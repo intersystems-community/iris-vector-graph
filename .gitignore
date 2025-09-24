@@ -1,0 +1,101 @@
+# Dependencies
+node_modules
+dist
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.bak
+*.tmp
+*.orig
+*~
+
+# Archives
+*.zip
+*.tar.gz
+*.tar
+*.rar
+
+# Data directories (large test datasets)
+data/
+
+# License files (sensitive)
+*.key
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude configuration
+.claude/
+
+# Test coverage
+coverage/
+.nyc_output
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# UV package manager
+.uv/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Test results
+test_results.json

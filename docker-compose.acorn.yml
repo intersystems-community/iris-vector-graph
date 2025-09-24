@@ -1,0 +1,38 @@
+version: '3.8'
+services:
+  iris-acorn:
+    image: docker.iscinternal.com/intersystems/iris:2025.3.0EHAT.127.0-linux-arm64v8
+    container_name: iris_acorn_vector_graph_ai
+    ports:
+      - "1973:1972"
+      - "52774:52773"
+      - "53773:53773"  # Web Gateway
+    environment:
+      - ISC_PACKAGE_MGRUSER=Admin
+      - ISC_PACKAGE_MGRPWD=SYS
+      - ISC_PACKAGE_IRISUSER=Admin
+      - ISC_PACKAGE_IRISUSERPWD=SYS
+      - ISC_PACKAGE_INSTANCENAME=IRIS
+      - ISC_PACKAGE_INSTALLDIR=/usr/irissys
+      - ISC_DEFAULT_PASSWORD=SYS
+    command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
+    volumes:
+      - iris_acorn_data:/dur/iconfig
+      - iris_acorn_wij:/dur/config/mgr
+      - ./iris.key:/usr/irissys/mgr/iris.key
+    networks:
+      - iris_network
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "session", "IRIS", "-U", "%SYS", "##class(%SYSTEM.Process).CurrentDirectory()"]
+      interval: 30s
+      timeout: 30s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  iris_acorn_data:
+  iris_acorn_wij:
+
+networks:
+  iris_network:
+    driver: bridge
