@@ -13,22 +13,31 @@ A production-ready IRIS-native system for **graph traversal** + **vector search*
 
 ## 🏗️ Architecture
 
-**IRIS-integrated** solution with embedded Python:
-- **IRIS-native REST** endpoints via `%CSP.REST`
-- **Embedded Python** for graph computation and vector search
-- **HNSW vector search** optimization (6ms performance achieved)
-- **RDF-style graph** storage with JSON_TABLE filtering
-- **Hybrid retrieval** via Python APIs (not pure SQL)
-- **JSON_TABLE confidence filtering** working in production
+IRIS-native system with embedded Python and REST:
+- **IRIS-native REST** via `%CSP.REST` in [`Graph.KG.Service`](iris/src/Graph/KG/Service.cls:1) exposing:
+  - POST /kg/vectorSearch
+  - POST /kg/hybridSearch
+  - POST /kg/metaPath
+- **Embedded Python** operators in [`Graph.KG.PyOps`](iris/src/Graph/KG/PyOps.cls:1) calling the core engine
+- **Core Python Engine** in [`iris_vector_graph_core`](iris_vector_graph_core/engine.py) providing vector/text/RRF/graph utilities
+- **HNSW vector search** optimization (6ms performance in ACORN-1)
+- **RDF-style graph** storage (rdf_edges, rdf_labels, rdf_props) with qualifier filtering patterns
+- **Hybrid retrieval** via RRF fusion (vector + text)
+- Note: Advanced TVFs are experimental; traversal is implemented via globals/Python/REST
 
 ## 📁 What's Included
 
 ### Core System
-- `sql/` — RDF tables, HNSW vector indexes (graph_walk_tvf.sql is experimental/non-functional)
-- `python/` — Working graph operators and vector search implementations
-- `iris/src/` — IRIS ObjectScript classes for REST API and Python operations
-- `scripts/` — Performance testing, data loading, environment setup
-- `tests/` — Comprehensive test suite (unit, integration, e2e, performance)
+- `sql/` — Schema and operators
+  - `schema.sql` — Tables: `rdf_edges`, `rdf_labels`, `rdf_props`, `kg_NodeEmbeddings`
+  - `operators.sql` — Vector/Text/RRF/Graph procedures for IRIS 2025.3+ with VECTOR/HNSW
+  - `operators_fixed.sql` — Compatibility simplifications if your environment lacks some features
+  - `graph_walk_tvf.sql` — Experimental; not used in production flows
+- `iris_vector_graph_core/` — Core Python: vector search, text search, RRF fusion, traversal utilities
+- `iris/src/` — IRIS ObjectScript: REST service (Service.cls), embedded Python ops (PyOps.cls), traversal utilities (Traversal.cls)
+- `python/` — Example Python operators and helpers for local runs/tests
+- `scripts/` — Performance testing, data loaders, environment setup scripts
+- `tests/` — Unit, integration, e2e, performance tests
 
 ### Documentation
 - `docs/performance/` — Performance analysis and benchmarks
@@ -70,11 +79,24 @@ docker-compose -f docker-compose.acorn.yml up -d
 docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
+### 2a. Create REST Web App (if not already created)
+In the IRIS terminal (or Management Portal), run:
+```objectscript
+Do ##class(Graph.KG.Service).CreateWebApp("/kg")
+```
+This registers the /kg REST application that exposes vectorSearch, hybridSearch, and metaPath.
+
 ### 3. Load Schema & Data
 ```sql
 -- In IRIS SQL terminal
 \i sql/schema.sql
+
+-- Pick ONE operators file based on your IRIS features:
+-- Preferred (IRIS 2025.3+ with VECTOR + HNSW, or ACORN-1)
 \i sql/operators.sql
+-- Compatibility fallback (if operators.sql fails due to missing features)
+-- \i sql/operators_fixed.sql
+
 \i scripts/sample_data_768.sql
 ```
 
@@ -112,9 +134,9 @@ uv run python scripts/performance/string_db_scale_test.py --max-proteins 10000 -
 
 ### 🔍 Vector Similarity Search
 
-**Find proteins similar to BRCA1:**
+Find similar entities by embedding:
 
-**REST API:**
+- REST (always available when Service is registered)
 ```bash
 curl -X POST http://localhost:52773/kg/vectorSearch \
   -H "Content-Type: application/json" \
@@ -125,35 +147,21 @@ curl -X POST http://localhost:52773/kg/vectorSearch \
   }'
 ```
 
-**Python SDK:**
+- Python (DB-API using stored procedure from operators.sql)
 ```python
-import iris
-import json
-import numpy as np
-
-# Connect to IRIS
+import iris, json, numpy as np
 conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
-cursor = conn.cursor()
-
-# Vector similarity search using stored procedure
-query_vector = np.random.rand(768).tolist()  # 768D embedding
-cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
-    json.dumps(query_vector),
-    10,        # top 10 results
-    'Gene'     # filter by Gene entities
-])
-
-results = cursor.fetchall()
-for entity_id, similarity in results:
-    print(f"{entity_id}: {similarity:.3f}")
+c = conn.cursor()
+qvec = np.random.rand(768).tolist()
+c.execute("CALL kg_KNN_VEC(?, ?, ?)", [json.dumps(qvec), 10, 'protein'])
+print(c.fetchall())
 ```
 
-**Direct SQL:**
+- SQL (requires VECTOR/TO_VECTOR availability)
 ```sql
--- Vector similarity using native IRIS functions
-SELECT TOP 10
-    id,
-    VECTOR_COSINE(emb, TO_VECTOR('[0.1,0.2,0.3,...]')) as similarity
+-- Use when VECTOR/TO_VECTOR functions are available
+SELECT TOP 10 id,
+       VECTOR_COSINE(emb, TO_VECTOR('[0.1,0.2,0.3,...]')) AS similarity
 FROM kg_NodeEmbeddings
 ORDER BY similarity DESC;
 ```
@@ -440,17 +448,22 @@ uv run mypy scripts/ tests/
 # Run STRING database scale test
 uv run python scripts/performance/string_db_scale_test.py --max-proteins 50000
 
+# Optional PMC-based scale test (requires PMC corpus setup)
+uv run python scripts/performance/pmc_scale_test.py
+
 # View performance results
-cat docs/performance/string_scale_test_report.json
+cat string_scale_test_report.json
 ```
 
 ## 📚 Documentation
 
 - **[Performance Analysis](docs/performance/)** — Detailed benchmarks and optimization analysis
 - **[Setup Guide](docs/setup/)** — ACORN-1 configuration and troubleshooting
-- **[Architecture](docs/architecture/)** — Technical design and data flow
-- **[API Reference](docs/api/)** — REST endpoint documentation
-- **[Graph Primitives Assessment](docs/GRAPH_PRIMITIVES_IMPLEMENTATION_ASSESSMENT.md)** — Implementation analysis against indexing specifications
+- **[Architecture](docs/architecture/)** — Technical design, data flow, and actual schema realities
+  - See [`ACTUAL_SCHEMA`](docs/architecture/ACTUAL_SCHEMA.md) for capability notes and working patterns
+- **[API Reference](docs/api/REST_API.md)** — REST endpoints exposed by [`Graph.KG.Service`](iris/src/Graph/KG/Service.cls:1)
+- **[Graph Primitives](docs/GRAPH_PRIMITIVES.md)** — Graph indexing primitives and intended capabilities
+- **[Graph Primitives Assessment](docs/GRAPH_PRIMITIVES_IMPLEMENTATION_ASSESSMENT.md)** — Mapping of primitives to implementation, with gaps
 
 ## 🎯 Production Deployment
 
