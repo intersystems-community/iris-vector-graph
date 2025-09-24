@@ -1,0 +1,26 @@
+services:
+  iris_test:
+    image: intersystemsdc/iris-community:latest
+    container_name: iris_test_vector_graph_ai
+    ports:
+      - "1973:1972"   # IRIS SuperServer port (different from dev to avoid conflicts)
+      - "52774:52773" # IRIS Management Portal
+    environment:
+      - IRISNAMESPACE=USER
+      - ISC_DEFAULT_PASSWORD=SYS
+    volumes:
+      - iris_test_data:/usr/irissys/mgr
+      - ./sql:/home/irisowner/sql # Mount SQL files for initialization
+    stdin_open: true
+    tty: true
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "session", "iris", "-U%SYS", "##class(%SYSTEM.Process).CurrentDirectory()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    # Initialize test schema on startup
+    command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
+
+volumes:
+  iris_test_data: {}

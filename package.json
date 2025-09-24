@@ -1,0 +1,28 @@
+{
+  "name": "iris-vector-graph-ai",
+  "version": "1.0.0",
+  "description": "High-performance biomedical knowledge graph with IRIS and ACORN-1 optimization",
+  "keywords": ["iris", "graph", "vector-search", "biomedical", "knowledge-graph", "acorn-1", "hnsw"],
+  "author": "InterSystems IRIS Graph-AI Team",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "test": "uv run python tests/python/run_all_tests.py",
+    "test:quick": "uv run python tests/python/run_all_tests.py --quick",
+    "test:api": "uv run python tests/python/test_iris_rest_api.py",
+    "test:sdk": "uv run python tests/python/test_python_sdk.py",
+    "test:networkx": "uv run python tests/python/test_networkx_loader.py",
+    "test:performance": "uv run python tests/python/test_performance_benchmarks.py",
+    "env:setup": "./scripts/setup/setup-test-env.sh",
+    "env:teardown": "./scripts/setup/stop-test-env.sh",
+    "env:clean": "./scripts/setup/stop-test-env.sh --with-data",
+    "env:acorn": "./scripts/setup/setup_acorn_test.sh",
+    "perf:string": "uv run python scripts/performance/string_db_scale_test.py",
+    "perf:scale": "uv run python scripts/performance/scale_test.py",
+    "perf:pmc": "uv run python scripts/performance/pmc_scale_test.py",
+    "ingest:networkx": "uv run python scripts/ingest/networkx_loader.py",
+    "format": "uv run black scripts/ tests/",
+    "lint": "uv run flake8 scripts/ tests/",
+    "type-check": "uv run mypy scripts/ tests/"
+  }
+}

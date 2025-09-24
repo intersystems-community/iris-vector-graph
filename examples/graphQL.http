@@ -1,0 +1,27 @@
+// examples/graphQL.http (use VS Code REST Client)
+
+### Vector search (3-dim sample)
+POST http://localhost:4000/graphql
+Content-Type: application/json
+
+{
+  "query": "query($vec:[Float!]!){ vectorSearch(vector:$vec, k:3){ id score } }",
+  "variables": { "vec": [0.1, 0.2, 0.9] }
+}
+
+### Hybrid search
+POST http://localhost:4000/graphql
+Content-Type: application/json
+
+{
+  "query": "query($vec:[Float!]!,$q:String!){ hybridSearch(vector:$vec, text:$q, k:3){ id score extras } }",
+  "variables": { "vec": [0.1,0.2,0.9], "q":"tumor suppressor" }
+}
+
+### Meta-path (Drug -targets-> Gene -ASSOCIATED_WITH-> Disease)
+POST http://localhost:4000/graphql
+Content-Type: application/json
+
+{
+  "query": "{ metaPath(srcId:"CHEMBL:123", pred1:"targets", pred2:"ASSOCIATED_WITH"){ id steps{step s p o} } }"
+}
