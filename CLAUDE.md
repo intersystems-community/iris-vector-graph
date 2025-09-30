@@ -4,76 +4,77 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Commands
 
+### Environment Setup
 ```bash
-# Setup
-cp .env.sample .env  # Edit connection details for IRIS
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+# Initial setup (using uv for modern Python package management)
+uv sync                      # Install dependencies via pyproject.toml
+source .venv/bin/activate    # Activate virtual environment
 
-# Development
-python scripts/setup_schema.py           # Initialize database schema
-python scripts/sample_data.py            # Load sample data
-python tests/python/run_all_tests.py     # Run test suite
+# Alternative (if using requirements.txt)
+cp .env.sample .env          # Edit connection details for IRIS
+uv venv
+uv pip install -r requirements.txt
 ```
 
-## IRIS Database Setup
+### Database Setup
 
-### Option 1: Docker (Recommended)
-
-Run IRIS in Docker using the community edition:
+**Option 1: Docker (Recommended)**
 
 ```bash
-# Create docker-compose.yml for IRIS
-cat > docker-compose.yml << 'EOF'
-services:
-  iris_db:
-    image: intersystemsdc/iris-community:latest
-    container_name: iris_db_iris_vector_graph
-    ports:
-      - "1972:1972"   # IRIS SuperServer port (host:container)
-      - "52773:52773" # IRIS Management Portal (host:container)
-    environment:
-      - IRISNAMESPACE=USER
-      - ISC_DEFAULT_PASSWORD=SYS
-    volumes:
-      - iris_db_data:/usr/irissys/mgr # Named volume for IRIS data persistence
-      - .:/home/irisowner/dev # Mount project directory
-    stdin_open: true # Keep container running
-    tty: true        # Keep container running
-    healthcheck:
-      test: ["CMD", "/usr/irissys/bin/iris", "session", "iris", "-U%SYS", "##class(%SYSTEM.Process).CurrentDirectory()"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
-
-volumes:
-  iris_db_data: {} # Defines the named volume for IRIS data
-EOF
-
-# Start IRIS
+# Standard IRIS Community Edition
 docker-compose up -d
 
-# Configure ODBC DSN or use connection string in .env:
-# IRIS_DSN=localhost:1972/USER
-# IRIS_USER=_SYSTEM
-# IRIS_PASS=SYS
+# ACORN-1 (pre-release build with HNSW optimization - fastest)
+docker-compose -f docker-compose.acorn.yml up -d
 ```
 
-Access IRIS Management Portal: http://localhost:52773/csp/sys/UtilHome.csp
-
-### Option 2: Manual IRIS Installation
+**Option 2: Manual IRIS Installation**
 
 Requires **InterSystems IRIS 2025.1+** with Vector Search (HNSW) feature:
 
 ```sql
 -- Run in IRIS SQL tool
 \i sql/schema.sql
-\i sql/operators.sql
--- Optional sample data:
-\i scripts/sample_data.sql
+\i sql/operators.sql       # Use operators_fixed.sql if this fails
+\i scripts/sample_data.sql # Optional sample data
+```
+
+Access IRIS Management Portal: http://localhost:52773/csp/sys/UtilHome.csp (or port 252773 for ACORN-1)
+
+### Testing
+```bash
+# Run test suite
+uv run python tests/python/run_all_tests.py       # All tests
+uv run python tests/python/run_all_tests.py --quick  # Quick validation
+
+# Direct pytest execution
+pytest tests/                                      # All tests
+pytest tests/unit/                                 # Unit tests only
+pytest tests/integration/                          # Integration tests only
+pytest -m requires_database                        # Database-dependent tests
+pytest --cov=iris_vector_graph_core               # With coverage
+```
+
+### Development Operations
+```bash
+# Schema and data management
+python scripts/setup_schema.py                     # Initialize database schema
+python scripts/sample_data.py                      # Load sample data
+
+# Performance testing
+uv run python scripts/performance/test_vector_performance.py
+uv run python scripts/performance/string_db_scale_test.py --max-proteins 10000
+```
+
+### Linting and Formatting
+```bash
+# Format code (per pyproject.toml configuration)
+black .
+isort .
+
+# Lint code
+flake8 .
+mypy iris_vector_graph_core/
 ```
 
 ## Architecture Overview
@@ -112,10 +113,19 @@ This is a **Graph + Vector Retrieval** system targeting **InterSystems IRIS** th
 
 Configure IRIS connection in `.env`:
 - `IRIS_HOST` - IRIS server hostname (default: localhost)
-- `IRIS_PORT` - IRIS SuperServer port (default: 1973)
+- `IRIS_PORT` - IRIS SuperServer port (default: 1972 or 21972 for ACORN-1)
 - `IRIS_NAMESPACE` - IRIS namespace (default: USER)
 - `IRIS_USER` - Database username (default: _SYSTEM)
 - `IRIS_PASSWORD` - Database password (default: SYS)
+
+### IRIS Docker Port Mapping Strategy
+
+**Standardized Port Ranges** (per constitution):
+- **Default IRIS**: `1972:1972` and `52773:52773` (docker-compose.yml)
+- **Licensed IRIS (ACORN-1)**: `21972:1972` and `252773:52773` (docker-compose.acorn.yml)
+- **Development instances**: `11972:1972` and `152773:52773` (if needed for multiple instances)
+
+**Rationale**: Predictable ports avoid conflicts, enable easy configuration, support multiple IRIS instances
 
 ### Key Technical Notes
 
@@ -134,3 +144,61 @@ Configure IRIS connection in `.env`:
 - `scripts/` - Setup, testing, and performance scripts
 - `tests/` - Comprehensive test suite
 - `docs/` - Documentation and performance analysis
+
+## Constitutional Requirements
+
+When developing, ensure compliance with `.specify/memory/constitution.md`:
+
+### Core Principles Summary
+1. **IRIS-Native Development** - Leverage IRIS capabilities directly (embedded Python, SQL procedures, ObjectScript)
+2. **Test-First with Live Database** - TDD with running IRIS instance (no mocked database for integration tests)
+3. **Performance as a Feature** - HNSW indexing, bounded queries, tracked benchmarks
+4. **Hybrid Search by Default** - Vector + text + graph using RRF fusion
+5. **Observability & Debuggability** - Structured logging at each layer
+6. **Modular Core Library** - Database-agnostic iris_vector_graph_core
+7. **Explicit Error Handling** - No silent failures, actionable error messages
+8. **Standardized Database Interfaces** - Use proven utilities, contribute patterns back
+
+### Testing Requirements (NON-NEGOTIABLE)
+- All tests involving data storage, vector operations, or graph operations MUST use live IRIS
+- Test categories:
+  - `@pytest.mark.requires_database` - MUST connect to live IRIS
+  - `@pytest.mark.integration` - MUST use IRIS for data operations
+  - `@pytest.mark.e2e` - MUST use complete IRIS + vector workflow
+  - Unit tests MAY mock IRIS for isolated component testing
+- Performance tests MUST verify: vector search <10ms, graph queries <1ms (with HNSW)
+
+### Development Standards
+- **Package Management**: Use `uv` for all Python dependency management
+- **Code Quality**: Pass black, isort, flake8, mypy before commits
+- **Documentation**: Comprehensive docstrings for all public APIs
+- **Versioning**: Follow semantic versioning for schema/API changes
+
+### AI Development Constraints
+- Follow constraint-based architecture, not "vibecoding"
+- Constitutional validation gates prevent repeating known bugs
+- Every bug fix MUST be captured as new validation rule or enhanced guideline
+- Work within established frameworks, patterns, and validation loops
+- **Constraint Philosophy**: Less freedom = less chaos. Constraints prevent regression.
+
+## Integration with RAG Systems
+
+The `iris_vector_graph_core` module is designed for integration with RAG frameworks like `rag-templates`:
+
+```python
+# Example usage in RAG pipeline
+from iris_vector_graph_core import HybridSearchFusion, IRISGraphEngine
+
+# Initialize engine with IRIS connection
+engine = IRISGraphEngine(connection_params)
+
+# Hybrid search combining vector, text, and graph
+results = engine.hybrid_search(
+    query_vector=embeddings,
+    query_text="cancer pathway",
+    k=15,
+    use_rrf=True
+)
+```
+
+See `docs/architecture/ACTUAL_SCHEMA.md` for working patterns and integration examples.
