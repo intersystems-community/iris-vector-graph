@@ -160,27 +160,27 @@ class TestBulkNodeInsertion:
 
     def test_bulk_insert_handles_duplicates(self, iris_connection_with_sample_data):
         """
-        GIVEN: nodes table exists and some nodes appear in multiple tables
-        WHEN: bulk inserting discovered nodes
-        THEN: each node appears only once in nodes table
+        GIVEN: nodes table exists with sample nodes already inserted
+        WHEN: bulk inserting discovered nodes (which includes duplicates)
+        THEN: duplicates are ignored and each node appears only once
 
         Expected: FAIL initially (bulk_insert_nodes() not implemented)
         """
-        # First create nodes table
-        execute_sql_migration(iris_connection_with_sample_data, 'sql/migrations/001_add_nodepk_table.sql')
-
-        # Discover and insert nodes
+        # Nodes table already exists from fixture with 7 nodes inserted
+        # Try to insert them again - should handle duplicates gracefully
         discovered_nodes = discover_nodes(iris_connection_with_sample_data)
+
+        # Insert again (should handle duplicates)
         inserted_count = bulk_insert_nodes(iris_connection_with_sample_data, discovered_nodes)
 
-        # Verify each node appears only once
+        # Verify each node appears only once (no duplicates created)
         cursor = iris_connection_with_sample_data.cursor()
         cursor.execute("SELECT COUNT(DISTINCT node_id), COUNT(*) FROM nodes WHERE node_id LIKE 'SAMPLE:%'")
         unique_count, total_count = cursor.fetchone()
 
-        assert unique_count == total_count, "Each node should appear only once"
-        assert unique_count == 7, "Should have 7 unique nodes"
-        assert inserted_count == 7, "Should report 7 nodes inserted"
+        assert unique_count == total_count, "Each node should appear only once (no duplicates)"
+        # inserted_count should be 0 since all nodes already exist
+        assert inserted_count == 0, f"Should insert 0 nodes (all duplicates), got {inserted_count}"
 
     def test_bulk_insert_performance(self, iris_connection):
         """

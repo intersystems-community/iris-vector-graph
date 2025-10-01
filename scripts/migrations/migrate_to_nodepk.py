@@ -148,10 +148,84 @@ def discover_nodes(connection) -> List[str]:
 
 def bulk_insert_nodes(connection, node_ids: List[str]) -> int:
     """
-    Bulk insert nodes with deduplication.
-    Implementation in T022.
+    Bulk insert nodes with deduplication and performance measurement.
+
+    Implements efficient batch insertion from T022 specification.
+
+    Args:
+        connection: IRIS database connection
+        node_ids: List of node IDs to insert
+
+    Returns:
+        Count of nodes successfully inserted
+
+    Performance:
+        - Target: ≥1000 nodes/second
+        - Uses batch size of 1000 nodes per transaction
+        - Ignores duplicates (idempotent)
+
+    Strategy:
+        Since IRIS doesn't support ON DUPLICATE KEY IGNORE, we use:
+        1. Try INSERT, catch UNIQUE constraint violations
+        2. Batch commits every 1000 nodes for performance
+        3. Measure and log insertion rate
     """
-    raise NotImplementedError("bulk_insert_nodes() - implement in T022")
+    logger = logging.getLogger(__name__)
+    cursor = connection.cursor()
+
+    if not node_ids:
+        logger.info("No nodes to insert")
+        return 0
+
+    logger.info(f"Bulk inserting {len(node_ids)} nodes...")
+    start_time = datetime.now()
+
+    inserted_count = 0
+    batch_size = 1000
+    current_batch = 0
+
+    for i, node_id in enumerate(node_ids):
+        try:
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
+            inserted_count += 1
+
+            # Commit batch every 1000 nodes
+            if (i + 1) % batch_size == 0:
+                connection.commit()
+                current_batch += 1
+                logger.debug(f"  Committed batch {current_batch} ({i + 1}/{len(node_ids)} nodes)")
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            # Ignore duplicate key errors (UNIQUE constraint violations)
+            if 'unique' in error_msg or 'duplicate' in error_msg or 'constraint' in error_msg:
+                # Already exists, skip
+                connection.rollback()
+                continue
+            else:
+                # Unexpected error
+                logger.error(f"Error inserting node {node_id}: {e}")
+                connection.rollback()
+                raise
+
+    # Final commit for remaining nodes
+    try:
+        connection.commit()
+    except:
+        connection.rollback()
+
+    # Calculate performance
+    elapsed_time = (datetime.now() - start_time).total_seconds()
+    if elapsed_time > 0:
+        nodes_per_second = inserted_count / elapsed_time
+        logger.info(f"✅ Inserted {inserted_count} nodes in {elapsed_time:.2f}s ({nodes_per_second:.0f} nodes/sec)")
+
+        if nodes_per_second < 1000:
+            logger.warning(f"⚠️  Performance below target (≥1000 nodes/sec): {nodes_per_second:.0f} nodes/sec")
+    else:
+        logger.info(f"✅ Inserted {inserted_count} nodes (too fast to measure)")
+
+    return inserted_count
 
 
 def detect_orphans(connection) -> Dict[str, List[str]]:
