@@ -74,10 +74,76 @@ def get_connection():
 # Migration functions to be implemented in later tasks
 def discover_nodes(connection) -> List[str]:
     """
-    Discover all unique node IDs from graph tables.
-    Implementation in T021.
+    Discover all unique node IDs from existing graph tables.
+
+    Implements Contract 7: Node Discovery from specs/001-add-explicit-nodepk/contracts/sql_contracts.md
+
+    Args:
+        connection: IRIS database connection
+
+    Returns:
+        List of unique node IDs discovered across all tables (sorted)
+
+    Strategy:
+        UNION query collecting node IDs from:
+        - rdf_labels.s
+        - rdf_props.s
+        - rdf_edges.s (source nodes)
+        - rdf_edges.o_id (destination nodes)
+        - kg_NodeEmbeddings.id (if table exists)
     """
-    raise NotImplementedError("discover_nodes() - implement in T021")
+    logger = logging.getLogger(__name__)
+    cursor = connection.cursor()
+
+    # Base query for tables that definitely exist
+    query = """
+    SELECT DISTINCT node_id FROM (
+        SELECT s AS node_id FROM rdf_labels
+        UNION SELECT s FROM rdf_props
+        UNION SELECT s FROM rdf_edges
+        UNION SELECT o_id FROM rdf_edges
+    ) all_nodes
+    ORDER BY node_id
+    """
+
+    logger.info("Discovering unique node IDs from graph tables...")
+    cursor.execute(query)
+    nodes = [row[0] for row in cursor.fetchall()]
+
+    # Try to add kg_NodeEmbeddings if it exists
+    try:
+        cursor.execute("SELECT DISTINCT id FROM kg_NodeEmbeddings")
+        embedding_nodes = [row[0] for row in cursor.fetchall()]
+        # Add any new nodes from embeddings
+        nodes_set = set(nodes)
+        for node in embedding_nodes:
+            if node not in nodes_set:
+                nodes.append(node)
+        logger.info(f"  + kg_NodeEmbeddings: {len(embedding_nodes)} node IDs")
+    except Exception as e:
+        if 'not found' in str(e).lower() or 'does not exist' in str(e).lower():
+            logger.debug("  kg_NodeEmbeddings table not found (OK - optional)")
+        else:
+            logger.warning(f"  Could not query kg_NodeEmbeddings: {e}")
+
+    # Log breakdown by table
+    cursor.execute("SELECT COUNT(DISTINCT s) FROM rdf_labels")
+    label_count = cursor.fetchone()[0]
+    logger.info(f"  rdf_labels: {label_count} unique node IDs")
+
+    cursor.execute("SELECT COUNT(DISTINCT s) FROM rdf_props")
+    props_count = cursor.fetchone()[0]
+    logger.info(f"  rdf_props: {props_count} unique node IDs")
+
+    cursor.execute("SELECT COUNT(DISTINCT s) FROM rdf_edges")
+    edges_s_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(DISTINCT o_id) FROM rdf_edges")
+    edges_o_count = cursor.fetchone()[0]
+    logger.info(f"  rdf_edges (source): {edges_s_count} unique node IDs")
+    logger.info(f"  rdf_edges (dest): {edges_o_count} unique node IDs")
+
+    logger.info(f"✅ Total unique nodes discovered: {len(nodes)}")
+    return nodes
 
 
 def bulk_insert_nodes(connection, node_ids: List[str]) -> int:
