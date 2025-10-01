@@ -158,7 +158,8 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "performance: marks tests as performance benchmarks",
-    "requires_iris: marks tests that require IRIS database connection"
+    "requires_iris: marks tests that require IRIS database connection",
+    "requires_database: marks tests that require database connection (alias for requires_iris)"
 ]
 
 [tool.coverage.run]
