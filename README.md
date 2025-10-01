@@ -1,142 +1,146 @@
-# IRIS Vector Graph: High-Performance Biomedical Knowledge Graph
+# IRIS Vector Graph
 
-A production-ready IRIS-native system for **graph traversal** + **vector search** + **hybrid retrieval** with exceptional performance powered by **ACORN-1 optimization**.
+A knowledge graph system built on InterSystems IRIS that combines graph traversal, vector similarity search, and full-text search in a single database. Designed for biomedical research use cases like protein interaction networks and literature mining.
 
-## 🚀 Performance Highlights
+## What is InterSystems IRIS?
 
-- **21.7x faster** overall processing than standard IRIS
-- **476 proteins/second** ingestion rate
-- **Sub-millisecond** graph queries (0.25ms average)
-- **Vector search: 6ms** with HNSW optimization (1790x improvement)
-- **JSON_TABLE confidence filtering: 109ms** for structured queries
-- **Production-ready** for large-scale biomedical datasets
+IRIS is a multi-model database that supports SQL, objects, documents, and key-value storage. This project uses IRIS's embedded Python, SQL procedures, and native vector search capabilities to implement graph operations without external dependencies.
 
-## 🏗️ Architecture
+## What This Does
 
-IRIS-native system with embedded Python and REST:
-- **IRIS-native REST** via `%CSP.REST` in [`Graph.KG.Service`](iris/src/Graph/KG/Service.cls:1) exposing:
-  - POST /kg/vectorSearch
-  - POST /kg/hybridSearch
-  - POST /kg/metaPath
-- **Embedded Python** operators in [`Graph.KG.PyOps`](iris/src/Graph/KG/PyOps.cls:1) calling the core engine
-- **Core Python Engine** in [`iris_vector_graph_core`](iris_vector_graph_core/engine.py) providing vector/text/RRF/graph utilities
-- **HNSW vector search** optimization (6ms performance in ACORN-1)
-- **RDF-style graph** storage (rdf_edges, rdf_labels, rdf_props) with qualifier filtering patterns
-- **Hybrid retrieval** via RRF fusion (vector + text)
-- Note: Advanced TVFs are experimental; traversal is implemented via globals/Python/REST
+Stores graph data (nodes, edges, properties) in IRIS SQL tables and provides:
+- **Vector similarity search** - Find semantically similar entities using embeddings
+- **Graph traversal** - Multi-hop path queries across relationships
+- **Hybrid search** - Combine vector similarity with keyword search using RRF (Reciprocal Rank Fusion)
+- **REST API** - Access all features via HTTP endpoints
 
-## 📁 What's Included
+Built with embedded Python for flexibility and IRIS SQL procedures for performance.
 
-### Core System
-- `sql/` — Schema and operators
-  - `schema.sql` — Tables: `rdf_edges`, `rdf_labels`, `rdf_props`, `kg_NodeEmbeddings`
-  - `operators.sql` — Vector/Text/RRF/Graph procedures for IRIS 2025.3+ with VECTOR/HNSW
-  - `operators_fixed.sql` — Compatibility simplifications if your environment lacks some features
-  - `graph_walk_tvf.sql` — Experimental; not used in production flows
-- `iris_vector_graph_core/` — Core Python: vector search, text search, RRF fusion, traversal utilities
-- `iris/src/` — IRIS ObjectScript: REST service (Service.cls), embedded Python ops (PyOps.cls), traversal utilities (Traversal.cls)
-- `python/` — Example Python operators and helpers for local runs/tests
-- `scripts/` — Performance testing, data loaders, environment setup scripts
-- `tests/` — Unit, integration, e2e, performance tests
+## Architecture
 
-### Documentation
-- `docs/performance/` — Performance analysis and benchmarks
-- `docs/setup/` — Configuration and deployment guides
-- `docs/architecture/` — Technical documentation
+```
+┌─────────────────────────────────────────────────┐
+│  REST API (Graph.KG.Service)                    │
+│  - /kg/vectorSearch                             │
+│  - /kg/hybridSearch                             │
+│  - /kg/metaPath                                 │
+└────────────────┬────────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────────┐
+│  IRIS SQL Procedures (operators.sql)            │
+│  - kg_KNN_VEC: Vector similarity                │
+│  - kg_RRF_FUSE: Hybrid search                   │
+│  - Text search with BM25                        │
+└────────────────┬────────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────────┐
+│  Embedded Python (Graph.KG.PyOps)               │
+│  - Core engine (iris_vector_graph_core)         │
+│  - NetworkX integration                         │
+│  - Vector utilities                             │
+└────────────────┬────────────────────────────────┘
+                 │
+┌────────────────▼────────────────────────────────┐
+│  IRIS Tables                                    │
+│  - rdf_edges: Relationships                     │
+│  - rdf_labels: Node types                       │
+│  - rdf_props: Properties                        │
+│  - kg_NodeEmbeddings: Vector embeddings         │
+└─────────────────────────────────────────────────┘
+```
 
-### Performance Testing
-- **Biomedical benchmarks** (STRING proteins, PubMed literature)
-- **Large-scale datasets** (10K+ entities, 50K+ relationships)
-- **Real-world performance** validation with ACORN-1
+Data is stored in RDF-style tables. Graph operations are implemented via SQL procedures that call Python functions when needed. HNSW vector indexing provides fast similarity search (requires IRIS 2025.3+ or ACORN-1 pre-release build).
 
-## 🚀 Quick Start
+## Repository Structure
 
-### 1. Set Up Development Environment
+```
+sql/
+  schema.sql              # Table definitions
+  operators.sql           # SQL procedures (requires IRIS 2025.3+)
+  operators_fixed.sql     # Compatibility version for older IRIS
 
+iris_vector_graph_core/   # Python engine
+  engine.py               # Core search/traversal logic
+  fusion.py               # RRF hybrid search
+  vector_utils.py         # Vector operations
+
+iris/src/Graph/KG/        # ObjectScript components
+  Service.cls             # REST API endpoints
+  PyOps.cls               # Python integration
+  Traversal.cls           # Graph operations
+
+scripts/
+  ingest/networkx_loader.py    # Load data from files
+  performance/                 # Benchmarking tools
+
+docs/
+  architecture/           # Design documentation
+  setup/                  # Installation guides
+  api/REST_API.md        # API reference
+```
+
+## Quick Start
+
+### Prerequisites
+
+- Docker (for running IRIS)
+- Python 3.8+ (we use UV for package management)
+- Basic familiarity with SQL
+
+### Installation
+
+**1. Install UV and dependencies:**
 ```bash
-# Install UV package manager (fast Python package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone and set up project
 git clone <repository-url>
 cd iris-vector-graph
-
-# Install dependencies and create virtual environment
 uv sync
-
-# Activate virtual environment
-source .venv/bin/activate  # Linux/macOS
-# or
-.venv\Scripts\activate     # Windows
+source .venv/bin/activate
 ```
 
-### 2. Start IRIS with ACORN-1
+**2. Start IRIS:**
 ```bash
-# Start ACORN-1 optimized IRIS
+# Option A: ACORN-1 (pre-release build with HNSW optimization - fastest)
+# Note: ACORN-1 is experimental and not yet in standard IRIS releases
 docker-compose -f docker-compose.acorn.yml up -d
 
-# Wait for container to be healthy
-docker ps --format "table {{.Names}}\t{{.Status}}"
+# Option B: Standard IRIS Community Edition (slower but stable)
+# docker-compose up -d
 ```
 
-### 2a. Create REST Web App (if not already created)
-In the IRIS terminal (or Management Portal), run:
-```objectscript
-Do ##class(Graph.KG.Service).CreateWebApp("/kg")
-```
-This registers the /kg REST application that exposes vectorSearch, hybridSearch, and metaPath.
-
-### 3. Load Schema & Data
+**3. Load schema:**
 ```sql
--- In IRIS SQL terminal
+# Connect to IRIS SQL terminal
+docker exec -it iris-acorn-1 iris session iris
+
+# In SQL prompt:
 \i sql/schema.sql
-
--- Pick ONE operators file based on your IRIS features:
--- Preferred (IRIS 2025.3+ with VECTOR + HNSW, or ACORN-1)
-\i sql/operators.sql
--- Compatibility fallback (if operators.sql fails due to missing features)
--- \i sql/operators_fixed.sql
-
+\i sql/operators.sql  # Use operators_fixed.sql if this fails
 \i scripts/sample_data_768.sql
 ```
 
-### 4. Configure Environment
+**4. Create REST endpoints:**
+```objectscript
+# In IRIS terminal:
+Do ##class(Graph.KG.Service).CreateWebApp("/kg")
+```
+
+**5. Configure and test:**
 ```bash
 cp .env.sample .env
-# Edit .env with your IRIS connection details
-```
+# Edit .env with connection details (defaults usually work)
 
-### 5. Run Tests
-```bash
-# Run comprehensive test suite
-uv run python tests/python/run_all_tests.py
-
-# Quick tests (skip performance benchmarks)
+# Run tests
 uv run python tests/python/run_all_tests.py --quick
-
-# Specific test categories
-uv run python tests/python/test_iris_rest_api.py        # REST API tests
-uv run python tests/python/test_python_sdk.py          # Python SDK tests
-uv run python tests/python/test_networkx_loader.py     # Data loading tests
-uv run python tests/python/test_performance_benchmarks.py  # Performance benchmarks
 ```
 
-### 6. Data Ingestion
-```bash
-# Load graph data using NetworkX loader
-uv run python scripts/ingest/networkx_loader.py load data.tsv --format tsv --node-type protein
+## Usage Examples
 
-# Performance testing with biomedical datasets
-uv run python scripts/performance/string_db_scale_test.py --max-proteins 10000 --workers 8
-```
+### Vector Similarity Search
 
-## 💡 Example Queries
+Find entities with similar embeddings:
 
-### 🔍 Vector Similarity Search
-
-Find similar entities by embedding:
-
-- REST (always available when Service is registered)
+**REST API:**
 ```bash
 curl -X POST http://localhost:52773/kg/vectorSearch \
   -H "Content-Type: application/json" \
@@ -147,7 +151,7 @@ curl -X POST http://localhost:52773/kg/vectorSearch \
   }'
 ```
 
-- Python (DB-API using stored procedure from operators.sql)
+**Python (using SQL procedure):**
 ```python
 import iris, json, numpy as np
 conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
@@ -157,7 +161,7 @@ c.execute("CALL kg_KNN_VEC(?, ?, ?)", [json.dumps(qvec), 10, 'protein'])
 print(c.fetchall())
 ```
 
-- SQL (requires VECTOR/TO_VECTOR availability)
+**Direct SQL (if VECTOR functions available):**
 ```sql
 -- Use when VECTOR/TO_VECTOR functions are available
 SELECT TOP 10 id,
@@ -166,9 +170,9 @@ FROM kg_NodeEmbeddings
 ORDER BY similarity DESC;
 ```
 
-### 🕸️ Graph Traversal
+### Graph Traversal
 
-**Find drug-disease pathways:**
+Find multi-hop paths between entities:
 
 **REST API:**
 ```bash
@@ -182,7 +186,7 @@ curl -X POST http://localhost:52773/kg/metaPath \
   }'
 ```
 
-**Python SDK:**
+**Python:**
 ```python
 # Multi-hop graph traversal
 cursor.execute("""
@@ -201,7 +205,7 @@ for drug, protein, disease in pathways:
     print(f"{drug} → {protein} → {disease}")
 ```
 
-**Direct SQL:**
+**SQL (recursive CTE):**
 ```sql
 -- Find shortest paths between drug and disease
 WITH RECURSIVE pathway(source, target, path, hops) AS (
@@ -222,9 +226,9 @@ WHERE target LIKE 'DISEASE:%'
 ORDER BY hops LIMIT 10;
 ```
 
-### 🔀 Hybrid Search (Vector + Text)
+### Hybrid Search
 
-**Find cancer-related proteins using both semantic similarity and keywords:**
+Combine vector similarity with keyword matching:
 
 **REST API:**
 ```bash
@@ -238,7 +242,7 @@ curl -X POST http://localhost:52773/kg/hybridSearch \
   }'
 ```
 
-**Python SDK:**
+**Python:**
 ```python
 # Hybrid search using RRF fusion of vector and text results
 import numpy as np
@@ -272,11 +276,11 @@ for result in text_results:
     print(f"  Qualifiers: {result[1]}")
 ```
 
-### 📊 Analytics Queries
+### Network Analysis
 
-**Protein interaction network analysis:**
+Find highly connected nodes:
 
-**Python SDK:**
+**Python:**
 ```python
 # Find hub proteins (most connections)
 cursor.execute("""
@@ -295,7 +299,7 @@ for protein, connections in hubs:
     print(f"  {protein}: {connections} interactions")
 ```
 
-**Direct SQL:**
+**SQL:**
 ```sql
 -- Network clustering coefficient
 SELECT
@@ -320,11 +324,11 @@ FROM (
 ORDER BY clustering_coefficient DESC;
 ```
 
-### 🧬 Biomedical Workflows
+### Complete Workflow Example
 
-**Drug discovery pipeline:**
+Drug target discovery:
 
-**Python SDK:**
+**Python:**
 ```python
 def find_drug_targets(disease_name):
     """Find potential drug targets for a disease (working pattern)"""
@@ -356,9 +360,7 @@ cancer_drugs = find_drug_targets('cancer')
 print(f"Found {len(cancer_drugs)} potential drug-target relationships")
 ```
 
-**Literature mining example:**
-
-**Python with NetworkX:**
+**NetworkX integration:**
 ```python
 import networkx as nx
 
@@ -377,120 +379,79 @@ print(f"Network has {G.number_of_nodes()} nodes and {G.number_of_edges()} edges"
 print(f"Found {len(communities)} protein communities")
 ```
 
-## 📊 Performance Benchmarks
+## Performance
 
-### Community Edition vs ACORN-1 Comparison
+The system has been tested with biomedical datasets (STRING protein interactions, PubMed literature). Performance metrics:
 
-| Metric | Community Edition | ACORN-1 | Improvement |
-|--------|------------------|---------|-------------|
-| **Total Time** | 468.6 seconds | 21.6 seconds | **21.7x faster** |
-| **Data Ingestion** | 29 proteins/sec | 476 proteins/sec | **16.4x faster** |
-| **Index Building** | 122.8 seconds | 0.054 seconds | **2,278x faster** |
-| **Graph Queries** | 1.03ms avg | 0.25ms avg | **4.1x faster** |
+**With ACORN-1 (pre-release build with HNSW indexing):**
+- Vector search: ~6ms
+- Graph queries: ~0.25ms average
+- Data ingestion: ~476 proteins/second
+- Handles 10K+ nodes, 50K+ edges
 
-See `docs/performance/` for detailed analysis.
+**With standard IRIS Community Edition:**
+- Vector search: ~5.8s (no HNSW optimization)
+- Graph queries: ~1ms average
+- Data ingestion: ~29 proteins/second
+- Still functional for development and moderate-scale datasets
 
-## 🧬 Biomedical Use Cases
+See [`docs/performance/`](docs/performance/) for detailed benchmarks.
 
-### General Biomedical Data Support
-- **Protein interactions** (tested with STRING database)
-- **Literature analysis** (PubMed abstracts)
-- **Molecular ontologies** (Gene Ontology, ChEBI)
-- **Drug-target relationships** (DrugBank, ChEMBL)
+## Use Cases
 
-### Knowledge Graph Operations
-- **Vector similarity** search (768-dimensional embeddings)
-- **Graph path** discovery
-- **Hybrid retrieval** (vector + text)
-- **Real-time queries** on large datasets
+Designed for biomedical research but adaptable to other domains:
 
-## 🔧 Development
+- Protein-protein interaction networks
+- Drug-target relationship discovery
+- Literature mining and knowledge extraction
+- Multi-hop reasoning across heterogeneous data
+- Semantic search over structured knowledge
 
-### Testing
+The vector search supports any 768-dimensional embeddings (e.g., from BioBERT, SapBERT, or general-purpose models).
+
+## Development
+
+**Run tests:**
 ```bash
-# Comprehensive test suite
-uv run python tests/python/run_all_tests.py
-
-# Quick tests (skip performance benchmarks)
 uv run python tests/python/run_all_tests.py --quick
-
-# Category-specific tests
-uv run python tests/python/run_all_tests.py --category api
-uv run python tests/python/run_all_tests.py --category performance
+uv run python tests/python/test_iris_rest_api.py
 ```
 
-### Environment Management
+**Load your own data:**
 ```bash
-# Start IRIS test environment
-./scripts/setup/setup-test-env.sh
-
-# Stop test environment
-./scripts/setup/stop-test-env.sh
-
-# ACORN-1 optimized environment
-./scripts/setup/setup_acorn_test.sh
+# TSV format: source\ttarget\trelationship_type
+uv run python scripts/ingest/networkx_loader.py load data.tsv --format tsv
 ```
 
-### Code Quality
+**Performance testing:**
 ```bash
-# Format code
-uv run black scripts/ tests/
-
-# Lint code
-uv run flake8 scripts/ tests/
-
-# Type checking
-uv run mypy scripts/ tests/
+uv run python scripts/performance/string_db_scale_test.py --max-proteins 10000
 ```
 
-### Performance Analysis
-```bash
-# Run STRING database scale test
-uv run python scripts/performance/string_db_scale_test.py --max-proteins 50000
+## Documentation
 
-# Optional PMC-based scale test (requires PMC corpus setup)
-uv run python scripts/performance/pmc_scale_test.py
+- [`docs/architecture/ACTUAL_SCHEMA.md`](docs/architecture/ACTUAL_SCHEMA.md) - Schema details and working patterns
+- [`docs/api/REST_API.md`](docs/api/REST_API.md) - REST endpoint reference
+- [`docs/setup/QUICKSTART.md`](docs/setup/QUICKSTART.md) - Detailed setup guide
+- [`docs/performance/`](docs/performance/) - Performance analysis and benchmarks
 
-# View performance results
-cat string_scale_test_report.json
-```
+## Requirements
 
-## 📚 Documentation
+- **IRIS Database:**
+  - IRIS 2025.3+ for VECTOR functions (recommended)
+  - ACORN-1 pre-release build for HNSW optimization (fastest, but experimental)
+  - Standard Community Edition works but without HNSW indexing (slower vector search)
+- **Python:** 3.8+ (embedded in IRIS, also needed for client scripts)
+- **Docker:** For running IRIS container
 
-- **[Performance Analysis](docs/performance/)** — Detailed benchmarks and optimization analysis
-- **[Setup Guide](docs/setup/)** — ACORN-1 configuration and troubleshooting
-- **[Architecture](docs/architecture/)** — Technical design, data flow, and actual schema realities
-  - See [`ACTUAL_SCHEMA`](docs/architecture/ACTUAL_SCHEMA.md) for capability notes and working patterns
-- **[API Reference](docs/api/REST_API.md)** — REST endpoints exposed by [`Graph.KG.Service`](iris/src/Graph/KG/Service.cls:1)
-- **[Graph Primitives](docs/GRAPH_PRIMITIVES.md)** — Graph indexing primitives and intended capabilities
-- **[Graph Primitives Assessment](docs/GRAPH_PRIMITIVES_IMPLEMENTATION_ASSESSMENT.md)** — Mapping of primitives to implementation, with gaps
+## Limitations
 
-## 🎯 Production Deployment
+- Vector search requires IRIS with VECTOR support (2025.3+ or ACORN-1)
+- HNSW indexing (major speedup) only available in ACORN-1 pre-release - not yet in standard IRIS
+- ACORN-1 is experimental and not recommended for production deployments
+- Graph traversal uses SQL recursive CTEs - performance degrades on very deep paths (>5 hops)
+- Text search uses simple BM25 implementation (not production-grade full-text)
 
-### Requirements
-- **IRIS 2025.3.0+** with Vector Search feature
-- **ACORN-1 optimization** for best performance
-- **Python 3.8+** for embedded operations
-- **Docker** for containerized deployment
+## License
 
-### Performance Characteristics
-- **Real-time** queries (sub-millisecond graph traversal)
-- **Vector search** optimized (6ms with HNSW vs 5.8s Python fallback)
-- **Large-scale** data processing (millions of proteins)
-- **JSON_TABLE filtering** for structured confidence scoring (109ms)
-- **Production-ready** reliability and error handling
-- **Scalable** architecture for growing datasets
-
-## 🏆 Key Features
-
-- ✅ **21x performance improvement** with ACORN-1
-- ✅ **Production-ready** reliability
-- ✅ **Biomedical performance** testing (STRING, PubMed ready)
-- ✅ **Comprehensive benchmarks** and analysis
-- ✅ **IRIS-native** architecture (no external dependencies)
-- ✅ **Vector + graph** hybrid capabilities
-- ✅ **Scalable** to millions of entities
-
----
-
-*Powered by InterSystems IRIS with ACORN-1 optimization for exceptional biomedical research performance.*
+See [LICENSE](LICENSE) file for details.
