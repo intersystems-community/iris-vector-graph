@@ -463,10 +463,138 @@ def validate_migration(connection) -> Dict:
 
 def execute_migration(connection) -> bool:
     """
-    Execute the full migration.
-    Implementation in T025.
+    Execute the full NodePK migration.
+
+    Implements T025 specification: Migration execution mode.
+
+    This function performs the complete migration:
+    1. Create nodes table (if not exists)
+    2. Discover and insert all nodes
+    3. Add foreign key constraints
+    4. Validate referential integrity
+
+    Args:
+        connection: IRIS database connection
+
+    Returns:
+        bool: True if migration succeeded, False otherwise
+
+    Raises:
+        Exception: If migration fails at any step
+
+    Strategy:
+        1. Check if already migrated (nodes table exists with FK constraints)
+        2. Run validation first to detect orphans
+        3. Execute SQL migrations (nodes table + FK constraints)
+        4. Discover and bulk insert nodes
+        5. Verify referential integrity post-migration
     """
-    raise NotImplementedError("execute_migration() - implement in T025")
+    logger = logging.getLogger(__name__)
+
+    logger.info("=" * 70)
+    logger.info("EXECUTING NODEPK MIGRATION")
+    logger.info("=" * 70)
+
+    cursor = connection.cursor()
+
+    try:
+        # Step 1: Check if already migrated
+        logger.info("\n[1/6] Checking migration status...")
+        try:
+            cursor.execute("SELECT COUNT(*) FROM nodes WHERE 1=0")
+            logger.info("  nodes table already exists")
+
+            # Check if FK constraints already exist
+            cursor.execute("""
+                SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS
+                WHERE constraint_name LIKE 'fk_%'
+            """)
+            fk_count = cursor.fetchone()[0]
+
+            if fk_count >= 4:  # Expecting at least 4 FK constraints (edges s/o_id, labels, props)
+                logger.info(f"  ✅ Migration appears complete ({fk_count} FK constraints found)")
+                logger.info("  This is idempotent - verifying integrity...")
+                # Continue to validation step
+            else:
+                logger.warning(f"  ⚠️  nodes table exists but only {fk_count} FK constraints found")
+                logger.info("  Continuing migration to add missing constraints...")
+
+        except Exception as e:
+            if 'not found' in str(e).lower() or 'does not exist' in str(e).lower():
+                logger.info("  nodes table does not exist - starting fresh migration")
+            else:
+                raise
+
+        # Step 2: Pre-migration validation
+        logger.info("\n[2/6] Running pre-migration validation...")
+
+        # Discover nodes without inserting
+        discovered_nodes = discover_nodes(connection)
+        logger.info(f"  Discovered {len(discovered_nodes)} unique nodes")
+
+        # Step 3: Create nodes table
+        logger.info("\n[3/6] Creating nodes table...")
+        try:
+            execute_sql_migration(connection, 'sql/migrations/001_add_nodepk_table.sql')
+            logger.info("  ✅ nodes table created")
+        except Exception as e:
+            if 'already exists' in str(e).lower():
+                logger.info("  nodes table already exists (OK)")
+            else:
+                raise
+
+        # Step 4: Bulk insert nodes
+        logger.info("\n[4/6] Inserting nodes...")
+        inserted_count = bulk_insert_nodes(connection, discovered_nodes)
+        logger.info(f"  ✅ Inserted {inserted_count} nodes")
+
+        # Step 5: Add FK constraints
+        logger.info("\n[5/6] Adding foreign key constraints...")
+        try:
+            execute_sql_migration(connection, 'sql/migrations/002_add_fk_constraints.sql')
+            logger.info("  ✅ FK constraints added")
+        except Exception as e:
+            error_msg = str(e).lower()
+            if 'already exists' in error_msg or 'duplicate' in error_msg:
+                logger.info("  FK constraints already exist (OK)")
+            elif 'foreign key' in error_msg and 'failed' in error_msg:
+                logger.error(f"  ❌ FK constraint validation failed: {e}")
+                logger.error("  This means there are orphaned references in the database.")
+                logger.error("  Run with --validate-only to identify orphans.")
+                raise
+            else:
+                raise
+
+        # Step 6: Post-migration validation
+        logger.info("\n[6/6] Verifying referential integrity...")
+        orphans = detect_orphans(connection)
+
+        if orphans:
+            total_orphans = sum(len(nodes) for nodes in orphans.values())
+            logger.error(f"  ❌ Found {total_orphans} orphaned references!")
+            for table, orphaned_nodes in orphans.items():
+                logger.error(f"    {table}: {len(orphaned_nodes)} orphans")
+            logger.error("  Migration completed but integrity issues detected.")
+            return False
+        else:
+            logger.info("  ✅ No orphaned references - referential integrity verified")
+
+        # Success summary
+        logger.info("\n" + "=" * 70)
+        logger.info("MIGRATION COMPLETED SUCCESSFULLY")
+        logger.info("=" * 70)
+        logger.info(f"\n  nodes table: ✅ Created with {len(discovered_nodes)} nodes")
+        logger.info(f"  FK constraints: ✅ Added to rdf_edges, rdf_labels, rdf_props")
+        logger.info(f"  Referential integrity: ✅ Verified")
+        logger.info("\n" + "=" * 70 + "\n")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"\n❌ Migration failed: {e}")
+        logger.error("Rolling back transaction...")
+        connection.rollback()
+        raise
 
 
 def execute_sql_migration(connection, sql_file_path: str):
