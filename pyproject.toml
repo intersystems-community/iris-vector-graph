@@ -46,9 +46,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "fastapi>=0.118.0",
     "uvicorn>=0.37.0",
-    "opencypher>=0.3.0",
     "pydantic>=2.11.9",
     "pytest-asyncio>=1.2.0",
+    "py2neo>=2021.2.4",
 ]
 
 # Optional dependencies for different use cases
