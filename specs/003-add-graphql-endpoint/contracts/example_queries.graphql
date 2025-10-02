@@ -1,0 +1,246 @@
+# Example GraphQL Queries for IRIS Vector Graph API
+# Generated: 2025-10-02
+
+# Query 1: Simple protein lookup
+query GetProtein {
+  protein(id: "PROTEIN:TP53") {
+    id
+    name
+    function
+    organism
+    confidence
+  }
+}
+
+# Query 2: Protein with nested interactions (demonstrates DataLoader batching)
+query ProteinWithInteractions {
+  protein(id: "PROTEIN:TP53") {
+    id
+    name
+    function
+    interactsWith(first: 5) {
+      id
+      name
+      function
+    }
+  }
+}
+
+# Query 3: Multi-level nesting (tests query depth limits)
+query DeepNesting {
+  protein(id: "PROTEIN:TP53") {
+    name
+    interactsWith(first: 3) {
+      name
+      interactsWith(first: 3) {
+        name
+        interactsWith(first: 3) {
+          name
+        }
+      }
+    }
+  }
+}
+
+# Query 4: Vector similarity search
+query SimilarProteins {
+  protein(id: "PROTEIN:TP53") {
+    name
+    similar(limit: 10, threshold: 0.8) {
+      protein {
+        id
+        name
+        function
+      }
+      similarity
+      distance
+    }
+  }
+}
+
+# Query 5: Hybrid vector+graph query
+query HybridSearch {
+  protein(id: "PROTEIN:TP53") {
+    name
+    similar(limit: 5, threshold: 0.8) {
+      protein {
+        name
+        interactsWith(first: 3) {
+          name
+          function
+        }
+      }
+      similarity
+    }
+  }
+}
+
+# Query 6: Protein neighborhood (graph traversal)
+query ProteinNeighborhood {
+  proteinNeighborhood(id: "PROTEIN:TP53", hops: 2) {
+    center {
+      name
+      function
+    }
+    neighbors {
+      name
+      confidence
+    }
+    interactions {
+      type
+      confidence
+      source {
+        ... on Protein {
+          name
+        }
+      }
+      target {
+        ... on Protein {
+          name
+        }
+      }
+    }
+    depth
+  }
+}
+
+# Query 7: List proteins with filtering
+query FilteredProteins {
+  proteins(
+    where: {
+      organism: "Homo sapiens"
+      confidenceMin: 0.8
+    }
+    first: 20
+    offset: 0
+  ) {
+    id
+    name
+    organism
+    confidence
+  }
+}
+
+# Query 8: Shortest path between proteins
+query ShortestPath {
+  shortestPath(
+    sourceId: "PROTEIN:TP53"
+    targetId: "PROTEIN:MDM2"
+  ) {
+    nodes {
+      id
+      ... on Protein {
+        name
+      }
+    }
+    edges {
+      type
+      confidence
+    }
+    length
+  }
+}
+
+# Query 9: Vector similarity with direct query vector
+query VectorSearch {
+  similarProteins(
+    queryVector: [0.1, 0.2, 0.3, ...]  # 768-dimensional vector
+    limit: 10
+    threshold: 0.75
+  ) {
+    protein {
+      id
+      name
+      function
+    }
+    similarity
+  }
+}
+
+# Query 10: Graph statistics
+query Stats {
+  graphStats {
+    totalNodes
+    totalEdges
+    nodesByLabel
+    edgesByType
+  }
+}
+
+# Query 11: Multiple entities in single request
+query BatchQuery {
+  tp53: protein(id: "PROTEIN:TP53") {
+    name
+    function
+  }
+  mdm2: protein(id: "PROTEIN:MDM2") {
+    name
+    function
+  }
+  p53Pathway: pathway(id: "PATHWAY:P53_SIGNALING") {
+    name
+    description
+    proteins(first: 10) {
+      name
+    }
+  }
+}
+
+# Query 12: Genes with encoded proteins
+query GenesAndProteins {
+  genes(first: 5) {
+    name
+    chromosome
+    position
+    encodes(first: 3) {
+      name
+      function
+    }
+  }
+}
+
+# Query 13: Pathway analysis
+query PathwayAnalysis {
+  pathway(id: "PATHWAY:P53_SIGNALING") {
+    name
+    description
+    proteins(first: 20) {
+      name
+      confidence
+      interactsWith(first: 5) {
+        name
+      }
+    }
+  }
+}
+
+# Query 14: Fragment usage (demonstrates code reuse)
+fragment ProteinDetails on Protein {
+  id
+  name
+  function
+  organism
+  confidence
+}
+
+query WithFragments {
+  protein(id: "PROTEIN:TP53") {
+    ...ProteinDetails
+    interactsWith(first: 5) {
+      ...ProteinDetails
+    }
+  }
+}
+
+# Query 15: Interface query (Node interface)
+query InterfaceQuery {
+  node(id: "PROTEIN:TP53") {
+    id
+    labels
+    createdAt
+    ... on Protein {
+      name
+      function
+    }
+  }
+}
