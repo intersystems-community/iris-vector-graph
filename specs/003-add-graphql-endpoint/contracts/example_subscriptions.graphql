@@ -1,0 +1,116 @@
+# Example GraphQL Subscriptions for IRIS Vector Graph API
+# Generated: 2025-10-02
+
+# Subscription 1: Subscribe to all protein creation events
+subscription ProteinCreated {
+  proteinCreated {
+    id
+    name
+    function
+    createdAt
+  }
+}
+
+# Subscription 2: Subscribe to updates for specific protein
+subscription ProteinUpdated {
+  proteinUpdated(id: "PROTEIN:TP53") {
+    id
+    name
+    function
+    confidence
+  }
+}
+
+# Subscription 3: Subscribe to all gene creation events
+subscription GeneCreated {
+  geneCreated {
+    id
+    name
+    chromosome
+    position
+    createdAt
+  }
+}
+
+# Subscription 4: Subscribe to interaction creation events
+subscription InteractionCreated {
+  interactionCreated {
+    source {
+      id
+      ... on Protein {
+        name
+      }
+    }
+    target {
+      id
+      ... on Protein {
+        name
+      }
+    }
+    type
+    confidence
+  }
+}
+
+# Subscription 5: Subscribe to pathway creation with nested proteins
+subscription PathwayCreated {
+  pathwayCreated {
+    id
+    name
+    description
+    proteins(first: 10) {
+      name
+      function
+    }
+  }
+}
+
+# Subscription 6: Multiple subscriptions (client manages multiple WebSocket connections)
+# Note: Each subscription requires separate WebSocket connection
+
+# Connection 1:
+subscription MonitorTP53 {
+  proteinUpdated(id: "PROTEIN:TP53") {
+    name
+    confidence
+  }
+}
+
+# Connection 2:
+subscription MonitorMDM2 {
+  proteinUpdated(id: "PROTEIN:MDM2") {
+    name
+    confidence
+  }
+}
+
+# Connection 3:
+subscription MonitorAllCreations {
+  proteinCreated {
+    name
+  }
+}
+
+# Subscription 7: Use with fragment
+fragment ProteinEvent on Protein {
+  id
+  name
+  function
+  confidence
+  createdAt
+}
+
+subscription ProteinEventsWithFragment {
+  proteinCreated {
+    ...ProteinEvent
+  }
+}
+
+# Subscription 8: Subscribe to gene updates (no ID filter = all genes)
+subscription AllGeneUpdates {
+  geneUpdated {
+    id
+    name
+    chromosome
+  }
+}

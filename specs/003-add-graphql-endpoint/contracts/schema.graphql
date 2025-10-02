@@ -1,0 +1,222 @@
+# GraphQL Schema for IRIS Vector Graph API
+# Generated: 2025-10-02
+# Spec: 003-add-graphql-endpoint
+
+# Custom scalar types
+scalar JSON
+scalar DateTime
+
+# Base interface for all graph entities
+interface Node {
+  id: ID!
+  labels: [String!]!
+  properties: JSON!
+  createdAt: DateTime!
+}
+
+# Protein entity
+type Protein implements Node {
+  # Node interface fields
+  id: ID!
+  labels: [String!]!
+  properties: JSON!
+  createdAt: DateTime!
+
+  # Protein-specific fields
+  name: String!
+  function: String
+  organism: String
+  confidence: Float
+
+  # Relationship fields
+  interactsWith(first: Int = 10, offset: Int = 0): [Protein!]!
+  regulatedBy(first: Int = 10, offset: Int = 0): [Gene!]!
+  participatesIn(first: Int = 10, offset: Int = 0): [Pathway!]!
+
+  # Vector similarity field
+  similar(limit: Int = 10, threshold: Float = 0.7): [SimilarProtein!]!
+}
+
+# Gene entity
+type Gene implements Node {
+  # Node interface fields
+  id: ID!
+  labels: [String!]!
+  properties: JSON!
+  createdAt: DateTime!
+
+  # Gene-specific fields
+  name: String!
+  chromosome: String
+  position: Int
+
+  # Relationship fields
+  encodes(first: Int = 10, offset: Int = 0): [Protein!]!
+  variants(first: Int = 10, offset: Int = 0): [Variant!]!
+}
+
+# Pathway entity
+type Pathway implements Node {
+  # Node interface fields
+  id: ID!
+  labels: [String!]!
+  properties: JSON!
+  createdAt: DateTime!
+
+  # Pathway-specific fields
+  name: String!
+  description: String
+
+  # Relationship fields
+  proteins(first: Int = 10, offset: Int = 0): [Protein!]!
+  genes(first: Int = 10, offset: Int = 0): [Gene!]!
+}
+
+# Variant entity (placeholder)
+type Variant implements Node {
+  # Node interface fields
+  id: ID!
+  labels: [String!]!
+  properties: JSON!
+  createdAt: DateTime!
+
+  # Variant-specific fields
+  name: String!
+  rsId: String
+  chromosome: String
+  position: Int
+}
+
+# Interaction/Edge type
+type Interaction {
+  source: Node!
+  target: Node!
+  type: String!
+  confidence: Float
+  qualifiers: JSON
+}
+
+# Vector similarity result
+type SimilarProtein {
+  protein: Protein!
+  similarity: Float!
+  distance: Float
+}
+
+# Neighborhood query result
+type ProteinNeighborhood {
+  center: Protein!
+  neighbors: [Protein!]!
+  interactions: [Interaction!]!
+  depth: Int!
+}
+
+# Path query result
+type Path {
+  nodes: [Node!]!
+  edges: [Interaction!]!
+  length: Int!
+}
+
+# Graph statistics
+type GraphStats {
+  totalNodes: Int!
+  totalEdges: Int!
+  nodesByLabel: JSON!
+  edgesByType: JSON!
+}
+
+# Input types for mutations
+input CreateProteinInput {
+  id: ID!
+  name: String!
+  function: String
+  organism: String
+  embedding: [Float!]  # 768-dimensional vector
+}
+
+input UpdateProteinInput {
+  name: String
+  function: String
+  confidence: Float
+}
+
+input ProteinFilter {
+  name: String
+  organism: String
+  confidenceMin: Float
+  confidenceMax: Float
+}
+
+# Query root
+type Query {
+  # Node lookups
+  protein(id: ID!): Protein
+  gene(id: ID!): Gene
+  pathway(id: ID!): Pathway
+  node(id: ID!): Node
+
+  # List queries with filtering
+  proteins(
+    where: ProteinFilter
+    first: Int = 10
+    offset: Int = 0
+  ): [Protein!]!
+
+  genes(
+    first: Int = 10
+    offset: Int = 0
+  ): [Gene!]!
+
+  pathways(
+    first: Int = 10
+    offset: Int = 0
+  ): [Pathway!]!
+
+  # Graph queries
+  proteinNeighborhood(id: ID!, hops: Int = 1): ProteinNeighborhood
+  shortestPath(sourceId: ID!, targetId: ID!): Path
+
+  # Hybrid vector+graph queries
+  similarProteins(
+    queryVector: [Float!]!
+    limit: Int = 10
+    threshold: Float = 0.7
+  ): [SimilarProtein!]!
+
+  # Stats
+  graphStats: GraphStats!
+}
+
+# Mutation root
+type Mutation {
+  # Protein mutations
+  createProtein(input: CreateProteinInput!): Protein!
+  updateProtein(id: ID!, input: UpdateProteinInput!): Protein!
+  deleteProtein(id: ID!): Boolean!
+
+  # Batch mutations
+  createProteins(inputs: [CreateProteinInput!]!): [Protein!]!
+}
+
+# Subscription root
+type Subscription {
+  # Entity creation events
+  proteinCreated: Protein!
+  geneCreated: Gene!
+  pathwayCreated: Pathway!
+
+  # Entity update events
+  proteinUpdated(id: ID): Protein!
+  geneUpdated(id: ID): Gene!
+
+  # Interaction creation events
+  interactionCreated: Interaction!
+}
+
+# Schema definition
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}

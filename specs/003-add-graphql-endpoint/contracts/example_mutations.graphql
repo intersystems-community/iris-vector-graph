@@ -1,0 +1,154 @@
+# Example GraphQL Mutations for IRIS Vector Graph API
+# Generated: 2025-10-02
+
+# Mutation 1: Create a new protein
+mutation CreateProtein {
+  createProtein(input: {
+    id: "PROTEIN:NEW001"
+    name: "Test Protein 1"
+    function: "DNA binding"
+    organism: "Homo sapiens"
+    embedding: [0.1, 0.2, 0.3, ...]  # 768-dimensional vector
+  }) {
+    id
+    name
+    function
+    confidence
+    createdAt
+  }
+}
+
+# Mutation 2: Update existing protein
+mutation UpdateProtein {
+  updateProtein(
+    id: "PROTEIN:TP53"
+    input: {
+      function: "Updated function description"
+      confidence: 0.95
+    }
+  ) {
+    id
+    name
+    function
+    confidence
+  }
+}
+
+# Mutation 3: Delete protein
+mutation DeleteProtein {
+  deleteProtein(id: "PROTEIN:OLD001")
+}
+
+# Mutation 4: Batch create proteins
+mutation BatchCreateProteins {
+  createProteins(inputs: [
+    {
+      id: "PROTEIN:BATCH001"
+      name: "Batch Protein 1"
+      function: "Kinase activity"
+    },
+    {
+      id: "PROTEIN:BATCH002"
+      name: "Batch Protein 2"
+      function: "Phosphatase activity"
+    },
+    {
+      id: "PROTEIN:BATCH003"
+      name: "Batch Protein 3"
+      function: "Transcription factor"
+    }
+  ]) {
+    id
+    name
+    function
+  }
+}
+
+# Mutation 5: Create protein with nested query (demonstrates mutation + query)
+mutation CreateAndQuery {
+  createProtein(input: {
+    id: "PROTEIN:NEW002"
+    name: "New Protein 2"
+    function: "Signal transduction"
+  }) {
+    id
+    name
+    function
+    # Query related proteins after creation
+    interactsWith(first: 5) {
+      name
+    }
+  }
+}
+
+# Mutation 6: Update with fragment
+fragment ProteinResult on Protein {
+  id
+  name
+  function
+  confidence
+  createdAt
+}
+
+mutation UpdateWithFragment {
+  updateProtein(
+    id: "PROTEIN:TP53"
+    input: {
+      confidence: 0.99
+    }
+  ) {
+    ...ProteinResult
+  }
+}
+
+# Mutation 7: Multiple mutations in single request
+mutation BatchOperations {
+  create: createProtein(input: {
+    id: "PROTEIN:MULTI001"
+    name: "Multi Protein 1"
+  }) {
+    id
+    name
+  }
+
+  update: updateProtein(
+    id: "PROTEIN:TP53"
+    input: { confidence: 0.97 }
+  ) {
+    id
+    confidence
+  }
+
+  delete: deleteProtein(id: "PROTEIN:OLD002")
+}
+
+# Mutation 8: Create with validation error (should fail)
+mutation CreateInvalid {
+  createProtein(input: {
+    id: "PROTEIN:INVALID"
+    name: ""  # Empty name should fail validation
+  }) {
+    id
+    name
+  }
+}
+
+# Mutation 9: Update non-existent protein (should fail)
+mutation UpdateNonExistent {
+  updateProtein(
+    id: "PROTEIN:NONEXISTENT"
+    input: { function: "Test" }
+  ) {
+    id
+  }
+}
+
+# Mutation 10: Create with duplicate ID (should fail FK constraint)
+mutation CreateDuplicate {
+  createProtein(input: {
+    id: "PROTEIN:TP53"  # Already exists
+    name: "Duplicate"
+  }) {
+    id
+  }
+}
