@@ -49,6 +49,7 @@ dependencies = [
     "pydantic>=2.11.9",
     "pytest-asyncio>=1.2.0",
     "py2neo>=2021.2.4",
+    "httpx>=0.28.1",
 ]
 
 # Optional dependencies for different use cases

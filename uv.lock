@@ -1009,6 +1009,7 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "intersystems-irispython" },
     { name = "networkx", version = "3.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
@@ -1066,6 +1067,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.118.0" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "graphviz", marker = "extra == 'visualization'", specifier = ">=0.20.0" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "intersystems-irispython", specifier = ">=3.2.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "matplotlib", marker = "extra == 'visualization'", specifier = ">=3.7.0" },
