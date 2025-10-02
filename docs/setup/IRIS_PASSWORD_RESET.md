@@ -11,7 +11,35 @@ Details: Password change required
 
 ## Solution
 
-### Option 1: Reset Password via Management Portal (Recommended)
+### Option 1: Disable Password Expiration (Recommended for Development)
+
+**Source**: [`../rag-templates/archive/archived_documentation/migrations/IRIS_VERSION_MIGRATION_2025.md`](https://github.com/intersystems-community/rag-templates)
+
+This is the cleanest solution for development/testing environments:
+
+```bash
+# Access IRIS terminal in %SYS namespace
+docker exec -i iris-pgwire-db iris session iris -U%SYS <<'EOF'
+do ##class(Security.Users).UnExpireUserPasswords("*")
+write "Password expiration disabled for all users", !
+quit
+EOF
+```
+
+**Why this works**:
+- Disables password expiration for all user accounts
+- No need to change passwords or update .env files
+- Persists across container restarts
+- Standard InterSystems recommended approach for development
+
+**For docker-compose automated setup**, add to your compose file:
+```yaml
+services:
+  iris:
+    command: --check-caps false -a "iris session iris -U%SYS '##class(Security.Users).UnExpireUserPasswords(\"*\")'"
+```
+
+### Option 2: Reset Password via Management Portal
 
 1. **Access Management Portal**:
    ```bash
@@ -36,7 +64,7 @@ Details: Password change required
    IRIS_PASSWORD=your_new_password
    ```
 
-### Option 2: Reset Password via Docker Container
+### Option 3: Reset Password via Docker Container
 
 1. **Access IRIS terminal**:
    ```bash
@@ -56,7 +84,7 @@ Details: Password change required
 
 3. **Update .env file** (same as Option 1)
 
-### Option 3: Recreate IRIS Container (Fresh Start)
+### Option 4: Recreate IRIS Container (Fresh Start)
 
 If you don't need to preserve data:
 
@@ -74,7 +102,7 @@ docker-compose -f docker-compose.acorn.yml up -d
 
 **⚠️ WARNING**: This deletes all data in the database!
 
-### Option 4: Modify iris.key File (Advanced)
+### Option 5: Modify iris.key File (Advanced)
 
 For persistent containers where you want to bypass password change:
 

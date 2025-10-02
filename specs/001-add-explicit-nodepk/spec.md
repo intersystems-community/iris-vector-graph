@@ -112,6 +112,42 @@ As a graph database administrator, I need the system to enforce referential inte
 
 ---
 
+## Clarifications
+
+### Session 2025-10-02
+
+- Q: Should NodePK spec include hybrid query patterns (vector + graph), or focus purely on referential integrity? → A: Referential integrity only - NodePK is foundational infrastructure
+
+---
+
+## Architectural Context
+
+This feature provides the **foundational infrastructure** for the IRIS Vector Graph system by establishing explicit node identity and referential integrity. While NodePK itself focuses solely on data consistency, it enables higher-level capabilities defined in the system constitution:
+
+**Enabled Use Cases** (defined in constitution, not part of this feature):
+- **Hybrid Search** (Constitution Principle IV): Vector similarity + text search + graph traversal with RRF fusion
+- **Graph Analytics**: PageRank, Connected Components, BFS on integrity-validated graph structures
+- **Vector-Guided Graph Operations**: HNSW k-NN search (SQL-based) → graph expansion → analytics (embedded Python)
+
+**Architectural Relationship**:
+```
+NodePK (this feature)
+  ↓ Provides: Explicit node identity + FK constraints + validated references
+Constitution Principles
+  ↓ Define: Hybrid search patterns, IRIS-native development, performance targets
+Higher-Level Features
+  ↓ Implement: Vector-guided PageRank, hybrid RAG, semantic graph traversal
+```
+
+**Critical Constraint** (from `docs/architecture/embedded_python_architecture.md`):
+- HNSW vector operations MUST use SQL (tightly coupled to query planner)
+- Pure graph operations CAN use embedded Python with global access (10-50x faster)
+- FK constraints (from NodePK) validate all node references in both patterns
+
+**Reference**: See `docs/architecture/embedded_python_architecture.md` for detailed hybrid query architecture.
+
+---
+
 ## Dependencies and Assumptions
 
 ### Dependencies
