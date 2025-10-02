@@ -128,8 +128,96 @@ class Protein(Node):
         limit: int = 10,
         threshold: float = 0.7
     ) -> List["SimilarProtein"]:
-        """Find similar proteins using vector embeddings"""
-        raise NotImplementedError("Resolver not implemented - will be added in T024")
+        """
+        Find similar proteins using vector embeddings with HNSW index.
+
+        REQUIRES: InterSystems IRIS 2025.1+ with Vector Search feature enabled.
+
+        NOTE: This implementation will return empty results if VECTOR functions
+        are not available. For full vector search support, use IRIS with:
+        - VECTOR_DOT_PRODUCT() function
+        - VECTOR_COSINE() function
+        - HNSW index on kg_NodeEmbeddings.emb
+
+        See docs/setup/IRIS_PASSWORD_RESET.md for IRIS version requirements.
+        """
+        # Get database connection from context
+        db_connection = info.context.get("db_connection")
+        if not db_connection:
+            return []
+
+        cursor = db_connection.cursor()
+
+        # Check if embeddings exist for this protein
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM kg_NodeEmbeddings WHERE id = ?",
+                (str(self.id),)
+            )
+            count = cursor.fetchone()[0]
+            if count == 0:
+                # No embedding for this protein
+                return []
+        except Exception:
+            return []
+
+        # Try to use VECTOR functions if available (IRIS 2025.1+)
+        # Query using HNSW vector search with VECTOR_DOT_PRODUCT
+        query = """
+            SELECT TOP ?
+                e2.id,
+                VECTOR_DOT_PRODUCT(e1.emb, e2.emb) as similarity
+            FROM kg_NodeEmbeddings e1,
+                 kg_NodeEmbeddings e2
+            WHERE e1.id = ?
+              AND e2.id != ?
+              AND VECTOR_DOT_PRODUCT(e1.emb, e2.emb) >= ?
+            ORDER BY similarity DESC
+        """
+
+        try:
+            cursor.execute(query, (limit, str(self.id), str(self.id), threshold))
+            rows = cursor.fetchall()
+        except Exception as e:
+            # VECTOR functions not available - requires IRIS 2025.1+ with Vector Search
+            # Return empty list (graceful degradation)
+            return []
+
+        if not rows:
+            return []
+
+        # Batch load proteins using ProteinLoader
+        protein_loader = info.context["protein_loader"]
+        protein_ids = [row[0] for row in rows]
+
+        proteins_data = await protein_loader.load_many(protein_ids)
+
+        # Build SimilarProtein results
+        results = []
+        for i, row in enumerate(rows):
+            protein_id = row[0]
+            similarity = float(row[1]) if row[1] is not None else 0.0
+
+            protein_data = proteins_data[i]
+            if protein_data:
+                protein = Protein(
+                    id=strawberry.ID(protein_data["id"]),
+                    labels=protein_data.get("labels", []),
+                    properties=protein_data.get("properties", {}),
+                    created_at=protein_data.get("created_at"),
+                    name=protein_data.get("name", ""),
+                    function=protein_data.get("function"),
+                    organism=protein_data.get("organism"),
+                    confidence=protein_data.get("confidence"),
+                )
+
+                results.append(SimilarProtein(
+                    protein=protein,
+                    similarity=similarity,
+                    distance=None  # Distance not computed in this query
+                ))
+
+        return results
 
 
 @strawberry.type
