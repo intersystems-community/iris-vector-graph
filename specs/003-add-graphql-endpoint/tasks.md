@@ -43,7 +43,7 @@
   - Run: `uv sync` to install dependencies
   - Dependencies: None
 
-- [ ] **T003 [P]** Configure linting and type checking
+- [X] **T003 [P]** Configure linting and type checking
   - Update `/Users/tdyar/ws/iris-vector-graph/pyproject.toml`:
     - Add `api/` and `iris_vector_graph_core/graphql/` to mypy paths
     - Add `tests/integration/graphql/` to pytest paths
@@ -56,7 +56,7 @@
 
 **CRITICAL: These tests MUST be written and MUST FAIL before ANY implementation**
 
-- [ ] **T004 [P]** Write failing GraphQL schema validation test
+- [X] **T004 [P]** Write failing GraphQL schema validation test
   - File: `/Users/tdyar/ws/iris-vector-graph/tests/contract/test_graphql_schema.py`
   - Test: Schema introspection validates all types from `/Users/tdyar/ws/iris-vector-graph/specs/003-add-graphql-endpoint/contracts/schema.graphql`
   - Test: Node interface implemented by Protein, Gene, Pathway types
@@ -66,7 +66,7 @@
   - Expected: **FAIL** (schema not implemented yet)
   - Dependencies: T003
 
-- [ ] **T005 [P]** Write failing contract test for Node interface introspection
+- [X] **T005 [P]** Write failing contract test for Node interface introspection
   - File: `/Users/tdyar/ws/iris-vector-graph/tests/contract/test_graphql_schema.py` (append)
   - Test: Node interface introspection returns `id`, `labels`, `properties`, `createdAt` fields
   - Test: Protein type introspection shows Node interface implementation
@@ -74,7 +74,7 @@
   - Expected: **FAIL** (Node interface not implemented yet)
   - Dependencies: T003
 
-- [ ] **T006 [P]** Write failing contract tests for example queries
+- [X] **T006 [P]** Write failing contract tests for example queries
   - File: `/Users/tdyar/ws/iris-vector-graph/tests/contract/test_graphql_queries.py`
   - Test queries from `/Users/tdyar/ws/iris-vector-graph/specs/003-add-graphql-endpoint/contracts/example_queries.graphql`:
     - Query 1: Simple protein lookup (GetProtein)
