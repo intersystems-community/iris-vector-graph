@@ -717,8 +717,7 @@ Examples:
         if args.validate_only:
             logger.info("Running migration validation (dry run)...")
             report = validate_migration(connection)
-            # TODO: Pretty print report (implement in T024)
-            print(report)
+            # Report is already logged by validate_migration()
 
         elif args.execute:
             logger.info("Executing migration...")
@@ -729,11 +728,6 @@ Examples:
             else:
                 logger.error("Migration failed!")
                 sys.exit(1)
-
-    except NotImplementedError as e:
-        logger.error(f"Function not yet implemented: {e}")
-        logger.info("This is expected - implement tasks T021-T026 to complete migration utility")
-        sys.exit(1)
 
     except Exception as e:
         logger.error(f"Migration error: {e}")
