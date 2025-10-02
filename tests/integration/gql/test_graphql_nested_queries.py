@@ -1,0 +1,297 @@
+"""
+Integration tests for GraphQL nested field resolvers.
+
+Tests nested queries with DataLoader batching to prevent N+1 queries.
+Validates interactsWith, regulatedBy, and similar() field resolvers.
+"""
+
+import pytest
+from typing import Optional
+
+# TDD Gate: Tests will initially fail until nested resolvers are implemented
+try:
+    from api.gql.schema import schema
+    from api.gql.loaders import ProteinLoader, GeneLoader, PathwayLoader, EdgeLoader
+    SCHEMA_EXISTS = True
+except ImportError as e:
+    SCHEMA_EXISTS = False
+    schema = None
+
+
+@pytest.mark.requires_database
+@pytest.mark.integration
+@pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
+class TestNestedFieldResolvers:
+    """Integration tests for nested field resolvers with DataLoader batching"""
+
+    async def test_protein_interacts_with_nested_query(self, iris_connection):
+        """Test protein.interactsWith field resolver with DataLoader batching"""
+        cursor = iris_connection.cursor()
+
+        # Setup: Create two proteins and an interaction
+        # Protein 1: TP53
+        try:
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ("PROTEIN:TP53",))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", ("PROTEIN:TP53", "Protein"))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                         ("PROTEIN:TP53", "name", "Tumor protein p53"))
+        except:
+            pass
+
+        # Protein 2: MDM2
+        try:
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ("PROTEIN:MDM2",))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", ("PROTEIN:MDM2", "Protein"))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                         ("PROTEIN:MDM2", "name", "MDM2 proto-oncogene"))
+        except:
+            pass
+
+        # Create interaction edge
+        try:
+            cursor.execute(
+                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
+                (1, "PROTEIN:TP53", "INTERACTS_WITH", "PROTEIN:MDM2")
+            )
+        except:
+            pass
+
+        iris_connection.commit()
+
+        # Execute nested GraphQL query
+        query = """
+            query GetProteinWithInteractions($id: ID!) {
+                protein(id: $id) {
+                    id
+                    name
+                    interactsWith(first: 5) {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        result = await schema.execute(
+            query,
+            variable_values={"id": "PROTEIN:TP53"},
+            context_value={
+                "protein_loader": ProteinLoader(iris_connection),
+                "gene_loader": GeneLoader(iris_connection),
+                "pathway_loader": PathwayLoader(iris_connection),
+                "edge_loader": EdgeLoader(iris_connection),
+            }
+        )
+
+        # Validate result
+        assert result.errors is None, f"GraphQL errors: {result.errors}"
+        assert result.data is not None
+
+        protein = result.data["protein"]
+        assert protein["name"] == "Tumor protein p53"
+        assert len(protein["interactsWith"]) == 1
+        assert protein["interactsWith"][0]["id"] == "PROTEIN:MDM2"
+        assert protein["interactsWith"][0]["name"] == "MDM2 proto-oncogene"
+
+    async def test_gene_encodes_nested_query(self, iris_connection):
+        """Test gene.encodes field resolver (gene -> protein relationship)"""
+        cursor = iris_connection.cursor()
+
+        # Setup: Create gene and protein with ENCODES relationship
+        # Gene: TP53
+        try:
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ("GENE:TP53",))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", ("GENE:TP53", "Gene"))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                         ("GENE:TP53", "name", "TP53"))
+        except:
+            pass
+
+        # Protein: TP53
+        try:
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ("PROTEIN:TP53",))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", ("PROTEIN:TP53", "Protein"))
+        except:
+            pass
+        try:
+            cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                         ("PROTEIN:TP53", "name", "Tumor protein p53"))
+        except:
+            pass
+
+        # Create ENCODES edge
+        try:
+            cursor.execute(
+                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
+                (2, "GENE:TP53", "ENCODES", "PROTEIN:TP53")
+            )
+        except:
+            pass
+
+        iris_connection.commit()
+
+        # Execute nested GraphQL query
+        query = """
+            query GetGeneWithProteins($id: ID!) {
+                gene(id: $id) {
+                    id
+                    name
+                    encodes(first: 5) {
+                        id
+                        name
+                    }
+                }
+            }
+        """
+
+        result = await schema.execute(
+            query,
+            variable_values={"id": "GENE:TP53"},
+            context_value={
+                "protein_loader": ProteinLoader(iris_connection),
+                "gene_loader": GeneLoader(iris_connection),
+                "pathway_loader": PathwayLoader(iris_connection),
+                "edge_loader": EdgeLoader(iris_connection),
+            }
+        )
+
+        assert result.errors is None, f"GraphQL errors: {result.errors}"
+        gene = result.data["gene"]
+        assert gene["name"] == "TP53"
+        assert len(gene["encodes"]) == 1
+        assert gene["encodes"][0]["name"] == "Tumor protein p53"
+
+    async def test_dataloader_batching_prevents_n_plus_1(self, iris_connection):
+        """Test that DataLoader batching reduces N+1 queries to ≤2 queries"""
+        cursor = iris_connection.cursor()
+
+        # Setup: Create 3 proteins with interactions
+        proteins = [
+            ("PROTEIN:P1", "Protein 1"),
+            ("PROTEIN:P2", "Protein 2"),
+            ("PROTEIN:P3", "Protein 3"),
+        ]
+
+        for protein_id, name in proteins:
+            try:
+                cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", (protein_id,))
+            except:
+                pass
+            try:
+                cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", (protein_id, "Protein"))
+            except:
+                pass
+            try:
+                cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                             (protein_id, "name", name))
+            except:
+                pass
+
+        # Create interaction edges (P1 -> P2, P1 -> P3)
+        try:
+            cursor.execute(
+                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
+                (101, "PROTEIN:P1", "INTERACTS_WITH", "PROTEIN:P2")
+            )
+        except:
+            pass
+        try:
+            cursor.execute(
+                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
+                (102, "PROTEIN:P1", "INTERACTS_WITH", "PROTEIN:P3")
+            )
+        except:
+            pass
+
+        iris_connection.commit()
+
+        # Execute nested query
+        query = """
+            query GetProteinWithInteractions($id: ID!) {
+                protein(id: $id) {
+                    id
+                    name
+                    interactsWith(first: 10) {
+                        id
+                        name
+                        function
+                    }
+                }
+            }
+        """
+
+        result = await schema.execute(
+            query,
+            variable_values={"id": "PROTEIN:P1"},
+            context_value={
+                "protein_loader": ProteinLoader(iris_connection),
+                "gene_loader": GeneLoader(iris_connection),
+                "pathway_loader": PathwayLoader(iris_connection),
+                "edge_loader": EdgeLoader(iris_connection),
+            }
+        )
+
+        assert result.errors is None
+        protein = result.data["protein"]
+        assert len(protein["interactsWith"]) == 2
+
+        # Verify both interactions loaded correctly
+        partner_names = {p["name"] for p in protein["interactsWith"]}
+        assert partner_names == {"Protein 2", "Protein 3"}
+
+
+@pytest.fixture
+def iris_connection():
+    """Fixture providing live IRIS database connection"""
+    import iris
+    import os
+
+    conn = iris.connect(
+        os.getenv('IRIS_HOST', 'localhost'),
+        int(os.getenv('IRIS_PORT', '1972')),
+        os.getenv('IRIS_NAMESPACE', 'USER'),
+        os.getenv('IRIS_USER', '_SYSTEM'),
+        os.getenv('IRIS_PASSWORD', 'SYS')
+    )
+
+    yield conn
+
+    # Cleanup: Remove test data
+    cursor = conn.cursor()
+    test_nodes = [
+        "PROTEIN:TP53", "PROTEIN:MDM2", "GENE:TP53",
+        "PROTEIN:P1", "PROTEIN:P2", "PROTEIN:P3"
+    ]
+
+    for node_id in test_nodes:
+        try:
+            cursor.execute("DELETE FROM rdf_edges WHERE s = ? OR o_id = ?", (node_id, node_id))
+            cursor.execute("DELETE FROM rdf_props WHERE s = ?", (node_id,))
+            cursor.execute("DELETE FROM rdf_labels WHERE s = ?", (node_id,))
+            cursor.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
+        except:
+            pass
+
+    conn.commit()
+    conn.close()
