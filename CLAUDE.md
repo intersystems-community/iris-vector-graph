@@ -41,11 +41,27 @@ Requires **InterSystems IRIS 2025.1+** with Vector Search (HNSW) feature:
 
 Access IRIS Management Portal: http://localhost:52773/csp/sys/UtilHome.csp (or port 252773 for ACORN-1)
 
+### GraphQL API Server
+```bash
+# Start GraphQL API server (FastAPI + Strawberry)
+uvicorn api.main:app --reload --port 8000
+
+# Access GraphQL Playground UI
+open http://localhost:8000/graphql
+
+# Health check
+curl http://localhost:8000/health
+```
+
 ### Testing
 ```bash
 # Run test suite
 uv run python tests/python/run_all_tests.py       # All tests
 uv run python tests/python/run_all_tests.py --quick  # Quick validation
+
+# GraphQL API tests
+pytest tests/integration/gql/           # GraphQL resolvers
+pytest tests/integration/test_fastapi_graphql.py  # FastAPI endpoint
 
 # Direct pytest execution
 pytest tests/                                      # All tests
@@ -99,12 +115,20 @@ This is a **Graph + Vector Retrieval** system targeting **InterSystems IRIS** th
    - `TextSearchEngine` - IRIS iFind integration
    - `VectorOptimizer` - HNSW optimization utilities
 
-3. **IRIS REST API** (`iris/src/`):
+3. **GraphQL API** (`api/gql/`):
+   - **Query Engines**: GraphQL + openCypher on top of generic graph database
+   - `schema.py` - Strawberry GraphQL schema composition
+   - `types.py` - Node interface, domain types (Protein, Gene, Pathway as EXAMPLES)
+   - `resolvers/` - Query, Mutation resolvers with DataLoader batching
+   - `loaders.py` - 6 DataLoaders for N+1 prevention (ProteinLoader, EdgeLoader, etc.)
+   - **FastAPI**: `/graphql` endpoint with Playground UI (port 8000)
+
+4. **IRIS REST API** (`iris/src/`):
    - `GraphAPI.cls` - REST endpoints for graph operations
    - `VectorSearch.cls` - Vector similarity search endpoints
    - `HybridSearch.cls` - Multi-modal search endpoints
 
-4. **Performance Testing** (`scripts/performance/`):
+5. **Performance Testing** (`scripts/performance/`):
    - `test_vector_performance.py` - Vector search benchmarks
    - `string_db_scale_test.py` - Large-scale biomedical testing
    - `benchmark_suite.py` - Comprehensive performance analysis
@@ -202,3 +226,156 @@ results = engine.hybrid_search(
 ```
 
 See `docs/architecture/ACTUAL_SCHEMA.md` for working patterns and integration examples.
+
+## GraphQL API Usage
+
+### Quick Start
+
+```bash
+# 1. Start IRIS database
+docker-compose up -d
+
+# 2. Start GraphQL API server
+uvicorn api.main:app --reload --port 8000
+
+# 3. Open GraphQL Playground
+open http://localhost:8000/graphql
+```
+
+### Generic Graph Queries (Works for ANY domain)
+
+```graphql
+# Query any node by ID (returns Node interface)
+query {
+  node(id: "PROTEIN:TP53") {
+    __typename          # Type name (e.g., "Protein")
+    id
+    labels              # ["Protein"]
+    properties          # {name: "Tumor protein p53", function: "..."}
+    property(key: "name")  # "Tumor protein p53"
+    createdAt
+  }
+}
+
+# Query with GraphQL fragments for type-specific fields
+query {
+  node(id: "PROTEIN:TP53") {
+    ... on Protein {
+      name
+      function
+      organism
+    }
+    ... on Gene {
+      name
+      chromosome
+    }
+  }
+}
+```
+
+### Domain-Specific Queries (Biomedical Example)
+
+```graphql
+# Query protein with nested interactions
+query {
+  protein(id: "PROTEIN:TP53") {
+    name
+    function
+    interactsWith(first: 5) {
+      name
+      function
+    }
+  }
+}
+
+# Vector similarity search (HNSW-optimized)
+query {
+  protein(id: "PROTEIN:TP53") {
+    name
+    similar(limit: 10, threshold: 0.7) {
+      protein {
+        name
+        function
+      }
+      similarity
+    }
+  }
+}
+
+# Gene encoding proteins
+query {
+  gene(id: "GENE:TP53") {
+    name
+    chromosome
+    encodes(first: 5) {
+      name
+      function
+    }
+  }
+}
+```
+
+### Mutations
+
+```graphql
+# Create protein with embedding
+mutation {
+  createProtein(input: {
+    id: "PROTEIN:NEW_PROTEIN"
+    name: "Novel Protein"
+    function: "Unknown function"
+    embedding: [0.1, 0.2, ..., 0.768]  # 768-dimensional vector
+  }) {
+    id
+    name
+    function
+  }
+}
+
+# Update protein fields (partial update)
+mutation {
+  updateProtein(
+    id: "PROTEIN:TP53"
+    input: {
+      function: "Updated function description"
+      confidence: 0.95
+    }
+  ) {
+    id
+    name
+    function
+    confidence
+  }
+}
+
+# Delete protein (cascade via FK constraints)
+mutation {
+  deleteProtein(id: "PROTEIN:OLD_PROTEIN")
+}
+```
+
+### Architecture Notes
+
+**GraphQL and openCypher are Query Engines** on top of a generic graph database:
+
+```
+┌────────────────────────────────────────┐
+│   Query Engines (User-Facing)         │
+│   GraphQL | openCypher | SQL          │
+└────────────────────────────────────────┘
+              ▼
+┌────────────────────────────────────────┐
+│   Core Graph Database (Generic)        │
+│   NodePK: nodes, rdf_edges, rdf_*     │
+│   Vector: kg_NodeEmbeddings + HNSW    │
+└────────────────────────────────────────┘
+              ▼
+┌────────────────────────────────────────┐
+│   Domain Schemas (Optional)            │
+│   Biomedical | Social | E-commerce    │
+└────────────────────────────────────────┘
+```
+
+**Design Principle**: Biomedical types (Protein, Gene, Pathway) are **EXAMPLE implementations**, not the core API. Use generic `node()` query for custom domains.
+
+See `docs/architecture/generic_graph_api_design.md` for full architecture details.

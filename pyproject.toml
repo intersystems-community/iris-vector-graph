@@ -49,6 +49,7 @@ dependencies = [
     "pytest-asyncio>=0.23.0",
     "graphql-core>=3.2.6",
     "strawberry-graphql[fastapi]>=0.280.0",
+    "httpx>=0.28.1",
 ]
 
 # Optional dependencies for different use cases
