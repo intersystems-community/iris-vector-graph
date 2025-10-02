@@ -136,6 +136,16 @@ ClassMethod ComputePageRank(
 
 **Timeline**: Available NOW!
 
+**⚠️ CRITICAL CONSTRAINT**: Embedded Python is for **PURE GRAPH operations only**
+
+- ✅ Use for: PageRank, Connected Components, BFS, graph traversals
+- ❌ NOT for: Vector similarity search (requires SQL + HNSW index)
+- ⚠️ Hybrid: Use SQL for vector search, then embedded Python for graph operations
+
+**Why**: HNSW vector index is SQL-coupled. You **CANNOT** bypass SQL for vector operations.
+
+**Reference**: See `docs/architecture/embedded_python_architecture.md` for detailed constraints
+
 ---
 
 ### Phase 2: Graph-Centric Computation Framework (Medium-Term)
