@@ -91,7 +91,7 @@
 
 **CRITICAL: All type implementations MUST come AFTER contract tests (T004-T006)**
 
-- [ ] **T007 [P]** Create Node interface
+- [X] **T007 [P]** Create Node interface
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py`
   - Implement Strawberry interface:
     ```python
@@ -104,7 +104,7 @@
     ```
   - Dependency: T004, T005
 
-- [ ] **T008 [P]** Create Protein type implementing Node interface
+- [X] **T008 [P]** Create Protein type implementing Node interface
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py` (append)
   - Implement Strawberry type:
     ```python
@@ -134,24 +134,24 @@
     ```
   - Dependency: T004, T007
 
-- [ ] **T009 [P]** Create Gene type implementing Node interface
+- [X] **T009 [P]** Create Gene type implementing Node interface
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py` (append)
   - Implement Strawberry type matching `/Users/tdyar/ws/iris-vector-graph/specs/003-add-graphql-endpoint/contracts/schema.graphql` Gene type
   - Include stubs for `encodes`, `variants` relationship fields
   - Dependency: T004, T007
 
-- [ ] **T010 [P]** Create Pathway type implementing Node interface
+- [X] **T010 [P]** Create Pathway type implementing Node interface
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py` (append)
   - Implement Strawberry type matching `/Users/tdyar/ws/iris-vector-graph/specs/003-add-graphql-endpoint/contracts/schema.graphql` Pathway type
   - Include stubs for `proteins`, `genes` relationship fields
   - Dependency: T004, T007
 
-- [ ] **T011 [P]** Create Variant type implementing Node interface
+- [X] **T011 [P]** Create Variant type implementing Node interface
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py` (append)
   - Implement Strawberry type matching `/Users/tdyar/ws/iris-vector-graph/specs/003-add-graphql-endpoint/contracts/schema.graphql` Variant type
   - Dependency: T004, T007
 
-- [ ] **T012 [P]** Create Interaction and SimilarProtein types
+- [X] **T012 [P]** Create Interaction and SimilarProtein types
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py` (append)
   - Implement:
     ```python
@@ -171,12 +171,12 @@
     ```
   - Dependency: T004
 
-- [ ] **T013 [P]** Create ProteinNeighborhood, Path, GraphStats result types
+- [X] **T013 [P]** Create ProteinNeighborhood, Path, GraphStats result types
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/types.py` (append)
   - Implement types matching `/Users/tdyar/ws/iris-vector-graph/specs/003-add-graphql-endpoint/contracts/schema.graphql`
   - Dependency: T004
 
-- [ ] **T014 [P]** Create Input types (CreateProteinInput, UpdateProteinInput, ProteinFilter)
+- [X] **T014 [P]** Create Input types (CreateProteinInput, UpdateProteinInput, ProteinFilter)
   - File: `/Users/tdyar/ws/iris-vector-graph/api/models/graphql.py`
   - Implement Pydantic models for input validation:
     ```python
