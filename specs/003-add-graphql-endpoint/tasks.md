@@ -205,7 +205,7 @@
 
 **CRITICAL: DataLoader batching is MANDATORY per spec (NFR-004). Must be implemented BEFORE query resolvers (T019-T022) to prevent N+1 queries.**
 
-- [ ] **T015 [P]** Write failing unit tests for ProteinLoader
+- [X] **T015 [P]** Write failing unit tests for ProteinLoader
   - File: `/Users/tdyar/ws/iris-vector-graph/tests/unit/test_graphql_dataloader.py`
   - Test: `test_protein_loader_batch_load_by_id`
     - Load 10 proteins with different IDs
@@ -218,7 +218,7 @@
   - Expected: **FAIL** (ProteinLoader not implemented yet)
   - Dependencies: T014
 
-- [ ] **T016 [P]** Implement ProteinLoader with SQL batching
+- [X] **T016 [P]** Implement ProteinLoader with SQL batching
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/loaders.py`
   - Implement DataLoader using strawberry.dataloader:
     ```python
@@ -246,7 +246,7 @@
     ```
   - Dependencies: T015
 
-- [ ] **T017 [P]** Write failing unit tests for EdgeLoader, PropertyLoader, LabelLoader
+- [X] **T017 [P]** Write failing unit tests for EdgeLoader, PropertyLoader, LabelLoader
   - File: `/Users/tdyar/ws/iris-vector-graph/tests/unit/test_graphql_dataloader.py` (append)
   - Test: `test_edge_loader_batch_load_by_source`
     - Load edges for 5 source nodes
@@ -264,7 +264,7 @@
   - Expected: **FAIL** (loaders not implemented yet)
   - Dependencies: T015
 
-- [ ] **T018 [P]** Implement EdgeLoader, PropertyLoader, LabelLoader with SQL batching
+- [X] **T018 [P]** Implement EdgeLoader, PropertyLoader, LabelLoader with SQL batching
   - File: `/Users/tdyar/ws/iris-vector-graph/api/graphql/loaders.py` (append)
   - Implement DataLoaders following pattern from T016:
     - EdgeLoader: Batch load edges by source_id, return list of lists
