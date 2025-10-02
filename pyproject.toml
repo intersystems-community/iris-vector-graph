@@ -50,6 +50,7 @@ dependencies = [
     "pytest-asyncio>=1.2.0",
     "py2neo>=2021.2.4",
     "httpx>=0.28.1",
+    "strawberry-graphql[fastapi]>=0.280.0",
 ]
 
 # Optional dependencies for different use cases
@@ -166,7 +167,8 @@ markers = [
     "integration: marks tests as integration tests",
     "performance: marks tests as performance benchmarks",
     "requires_iris: marks tests that require IRIS database connection",
-    "requires_database: marks tests that require database connection (alias for requires_iris)"
+    "requires_database: marks tests that require database connection (alias for requires_iris)",
+    "e2e: marks tests as end-to-end system tests (all query engines)"
 ]
 
 [tool.coverage.run]
