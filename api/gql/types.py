@@ -63,7 +63,42 @@ class Protein(Node):
         offset: int = 0
     ) -> List["Protein"]:
         """Proteins that interact with this protein"""
-        raise NotImplementedError("Resolver not implemented - will be added in T022")
+        # Load edges for this protein using EdgeLoader
+        edge_loader = info.context["edge_loader"]
+        edges = await edge_loader.load(str(self.id))
+
+        # Filter for INTERACTS_WITH relationships
+        interaction_edges = [e for e in edges if e["type"] == "INTERACTS_WITH"]
+
+        # Apply pagination
+        paginated_edges = interaction_edges[offset:offset + first]
+
+        # Load target proteins using ProteinLoader (batched!)
+        protein_loader = info.context["protein_loader"]
+        target_ids = [e["target_id"] for e in paginated_edges]
+
+        if not target_ids:
+            return []
+
+        # Batch load all target proteins in single query
+        proteins_data = await protein_loader.load_many(target_ids)
+
+        # Convert to Protein objects
+        proteins = []
+        for data in proteins_data:
+            if data:
+                proteins.append(Protein(
+                    id=strawberry.ID(data["id"]),
+                    labels=data.get("labels", []),
+                    properties=data.get("properties", {}),
+                    created_at=data.get("created_at"),
+                    name=data.get("name", ""),
+                    function=data.get("function"),
+                    organism=data.get("organism"),
+                    confidence=data.get("confidence"),
+                ))
+
+        return proteins
 
     @strawberry.field
     async def regulated_by(
@@ -120,7 +155,42 @@ class Gene(Node):
         offset: int = 0
     ) -> List[Protein]:
         """Proteins encoded by this gene"""
-        raise NotImplementedError("Resolver not implemented - will be added in T022")
+        # Load edges for this gene using EdgeLoader
+        edge_loader = info.context["edge_loader"]
+        edges = await edge_loader.load(str(self.id))
+
+        # Filter for ENCODES relationships
+        encodes_edges = [e for e in edges if e["type"] == "ENCODES"]
+
+        # Apply pagination
+        paginated_edges = encodes_edges[offset:offset + first]
+
+        # Load target proteins using ProteinLoader (batched!)
+        protein_loader = info.context["protein_loader"]
+        target_ids = [e["target_id"] for e in paginated_edges]
+
+        if not target_ids:
+            return []
+
+        # Batch load all target proteins in single query
+        proteins_data = await protein_loader.load_many(target_ids)
+
+        # Convert to Protein objects
+        proteins = []
+        for data in proteins_data:
+            if data:
+                proteins.append(Protein(
+                    id=strawberry.ID(data["id"]),
+                    labels=data.get("labels", []),
+                    properties=data.get("properties", {}),
+                    created_at=data.get("created_at"),
+                    name=data.get("name", ""),
+                    function=data.get("function"),
+                    organism=data.get("organism"),
+                    confidence=data.get("confidence"),
+                ))
+
+        return proteins
 
     @strawberry.field
     async def variants(
