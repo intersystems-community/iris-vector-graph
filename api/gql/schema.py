@@ -52,7 +52,7 @@ class Query(CoreQuery):
 
         @strawberry.field
         async def protein(
-            self, info: strawberry.Info, id: strawberry.ID
+            info: strawberry.Info, id: strawberry.ID
         ) -> Optional[Protein]:
             """
             Query a protein by ID.
@@ -68,7 +68,7 @@ class Query(CoreQuery):
 
         @strawberry.field
         async def gene(
-            self, info: strawberry.Info, id: strawberry.ID
+            info: strawberry.Info, id: strawberry.ID
         ) -> Optional[Gene]:
             """Query a gene by ID."""
             biomed_resolver = BiomedicalDomainResolver(
@@ -78,7 +78,7 @@ class Query(CoreQuery):
 
         @strawberry.field
         async def pathway(
-            self, info: strawberry.Info, id: strawberry.ID
+            info: strawberry.Info, id: strawberry.ID
         ) -> Optional[Pathway]:
             """Query a pathway by ID."""
             biomed_resolver = BiomedicalDomainResolver(
@@ -99,7 +99,7 @@ class Mutation:
 
         @strawberry.mutation
         async def create_protein(
-            self, info: strawberry.Info, input: CreateProteinInput
+            info: strawberry.Info, input: CreateProteinInput
         ) -> Protein:
             """Create a new protein."""
             biomed_resolver = BiomedicalDomainResolver(
@@ -109,7 +109,7 @@ class Mutation:
 
         @strawberry.mutation
         async def update_protein(
-            self, info: strawberry.Info, id: strawberry.ID, input: UpdateProteinInput
+            info: strawberry.Info, id: strawberry.ID, input: UpdateProteinInput
         ) -> Protein:
             """Update an existing protein."""
             biomed_resolver = BiomedicalDomainResolver(
@@ -119,7 +119,7 @@ class Mutation:
 
         @strawberry.mutation
         async def delete_protein(
-            self, info: strawberry.Info, id: strawberry.ID
+            info: strawberry.Info, id: strawberry.ID
         ) -> bool:
             """Delete a protein."""
             biomed_resolver = BiomedicalDomainResolver(

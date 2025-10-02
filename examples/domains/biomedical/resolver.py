@@ -119,7 +119,6 @@ class BiomedicalDomainResolver(DomainResolver):
         }
 
     # Query resolvers
-    @strawberry.field
     async def _protein_query(
         self, info: Info, id: strawberry.ID
     ) -> Optional[Protein]:
@@ -146,7 +145,6 @@ class BiomedicalDomainResolver(DomainResolver):
             confidence=protein_data.get("confidence"),
         )
 
-    @strawberry.field
     async def _gene_query(self, info: Info, id: strawberry.ID) -> Optional[Gene]:
         """Query a gene by ID."""
         loader: GeneLoader = info.context["gene_loader"]
@@ -165,7 +163,6 @@ class BiomedicalDomainResolver(DomainResolver):
             position=gene_data.get("position"),
         )
 
-    @strawberry.field
     async def _pathway_query(
         self, info: Info, id: strawberry.ID
     ) -> Optional[Pathway]:
@@ -186,7 +183,6 @@ class BiomedicalDomainResolver(DomainResolver):
         )
 
     # Mutation resolvers
-    @strawberry.mutation
     async def _create_protein_mutation(
         self, info: Info, input: CreateProteinInput
     ) -> Protein:
@@ -264,7 +260,6 @@ class BiomedicalDomainResolver(DomainResolver):
             confidence=protein_data.get("confidence"),
         )
 
-    @strawberry.mutation
     async def _update_protein_mutation(
         self, info: Info, id: strawberry.ID, input: UpdateProteinInput
     ) -> Protein:
@@ -333,7 +328,6 @@ class BiomedicalDomainResolver(DomainResolver):
             confidence=protein_data.get("confidence"),
         )
 
-    @strawberry.mutation
     async def _delete_protein_mutation(
         self, info: Info, id: strawberry.ID
     ) -> bool:
