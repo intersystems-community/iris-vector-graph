@@ -1,0 +1,64 @@
+-- kg_PageRank: SQL-based PageRank algorithm for IRIS
+--
+-- Performance Target: 10-20 seconds for 100K nodes (5-10x speedup vs Python)
+--
+-- NOTE: IRIS doesn't support standard SQL stored procedures easily.
+-- Instead, we use direct SQL queries executed from Python in a loop.
+-- This still achieves the performance benefit by:
+-- 1. Eliminating data transfer (adjacency list stays in database)
+-- 2. Using SQL's set-based operations instead of Python loops
+-- 3. Leveraging IRIS query optimizer
+--
+-- Usage from Python:
+--   See pagerank_sql() function in test_pagerank_sql_optimization.py
+
+-- Step 1: Create temporary table for PageRank scores
+-- Execute this once at start
+-- CREATE TABLE PageRankTmp (
+--     node_id VARCHAR(256) PRIMARY KEY,
+--     rank_current DECIMAL DEFAULT 0.0,
+--     rank_new DECIMAL DEFAULT 0.0,
+--     out_degree INT DEFAULT 0
+-- );
+
+-- Step 2: Initialize PageRank scores for filtered nodes
+-- Execute with appropriate node_filter parameter
+-- DELETE FROM PageRankTmp;
+--
+-- INSERT INTO PageRankTmp (node_id, rank_current, rank_new, out_degree)
+-- SELECT
+--     n.node_id,
+--     1.0 / (SELECT COUNT(*) FROM nodes WHERE node_id LIKE ?),
+--     0.0,
+--     COALESCE(degree.out_deg, 0)
+-- FROM nodes n
+-- LEFT JOIN (
+--     SELECT s, COUNT(*) as out_deg
+--     FROM rdf_edges
+--     WHERE s LIKE ?
+--     GROUP BY s
+-- ) degree ON n.node_id = degree.s
+-- WHERE n.node_id LIKE ?;
+
+-- Step 3a: Reset new_rank to teleport probability (execute each iteration)
+-- UPDATE PageRankTmp
+-- SET rank_new = (1.0 - ?) / ?;  -- (1 - damping_factor) / num_nodes
+
+-- Step 3b: Aggregate contributions from incoming edges (execute each iteration)
+-- UPDATE PageRankTmp dest
+-- SET rank_new = rank_new + (
+--     SELECT ? * COALESCE(SUM(src.rank_current / src.out_degree), 0.0)
+--     FROM rdf_edges e
+--     INNER JOIN PageRankTmp src ON e.s = src.node_id
+--     WHERE e.o_id = dest.node_id
+--       AND src.out_degree > 0
+-- );  -- damping_factor parameter
+
+-- Step 3c: Copy new_rank to rank_current (execute each iteration)
+-- UPDATE PageRankTmp
+-- SET rank_current = rank_new;
+
+-- Step 4: Get PageRank results (execute once at end)
+-- SELECT node_id, rank_current AS pagerank
+-- FROM PageRankTmp
+-- ORDER BY rank_current DESC;
