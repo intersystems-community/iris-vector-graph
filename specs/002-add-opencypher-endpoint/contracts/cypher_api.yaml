@@ -1,0 +1,316 @@
+openapi: 3.0.3
+info:
+  title: IRIS Vector Graph - openCypher Query API
+  description: REST API for executing openCypher queries against IRIS Vector Graph database
+  version: 1.0.0
+  contact:
+    name: IRIS Vector Graph Team
+
+servers:
+  - url: http://localhost:52773/api
+    description: Local IRIS instance (standard)
+  - url: http://localhost:252773/api
+    description: Local IRIS instance (ACORN-1)
+
+paths:
+  /cypher:
+    post:
+      summary: Execute openCypher query
+      description: |
+        Parse and execute an openCypher query against the IRIS Vector Graph database.
+        Queries are translated to IRIS SQL and executed with FK constraint validation.
+        Supports MATCH, WHERE, RETURN, ORDER BY, LIMIT, OPTIONAL MATCH, and custom
+        vector search procedures.
+      operationId: executeCypherQuery
+      tags:
+        - Cypher Queries
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CypherQueryRequest'
+            examples:
+              simpleMatch:
+                summary: Simple node lookup
+                value:
+                  query: "MATCH (p:Protein {id: 'PROTEIN:TP53'}) RETURN p.name, p.function"
+              graphTraversal:
+                summary: Multi-hop graph traversal
+                value:
+                  query: "MATCH (p:Protein)-[:INTERACTS_WITH*1..2]->(target:Protein) WHERE p.id = 'PROTEIN:TP53' RETURN target.name ORDER BY target.name LIMIT 10"
+              vectorSearch:
+                summary: Hybrid vector + graph query
+                value:
+                  query: "CALL db.index.vector.queryNodes('protein_embeddings', 10, $queryVector) YIELD node, score MATCH (node)-[:ASSOCIATED_WITH]->(d:Disease) RETURN node.name, d.name, score ORDER BY score DESC"
+                  parameters:
+                    queryVector: [0.1, 0.2, 0.3]
+              withParameters:
+                summary: Parameterized query
+                value:
+                  query: "MATCH (p:Protein) WHERE p.id = $proteinId RETURN p"
+                  parameters:
+                    proteinId: "PROTEIN:TP53"
+              timeout:
+                summary: Custom timeout
+                value:
+                  query: "MATCH (n)-[r*1..5]->(m) RETURN n, m"
+                  timeout: 60
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CypherQueryResponse'
+              examples:
+                success:
+                  summary: Successful query result
+                  value:
+                    columns: ["name", "function"]
+                    rows: [
+                      ["Tumor protein p53", "Tumor suppressor protein"],
+                      ["Epidermal growth factor receptor", "Receptor tyrosine kinase"]
+                    ]
+                    rowCount: 2
+                    executionTimeMs: 12.3
+                    translationTimeMs: 2.1
+                    traceId: "cypher-20251002-abc123"
+        '400':
+          description: Invalid Cypher query (syntax or semantic error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CypherErrorResponse'
+              examples:
+                syntaxError:
+                  summary: Syntax error
+                  value:
+                    errorType: "syntax"
+                    message: "Unexpected token 'RETRUN' at line 2, column 1"
+                    line: 2
+                    column: 1
+                    errorCode: "SYNTAX_ERROR"
+                    suggestion: "Did you mean 'RETURN'?"
+                    traceId: "cypher-20251002-def456"
+                undefinedVariable:
+                  summary: Semantic error
+                  value:
+                    errorType: "translation"
+                    message: "Undefined variable 'm' in RETURN clause"
+                    line: 1
+                    column: 35
+                    errorCode: "UNDEFINED_VARIABLE"
+                    suggestion: "Define 'm' in a MATCH clause before using in RETURN"
+                    traceId: "cypher-20251002-ghi789"
+        '408':
+          description: Query execution timeout
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CypherErrorResponse'
+              examples:
+                timeout:
+                  summary: Query timeout
+                  value:
+                    errorType: "timeout"
+                    message: "Query execution exceeded timeout of 30 seconds"
+                    errorCode: "QUERY_TIMEOUT"
+                    suggestion: "Reduce query complexity or increase timeout parameter"
+                    traceId: "cypher-20251002-jkl012"
+        '413':
+          description: Query too complex
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CypherErrorResponse'
+              examples:
+                complexityLimit:
+                  summary: Complexity limit exceeded
+                  value:
+                    errorType: "translation"
+                    message: "Variable-length path depth exceeds maximum of 10 hops"
+                    errorCode: "COMPLEXITY_LIMIT_EXCEEDED"
+                    suggestion: "Reduce max_hops in variable-length path pattern"
+                    traceId: "cypher-20251002-mno345"
+        '500':
+          description: Internal server error (SQL execution failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CypherErrorResponse'
+              examples:
+                executionError:
+                  summary: SQL execution failure
+                  value:
+                    errorType: "execution"
+                    message: "Foreign key constraint violation: node 'PROTEIN:INVALID' not found"
+                    errorCode: "FK_CONSTRAINT_VIOLATION"
+                    traceId: "cypher-20251002-pqr678"
+
+components:
+  schemas:
+    CypherQueryRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: openCypher query string
+          example: "MATCH (p:Protein) WHERE p.id = $proteinId RETURN p.name"
+        parameters:
+          type: object
+          description: Named parameters for query (optional)
+          additionalProperties: true
+          example:
+            proteinId: "PROTEIN:TP53"
+            minScore: 0.8
+        timeout:
+          type: integer
+          description: Query execution timeout in seconds (default 30, max 300)
+          minimum: 1
+          maximum: 300
+          default: 30
+          example: 60
+        enableOptimization:
+          type: boolean
+          description: Enable query optimization (label pushdown, property pushdown)
+          default: true
+        enableCache:
+          type: boolean
+          description: Enable query translation caching for repeated patterns
+          default: true
+
+    CypherQueryResponse:
+      type: object
+      required:
+        - columns
+        - rows
+        - rowCount
+        - executionTimeMs
+        - traceId
+      properties:
+        columns:
+          type: array
+          items:
+            type: string
+          description: Column names from RETURN clause
+          example: ["protein_name", "interaction_count"]
+        rows:
+          type: array
+          items:
+            type: array
+            items: {}
+          description: Result rows (array of arrays)
+          example: [
+            ["TP53", 127],
+            ["EGFR", 93]
+          ]
+        rowCount:
+          type: integer
+          description: Total number of rows returned
+          minimum: 0
+          example: 2
+        executionTimeMs:
+          type: number
+          format: float
+          description: Total query execution time in milliseconds
+          minimum: 0
+          example: 12.3
+        translationTimeMs:
+          type: number
+          format: float
+          description: Cypher-to-SQL translation time in milliseconds
+          minimum: 0
+          example: 2.1
+        queryMetadata:
+          type: object
+          description: Optional query execution metadata
+          properties:
+            sqlQuery:
+              type: string
+              description: Generated SQL query (for debugging, optional)
+            indexesUsed:
+              type: array
+              items:
+                type: string
+              description: Database indexes used during execution
+            optimizationsApplied:
+              type: array
+              items:
+                type: string
+              description: Query optimizations applied
+              example: ["label_pushdown", "property_pushdown"]
+        traceId:
+          type: string
+          description: Unique trace ID for debugging/logging
+          example: "cypher-20251002-abc123"
+
+    CypherErrorResponse:
+      type: object
+      required:
+        - errorType
+        - message
+        - errorCode
+        - traceId
+      properties:
+        errorType:
+          type: string
+          enum: [syntax, translation, execution, timeout]
+          description: Category of error
+          example: "syntax"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "Unexpected token 'RETRUN' at line 2, column 1"
+        line:
+          type: integer
+          description: Line number in Cypher query where error occurred (if applicable)
+          minimum: 1
+          example: 2
+        column:
+          type: integer
+          description: Column number in Cypher query where error occurred (if applicable)
+          minimum: 1
+          example: 1
+        errorCode:
+          type: string
+          description: Machine-readable error code
+          enum:
+            - SYNTAX_ERROR
+            - UNDEFINED_VARIABLE
+            - UNDEFINED_LABEL
+            - UNDEFINED_PROPERTY
+            - TYPE_MISMATCH
+            - COMPLEXITY_LIMIT_EXCEEDED
+            - QUERY_TIMEOUT
+            - FK_CONSTRAINT_VIOLATION
+            - SQL_EXECUTION_ERROR
+            - INTERNAL_ERROR
+          example: "SYNTAX_ERROR"
+        suggestion:
+          type: string
+          description: Actionable suggestion to fix the error (optional)
+          example: "Did you mean 'RETURN'?"
+        traceId:
+          type: string
+          description: Unique trace ID for debugging/logging
+          example: "cypher-20251002-def456"
+        sqlQuery:
+          type: string
+          description: Generated SQL query that failed (for debugging, optional)
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key for authentication (IRIS REST API pattern)
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Cypher Queries
+    description: Execute openCypher queries against IRIS Vector Graph
