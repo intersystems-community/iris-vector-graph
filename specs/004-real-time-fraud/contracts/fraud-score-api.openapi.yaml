@@ -1,0 +1,284 @@
+openapi: 3.0.3
+info:
+  title: IRIS Vector Graph - Fraud Scoring API
+  version: 1.0.0
+  description: |
+    Real-time fraud scoring API for transaction risk assessment.
+
+    **Performance SLOs**:
+    - MLP mode: <20ms p95 at 200 QPS
+    - EGO mode: <50ms p95 at 200 QPS
+
+    **Constitutional Compliance**:
+    - IRIS-native (embedded Python, SQL procedures)
+    - Test-first (contract tests before implementation)
+    - Performance as feature (SLOs tracked in benchmarks)
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+  - url: http://localhost:8001
+    description: ACORN-1 test server
+
+paths:
+  /fraud/score:
+    post:
+      summary: Score a transaction for fraud risk
+      description: |
+        Returns fraud probability (0.0-1.0) and explainable reason codes for a transaction.
+
+        **Modes**:
+        - **MLP** (default): Fast inference using precomputed embeddings (~15ms)
+        - **EGO**: Ego-graph + GraphSAGE for cold-start scenarios (~40ms)
+
+        **Explainability**: Returns minimum 3 reason codes (feature attributions + vector proximity)
+      operationId: scoreFraudTransaction
+      tags:
+        - Fraud Scoring
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FraudScoreRequest'
+            examples:
+              mlp_mode:
+                summary: MLP mode (default)
+                value:
+                  mode: "MLP"
+                  payer: "acct:user123"
+                  device: "dev:abc123"
+                  ip: "ip:192.168.1.100"
+                  merchant: "mer:shop456"
+                  amount: 129.99
+                  country: "US"
+              ego_mode:
+                summary: EGO mode (optional)
+                value:
+                  mode: "EGO"
+                  payer: "acct:newuser789"
+                  device: "dev:xyz789"
+                  ip: "ip:10.0.0.1"
+                  merchant: "mer:shop456"
+                  amount: 1500.00
+      responses:
+        '200':
+          description: Fraud score computed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FraudScoreResponse'
+              examples:
+                low_risk:
+                  summary: Low fraud probability
+                  value:
+                    prob: 0.12
+                    reasons:
+                      - kind: "feature"
+                        detail: "deg_24h=3"
+                        weight: 0.05
+                      - kind: "feature"
+                        detail: "tx_amt_sum_24h=250.00"
+                        weight: 0.03
+                      - kind: "vector"
+                        detail: "sim_to_fraud=0.24"
+                        weight: 0.04
+                high_risk:
+                  summary: High fraud probability
+                  value:
+                    prob: 0.87
+                    reasons:
+                      - kind: "feature"
+                        detail: "deg_24h=45"
+                        weight: 0.32
+                      - kind: "feature"
+                        detail: "uniq_devices_7d=12"
+                        weight: 0.25
+                      - kind: "vector"
+                        detail: "sim_to_fraud=0.91"
+                        weight: 0.30
+                cold_start:
+                  summary: Cold-start (missing embedding)
+                  value:
+                    prob: 0.45
+                    reasons:
+                      - kind: "feature"
+                        detail: "deg_24h=1"
+                        weight: 0.10
+                      - kind: "feature"
+                        detail: "tx_amt_sum_24h=0.00"
+                        weight: 0.02
+                      - kind: "vector"
+                        detail: "cold_start"
+                        weight: 0.00
+        '400':
+          description: Invalid request (malformed entity_id, invalid mode)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalid_entity_id:
+                  summary: Invalid entity_id format
+                  value:
+                    error: "Invalid entity_id format"
+                    detail: "payer 'invalid:id:format' does not match pattern '^[a-z]+:[a-zA-Z0-9_-]+$'"
+                    trace_id: "fraud-001-abc123"
+                invalid_mode:
+                  summary: Invalid mode parameter
+                  value:
+                    error: "Invalid mode"
+                    detail: "mode 'UNKNOWN' not in allowed values ['MLP', 'EGO']"
+                    trace_id: "fraud-002-def456"
+        '404':
+          description: Entity not found in nodes table
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                entity_not_found:
+                  summary: Payer entity not found
+                  value:
+                    error: "Entity not found"
+                    detail: "payer 'acct:unknown123' does not exist in nodes table"
+                    trace_id: "fraud-003-ghi789"
+        '500':
+          description: Internal server error (model load failure, SQL error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                model_load_failure:
+                  summary: TorchScript model load failure
+                  value:
+                    error: "Model load failed"
+                    detail: "Failed to load TorchScript model from models/mlp_current.torchscript: FileNotFoundError"
+                    trace_id: "fraud-004-jkl012"
+                sql_error:
+                  summary: SQL procedure error
+                  value:
+                    error: "SQL procedure failed"
+                    detail: "gs_FetchServingRow failed: SQLCODE=-400 (foreign key constraint violation)"
+                    trace_id: "fraud-005-mno345"
+
+components:
+  schemas:
+    FraudScoreRequest:
+      type: object
+      required:
+        - payer
+        - device
+        - ip
+        - merchant
+      properties:
+        mode:
+          type: string
+          enum: [MLP, EGO]
+          default: MLP
+          description: |
+            Scoring mode:
+            - **MLP**: Precomputed embeddings + MLP inference (fast, <20ms p95)
+            - **EGO**: Bounded ego-graph + GraphSAGE (cold-start, <50ms p95)
+        payer:
+          type: string
+          pattern: '^[a-z]+:[a-zA-Z0-9_-]+$'
+          example: "acct:user123"
+          description: Payer entity_id (must exist in nodes table)
+        device:
+          type: string
+          pattern: '^[a-z]+:[a-zA-Z0-9_-]+$'
+          example: "dev:abc123"
+          description: Device entity_id
+        ip:
+          type: string
+          pattern: '^[a-z]+:[a-zA-Z0-9_.-]+$'
+          example: "ip:192.168.1.100"
+          description: IP address entity_id
+        merchant:
+          type: string
+          pattern: '^[a-z]+:[a-zA-Z0-9_-]+$'
+          example: "mer:shop456"
+          description: Merchant entity_id
+        amount:
+          type: number
+          format: double
+          minimum: 0
+          example: 129.99
+          description: Transaction amount (optional, used as contextual feature)
+        country:
+          type: string
+          pattern: '^[A-Z]{2}$'
+          example: "US"
+          description: ISO 3166-1 alpha-2 country code (optional)
+
+    FraudScoreResponse:
+      type: object
+      required:
+        - prob
+        - reasons
+      properties:
+        prob:
+          type: number
+          format: double
+          minimum: 0.0
+          maximum: 1.0
+          example: 0.82
+          description: Fraud probability (0.0 = legit, 1.0 = fraud)
+        reasons:
+          type: array
+          minItems: 3
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+          description: Explanation reason codes (minimum 3, sorted by weight desc)
+
+    ReasonCode:
+      type: object
+      required:
+        - kind
+        - detail
+        - weight
+      properties:
+        kind:
+          type: string
+          enum: [feature, vector]
+          example: "feature"
+          description: |
+            Reason type:
+            - **feature**: Feature attribution (gradient × input)
+            - **vector**: Vector proximity to fraud centroid
+        detail:
+          type: string
+          example: "deg_24h=38"
+          description: |
+            Human-readable reason detail.
+
+            **Feature format**: `feature_name=value` (e.g., "deg_24h=38", "tx_amt_sum_24h=1250.50")
+
+            **Vector format**: `sim_to_fraud=0.91` or "cold_start" if embedding missing
+        weight:
+          type: number
+          format: double
+          example: 0.22
+          description: Attribution weight (higher = more influential)
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - detail
+        - trace_id
+      properties:
+        error:
+          type: string
+          example: "Entity not found"
+          description: High-level error category
+        detail:
+          type: string
+          example: "payer 'acct:unknown123' does not exist in nodes table"
+          description: Detailed error message with specific context
+        trace_id:
+          type: string
+          example: "fraud-003-ghi789"
+          description: Unique trace ID for debugging (fraud-{error_code}-{uuid})
