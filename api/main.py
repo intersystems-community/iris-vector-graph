@@ -14,13 +14,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 
 from api.gql.schema import schema
-from api.gql.loaders import (
-    ProteinLoader,
-    GeneLoader,
-    PathwayLoader,
+from api.gql.core.loaders import (
     EdgeLoader,
     PropertyLoader,
     LabelLoader,
+)
+
+# Import biomedical domain loaders (example domain)
+from examples.domains.biomedical.loaders import (
+    ProteinLoader,
+    GeneLoader,
+    PathwayLoader,
 )
 
 

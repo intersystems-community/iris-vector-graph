@@ -11,6 +11,7 @@ import strawberry
 from typing import List, Optional
 from datetime import datetime
 import json as json_module
+from enum import Enum
 
 
 # Custom scalar types
@@ -92,7 +93,7 @@ class GenericNode(Node):
 
 
 @strawberry.enum
-class EdgeDirection(str, strawberry.Enum):
+class EdgeDirection(Enum):
     """Direction for edge traversal"""
     OUTGOING = "OUTGOING"
     INCOMING = "INCOMING"
