@@ -16,17 +16,16 @@ Performance: Reduces N+1 queries to ≤2 queries per nested GraphQL query.
 from strawberry.dataloader import DataLoader
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from api.graphql.types import Protein, Gene, Pathway, Variant
 
 
 class ProteinLoader(DataLoader):
     """Batch load proteins by ID"""
 
     def __init__(self, db_connection: Any) -> None:
-        super().__init__()
         self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
 
-    async def load_fn(self, keys: List[str]) -> List[Optional[Protein]]:
+    async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
         """
         Batch load proteins for given IDs using single SQL query.
 
@@ -34,7 +33,7 @@ class ProteinLoader(DataLoader):
             keys: List of protein IDs (e.g., ["PROTEIN:TP53", "PROTEIN:MDM2"])
 
         Returns:
-            List of Protein objects in same order as keys (None for missing IDs)
+            List of protein data dicts in same order as keys (None for missing IDs)
         """
         if not keys:
             return []
@@ -65,22 +64,22 @@ class ProteinLoader(DataLoader):
             props_list = await property_loader.load_many(list(existing_ids))
             labels_list = await label_loader.load_many(list(existing_ids))
 
-            # Build protein objects
-            protein_dict: Dict[str, Protein] = {}
-            for i, protein_id in enumerate(existing_ids):
+            # Build protein data dicts
+            protein_dict: Dict[str, Dict[str, Any]] = {}
+            for i, protein_id in enumerate(list(existing_ids)):
                 props = props_list[i]
                 labels = labels_list[i]
 
-                protein_dict[protein_id] = Protein(
-                    id=protein_id,
-                    labels=labels,
-                    properties=props,
-                    created_at=datetime.now(),  # TODO: Get from database
-                    name=props.get("name", ""),
-                    function=props.get("function"),
-                    organism=props.get("organism"),
-                    confidence=float(props["confidence"]) if "confidence" in props else None
-                )
+                protein_dict[protein_id] = {
+                    "id": protein_id,
+                    "labels": labels,
+                    "properties": props,
+                    "created_at": datetime.now(),  # TODO: Get from nodes.created_at
+                    "name": props.get("name", ""),
+                    "function": props.get("function"),
+                    "organism": props.get("organism"),
+                    "confidence": float(props["confidence"]) if "confidence" in props else None
+                }
         else:
             protein_dict = {}
 
@@ -92,10 +91,10 @@ class GeneLoader(DataLoader):
     """Batch load genes by ID"""
 
     def __init__(self, db_connection: Any) -> None:
-        super().__init__()
         self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
 
-    async def load_fn(self, keys: List[str]) -> List[Optional[Gene]]:
+    async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
         """Batch load genes for given IDs using single SQL query"""
         if not keys:
             return []
@@ -123,20 +122,20 @@ class GeneLoader(DataLoader):
             props_list = await property_loader.load_many(list(existing_ids))
             labels_list = await label_loader.load_many(list(existing_ids))
 
-            gene_dict: Dict[str, Gene] = {}
-            for i, gene_id in enumerate(existing_ids):
+            gene_dict: Dict[str, Dict[str, Any]] = {}
+            for i, gene_id in enumerate(list(existing_ids)):
                 props = props_list[i]
                 labels = labels_list[i]
 
-                gene_dict[gene_id] = Gene(
-                    id=gene_id,
-                    labels=labels,
-                    properties=props,
-                    created_at=datetime.now(),
-                    name=props.get("name", ""),
-                    chromosome=props.get("chromosome"),
-                    position=int(props["position"]) if "position" in props else None
-                )
+                gene_dict[gene_id] = {
+                    "id": gene_id,
+                    "labels": labels,
+                    "properties": props,
+                    "created_at": datetime.now(),
+                    "name": props.get("name", ""),
+                    "chromosome": props.get("chromosome"),
+                    "position": int(props["position"]) if "position" in props else None
+                }
         else:
             gene_dict = {}
 
@@ -147,10 +146,10 @@ class PathwayLoader(DataLoader):
     """Batch load pathways by ID"""
 
     def __init__(self, db_connection: Any) -> None:
-        super().__init__()
         self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
 
-    async def load_fn(self, keys: List[str]) -> List[Optional[Pathway]]:
+    async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
         """Batch load pathways for given IDs using single SQL query"""
         if not keys:
             return []
@@ -178,19 +177,19 @@ class PathwayLoader(DataLoader):
             props_list = await property_loader.load_many(list(existing_ids))
             labels_list = await label_loader.load_many(list(existing_ids))
 
-            pathway_dict: Dict[str, Pathway] = {}
-            for i, pathway_id in enumerate(existing_ids):
+            pathway_dict: Dict[str, Dict[str, Any]] = {}
+            for i, pathway_id in enumerate(list(existing_ids)):
                 props = props_list[i]
                 labels = labels_list[i]
 
-                pathway_dict[pathway_id] = Pathway(
-                    id=pathway_id,
-                    labels=labels,
-                    properties=props,
-                    created_at=datetime.now(),
-                    name=props.get("name", ""),
-                    description=props.get("description")
-                )
+                pathway_dict[pathway_id] = {
+                    "id": pathway_id,
+                    "labels": labels,
+                    "properties": props,
+                    "created_at": datetime.now(),
+                    "name": props.get("name", ""),
+                    "description": props.get("description")
+                }
         else:
             pathway_dict = {}
 
@@ -201,10 +200,10 @@ class EdgeLoader(DataLoader):
     """Batch load edges by source node ID"""
 
     def __init__(self, db_connection: Any) -> None:
-        super().__init__()
         self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
 
-    async def load_fn(self, keys: List[str]) -> List[List[Dict[str, Any]]]:
+    async def batch_load_fn(self, keys: List[str]) -> List[List[Dict[str, Any]]]:
         """
         Batch load edges for given source node IDs using single SQL query.
 
@@ -253,10 +252,10 @@ class PropertyLoader(DataLoader):
     """Batch load properties by node ID"""
 
     def __init__(self, db_connection: Any) -> None:
-        super().__init__()
         self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
 
-    async def load_fn(self, keys: List[str]) -> List[Dict[str, str]]:
+    async def batch_load_fn(self, keys: List[str]) -> List[Dict[str, str]]:
         """
         Batch load properties for given node IDs using single SQL query.
 
@@ -301,10 +300,10 @@ class LabelLoader(DataLoader):
     """Batch load labels by node ID"""
 
     def __init__(self, db_connection: Any) -> None:
-        super().__init__()
         self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
 
-    async def load_fn(self, keys: List[str]) -> List[List[str]]:
+    async def batch_load_fn(self, keys: List[str]) -> List[List[str]]:
         """
         Batch load labels for given node IDs using single SQL query.
 
