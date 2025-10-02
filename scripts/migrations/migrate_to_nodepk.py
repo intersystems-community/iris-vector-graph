@@ -230,10 +230,111 @@ def bulk_insert_nodes(connection, node_ids: List[str]) -> int:
 
 def detect_orphans(connection) -> Dict[str, List[str]]:
     """
-    Detect orphaned references (nodes that don't exist).
-    Implementation in T023.
+    Detect orphaned node references across graph tables.
+
+    Implements orphan detection from T023 specification using LEFT JOIN queries
+    to find node IDs that are referenced but don't exist in the nodes table.
+
+    Args:
+        connection: IRIS database connection
+
+    Returns:
+        Dict mapping table name to list of orphaned node IDs
+        Example: {'rdf_edges_source': ['node1', 'node2'], 'rdf_labels': ['node3']}
+
+    Strategy:
+        For each dependent table, query for node IDs that don't exist in nodes table:
+        - rdf_edges.s (source nodes)
+        - rdf_edges.o_id (destination nodes)
+        - rdf_labels.s
+        - rdf_props.s
+        - kg_NodeEmbeddings.id (if table exists)
     """
-    raise NotImplementedError("detect_orphans() - implement in T023")
+    logger = logging.getLogger(__name__)
+    cursor = connection.cursor()
+
+    orphans = {}
+    total_orphans = 0
+
+    logger.info("Detecting orphaned node references...")
+
+    # Check rdf_edges source nodes
+    query = """
+    SELECT DISTINCT s FROM rdf_edges
+    WHERE s NOT IN (SELECT node_id FROM nodes)
+    """
+    cursor.execute(query)
+    orphaned_sources = [row[0] for row in cursor.fetchall()]
+    if orphaned_sources:
+        orphans['rdf_edges_source'] = orphaned_sources
+        total_orphans += len(orphaned_sources)
+        logger.warning(f"  rdf_edges (source): {len(orphaned_sources)} orphaned nodes")
+        logger.debug(f"    Sample: {orphaned_sources[:5]}")
+
+    # Check rdf_edges destination nodes
+    query = """
+    SELECT DISTINCT o_id FROM rdf_edges
+    WHERE o_id NOT IN (SELECT node_id FROM nodes)
+    """
+    cursor.execute(query)
+    orphaned_dests = [row[0] for row in cursor.fetchall()]
+    if orphaned_dests:
+        orphans['rdf_edges_dest'] = orphaned_dests
+        total_orphans += len(orphaned_dests)
+        logger.warning(f"  rdf_edges (dest): {len(orphaned_dests)} orphaned nodes")
+        logger.debug(f"    Sample: {orphaned_dests[:5]}")
+
+    # Check rdf_labels
+    query = """
+    SELECT DISTINCT s FROM rdf_labels
+    WHERE s NOT IN (SELECT node_id FROM nodes)
+    """
+    cursor.execute(query)
+    orphaned_labels = [row[0] for row in cursor.fetchall()]
+    if orphaned_labels:
+        orphans['rdf_labels'] = orphaned_labels
+        total_orphans += len(orphaned_labels)
+        logger.warning(f"  rdf_labels: {len(orphaned_labels)} orphaned nodes")
+        logger.debug(f"    Sample: {orphaned_labels[:5]}")
+
+    # Check rdf_props
+    query = """
+    SELECT DISTINCT s FROM rdf_props
+    WHERE s NOT IN (SELECT node_id FROM nodes)
+    """
+    cursor.execute(query)
+    orphaned_props = [row[0] for row in cursor.fetchall()]
+    if orphaned_props:
+        orphans['rdf_props'] = orphaned_props
+        total_orphans += len(orphaned_props)
+        logger.warning(f"  rdf_props: {len(orphaned_props)} orphaned nodes")
+        logger.debug(f"    Sample: {orphaned_props[:5]}")
+
+    # Check kg_NodeEmbeddings (if exists)
+    try:
+        query = """
+        SELECT DISTINCT id FROM kg_NodeEmbeddings
+        WHERE id NOT IN (SELECT node_id FROM nodes)
+        """
+        cursor.execute(query)
+        orphaned_embeddings = [row[0] for row in cursor.fetchall()]
+        if orphaned_embeddings:
+            orphans['kg_NodeEmbeddings'] = orphaned_embeddings
+            total_orphans += len(orphaned_embeddings)
+            logger.warning(f"  kg_NodeEmbeddings: {len(orphaned_embeddings)} orphaned nodes")
+            logger.debug(f"    Sample: {orphaned_embeddings[:5]}")
+    except Exception as e:
+        if 'not found' in str(e).lower() or 'does not exist' in str(e).lower():
+            logger.debug("  kg_NodeEmbeddings table not found (OK - optional)")
+        else:
+            logger.warning(f"  Could not check kg_NodeEmbeddings: {e}")
+
+    if total_orphans == 0:
+        logger.info("✅ No orphaned references found!")
+    else:
+        logger.error(f"❌ Found {total_orphans} orphaned node references across {len(orphans)} tables")
+
+    return orphans
 
 
 def validate_migration(connection) -> Dict:
