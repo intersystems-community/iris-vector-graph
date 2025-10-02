@@ -31,11 +31,35 @@ DateTime = strawberry.scalar(
 # Node interface - base for all graph entities
 @strawberry.interface
 class Node:
-    """Base interface for all graph entities"""
+    """
+    Base interface for all graph entities.
+
+    DESIGN NOTE: This interface provides both:
+    1. Generic accessors (property, neighbors) for any domain
+    2. Domain-specific implementations (Protein, Gene) as convenience wrappers
+
+    The biomedical types (Protein, Gene, Pathway) are EXAMPLE implementations.
+    Users can create custom domains by implementing this interface.
+    """
     id: strawberry.ID
     labels: List[str]
     properties: JSON
     created_at: DateTime = strawberry.field(name="createdAt")
+
+    @strawberry.field
+    def property(self, key: str) -> Optional[str]:
+        """
+        Generic property accessor.
+
+        Get any property value by key from the properties JSON.
+        This enables querying properties not defined as typed fields.
+
+        Example:
+            node { property(key: "custom_annotation") }
+        """
+        if isinstance(self.properties, dict):
+            return self.properties.get(key)
+        return None
 
 
 # Forward declarations for circular references
