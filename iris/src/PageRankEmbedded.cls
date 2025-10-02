@@ -1,12 +1,37 @@
 /// PageRank using IRIS Embedded Python with direct global access
 ///
-/// This implementation uses iris.gref() to access IRIS globals directly,
-/// bypassing SQL entirely for maximum performance.
+/// This implementation uses iris.sql.exec() for in-process execution,
+/// with optional iris.gref() for direct global access.
 ///
-/// Expected performance: 10-50x faster than SQL approach
+/// Expected performance: 10-50x faster than client-side Python
 /// - 1K nodes: 10-50ms
 /// - 10K nodes: 100-500ms
 /// - 100K nodes: 1-5 seconds (vs 50-60s Python baseline!)
+///
+/// ⚠️ CRITICAL CONSTRAINT: This is for PURE GRAPH operations only
+///
+/// DO NOT USE for vector similarity operations:
+/// - Vector k-NN search REQUIRES SQL (HNSW index is SQL-coupled)
+/// - VECTOR_DOT_PRODUCT MUST be in SQL queries
+/// - Vector embedding insertion MUST go through SQL
+///
+/// Use embedded Python for:
+/// ✅ Pure graph algorithms (PageRank, Connected Components, BFS)
+/// ✅ Graph traversals and aggregations
+/// ✅ Building secondary graph indexes
+///
+/// Use SQL for:
+/// ❌ Vector similarity search (HNSW index)
+/// ❌ Any VECTOR_DOT_PRODUCT operations
+/// ❌ Hybrid vector + graph queries (vector portion)
+///
+/// For hybrid workflows, use SQL for vectors, then embedded Python for graph:
+///   1. SQL: Vector k-NN search → seed nodes
+///   2. Embedded Python: Graph expansion + PageRank on subgraph
+///   3. SQL: Re-rank by vector similarity (optional)
+///
+/// Reference: docs/architecture/embedded_python_architecture.md
+/// Reference: ../rag-templates HybridGraphRAG implementation
 ///
 /// Usage:
 ///   set results = ##class(PageRankEmbedded).ComputePageRank("PAGERANK:%", 10, 0.85)
