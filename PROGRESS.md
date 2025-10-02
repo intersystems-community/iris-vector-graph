@@ -1,6 +1,8 @@
 # IRIS Graph-AI Development Progress
 
-**Project Timeline**: Research → Implementation → Production Ready
+**Project Timeline**: Research → Implementation → Production Ready → Multi-Query-Engine Platform
+
+**Last Updated**: 2025-10-02
 
 ## 📅 Development Phases
 
@@ -66,16 +68,37 @@
 - `docs/` - Complete documentation suite
 - `benchmarking/` - Competitive analysis framework
 
-## 🎯 Current State: PRODUCTION READY
+### Phase 5: Multi-Query-Engine Platform (IN PROGRESS - 2025-10-02) 🔄
+**Goal**: Support multiple query languages over unified graph database
+
+**Achievements**:
+- ✅ **NodePK Foundation** - Generic graph schema with FK constraints (merged)
+- ✅ **GraphQL API** - Generic core + biomedical domain (merged)
+- ✅ **openCypher API** - Cypher-to-SQL translation (READY TO MERGE)
+- ✅ **Three Query Engines** - openCypher, GraphQL, SQL on same database
+- ✅ **Generic Core Architecture** - Schema-agnostic foundation
+
+**Key Files Created**:
+- `iris_vector_graph_core/cypher/` - Parser, AST, translator (9 files, 2,222 lines)
+- `api/routers/cypher.py` - openCypher FastAPI endpoint
+- `api/gql/core/` - Generic GraphQL core
+- `examples/domains/biomedical/` - Example domain implementation
+
+**Current Status**: openCypher branch `002-add-opencypher-endpoint` ready to merge
+
+## 🎯 Current State: MULTI-QUERY-ENGINE PLATFORM
 
 ### What Works Now (Validated in Production)
-1. **Vector Search**: 6ms with HNSW optimization
-2. **Graph Traversal**: 0.25ms average query time
-3. **Data Ingestion**: 476 proteins/second throughput
-4. **Hybrid Search**: Vector + Text + Graph fusion
-5. **Confidence Filtering**: JSON_TABLE extraction at 109ms
-6. **REST API**: IRIS-native endpoints with embedded Python
-7. **Biomedical Scale**: Validated on STRING protein database
+1. **openCypher API**: POST /api/cypher with pattern-based parser and AST-to-SQL translation
+2. **GraphQL API**: POST /graphql with generic core and DataLoader batching
+3. **SQL Direct Access**: Native IRIS SQL with NodePK schema
+4. **Vector Search**: 6ms with HNSW optimization
+5. **Graph Traversal**: 0.25ms average query time
+6. **Data Ingestion**: 476 proteins/second throughput
+7. **Hybrid Search**: Vector + Text + Graph fusion
+8. **Confidence Filtering**: JSON_TABLE extraction at 109ms
+9. **REST API**: IRIS-native endpoints with embedded Python
+10. **Biomedical Scale**: Validated on STRING protein database
 
 ### Performance Benchmarks Achieved
 - **21.7x faster** than standard IRIS
@@ -85,19 +108,32 @@
 
 ## 🚀 Next Development Priorities
 
-### P0: Production Deployment
+### P0: Complete Multi-Query-Engine Platform
+- [x] NodePK implementation (merged)
+- [x] GraphQL API (merged)
+- [ ] **Merge openCypher API** - Branch `002-add-opencypher-endpoint` ready ✅
+- [ ] Multi-query-engine README documentation
+
+### P1: Query Engine Enhancements
+- [ ] Parser upgrade: libcypher-parser for full Cypher support
+- [ ] Query plan caching (enableCache parameter)
+- [ ] Variable-length path support (recursive CTEs)
+- [ ] SQL procedures: CALL db.index.vector.queryNodes()
+- [ ] GraphQL subscriptions (WebSocket real-time updates)
+
+### P2: Production Deployment
 - [ ] SSL/TLS configuration
 - [ ] Monitoring and alerting setup
 - [ ] Backup and disaster recovery
 - [ ] Load balancing configuration
 
-### P1: Scale Optimization
-- [ ] Vector data migration to optimized tables
+### P3: Scale Optimization
 - [ ] Multi-million entity testing
 - [ ] Memory optimization analysis
 - [ ] Query plan optimization
+- [ ] Performance benchmarking across all query engines
 
-### P2: Feature Enhancement
+### P4: Feature Enhancement
 - [ ] Additional vector embedding models
 - [ ] Advanced graph analytics
 - [ ] Real-time data streaming
