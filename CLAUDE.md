@@ -66,6 +66,38 @@ uv run python scripts/performance/test_vector_performance.py
 uv run python scripts/performance/string_db_scale_test.py --max-proteins 10000
 ```
 
+### openCypher API Server
+```bash
+# Start openCypher API server (ASGI)
+uvicorn api.main:app --reload --port 8000
+
+# Alternative: Direct execution
+uv run uvicorn api.main:app --reload --port 8000
+
+# Access API documentation
+open http://localhost:8000/docs  # Swagger UI
+open http://localhost:8000       # API info
+
+# Health check
+curl http://localhost:8000/health
+
+# Execute Cypher query
+curl -X POST http://localhost:8000/api/cypher \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (p:Protein {id: \"PROTEIN:TP53\"}) RETURN p.name",
+    "timeout": 30
+  }'
+
+# Parameterized Cypher query
+curl -X POST http://localhost:8000/api/cypher \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "MATCH (p:Protein) WHERE p.id = $proteinId RETURN p.name",
+    "parameters": {"proteinId": "PROTEIN:TP53"}
+  }'
+```
+
 ### Linting and Formatting
 ```bash
 # Format code (per pyproject.toml configuration)
@@ -82,10 +114,29 @@ mypy iris_vector_graph_core/
 This is a **Graph + Vector Retrieval** system targeting **InterSystems IRIS** that combines:
 
 - **Vector search (HNSW)** + **lexical search** + **graph constraints**
+- **openCypher query endpoint** for graph pattern matching
 - **IRIS-native Python** integration with embedded operations
-- **REST API** via IRIS ObjectScript classes
+- **REST API** via FastAPI (openCypher) and IRIS ObjectScript classes
 - **iris_vector_graph_core** Python module for high-performance operations
 - **Direct iris.connect()** for optimal performance
+
+### Query Engines
+
+The system supports multiple query interfaces on the same NodePK schema:
+
+1. **openCypher API** (`/api/cypher`) - Graph pattern matching with Cypher syntax
+   - Parser: Pattern-based MVP parser (regex-based for common queries)
+   - Translator: AST-to-SQL with label/property pushdown optimizations
+   - Endpoint: FastAPI async endpoint at http://localhost:8000/api/cypher
+
+2. **SQL Direct** - Native IRIS SQL for maximum control
+   - Direct access to `nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `kg_NodeEmbeddings`
+   - Full IRIS SQL capabilities including VECTOR functions
+
+3. **GraphQL API** (on main branch) - Type-safe graph queries
+   - Generic core + domain-specific types (Protein, Gene, Pathway as examples)
+   - DataLoader batching for N+1 prevention
+   - Vector similarity via `similar()` field resolver
 
 ### Core Components
 
@@ -134,6 +185,8 @@ Configure IRIS connection in `.env`:
 - **RRF Fusion**: Uses Reciprocal Rank Fusion (Cormack & Clarke SIGIR'09) to combine vector and text search results.
 - **Graph queries**: Performance-optimized with bounded hops and confidence filtering.
 - **iris_vector_graph_core**: Modular design for integration with other RAG systems.
+- **Cypher-to-SQL Translation**: Label pushdown and property pushdown optimizations for fast queries.
+- **Query Pattern Matching**: MVP parser supports common Cypher patterns (MATCH, WHERE, RETURN, ORDER BY, LIMIT).
 
 ### File Structure
 
