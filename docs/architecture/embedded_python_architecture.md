@@ -3,6 +3,24 @@
 **Date**: 2025-10-02
 **Context**: NodePK PageRank optimization using embedded Python
 **Reference**: ../rag-templates HybridGraphRAG implementation
+**Setup Guide**: https://github.com/intersystems-community/iris-embedded-python-template
+
+---
+
+## Setup Requirements
+
+For IRIS embedded Python to work correctly, you must:
+
+1. **Use InterSystems IRIS with Python support** (2024.1+ or Container Python Framework)
+2. **Configure Python environment in IRIS**:
+   - See [iris-embedded-python-template](https://github.com/intersystems-community/iris-embedded-python-template) for CPF (Container Python Framework) setup
+   - Or use standard IRIS Python configuration via Management Portal
+3. **Compile ObjectScript classes with embedded Python** (`Language=python` methods)
+4. **Ensure Python packages available to IRIS runtime** (not just client environment)
+
+**Important**: The Python environment used by IRIS embedded Python is **separate** from your client Python environment. Packages must be installed in the IRIS Python environment.
+
+See [`../iris-pgwire`](../../../iris-pgwire) for recent updates on embedded Python setup patterns.
 
 ---
 

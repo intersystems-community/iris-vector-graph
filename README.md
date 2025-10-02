@@ -439,9 +439,21 @@ uv run python scripts/migrations/migrate_to_nodepk.py --execute --verbose
 
 ### Graph Analytics with Embedded Python
 
-High-performance graph algorithms using IRIS embedded Python (runs in-process, 10-50x faster than client-side):
+High-performance graph algorithms using IRIS embedded Python (runs in-process, 10-50x faster than client-side).
 
-**PageRank:**
+**Setup Requirements:**
+- InterSystems IRIS 2024.1+ with embedded Python support
+- Container Python Framework (CPF) configuration - see [iris-embedded-python-template](https://github.com/intersystems-community/iris-embedded-python-template)
+- Python packages installed in IRIS runtime environment (separate from client)
+- PageRankEmbedded.cls compiled in IRIS
+
+**Compilation (one-time setup):**
+```objectscript
+// IRIS terminal - compile PageRankEmbedded class
+do $system.OBJ.Load("/path/to/iris/src/PageRankEmbedded.cls", "ck")
+```
+
+**PageRank Usage:**
 ```objectscript
 // IRIS terminal - compute PageRank on graph subset
 set results = ##class(PageRankEmbedded).ComputePageRank("PROTEIN:%", 10, 0.85)
