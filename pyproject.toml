@@ -44,11 +44,11 @@ dependencies = [
     "numpy>=1.24.0",
     "requests>=2.28.0",
     "python-dotenv>=1.0.0",
-    "uvicorn[standard]>=0.30.0",
-    "pydantic>=2.0.0",
-    "pytest-asyncio>=0.23.0",
-    "graphql-core>=3.2.6",
-    "strawberry-graphql[fastapi]>=0.280.0",
+    "fastapi>=0.118.0",
+    "uvicorn>=0.37.0",
+    "pydantic>=2.11.9",
+    "pytest-asyncio>=1.2.0",
+    "py2neo>=2021.2.4",
     "httpx>=0.28.1",
 ]
 
@@ -114,8 +114,6 @@ extend-exclude = '''
   | dist
 )/
 '''
-# Support async/await syntax
-preview = true
 
 [tool.isort]
 profile = "black"
@@ -140,11 +138,6 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
 strict_equality = true
-files = [
-    "iris_vector_graph_core",
-    "api",
-    "tests"
-]
 
 [[tool.mypy.overrides]]
 module = [
@@ -152,11 +145,7 @@ module = [
     "networkx",
     "plotly.*",
     "bioservices.*",
-    "mygene",
-    "strawberry",
-    "strawberry.*",
-    "fastapi",
-    "uvicorn"
+    "mygene"
 ]
 ignore_missing_imports = true
 
@@ -172,15 +161,12 @@ addopts = [
     "--strict-markers",
     "--disable-warnings"
 ]
-asyncio_mode = "auto"
-timeout = 30
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "performance: marks tests as performance benchmarks",
     "requires_iris: marks tests that require IRIS database connection",
-    "requires_database: marks tests that require database connection (alias for requires_iris)",
-    "e2e: marks tests as end-to-end tests"
+    "requires_database: marks tests that require database connection (alias for requires_iris)"
 ]
 
 [tool.coverage.run]

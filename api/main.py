@@ -1,7 +1,9 @@
 """
-FastAPI application with GraphQL endpoint.
+FastAPI application with GraphQL and openCypher API endpoints.
 
-Provides /graphql endpoint with GraphQL Playground UI and vector graph operations.
+Provides:
+- /graphql endpoint with GraphQL Playground UI and vector graph operations
+- /api/cypher endpoint for openCypher query execution
 """
 
 import os
@@ -26,6 +28,9 @@ from examples.domains.biomedical.loaders import (
     GeneLoader,
     PathwayLoader,
 )
+
+# Import openCypher router
+from api.routers.cypher import router as cypher_router
 
 
 # Database connection configuration
@@ -80,17 +85,20 @@ connection_pool = ConnectionPool(max_connections=10)
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup/shutdown"""
     # Startup: Initialize connection pool
-    print(f"Connecting to IRIS at {IRIS_HOST}:{IRIS_PORT}/{IRIS_NAMESPACE}")
+    print(f"✓ IRIS Vector Graph API - Multi-Query-Engine Platform")
+    print(f"  GraphQL endpoint: /graphql")
+    print(f"  openCypher endpoint: /api/cypher")
+    print(f"  Connecting to IRIS at {IRIS_HOST}:{IRIS_PORT}/{IRIS_NAMESPACE}")
     yield
     # Shutdown: Close all connections
     connection_pool.close_all()
-    print("Closed all IRIS connections")
+    print("✓ Closed all IRIS connections")
 
 
 # Create FastAPI application
 app = FastAPI(
-    title="IRIS Vector Graph API",
-    description="GraphQL API for hybrid vector + graph search on InterSystems IRIS",
+    title="IRIS Vector Graph - Multi-Query-Engine API",
+    description="GraphQL and openCypher query engines for IRIS Vector Graph database",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -141,15 +149,32 @@ graphql_app = GraphQLRouter(
 # Mount GraphQL endpoint
 app.include_router(graphql_app, prefix="/graphql")
 
+# Mount openCypher endpoint
+app.include_router(cypher_router)
+
 
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
     return {
-        "name": "IRIS Vector Graph API",
+        "name": "IRIS Vector Graph - Multi-Query-Engine API",
         "version": "1.0.0",
-        "graphql_endpoint": "/graphql",
-        "graphql_playground": "/graphql (open in browser)",
+        "query_engines": {
+            "graphql": {
+                "endpoint": "/graphql",
+                "playground": "/graphql (open in browser)",
+                "description": "Type-safe queries with DataLoader batching"
+            },
+            "opencypher": {
+                "endpoint": "/api/cypher",
+                "docs": "/docs#/Cypher%20Queries",
+                "description": "Pattern matching with Cypher-to-SQL translation"
+            },
+            "sql": {
+                "method": "iris.connect()",
+                "description": "Native IRIS SQL for direct access"
+            }
+        },
         "status": "running"
     }
 
@@ -168,13 +193,15 @@ async def health_check():
         return {
             "status": "healthy",
             "database": "connected",
-            "graphql": "available"
+            "graphql": "available",
+            "cypher": "available"
         }
     except Exception as e:
         return {
             "status": "unhealthy",
             "database": f"error: {str(e)}",
-            "graphql": "unavailable"
+            "graphql": "unavailable",
+            "cypher": "unavailable"
         }
 
 
