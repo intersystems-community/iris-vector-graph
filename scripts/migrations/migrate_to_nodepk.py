@@ -339,10 +339,126 @@ def detect_orphans(connection) -> Dict[str, List[str]]:
 
 def validate_migration(connection) -> Dict:
     """
-    Validate migration without making changes.
-    Implementation in T024.
+    Validate migration without making changes (dry run).
+
+    Implements T024 specification: Migration validation mode.
+
+    This function performs all discovery and analysis steps WITHOUT modifying
+    the database. It provides a comprehensive report of what would happen
+    during migration.
+
+    Args:
+        connection: IRIS database connection
+
+    Returns:
+        Dict with validation report containing:
+        - 'discovered_nodes': List of node IDs that would be inserted
+        - 'node_count': Total number of unique nodes discovered
+        - 'orphans': Dict of orphaned references by table (should be empty)
+        - 'ready_for_migration': Boolean indicating if migration can proceed
+        - 'issues': List of any issues found
+        - 'table_breakdown': Dict with counts per table
+
+    Strategy:
+        1. Run node discovery to find all existing nodes
+        2. Run orphan detection to verify referential integrity
+        3. Generate comprehensive report
+        4. Do NOT modify database
     """
-    raise NotImplementedError("validate_migration() - implement in T024")
+    logger = logging.getLogger(__name__)
+
+    logger.info("=" * 70)
+    logger.info("MIGRATION VALIDATION (DRY RUN)")
+    logger.info("=" * 70)
+
+    report = {
+        'discovered_nodes': [],
+        'node_count': 0,
+        'orphans': {},
+        'ready_for_migration': False,
+        'issues': [],
+        'table_breakdown': {}
+    }
+
+    try:
+        # Step 1: Discover nodes
+        logger.info("\n[1/2] Discovering unique node IDs...")
+        discovered_nodes = discover_nodes(connection)
+        report['discovered_nodes'] = discovered_nodes
+        report['node_count'] = len(discovered_nodes)
+
+        # Get breakdown by table
+        cursor = connection.cursor()
+        cursor.execute("SELECT COUNT(DISTINCT s) FROM rdf_labels")
+        report['table_breakdown']['rdf_labels'] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(DISTINCT s) FROM rdf_props")
+        report['table_breakdown']['rdf_props'] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(DISTINCT s) FROM rdf_edges")
+        report['table_breakdown']['rdf_edges_source'] = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(DISTINCT o_id) FROM rdf_edges")
+        report['table_breakdown']['rdf_edges_dest'] = cursor.fetchone()[0]
+
+        try:
+            cursor.execute("SELECT COUNT(DISTINCT id) FROM kg_NodeEmbeddings")
+            report['table_breakdown']['kg_NodeEmbeddings'] = cursor.fetchone()[0]
+        except:
+            report['table_breakdown']['kg_NodeEmbeddings'] = 0
+
+        # Step 2: Check for orphans
+        logger.info("\n[2/2] Checking for orphaned references...")
+        orphans = detect_orphans(connection)
+        report['orphans'] = orphans
+
+        # Analyze results
+        logger.info("\n" + "=" * 70)
+        logger.info("VALIDATION REPORT")
+        logger.info("=" * 70)
+
+        logger.info(f"\nNode Discovery:")
+        logger.info(f"  Total unique nodes: {report['node_count']}")
+        logger.info(f"  Breakdown by table:")
+        for table, count in report['table_breakdown'].items():
+            logger.info(f"    {table}: {count} nodes")
+
+        if orphans:
+            logger.error(f"\n❌ ORPHANED REFERENCES FOUND:")
+            total_orphans = sum(len(nodes) for nodes in orphans.values())
+            logger.error(f"  Total orphans: {total_orphans}")
+            for table, orphaned_nodes in orphans.items():
+                logger.error(f"  {table}: {len(orphaned_nodes)} orphaned nodes")
+                report['issues'].append(
+                    f"Found {len(orphaned_nodes)} orphaned references in {table}"
+                )
+            logger.error(
+                "\n⚠️  Migration cannot proceed with orphaned references.\n"
+                "    Fix: Insert missing nodes or remove orphaned references before migration."
+            )
+            report['ready_for_migration'] = False
+        else:
+            logger.info(f"\n✅ NO ORPHANED REFERENCES")
+            logger.info(f"✅ Database is ready for migration")
+            report['ready_for_migration'] = True
+
+        # Summary
+        logger.info("\n" + "=" * 70)
+        if report['ready_for_migration']:
+            logger.info("RESULT: ✅ VALIDATION PASSED - Ready for migration")
+            logger.info(f"        {report['node_count']} nodes will be inserted into nodes table")
+        else:
+            logger.error("RESULT: ❌ VALIDATION FAILED - Fix issues before migration")
+            logger.error(f"        {len(report['issues'])} issue(s) found")
+        logger.info("=" * 70 + "\n")
+
+    except Exception as e:
+        logger.error(f"Validation failed with error: {e}")
+        report['issues'].append(f"Validation error: {e}")
+        report['ready_for_migration'] = False
+        raise
+
+    return report
 
 
 def execute_migration(connection) -> bool:

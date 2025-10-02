@@ -319,6 +319,56 @@ class TestNodeDiscovery:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+class TestMigrationValidation:
+    """Test suite for T024: validate_migration() function"""
+
+    def test_validation_passes_with_valid_data(self, iris_connection_with_sample_data):
+        """Test that validation passes when database has valid data with FK constraints"""
+        from scripts.migrations.migrate_to_nodepk import validate_migration
+
+        report = validate_migration(iris_connection_with_sample_data)
+
+        # Validation should pass
+        assert report['ready_for_migration'] is True, "Validation should pass with valid data"
+        assert len(report['issues']) == 0, f"Should have no issues, got: {report['issues']}"
+
+        # Check node count
+        assert report['node_count'] > 0, "Should discover at least some nodes"
+
+        # Check no orphans
+        assert len(report['orphans']) == 0, "Should have no orphans with FK constraints enforced"
+
+        # Check table breakdown exists
+        assert 'rdf_labels' in report['table_breakdown']
+        assert 'rdf_props' in report['table_breakdown']
+        assert 'rdf_edges_source' in report['table_breakdown']
+        assert 'rdf_edges_dest' in report['table_breakdown']
+
+    def test_validation_report_structure(self, iris_connection_with_sample_data):
+        """Test that validation report has all required fields"""
+        from scripts.migrations.migrate_to_nodepk import validate_migration
+
+        report = validate_migration(iris_connection_with_sample_data)
+
+        # Check all required fields exist
+        required_fields = [
+            'discovered_nodes', 'node_count', 'orphans',
+            'ready_for_migration', 'issues', 'table_breakdown'
+        ]
+        for field in required_fields:
+            assert field in report, f"Report missing required field: {field}"
+
+        # Check types
+        assert isinstance(report['discovered_nodes'], list)
+        assert isinstance(report['node_count'], int)
+        assert isinstance(report['orphans'], dict)
+        assert isinstance(report['ready_for_migration'], bool)
+        assert isinstance(report['issues'], list)
+        assert isinstance(report['table_breakdown'], dict)
+
+
+@pytest.mark.requires_database
+@pytest.mark.integration
 class TestOrphanDetection:
     """Test orphan detection functionality."""
 
