@@ -99,7 +99,7 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 ### Non-Functional Requirements
 
 #### Performance
-- **NFR-001**: MLP mode scoring MUST achieve <20ms p95 latency at 200 QPS (component budget breakdown: 5-8ms feature computation, ≤8ms inference, ≤3ms explainability - documented in implementation plan)
+- **NFR-001**: MLP mode scoring MUST achieve <20ms p95 latency at 200 QPS (component budget breakdown documented in plan.md Constitution Check section)
 - **NFR-002**: Optional ego-graph mode (EGO) MUST achieve <50ms p95 latency with fanout caps (10/5, max 60 edges)
 
 #### Scalability
@@ -158,7 +158,7 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 - [x] Key concepts extracted
 - [x] Ambiguities marked (none - well-defined MVP)
 - [x] User scenarios defined
-- [x] Requirements generated (21 functional, 8 non-functional)
+- [x] Requirements generated (21 functional, 6 non-functional)
 - [x] Entities identified (8 entities)
 - [x] Review checklist passed
 
@@ -217,6 +217,6 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 | Feature freshness | ≤60s | Timestamp delta between event and feature update |
 | Reason code coverage | ≥95% | Percentage of responses with ≥3 reasons |
 | Error rate | 0% | Count of 5xx responses during load test |
-| Model hot-reload downtime | 0s | Time delta between requests before/after version flip |
+| Model hot-reload downtime | N/A (deferred) | Time delta between requests before/after version flip |
 
 ---

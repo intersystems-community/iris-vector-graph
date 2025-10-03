@@ -44,7 +44,7 @@
 
 ## Phase 3.1: Setup
 
-### T001: Create fraud-specific directory structure
+### [X] T001: Create fraud-specific directory structure
 **File paths**:
 - `sql/fraud/` (directory)
 - `iris_vector_graph_core/fraud/` (directory)
@@ -66,7 +66,7 @@
 
 ---
 
-### T002: [P] Install PyTorch dependency for TorchScript support
+### [X] T002: [P] Install PyTorch dependency for TorchScript support
 **File path**: `pyproject.toml` (or `requirements.txt`)
 
 **Tasks**:
@@ -82,7 +82,7 @@
 
 ---
 
-### T003: [P] Configure linting and type checking for fraud module
+### [X] T003: [P] Configure linting and type checking for fraud module
 **File path**: `pyproject.toml`, `.flake8`, `mypy.ini`
 
 **Tasks**:
@@ -99,7 +99,7 @@
 ## Phase 3.2: Tests First (TDD) ⚠️ MUST COMPLETE BEFORE 3.3
 **CRITICAL: These tests MUST be written and MUST FAIL before ANY implementation**
 
-### T004: [P] Contract test: POST /fraud/score MLP mode success
+### [X] T004: [P] Contract test: POST /fraud/score MLP mode success
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -119,7 +119,7 @@
 
 ---
 
-### T005: [P] Contract test: POST /fraud/score EGO mode success
+### [X] T005: [P] Contract test: POST /fraud/score EGO mode success
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -134,7 +134,7 @@
 
 ---
 
-### T006: [P] Contract test: Minimum 3 reason codes
+### [X] T006: [P] Contract test: Minimum 3 reason codes
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -150,7 +150,7 @@
 
 ---
 
-### T007: [P] Contract test: Invalid entity_id returns 400
+### [X] T007: [P] Contract test: Invalid entity_id returns 400
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -165,7 +165,7 @@
 
 ---
 
-### T008: [P] Contract test: Entity not found returns 404
+### [X] T008: [P] Contract test: Entity not found returns 404
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -179,7 +179,7 @@
 
 ---
 
-### T009: [P] Contract test: Invalid mode returns 400/422
+### [X] T009: [P] Contract test: Invalid mode returns 400/422
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -193,7 +193,7 @@
 
 ---
 
-### T010: [P] Contract test: Missing required field returns 400/422
+### [X] T010: [P] Contract test: Missing required field returns 400/422
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -207,7 +207,7 @@
 
 ---
 
-### T011: [P] Contract test: Optional fields null handled gracefully
+### [X] T011: [P] Contract test: Optional fields null handled gracefully
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -221,7 +221,7 @@
 
 ---
 
-### T012: [P] Contract test: Zero amount transaction
+### [X] T012: [P] Contract test: Zero amount transaction
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -235,7 +235,7 @@
 
 ---
 
-### T013: [P] Contract test: Large amount transaction
+### [X] T013: [P] Contract test: Large amount transaction
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -249,7 +249,7 @@
 
 ---
 
-### T014: [P] Contract test: Meta-test suite summary
+### [X] T014: [P] Contract test: Meta-test suite summary
 **File path**: `tests/contract/test_fraud_score_contract.py`
 
 **Tasks**:
@@ -266,7 +266,7 @@
 
 ---
 
-### T015: [P] Integration test: On-demand CTE feature computation
+### [X] T015: [P] Integration test: On-demand CTE feature computation
 **File path**: `tests/integration/test_fraud_features.py`
 
 **Tasks**:
@@ -284,7 +284,7 @@
 
 ---
 
-### T016: [P] Integration test: TorchScript model loading in embedded Python
+### [X] T016: [P] Integration test: TorchScript model loading in embedded Python
 **File path**: `tests/integration/test_fraud_model_loading.py`
 
 **Tasks**:
@@ -303,7 +303,7 @@
 
 ---
 
-### T017: [P] Integration test: Explainability (gradient × input)
+### [X] T017: [P] Integration test: Explainability (gradient × input)
 **File path**: `tests/integration/test_fraud_explainability.py`
 
 **Tasks**:
@@ -320,7 +320,7 @@
 
 ---
 
-### T018: [P] E2E test: Load test at 200 QPS
+### [X] T018: [P] E2E test: Load test at 200 QPS
 **File path**: `tests/e2e/test_fraud_scoring_e2e.py`
 
 **Tasks**:
@@ -341,7 +341,7 @@
 
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
 
-### T019: [P] SQL schema: gs_events table
+### [X] T019: [P] SQL schema: gs_events table
 **File path**: `sql/fraud/schema_fraud.sql`
 
 **Tasks**:
@@ -367,7 +367,7 @@
 
 ---
 
-### T020: [P] SQL schema: gs_labels table
+### [X] T020: [P] SQL schema: gs_labels table
 **File path**: `sql/fraud/schema_fraud.sql`
 
 **Tasks**:
@@ -386,7 +386,7 @@
 
 ---
 
-### T021: [P] SQL schema: gs_fraud_centroid table
+### [X] T021: [P] SQL schema: gs_fraud_centroid table
 **File path**: `sql/fraud/schema_fraud.sql`
 
 **Tasks**:
@@ -403,7 +403,7 @@
 
 ---
 
-### T022: [P] SQL schema: Extend kg_NodeEmbeddings with version column
+### [X] T022: [P] SQL schema: Extend kg_NodeEmbeddings with version column
 **File path**: `sql/fraud/schema_fraud.sql`
 
 **Tasks**:
@@ -419,7 +419,7 @@
 
 ---
 
-### T023: SQL stored procedure: On-demand feature computation via LANGUAGE PYTHON
+### [X] T023: SQL stored procedure: On-demand feature computation via LANGUAGE PYTHON
 **File path**: `sql/fraud/proc_compute_features.sql`
 
 **Tasks**:
@@ -442,7 +442,7 @@
 
 ---
 
-### T024: SQL stored procedure: K-hop subgraph sampling via LANGUAGE PYTHON
+### [X] T024: SQL stored procedure: K-hop subgraph sampling via LANGUAGE PYTHON
 **File path**: `sql/fraud/proc_subgraph_sample.sql`
 
 **Tasks**:
@@ -465,7 +465,7 @@
 
 ---
 
-### T025: Python module: TorchScript model loader
+### [X] T025: Python module: TorchScript model loader
 **File path**: `iris_vector_graph_core/fraud/model_loader.py`
 
 **Tasks**:
@@ -483,7 +483,7 @@
 
 ---
 
-### T026: Python module: Feature utilities (zero-vector fallback)
+### [X] T026: Python module: Feature utilities (zero-vector fallback)
 **File path**: `iris_vector_graph_core/fraud/feature_utils.py`
 
 **Tasks**:
@@ -501,7 +501,7 @@
 
 ---
 
-### T027: Python module: Explainability (gradient × input)
+### [X] T027: Python module: Explainability (gradient × input)
 **File path**: `iris_vector_graph_core/fraud/explainability.py`
 
 **Tasks**:
@@ -521,7 +521,7 @@
 
 ---
 
-### T028: FastAPI router: POST /fraud/score endpoint
+### [X] T028: FastAPI router: POST /fraud/score endpoint
 **File path**: `api/routers/fraud.py`
 
 **Tasks**:
@@ -554,7 +554,7 @@
 
 ---
 
-### T029: FastAPI router: EGO mode (optional subgraph sampling)
+### [X] T029: FastAPI router: EGO mode (optional subgraph sampling)
 **File path**: `api/routers/fraud.py`
 
 **Tasks**:
@@ -576,7 +576,7 @@
 
 ---
 
-### T030: Integration: Register fraud router in FastAPI app
+### [X] T030: Integration: Register fraud router in FastAPI app
 **File path**: `api/main.py`
 
 **Tasks**:
@@ -593,7 +593,7 @@
 
 ## Phase 3.4: Integration & Validation
 
-### T031: Script: Load fraud schema into IRIS
+### [X] T031: Script: Load fraud schema into IRIS
 **File path**: `scripts/fraud/load_fraud_schema.py`
 
 **Tasks**:
@@ -614,7 +614,7 @@
 
 ---
 
-### T032: Script: Load sample fraud events
+### [X] T032: Script: Load sample fraud events
 **File path**: `scripts/fraud/load_sample_events.py`
 
 **Tasks**:
@@ -630,7 +630,7 @@
 
 ---
 
-### T033: Validate quickstart.md workflow
+### [X] T033: Validate quickstart.md workflow
 **File path**: `specs/004-real-time-fraud/quickstart.md`
 
 **Tasks**:
@@ -656,7 +656,7 @@
 
 ## Phase 3.5: Polish
 
-### T034: Performance benchmark: 200 QPS load test
+### [X] T034: Performance benchmark: 200 QPS load test
 **File path**: `scripts/fraud/performance/benchmark_fraud_scoring.py`
 
 **Tasks**:
@@ -678,7 +678,7 @@
 
 ---
 
-### T035: [P] Documentation: Update CLAUDE.md with fraud scoring context
+### [X] T035: [P] Documentation: Update CLAUDE.md with fraud scoring context
 **File path**: `CLAUDE.md`
 
 **Tasks**:

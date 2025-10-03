@@ -32,6 +32,9 @@ from examples.domains.biomedical.loaders import (
 # Import openCypher router
 from api.routers.cypher import router as cypher_router
 
+# Import fraud scoring router
+from api.routers.fraud import router as fraud_router
+
 
 # Database connection configuration
 IRIS_HOST = os.getenv("IRIS_HOST", "localhost")
@@ -88,6 +91,7 @@ async def lifespan(app: FastAPI):
     print(f"✓ IRIS Vector Graph API - Multi-Query-Engine Platform")
     print(f"  GraphQL endpoint: /graphql")
     print(f"  openCypher endpoint: /api/cypher")
+    print(f"  Fraud scoring endpoint: /fraud/score")
     print(f"  Connecting to IRIS at {IRIS_HOST}:{IRIS_PORT}/{IRIS_NAMESPACE}")
     yield
     # Shutdown: Close all connections
@@ -152,6 +156,9 @@ app.include_router(graphql_app, prefix="/graphql")
 # Mount openCypher endpoint
 app.include_router(cypher_router)
 
+# Mount fraud scoring endpoint
+app.include_router(fraud_router)
+
 
 @app.get("/")
 async def root():
@@ -173,6 +180,11 @@ async def root():
             "sql": {
                 "method": "iris.connect()",
                 "description": "Native IRIS SQL for direct access"
+            },
+            "fraud": {
+                "endpoint": "/fraud/score",
+                "health": "/fraud/health",
+                "description": "Real-time fraud scoring with TorchScript ML"
             }
         },
         "status": "running"
@@ -194,14 +206,16 @@ async def health_check():
             "status": "healthy",
             "database": "connected",
             "graphql": "available",
-            "cypher": "available"
+            "cypher": "available",
+            "fraud": "available"
         }
     except Exception as e:
         return {
             "status": "unhealthy",
             "database": f"error: {str(e)}",
             "graphql": "unavailable",
-            "cypher": "unavailable"
+            "cypher": "unavailable",
+            "fraud": "unavailable"
         }
 
 

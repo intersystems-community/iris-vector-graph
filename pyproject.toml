@@ -51,6 +51,7 @@ dependencies = [
     "py2neo>=2021.2.4",
     "httpx>=0.28.1",
     "strawberry-graphql[fastapi]>=0.280.0",
+    "torch>=2.0.0",  # TorchScript model loading for fraud scoring
 ]
 
 # Optional dependencies for different use cases
