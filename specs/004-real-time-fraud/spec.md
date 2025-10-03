@@ -39,7 +39,7 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 
 1. **Given** a transaction with payer, device, IP, and merchant IDs, **When** the Risk API calls the scoring endpoint, **Then** the system returns a fraud probability and at least 3 reason codes in under 20ms (p95)
 
-2. **Given** a new transaction event is inserted, **When** the event is written to the database, **Then** subsequent scoring requests compute up-to-date rolling features (24-hour degree, transaction sum) via on-demand CTE queries
+2. **Given** a new transaction event is inserted, **When** the event is written to the database, **Then** subsequent scoring requests compute up-to-date rolling features (24-hour degree, transaction sum) via on-demand LANGUAGE PYTHON procedures
 
 3. **Given** a fraud score response, **When** an analyst reviews the reasons, **Then** they see concrete feature values (e.g., "deg_24h=38") and vector proximity scores that explain the prediction
 
@@ -54,7 +54,7 @@ A Risk API developer needs to score a transaction in real-time by providing iden
   - Returns default values (0 for counts, 0.0 for sums) and proceeds with scoring
 
 - What happens if optional feature caching (hourly job) is not yet implemented?
-  - Features are computed on-demand via CTE queries (~5-8ms). If CTE latency exceeds budget, caching can be added as optimization
+  - Features are computed on-demand via LANGUAGE PYTHON procedures (~5-8ms). If latency exceeds budget, caching can be added as optimization
 
 - How does the system handle high-degree nodes during optional ego-graph mode?
   - Enforces strict fanout caps (10 neighbors at hop 1, 5 at hop 2) to prevent performance degradation
@@ -75,8 +75,8 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 #### Event Ingestion & Features
 - **FR-006**: System MUST accept transaction events with entity_id, kind, timestamp, amount, device_id, and ip fields
 - **FR-007**: System MUST sustain ≥500 events/second insertion rate without backpressure
-- **FR-008**: System MUST compute rolling features (24-hour degree, 24-hour transaction sum) on-demand during scoring requests using CTE queries over gs_events table (target: 5-8ms)
-- **FR-009**: System MUST compute derived features (unique devices 7-day, risky neighbors 1-hop) on-demand during scoring requests. Optional: System MAY cache features in rdf_props via hourly job for performance optimization (deferred)
+- **FR-008**: System MUST compute rolling features (24-hour degree, 24-hour transaction sum) on-demand during scoring requests using LANGUAGE PYTHON stored procedures that query gs_events table (target: 5-8ms)
+- **FR-009**: System MUST compute derived features (unique devices 7-day, risky neighbors 1-hop) on-demand during scoring requests via LANGUAGE PYTHON stored procedures. Optional: System MAY cache features in rdf_props via hourly job for performance optimization (deferred)
 - **FR-010**: System MUST support foreign key constraints between events, nodes, embeddings, features, and labels tables
 
 #### Explainability
@@ -99,12 +99,12 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 ### Non-Functional Requirements
 
 #### Performance
-- **NFR-001**: MLP mode scoring MUST achieve <20ms p95 latency at 200 QPS (component budget breakdown: 5-8ms CTE features, ≤8ms inference, ≤3ms explainability - documented in implementation plan)
+- **NFR-001**: MLP mode scoring MUST achieve <20ms p95 latency at 200 QPS (component budget breakdown: 5-8ms feature computation, ≤8ms inference, ≤3ms explainability - documented in implementation plan)
 - **NFR-002**: Optional ego-graph mode (EGO) MUST achieve <50ms p95 latency with fanout caps (10/5, max 60 edges)
 
 #### Scalability
 - **NFR-003**: System MUST handle 200 concurrent queries per second for MLP mode
-- **NFR-004**: System MAY support hourly feature caching completing in ≤5 minutes for current dataset sizes (deferred to post-MVP if on-demand CTE exceeds latency budget)
+- **NFR-004**: System MAY support hourly feature caching completing in ≤5 minutes for current dataset sizes (deferred to post-MVP if on-demand computation exceeds latency budget)
 
 #### Reliability
 - **NFR-005**: System MUST achieve error rate of 0% during 15-minute load test at 200 QPS
@@ -122,7 +122,7 @@ A Risk API developer needs to score a transaction in real-time by providing iden
   - Counts: 24-hour degree, unique devices in 7 days, risky neighbors at 1-hop
   - Aggregates: 24-hour transaction amount sum
   - Metadata: last update timestamp (features_updated_at)
-  - Computed on-demand via CTE queries during scoring requests (~5-8ms)
+  - Computed on-demand via LANGUAGE PYTHON stored procedures during scoring requests (~5-8ms)
   - Optional: Materialized to rdf_props via hourly caching job (deferred optimization)
 
 - **Label**: Ground truth fraud/legit label for an entity at a specific timestamp. Used for training/validation and for computing "risky neighbors" feature. Optional for online scoring.
@@ -168,7 +168,7 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 
 ### In Scope
 - Single fraud scoring endpoint (POST /fraud/score)
-- On-demand CTE feature computation (rolling 24h features, derived 7d features)
+- On-demand feature computation via LANGUAGE PYTHON stored procedures (rolling 24h features, derived 7d features)
 - Precomputed node embeddings (HNSW optional)
 - TorchScript MLP model loaded in embedded Python
 - Simple explainability (top-3 feature attributions + vector proximity)

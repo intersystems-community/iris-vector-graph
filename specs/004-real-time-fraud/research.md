@@ -109,7 +109,7 @@ Implement k-hop neighborhood extraction with fanout limits for preparing GNN inf
 ### Rationale
 - **GNN Requirement**: Graph neural networks require node neighborhoods for message passing
 - **AWS Pattern**: GraphStorm inference uses 3-stage flow (sampling → payload prep → inference)
-- **IRIS-Native**: Use bounded CTE (R003 ego-graph) for k-hop sampling directly from IRIS
+- **IRIS-Native**: Use LANGUAGE PYTHON stored procedure with `iris.sql.exec()` for k-hop sampling
 - **Performance**: Fanout caps prevent unbounded traversal on high-degree nodes
 
 ### Sampling Strategy
@@ -118,27 +118,56 @@ Implement k-hop neighborhood extraction with fanout limits for preparing GNN inf
 - Hop 2: Top 5 neighbors per hop-1 node
 - Total edges: Max 10 + (10 × 5) = 60 edges
 
-**SQL Pattern**:
+**Implementation Pattern** (LANGUAGE PYTHON):
 ```sql
--- Extract k-hop subgraph around target transaction
-WITH hop1 AS (
-    SELECT e.s, e.o_id, e.p, e.created_at
-    FROM rdf_edges e
-    WHERE e.s = :target_transaction_id
-    ORDER BY e.created_at DESC
-    LIMIT 10
-),
-hop2 AS (
-    SELECT e.s, e.o_id, e.p, e.created_at
-    FROM rdf_edges e
-    WHERE e.s IN (SELECT o_id FROM hop1)
-    ORDER BY e.s, e.created_at DESC
-    LIMIT 50  -- Approximation: 10 nodes × 5 edges each
+-- sql/fraud/proc_subgraph_sample.sql
+-- IRIS SQL does not support recursive CTEs (see CTE_DESIGN_VALIDATION.md)
+-- Use LANGUAGE PYTHON with iris.sql.exec() following graph_path_globals.sql pattern
+
+CREATE OR REPLACE PROCEDURE gs_SubgraphSample(
+  IN target_tx_id VARCHAR(256),
+  IN fanout1 INT DEFAULT 10,
+  IN fanout2 INT DEFAULT 5
 )
-SELECT s, o_id, p FROM hop1
-UNION ALL
-SELECT s, o_id, p FROM hop2;
+RETURNS TABLE (s VARCHAR(256), o_id VARCHAR(256), p VARCHAR(128), hop INT)
+LANGUAGE PYTHON
+BEGIN
+import iris.sql as sql
+
+# Hop 1: Top fanout1 neighbors by most recent edge
+cursor = sql.exec("""
+    SELECT TOP ? e.s, e.o_id, e.p, 1 AS hop
+    FROM rdf_edges e
+    WHERE e.s = ?
+    ORDER BY e.created_at DESC
+""", fanout1, target_tx_id)
+
+hop1_results = cursor.fetchall()
+hop1_nodes = [row[1] for row in hop1_results]  # Extract o_id values
+
+# Hop 2: Top fanout2 neighbors per hop1 node (true per-node fanout)
+hop2_results = []
+for hop1_node in hop1_nodes:
+    cursor = sql.exec("""
+        SELECT TOP ? e.s, e.o_id, e.p, 2 AS hop
+        FROM rdf_edges e
+        WHERE e.s = ?
+        ORDER BY e.created_at DESC
+    """, fanout2, hop1_node)
+    hop2_results.extend(cursor.fetchall())
+
+# Combine results (max 60 edges: 10 + 50)
+all_results = hop1_results + hop2_results
+return all_results
+END;
 ```
+
+**Key Advantages over CTE Approach**:
+- ✅ True per-node fanout limits (not global `LIMIT 50` approximation)
+- ✅ Can extend to arbitrary depth (not hardcoded to 2 hops)
+- ✅ Cycle detection possible (add `seen` set if needed)
+- ✅ Follows proven `graph_path_globals.sql` pattern
+- ✅ Avoids IRIS SQL CTE limitations (non-recursive only)
 
 ### Payload Preparation
 After sampling subgraph, prepare JSON payload for model inference:
@@ -167,15 +196,12 @@ After sampling subgraph, prepare JSON payload for model inference:
 | **Fixed Depth BFS** | Unbounded fanout causes performance issues on high-degree nodes (popular merchants) |
 
 ### Performance Characteristics
-- Subgraph extraction: ~15-25ms (indexed query, R003 CTE pattern)
+- Subgraph extraction: ~15-25ms (LANGUAGE PYTHON with indexed queries)
 - Feature lookup: ~4ms (PK lookups for node properties)
 - Payload serialization: ~2ms (JSON encoding)
 - **Total sampling overhead**: ~21-31ms (acceptable for <50ms EGO mode target)
 
-### Integration with R003 (Ego-Graph CTE)
-This sampling pattern **reuses** the R003 bounded CTE for ego-graph extraction. The difference:
-- **R003 (EGO mode)**: Extract subgraph + pass to GraphSAGE model
-- **R001A (Sampling)**: Extract subgraph + prepare JSON payload for any GNN model
+**Note**: LANGUAGE PYTHON is 10-50x faster than client-side Python (in-process execution, per `docs/architecture/embedded_python_architecture.md:283-304`)
 
 ### Error Handling
 - Target node not found → Return empty subgraph, fallback to zero-vector embedding (R001)

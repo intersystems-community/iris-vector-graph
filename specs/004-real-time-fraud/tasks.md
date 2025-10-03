@@ -361,7 +361,7 @@
 **Acceptance**:
 - `sql/fraud/schema_fraud.sql` exists
 - SQL syntax valid (test with `\i sql/fraud/schema_fraud.sql` in IRIS SQL shell)
-- Indexes created for CTE performance (5-8ms target)
+- Indexes created for feature computation performance (5-8ms target)
 
 **Constitutional Validation**: IRIS-Native Development (SQL-first)
 
@@ -419,58 +419,49 @@
 
 ---
 
-### T023: SQL stored procedure: On-demand CTE feature computation
+### T023: SQL stored procedure: On-demand feature computation via LANGUAGE PYTHON
 **File path**: `sql/fraud/proc_compute_features.sql`
 
 **Tasks**:
-1. Create `gs_ComputeFeatures(payer_id VARCHAR)` stored procedure
-2. Implement CTE for rolling features:
+1. Create `gs_ComputeFeatures(payer_id VARCHAR)` stored procedure with `LANGUAGE PYTHON`
+2. Implement Python feature computation using `iris.sql.exec()`:
    - `deg_24h`: COUNT(*) from gs_events WHERE entity_id=payer_id AND ts >= NOW - 24h
    - `tx_amt_sum_24h`: SUM(amount) from gs_events WHERE entity_id=payer_id AND ts >= NOW - 24h
    - `uniq_devices_7d`: COUNT(DISTINCT device_id) from gs_events WHERE entity_id=payer_id AND ts >= NOW - 7d
    - `risk_neighbors_1hop`: COUNT(*) from rdf_edges JOIN gs_labels WHERE s=payer_id AND label='fraud'
-3. Return features as JSON: `{"deg_24h": 5, "tx_amt_sum_24h": 1250.50, ...}`
+3. Return single-row table (4 columns: deg_24h, tx_amt_sum_24h, uniq_devices_7d, risk_neighbors_1hop)
+4. Pattern reference: `sql/graph_path_globals.sql` (proven LANGUAGE PYTHON approach)
 
 **Acceptance**:
 - Procedure executes in ~5-8ms (within 20ms budget)
 - Returns correct feature values for test data
 - Integration test T015 PASSES
+- Follows IRIS Embedded Python pattern (not CTE - IRIS SQL limitation documented in CTE_DESIGN_VALIDATION.md)
 
-**Constitutional Validation**: Performance as Feature (5-8ms CTE)
+**Constitutional Validation**: IRIS-Native (Embedded Python), Performance as Feature (5-8ms)
 
 ---
 
-### T024: SQL stored procedure: K-hop subgraph sampling
+### T024: SQL stored procedure: K-hop subgraph sampling via LANGUAGE PYTHON
 **File path**: `sql/fraud/proc_subgraph_sample.sql`
 
 **Tasks**:
-1. Create `gs_SubgraphSample(target_tx_id VARCHAR, fanout1 INT, fanout2 INT)` stored procedure
-2. Implement k-hop CTE with fanout limits (research.md R001A pattern):
-   ```sql
-   WITH hop1 AS (
-       SELECT e.s, e.o_id, e.p, e.created_at
-       FROM rdf_edges e
-       WHERE e.s = target_tx_id
-       ORDER BY e.created_at DESC
-       LIMIT fanout1  -- Default 10
-   ),
-   hop2 AS (
-       SELECT e.s, e.o_id, e.p, e.created_at
-       FROM rdf_edges e
-       WHERE e.s IN (SELECT o_id FROM hop1)
-       ORDER BY e.s, e.created_at DESC
-       LIMIT fanout1 * fanout2  -- Default 50 (10 × 5)
-   )
-   SELECT s, o_id, p FROM hop1
-   UNION ALL
-   SELECT s, o_id, p FROM hop2;
-   ```
-3. Return subgraph as JSON (simplified GraphStorm format)
+1. Create `gs_SubgraphSample(target_tx_id VARCHAR, fanout1 INT, fanout2 INT)` stored procedure with `LANGUAGE PYTHON`
+2. Implement Python iteration pattern using `iris.sql.exec()`:
+   - Hop 1: Execute `SELECT TOP ? ... WHERE s = target_tx_id ORDER BY created_at DESC` (fanout1=10)
+   - Store hop1 results (s, o_id, p, hop=1)
+   - Hop 2: For each hop1 node, execute `SELECT TOP ? ... WHERE s = ? ORDER BY created_at DESC` (fanout2=5)
+   - Combine hop1 + hop2 results (max 60 edges: 10 + 50)
+3. Return table with columns: s, o_id, p, hop
+4. Pattern reference: `sql/graph_path_globals.sql` (proven LANGUAGE PYTHON pattern for graph traversal)
 
 **Acceptance**:
 - Procedure returns max 60 edges (10 + 50)
 - Executes in ~21-31ms (within 50ms EGO mode budget)
-- Subgraph JSON includes nodes, edges, features
+- True per-node fanout limits (not global LIMIT like CTE approach)
+- Follows graph_path_globals.sql pattern (IRIS SQL does not support recursive CTEs - see CTE_DESIGN_VALIDATION.md)
+
+**Constitutional Validation**: IRIS-Native (Embedded Python), Performance as Feature (21-31ms)
 
 ---
 
