@@ -9,9 +9,9 @@ This document consolidates research findings for implementing real-time fraud sc
 
 ---
 
-## R001: TorchScript Model Loading in IRIS Embedded Python
+## R001: TorchScript Model Loading in IRIS Embedded Python (MVP) → GraphStorm Upgrade Path
 
-### Decision
+### Decision (MVP)
 Use `torch.jit.load()` in IRIS Embedded Python via `iris.cls` Python gateway for TorchScript MLP model loading.
 
 ### Rationale
@@ -19,6 +19,35 @@ Use `torch.jit.load()` in IRIS Embedded Python via `iris.cls` Python gateway for
 - **TorchScript Performance**: TorchScript provides optimized CPU inference (~5-8ms for small MLPs)
 - **Model Portability**: `.torchscript` files are self-contained (include architecture + weights)
 - **Zero-Copy Integration**: Embedded Python runs in-process with IRIS, avoiding IPC overhead
+- **MVP Simplicity**: Faster implementation (2-3 weeks) for learning GNN concepts before scaling
+
+### AWS GraphStorm Pattern (Future Upgrade Path)
+**Reference**: [AWS GraphStorm v0.5 Real-Time Fraud Detection](https://aws.amazon.com/blogs/machine-learning/modernize-fraud-prevention-graphstorm-v0-5-for-real-time-inference/)
+
+The AWS production pattern separates concerns across specialized services:
+1. **OLTP Graph Database** (Neptune/IRIS): Live transaction streams, quick subgraph extraction
+2. **Offline Training** (GraphStorm on SageMaker): Distributed RGCN/HGT training on billions of nodes
+3. **Real-Time Endpoint** (SageMaker BYOC): Sub-second inference with standardized payloads
+4. **Client Integration**: Subgraph sampling → payload preparation → endpoint invocation
+
+**Upgrade Path** (6-8 weeks):
+- Keep IRIS as OLTP graph database (replace Neptune)
+- Export graph to S3 in GraphStorm format using `GConstruct` command
+- Train full GNN (RGCN/HGT) on SageMaker with GraphStorm distributed training
+- Deploy to SageMaker endpoint with one-command deployment (`launch_realtime_endpoint.py`)
+- Implement GraphStorm JSON payload specification for client integration
+
+**Why Not GraphStorm for MVP**:
+- Requires multi-service orchestration (IRIS + S3 + SageMaker + ECR)
+- BYOC Docker image packaging and deployment complexity
+- GraphStorm GConstruct + distributed training setup (90s + 100s per epoch)
+- Overkill for learning GNN fundamentals on 100K-1M node graphs
+
+**When to Upgrade**:
+- Graph scale exceeds 10M nodes or 100M edges
+- Need distributed GNN training (RGCN, HGT, multi-layer message passing)
+- Require enterprise MLOps (model versioning, A/B testing, gradual rollouts)
+- SLOs demand horizontal scaling beyond single IRIS instance
 
 ### Implementation Pattern
 ```python
@@ -69,6 +98,89 @@ class TorchScriptModelLoader:
 - Missing model file → raise `ModelLoadError` with file path
 - Corrupted .torchscript file → raise `ModelLoadError` with validation error
 - PyTorch version mismatch → log warning, attempt load (TorchScript is forward-compatible)
+
+---
+
+## R001A: Subgraph Sampling Pattern for GNN Inference
+
+### Decision
+Implement k-hop neighborhood extraction with fanout limits for preparing GNN inference payloads, following AWS GraphStorm pattern.
+
+### Rationale
+- **GNN Requirement**: Graph neural networks require node neighborhoods for message passing
+- **AWS Pattern**: GraphStorm inference uses 3-stage flow (sampling → payload prep → inference)
+- **IRIS-Native**: Use bounded CTE (R003 ego-graph) for k-hop sampling directly from IRIS
+- **Performance**: Fanout caps prevent unbounded traversal on high-degree nodes
+
+### Sampling Strategy
+**K-hop with Fanout Limits** (from AWS article):
+- Hop 1: Top 10 neighbors by most recent edge
+- Hop 2: Top 5 neighbors per hop-1 node
+- Total edges: Max 10 + (10 × 5) = 60 edges
+
+**SQL Pattern**:
+```sql
+-- Extract k-hop subgraph around target transaction
+WITH hop1 AS (
+    SELECT e.s, e.o_id, e.p, e.created_at
+    FROM rdf_edges e
+    WHERE e.s = :target_transaction_id
+    ORDER BY e.created_at DESC
+    LIMIT 10
+),
+hop2 AS (
+    SELECT e.s, e.o_id, e.p, e.created_at
+    FROM rdf_edges e
+    WHERE e.s IN (SELECT o_id FROM hop1)
+    ORDER BY e.s, e.created_at DESC
+    LIMIT 50  -- Approximation: 10 nodes × 5 edges each
+)
+SELECT s, o_id, p FROM hop1
+UNION ALL
+SELECT s, o_id, p FROM hop2;
+```
+
+### Payload Preparation
+After sampling subgraph, prepare JSON payload for model inference:
+
+**Subgraph JSON Format** (simplified GraphStorm spec):
+```json
+{
+  "target_nodes": ["tx:2991260"],
+  "node_features": {
+    "tx:2991260": {"amount": 150.0, "deg_24h": 1, "device_count": 1},
+    "dev:laptop123": {"device_type": "desktop"},
+    "ip:192.168.1.100": {"ip_reputation": 0.8}
+  },
+  "edges": [
+    {"src": "tx:2991260", "dst": "dev:laptop123", "rel": "uses_device"},
+    {"src": "tx:2991260", "dst": "ip:192.168.1.100", "rel": "uses_ip"}
+  ]
+}
+```
+
+### Alternatives Considered
+| Alternative | Why Rejected |
+|-------------|--------------|
+| **Full Graph Export** | Too slow for real-time inference (multi-GB graphs), defeats purpose of sampling |
+| **Random Sampling** | Loses temporal relevance (recent edges more important for fraud), no ordering |
+| **Fixed Depth BFS** | Unbounded fanout causes performance issues on high-degree nodes (popular merchants) |
+
+### Performance Characteristics
+- Subgraph extraction: ~15-25ms (indexed query, R003 CTE pattern)
+- Feature lookup: ~4ms (PK lookups for node properties)
+- Payload serialization: ~2ms (JSON encoding)
+- **Total sampling overhead**: ~21-31ms (acceptable for <50ms EGO mode target)
+
+### Integration with R003 (Ego-Graph CTE)
+This sampling pattern **reuses** the R003 bounded CTE for ego-graph extraction. The difference:
+- **R003 (EGO mode)**: Extract subgraph + pass to GraphSAGE model
+- **R001A (Sampling)**: Extract subgraph + prepare JSON payload for any GNN model
+
+### Error Handling
+- Target node not found → Return empty subgraph, fallback to zero-vector embedding (R001)
+- No neighbors found (isolated node) → Return target node only, cold-start reasoning
+- Sampling timeout (>50ms) → Reduce fanout dynamically (10/5 → 5/2), log warning
 
 ---
 

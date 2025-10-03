@@ -18,11 +18,13 @@
    → Update Progress Tracking: Initial Constitution Check PASS
 5. Execute Phase 0 → research.md
    → TorchScript model loading patterns in IRIS Embedded Python
-   → SQL trigger design for real-time feature updates
-   → Bounded CTE patterns for ego-graph extraction
+   → AWS GraphStorm upgrade path for enterprise scale (>10M nodes)
+   → K-hop subgraph sampling with fanout limits (10/5, max 60 edges)
+   → On-demand CTE feature computation (no trigger overhead)
 6. Execute Phase 1 → contracts, data-model.md, quickstart.md
-   → REST API contract for POST /fraud/score
-   → SQL schema for gs_events, gs_features, gs_labels
+   → REST API contract for POST /fraud/score (MLP/EGO modes)
+   → SQL schema for gs_events, gs_labels (reuse rdf_props for features)
+   → Subgraph sampling payload spec aligned with GraphStorm pattern
    → Test scenarios for scoring, ingestion, explainability
 7. Re-evaluate Constitution Check section
    → ✅ Design maintains constitutional compliance
@@ -35,14 +37,14 @@
 
 Add real-time fraud scoring capability to IRIS Vector Graph using precomputed node embeddings and a TorchScript MLP model loaded in IRIS Embedded Python. System accepts transaction identifiers (payer, device, IP, merchant) and returns fraud probability with explainable reason codes in <20ms p95 at 200 QPS.
 
-**Technical Approach** (from research):
-- **SQL-first architecture**: Extend existing `nodes`, `rdf_edges`, `kg_NodeEmbeddings` schema with fraud-specific tables (`gs_events`, `gs_features`, `gs_labels`)
+**Technical Approach** (from research, aligned with AWS GraphStorm pattern):
+- **Graph-native architecture**: Extend existing `nodes`, `rdf_edges`, `kg_NodeEmbeddings` with fraud-specific tables (`gs_events`, `gs_labels`); store features as `rdf_props` (no separate gs_features table)
 - **IRIS Embedded Python**: Load TorchScript MLP model using `iris.cls` Python integration
-- **Trigger-based features**: SQL AFTER INSERT trigger updates rolling 24h degree and transaction sums in same transaction
-- **Hourly batch job**: SQL UPDATE statements for 7-day unique devices and risky neighbor counts
+- **On-demand feature computation**: Rolling features computed via CTE during scoring (~5-8ms), optional caching in `rdf_props`
 - **REST endpoint**: FastAPI POST /fraud/score leveraging existing `api/main.py` structure
 - **Explainability**: Gradient × input for feature attributions, cosine similarity for vector proximity
-- **Optional ego-graph**: Bounded 2-hop CTE with strict fanout caps (10/5) for GraphSAGE mode
+- **Optional subgraph sampling**: K-hop CTE with fanout limits (10/5, max 60 edges) for GraphSAGE mode
+- **GraphStorm upgrade path**: Documented for enterprise scale (>10M nodes), offline training on SageMaker
 
 ## Technical Context
 
@@ -70,12 +72,13 @@ Add real-time fraud scoring capability to IRIS Vector Graph using precomputed no
 - No multi-tenancy (deferred)
 - TorchScript models externally trained (offline pipeline)
 
-**Scale/Scope**:
-- 4 new SQL tables (gs_events, gs_features, gs_labels, gs_fraud_centroid)
+**Scale/Scope** (simplified from AWS pattern alignment):
+- 3 new SQL tables (gs_events, gs_labels, gs_fraud_centroid)
+- Reuse existing rdf_props table for feature storage (graph-native)
 - 1 REST endpoint POST /fraud/score with 2 modes (MLP, EGO)
-- 3 SQL stored procedures (gs_FetchServingRow, gs_ScoreMLP, gs_EgoGraph)
-- 1 SQL trigger (gs_UpdateRollingFeatures)
-- 1 hourly batch job (gs_RefreshDerivedFeatures)
+- 2 SQL stored procedures (gs_ScoreMLP, gs_SubgraphSample)
+- On-demand CTE for feature computation (no trigger complexity)
+- Optional hourly job for rdf_props caching (deferred optimization)
 - ~15 contract tests, ~10 integration tests, ~5 performance benchmarks
 
 ## Constitution Check

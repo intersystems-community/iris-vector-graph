@@ -29,7 +29,9 @@ paths:
 
         **Modes**:
         - **MLP** (default): Fast inference using precomputed embeddings (~15ms)
-        - **EGO**: Ego-graph + GraphSAGE for cold-start scenarios (~40ms)
+        - **EGO**: K-hop subgraph sampling + GraphSAGE inference for cold-start scenarios (~40ms)
+          * Subgraph extracted via bounded CTE (fanout 10/5, max 60 edges)
+          * Node features computed on-demand from gs_events + rdf_props
 
         **Explainability**: Returns minimum 3 reason codes (feature attributions + vector proximity)
       operationId: scoreFraudTransaction
@@ -180,7 +182,9 @@ components:
           description: |
             Scoring mode:
             - **MLP**: Precomputed embeddings + MLP inference (fast, <20ms p95)
-            - **EGO**: Bounded ego-graph + GraphSAGE (cold-start, <50ms p95)
+            - **EGO**: K-hop subgraph sampling + GraphSAGE inference (cold-start, <50ms p95)
+              * Fanout limits: 10 (hop 1), 5 (hop 2)
+              * Max 60 edges sampled per transaction
         payer:
           type: string
           pattern: '^[a-z]+:[a-zA-Z0-9_-]+$'
