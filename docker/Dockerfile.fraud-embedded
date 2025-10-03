@@ -1,0 +1,51 @@
+FROM containers.intersystems.com/intersystems/iris:latest-preview
+
+# IRIS container already includes Python and curl, no additional system deps needed
+
+# Use IRIS user's home directory (container runs as non-root)
+USER irisowner
+WORKDIR /home/irisowner
+RUN mkdir -p app/src app/scripts models
+
+# Copy merge.cpf to enable CallIn service (required for embedded Python)
+COPY --chown=irisowner:irisowner docker/merge.cpf app/merge.cpf
+
+# Install Python dependencies in irispython context
+# CRITICAL: Use --break-system-packages for irispython pip
+RUN /usr/irissys/bin/irispython -m pip install --quiet --break-system-packages \
+    fastapi>=0.104.0 \
+    uvicorn[standard]>=0.24.0 \
+    torch>=2.0.0 \
+    numpy>=1.24.0 \
+    structlog>=23.1.0 \
+    pydantic>=2.4.0
+
+# Copy fraud server code
+COPY --chown=irisowner:irisowner src/iris_fraud_server/ app/src/iris_fraud_server/
+
+# Copy fraud SQL schema and scripts
+COPY --chown=irisowner:irisowner sql/fraud/ app/sql/fraud/
+COPY --chown=irisowner:irisowner scripts/fraud/load_fraud_schema_embedded.py app/scripts/fraud/
+COPY --chown=irisowner:irisowner scripts/fraud/load_sample_events_embedded.py app/scripts/fraud/
+COPY --chown=irisowner:irisowner scripts/fraud/stress_test_fraud.py app/scripts/fraud/
+COPY --chown=irisowner:irisowner scripts/fraud/benchmark_fraud_at_scale.py app/scripts/fraud/
+COPY --chown=irisowner:irisowner scripts/fraud/diagnose_performance.py app/scripts/fraud/
+
+# Copy startup script
+COPY --chown=irisowner:irisowner docker/start-fraud-server.sh app/start-fraud-server.sh
+RUN chmod +x app/start-fraud-server.sh
+
+# Expose fraud API port
+EXPOSE 8000
+
+# Expose IRIS ports
+EXPOSE 1972 52773
+
+# Set environment variables
+ENV PYTHONPATH=/app/src
+ENV IRIS_NAMESPACE=USER
+ENV FRAUD_API_PORT=8000
+ENV FRAUD_MODEL_PATH=/models/fraud_mlp.torchscript
+
+# Start IRIS and fraud server
+CMD ["/iris-main", "--check-caps", "false"]

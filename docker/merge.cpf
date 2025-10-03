@@ -1,0 +1,3 @@
+[Actions]
+; Enable CallIn service (required for embedded Python)
+ModifyService:Name=%Service_CallIn,Enabled=1,AutheEnabled=48

@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  iris-fraud-embedded:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fraud-embedded
+    container_name: iris-fraud-embedded
+    ports:
+      - "8100:8000"    # Fraud API (embedded Python FastAPI)
+      - "41972:1972"   # IRIS SuperServer
+      - "52775:52773" # Management Portal
+    environment:
+      - ISC_PACKAGE_MGRUSER=Admin
+      - ISC_PACKAGE_MGRPWD=SYS
+      - ISC_PACKAGE_IRISUSER=Admin
+      - ISC_PACKAGE_IRISUSERPWD=SYS
+      - ISC_DEFAULT_PASSWORD=SYS
+      - IRIS_USERNAME=_SYSTEM
+      - IRIS_PASSWORD=SYS
+      - IRIS_NAMESPACE=USER
+      - FRAUD_API_PORT=8000
+      - FRAUD_MODEL_PATH=/models/fraud_mlp.torchscript
+      - LOAD_SAMPLE_DATA=true
+    volumes:
+      - iris-fraud-embedded-data:/usr/irissys/mgr
+      - ./models:/models:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/fraud/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - fraud-network
+    # Override entrypoint to run custom startup
+    entrypoint: ["/bin/bash", "/home/irisowner/app/start-fraud-server.sh"]
+    command: []
+
+networks:
+  fraud-network:
+    driver: bridge
+
+volumes:
+  iris-fraud-embedded-data:
+    driver: local

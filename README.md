@@ -549,6 +549,57 @@ uv run python scripts/ingest/networkx_loader.py load data.tsv --format tsv
 uv run python scripts/performance/string_db_scale_test.py --max-proteins 10000
 ```
 
+## Fraud Detection Use Case
+
+This repository includes a **real-time fraud scoring system** demonstrating IRIS embedded Python capabilities. The fraud server runs entirely inside an IRIS container with native access to the database via the `iris` module.
+
+**Features:**
+- ✅ **Sub-millisecond feature computation** (1.07ms median at 100K scale)
+- ✅ **TorchScript model inference** for fraud probability scoring
+- ✅ **FastAPI endpoints** for real-time fraud detection
+- ✅ **Embedded Python architecture** - no external services required
+
+**Quick Start:**
+```bash
+# Build and start fraud server with embedded IRIS
+docker-compose -f docker-compose.fraud-embedded.yml up -d
+
+# Load 100K test transactions
+docker exec iris-fraud-embedded /usr/irissys/bin/irispython \
+  /home/irisowner/app/scripts/fraud/stress_test_fraud.py
+
+# Test fraud scoring API
+curl -X POST http://localhost:8100/fraud/score \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mode": "MLP",
+    "payer": "acct:user000001",
+    "device": "dev:laptop",
+    "ip": "ip:192.168.1.1",
+    "merchant": "merch:store1",
+    "amount": 100.0
+  }'
+```
+
+**Performance at 100K Transaction Scale:**
+| Metric | Result |
+|--------|--------|
+| Median query latency | 1.07ms |
+| End-to-end API latency | 26ms |
+| Data load throughput | 2,699 txn/s |
+| Database size | 100,000 transactions |
+
+**Key Implementation Lessons:**
+- Stored procedures with parameters **don't work** via `iris.sql.exec()` - use direct SQL queries instead
+- Python datetime objects **can't be query parameters** - use SQL `DATEADD()` functions
+- IRIS result sets **don't have `fetchone()`** - use `list(result)` or direct iteration
+- See [`docs/IRIS_EMBEDDED_PYTHON_LESSONS.md`](docs/IRIS_EMBEDDED_PYTHON_LESSONS.md) for complete details
+
+**Documentation:**
+- [`docs/FRAUD_SCORING_SCALE_TEST_RESULTS.md`](docs/FRAUD_SCORING_SCALE_TEST_RESULTS.md) - Performance analysis at scale
+- [`docs/IRIS_EMBEDDED_PYTHON_LESSONS.md`](docs/IRIS_EMBEDDED_PYTHON_LESSONS.md) - Critical IRIS SQL patterns
+- [`tests/fraud/`](tests/fraud/) - Integration and API test suites
+
 ## Documentation
 
 - [`docs/architecture/ACTUAL_SCHEMA.md`](docs/architecture/ACTUAL_SCHEMA.md) - Schema details and working patterns
