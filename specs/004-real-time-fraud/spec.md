@@ -39,13 +39,11 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 
 1. **Given** a transaction with payer, device, IP, and merchant IDs, **When** the Risk API calls the scoring endpoint, **Then** the system returns a fraud probability and at least 3 reason codes in under 20ms (p95)
 
-2. **Given** a new transaction event is inserted, **When** the event is written to the database, **Then** the payer's rolling features (24-hour degree, transaction sum) are updated within the same transaction
+2. **Given** a new transaction event is inserted, **When** the event is written to the database, **Then** subsequent scoring requests compute up-to-date rolling features (24-hour degree, transaction sum) via on-demand CTE queries
 
 3. **Given** a fraud score response, **When** an analyst reviews the reasons, **Then** they see concrete feature values (e.g., "deg_24h=38") and vector proximity scores that explain the prediction
 
-4. **Given** a new TorchScript MLP model, **When** ML Ops activates the new version, **Then** subsequent scoring requests use the new model without downtime
-
-5. **Given** a high-volume scenario of 500 events/second, **When** events are ingested continuously, **Then** the system sustains writes without backpressure and rolling features reflect new events within 60 seconds
+4. **Given** a high-volume scenario of 500 events/second, **When** events are ingested continuously, **Then** the system sustains writes without backpressure and rolling features are available for scoring within seconds (on-demand computation)
 
 ### Edge Cases
 
@@ -55,8 +53,8 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 - How does the system handle missing feature data?
   - Returns default values (0 for counts, 0.0 for sums) and proceeds with scoring
 
-- What happens when hourly feature refresh job is delayed?
-  - Features may be stale up to refresh interval; system continues scoring with available data
+- What happens if optional feature caching (hourly job) is not yet implemented?
+  - Features are computed on-demand via CTE queries (~5-8ms). If CTE latency exceeds budget, caching can be added as optimization
 
 - How does the system handle high-degree nodes during optional ego-graph mode?
   - Enforces strict fanout caps (10 neighbors at hop 1, 5 at hop 2) to prevent performance degradation
@@ -77,8 +75,8 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 #### Event Ingestion & Features
 - **FR-006**: System MUST accept transaction events with entity_id, kind, timestamp, amount, device_id, and ip fields
 - **FR-007**: System MUST sustain ≥500 events/second insertion rate without backpressure
-- **FR-008**: System MUST update rolling features (24-hour degree, 24-hour transaction sum) within the same transaction as event insertion
-- **FR-009**: System MUST recompute derived features (unique devices 7-day, risky neighbors 1-hop) within 60 seconds of event arrival
+- **FR-008**: System MUST compute rolling features (24-hour degree, 24-hour transaction sum) on-demand during scoring requests using CTE queries over gs_events table (target: 5-8ms)
+- **FR-009**: System MUST compute derived features (unique devices 7-day, risky neighbors 1-hop) on-demand during scoring requests. Optional: System MAY cache features in rdf_props via hourly job for performance optimization (deferred)
 - **FR-010**: System MUST support foreign key constraints between events, nodes, embeddings, features, and labels tables
 
 #### Explainability
@@ -89,30 +87,28 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 
 #### Model Management
 - **FR-015**: System MUST load TorchScript MLP model on startup from configurable file path
-- **FR-016**: System MUST support hot-reloading of TorchScript model without system downtime
+- **FR-016**: System MAY support hot-reloading of TorchScript model without system downtime (deferred to post-MVP - requires thread-safe model swapping)
 - **FR-017**: System MUST track model version in embeddings table
 - **FR-018**: System MUST fall back to zero-vector embeddings when node embedding is missing
 
 #### Data Retention & Freshness
 - **FR-019**: System MUST retain raw events in append-only table with no automatic deletion (manual cleanup only)
 - **FR-020**: System MUST timestamp all feature updates to track freshness
-- **FR-021**: System MUST support hourly batch jobs for derived feature computation
+- **FR-021**: System MAY support hourly batch jobs for caching derived features to rdf_props (performance optimization, deferred to post-MVP)
 
 ### Non-Functional Requirements
 
 #### Performance
-- **NFR-001**: Primary key lookups for embeddings and features MUST complete in ≤4ms (p95)
-- **NFR-002**: MLP inference on single transaction MUST complete in ≤8ms (p95)
-- **NFR-003**: Optional ego-graph CTE extraction MUST complete in ≤25ms (p95) with strict fanout caps
-- **NFR-004**: Reason code generation MUST complete in ≤3ms (p95)
+- **NFR-001**: MLP mode scoring MUST achieve <20ms p95 latency at 200 QPS (component budget breakdown: 5-8ms CTE features, ≤8ms inference, ≤3ms explainability - documented in implementation plan)
+- **NFR-002**: Optional ego-graph mode (EGO) MUST achieve <50ms p95 latency with fanout caps (10/5, max 60 edges)
 
 #### Scalability
-- **NFR-005**: System MUST handle 200 concurrent queries per second for MLP mode
-- **NFR-006**: System MUST support hourly feature refresh completing in ≤5 minutes for current dataset sizes
+- **NFR-003**: System MUST handle 200 concurrent queries per second for MLP mode
+- **NFR-004**: System MAY support hourly feature caching completing in ≤5 minutes for current dataset sizes (deferred to post-MVP if on-demand CTE exceeds latency budget)
 
 #### Reliability
-- **NFR-007**: System MUST achieve error rate of 0% during 15-minute load test at 200 QPS
-- **NFR-008**: System MUST handle missing data gracefully without throwing exceptions
+- **NFR-005**: System MUST achieve error rate of 0% during 15-minute load test at 200 QPS
+- **NFR-006**: System MUST handle missing data gracefully without throwing exceptions
 
 ### Key Entities
 
@@ -122,11 +118,12 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 
 - **Embedding**: Precomputed vector representation (768 dimensions) of a node. Includes version number and last update timestamp. May be missing for cold-start nodes (system falls back to zero-vector).
 
-- **Rolling Features**: Denormalized feature set for each entity. Contains:
+- **Rolling Features**: Graph properties computed on-demand or cached in rdf_props table. Contains:
   - Counts: 24-hour degree, unique devices in 7 days, risky neighbors at 1-hop
   - Aggregates: 24-hour transaction amount sum
-  - Metadata: last update timestamp
-  - Updated via trigger (real-time) and hourly job (batch)
+  - Metadata: last update timestamp (features_updated_at)
+  - Computed on-demand via CTE queries during scoring requests (~5-8ms)
+  - Optional: Materialized to rdf_props via hourly caching job (deferred optimization)
 
 - **Label**: Ground truth fraud/legit label for an entity at a specific timestamp. Used for training/validation and for computing "risky neighbors" feature. Optional for online scoring.
 
@@ -171,12 +168,12 @@ A Risk API developer needs to score a transaction in real-time by providing iden
 
 ### In Scope
 - Single fraud scoring endpoint (POST /fraud/score)
-- Event-driven rolling features (trigger-based)
+- On-demand CTE feature computation (rolling 24h features, derived 7d features)
 - Precomputed node embeddings (HNSW optional)
 - TorchScript MLP model loaded in embedded Python
 - Simple explainability (top-3 feature attributions + vector proximity)
-- Hot-reload model capability
-- Optional: bounded 2-hop ego-graph mode with GraphSAGE
+- Model loading on startup (hot-reload deferred to post-MVP)
+- Optional: bounded k-hop subgraph sampling (fanout 10/5, max 60 edges) for GraphSAGE mode
 
 ### Out of Scope (Deferred)
 - Multi-tenancy / ContextID isolation
