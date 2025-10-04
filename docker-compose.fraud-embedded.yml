@@ -25,6 +25,7 @@ services:
     volumes:
       - iris-fraud-embedded-data:/usr/irissys/mgr
       - ./models:/models:ro
+      - ../rag-templates/iris.key:/usr/irissys/mgr/iris.key:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/fraud/health"]
       interval: 30s
