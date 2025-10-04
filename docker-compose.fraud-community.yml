@@ -14,8 +14,8 @@ services:
     container_name: iris-fraud-community
     ports:
       - "8101:8000"    # Fraud API (offset from licensed version)
-      - "31972:1972"   # IRIS SuperServer (offset from licensed version)
-      - "32773:52773"  # Management Portal (offset from licensed version)
+      - "51972:1972"   # IRIS SuperServer (offset from licensed version)
+      - "62773:52773"  # Management Portal (offset from licensed version)
     environment:
       - ISC_PACKAGE_MGRUSER=Admin
       - ISC_PACKAGE_MGRPWD=SYS

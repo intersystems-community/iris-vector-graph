@@ -27,8 +27,8 @@ docker-compose -f docker-compose.fraud-community.yml up -d
 
 **Ports** (offset from licensed version):
 - **Fraud API**: http://localhost:8101 (vs 8100 for licensed)
-- **SuperServer**: localhost:31972 (vs 41972 for licensed)
-- **Management Portal**: http://localhost:32773 (vs 52775 for licensed)
+- **SuperServer**: localhost:51972 (vs 41972 for licensed)
+- **Management Portal**: http://localhost:62773 (vs 52775 for licensed)
 
 ### 2. Load Test Data
 
@@ -150,7 +150,7 @@ docker-compose -f docker-compose.fraud-embedded.yml up -d
 
 # Community version (10M-30M scale)
 docker-compose -f docker-compose.fraud-community.yml up -d
-# API: localhost:8101, SuperServer: 31972, Portal: 32773
+# API: localhost:8101, SuperServer: 51972, Portal: 62773
 ```
 
 **Use cases**:
