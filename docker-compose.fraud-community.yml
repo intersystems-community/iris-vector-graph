@@ -1,0 +1,54 @@
+version: '3.8'
+
+# IRIS Community Edition Compatible Fraud Detection
+# - Database limit: 10GB (supports 10M-30M transactions)
+# - No license key required (no VECTOR support)
+# - Same sub-2ms fraud scoring performance
+# - Ideal for demos, development, and proof-of-concept
+
+services:
+  iris-fraud-community:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.fraud-embedded
+    container_name: iris-fraud-community
+    ports:
+      - "8101:8000"    # Fraud API (offset from licensed version)
+      - "31972:1972"   # IRIS SuperServer (offset from licensed version)
+      - "32773:52773"  # Management Portal (offset from licensed version)
+    environment:
+      - ISC_PACKAGE_MGRUSER=Admin
+      - ISC_PACKAGE_MGRPWD=SYS
+      - ISC_PACKAGE_IRISUSER=Admin
+      - ISC_PACKAGE_IRISUSERPWD=SYS
+      - ISC_DEFAULT_PASSWORD=SYS
+      - IRIS_USERNAME=_SYSTEM
+      - IRIS_PASSWORD=SYS
+      - IRIS_NAMESPACE=USER
+      - FRAUD_API_PORT=8000
+      - FRAUD_MODEL_PATH=/models/fraud_mlp.torchscript
+      - LOAD_SAMPLE_DATA=true
+      - COMMUNITY_EDITION=true
+      - MAX_TRANSACTIONS=30000000  # 30M = ~6.6GB (under 10GB limit)
+    volumes:
+      - iris-fraud-community-data:/usr/irissys/mgr
+      - ./models:/models:ro
+      # NO LICENSE KEY - Community Edition
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/fraud/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - fraud-community-network
+    entrypoint: ["/bin/bash", "/home/irisowner/app/start-fraud-server.sh"]
+    command: []
+
+networks:
+  fraud-community-network:
+    driver: bridge
+
+volumes:
+  iris-fraud-community-data:
+    driver: local
