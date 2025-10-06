@@ -19,6 +19,7 @@ services:
       - IRIS_USERNAME=_SYSTEM
       - IRIS_PASSWORD=SYS
       - IRIS_NAMESPACE=USER
+      - ISC_CPF_MERGE_FILE=/home/irisowner/app/merge.cpf
       - FRAUD_API_PORT=8000
       - FRAUD_MODEL_PATH=/models/fraud_mlp.torchscript
       - LOAD_SAMPLE_DATA=true
@@ -34,9 +35,7 @@ services:
       start_period: 120s
     networks:
       - fraud-network
-    # Override entrypoint to run custom startup
-    entrypoint: ["/bin/bash", "/home/irisowner/app/start-fraud-server.sh"]
-    command: []
+    # Use default CMD from Dockerfile (no custom startup)
 
 networks:
   fraud-network:

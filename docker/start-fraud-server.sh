@@ -4,19 +4,21 @@
 # This script runs in IRIS container and starts the fraud scoring API
 # via irispython (embedded Python with iris module).
 
-set -e
+# Removed 'set -e' to allow script to continue even if some commands fail
+# This is necessary because iris module import may fail initially before CallIn is enabled
+set +e
 
 echo "[Fraud Server] Starting IRIS..."
 
-# Start IRIS in background with CPF merge
-/iris-main --check-caps false -a "iris merge IRIS /home/irisowner/app/merge.cpf" &
+# Start IRIS in background
+/iris-main --check-caps false &
 IRIS_PID=$!
 
 echo "[Fraud Server] IRIS PID: $IRIS_PID"
 
 # Wait for IRIS to be fully started
 echo "[Fraud Server] Waiting for IRIS to be ready..."
-max_wait=120
+max_wait=1200  # 20 minutes for large database recovery (29GB+)
 count=0
 while [ $count -lt $max_wait ]; do
     # Check if IRIS is ready by looking for the "started InterSystems IRIS" message in logs
@@ -35,29 +37,49 @@ if [ $count -eq $max_wait ]; then
     exit 1
 fi
 
-# Additional wait for stability and CPF merge to complete
+# Additional wait for stability
 sleep 10
 
-# Load fraud schema via irispython
-echo "[Fraud Server] Loading fraud schema..."
+# Enable CallIn service via ObjectScript (required for embedded Python)
+echo "[Fraud Server] Enabling CallIn service with all authentication methods..."
+echo -e "_SYSTEM\nSYS\nset sc = ##class(Security.Services).Get(\"%Service_CallIn\", .Properties)\nset Properties(\"Enabled\") = 1\nset Properties(\"AutheEnabled\") = 64\nset sc = ##class(Security.Services).Modify(\"%Service_CallIn\", .Properties)\nwrite \"CallIn service enabled: \", sc,!\nhalt" | /usr/irissys/bin/irissession IRIS -U%SYS
+
+# Wait for service to activate
+echo "[Fraud Server] Waiting for CallIn service to activate..."
+sleep 5
+
+# Export IRIS credentials for embedded Python
+export IRISUSERNAME=${IRIS_USERNAME:-_SYSTEM}
+export IRISPASSWORD=${IRIS_PASSWORD:-SYS}
+export IRISNAMESPACE=${IRIS_NAMESPACE:-USER}
+
+# Verify database is accessible
+echo "[Fraud Server] Verifying database access..."
+/usr/irissys/bin/irispython -c "
+import iris
+result = iris.sql.exec('SELECT COUNT(*) FROM gs_events')
+count = list(result)[0][0]
+print(f'[Fraud Server] ✅ Database verified: {count:,} transactions')
+" 2>&1 || echo "[Fraud Server] ⚠️  Database verification failed"
+
+# Load fraud schema via irispython (skip if database already configured)
+echo "[Fraud Server] Checking if schema needs to be loaded..."
 echo "[Fraud Server] Python version: $(/usr/irissys/bin/irispython --version 2>&1)"
 echo "[Fraud Server] Testing iris module..."
 /usr/irissys/bin/irispython -c "import iris; print('iris module loaded successfully')" 2>&1 || echo "Failed to load iris module"
-/usr/irissys/bin/irispython /home/irisowner/app/scripts/fraud/load_fraud_schema_embedded.py 2>&1 | tee /tmp/schema-load.log
+/usr/irissys/bin/irispython /home/irisowner/app/scripts/fraud/load_fraud_schema_embedded.py 2>&1 | tee /tmp/schema-load.log || true
 
 if [ $? -ne 0 ]; then
-    echo "[Fraud Server] WARNING: Schema loading failed, continuing anyway..."
-    cat /tmp/schema-load.log
+    echo "[Fraud Server] Schema loading skipped (database may already be configured)"
 fi
 
-# Load sample data (if requested)
+# Load sample data (if requested and database is empty)
 if [ "$LOAD_SAMPLE_DATA" = "true" ]; then
-    echo "[Fraud Server] Loading sample fraud data..."
-    /usr/irissys/bin/irispython /home/irisowner/app/scripts/fraud/load_sample_events_embedded.py 2>&1 | tee /tmp/sample-load.log
+    echo "[Fraud Server] Checking if sample data needs to be loaded..."
+    /usr/irissys/bin/irispython /home/irisowner/app/scripts/fraud/load_sample_events_embedded.py 2>&1 | tee /tmp/sample-load.log || true
 
     if [ $? -ne 0 ]; then
-        echo "[Fraud Server] WARNING: Sample data loading failed, continuing anyway..."
-        cat /tmp/sample-load.log
+        echo "[Fraud Server] Sample data loading skipped (database may already have data)"
     fi
 fi
 

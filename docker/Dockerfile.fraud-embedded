@@ -31,9 +31,10 @@ COPY --chown=irisowner:irisowner scripts/fraud/stress_test_fraud.py app/scripts/
 COPY --chown=irisowner:irisowner scripts/fraud/benchmark_fraud_at_scale.py app/scripts/fraud/
 COPY --chown=irisowner:irisowner scripts/fraud/diagnose_performance.py app/scripts/fraud/
 
-# Copy startup script
+# Copy startup scripts
 COPY --chown=irisowner:irisowner docker/start-fraud-server.sh app/start-fraud-server.sh
-RUN chmod +x app/start-fraud-server.sh
+COPY --chown=irisowner:irisowner docker/start-fraud-api-only.sh app/start-fraud-api-only.sh
+RUN chmod +x app/start-fraud-server.sh app/start-fraud-api-only.sh
 
 # Expose fraud API port
 EXPOSE 8000
@@ -47,5 +48,5 @@ ENV IRIS_NAMESPACE=USER
 ENV FRAUD_API_PORT=8000
 ENV FRAUD_MODEL_PATH=/models/fraud_mlp.torchscript
 
-# Start IRIS and fraud server
-CMD ["/iris-main", "--check-caps", "false"]
+# Start IRIS (entrypoint is /tini -- /iris-main, so CMD is just the args)
+CMD ["--check-caps", "false"]
