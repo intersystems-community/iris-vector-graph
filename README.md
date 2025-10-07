@@ -1,6 +1,12 @@
 # IRIS Vector Graph
 
-A knowledge graph system built on InterSystems IRIS that combines graph traversal, vector similarity search, and full-text search in a single database. Designed for biomedical research use cases like protein interaction networks and literature mining.
+A knowledge graph system built on InterSystems IRIS that combines graph traversal, vector similarity search, and full-text search in a single database.
+
+**Proven at Scale Across Industries**:
+- **Financial Services**: Real-time fraud detection with 130M+ transactions, bitemporal audit trails
+- **Biomedical Research**: Protein interaction networks, drug discovery, literature mining
+
+Demonstrates IRIS versatility: Same platform powering fraud scoring APIs and genomic research graphs.
 
 ## What is InterSystems IRIS?
 
@@ -54,67 +60,87 @@ Built with embedded Python for flexibility and IRIS SQL procedures for performan
 
 Data is stored in RDF-style tables with explicit node identity and foreign key constraints for referential integrity. Graph operations are implemented via SQL procedures and embedded Python. HNSW vector indexing provides fast similarity search (requires IRIS 2025.3+ or ACORN-1 pre-release build).
 
+## Use Cases by Industry
+
+### Financial Services (IDFS)
+- **Real-Time Fraud Detection**: 130M+ transactions, graph-based scoring, <10ms queries
+  - Docker: `docker-compose.fraud-embedded.yml` (licensed IRIS + embedded Python)
+  - API: FastAPI fraud scoring at `:8100/fraud/score`
+  - Examples: `examples/bitemporal/` - Bitemporal data for chargebacks, audit trails
+
+- **Key Features**:
+  - Bitemporal tracking (valid_time vs system_time)
+  - Late-arrival detection (settlement delays)
+  - Complete audit trails (regulatory compliance)
+  - ML model inference in-database
+
+### Biomedical Research
+- **Protein Interaction Networks**: STRING DB integration, pathway analysis
+  - Examples: `biomedical/` - Graph queries for drug discovery
+  - Performance: 100K+ proteins, <50ms multi-hop queries
+
+- **Key Features**:
+  - Vector similarity (find related proteins)
+  - Graph traversal (interaction pathways)
+  - Hybrid search (combine embeddings + text)
+
 ## Repository Structure
 
 ```
 sql/
-  schema.sql              # Table definitions
-  operators.sql           # SQL procedures (requires IRIS 2025.3+)
-  operators_fixed.sql     # Compatibility version for older IRIS
-  migrations/             # Schema migrations (NodePK)
-    001_add_nodepk_table.sql
-    002_add_fk_constraints.sql
+  schema.sql              # Graph schema (nodes, edges, properties)
+  bitemporal/             # Bitemporal fraud schema
+  fraud/                  # Fraud-specific tables
 
-iris_vector_graph_core/   # Python engine
-  engine.py               # Core search/traversal logic
-  fusion.py               # RRF hybrid search
-  vector_utils.py         # Vector operations
+examples/
+  bitemporal/             # Financial services (fraud, audit trails)
 
-iris/src/                 # ObjectScript components
-  Graph/KG/               # REST API and Python integration
-    Service.cls           # REST API endpoints
-    PyOps.cls             # Python integration
-    Traversal.cls         # Graph operations
-  PageRankEmbedded.cls    # Embedded Python graph analytics
+biomedical/               # Life sciences use cases
 
-scripts/
-  ingest/networkx_loader.py         # Load data from files
-  migrations/migrate_to_nodepk.py   # NodePK migration utility
-  performance/                      # Benchmarking tools
+iris_vector_graph_core/   # Core Python graph engine
 
-docs/
-  architecture/           # Design documentation
-  performance/            # Performance benchmarks
-  setup/                  # Installation guides
-  api/REST_API.md        # API reference
+src/iris_fraud_server/    # FastAPI fraud detection server
+
+scripts/fraud/            # 130M transaction loader, benchmarks
 ```
 
 ## Quick Start
 
-### Prerequisites
+Choose your use case:
 
-- Docker (for running IRIS)
-- Python 3.8+ (we use UV for package management)
-- Basic familiarity with SQL
+### Option A: Fraud Detection (Financial Services)
 
-### Installation
-
-**1. Install UV and dependencies:**
+**Start fraud detection system with 130M transactions:**
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-git clone <repository-url>
-cd iris-vector-graph
-uv sync
-source .venv/bin/activate
+# Licensed IRIS with embedded Python fraud API
+docker-compose -f docker-compose.fraud-embedded.yml up -d
+
+# Wait for IRIS to start (~2 min), then test API
+curl -X POST http://localhost:8100/fraud/score \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"MLP","payer":"acct:test","amount":1000.0}'
+
+# Load bitemporal fraud schema
+docker exec -i iris-fraud-embedded /usr/irissys/bin/irissession IRIS -U USER < sql/bitemporal/schema.sql
+
+# Run bitemporal example
+docker exec -e IRISUSERNAME=_SYSTEM -e IRISPASSWORD=SYS -e IRISNAMESPACE=USER \
+    iris-fraud-embedded /usr/irissys/bin/irispython \
+    /home/irisowner/app/examples/bitemporal/bitemporal_fraud.py
 ```
 
-**2. Start IRIS:**
+**What you get**: Fraud scoring API + bitemporal audit trails + 130M transaction graph
+
+**See**: `examples/bitemporal/README.md` for fraud scenarios (chargebacks, late arrivals, compliance)
+
+### Option B: Biomedical Graph (Life Sciences)
+
+**Start vector graph system:**
 ```bash
-# Option A: ACORN-1 (pre-release build with HNSW optimization - fastest)
-# Note: ACORN-1 is experimental and not yet in standard IRIS releases
+# ACORN-1 (pre-release build with HNSW optimization - fastest)
 docker-compose -f docker-compose.acorn.yml up -d
 
-# Option B: Standard IRIS Community Edition (slower but stable)
+# OR: Standard IRIS Community Edition
 # docker-compose up -d
 ```
 
