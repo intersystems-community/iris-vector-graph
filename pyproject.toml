@@ -49,9 +49,12 @@ dependencies = [
     "pydantic>=2.11.9",
     "pytest-asyncio>=1.2.0",
     "py2neo>=2021.2.4",
-    "httpx>=0.28.1",
+    "httpx[http2]>=0.28.1",
     "strawberry-graphql[fastapi]>=0.280.0",
     "torch>=2.0.0",  # TorchScript model loading for fraud scoring
+    # Demo server dependencies
+    "python-fasthtml>=0.8.1",
+    "faker>=28.0.0",
 ]
 
 # Optional dependencies for different use cases
@@ -62,7 +65,8 @@ dev = [
     "black>=23.0.0",
     "isort>=5.12.0",
     "flake8>=6.0.0",
-    "mypy>=1.5.0"
+    "mypy>=1.5.0",
+    "playwright>=1.40.0"
 ]
 performance = [
     "psutil>=5.9.0",
@@ -147,7 +151,9 @@ module = [
     "networkx",
     "plotly.*",
     "bioservices.*",
-    "mygene"
+    "mygene",
+    "fasthtml.*",
+    "faker"
 ]
 ignore_missing_imports = true
 

@@ -2,6 +2,8 @@
 
 A knowledge graph system built on InterSystems IRIS that combines graph traversal, vector similarity search, and full-text search in a single database.
 
+> **NEW**: [Interactive Demo Server](src/iris_demo_server/) showcasing fraud detection + biomedical capabilities
+
 **Proven at Scale Across Industries**:
 - **Financial Services**: Real-time fraud detection (130M+ transactions), bitemporal audit trails, <10ms queries
 - **Biomedical Research**: Protein interaction networks (100K+ proteins), drug discovery, <50ms multi-hop queries
