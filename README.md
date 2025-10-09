@@ -61,39 +61,36 @@ docker exec -e IRISUSERNAME=_SYSTEM -e IRISPASSWORD=SYS -e IRISNAMESPACE=USER \
 
 ### Option B: Biomedical Graph (Life Sciences)
 
-**Start vector graph system** (protein networks, pathway analysis):
+**Start interactive demo with real protein data** (10K proteins, 37K interactions):
 
 ```bash
-# ACORN-1 pre-release (HNSW optimization - fastest)
-docker-compose -f docker-compose.acorn.yml up -d
-
-# OR: Standard IRIS Community Edition
-docker-compose up -d
+# Start IRIS database
+docker-compose up -d  # or docker-compose -f docker-compose.acorn.yml up -d
 
 # Install dependencies
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync && source .venv/bin/activate
 
-# Load schema and sample data
-docker exec -it iris-acorn-1 iris session iris
-\i sql/schema.sql
-\i sql/operators.sql
-\i scripts/sample_data_768.sql
+# Load STRING protein database (10K proteins, ~1 minute)
+python scripts/performance/string_db_scale_test.py --max-proteins 10000
 
-# Create REST API
-Do ##class(Graph.KG.Service).CreateWebApp("/kg")
+# Start interactive demo server
+PYTHONPATH=src python -m iris_demo_server.app
 
-# Test graph queries
-uv run python tests/python/run_all_tests.py --quick
+# Open browser
+open http://localhost:8200/bio
 ```
 
 **What you get**:
-- Vector similarity search (find related proteins)
-- Graph traversal (interaction pathways)
-- Hybrid search (combine embeddings + full-text)
-- REST API at `:52773/kg/`
+- **Interactive protein search** with vector similarity (EGFR, TP53, etc.)
+- **D3.js graph visualization** with click-to-expand nodes
+- **Pathway analysis** between proteins (e.g., cancer pathways)
+- **Real STRING DB data** (10K proteins, 37K interactions)
+- **<100ms queries** powered by HNSW vector search
 
-**Learn more**: [`biomedical/README.md`](biomedical/README.md) - Protein networks, drug discovery workflows
+**Learn more**:
+- [`docs/biomedical-demo-setup.md`](docs/biomedical-demo-setup.md) - Complete setup guide with scaling options
+- [`biomedical/README.md`](biomedical/README.md) - Architecture and development patterns
 
 ---
 
