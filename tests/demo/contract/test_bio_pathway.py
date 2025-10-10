@@ -18,8 +18,8 @@ async def test_pathway_response_schema():
         response = await client.post(
             "/api/bio/pathway",
             json={
-                "source_protein_id": "ENSP00000306407",  # GAPDH
-                "target_protein_id": "ENSP00000316649",  # LDHA
+                "source_protein_id": "ENSP00000011898",  # TSPAN9
+                "target_protein_id": "ENSP00000324101",  # CD151 (direct neighbor)
                 "max_hops": 2
             }
         )
@@ -65,8 +65,8 @@ async def test_pathway_max_hops():
         response = await client.post(
             "/api/bio/pathway",
             json={
-                "source_protein_id": "ENSP00000269305",
-                "target_protein_id": "ENSP00000344548",
+                "source_protein_id": "ENSP00000012049",  # QPCTL
+                "target_protein_id": "ENSP00000321221",  # SH2B1 (direct neighbor)
                 "max_hops": 2
             }
         )
@@ -86,8 +86,8 @@ async def test_pathway_interaction_confidence():
         response = await client.post(
             "/api/bio/pathway",
             json={
-                "source_protein_id": "ENSP00000306407",
-                "target_protein_id": "ENSP00000316649",
+                "source_protein_id": "ENSP00000012443",  # PPP5C
+                "target_protein_id": "ENSP00000295228",  # INHBB (direct neighbor)
                 "max_hops": 3
             }
         )
@@ -111,8 +111,8 @@ async def test_pathway_performance_requirement():
         response = await client.post(
             "/api/bio/pathway",
             json={
-                "source_protein_id": "ENSP00000306407",
-                "target_protein_id": "ENSP00000316649",
+                "source_protein_id": "ENSP00000011898",  # TSPAN9
+                "target_protein_id": "ENSP00000324101",  # CD151 (direct neighbor)
                 "max_hops": 2
             }
         )

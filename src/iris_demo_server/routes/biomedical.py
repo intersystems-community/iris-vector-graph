@@ -616,8 +616,7 @@ def register_biomedical_routes(app):
             metrics = QueryPerformanceMetrics(
                 query_type="network_expansion",
                 execution_time_ms=int((time.time() - start_time) * 1000),
-                backend_used="biomedical_api" if not bio_client.circuit_breaker.is_open()
-                            else "cached_demo",
+                backend_used="iris_direct",
                 result_count=len(network.nodes),
                 search_methods=["graph_neighbors"],
                 timestamp=datetime.utcnow()
@@ -1203,8 +1202,7 @@ def register_biomedical_routes(app):
             metrics = QueryPerformanceMetrics(
                 query_type="pathway_search",
                 execution_time_ms=int((time.time() - start_time) * 1000),
-                backend_used="biomedical_api" if not bio_client.circuit_breaker.is_open()
-                            else "cached_demo",
+                backend_used="iris_direct",
                 result_count=len(pathway.path),
                 search_methods=["graph_traversal"],
                 timestamp=datetime.utcnow()

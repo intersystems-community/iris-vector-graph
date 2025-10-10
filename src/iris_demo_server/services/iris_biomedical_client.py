@@ -115,29 +115,34 @@ class IRISBiomedicalClient:
         cursor = self.conn.cursor()
 
         try:
-            # Get center protein
+            # Convert ENSP format to full STRING format (protein:9606.ENSP00000269305)
+            full_protein_id = f"protein:9606.{protein_id}" if not protein_id.startswith("protein:") else protein_id
+
+            # Get center protein details from rdf_props
             cursor.execute("""
-                SELECT node_id, txt
-                FROM kg_Documents
-                WHERE node_id = ?
-            """, (protein_id,))
+                SELECT key, val
+                FROM rdf_props
+                WHERE s = ?
+            """, (full_protein_id,))
 
-            center_result = cursor.fetchone()
-            if not center_result:
-                return InteractionNetwork(nodes=[], edges=[])
+            props = {row[0]: row[1] for row in cursor.fetchall()}
+            if not props:
+                raise ValueError(f"Protein {protein_id} not found")
 
-            center_protein = self._parse_protein(center_result[0], center_result[1])
+            center_protein = Protein(
+                protein_id=protein_id,
+                name=props.get("preferred_name", protein_id),
+                organism="Homo sapiens",
+                function_description=props.get("annotation", "")
+            )
 
-            # Get neighbors via edges (subject or object)
+            # Get neighbors via edges
             cursor.execute("""
-                SELECT DISTINCT e.s, e.o_id, e.qualifiers,
-                       d1.txt as s_txt, d2.txt as o_txt
-                FROM rdf_edges e
-                LEFT JOIN kg_Documents d1 ON e.s = d1.node_id
-                LEFT JOIN kg_Documents d2 ON e.o_id = d2.node_id
-                WHERE e.s = ? OR e.o_id = ?
+                SELECT s, o_id, qualifiers
+                FROM rdf_edges
+                WHERE s = ? OR o_id = ?
                 LIMIT 500
-            """, (protein_id, protein_id))
+            """, (full_protein_id, full_protein_id))
 
             edges_data = cursor.fetchall()
 
@@ -145,27 +150,51 @@ class IRISBiomedicalClient:
             nodes_dict = {protein_id: center_protein}
             edges = []
 
-            for s, o_id, qualifiers, s_txt, o_txt in edges_data:
-                # Add source protein if not in dict
-                if s not in nodes_dict and s_txt:
-                    nodes_dict[s] = self._parse_protein(s, s_txt)
+            # Collect unique protein IDs to fetch
+            proteins_to_fetch = set()
+            for s, o_id, _ in edges_data:
+                if s != full_protein_id:
+                    proteins_to_fetch.add(s)
+                if o_id != full_protein_id:
+                    proteins_to_fetch.add(o_id)
 
-                # Add target protein if not in dict
-                if o_id not in nodes_dict and o_txt:
-                    nodes_dict[o_id] = self._parse_protein(o_id, o_txt)
+            # Fetch neighbor protein details in batch
+            for full_id in proteins_to_fetch:
+                ensp_id = full_id.split(".")[-1]  # protein:9606.ENSP00000000233 -> ENSP00000000233
 
-                # Parse interaction
-                qual_dict = self._parse_qualifiers(qualifiers)
-                interaction_type = qual_dict.get("type", "binding")
-                confidence = float(qual_dict.get("score", 0.5))
+                cursor.execute("""
+                    SELECT key, val
+                    FROM rdf_props
+                    WHERE s = ?
+                """, (full_id,))
 
-                edges.append(Interaction(
-                    source_protein_id=s,
-                    target_protein_id=o_id,
-                    interaction_type=interaction_type,
-                    confidence_score=confidence,
-                    evidence=qual_dict.get("evidence", "STRING DB")
-                ))
+                props = {row[0]: row[1] for row in cursor.fetchall()}
+                if props:
+                    nodes_dict[ensp_id] = Protein(
+                        protein_id=ensp_id,
+                        name=props.get("preferred_name", ensp_id),
+                        organism="Homo sapiens",
+                        function_description=props.get("annotation", "")
+                    )
+
+            # Build edges
+            for s, o_id, qualifiers in edges_data:
+                s_ensp = s.split(".")[-1]
+                o_ensp = o_id.split(".")[-1]
+
+                # Only add edge if both nodes were fetched
+                if s_ensp in nodes_dict and o_ensp in nodes_dict:
+                    qual_dict = self._parse_qualifiers(qualifiers)
+                    # STRING confidence is 0-1000, normalize to 0-1
+                    confidence = float(qual_dict.get("confidence", 500)) / 1000.0
+
+                    edges.append(Interaction(
+                        source_protein_id=s_ensp,
+                        target_protein_id=o_ensp,
+                        interaction_type="binding",
+                        confidence_score=confidence,
+                        evidence="STRING DB"
+                    ))
 
             return InteractionNetwork(
                 nodes=list(nodes_dict.values()),
@@ -174,8 +203,7 @@ class IRISBiomedicalClient:
             )
 
         except Exception as e:
-            # Return minimal network on error
-            return InteractionNetwork(nodes=[], edges=[])
+            raise RuntimeError(f"IRIS network query failed for {protein_id}: {e}")
         finally:
             cursor.close()
 
@@ -191,15 +219,19 @@ class IRISBiomedicalClient:
         cursor = self.conn.cursor()
 
         try:
-            # Simple BFS pathfinding (for demo - production would use IRIS graph procedures)
+            # Convert to full STRING format
+            source_full = f"protein:9606.{query.source_protein_id}" if not query.source_protein_id.startswith("protein:") else query.source_protein_id
+            target_full = f"protein:9606.{query.target_protein_id}" if not query.target_protein_id.startswith("protein:") else query.target_protein_id
+
+            # BFS pathfinding
             path = await self._bfs_path(
                 cursor,
-                query.source_protein_id,
-                query.target_protein_id,
+                source_full,
+                target_full,
                 query.max_hops
             )
 
-            if not path:
+            if not path or len(path) < 2:
                 # Return empty pathway
                 return PathwayResult(
                     path=[],
@@ -208,13 +240,25 @@ class IRISBiomedicalClient:
                     confidence=0.0
                 )
 
-            # Get protein details for path
+            # Get protein details for each protein in path using rdf_props
             proteins = []
-            for node_id in path:
-                cursor.execute("SELECT txt FROM kg_Documents WHERE node_id = ?", (node_id,))
-                result = cursor.fetchone()
-                if result:
-                    proteins.append(self._parse_protein(node_id, result[0]))
+            for full_id in path:
+                ensp_id = full_id.split(".")[-1]
+
+                cursor.execute("""
+                    SELECT key, val
+                    FROM rdf_props
+                    WHERE s = ?
+                """, (full_id,))
+
+                props = {row[0]: row[1] for row in cursor.fetchall()}
+                if props:
+                    proteins.append(Protein(
+                        protein_id=ensp_id,
+                        name=props.get("preferred_name", ensp_id),
+                        organism="Homo sapiens",
+                        function_description=props.get("annotation", "")
+                    ))
 
             # Get interactions along path
             interactions = []
@@ -229,32 +273,34 @@ class IRISBiomedicalClient:
                 result = cursor.fetchone()
                 if result:
                     qual_dict = self._parse_qualifiers(result[0])
-                    confidence = float(qual_dict.get("score", 0.5))
+                    confidence = float(qual_dict.get("confidence", 500)) / 1000.0  # STRING confidence 0-1000
                     confidences.append(confidence)
 
+                    s_ensp = path[i].split(".")[-1]
+                    o_ensp = path[i+1].split(".")[-1]
+
                     interactions.append(Interaction(
-                        source_protein_id=path[i],
-                        target_protein_id=path[i+1],
-                        interaction_type=qual_dict.get("type", "binding"),
-                        confidence_score=confidence
+                        source_protein_id=s_ensp,
+                        target_protein_id=o_ensp,
+                        interaction_type="binding",
+                        confidence_score=confidence,
+                        evidence="STRING DB"
                     ))
 
             avg_confidence = sum(confidences) / len(confidences) if confidences else 0.5
 
+            # Return path with ENSP IDs
+            path_ensp = [full_id.split(".")[-1] for full_id in path]
+
             return PathwayResult(
-                path=path,
+                path=path_ensp,
                 intermediate_proteins=proteins,
                 path_interactions=interactions,
                 confidence=avg_confidence
             )
 
         except Exception as e:
-            return PathwayResult(
-                path=[],
-                intermediate_proteins=[],
-                path_interactions=[],
-                confidence=0.0
-            )
+            raise RuntimeError(f"IRIS pathway query failed: {e}")
         finally:
             cursor.close()
 
@@ -266,10 +312,14 @@ class IRISBiomedicalClient:
         max_hops: int
     ) -> Optional[List[str]]:
         """BFS pathfinding between proteins"""
-        if source == target:
+        # Normalize to lowercase for case-insensitive comparison
+        source_lower = source.lower()
+        target_lower = target.lower()
+
+        if source_lower == target_lower:
             return [source]
 
-        visited = {source}
+        visited = {source_lower}
         queue = [(source, [source])]
 
         for _ in range(max_hops):
@@ -278,7 +328,7 @@ class IRISBiomedicalClient:
 
             new_queue = []
             for current, path in queue:
-                # Get neighbors
+                # Get neighbors (IRIS may return uppercase)
                 cursor.execute("""
                     SELECT o_id FROM rdf_edges WHERE s = ?
                     UNION
@@ -288,11 +338,13 @@ class IRISBiomedicalClient:
                 neighbors = cursor.fetchall()
 
                 for (neighbor,) in neighbors:
-                    if neighbor == target:
+                    neighbor_lower = neighbor.lower()
+
+                    if neighbor_lower == target_lower:
                         return path + [neighbor]
 
-                    if neighbor not in visited:
-                        visited.add(neighbor)
+                    if neighbor_lower not in visited:
+                        visited.add(neighbor_lower)
                         new_queue.append((neighbor, path + [neighbor]))
 
             queue = new_queue

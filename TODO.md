@@ -5,7 +5,7 @@
 
 ## 🚀 Immediate Actions (P0)
 
-### Biomedical Demo - IRIS Backend (IN PROGRESS)
+### Biomedical Demo - IRIS Backend ✅ COMPLETE
 
 #### ✅ Completed
 - Direct IRIS biomedical client (`iris_biomedical_client.py`)
@@ -13,47 +13,9 @@
 - EGFR search working with real IRIS queries
 - Comprehensive setup documentation (`docs/biomedical-demo-setup.md`)
 - Updated README with biomedical demo instructions
-- Contract tests: 11/20 passing (search + scenario endpoints)
-
-#### 🔨 Network Endpoint - Needs IRIS Implementation
-**Status**: Returns empty networks (5 failing tests)
-
-**File**: `src/iris_demo_server/services/iris_biomedical_client.py:101-180`
-
-**Implementation needed**:
-```python
-async def get_interaction_network(self, protein_id: str, expand_depth: int = 1):
-    # TODO: Query rdf_edges table for 1-hop or 2-hop neighbors
-    # - Get center protein from kg_Documents WHERE node_id = ?
-    # - Get edges: SELECT e.s, e.o_id, e.qualifiers FROM rdf_edges e WHERE e.s = ? OR e.o_id = ?
-    # - Parse qualifiers JSON for interaction type and confidence
-    # - Return InteractionNetwork with populated nodes and edges
-```
-
-**SQL Pattern**:
-```sql
-SELECT DISTINCT e.s, e.o_id, e.qualifiers, d1.txt as s_txt, d2.txt as o_txt
-FROM rdf_edges e
-LEFT JOIN kg_Documents d1 ON e.s = d1.node_id
-LEFT JOIN kg_Documents d2 ON e.o_id = d2.node_id
-WHERE e.s = ? OR e.o_id = ?
-LIMIT 500
-```
-
-#### 🔨 Pathway Endpoint - Needs IRIS Implementation
-**Status**: Returns empty pathways (4 failing tests)
-
-**File**: `src/iris_demo_server/services/iris_biomedical_client.py:182-259`
-
-**Implementation needed**:
-```python
-async def find_pathway(self, query: PathwayQuery):
-    # TODO: Implement BFS pathfinding using rdf_edges
-    # - Use _bfs_path helper (already exists at line 261)
-    # - Get protein details: SELECT txt FROM kg_Documents WHERE node_id = ?
-    # - Get interaction details: SELECT qualifiers FROM rdf_edges WHERE s = ? AND o_id = ?
-    # - Calculate average confidence score from qualifiers
-```
+- **Network endpoint**: IRIS graph traversal with rdf_edges queries (5/5 tests passing)
+- **Pathway endpoint**: BFS pathfinding with case-insensitive matching (4/4 tests passing)
+- **Contract tests**: 20/20 passing (100% - search, network, pathway, scenario endpoints)
 
 ### Complete Multi-Query-Engine Platform
 - [ ] **Merge openCypher API to main** ✅ READY
