@@ -98,10 +98,10 @@ biodata = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/iris-graph/iris-vector-graph"
-Documentation = "https://github.com/iris-graph/iris-vector-graph/tree/main/docs"
-Repository = "https://github.com/iris-graph/iris-vector-graph"
-Issues = "https://github.com/iris-graph/iris-vector-graph/issues"
+Homepage = "https://github.com/isc-tdyar/iris-vector-graph"
+Documentation = "https://github.com/isc-tdyar/iris-vector-graph/tree/main/docs"
+Repository = "https://github.com/isc-tdyar/iris-vector-graph"
+Issues = "https://github.com/isc-tdyar/iris-vector-graph/issues"
 
 [project.scripts]
 networkx-loader = "scripts.ingest.networkx_loader:main"

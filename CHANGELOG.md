@@ -106,4 +106,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-query-engine platform (SQL, openCypher, GraphQL)
 - Production hardening (SSL/TLS, monitoring, backup procedures)
 
-[1.0.0]: https://github.com/tdyar/iris-vector-graph/releases/tag/v1.0.0
+[1.0.0]: https://github.com/isc-tdyar/iris-vector-graph/releases/tag/v1.0.0

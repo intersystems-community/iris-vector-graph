@@ -99,3 +99,12 @@ dmypy.json
 
 # Test results
 test_results.json
+
+# Code assistant artifacts
+CLAUDE.md
+.claude-code/
+.sesskey
+*.sesskey
+
+# Specification drafts (work in progress)
+specs/
