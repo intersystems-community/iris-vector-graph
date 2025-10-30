@@ -1,0 +1,10 @@
+include README.md
+include LICENSE
+include CLAUDE.md
+include TODO.md
+include .env.sample
+recursive-include sql *.sql
+recursive-include docs *.md
+recursive-include examples *.py *.md
+recursive-include biomedical *.py *.md
+recursive-include scripts *.py *.sh

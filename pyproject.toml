@@ -9,32 +9,41 @@ description = "High-performance biomedical knowledge graph powered by InterSyste
 readme = "README.md"
 license = "MIT"
 authors = [
-    {name = "IRIS Graph Team"}
+    {name = "Tom Dyar", email = "tom@example.com"}
+]
+maintainers = [
+    {name = "Tom Dyar"}
 ]
 keywords = [
-    "graph",
-    "biomedical",
-    "iris",
-    "knowledge-graph",
-    "bioinformatics",
+    "intersystems-iris",
     "vector-search",
-    "protein-interactions"
+    "knowledge-graph",
+    "rag",
+    "biomedical",
+    "fraud-detection",
+    "graph-database",
+    "protein-interactions",
+    "bitemporal",
+    "hnsw"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Healthcare Industry",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Database",
-    "Topic :: Scientific/Engineering"
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries :: Python Modules"
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 # Core dependencies
 dependencies = [

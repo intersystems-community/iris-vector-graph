@@ -1,0 +1,172 @@
+ROUTINE TestCaregiverRouter
+
+/// Quick test routine for caregiver route optimization
+///
+/// Usage from IRIS Terminal:
+///   Do ^TestCaregiverRouter
+///
+/// This will:
+/// 1. Optimize route for 5 patients
+/// 2. Display optimal route with travel times
+/// 3. Show detailed schedule with ETAs
+///
+Main
+    Write !, "=" , $Justify("", 60, "="), !
+    Write "CAREGIVER ROUTE OPTIMIZATION DEMO", !
+    Write "=" , $Justify("", 60, "="), !
+    Write !
+
+    // Test Case 1: Optimize route for 5 patients
+    Write "Test Case 1: Optimize route for 5 patients", !
+    Write "-" , $Justify("", 60, "-"), !
+
+    Set patients = $ListBuild("patient:001", "patient:002", "patient:003", "patient:004", "patient:005")
+
+    Write "Input patients:", !
+    For i=1:1:$ListLength(patients) {
+        Write "  ", i, ". ", $ListGet(patients, i), !
+    }
+    Write !
+
+    // Call optimizer
+    Set sc = ##class(Graph.CaregiverRouter).OptimizeRoute(patients, .route, .totalTime)
+
+    If $$$ISERR(sc) {
+        Write "ERROR: ", $System.Status.GetErrorText(sc), !
+        Quit
+    }
+
+    Write "✓ Optimization successful!", !
+    Write "Total travel time: ", totalTime, " minutes", !
+    Write !
+
+    Write "Optimal route:", !
+    For i=1:1:$ListLength(route) {
+        Set patientId = $ListGet(route, i)
+        Set name = ..GetPatientName(patientId)
+        Write "  ", i, ". ", name, " (", patientId, ")", !
+    }
+    Write !
+
+    // Test Case 2: Get detailed schedule
+    Write "Test Case 2: Detailed schedule with ETAs", !
+    Write "-" , $Justify("", 60, "-"), !
+
+    Set startTime = "2025-10-26 08:00:00"
+    Set sc = ##class(Graph.CaregiverRouter).GetRouteDetails(route, startTime, .details)
+
+    If $$$ISERR(sc) {
+        Write "ERROR: ", $System.Status.GetErrorText(sc), !
+        Quit
+    }
+
+    Write "Start time: ", startTime, !
+    Write !
+
+    For i=1:1:details.Count() {
+        Set visit = details.GetAt(i)
+
+        Write "Stop #", visit.position, ": ", visit.name, !
+        Write "  Address: ", visit.address, !
+        Write "  Arrival: ", visit.arrivalTime, !
+        Write "  Service: ", visit.serviceMinutes, " minutes", !
+        Write !
+    }
+
+    Write "Total travel time: ", totalTime, " minutes", !
+    Write !
+
+    // Test Case 3: Compare with unoptimized route
+    Write "Test Case 3: Savings vs unoptimized route", !
+    Write "-" , $Justify("", 60, "-"), !
+
+    // Calculate time for unoptimized route (original order)
+    Set unoptimizedTime = ..CalculateRouteTime(patients)
+
+    Write "Unoptimized route time: ", unoptimizedTime, " minutes", !
+    Write "Optimized route time:   ", totalTime, " minutes", !
+    Write "Savings:                ", (unoptimizedTime - totalTime), " minutes (",
+          $FNumber((1 - (totalTime / unoptimizedTime)) * 100, "", 1), "%)", !
+    Write !
+
+    // Test Case 4: All 8 patients
+    Write "Test Case 4: Optimize all 8 patients", !
+    Write "-" , $Justify("", 60, "-"), !
+
+    Set allPatients = $ListBuild(
+        "patient:001", "patient:002", "patient:003", "patient:004",
+        "patient:005", "patient:006", "patient:007", "patient:008"
+    )
+
+    Set sc = ##class(Graph.CaregiverRouter).OptimizeRoute(allPatients, .route8, .time8)
+
+    If $$$ISOK(sc) {
+        Write "✓ Successfully optimized route for 8 patients", !
+        Write "Total travel time: ", time8, " minutes", !
+        Write !
+
+        Write "Route:", !
+        For i=1:1:$ListLength(route8) {
+            Set patientId = $ListGet(route8, i)
+            Set name = ..GetPatientName(patientId)
+            Write "  ", i, ". ", name, !
+        }
+    } Else {
+        Write "ERROR: ", $System.Status.GetErrorText(sc), !
+    }
+
+    Write !
+    Write "=" , $Justify("", 60, "="), !
+    Write "DEMO COMPLETE", !
+    Write "=" , $Justify("", 60, "="), !
+    Write !
+
+    Quit
+
+/// Get patient name from database
+GetPatientName(patientId)
+    New name
+    Set name = ""
+
+    &sql(SELECT val INTO :name FROM rdf_props WHERE s = :patientId AND key = 'name')
+
+    If SQLCODE = 0 {
+        Quit name
+    } Else {
+        Quit patientId  // Return ID if name not found
+    }
+
+/// Calculate total time for a route (in given order)
+CalculateRouteTime(route)
+    New i, current, next, time, totalTime
+    Set totalTime = 0
+
+    For i=1:1:($ListLength(route)-1) {
+        Set current = $ListGet(route, i)
+        Set next = $ListGet(route, i+1)
+
+        Set time = ..GetTravelTimeBetween(current, next)
+        Set totalTime = totalTime + time
+    }
+
+    Quit totalTime
+
+/// Get travel time between two patients
+GetTravelTimeBetween(from, to)
+    New qualifiers, travelTime
+
+    &sql(SELECT qualifiers INTO :qualifiers
+         FROM rdf_edges
+         WHERE s = :from AND o_id = :to AND label = 'travel_to')
+
+    If SQLCODE = 0 {
+        Try {
+            Set obj = {}.%FromJSON(qualifiers)
+            Set travelTime = obj."travel_time_minutes"
+            Quit travelTime
+        } Catch {
+            Quit 15  // Default
+        }
+    }
+
+    Quit 15  // Default if no edge found

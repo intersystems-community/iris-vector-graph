@@ -17,6 +17,22 @@
 - **Pathway endpoint**: BFS pathfinding with case-insensitive matching (4/4 tests passing)
 - **Contract tests**: 20/20 passing (100% - search, network, pathway, scenario endpoints)
 
+### PyPI Publication Preparation 🔄 IN PROGRESS
+
+#### ✅ Completed
+- Clarified deployment modes in README (External DEFAULT, Embedded OPTIONAL)
+- Created PYPI_CHECKLIST.md with publication steps
+- Created MANIFEST.in to include SQL files and documentation
+- Updated pyproject.toml with proper keywords and classifiers
+- Created CHANGELOG.md for v1.0.0
+- Security audit: No hardcoded production credentials found
+
+#### 🔄 Next Steps
+- [ ] Run code quality tools (black, isort, flake8, mypy)
+- [ ] Test package build in clean environment
+- [ ] Upload to TestPyPI for validation
+- [ ] Final review and publication to PyPI
+
 ### Complete Multi-Query-Engine Platform
 - [ ] **Merge openCypher API to main** ✅ READY
   - Branch: `002-add-opencypher-endpoint`

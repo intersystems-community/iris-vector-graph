@@ -27,33 +27,50 @@ Same IRIS platform. Different domains. Powerful results.
 
 ## Quick Start
 
+**Two Deployment Modes**:
+1. **External** (DEFAULT - simpler): Python app connects to IRIS via `iris.connect()`
+2. **Embedded** (ADVANCED - optional): Python app runs INSIDE IRIS container
+
 ### Option A: Fraud Detection (Financial Services)
 
-**Start fraud detection system** (130M transactions, bitemporal audit trails):
+#### External Mode (Default - Simpler)
 
 ```bash
-# Licensed IRIS with embedded Python fraud API
+# 1. Start IRIS database
+docker-compose up -d
+
+# 2. Install Python dependencies
+pip install iris-vector-graph[dev]
+
+# 3. Load fraud schema
+docker exec -i iris /usr/irissys/bin/irissession IRIS -U USER < sql/fraud/schema.sql
+
+# 4. Start fraud API (external Python)
+PYTHONPATH=src python -m iris_fraud_server
+
+# Test fraud scoring API
+curl -X POST http://localhost:8000/fraud/score \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"MLP","payer":"acct:test","device":"dev:laptop","amount":1000.0}'
+```
+
+#### Embedded Mode (Advanced - Optional)
+
+```bash
+# Run FastAPI INSIDE IRIS container (licensed IRIS required)
 docker-compose -f docker-compose.fraud-embedded.yml up -d
 
 # Test fraud scoring API (~2 min startup)
 curl -X POST http://localhost:8100/fraud/score \
   -H 'Content-Type: application/json' \
   -d '{"mode":"MLP","payer":"acct:test","device":"dev:laptop","amount":1000.0}'
-
-# Load bitemporal schema (for audit trails, chargebacks)
-docker exec -i iris-fraud-embedded /usr/irissys/bin/irissession IRIS -U USER < sql/bitemporal/schema.sql
-
-# Run fraud scenarios (late arrivals, chargebacks, compliance)
-docker exec -e IRISUSERNAME=_SYSTEM -e IRISPASSWORD=SYS -e IRISNAMESPACE=USER \
-    iris-fraud-embedded /usr/irissys/bin/irispython \
-    /home/irisowner/app/examples/bitemporal/bitemporal_fraud.py
 ```
 
 **What you get**:
-- FastAPI fraud scoring at `:8100/fraud/score`
+- FastAPI fraud scoring (external `:8000` or embedded `:8100`)
 - Bitemporal data (track when transactions happened vs. when you learned about them)
 - Complete audit trails (regulatory compliance: SOX, MiFID II)
-- 130M transaction graph
+- Direct IRIS queries (no middleware)
 
 **Learn more**: [`examples/bitemporal/README.md`](examples/bitemporal/README.md) - Fraud scenarios, chargeback defense, model tracking
 
@@ -61,24 +78,31 @@ docker exec -e IRISUSERNAME=_SYSTEM -e IRISPASSWORD=SYS -e IRISNAMESPACE=USER \
 
 ### Option B: Biomedical Graph (Life Sciences)
 
-**Start interactive demo with real protein data** (10K proteins, 37K interactions):
+#### External Mode (Default - Simpler)
 
 ```bash
-# Start IRIS database
-docker-compose up -d  # or docker-compose -f docker-compose.acorn.yml up -d
+# 1. Start IRIS database
+docker-compose up -d
 
-# Install dependencies
+# 2. Install dependencies
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync && source .venv/bin/activate
 
-# Load STRING protein database (10K proteins, ~1 minute)
+# 3. Load STRING protein database (10K proteins, ~1 minute)
 python scripts/performance/string_db_scale_test.py --max-proteins 10000
 
-# Start interactive demo server
+# 4. Start interactive demo server (external Python)
 PYTHONPATH=src python -m iris_demo_server.app
 
-# Open browser
+# 5. Open browser
 open http://localhost:8200/bio
+```
+
+#### Embedded Mode (Advanced - Optional)
+
+```bash
+# Run demo server INSIDE IRIS container (licensed IRIS required)
+# Coming soon - currently only external mode supported for biomedical demo
 ```
 
 **What you get**:
@@ -141,21 +165,27 @@ open http://localhost:8200/bio
 
 ## Architecture
 
+**Deployment Options**:
+- **External (Default)**: Python app connects to IRIS via `iris.connect()` - simpler setup, easier debugging
+- **Embedded (Advanced)**: Python app runs inside IRIS container - maximum performance, requires licensed IRIS
+
 ```
-Financial Services Stack          Biomedical Stack
-┌────────────────────────┐        ┌────────────────────────┐
-│ FastAPI Fraud Server   │        │ REST API (Graph.KG)    │
-│ (embedded Python)      │        │ (ObjectScript)         │
-├────────────────────────┤        ├────────────────────────┤
-│ Bitemporal Tables      │        │ Vector Search (HNSW)   │
-│ (valid_time, sys_time) │        │ Hybrid Search (RRF)    │
-├────────────────────────┤        ├────────────────────────┤
-│ IRIS Globals           │◄───────┤ IRIS Globals           │
-│ (append-only audit)    │        │ (graph storage)        │
-└────────────────────────┘        └────────────────────────┘
+External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
+┌────────────────────────┐          ┌──────────────────────────────┐
+│ FastAPI Server         │          │ IRIS Container               │
+│ (external Python)      │          │ ┌──────────────────────────┐ │
+│                        │          │ │ FastAPI Server           │ │
+│  iris.connect()   ─────┼──────────┤►│ (/usr/irissys/bin/       │ │
+│  to localhost:1972     │          │ │  irispython)             │ │
+└────────────────────────┘          │ └──────────────────────────┘ │
+                                    │ ┌──────────────────────────┐ │
+                                    │ │ IRIS Database Engine     │ │
+                                    │ │ (Bitemporal/Graph/Vector)│ │
+                                    │ └──────────────────────────┘ │
+                                    └──────────────────────────────┘
 
          Same Platform: InterSystems IRIS
-         Same Features: Embedded Python, SQL, Globals
+         Same Features: Vector Search, Graph Traversal, Bitemporal Audit
          Different Domains: Finance vs. Life Sciences
 ```
 
