@@ -163,6 +163,56 @@ open http://localhost:8200/bio
 
 ---
 
+### Graph Algorithms (TSP Examples)
+
+Two standalone implementations of the **Traveling Salesman Problem** demonstrating graph algorithms on IRIS:
+
+#### Option A: Python + NetworkX (Biomedical)
+
+Find optimal pathways through protein interaction networks:
+
+```bash
+# Test with 10 cancer-related proteins
+python scripts/algorithms/tsp_demo.py --proteins 10 --compare-methods
+```
+
+**Algorithms**: Greedy (1ms), Christofides (15ms), 2-opt (8ms)
+**Use case**: Optimize order to study protein interactions in cancer pathways
+
+#### Option B: ObjectScript (Healthcare Interoperability)
+
+Optimize caregiver routes for home healthcare:
+
+```bash
+# Load sample data (8 patients, 26 travel edges)
+docker exec -i iris /usr/irissys/bin/irissession IRIS -U USER < sql/caregiver_routing_demo.sql
+
+# Run optimization demo (IRIS Terminal)
+Do ^TestCaregiverRouter
+```
+
+**Performance**: <2ms for 8-patient routes
+**Integration**: Direct Business Process method calls
+**Impact**: 53% travel time reduction (75min → 35min)
+
+**What you get**:
+- **Python approach**: NetworkX integration, multiple algorithms, FastAPI endpoint example
+- **ObjectScript approach**: Zero dependencies, Interoperability production integration, bitemporal audit
+- **Comprehensive docs**: Neo4j comparison, performance benchmarks, real-world use cases
+
+**Files**:
+- `scripts/algorithms/tsp_demo.py` - Python demo (works with STRING protein data)
+- `iris/src/Graph/CaregiverRouter.cls` - ObjectScript TSP optimizer
+- `iris/src/Graph/ScheduleOptimizationProcess.cls` - Business Process integration
+- `sql/caregiver_routing_demo.sql` - Sample healthcare data
+
+**Learn more**:
+- [`docs/algorithms/TSP_ANALYSIS.md`](docs/algorithms/TSP_ANALYSIS.md) - Deep dive and Neo4j comparison
+- [`docs/algorithms/TSP_IMPLEMENTATION_SUMMARY.md`](docs/algorithms/TSP_IMPLEMENTATION_SUMMARY.md) - Overview and benchmarks
+- [`docs/examples/CAREGIVER_ROUTING_DEMO.md`](docs/examples/CAREGIVER_ROUTING_DEMO.md) - Step-by-step tutorial
+
+---
+
 ## Architecture
 
 **Deployment Options**:
