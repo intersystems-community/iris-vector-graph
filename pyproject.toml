@@ -9,10 +9,10 @@ description = "High-performance biomedical knowledge graph powered by InterSyste
 readme = "README.md"
 license = "MIT"
 authors = [
-    {name = "Tom Dyar", email = "tom@example.com"}
+    {name = "Thomas Dyar", email = "thomas.dyar@intersystems.com"}
 ]
 maintainers = [
-    {name = "Tom Dyar"}
+    {name = "Thomas Dyar", email = "thomas.dyar@intersystems.com"}
 ]
 keywords = [
     "intersystems-iris",
@@ -107,7 +107,7 @@ Issues = "https://github.com/intersystems-community/iris-vector-graph/issues"
 networkx-loader = "scripts.ingest.networkx_loader:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["scripts", "tests"]
+packages = ["iris_vector_graph_core"]
 
 # Tool configurations
 [tool.black]
