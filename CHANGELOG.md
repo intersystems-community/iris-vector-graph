@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2025-10-19
+## [1.0.0] - 2025-11-05
 
 ### Added
 
@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TextSearchEngine` - IRIS iFind integration
 - `VectorOptimizer` - HNSW optimization utilities
 - `BiomedicalClient` - Direct IRIS queries for protein data
+
+#### Package Distribution
+- **Optimized Dependencies**: Default install reduced from 75 to 56 packages (25% fewer)
+- **Optional ML Features**: `pip install iris-vector-graph[ml]` for fraud detection models (torch, scikit-learn, scipy)
+- **Modular Installation**: Core features ~200MB, full ML suite ~1.2GB
+- **PyPI Publication**: Available at https://pypi.org/project/iris-vector-graph/
 
 #### Documentation
 - Comprehensive README with quick start for both domains
