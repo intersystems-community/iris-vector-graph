@@ -4,6 +4,7 @@ import os
 
 # Import routes
 from .routes.fraud import register_fraud_routes
+from .routes.biomedical import register_biomedical_routes
 
 # Create FastHTML app
 app = FastHTML(
@@ -16,6 +17,7 @@ app = FastHTML(
 
 # Register routes
 register_fraud_routes(app)
+register_biomedical_routes(app)
 
 
 # Homepage

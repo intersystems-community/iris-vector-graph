@@ -4,7 +4,7 @@
     "string_version": "v12.0",
     "organism": "9606",
     "max_proteins": 10000,
-    "max_interactions": 50000,
+    "max_interactions": 500000,
     "min_score": 400,
     "vector_dimension": 768,
     "num_vector_queries": 1000,
@@ -14,41 +14,41 @@
     "protein_batch_size": 5000,
     "interaction_batch_size": 25000,
     "embedding_batch_size": 2000,
-    "max_workers": 8,
+    "max_workers": 12,
     "data_dir": "/Users/tdyar/ws/graph-ai/data/string"
   },
   "data_stats": {
     "proteins_processed": 10000,
-    "interactions_processed": 3889,
-    "avg_interactions_per_protein": 0.3889,
+    "interactions_processed": 37258,
+    "avg_interactions_per_protein": 3.7258,
     "confidence_threshold": 400
   },
   "timings": {
-    "total_time": 21.604093074798584,
-    "download_time": 0.0006511211395263672,
-    "parse_time": 0.06626677513122559,
-    "ingestion_time": 21.008538007736206,
-    "index_build_time": 0.053894996643066406
+    "total_time": 48.53156614303589,
+    "download_time": 14.920192003250122,
+    "parse_time": 0.40833401679992676,
+    "ingestion_time": 32.57225513458252,
+    "index_build_time": 0.05794811248779297
   },
   "ingestion_rates": {
-    "proteins_per_sec": 475.99694925546885,
-    "interactions_per_sec": 185.11521356545185,
-    "embeddings_per_sec": 475.99694925546885
+    "proteins_per_sec": 307.00975289189694,
+    "interactions_per_sec": 1143.8569373246296,
+    "embeddings_per_sec": 307.00975289189694
   },
   "graph_query_performance": {
-    "avg_time": 0.00025093984603881837,
-    "p95_time": 0.00017099380493164058,
-    "p99_time": 0.00020079135894775387,
-    "avg_results": 0.472,
+    "avg_time": 0.00039479589462280274,
+    "p95_time": 0.000305032730102539,
+    "p99_time": 0.0007913327217102049,
+    "avg_results": 1.882,
     "total_queries": 500
   },
   "vector_search_performance": {
     "error": "No successful vector queries"
   },
   "text_search_performance": {
-    "avg_time": 0.0011586586634318033,
-    "p95_time": 0.0008496284484863281,
-    "p99_time": 0.015732629299163695,
+    "avg_time": 0.001196459929148356,
+    "p95_time": 0.0014212131500244138,
+    "p99_time": 0.01483034849166859,
     "avg_results": 10.0,
     "total_queries": 60
   }

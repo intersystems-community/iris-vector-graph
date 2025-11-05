@@ -16,12 +16,38 @@ class QueryPerformanceMetrics(BaseModel):
 
     class Config:
         json_schema_extra = {
-            "example": {
-                "query_type": "fraud_score",
-                "execution_time_ms": 127,
-                "backend_used": "fraud_api",
-                "result_count": 1,
-                "search_methods": ["MLP"],
-                "timestamp": "2025-01-06T14:35:22Z"
-            }
+            "examples": [
+                {
+                    "query_type": "fraud_score",
+                    "execution_time_ms": 127,
+                    "backend_used": "fraud_api",
+                    "result_count": 1,
+                    "search_methods": ["MLP"],
+                    "timestamp": "2025-01-06T14:35:22Z"
+                },
+                {
+                    "query_type": "protein_search",
+                    "execution_time_ms": 89,
+                    "backend_used": "biomedical_api",
+                    "result_count": 10,
+                    "search_methods": ["HNSW", "BM25", "RRF"],
+                    "timestamp": "2025-01-06T14:36:45Z"
+                },
+                {
+                    "query_type": "pathway_search",
+                    "execution_time_ms": 215,
+                    "backend_used": "biomedical_api",
+                    "result_count": 3,
+                    "search_methods": ["graph_traversal"],
+                    "timestamp": "2025-01-06T14:37:12Z"
+                },
+                {
+                    "query_type": "network_expansion",
+                    "execution_time_ms": 145,
+                    "backend_used": "cached_demo",
+                    "result_count": 25,
+                    "search_methods": ["graph_neighbors"],
+                    "timestamp": "2025-01-06T14:38:00Z"
+                }
+            ]
         }
