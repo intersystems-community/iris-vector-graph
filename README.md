@@ -40,7 +40,8 @@ Same IRIS platform. Different domains. Powerful results.
 docker-compose up -d
 
 # 2. Install Python dependencies
-pip install iris-vector-graph[dev]
+pip install iris-vector-graph        # Core features
+pip install iris-vector-graph[ml]    # + Machine learning (fraud scoring models)
 
 # 3. Load fraud schema
 docker exec -i iris /usr/irissys/bin/irissession IRIS -U USER < sql/fraud/schema.sql

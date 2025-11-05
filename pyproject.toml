@@ -45,7 +45,7 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 
-# Core dependencies
+# Core dependencies - everything needed for graph operations, APIs, and demos
 dependencies = [
     "intersystems-irispython>=3.2.0",
     "networkx>=3.0",
@@ -56,11 +56,8 @@ dependencies = [
     "fastapi>=0.118.0",
     "uvicorn>=0.37.0",
     "pydantic>=2.11.9",
-    "pytest-asyncio>=1.2.0",
-    "py2neo>=2021.2.4",
     "httpx[http2]>=0.28.1",
     "strawberry-graphql[fastapi]>=0.280.0",
-    "torch>=2.0.0",  # TorchScript model loading for fraud scoring
     # Demo server dependencies
     "python-fasthtml>=0.8.1",
     "faker>=28.0.0",
@@ -68,6 +65,14 @@ dependencies = [
 
 # Optional dependencies for different use cases
 [project.optional-dependencies]
+# Machine learning features (fraud detection models, neural networks)
+ml = [
+    "torch>=2.0.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.11.0"
+]
+
+# Development tools
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -77,20 +82,21 @@ dev = [
     "mypy>=1.5.0",
     "playwright>=1.40.0"
 ]
+
+# Performance profiling
 performance = [
     "psutil>=5.9.0",
     "memory-profiler>=0.61.0"
 ]
+
+# Visualization tools
 visualization = [
     "matplotlib>=3.7.0",
     "plotly>=5.15.0",
     "graphviz>=0.20.0"
 ]
-ml = [
-    "scikit-learn>=1.3.0",
-    "scipy>=1.11.0",
-    "torch>=2.0.0"
-]
+
+# Biomedical data sources
 biodata = [
     "biopython>=1.81",
     "bioservices>=1.11.0",
