@@ -105,3 +105,7 @@ test_results.json
 .sesskey
 *.sesskey
 IMPLEMENTATION_COMPLETE.md
+
+# Specification drafts (work in progress)
+specs/
+.specify/
