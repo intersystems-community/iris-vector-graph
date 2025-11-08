@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2025-11-08
+
+### Fixed
+- **Import UX (BREAKING)**: Renamed package module from `iris_vector_graph_core` to `iris_vector_graph`
+  - Package name (`iris-vector-graph`) now matches import name (`iris_vector_graph`)
+  - **Breaking change**: `from iris_vector_graph_core import ...` is no longer supported
+  - **New import**: `from iris_vector_graph import IRISGraphEngine`
+  - Cleaner, more intuitive structure following Python conventions
+
 ## [1.1.0] - 2025-11-08
 
 ### Added

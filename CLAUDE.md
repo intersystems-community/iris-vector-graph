@@ -68,7 +68,7 @@ pytest tests/                                      # All tests
 pytest tests/unit/                                 # Unit tests only
 pytest tests/integration/                          # Integration tests only
 pytest -m requires_database                        # Database-dependent tests
-pytest --cov=iris_vector_graph_core               # With coverage
+pytest --cov=iris_vector_graph               # With coverage
 
 # Personalized PageRank (PPR) tests
 pytest tests/contract/test_ppr_contract.py         # Contract tests (7 tests)
@@ -127,7 +127,7 @@ isort .
 
 # Lint code
 flake8 .
-mypy iris_vector_graph_core/
+mypy iris_vector_graph/
 ```
 
 ## Architecture Overview
@@ -138,7 +138,7 @@ This is a **Graph + Vector Retrieval** system targeting **InterSystems IRIS** th
 - **openCypher query endpoint** for graph pattern matching
 - **IRIS-native Python** integration with embedded operations
 - **REST API** via FastAPI (openCypher) and IRIS ObjectScript classes
-- **iris_vector_graph_core** Python module for high-performance operations
+- **iris_vector_graph** Python module for high-performance operations
 - **Direct iris.connect()** for optimal performance
 
 ### Query Engines
@@ -165,7 +165,7 @@ The system supports multiple query interfaces on the same NodePK schema:
    - `schema.sql` - RDF-ish tables (`rdf_labels`, `rdf_props`, `rdf_edges`) + vector embeddings table with HNSW index
    - `operators.sql` - Stored procedures: `kg_KNN_VEC`, `kg_TXT`, `kg_RRF_FUSE`, `kg_GRAPH_PATH`
 
-2. **Python SDK** (`python/`, `iris_vector_graph_core/`):
+2. **Python SDK** (`python/`, `iris_vector_graph/`):
    - `IRISGraphEngine` - Core graph operations and vector search
    - `HybridSearchFusion` - RRF fusion of vector + text results
    - `TextSearchEngine` - IRIS iFind integration
@@ -214,13 +214,13 @@ Configure IRIS connection in `.env`:
 - **Personalized PageRank**: Power iteration algorithm for entity importance scoring. Performance: <25ms (1K nodes), ~200ms (10K nodes). Use for document ranking, pathway analysis.
 - **RRF Fusion**: Uses Reciprocal Rank Fusion (Cormack & Clarke SIGIR'09) to combine vector and text search results.
 - **Graph queries**: Performance-optimized with bounded hops and confidence filtering.
-- **iris_vector_graph_core**: Modular design for integration with other RAG systems.
+- **iris_vector_graph**: Modular design for integration with other RAG systems.
 - **Cypher-to-SQL Translation**: Label pushdown and property pushdown optimizations for fast queries.
 - **Query Pattern Matching**: MVP parser supports common Cypher patterns (MATCH, WHERE, RETURN, ORDER BY, LIMIT).
 
 ### File Structure
 
-- `iris_vector_graph_core/` - Core Python module for graph operations
+- `iris_vector_graph/` - Core Python module for graph operations
 - `biomedical/` - Domain-specific biomedical graph operations
 - `sql/` - Database schema and stored procedures
 - `iris/src/` - IRIS ObjectScript classes for REST API
@@ -238,7 +238,7 @@ When developing, ensure compliance with `.specify/memory/constitution.md`:
 3. **Performance as a Feature** - HNSW indexing, bounded queries, tracked benchmarks
 4. **Hybrid Search by Default** - Vector + text + graph using RRF fusion
 5. **Observability & Debuggability** - Structured logging at each layer
-6. **Modular Core Library** - Database-agnostic iris_vector_graph_core
+6. **Modular Core Library** - Database-agnostic iris_vector_graph
 7. **Explicit Error Handling** - No silent failures, actionable error messages
 8. **Standardized Database Interfaces** - Use proven utilities, contribute patterns back
 
@@ -266,11 +266,11 @@ When developing, ensure compliance with `.specify/memory/constitution.md`:
 
 ## Integration with RAG Systems
 
-The `iris_vector_graph_core` module is designed for integration with RAG frameworks like `rag-templates`:
+The `iris_vector_graph` module is designed for integration with RAG frameworks like `rag-templates`:
 
 ```python
 # Example usage in RAG pipeline
-from iris_vector_graph_core import HybridSearchFusion, IRISGraphEngine
+from iris_vector_graph import HybridSearchFusion, IRISGraphEngine
 
 # Initialize engine with IRIS connection
 engine = IRISGraphEngine(connection_params)

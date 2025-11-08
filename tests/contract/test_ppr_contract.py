@@ -17,7 +17,7 @@ Test Coverage:
 import pytest
 import time
 import iris
-from iris_vector_graph_core import IRISGraphEngine
+from iris_vector_graph import IRISGraphEngine
 
 
 @pytest.fixture(scope="module")

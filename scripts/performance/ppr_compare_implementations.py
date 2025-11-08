@@ -12,8 +12,8 @@ import time
 import iris
 import numpy as np
 from scipy.sparse import csr_matrix
-from iris_vector_graph_core import IRISGraphEngine
-from iris_vector_graph_core.ppr_globals import build_ppr_global, compute_ppr_globals
+from iris_vector_graph import IRISGraphEngine
+from iris_vector_graph.ppr_globals import build_ppr_global, compute_ppr_globals
 import json
 
 

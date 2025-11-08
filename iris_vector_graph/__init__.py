@@ -1,28 +1,30 @@
 """
 IRIS Vector Graph - Knowledge graph and vector search platform on InterSystems IRIS.
 
-This package provides a convenient top-level namespace that re-exports the core functionality
-from iris_vector_graph_core for easier imports.
+A high-performance graph engine combining:
+- HNSW-optimized vector search (<10ms with ACORN-1)
+- Native IRIS iFind text search integration
+- Reciprocal Rank Fusion (RRF) for hybrid ranking
+- Multi-modal graph-vector-text fusion
+- Personalized PageRank (PPR) with ObjectScript optimization (8.9x faster at scale)
 
-Usage:
-    from iris_vector_graph import IRISGraphEngine
-
-    # Or use the core module directly:
-    from iris_vector_graph_core import IRISGraphEngine
+Proven at scale:
+- Financial Services: 130M+ transactions, <10ms fraud scoring
+- Biomedical Research: 100K+ proteins, <50ms multi-hop queries
 """
 
-# Re-export all public APIs from iris_vector_graph_core
-from iris_vector_graph_core import *
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
-from iris_vector_graph_core.text_search import TextSearchEngine
-from iris_vector_graph_core.vector_utils import VectorOptimizer
+from .engine import IRISGraphEngine
+from .schema import GraphSchema
+from .vector_utils import VectorOptimizer
+from .text_search import TextSearchEngine
+from .fusion import RRFFusion, HybridSearchFusion
 
-# Version info
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 __all__ = [
     "IRISGraphEngine",
-    "HybridSearchFusion",
-    "TextSearchEngine",
+    "GraphSchema",
     "VectorOptimizer",
+    "TextSearchEngine",
+    "RRFFusion",
+    "HybridSearchFusion"
 ]

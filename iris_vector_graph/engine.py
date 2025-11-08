@@ -419,7 +419,7 @@ class IRISGraphEngine:
 
         if use_functional_index:
             try:
-                from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+                from iris_vector_graph.ppr_functional_index import compute_ppr_functional_index
                 logger.info(f"Using Functional Index PPR for {len(seed_entities)} seed entities")
                 scores = compute_ppr_functional_index(
                     self.conn,
@@ -437,7 +437,7 @@ class IRISGraphEngine:
                 logger.warning(f"Functional Index PPR failed ({e}), falling back to Pure Python")
 
         # Fallback: Pure Python implementation
-        from iris_vector_graph_core.ppr import (
+        from iris_vector_graph.ppr import (
             validate_ppr_inputs,
             get_all_graph_nodes,
             get_outdegrees,

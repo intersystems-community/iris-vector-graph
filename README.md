@@ -155,7 +155,7 @@ open http://localhost:8200/bio
 **Files**:
 - `biomedical/` - Protein queries, pathway examples
 - `sql/schema.sql` - Graph schema (nodes, edges, properties, embeddings)
-- `iris_vector_graph_core/` - Core Python graph engine
+- `iris_vector_graph/` - Core Python graph engine
 - `docker-compose.acorn.yml` - ACORN-1 with HNSW optimization
 
 **Quick Links**:
@@ -310,7 +310,7 @@ External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
 Compute entity importance scores for knowledge graph ranking:
 
 ```python
-from iris_vector_graph_core import IRISGraphEngine
+from iris_vector_graph import IRISGraphEngine
 import iris
 
 # Connect to IRIS
@@ -353,7 +353,7 @@ docs = engine.kg_PPR_RANK_DOCUMENTS(
 
 ### API Reference
 - [REST API](docs/api/REST_API.md)
-- [Python SDK](iris_vector_graph_core/README.md)
+- [Python SDK](iris_vector_graph/README.md)
 - [SQL Procedures](sql/operators.sql)
 
 ### Examples
@@ -376,7 +376,7 @@ examples/
 
 biomedical/               # Life sciences (proteins, pathways)
 
-iris_vector_graph_core/   # Python graph engine
+iris_vector_graph/   # Python graph engine
 
 src/iris_fraud_server/    # FastAPI fraud API
 

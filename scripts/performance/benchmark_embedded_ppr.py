@@ -10,7 +10,7 @@ Tests three implementations:
 import time
 import json
 import iris
-from iris_vector_graph_core.engine import IRISGraphEngine
+from iris_vector_graph.engine import IRISGraphEngine
 
 def create_test_graph(conn):
     """Create a test graph with 1000 nodes and ~5000 edges."""
