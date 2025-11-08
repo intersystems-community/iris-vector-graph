@@ -19,7 +19,7 @@ from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
 from .fusion import RRFFusion, HybridSearchFusion
 
-__version__ = "1.1.1"
+__version__ = "1.1.2"
 __all__ = [
     "IRISGraphEngine",
     "GraphSchema",

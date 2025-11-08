@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2025-11-08
+
+### Fixed
+- **PPR Correctness**: Fixed `get_incoming_edges()` to filter out edges with endpoints not in graph
+  - Bug: Edges in `rdf_edges` table can reference nodes not in `nodes` table (orphaned references)
+  - Symptom: `KeyError` when PPR tried to access scores for non-existent nodes
+  - Fix: Added check that both source and target nodes exist before including edge in adjacency
+  - Test: `test_ppr_scores_sum_to_one` now passes (was failing with random KeyError)
+  - Location: `iris_vector_graph/ppr.py:160` in `get_incoming_edges()`
+
 ## [1.1.1] - 2025-11-08
 
 ### Fixed
