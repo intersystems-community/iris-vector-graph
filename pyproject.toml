@@ -113,7 +113,7 @@ Issues = "https://github.com/intersystems-community/iris-vector-graph/issues"
 networkx-loader = "scripts.ingest.networkx_loader:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["iris_vector_graph_core"]
+packages = ["iris_vector_graph", "iris_vector_graph_core"]
 
 # Tool configurations
 [tool.black]
