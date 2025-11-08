@@ -1,0 +1,89 @@
+{
+  "1000": [
+    {
+      "implementation": "Pure Python (Current)",
+      "time_ms": 27.296781539916992,
+      "num_scores": 998,
+      "scores_sum": 1.0000000000000002,
+      "top_score": 0.1505725591904996
+    },
+    {
+      "implementation": "IRIS Globals + Python (GraphRAG)",
+      "time_ms": 18665.111541748047,
+      "build_time_ms": 16065.7217502594,
+      "compute_time_ms": 2599.3897914886475,
+      "num_scores": 998,
+      "scores_sum": 0.9999999999999991,
+      "top_score": 0.15114989164696901
+    },
+    {
+      "implementation": "SciPy Sparse Matrix",
+      "time_ms": 33.91313552856445,
+      "build_time_ms": 33.50710868835449,
+      "iter_time_ms": 0.40602684020996094,
+      "num_scores": 998,
+      "scores_sum": 1.0000000000000004,
+      "top_score": 0.1505725591904998,
+      "iterations": 14,
+      "converged": true
+    }
+  ],
+  "5000": [
+    {
+      "implementation": "Pure Python (Current)",
+      "time_ms": 97.30792045593262,
+      "num_scores": 4957,
+      "scores_sum": 1.0000000000000004,
+      "top_score": 0.15008268304987177
+    },
+    {
+      "implementation": "IRIS Globals + Python (GraphRAG)",
+      "time_ms": 43106.403827667236,
+      "build_time_ms": 32092.33784675598,
+      "compute_time_ms": 11014.065980911255,
+      "num_scores": 4957,
+      "scores_sum": 0.9999999999999952,
+      "top_score": 0.150146699566668
+    },
+    {
+      "implementation": "SciPy Sparse Matrix",
+      "time_ms": 59.06176567077637,
+      "build_time_ms": 58.52794647216797,
+      "iter_time_ms": 0.5338191986083984,
+      "num_scores": 4957,
+      "scores_sum": 0.9999999999999979,
+      "top_score": 0.15008268304987163,
+      "iterations": 14,
+      "converged": true
+    }
+  ],
+  "10000": [
+    {
+      "implementation": "Pure Python (Current)",
+      "time_ms": 217.32211112976074,
+      "num_scores": 9929,
+      "scores_sum": 0.9999999999999997,
+      "top_score": 0.15007733316505342
+    },
+    {
+      "implementation": "IRIS Globals + Python (GraphRAG)",
+      "time_ms": 111635.93101501465,
+      "build_time_ms": 88000.18000602722,
+      "compute_time_ms": 23635.751008987427,
+      "num_scores": 9929,
+      "scores_sum": 1.0,
+      "top_score": 0.15017261174011032
+    },
+    {
+      "implementation": "SciPy Sparse Matrix",
+      "time_ms": 108.50191116333008,
+      "build_time_ms": 107.64098167419434,
+      "iter_time_ms": 0.8609294891357422,
+      "num_scores": 9929,
+      "scores_sum": 1.0000000000000002,
+      "top_score": 0.15007733316505323,
+      "iterations": 13,
+      "converged": true
+    }
+  ]
+}

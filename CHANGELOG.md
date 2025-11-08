@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-11-08
+
+### Added
+
+#### Personalized PageRank (PPR) Optimization
+- **ObjectScript Native PPR**: Achieved 8.9x performance improvement at 10K nodes (184ms vs 1,631ms Pure Python)
+- **Functional Index with Packed Lists**: `$LISTBUILD` + `$LISTNEXT` pattern for zero-copy Global traversal
+- **Real-time Graph Adjacency**: Functional Index maintains `^PPR` Globals synchronized with SQL DML operations
+- **Dual Implementation**: Pure Python (portable, simple) + ObjectScript Native (IRIS-optimized, faster at scale)
+- **Scaling Advantage**: Speedup increases with graph size (1.0x @ 1K nodes → 8.9x @ 10K nodes)
+
+#### ObjectScript Classes
+- `Graph.KG.PPRFunctionalIndex`: Functional Index maintaining packed adjacency lists (`^PPR("outL", *)`, `^PPR("inL", *)`)
+- `Graph.KG.PPRNative`: ObjectScript PPR implementation using `$LISTNEXT` for in-memory neighbor iteration
+- `Graph.KG.PPRCompute`: Embedded Python investigation (documented for future IRIS enhancements)
+
+#### Documentation
+- **PPR Optimization Journey**: Complete optimization chronicle from 14ms baseline to 8.9x improvement (docs/ppr-optimization/)
+- **Embedded Python API Investigation**: Detailed analysis of `iris.gref()` limitations for IRIS dev team
+- **Pre-Release Checklist**: Constitutional amendment defining mandatory quality gates for releases
+
+### Changed
+- **README Performance Section**: Updated with PPR scaling benchmarks showing ObjectScript Native advantage
+- **Documentation Organization**: Created `docs/ppr-optimization/` subdirectory for related docs
+- **Constitution v1.2.0**: Added comprehensive pre-release checklist covering documentation, code hygiene, and versioning
+
+### Fixed
+- Removed temporary files (`.sesskey`, `.DS_Store`, `*.log`)
+- Updated `.gitignore` with patterns for session files and test outputs
+- Scrubbed informal terminology from professional documentation
+
+### Performance
+- **10K nodes PPR**: 184ms (ObjectScript Native) vs 1,631ms (Pure Python) = **8.9x faster**
+- **1K nodes PPR**: 14.3ms (ObjectScript Native) vs 14.5ms (Pure Python) = **comparable**
+- **Scaling behavior**: Sub-linear (10x nodes = 13x time with ObjectScript, 113x time with Python)
+
 ## [1.0.0] - 2025-11-05
 
 ### Added

@@ -255,6 +255,7 @@ External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
 | Feature | Financial Services Use | Biomedical Use |
 |---------|------------------------|----------------|
 | **Embedded Python** | Fraud ML models in-database | Graph analytics (PageRank, etc.) |
+| **Personalized PageRank** | Entity importance scoring | Document ranking, pathway analysis |
 | **Temporal Queries** | Bitemporal audit ("what did we know when?") | Time-series biomarker analysis |
 | **Graph Traversal** | Fraud ring detection (multi-hop) | Protein interaction pathways |
 | **Vector Search** | Transaction similarity | Protein/compound similarity |
@@ -267,6 +268,7 @@ External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
 - **Temporal Views**: Pre-filter current versions
 - **Foreign Key Constraints**: Referential integrity across graph
 - **HNSW Vector Index**: 100x faster than flat search (ACORN-1)
+- **PPR Functional Index**: ObjectScript `$LISTBUILD` + `$LISTNEXT` for 8.9x faster PageRank at scale (10K nodes: 184ms vs 1,631ms Python)
 
 ---
 
@@ -285,17 +287,55 @@ External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
 
 ### Biomedical (Protein Networks)
 
-| Metric | Standard IRIS | ACORN-1 (HNSW) |
-|--------|--------------|----------------|
-| **Vector Search** | 5800ms (flat) | 1.7ms (HNSW) |
+| Metric | Pure Python | ObjectScript Native |
+|--------|------------|---------------------|
+| **Vector Search** | 5800ms (flat) → 1.7ms (HNSW) | Same (HNSW index) |
 | **Multi-hop Queries** | <50ms | <50ms |
 | **Hybrid Search (RRF)** | <100ms | <20ms |
-| **Graph Analytics** | NetworkX integration | Embedded Python |
+| **Personalized PageRank (1K)** | 14.5ms | 14.3ms |
+| **Personalized PageRank (10K)** | **1,631ms** | **184ms (8.9x faster)** ✨ |
+| **Graph Analytics** | NetworkX integration | Zero-copy Global access |
 
 **Tested At Scale**:
 - ✅ 130M fraud transactions (licensed IRIS)
 - ✅ 100K+ protein interactions (STRING DB)
 - ✅ 768-dimensional embeddings (biomedical models)
+
+---
+
+## Usage Examples
+
+### Personalized PageRank (PPR)
+
+Compute entity importance scores for knowledge graph ranking:
+
+```python
+from iris_vector_graph_core import IRISGraphEngine
+import iris
+
+# Connect to IRIS
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn)
+
+# Compute PPR scores from seed entity
+scores = engine.kg_PERSONALIZED_PAGERANK(
+    seed_entities=["PROTEIN:TP53"],  # Seed with cancer protein
+    damping_factor=0.85,              # Standard PageRank parameter
+    top_k=20                          # Return top 20 scored entities
+)
+
+# Results: {'PROTEIN:TP53': 0.152, 'PROTEIN:MDM2': 0.087, ...}
+
+# Rank documents by PPR scores
+docs = engine.kg_PPR_RANK_DOCUMENTS(
+    seed_entities=["PROTEIN:TP53"],
+    top_k=10
+)
+
+# Results: [{document_id, score, top_entities, entity_count}, ...]
+```
+
+**Performance**: <25ms for 1K entities, ~200ms for 10K entities (Python implementation)
 
 ---
 

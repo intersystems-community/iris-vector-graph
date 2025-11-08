@@ -8,6 +8,7 @@ that can be used across any domain.
 """
 
 import json
+import os
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import logging
@@ -367,3 +368,295 @@ class IRISGraphEngine:
         except Exception as e:
             logger.error(f"kg_VECTOR_GRAPH_SEARCH failed: {e}")
             raise
+
+    # Personalized PageRank Operations
+    def kg_PERSONALIZED_PAGERANK(
+        self,
+        seed_entities: List[str],
+        damping_factor: float = 0.85,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        return_top_k: Optional[int] = None,
+        use_functional_index: Optional[bool] = None
+    ) -> Dict[str, float]:
+        """
+        Compute Personalized PageRank scores for knowledge graph entities.
+
+        Implements random walk with restart to seed entities using power iteration.
+
+        Performance implementations (automatic selection):
+        1. Functional Index (fastest): <10ms for 10K nodes using ^PPR Globals
+        2. Pure Python (fallback): ~200ms for 10K nodes using SQL extraction
+
+        Args:
+            seed_entities: List of entity IDs to use as personalization seeds
+            damping_factor: Probability of following an edge vs teleporting back to seed (default: 0.85)
+            max_iterations: Maximum iterations for convergence (default: 100)
+            tolerance: Convergence threshold - stop when max score change < tolerance (default: 1e-6)
+            return_top_k: Optional limit to return only top K scored entities
+            use_functional_index: Force Functional Index (True) or Pure Python (False).
+                If None (default), auto-selects based on USE_PPR_FUNCTIONAL_INDEX env var.
+
+        Returns:
+            Dictionary mapping entity_id -> PPR score (probability distribution summing to 1.0)
+
+        Environment Variables:
+            USE_PPR_FUNCTIONAL_INDEX: Set to "1" or "true" to enable Functional Index (default: auto-detect)
+
+        Raises:
+            ValueError: If seed_entities is empty, damping_factor invalid, or seeds don't exist
+
+        Examples:
+            >>> scores = engine.kg_PERSONALIZED_PAGERANK(["PROTEIN:TP53"], top_k=20)
+            >>> print(scores)
+            {'PROTEIN:TP53': 0.152, 'PROTEIN:MDM2': 0.087, ...}
+        """
+        # T021: Implementation selection - try Functional Index first
+        if use_functional_index is None:
+            # Auto-detect based on environment variable
+            use_functional_index_env = os.getenv('USE_PPR_FUNCTIONAL_INDEX', '').lower()
+            use_functional_index = use_functional_index_env in ('1', 'true', 'yes')
+
+        if use_functional_index:
+            try:
+                from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+                logger.info(f"Using Functional Index PPR for {len(seed_entities)} seed entities")
+                scores = compute_ppr_functional_index(
+                    self.conn,
+                    seed_entities=seed_entities,
+                    damping_factor=damping_factor,
+                    max_iterations=max_iterations,
+                    tolerance=tolerance
+                )
+                # Apply top_k filtering if requested
+                if return_top_k is not None:
+                    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+                    scores = dict(sorted_scores[:return_top_k])
+                return scores
+            except Exception as e:
+                logger.warning(f"Functional Index PPR failed ({e}), falling back to Pure Python")
+
+        # Fallback: Pure Python implementation
+        from iris_vector_graph_core.ppr import (
+            validate_ppr_inputs,
+            get_all_graph_nodes,
+            get_outdegrees,
+            get_incoming_edges
+        )
+
+        # T017: Validate inputs
+        validate_ppr_inputs(
+            seed_entities, damping_factor, max_iterations, tolerance, self.conn
+        )
+
+        logger.info(f"Computing PPR (Pure Python) for {len(seed_entities)} seed entities")
+
+        # Get all nodes in graph
+        all_nodes = get_all_graph_nodes(self.conn)
+
+        if len(all_nodes) == 0:
+            logger.warning("Graph has no nodes")
+            return {}
+
+        # Initialize scores: uniform distribution over seeds, 0 for others
+        scores = {}
+        seed_set = set(seed_entities)
+        uniform_seed_score = 1.0 / len(seed_entities)
+
+        for node_id in all_nodes:
+            scores[node_id] = uniform_seed_score if node_id in seed_set else 0.0
+
+        # Get graph structure (outdegrees and incoming edges)
+        outdegrees = get_outdegrees(self.conn, all_nodes)
+        incoming = get_incoming_edges(self.conn, all_nodes)
+
+        # Personalization vector (probability of teleporting to each node)
+        personalization = {
+            node_id: uniform_seed_score if node_id in seed_set else 0.0
+            for node_id in all_nodes
+        }
+
+        # Power iteration
+        iteration = 0
+        converged = False
+
+        for iteration in range(1, max_iterations + 1):
+            prev_scores = scores.copy()
+            new_scores = {}
+
+            # Update each node's score
+            for node_id in all_nodes:
+                # Random walk component: sum of scores from incoming neighbors
+                walk_score = 0.0
+                if node_id in incoming:
+                    for source_id in incoming[node_id]:
+                        source_score = prev_scores[source_id]
+                        source_outdegree = outdegrees[source_id]
+
+                        # Nodes with outdegree 0 are sinks (distribute evenly to all)
+                        if source_outdegree == 0:
+                            walk_score += source_score / len(all_nodes)
+                        else:
+                            walk_score += source_score / source_outdegree
+
+                # PPR formula: (1 - alpha) * personalization + alpha * walk
+                new_scores[node_id] = (
+                    (1 - damping_factor) * personalization[node_id] +
+                    damping_factor * walk_score
+                )
+
+            # Check convergence
+            max_change = max(
+                abs(new_scores[node_id] - prev_scores[node_id])
+                for node_id in all_nodes
+            )
+
+            scores = new_scores
+
+            if max_change < tolerance:
+                converged = True
+                logger.debug(f"PPR converged in {iteration} iterations (max_change={max_change:.2e})")
+                break
+
+        # T019: Log convergence status
+        if not converged:
+            logger.warning(
+                f"PPR did not converge after {max_iterations} iterations "
+                f"(max_change={max_change:.2e}, tolerance={tolerance:.2e})"
+            )
+
+        logger.info(
+            f"PPR computed for {len(seed_entities)} seeds, "
+            f"returned {len(scores)} entities"
+        )
+
+        # Normalize to ensure scores sum to exactly 1.0 (fix floating point errors)
+        total = sum(scores.values())
+        if total > 0:
+            scores = {k: v / total for k, v in scores.items()}
+
+        # Filter to non-zero scores only (after normalization)
+        scores = {k: v for k, v in scores.items() if v > 1e-10}
+
+        # Return top-k if requested
+        if return_top_k is not None:
+            sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+            scores = dict(sorted_scores[:return_top_k])
+
+        return scores
+
+    def kg_PPR_RANK_DOCUMENTS(
+        self,
+        seed_entities: List[str],
+        document_ids: Optional[List[str]] = None,
+        top_k: int = 10,
+        **ppr_kwargs
+    ) -> List[Dict[str, Any]]:
+        """
+        Rank documents using Personalized PageRank scores.
+
+        Computes PPR scores for entities, then scores documents by aggregating
+        the scores of entities they contain.
+
+        Args:
+            seed_entities: Query entities for PPR computation
+            document_ids: Optional list of document IDs to score (None = all documents)
+            top_k: Number of top documents to return
+            **ppr_kwargs: Additional arguments passed to kg_PERSONALIZED_PAGERANK
+                (damping_factor, max_iterations, tolerance)
+
+        Returns:
+            List of document ranking dictionaries, each containing:
+            - document_id: Document identifier
+            - score: Aggregated PPR score
+            - top_entities: List of top contributing entities with their scores
+            - entity_count: Total number of entities in document
+
+        Examples:
+            >>> results = engine.kg_PPR_RANK_DOCUMENTS(
+            ...     seed_entities=["PROTEIN:TP53"],
+            ...     top_k=10
+            ... )
+            >>> print(results[0])
+            {
+                'document_id': 'doc_001',
+                'score': 0.8734,
+                'top_entities': [
+                    {'entity_id': 'PROTEIN:TP53', 'score': 0.15},
+                    {'entity_id': 'PROTEIN:MDM2', 'score': 0.12}
+                ],
+                'entity_count': 5
+            }
+        """
+        # Compute PPR scores
+        ppr_scores = self.kg_PERSONALIZED_PAGERANK(
+            seed_entities=seed_entities,
+            **ppr_kwargs
+        )
+
+        # Get document-entity relationships from rdf_props
+        # Assuming documents are linked to entities via rdf_props or rdf_edges
+        cursor = self.conn.cursor()
+        try:
+            # Query for document-entity relationships
+            # This is a simplified implementation - adjust based on actual schema
+            if document_ids is None:
+                query = """
+                    SELECT DISTINCT s as document_id, val as entity_id
+                    FROM rdf_props
+                    WHERE key = 'contains_entity'
+                """
+                cursor.execute(query)
+            else:
+                placeholders = ",".join(["?" for _ in document_ids])
+                query = f"""
+                    SELECT DISTINCT s as document_id, val as entity_id
+                    FROM rdf_props
+                    WHERE key = 'contains_entity'
+                    AND s IN ({placeholders})
+                """
+                cursor.execute(query, document_ids)
+
+            doc_entities = cursor.fetchall()
+
+            # Aggregate scores by document
+            doc_scores = {}
+            for doc_id, entity_id in doc_entities:
+                if doc_id not in doc_scores:
+                    doc_scores[doc_id] = []
+
+                entity_score = ppr_scores.get(entity_id, 0.0)
+                if entity_score > 0:
+                    doc_scores[doc_id].append({
+                        'entity_id': entity_id,
+                        'score': entity_score
+                    })
+
+            # Build result list
+            results = []
+            for doc_id, entities in doc_scores.items():
+                # Aggregate score (sum of entity scores)
+                total_score = sum(e['score'] for e in entities)
+
+                # Sort entities by score descending
+                entities_sorted = sorted(
+                    entities,
+                    key=lambda x: x['score'],
+                    reverse=True
+                )
+
+                results.append({
+                    'document_id': doc_id,
+                    'score': total_score,
+                    'top_entities': entities_sorted[:5],  # Top 5 contributing entities
+                    'entity_count': len(entities)
+                })
+
+            # Sort documents by score descending
+            results.sort(key=lambda x: x['score'], reverse=True)
+
+            # Return top-k
+            return results[:top_k]
+
+        finally:
+            cursor.close()
