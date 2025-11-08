@@ -109,3 +109,11 @@ IMPLEMENTATION_COMPLETE.md
 # Specification drafts (work in progress)
 specs/
 .specify/
+# Temporary/session files
+.sesskey
+*.log
+.DS_Store
+
+# Test outputs
+*_test_report.json
+*_scale_test*.json

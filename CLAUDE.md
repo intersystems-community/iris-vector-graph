@@ -69,6 +69,11 @@ pytest tests/unit/                                 # Unit tests only
 pytest tests/integration/                          # Integration tests only
 pytest -m requires_database                        # Database-dependent tests
 pytest --cov=iris_vector_graph_core               # With coverage
+
+# Personalized PageRank (PPR) tests
+pytest tests/contract/test_ppr_contract.py         # Contract tests (7 tests)
+pytest tests/integration/test_ppr_integration.py   # Integration tests (5 tests)
+pytest tests/performance/test_ppr_performance.py -m performance  # Performance benchmarks
 ```
 
 ### Development Operations
@@ -206,6 +211,7 @@ Configure IRIS connection in `.env`:
 
 - **Vector embeddings**: Configured for 768-dimensional vectors (biomedical embeddings). HNSW optimization provides ~100x performance improvement.
 - **HNSW Index**: Optimized with ACORN=1 for production performance (1.7ms vs 5800ms baseline).
+- **Personalized PageRank**: Power iteration algorithm for entity importance scoring. Performance: <25ms (1K nodes), ~200ms (10K nodes). Use for document ranking, pathway analysis.
 - **RRF Fusion**: Uses Reciprocal Rank Fusion (Cormack & Clarke SIGIR'09) to combine vector and text search results.
 - **Graph queries**: Performance-optimized with bounded hops and confidence filtering.
 - **iris_vector_graph_core**: Modular design for integration with other RAG systems.

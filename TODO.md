@@ -1,7 +1,7 @@
 # IRIS Graph-AI TODO List
 
-**Last Updated**: 2025-10-09
-**Current Status**: Biomedical Demo with IRIS Backend + Multi-Query-Engine Platform
+**Last Updated**: 2025-11-07
+**Current Status**: Biomedical Demo with IRIS Backend + Multi-Query-Engine Platform + PPR Functional Index
 
 ## 🚀 Immediate Actions (P0)
 
@@ -16,6 +16,52 @@
 - **Network endpoint**: IRIS graph traversal with rdf_edges queries (5/5 tests passing)
 - **Pathway endpoint**: BFS pathfinding with case-insensitive matching (4/4 tests passing)
 - **Contract tests**: 20/20 passing (100% - search, network, pathway, scenario endpoints)
+
+### PPR Functional Index Implementation ✅ COMPLETE (T020-T021)
+
+#### ✅ Completed (2025-11-07)
+- **ObjectScript Functional Index**: `src/iris/Graph/KG/PPRFunctionalIndex.cls` (142 lines)
+  - InsertIndex, UpdateIndex, DeleteIndex, PurgeIndex callbacks
+  - Uses `CodeMode = objectgenerator` pattern (emits ObjectScript at compile time)
+  - Real-time ^PPR Global updates synchronized with SQL DML
+  - Successfully deployed and attached to rdf_edges table
+- **Python PPR Implementation**: `iris_vector_graph_core/ppr_functional_index.py` (175 lines)
+  - Zero-copy PPR computation using IRIS Globals traversal
+  - Uses `intersystems_irispython` iterator API
+  - Handles sink nodes (zero outdegree) correctly
+- **Integration Tests**: `tests/integration/test_ppr_functional_index_live.py` (361 lines)
+  - 6/6 tests passing (100%)
+  - Tests INSERT/UPDATE/DELETE triggers
+  - Validates correctness vs baseline
+  - Sink node handling, error cases
+- **Regression Tests**: All 5 PPR integration tests passing with both implementations
+- **Documentation**:
+  - `docs/functional-index-deployment-investigation.md` (Investigation notes)
+  - `docs/ppr-functional-index-deployment-summary.md` (Deployment summary)
+
+#### 📊 Performance Results (T022-T024)
+- ✅ **Functional correctness**: Results match Pure Python exactly
+- ✅ **Backward compatibility**: All existing tests passing
+- ⚠️ **Performance**: External Python client API has overhead
+  - Pure Python (baseline): 14ms for 1K nodes
+  - Functional Index (external client): 20,013ms for 1K nodes (1,400x slower)
+  - **Root cause**: External `intersystems_irispython` API has network/IPC overhead
+
+#### 🔬 Embedded Python Investigation (T025)
+- **Attempted**: Rewrite PPR using embedded Python (`iris.gref()`) for performance
+- **Potential**: Benchmarks showed 2.62x speedup potential (5.19ms vs 13.60ms)
+- ❌ **BLOCKED**: Namespace isolation issue - `iris.gref('^PPR')` returns None
+  - ^PPR Global has 1000 nodes visible from external client
+  - Embedded Python sees None for all subscript levels
+  - Root cause: Namespace scope visibility problem in embedded Python
+  - No `iris.eval()` available for ObjectScript interop
+  - Documented in `docs/embedded-python-issues.md` for IRIS dev team
+
+#### 🎯 Status: DEPLOYED AND OPERATIONAL
+- Functional Index correctly maintains ^PPR Globals in real-time
+- Pure Python remains default (excellent performance: 14ms for 1K nodes)
+- Functional Index available via feature flag for special use cases
+- **Next step**: ObjectScript native implementation for production performance (<10ms target)
 
 ### PyPI Publication Preparation 🔄 IN PROGRESS
 
