@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2025-11-09
+
+### Added
+- **ConnectionManager Compatibility**: IRISGraphEngine now supports both direct IRIS connections and ConnectionManager objects from iris-vector-rag
+  - Automatically detects ConnectionManager via duck typing (`hasattr(connection, 'get_connection')`)
+  - Fixes `AttributeError: 'ConnectionManager' object has no attribute 'cursor'` in kg_NEIGHBORHOOD_EXPANSION and kg_PERSONALIZED_PAGERANK
+  - Enables synonym expansion and graph traversal in HippoRAG pipeline
+  - Added comprehensive unit tests in `tests/unit/test_connection_manager_compatibility.py`
+  - Location: `iris_vector_graph/engine.py:28-46` in `__init__()`
+
 ## [1.1.2] - 2025-11-08
 
 ### Fixed

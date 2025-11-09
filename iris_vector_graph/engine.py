@@ -26,8 +26,24 @@ class IRISGraphEngine:
     """
 
     def __init__(self, connection):
-        """Initialize with IRIS database connection"""
-        self.conn = connection
+        """
+        Initialize with IRIS database connection or ConnectionManager.
+
+        Args:
+            connection: Either a direct IRIS connection (iris.connect()) or
+                       a ConnectionManager object with .get_connection() method
+        """
+        # Handle both direct connections and ConnectionManager
+        if hasattr(connection, 'get_connection'):
+            # ConnectionManager from iris-vector-rag
+            self.connection_manager = connection
+            self.conn = connection.get_connection()
+            self._is_managed_connection = True
+        else:
+            # Direct IRIS connection
+            self.connection_manager = None
+            self.conn = connection
+            self._is_managed_connection = False
 
     # Vector Search Operations
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
