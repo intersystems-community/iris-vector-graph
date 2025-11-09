@@ -1,6 +1,22 @@
 <!--
 Sync Impact Report
 ==================
+Version: 1.2.0 → 1.3.0
+Modified Principles: Development Standards - Enhanced Package Management section
+Added Sections:
+  * Package Management (NON-NEGOTIABLE) - Comprehensive rules for multi-environment Python development
+  * Multi-Environment Awareness - Explicit handling of multiple Python environments and Docker containers
+  * PyPI Package Cache Management (CRITICAL) - 4-step aggressive cache-clearing protocol
+Removed Sections: N/A
+Templates Status:
+  ✅ plan-template.md - No changes needed
+  ✅ spec-template.md - No changes needed
+  ✅ tasks-template.md - No changes needed
+Follow-up TODOs: None
+Amendment Rationale: Package caching issues and multi-environment confusion are recurring pain points causing significant development time waste and false bug reports. This amendment codifies aggressive cache management, explicit environment targeting (uv run, iris-devtester), and fresh-process verification as NON-NEGOTIABLE requirements. Addresses perennial issues with pip cache, Python import cache, and ambiguous container/environment selection.
+
+Previous Amendments:
+==================
 Version: 1.1.0 → 1.2.0
 Modified Principles: N/A
 Added Sections:
@@ -13,8 +29,6 @@ Templates Status:
 Follow-up TODOs: None
 Amendment Rationale: Added mandatory pre-release checklist to prevent repository drift, maintain professional presentation, and ensure consistent quality standards across releases. Checklist codifies best practices for documentation organization, cleanup, and version management.
 
-Previous Amendments:
-==================
 Version: 1.0.0 → 1.1.0
 Modified Principles:
   * Test-First Development - Enhanced with live IRIS database validation requirements
@@ -120,11 +134,26 @@ IRIS schema changes MUST include migration scripts in `sql/migrations/`. Breakin
 
 ## Development Standards
 
-**Package Management**: All Python projects MUST use `uv` for dependency management, virtual environment creation, and package installation. Traditional pip/virtualenv workflows are deprecated in favor of uv's superior performance and reliability.
+### Package Management (NON-NEGOTIABLE)
 
-Code MUST pass linting (black, isort, flake8, mypy) before commits. All public APIs MUST include comprehensive docstrings. Breaking changes MUST follow semantic versioning. Dependencies MUST be pinned and regularly updated for security.
+**uv-Only Workflow**: All Python projects MUST use `uv` for dependency management, virtual environment creation, and package installation. Traditional pip/virtualenv workflows are deprecated in favor of uv's superior performance and reliability.
 
-Documentation MUST include quickstart guides, API references, and integration examples. Agent-specific guidance files (CLAUDE.md) MUST be maintained for AI development assistance.
+**Multi-Environment Awareness**: This development machine hosts MULTIPLE Python environments (conda base, project .venv directories, system Python) and MULTIPLE IRIS Docker containers (default, ACORN-1, test instances). ALL Python and Docker operations MUST be explicit about target environment/container:
+- **Python**: ALWAYS use `uv run python` or explicit virtual environment activation
+- **Docker**: ALWAYS use `iris-devtester` with NAMED containers (no ambiguous container references)
+- **Verification**: NEVER assume which environment is active - always verify with `uv run python -c "import sys; print(sys.executable)"`
+
+**PyPI Package Cache Management (CRITICAL)**: When updating PyPI packages (iris-vector-graph, iris-vector-rag, etc.), MUST follow aggressive cache-clearing protocol:
+1. **Force uninstall**: `uv pip uninstall <package-name>` (uv has no -y flag)
+2. **No-cache install**: `uv pip install --no-cache <package-name>==<version>`
+3. **Fresh process verification**: `uv run python -c "import <module>; print(<module>.__version__)"` (NOT reusing existing Python processes)
+4. **Import cache**: Python caches imports - verification MUST use fresh `uv run python` process, NOT interactive sessions
+
+**Rationale**: Package caching issues are a recurring pain point. Multiple Python environments cause version confusion. pip cache can serve stale packages even after "upgrade". Python's import cache persists old versions in running processes. These issues waste development time and create false bug reports. Aggressive cache management is NON-NEGOTIABLE.
+
+**Code Quality**: Code MUST pass linting (black, isort, flake8, mypy) before commits. All public APIs MUST include comprehensive docstrings. Breaking changes MUST follow semantic versioning. Dependencies MUST be pinned and regularly updated for security.
+
+**Documentation**: Documentation MUST include quickstart guides, API references, and integration examples. Agent-specific guidance files (CLAUDE.md) MUST be maintained for AI development assistance.
 
 ## Development Workflow
 
@@ -220,4 +249,4 @@ Development with AI tools MUST follow constraint-based architecture, not "vibeco
 ### Compliance Review
 Each implementation plan MUST include a "Constitution Check" section evaluating alignment with principles. Violations require explicit justification in "Complexity Tracking" table.
 
-**Version**: 1.1.0 | **Ratified**: 2025-09-30 | **Last Amended**: 2025-09-30
+**Version**: 1.3.0 | **Ratified**: 2025-09-30 | **Last Amended**: 2025-11-09
