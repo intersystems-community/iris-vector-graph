@@ -57,6 +57,9 @@ class GraphSchema:
                 # Gracefully handle "already exists" errors for tables and indexes
                 if 'already exists' in error_msg or 'duplicate' in error_msg or 'table exists' in error_msg:
                     results[stmt[:50] + '...'] = 'skipped (already exists)'
+                # Gracefully handle text index errors (feature may not be available in all IRIS versions)
+                elif 'idx_docs_text_find' in stmt and ('input encountered' in error_msg or 'syntax' in error_msg):
+                    results[stmt[:50] + '...'] = 'skipped (text index not supported in this IRIS version)'
                 else:
                     results[stmt[:50] + '...'] = f'error: {str(e)[:100]}'
 
@@ -120,14 +123,14 @@ CREATE INDEX idx_props_s_key ON rdf_props(s, key);
 CREATE INDEX idx_props_key_val ON rdf_props(key, val);
 
 -- Entity relationships (subject -> predicate -> object)
--- NOTE: IRIS IDENTITY keyword not universally supported - use manual ID management
--- Applications must generate edge_id values (e.g., incrementing counter, UUID hash)
+-- NOTE: Manual ID management required - applications must generate edge_id values
+-- NOTE: JSON datatype not universally available - use VARCHAR for compatibility
 CREATE TABLE IF NOT EXISTS rdf_edges(
   edge_id    BIGINT PRIMARY KEY,
   s          VARCHAR(256) NOT NULL,
   p          VARCHAR(128) NOT NULL,
   o_id       VARCHAR(256) NOT NULL,
-  qualifiers JSON
+  qualifiers VARCHAR(4000)
 );
 CREATE INDEX idx_edges_s_p ON rdf_edges(s, p);
 CREATE INDEX idx_edges_p_oid ON rdf_edges(p, o_id);
