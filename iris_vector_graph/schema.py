@@ -54,8 +54,8 @@ class GraphSchema:
                 results[stmt[:50] + '...'] = 'success'
             except Exception as e:
                 error_msg = str(e).lower()
-                # Gracefully handle "already exists" errors for indexes
-                if 'already exists' in error_msg or 'duplicate' in error_msg:
+                # Gracefully handle "already exists" errors for tables and indexes
+                if 'already exists' in error_msg or 'duplicate' in error_msg or 'table exists' in error_msg:
                     results[stmt[:50] + '...'] = 'skipped (already exists)'
                 else:
                     results[stmt[:50] + '...'] = f'error: {str(e)[:100]}'
@@ -120,7 +120,8 @@ CREATE INDEX idx_props_s_key ON rdf_props(s, key);
 CREATE INDEX idx_props_key_val ON rdf_props(key, val);
 
 -- Entity relationships (subject -> predicate -> object)
-CREATE TABLE IF NOT EXISTS rdf_edges(
+-- NOTE: IRIS doesn't support IF NOT EXISTS with IDENTITY columns
+CREATE TABLE rdf_edges(
   edge_id    BIGINT NOT NULL IDENTITY,
   s          VARCHAR(256) NOT NULL,
   p          VARCHAR(128) NOT NULL,
