@@ -18,13 +18,13 @@ CREATE TABLE IF NOT EXISTS rdf_props(
 CREATE INDEX IF NOT EXISTS idx_props_s_key ON rdf_props(s, key);
 CREATE INDEX IF NOT EXISTS idx_props_key_val ON rdf_props(key, val);
 
+-- IRIS IDENTITY keyword not universally supported - use manual ID management
 CREATE TABLE IF NOT EXISTS rdf_edges(
-  edge_id  BIGINT NOT NULL IDENTITY,
+  edge_id  BIGINT PRIMARY KEY,
   s        VARCHAR(256) NOT NULL,
   p        VARCHAR(128) NOT NULL,
   o_id     VARCHAR(256) NOT NULL,
-  qualifiers JSON,
-  PRIMARY KEY (edge_id)
+  qualifiers JSON
 );
 CREATE INDEX IF NOT EXISTS idx_edges_s_p ON rdf_edges(s, p);
 CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON rdf_edges(p, o_id);
