@@ -19,11 +19,12 @@ CREATE INDEX IF NOT EXISTS idx_props_s_key ON rdf_props(s, key);
 CREATE INDEX IF NOT EXISTS idx_props_key_val ON rdf_props(key, val);
 
 CREATE TABLE IF NOT EXISTS rdf_edges(
-  edge_id  BIGINT IDENTITY PRIMARY KEY,
+  edge_id  BIGINT NOT NULL IDENTITY,
   s        VARCHAR(256) NOT NULL,
   p        VARCHAR(128) NOT NULL,
   o_id     VARCHAR(256) NOT NULL,
-  qualifiers JSON
+  qualifiers JSON,
+  PRIMARY KEY (edge_id)
 );
 CREATE INDEX IF NOT EXISTS idx_edges_s_p ON rdf_edges(s, p);
 CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON rdf_edges(p, o_id);
