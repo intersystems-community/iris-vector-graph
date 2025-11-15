@@ -186,3 +186,53 @@ class TestSchemaContract:
         assert len(matches) == 1, (
             "rdf_edges table MUST have qualifiers JSON column for edge metadata"
         )
+
+    def test_execute_schema_sql_preserves_create_table_statements(self):
+        """
+        Contract: execute_schema_sql() MUST NOT filter out CREATE TABLE statements
+
+        Regression test for v1.1.5 bug where aggressive comment filtering
+        removed CREATE TABLE statements that appeared after comment lines.
+
+        This was a CRITICAL bug that prevented iris-vector-rag from
+        initializing the graph schema.
+        """
+        schema_sql = GraphSchema.get_base_schema_sql()
+
+        # Mock cursor to capture executed statements
+        class MockCursor:
+            def __init__(self):
+                self.executed_statements = []
+
+            def execute(self, sql):
+                self.executed_statements.append(sql)
+
+        mock_cursor = MockCursor()
+
+        # Execute schema SQL
+        results = GraphSchema.execute_schema_sql(mock_cursor, schema_sql)
+
+        # Verify CREATE TABLE statements were executed
+        create_table_count = sum(
+            1 for stmt in mock_cursor.executed_statements
+            if 'CREATE TABLE' in stmt.upper()
+        )
+
+        assert create_table_count >= 6, (
+            f"execute_schema_sql() MUST execute at least 6 CREATE TABLE statements. "
+            f"Found only {create_table_count}. This indicates comment filtering is too aggressive. "
+            f"Tables expected: rdf_labels, rdf_props, rdf_edges, kg_NodeEmbeddings, "
+            f"kg_NodeEmbeddings_optimized, docs"
+        )
+
+        # Verify we didn't accidentally execute comment-only statements
+        for stmt in mock_cursor.executed_statements:
+            # Statement should not be pure comments
+            lines = stmt.strip().split('\n')
+            non_comment_lines = [
+                line for line in lines
+                if line.strip() and not line.strip().startswith('--')
+            ]
+            assert len(non_comment_lines) > 0, (
+                f"Statement should contain actual SQL, not just comments: {stmt[:100]}"
+            )

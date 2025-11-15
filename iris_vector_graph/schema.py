@@ -28,8 +28,25 @@ class GraphSchema:
         """
         results = {}
 
-        # Split into individual statements (simple split on semicolons)
-        statements = [stmt.strip() for stmt in sql.split(';') if stmt.strip() and not stmt.strip().startswith('--')]
+        # Split into individual statements and clean comments
+        raw_statements = sql.split(';')
+        statements = []
+
+        for stmt in raw_statements:
+            # Process line by line to remove comments but keep SQL
+            lines = []
+            for line in stmt.split('\n'):
+                # Remove inline comments
+                if '--' in line:
+                    line = line[:line.index('--')]
+                # Keep non-empty lines
+                if line.strip():
+                    lines.append(line)
+
+            # Reconstruct statement without comments
+            clean_stmt = '\n'.join(lines).strip()
+            if clean_stmt:
+                statements.append(clean_stmt)
 
         for stmt in statements:
             try:
@@ -44,6 +61,32 @@ class GraphSchema:
                     results[stmt[:50] + '...'] = f'error: {str(e)[:100]}'
 
         return results
+
+    @staticmethod
+    def ensure_schema(cursor) -> Dict[str, str]:
+        """
+        Ensure all required graph tables and indexes exist in IRIS database.
+
+        This is the recommended way to initialize the schema, providing better
+        error handling and reporting than execute_schema_sql().
+
+        Args:
+            cursor: Database cursor
+
+        Returns:
+            Dictionary mapping table/index name -> status (success/skipped/error)
+
+        Example:
+            >>> from iris_vector_graph.schema import GraphSchema
+            >>> import iris
+            >>> conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+            >>> cursor = conn.cursor()
+            >>> results = GraphSchema.ensure_schema(cursor)
+            >>> print(results['rdf_labels'])
+            'success'
+        """
+        schema_sql = GraphSchema.get_base_schema_sql()
+        return GraphSchema.execute_schema_sql(cursor, schema_sql)
 
     @staticmethod
     def get_base_schema_sql() -> str:

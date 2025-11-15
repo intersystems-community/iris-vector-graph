@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] - 2025-11-15
+
+### Fixed
+- **CRITICAL: execute_schema_sql() Comment Filtering Bug**: Fixed v1.1.5 regression where aggressive comment filtering prevented CREATE TABLE statements from executing
+  - Bug: Line-by-line filter removed statements starting with `--`, but after splitting by semicolons, multi-line statements with comment headers were treated as "starting with `--`"
+  - Impact: **0 of 6 tables created**, causing PPR to fail in iris-vector-rag 0.5.4 HippoRAG pipeline
+  - Fix: Changed comment filtering to process line-by-line within each statement, removing only comment lines/inline comments while preserving SQL
+  - Location: `iris_vector_graph/schema.py:31-49`
+  - Discovered by: HippoRAG2 team during integration testing with iris-vector-rag 0.5.4
+
+### Added
+- **GraphSchema.ensure_schema() API**: New recommended method for schema initialization with better error handling
+  - Provides cleaner API than calling `execute_schema_sql()` directly
+  - Returns dict mapping table/index names to status (success/skipped/error)
+  - Example usage documented in docstring
+  - Location: `iris_vector_graph/schema.py:65-89`
+
+- **Schema Initialization Integration Tests**: 5 new tests with live IRIS database
+  - `test_ensure_schema_creates_all_tables`: Verifies all 6 tables are created
+  - `test_ensure_schema_idempotent`: Verifies safe re-execution
+  - `test_execute_schema_sql_removes_comments`: Regression test for comment handling
+  - `test_validate_schema_after_initialization`: End-to-end validation
+  - `test_schema_sql_syntax_is_iris_compatible`: IRIS syntax verification
+  - Location: `tests/integration/test_schema_initialization.py`
+
+- **Contract Test for Comment Filtering**: Added regression test to contract suite
+  - `test_execute_schema_sql_preserves_create_table_statements`: Uses mock cursor to verify CREATE TABLE statements are executed
+  - Ensures comment filtering never breaks statement execution
+  - Location: `tests/contract/test_schema_contract.py:190-238`
+  - Total contract tests: 9 (was 8 in v1.1.5)
+
+### Why v1.1.5 Bug Wasn't Caught
+1. Contract tests only validated SQL syntax via regex, didn't execute SQL
+2. Integration tests used `sql/schema.sql` file directly, not Python method
+3. No tests executed `GraphSchema.execute_schema_sql()` to verify statement parsing
+4. v1.1.6 adds integration tests that actually execute the schema initialization code
+
+### Testing
+- ✅ 9/9 contract tests pass (8 existing + 1 new)
+- ✅ 5 new integration tests with live IRIS (pending execution)
+- ✅ Validated by HippoRAG2 team (report pending)
+
 ## [1.1.5] - 2025-11-10
 
 ### Fixed
