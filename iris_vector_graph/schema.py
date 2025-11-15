@@ -12,6 +12,40 @@ class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
 
     @staticmethod
+    def execute_schema_sql(cursor, sql: str) -> Dict[str, str]:
+        """
+        Execute schema SQL with proper error handling for IRIS.
+
+        IRIS doesn't support IF NOT EXISTS for indexes, so we need to handle
+        errors gracefully when indexes already exist.
+
+        Args:
+            cursor: Database cursor
+            sql: Schema SQL string (may contain multiple statements)
+
+        Returns:
+            Dictionary mapping statement -> status (success/skipped/error)
+        """
+        results = {}
+
+        # Split into individual statements (simple split on semicolons)
+        statements = [stmt.strip() for stmt in sql.split(';') if stmt.strip() and not stmt.strip().startswith('--')]
+
+        for stmt in statements:
+            try:
+                cursor.execute(stmt)
+                results[stmt[:50] + '...'] = 'success'
+            except Exception as e:
+                error_msg = str(e).lower()
+                # Gracefully handle "already exists" errors for indexes
+                if 'already exists' in error_msg or 'duplicate' in error_msg:
+                    results[stmt[:50] + '...'] = 'skipped (already exists)'
+                else:
+                    results[stmt[:50] + '...'] = f'error: {str(e)[:100]}'
+
+        return results
+
+    @staticmethod
     def get_base_schema_sql() -> str:
         """
         Returns the core RDF-style schema SQL without domain-specific constraints
@@ -28,8 +62,10 @@ CREATE TABLE IF NOT EXISTS rdf_labels(
   s      VARCHAR(256) NOT NULL,
   label  VARCHAR(128) NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_labels_label_s ON rdf_labels(label, s);
-CREATE INDEX IF NOT EXISTS idx_labels_s_label ON rdf_labels(s, label);
+-- Note: IRIS supports IF NOT EXISTS for tables but not indexes
+-- Drop IF NOT EXISTS from index creation for compatibility
+CREATE INDEX idx_labels_label_s ON rdf_labels(label, s);
+CREATE INDEX idx_labels_s_label ON rdf_labels(s, label);
 
 -- Entity properties (subject -> key/value pairs)
 CREATE TABLE IF NOT EXISTS rdf_props(
@@ -37,8 +73,8 @@ CREATE TABLE IF NOT EXISTS rdf_props(
   key    VARCHAR(128) NOT NULL,
   val    VARCHAR(4000)
 );
-CREATE INDEX IF NOT EXISTS idx_props_s_key ON rdf_props(s, key);
-CREATE INDEX IF NOT EXISTS idx_props_key_val ON rdf_props(key, val);
+CREATE INDEX idx_props_s_key ON rdf_props(s, key);
+CREATE INDEX idx_props_key_val ON rdf_props(key, val);
 
 -- Entity relationships (subject -> predicate -> object)
 CREATE TABLE IF NOT EXISTS rdf_edges(
@@ -48,28 +84,30 @@ CREATE TABLE IF NOT EXISTS rdf_edges(
   o_id       VARCHAR(256) NOT NULL,
   qualifiers JSON  -- Confidence scores, evidence, metadata
 );
-CREATE INDEX IF NOT EXISTS idx_edges_s_p ON rdf_edges(s, p);
-CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON rdf_edges(p, o_id);
-CREATE INDEX IF NOT EXISTS idx_edges_s ON rdf_edges(s);
+CREATE INDEX idx_edges_s_p ON rdf_edges(s, p);
+CREATE INDEX idx_edges_p_oid ON rdf_edges(p, o_id);
+CREATE INDEX idx_edges_s ON rdf_edges(s);
 
 -- Vector embeddings for semantic similarity (configurable dimensions)
 CREATE TABLE IF NOT EXISTS kg_NodeEmbeddings(
   id   VARCHAR(256) PRIMARY KEY,
-  emb  VECTOR(768) NOT NULL  -- Default to 768D, can be modified
+  emb  VECTOR(FLOAT, 768) NOT NULL  -- IRIS syntax: VECTOR(type, dimension)
 );
 
 -- HNSW index for high-performance vector search
-CREATE INDEX IF NOT EXISTS HNSW_NodeEmb ON kg_NodeEmbeddings(emb)
+-- Note: Remove IF NOT EXISTS for IRIS compatibility
+CREATE INDEX HNSW_NodeEmb ON kg_NodeEmbeddings(emb)
   AS HNSW(M=16, efConstruction=100, Distance='Cosine');
 
 -- Optimized vector table for production performance
 CREATE TABLE IF NOT EXISTS kg_NodeEmbeddings_optimized(
   id   VARCHAR(256) PRIMARY KEY,
-  emb  VECTOR(768) NOT NULL
+  emb  VECTOR(FLOAT, 768) NOT NULL  -- IRIS syntax: VECTOR(type, dimension)
 );
 
 -- HNSW index on optimized table
-CREATE INDEX IF NOT EXISTS HNSW_NodeEmb_Optimized ON kg_NodeEmbeddings_optimized(emb)
+-- Note: Remove IF NOT EXISTS for IRIS compatibility
+CREATE INDEX HNSW_NodeEmb_Optimized ON kg_NodeEmbeddings_optimized(emb)
   AS HNSW(M=16, efConstruction=200, Distance='COSINE');
 
 -- Text documents for lexical search
@@ -79,7 +117,7 @@ CREATE TABLE IF NOT EXISTS docs(
 );
 
 -- IRIS text index for %FIND functionality
-CREATE INDEX IF NOT EXISTS idx_docs_text_find ON docs(text)
+CREATE INDEX idx_docs_text_find ON docs(text)
   TYPE BITMAP
   WITH PARAMETERS('type=word,language=en,stemmer=1,stopwords=1');
 """

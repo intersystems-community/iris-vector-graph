@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2025-11-10
+
+### Fixed
+- **CRITICAL: IRIS SQL Schema Compatibility**: Fixed PostgreSQL-incompatible SQL syntax in `GraphSchema.get_base_schema_sql()`
+  - Changed `VECTOR(768)` to `VECTOR(FLOAT, 768)` (IRIS requires type specification)
+  - Removed `IF NOT EXISTS` from CREATE INDEX statements (IRIS doesn't support it for indexes)
+  - Added `execute_schema_sql()` helper for graceful error handling when indexes already exist
+  - Location: `iris_vector_graph/schema.py`
+  - **Impact**: This bug prevented iris-vector-rag from creating graph schema, causing PPR to fail
+
+### Added
+- **Schema Contract Tests**: Created comprehensive test suite to prevent SQL syntax regressions
+  - Tests enforce IRIS-specific SQL syntax requirements
+  - Validates VECTOR datatype syntax, index creation, HNSW syntax
+  - Prevents PostgreSQL-specific syntax from sneaking into codebase
+  - Location: `tests/contract/test_schema_contract.py` (8 contract tests)
+  - **Why this matters**: Previous tests didn't catch the bug because they used `sql/schema.sql` directly
+
+### Why We Didn't Catch This
+The bug existed because:
+1. Integration tests used `sql/schema.sql` directly (which had correct syntax)
+2. `GraphSchema.get_base_schema_sql()` Python method was never tested against live IRIS
+3. iris-vector-rag calls the Python method, not the SQL file
+4. No contract tests enforcing IRIS SQL syntax requirements
+
+**Contract Established**: iris-vector-graph MUST maintain IRIS SQL compatibility for integration with iris-vector-rag
+
 ## [1.1.4] - 2025-11-09
 
 ### Fixed
