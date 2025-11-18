@@ -434,7 +434,7 @@ class StringScaleTestSuite:
 
                 cursor.execute(
                     "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                    [entity_id, "annotation", info['annotation'][:1000]]  # Limit annotation length
+                    [entity_id, "annotation", info['annotation'][:200]]  # Limit to 200 chars for IRIS global subscript limits
                 )
 
                 batch_count += 1
@@ -458,15 +458,20 @@ class StringScaleTestSuite:
         cursor = self.conn.cursor()
 
         try:
+            # Get max edge_id to generate new IDs
+            cursor.execute("SELECT COALESCE(MAX(edge_id), 0) FROM rdf_edges")
+            max_edge_id = cursor.fetchone()[0]
+
             batch_count = 0
-            for protein1, protein2, score in interactions:
+            for idx, (protein1, protein2, score) in enumerate(interactions):
                 source_id = f"protein:{protein1}"
                 target_id = f"protein:{protein2}"
+                edge_id = max_edge_id + idx + 1
 
-                # Insert interaction edge
+                # Insert interaction edge with explicit edge_id
                 cursor.execute(
-                    "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                    [source_id, "interacts_with", target_id, json.dumps({"confidence": score})]
+                    "INSERT INTO rdf_edges (edge_id, s, p, o_id, qualifiers) VALUES (?, ?, ?, ?, ?)",
+                    [edge_id, source_id, "interacts_with", target_id, json.dumps({"confidence": score})]
                 )
 
                 batch_count += 1
