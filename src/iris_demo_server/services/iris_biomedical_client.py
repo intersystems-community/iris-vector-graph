@@ -325,7 +325,7 @@ class IRISBiomedicalClient:
         target: str,
         max_hops: int
     ) -> Optional[List[str]]:
-        """BFS pathfinding between proteins"""
+        """BFS pathfinding between proteins with limits to prevent runaway searches"""
         # Normalize to lowercase for case-insensitive comparison
         source_lower = source.lower()
         target_lower = target.lower()
@@ -335,9 +335,10 @@ class IRISBiomedicalClient:
 
         visited = {source_lower}
         queue = [(source, [source])]
+        max_visited = 500  # Limit exploration to prevent timeouts
 
         for _ in range(max_hops):
-            if not queue:
+            if not queue or len(visited) > max_visited:
                 break
 
             new_queue = []

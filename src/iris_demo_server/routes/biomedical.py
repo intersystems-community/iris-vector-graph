@@ -354,9 +354,9 @@ def register_biomedical_routes(app):
             "top_k": 10
         },
         "metabolic_pathway": {
-            "source_protein_id": "ENSP00000306407",  # GAPDH
-            "target_protein_id": "ENSP00000316649",  # LDHA
-            "max_hops": 2
+            "source_protein_id": "ENSP00000001008",  # FKBP4 (in loaded dataset)
+            "target_protein_id": "ENSP00000179259",  # TIGAR (in loaded dataset)
+            "max_hops": 3
         },
         "drug_target": {
             "query_text": "kinase inhibitor",
