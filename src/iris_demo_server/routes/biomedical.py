@@ -678,8 +678,8 @@ def register_biomedical_routes(app):
                     )
                 ),
 
-                # D3.js force-directed graph
-                Div(id="network-graph", style="margin-top: 1rem;"),
+                # D3.js force-directed graph (unique ID to force refresh)
+                Div(id=f"network-graph-{int(time.time() * 1000)}", cls="network-graph", style="margin-top: 1rem;"),
 
                 # Graph legend
                 Div(style="margin-top: 1rem; padding: 1rem; background: white; border-radius: 6px;")(
@@ -710,15 +710,21 @@ def register_biomedical_routes(app):
                         allLinks: []
                     }};
 
-                    // Clear previous graph
-                    d3.select('#network-graph').selectAll('*').remove();
+                    // Find the network graph container (has unique timestamp ID)
+                    const container = document.querySelector('.network-graph');
+                    if (!container) {{
+                        console.error('Network graph container not found');
+                        return;
+                    }}
 
-                    const container = document.getElementById('network-graph');
+                    // Clear previous content
+                    d3.select(container).selectAll('*').remove();
+
                     const parentWidth = container.parentElement ? container.parentElement.clientWidth : 1200;
                     const width = Math.max(container.clientWidth || parentWidth, 800);
                     const height = 600;
 
-                    const svg = d3.select('#network-graph')
+                    const svg = d3.select(container)
                         .append('svg')
                         .attr('width', width)
                         .attr('height', height)
