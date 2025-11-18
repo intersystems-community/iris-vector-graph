@@ -115,8 +115,12 @@ class IRISBiomedicalClient:
         cursor = self.conn.cursor()
 
         try:
-            # Convert ENSP format to full STRING format (protein:9606.ENSP00000269305)
-            full_protein_id = f"protein:9606.{protein_id}" if not protein_id.startswith("protein:") else protein_id
+            # Convert ENSP format to full STRING format (PROTEIN:9606.ENSP00000269305)
+            # Normalize to uppercase PROTEIN: prefix for consistency with graph data
+            if protein_id.startswith(("protein:", "PROTEIN:")):
+                full_protein_id = protein_id.upper().replace("PROTEIN:", "PROTEIN:")
+            else:
+                full_protein_id = f"PROTEIN:9606.{protein_id}"
 
             # Get center protein details from rdf_props
             cursor.execute("""

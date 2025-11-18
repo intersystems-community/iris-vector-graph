@@ -413,7 +413,7 @@ class StringScaleTestSuite:
         try:
             batch_count = 0
             for string_id, info in protein_data.items():
-                entity_id = f"protein:{string_id}"
+                entity_id = f"PROTEIN:{string_id}"
 
                 # Insert label
                 cursor.execute(
@@ -464,8 +464,8 @@ class StringScaleTestSuite:
 
             batch_count = 0
             for idx, (protein1, protein2, score) in enumerate(interactions):
-                source_id = f"protein:{protein1}"
-                target_id = f"protein:{protein2}"
+                source_id = f"PROTEIN:{protein1}"
+                target_id = f"PROTEIN:{protein2}"
                 edge_id = max_edge_id + idx + 1
 
                 # Insert interaction edge with explicit edge_id
@@ -497,7 +497,7 @@ class StringScaleTestSuite:
         try:
             batch_count = 0
             for string_id, info in protein_data.items():
-                entity_id = f"protein:{string_id}"
+                entity_id = f"PROTEIN:{string_id}"
                 vector = self.processor.generate_protein_vector(info)
                 vector_json = json.dumps(vector)
 
@@ -531,12 +531,13 @@ class StringScaleTestSuite:
 
         try:
             for i, (string_id, info) in enumerate(protein_data.items()):
+                entity_id = f"PROTEIN:{string_id}"  # Use actual protein ID, not loop index
                 # Create searchable document from protein info
                 document_text = f"Protein {info['preferred_name']} with annotation: {info['annotation']}. Protein size: {info['protein_size']} amino acids."
 
                 cursor.execute(
                     "INSERT INTO kg_Documents (node_id, txt) VALUES (?, ?)",
-                    [i, document_text]
+                    [entity_id, document_text]
                 )
 
                 if i % 1000 == 0:
@@ -566,7 +567,7 @@ class StringScaleTestSuite:
                                       min(self.config.num_graph_queries, len(protein_data)))
 
         for i, protein_id in enumerate(sample_proteins):
-            entity_id = f"protein:{protein_id}"
+            entity_id = f"PROTEIN:{protein_id}"
 
             start_time = time.time()
             # Find direct interacting proteins
