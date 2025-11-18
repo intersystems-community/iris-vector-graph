@@ -1257,9 +1257,16 @@ def register_biomedical_routes(app):
                                 item
                                 for i, protein_id in enumerate(pathway.path)
                                 for item in [
-                                    # Protein node
+                                    # Protein node (clickable to view network)
                                     Div(style="flex-shrink: 0;")(
-                                        Div(style="background: #11998e; color: white; padding: 0.75rem 1rem; border-radius: 6px; font-weight: 600; text-align: center;")(
+                                        Div(
+                                            style="background: #11998e; color: white; padding: 0.75rem 1rem; border-radius: 6px; font-weight: 600; text-align: center; cursor: pointer; transition: transform 0.2s;",
+                                            hx_get=f"/api/bio/network/{protein_id}?expand_depth=1",
+                                            hx_target="#viz",
+                                            hx_swap="outerHTML",
+                                            onmouseover="this.style.transform='scale(1.05)'",
+                                            onmouseout="this.style.transform='scale(1)'"
+                                        )(
                                             Div(style="font-size: 0.75rem; opacity: 0.8;")("Protein"),
                                             Div(style="font-size: 0.875rem; font-family: monospace;")(
                                                 protein_id if i < len(pathway.intermediate_proteins) else protein_id
