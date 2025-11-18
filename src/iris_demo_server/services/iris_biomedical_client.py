@@ -133,9 +133,12 @@ class IRISBiomedicalClient:
             if not props:
                 raise ValueError(f"Protein {protein_id} not found")
 
+            # Extract ENSP ID for consistent node_dict keys and IDs
+            center_ensp = full_protein_id.split(".")[-1]  # PROTEIN:9606.ENSP00000001008 -> ENSP00000001008
+
             center_protein = Protein(
-                protein_id=protein_id,
-                name=props.get("preferred_name", protein_id),
+                protein_id=center_ensp,  # Use ENSP ID for consistency with edges
+                name=props.get("preferred_name", center_ensp),
                 organism="Homo sapiens",
                 function_description=props.get("annotation", "")
             )
@@ -150,8 +153,8 @@ class IRISBiomedicalClient:
 
             edges_data = cursor.fetchall()
 
-            # Build nodes and edges
-            nodes_dict = {protein_id: center_protein}
+            # Build nodes and edges - use ENSP ID as key for consistency
+            nodes_dict = {center_ensp: center_protein}
             edges = []
 
             # Collect unique protein IDs to fetch
@@ -223,9 +226,16 @@ class IRISBiomedicalClient:
         cursor = self.conn.cursor()
 
         try:
-            # Convert to full STRING format
-            source_full = f"protein:9606.{query.source_protein_id}" if not query.source_protein_id.startswith("protein:") else query.source_protein_id
-            target_full = f"protein:9606.{query.target_protein_id}" if not query.target_protein_id.startswith("protein:") else query.target_protein_id
+            # Convert to full STRING format (uppercase PROTEIN: to match database)
+            if query.source_protein_id.startswith(("protein:", "PROTEIN:")):
+                source_full = query.source_protein_id.upper().replace("PROTEIN:", "PROTEIN:")
+            else:
+                source_full = f"PROTEIN:9606.{query.source_protein_id}"
+
+            if query.target_protein_id.startswith(("protein:", "PROTEIN:")):
+                target_full = query.target_protein_id.upper().replace("PROTEIN:", "PROTEIN:")
+            else:
+                target_full = f"PROTEIN:9606.{query.target_protein_id}"
 
             # BFS pathfinding
             path = await self._bfs_path(
@@ -367,7 +377,7 @@ class IRISBiomedicalClient:
             function_desc = txt[:200]
 
         return Protein(
-            protein_id=f"ENSP{str(node_id).zfill(11)}",  # Convert node_id to ENSEMBL format
+            protein_id=node_id,  # Use the actual node_id from database (already in correct format)
             name=name,
             organism="Homo sapiens",  # STRING data is human proteins
             function_description=function_desc
