@@ -127,7 +127,7 @@ def test_functional_index_basic_workflow(iris_connection, clean_test_data):
     assert in_b_a is not None, "^PPR(in, TEST_B, TEST_A) should exist"
 
     # Step 3: Compute PPR using Functional Index
-    from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+    from iris_vector_graph.ppr_functional_index import compute_ppr_functional_index
 
     scores = compute_ppr_functional_index(
         iris_connection,
@@ -294,7 +294,7 @@ def test_ppr_correctness_vs_baseline(iris_connection, clean_test_data):
     iris_connection.commit()
 
     # Compute PPR using Functional Index
-    from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+    from iris_vector_graph.ppr_functional_index import compute_ppr_functional_index
 
     scores_fi = compute_ppr_functional_index(
         iris_connection,
@@ -305,7 +305,7 @@ def test_ppr_correctness_vs_baseline(iris_connection, clean_test_data):
     )
 
     # Compute PPR using Pure Python baseline (via engine)
-    from iris_vector_graph_core.engine import IRISGraphEngine
+    from iris_vector_graph.engine import IRISGraphEngine
 
     engine = IRISGraphEngine(iris_connection)
     scores_baseline = engine.kg_PERSONALIZED_PAGERANK(
@@ -356,7 +356,7 @@ def test_sink_node_handling(iris_connection, clean_test_data):
     iris_connection.commit()
 
     # Compute PPR
-    from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+    from iris_vector_graph.ppr_functional_index import compute_ppr_functional_index
 
     scores = compute_ppr_functional_index(
         iris_connection,
@@ -392,7 +392,7 @@ def test_invalid_seed_entity_error(iris_connection, clean_test_data):
                    ['TEST_A', 'self_loop', 'TEST_A'])
     iris_connection.commit()
 
-    from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+    from iris_vector_graph.ppr_functional_index import compute_ppr_functional_index
 
     # Try to compute PPR with non-existent seed
     with pytest.raises(ValueError, match="Seed entities not found"):

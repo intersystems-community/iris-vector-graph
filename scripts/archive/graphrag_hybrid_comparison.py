@@ -23,10 +23,10 @@ from typing import Dict, Any, List, Tuple
 import iris
 
 # Import iris_vector_graph_core components
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
-from iris_vector_graph_core.text_search import TextSearchEngine
-from iris_vector_graph_core.vector_utils import VectorOptimizer
+from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.fusion import HybridSearchFusion
+from iris_vector_graph.text_search import TextSearchEngine
+from iris_vector_graph.vector_utils import VectorOptimizer
 
 logger = logging.getLogger(__name__)
 

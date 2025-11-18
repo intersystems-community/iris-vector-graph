@@ -8,8 +8,8 @@ Includes specialized entity types, predicates, and search methods for biomedical
 
 import logging
 from typing import List, Tuple, Optional, Dict, Any
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
+from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.fusion import HybridSearchFusion
 
 logger = logging.getLogger(__name__)
 

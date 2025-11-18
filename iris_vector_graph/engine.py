@@ -26,8 +26,24 @@ class IRISGraphEngine:
     """
 
     def __init__(self, connection):
-        """Initialize with IRIS database connection"""
-        self.conn = connection
+        """
+        Initialize with IRIS database connection or ConnectionManager.
+
+        Args:
+            connection: Either a direct IRIS connection (iris.connect()) or
+                       a ConnectionManager object with .get_connection() method
+        """
+        # Handle both direct connections and ConnectionManager
+        if hasattr(connection, 'get_connection'):
+            # ConnectionManager from iris-vector-rag
+            self.connection_manager = connection
+            self.conn = connection.get_connection()
+            self._is_managed_connection = True
+        else:
+            # Direct IRIS connection
+            self.connection_manager = None
+            self.conn = connection
+            self._is_managed_connection = False
 
     # Vector Search Operations
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
@@ -419,7 +435,7 @@ class IRISGraphEngine:
 
         if use_functional_index:
             try:
-                from iris_vector_graph_core.ppr_functional_index import compute_ppr_functional_index
+                from iris_vector_graph.ppr_functional_index import compute_ppr_functional_index
                 logger.info(f"Using Functional Index PPR for {len(seed_entities)} seed entities")
                 scores = compute_ppr_functional_index(
                     self.conn,
@@ -437,7 +453,7 @@ class IRISGraphEngine:
                 logger.warning(f"Functional Index PPR failed ({e}), falling back to Pure Python")
 
         # Fallback: Pure Python implementation
-        from iris_vector_graph_core.ppr import (
+        from iris_vector_graph.ppr import (
             validate_ppr_inputs,
             get_all_graph_nodes,
             get_outdegrees,

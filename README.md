@@ -155,7 +155,7 @@ open http://localhost:8200/bio
 **Files**:
 - `biomedical/` - Protein queries, pathway examples
 - `sql/schema.sql` - Graph schema (nodes, edges, properties, embeddings)
-- `iris_vector_graph_core/` - Core Python graph engine
+- `iris_vector_graph/` - Core Python graph engine
 - `docker-compose.acorn.yml` - ACORN-1 with HNSW optimization
 
 **Quick Links**:
@@ -268,7 +268,7 @@ External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
 - **Temporal Views**: Pre-filter current versions
 - **Foreign Key Constraints**: Referential integrity across graph
 - **HNSW Vector Index**: 100x faster than flat search (ACORN-1)
-- **PPR Functional Index**: ObjectScript `$LISTBUILD` + `$LISTNEXT` for 8.9x faster PageRank at scale (10K nodes: 184ms vs 1,631ms Python)
+- **PPR Functional Index**: ObjectScript adjacency maintenance with real-time graph synchronization (see [PPR Performance](#personalized-pagerank-ppr) section)
 
 ---
 
@@ -310,7 +310,7 @@ External Deployment (DEFAULT)        Embedded Deployment (OPTIONAL)
 Compute entity importance scores for knowledge graph ranking:
 
 ```python
-from iris_vector_graph_core import IRISGraphEngine
+from iris_vector_graph import IRISGraphEngine
 import iris
 
 # Connect to IRIS
@@ -335,31 +335,120 @@ docs = engine.kg_PPR_RANK_DOCUMENTS(
 # Results: [{document_id, score, top_entities, entity_count}, ...]
 ```
 
-**Performance**: <25ms for 1K entities, ~200ms for 10K entities (Python implementation)
+**Performance**:
+- **Pure Python**: <25ms (1K nodes), ~200ms (10K nodes)
+- **PPR Functional Index**: Real-time adjacency list maintenance synchronized with SQL DML
+- **Implementation Status**: Production-ready with 12/12 integration tests passing
+
+**Architecture Notes**:
+- **Pure Python** (current): SQL extraction + in-memory computation - best for current scale
+- **Functional Index**: ObjectScript-based adjacency maintenance (deployed, works correctly)
+- **Future**: Native ObjectScript PPR for sub-millisecond computation at 100K+ scale
+
+See [PPR Optimization Documentation](#ppr-performance--implementation) for detailed performance analysis and implementation journey.
 
 ---
 
 ## Documentation
 
-### Getting Started
-- [Fraud Detection Quick Start](examples/bitemporal/README.md)
-- [Biomedical Graph Setup](biomedical/README.md)
-- [Installation Guide](docs/setup/INSTALLATION.md)
+### 📚 Getting Started
 
-### Architecture & Design
-- [System Architecture](docs/architecture/ACTUAL_SCHEMA.md)
-- [IRIS-Native Features](docs/architecture/IRIS_NATIVE.md)
-- [Performance Benchmarks](docs/performance/)
+**Quick Starts**:
+- [Fraud Detection (Financial Services)](examples/bitemporal/README.md) - Real-time fraud scoring, bitemporal audit trails
+- [Biomedical Graph Setup](docs/biomedical-demo-setup.md) - STRING protein data loading, interactive demo
+- [Installation Guide](docs/setup/INSTALLATION.md) - Docker setup, Python environment, database initialization
+- [Quick Start Guide](docs/setup/QUICKSTART.md) - Get running in 5 minutes
 
-### API Reference
-- [REST API](docs/api/REST_API.md)
-- [Python SDK](iris_vector_graph_core/README.md)
-- [SQL Procedures](sql/operators.sql)
+**Setup Guides**:
+- [UV Package Manager Setup](docs/setup/UV_SETUP.md) - Modern Python dependency management
+- [IRIS Password Reset](docs/setup/IRIS_PASSWORD_RESET.md) - Fix expired password issues
+- [Data Formats](docs/setup/DATA_FORMATS.md) - RDF, JSON-LD, and graph data formats
 
-### Examples
-- [Bitemporal Fraud Detection](examples/bitemporal/)
-- [Protein Interaction Networks](biomedical/)
-- [Migration to NodePK](scripts/migrations/)
+### 🏗️ Architecture & Design
+
+**Core Architecture**:
+- [System Architecture](docs/architecture/ACTUAL_SCHEMA.md) - NodePK schema, vector search, graph traversal
+- [Embedded Python Architecture](docs/architecture/embedded_python_architecture.md) - In-database Python execution patterns
+- [Generic Graph API Design](docs/architecture/generic_graph_api_design.md) - Domain-agnostic GraphQL patterns
+- [Query Patterns](docs/architecture/QUERY_PATTERNS.md) - Optimized SQL patterns for graph operations
+
+**Advanced Topics**:
+- [Cypher-to-SQL Translation](docs/architecture/cypher_to_sql_translation.md) - openCypher parser and optimizer
+- [Competitive Advantages](docs/architecture/COMPETITIVE_ADVANTAGES.md) - vs. Neo4j, Neptune, TigerGraph
+- [Graph Primitives](docs/GRAPH_PRIMITIVES.md) - BFS, DFS, shortest path, connected components
+- [Advanced SQL Graph Patterns](docs/advanced-graph-sql-patterns.md) - Window functions, recursive CTEs
+
+### ⚡ Performance & Optimization
+
+**Benchmarks & Analysis**:
+- [Performance Benchmarks](docs/performance/BENCHMARKS.md) - Vector search, graph queries, hybrid search
+- [ACORN-1 vs Community](docs/performance/ACORN-1_vs_Community_Performance_Comparison.md) - HNSW optimization results
+- [NodePK Benchmark Results](docs/performance/nodepk_benchmark_results.md) - Production-scale projections
+- [Bottleneck Analysis](docs/performance/performance_bottleneck_analysis.md) - Query optimization guide
+- [Biomedical Datasets](docs/performance/BIOMEDICAL_DATASETS.md) - STRING DB, UniProt, PubMed
+
+**PPR Performance & Implementation**:
+- [PPR Performance Journey](docs/ppr-optimization/ppr-performance-optimization-journey.md) - Complete optimization history
+- [PPR Architecture Decision](docs/ppr-optimization/ppr-architecture-decision.md) - Pure Python vs Embedded vs ObjectScript
+- [PPR Functional Index](docs/ppr-optimization/ppr-functional-index-deployment-summary.md) - Real-time adjacency maintenance
+- [HippoRAG2 Integration](docs/ppr-optimization/hipporag2-ppr-functional-index.md) - Multi-hop reasoning with PPR
+
+**Scale Testing**:
+- [Fraud Detection Scale Testing](docs/FRAUD_SCALE_TESTING.md) - 130M transactions, <10ms queries
+- [Graph Analytics Roadmap](docs/performance/graph_analytics_roadmap.md) - Future optimization plans
+
+### 🔌 API Reference
+
+**REST APIs**:
+- [REST API Documentation](docs/api/REST_API.md) - `/api/cypher`, `/fraud/score`, `/graphql` endpoints
+- Fraud API Server - See `src/iris_fraud_server/` for FastAPI fraud scoring implementation
+
+**Python SDK**:
+- [Python SDK Overview](docs/python/PYTHON_SDK.md) - `iris_vector_graph` module documentation
+- [SQL Procedures](sql/operators.sql) - `kg_KNN_VEC`, `kg_RRF_FUSE`, `kg_GRAPH_PATH`, `kg_PERSONALIZED_PAGERANK`
+- Core Module Documentation - See inline docstrings in `iris_vector_graph/` package
+
+### 🧪 Examples & Use Cases
+
+**Industry Examples**:
+- [Bitemporal Fraud Detection](examples/bitemporal/) - Financial services, audit trails, late arrival detection
+- [Biomedical Protein Networks](docs/biomedical-demo-setup.md) - STRING DB, pathway analysis, drug discovery
+- [Caregiver Routing Demo](docs/examples/CAREGIVER_ROUTING_DEMO.md) - Healthcare TSP optimization
+
+**Algorithm Demonstrations**:
+- [TSP Analysis](docs/algorithms/TSP_ANALYSIS.md) - Python (NetworkX) vs ObjectScript implementation
+- [TSP Implementation Summary](docs/algorithms/TSP_IMPLEMENTATION_SUMMARY.md) - Performance benchmarks
+
+### 🚀 Progress & Roadmap
+
+**Implementation Status**:
+- [GraphQL Implementation](docs/progress/graphql_implementation_status.md) - Strawberry GraphQL with DataLoaders
+- [openCypher Complete](docs/progress/opencypher_implementation_complete.md) - Pattern matching, Cypher-to-SQL
+- [Phase 2 Refactoring](docs/progress/phase2_refactoring_summary.md) - NodePK migration summary
+
+**Future Development**:
+- [Enterprise Roadmap](docs/ENTERPRISE_ROADMAP.md) - Multi-tenancy, RBAC, compliance
+- [Phase 2: openCypher Implementation](docs/roadmap/phase_2_opencypher_implementation.md)
+- [GraphQL Endpoint Design](docs/roadmap/graphql_endpoint_design.md)
+
+### 📋 Design Documents
+
+**Research & Prototypes**:
+- [Cypher Parser Prototype](docs/design/cypher_parser_prototype.md) - MVP parser design
+- [SQLAlchemy + GraphQL Integration](docs/research/sqlalchemy_graphql_integration.md)
+- [Benchmarking Technical Spec](docs/benchmarking/BENCHMARKING_TECHNICAL_SPEC.md)
+- [Competitive Benchmarking Design](docs/benchmarking/COMPETITIVE_BENCHMARKING_DESIGN.md)
+
+### 🛠️ Developer Resources
+
+**Development Guides**:
+- [CLAUDE.md](CLAUDE.md) - Claude Code agent development guidance
+- [IRIS Embedded Python Lessons](docs/IRIS_EMBEDDED_PYTHON_LESSONS.md) - Lessons learned from embedded Python development
+- [DevTester Enhancements](docs/iris-devtester-enhancements.md) - Testing framework improvements
+
+**Community Edition**:
+- [Fraud Detection (Community Edition)](docs/FRAUD_COMMUNITY_EDITION.md) - 30M transaction limits
+- [Financial Services Summary](docs/FRAUD_FINANCIAL_SERVICES_SUMMARY.md) - Production deployment guide
 
 ---
 
@@ -376,7 +465,7 @@ examples/
 
 biomedical/               # Life sciences (proteins, pathways)
 
-iris_vector_graph_core/   # Python graph engine
+iris_vector_graph/   # Python graph engine
 
 src/iris_fraud_server/    # FastAPI fraud API
 

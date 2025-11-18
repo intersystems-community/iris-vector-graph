@@ -32,8 +32,8 @@ from examples.domains.biomedical.loaders import (
 # Import openCypher router
 from api.routers.cypher import router as cypher_router
 
-# Import fraud scoring router
-from api.routers.fraud import router as fraud_router
+# Import fraud scoring router (commented out - not yet implemented)
+# from api.routers.fraud import router as fraud_router
 
 
 # Database connection configuration
@@ -157,7 +157,7 @@ app.include_router(graphql_app, prefix="/graphql")
 app.include_router(cypher_router)
 
 # Mount fraud scoring endpoint
-app.include_router(fraud_router)
+# app.include_router(fraud_router)  # Commented out - fraud router not yet implemented
 
 
 @app.get("/")

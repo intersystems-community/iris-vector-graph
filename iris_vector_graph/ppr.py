@@ -155,8 +155,9 @@ def get_incoming_edges(conn, node_ids: Set[str]) -> dict:
         node_ids_set = set(node_ids)  # Convert to set for O(1) lookup
 
         for source, target in cursor.fetchall():
-            # Only process edges where target is in our requested nodes
-            if target in node_ids_set:
+            # Only process edges where BOTH source and target are in our graph
+            # This handles cases where edges reference nodes not in nodes table
+            if target in node_ids_set and source in node_ids_set:
                 if target not in incoming:
                     incoming[target] = []
                 incoming[target].append(source)

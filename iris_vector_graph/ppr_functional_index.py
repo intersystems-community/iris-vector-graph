@@ -83,6 +83,14 @@ def compute_ppr_functional_index(
     if iris is None:
         raise RuntimeError("IRIS module not available. Install intersystems_irispython.")
 
+    # Check if createIRIS() is available (requires intersystems-irispython >= 5.3.0)
+    if not hasattr(iris, 'createIRIS'):
+        raise RuntimeError(
+            "iris.createIRIS() not available. "
+            "Upgrade intersystems-irispython to 5.3.0+ or use Pure Python PPR. "
+            "Current version may be too old for Functional Index PPR."
+        )
+
     # Create IRIS object for Global access
     irispy = iris.createIRIS(conn)
 

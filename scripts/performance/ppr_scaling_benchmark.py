@@ -15,7 +15,7 @@ import json
 import time
 from typing import List, Dict, Tuple
 import iris
-from iris_vector_graph_core.ppr_impl import compute_ppr
+from iris_vector_graph.ppr_impl import compute_ppr
 
 def generate_test_graph(num_nodes: int, avg_degree: int = 5) -> List[Tuple[str, str]]:
     """Generate a random graph for testing"""

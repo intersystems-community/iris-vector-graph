@@ -884,7 +884,7 @@ wheels = [
 
 [[package]]
 name = "iris-vector-graph"
-version = "1.0.0"
+version = "1.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "faker" },

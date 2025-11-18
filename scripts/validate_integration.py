@@ -23,9 +23,9 @@ if rag_templates_path.exists():
     sys.path.insert(0, str(rag_templates_path))
 
 import iris
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
-from iris_vector_graph_core.vector_utils import VectorOptimizer
+from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.fusion import HybridSearchFusion
+from iris_vector_graph.vector_utils import VectorOptimizer
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
