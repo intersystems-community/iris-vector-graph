@@ -36,20 +36,17 @@ Same IRIS platform. Different domains. Powerful results.
 #### External Mode (Default - Simpler)
 
 ```bash
-# 1. Start IRIS database
-docker-compose up -d
+# 1. Start IRIS database (Community Edition with fraud schema)
+docker-compose -f docker-compose.fraud-community.yml up -d
 
 # 2. Install Python dependencies
 pip install iris-vector-graph        # Core features
 pip install iris-vector-graph[ml]    # + Machine learning (fraud scoring models)
 
-# 3. Load fraud schema
-docker exec -i iris /usr/irissys/bin/irissession IRIS -U USER < sql/fraud/schema.sql
+# 3. Wait for IRIS startup (~30 seconds), then connect external fraud API
+PYTHONPATH=src IRIS_PORT=51972 python -m iris_fraud_server
 
-# 4. Start fraud API (external Python)
-PYTHONPATH=src python -m iris_fraud_server
-
-# Test fraud scoring API
+# Test fraud scoring API (external server on :8000)
 curl -X POST http://localhost:8000/fraud/score \
   -H 'Content-Type: application/json' \
   -d '{"mode":"MLP","payer":"acct:test","device":"dev:laptop","amount":1000.0}'
@@ -82,22 +79,24 @@ curl -X POST http://localhost:8100/fraud/score \
 #### External Mode (Default - Simpler)
 
 ```bash
-# 1. Start IRIS database
-docker-compose up -d
+# Prerequisites: Running IRIS instance (any docker-compose or external IRIS)
+# Default connection: localhost:1972, namespace USER, user _SYSTEM, password SYS
 
-# 2. Install dependencies
+# 1. Install dependencies (using uv package manager)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync && source .venv/bin/activate
 
-# 3. Load STRING protein database (10K proteins, ~1 minute)
-python scripts/performance/string_db_scale_test.py --max-proteins 10000
+# 2. Load STRING protein database (1K proteins for quick demo, ~30 seconds)
+IRIS_PORT=1972 python scripts/performance/string_db_scale_test.py --max-proteins 1000
 
-# 4. Start interactive demo server (external Python)
-PYTHONPATH=src python -m iris_demo_server.app
+# 3. Start interactive demo server (external Python)
+PYTHONPATH=src IRIS_PORT=1972 python -m iris_demo_server.app
 
-# 5. Open browser
+# 4. Open browser
 open http://localhost:8200/bio
 ```
+
+**Configuration**: Use `IRIS_PORT`, `IRIS_HOST`, `IRIS_NAMESPACE`, `IRIS_USER`, and `IRIS_PASSWORD` environment variables to connect to your IRIS instance.
 
 #### Embedded Mode (Advanced - Optional)
 
