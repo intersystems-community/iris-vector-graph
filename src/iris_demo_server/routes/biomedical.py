@@ -701,24 +701,27 @@ def register_biomedical_routes(app):
 
                 # D3.js script to render uber-cool interactive graph (T018 + T019)
                 Script(NotStr(f"""
-                    const data = {json.dumps(graph_data)};
+                    (function() {{
+                        const data = {json.dumps(graph_data)};
 
-                    // Global state for node expansion
-                    window.networkState = window.networkState || {{
-                        expandedNodes: new Set(),
-                        allNodes: new Map(),
-                        allLinks: []
-                    }};
+                        // Global state for node expansion
+                        window.networkState = window.networkState || {{
+                            expandedNodes: new Set(),
+                            allNodes: new Map(),
+                            allLinks: []
+                        }};
 
-                    // Find the network graph container (has unique timestamp ID)
-                    const container = document.querySelector('.network-graph');
-                    if (!container) {{
-                        console.error('Network graph container not found');
-                        return;
-                    }}
+                        // Wait for DOM to be ready
+                        function renderNetwork() {{
+                            // Find the network graph container (has unique timestamp ID)
+                            const container = document.querySelector('.network-graph');
+                            if (!container) {{
+                                console.error('Network graph container not found');
+                                return;
+                            }}
 
-                    // Clear previous content
-                    d3.select(container).selectAll('*').remove();
+                            // Clear previous content
+                            d3.select(container).selectAll('*').remove();
 
                     const parentWidth = container.parentElement ? container.parentElement.clientWidth : 1200;
                     const width = Math.max(container.clientWidth || parentWidth, 800);
@@ -1174,6 +1177,11 @@ def register_biomedical_routes(app):
                         d.fx = null;
                         d.fy = null;
                     }}
+                }} // Close renderNetwork() function
+
+                // Execute the rendering
+                renderNetwork();
+            }})(); // Close IIFE
                 """))
             )
 
