@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7] - 2025-11-23
+
+### Fixed
+- **CRITICAL: PPR Connection Wrapper Compatibility**: Fixed Functional Index PPR fallback to Pure Python PPR when using wrapped connections
+  - Bug: `iris.createIRIS()` expects raw `irissdk.IRISConnection` but received wrapped connection objects (e.g., from `ConnectionManager`)
+  - Error: `TypeError: argument 1 must be irissdk.IRISConnection, not IRISConnection`
+  - Impact: Functional Index PPR was falling back to Pure Python PPR (8.9x slower: 1,631ms vs 184ms for 10K nodes)
+  - Solution: Added connection unwrapping logic that handles both raw and wrapped connections via `_connection` or `connection` attributes
+  - Files Modified:
+    - `iris_vector_graph/ppr_functional_index.py` (lines 94-109)
+    - `iris_vector_graph/ppr_globals.py` (lines 27-34, 85-92)
+  - Integration: Now compatible with `iris-vector-rag` ConnectionManager and other connection wrappers
+  - Reported by: HippoRAG team during integration testing
+
+### Added
+- **Connection Wrapper Detection**: Automatic detection and unwrapping of connection wrapper objects
+  - Checks for `_connection` attribute (preferred pattern)
+  - Checks for `connection` attribute (alternative pattern)
+  - Provides clear error message if unwrapping fails with guidance for wrapper implementations
+- **PPR Integration Documentation**: Added HIPPORAG_CONNECTION_FIX.md documenting the fix and integration requirements
+
+### Documentation
+- **Documentation Review**: Comprehensive review of all documentation files
+  - Created `docs/DOCUMENTATION_REVIEW.md` with prioritized action items
+  - Identified outdated module name references (`iris_vector_graph_core` → `iris_vector_graph`)
+  - Identified port configuration inconsistencies across Docker setups
+  - Identified outdated performance benchmarks in PPR documentation
+
+### Performance
+- **Functional Index PPR Performance**: With connection wrapper fix, Functional Index PPR delivers:
+  - 10K nodes: 184ms (vs 1,631ms Pure Python) - **8.9x faster**
+  - Enables sub-200ms PPR computation for HippoRAG entity ranking
+
 ## [1.1.6] - 2025-11-15
 
 ### Fixed
