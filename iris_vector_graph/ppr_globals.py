@@ -23,7 +23,15 @@ def build_ppr_global(conn):
     - ^PPR("outdeg", source) = count
     """
     cursor = conn.cursor()
-    irispy = iris.createIRIS(conn)
+
+    # Handle both raw irissdk.IRISConnection and wrapped connection objects
+    raw_conn = conn
+    if hasattr(conn, '_connection'):  # Wrapped connection (e.g., from ConnectionManager)
+        raw_conn = conn._connection
+    elif hasattr(conn, 'connection'):  # Alternative wrapper pattern
+        raw_conn = conn.connection
+
+    irispy = iris.createIRIS(raw_conn)
 
     # Clear existing Global
     irispy.kill("PPR")
@@ -74,7 +82,14 @@ def compute_ppr_globals(
     if not (0.0 <= damping_factor <= 1.0):
         raise ValueError(f"damping_factor must be in [0.0, 1.0], got {damping_factor}")
 
-    irispy = iris.createIRIS(conn)
+    # Handle both raw irissdk.IRISConnection and wrapped connection objects
+    raw_conn = conn
+    if hasattr(conn, '_connection'):  # Wrapped connection (e.g., from ConnectionManager)
+        raw_conn = conn._connection
+    elif hasattr(conn, 'connection'):  # Alternative wrapper pattern
+        raw_conn = conn.connection
+
+    irispy = iris.createIRIS(raw_conn)
 
     # Get all nodes from Global (using iterator)
     all_nodes = []

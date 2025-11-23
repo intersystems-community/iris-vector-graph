@@ -92,7 +92,21 @@ def compute_ppr_functional_index(
         )
 
     # Create IRIS object for Global access
-    irispy = iris.createIRIS(conn)
+    # Handle both raw irissdk.IRISConnection and wrapped connection objects
+    raw_conn = conn
+    if hasattr(conn, '_connection'):  # Wrapped connection (e.g., from ConnectionManager)
+        raw_conn = conn._connection
+    elif hasattr(conn, 'connection'):  # Alternative wrapper pattern
+        raw_conn = conn.connection
+
+    try:
+        irispy = iris.createIRIS(raw_conn)
+    except TypeError as e:
+        raise TypeError(
+            f"Failed to create IRIS object. Expected irissdk.IRISConnection, got {type(raw_conn)}. "
+            f"If using a connection wrapper, ensure it exposes the raw connection via _connection or connection attribute. "
+            f"Original error: {e}"
+        )
 
     # Step 1: Build node set from ^PPR("deg", *) and ^PPR("in", *, *)
     # Using intersystems_irispython iterator API
