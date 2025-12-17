@@ -31,6 +31,7 @@ CREATE TABLE rdf_edges(
 CREATE INDEX idx_edges_s_p ON rdf_edges(s, p);
 CREATE INDEX idx_edges_p_oid ON rdf_edges(p, o_id);
 CREATE INDEX idx_edges_s ON rdf_edges(s);
+CREATE INDEX idx_edges_oid ON rdf_edges(o_id);  -- For bidirectional PageRank reverse edge lookups
 
 -- Vector embeddings for nodes (768-dimensional)
 CREATE TABLE kg_NodeEmbeddings(

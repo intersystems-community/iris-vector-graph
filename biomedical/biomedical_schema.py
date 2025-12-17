@@ -7,7 +7,7 @@ Builds on the base RDF schema with biomedical entity types and relationships.
 """
 
 from typing import Dict, List, Optional
-from iris_vector_graph_core.schema import GraphSchema
+from iris_vector_graph.schema import GraphSchema
 
 
 class BiomedicalSchema(GraphSchema):

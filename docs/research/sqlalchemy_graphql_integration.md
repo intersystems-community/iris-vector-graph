@@ -230,7 +230,7 @@ Query Execution (iris.connect() - Always)
 
 **1. Define SQLAlchemy Models (schema definition)**:
 ```python
-# iris_vector_graph_core/models.py
+# iris_vector_graph/models.py
 from sqlalchemy import Table, Column, String, Integer, ForeignKey, DateTime
 from sqlalchemy_iris import IRISVector
 from sqlalchemy.ext.declarative import declarative_base
@@ -285,7 +285,7 @@ def sqlalchemy_to_strawberry(row, model):
 **With Hybrid Approach**:
 ```python
 # api/gql/types.py
-from iris_vector_graph_core.models import NodeEmbedding
+from iris_vector_graph.models import NodeEmbedding
 from sqlalchemy import select, desc
 
 @strawberry.field
@@ -353,7 +353,7 @@ async def similar(
 
 ### Phase 1: Schema Models (Low Risk, High Value)
 1. **Create SQLAlchemy models** for existing tables:
-   - `iris_vector_graph_core/models.py`
+   - `iris_vector_graph/models.py`
    - Define: Node, NodeEmbedding, RDFEdge, RDFLabel, RDFProp
    - Use IRISVector for embedding column
 
@@ -399,7 +399,7 @@ async def similar(
 
 **1. Create models.py**:
 ```python
-# iris_vector_graph_core/models.py
+# iris_vector_graph/models.py
 from sqlalchemy import create_engine, Column, String, Integer, ForeignKey, DateTime, func
 from sqlalchemy_iris import IRISVector
 from sqlalchemy.ext.declarative import declarative_base
@@ -451,7 +451,7 @@ class RDFEdge(Base):
 **2. Use in DataLoader**:
 ```python
 # api/gql/loaders.py
-from iris_vector_graph_core.models import RDFProperty
+from iris_vector_graph.models import RDFProperty
 
 class PropertyLoader(DataLoader):
     async def batch_load_fn(self, keys: List[str]) -> List[Dict[str, str]]:
@@ -474,7 +474,7 @@ class PropertyLoader(DataLoader):
 **3. Schema validation**:
 ```python
 # api/gql/mutations.py
-from iris_vector_graph_core.models import Node, NodeEmbedding
+from iris_vector_graph.models import Node, NodeEmbedding
 
 def validate_protein_input(input_data):
     """Validate mutation input against SQLAlchemy schema"""
@@ -498,7 +498,7 @@ def validate_protein_input(input_data):
 **Recommendation**: Adopt **Hybrid Approach**
 
 **Immediate Actions**:
-1. ✅ Create `iris_vector_graph_core/models.py` with SQLAlchemy models
+1. ✅ Create `iris_vector_graph/models.py` with SQLAlchemy models
 2. ✅ Use models for schema introspection in DataLoaders
 3. ✅ Add Alembic for schema migrations
 4. ❌ Do NOT use SQLAlchemy ORM sessions for query execution

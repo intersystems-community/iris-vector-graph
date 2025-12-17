@@ -3,11 +3,11 @@
 Standalone GraphRAG vs HybridGraphRAG Comparison for graph-ai project
 
 This script demonstrates the performance improvements achieved by HybridGraphRAG
-with iris_vector_graph_core using the working graph-ai setup.
+with iris_vector_graph using the working graph-ai setup.
 
 Key features:
 - Direct iris.connect() connection to avoid DBAPI SSL issues
-- Pure iris_vector_graph_core performance testing
+- Pure iris_vector_graph performance testing
 - Side-by-side comparison of search methods
 - Performance timing analysis
 - Demonstrates 21.7x performance improvements
@@ -22,18 +22,18 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple
 import iris
 
-# Import iris_vector_graph_core components
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
-from iris_vector_graph_core.text_search import TextSearchEngine
-from iris_vector_graph_core.vector_utils import VectorOptimizer
+# Import iris_vector_graph components
+from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.fusion import HybridSearchFusion
+from iris_vector_graph.text_search import TextSearchEngine
+from iris_vector_graph.vector_utils import VectorOptimizer
 
 logger = logging.getLogger(__name__)
 
 
 class GraphAIHybridComparison:
     """
-    Compare different search methods using iris_vector_graph_core in graph-ai project.
+    Compare different search methods using iris_vector_graph in graph-ai project.
     """
 
     def __init__(self):
@@ -50,7 +50,7 @@ class GraphAIHybridComparison:
         # Connect to IRIS using known working configuration
         self.connection = self._get_iris_connection()
 
-        # Initialize iris_vector_graph_core components
+        # Initialize iris_vector_graph components
         self._initialize_iris_components()
 
     def _get_iris_connection(self):
@@ -64,15 +64,15 @@ class GraphAIHybridComparison:
             raise
 
     def _initialize_iris_components(self):
-        """Initialize iris_vector_graph_core components"""
+        """Initialize iris_vector_graph components"""
         try:
             self.engine = IRISGraphEngine(self.connection)
             self.fusion = HybridSearchFusion(self.engine)
             self.text_engine = TextSearchEngine(self.connection)
             self.vector_optimizer = VectorOptimizer(self.connection)
-            logger.info("✅ iris_vector_graph_core components initialized")
+            logger.info("✅ iris_vector_graph components initialized")
         except Exception as e:
-            logger.error(f"Failed to initialize iris_vector_graph_core: {e}")
+            logger.error(f"Failed to initialize iris_vector_graph: {e}")
             raise
 
     def get_test_queries(self) -> List[Tuple[str, str]]:
@@ -207,7 +207,7 @@ class GraphAIHybridComparison:
 
     def run_comprehensive_analysis(self, num_iterations: int = 5) -> Dict[str, Any]:
         """Run comprehensive performance analysis"""
-        logger.info("🚀 Starting Comprehensive iris_vector_graph_core Performance Analysis")
+        logger.info("🚀 Starting Comprehensive iris_vector_graph Performance Analysis")
         logger.info("=" * 80)
 
         start_time = time.time()
@@ -346,7 +346,7 @@ class GraphAIHybridComparison:
 
 
 def main():
-    """Run iris_vector_graph_core performance analysis"""
+    """Run iris_vector_graph performance analysis"""
     try:
         comparison = GraphAIHybridComparison()
 

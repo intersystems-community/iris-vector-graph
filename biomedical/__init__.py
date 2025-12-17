@@ -3,7 +3,7 @@
 Biomedical Domain Layer for Graph-AI
 
 Domain-specific utilities and configurations for biomedical knowledge graphs.
-Built on top of the generic iris_vector_graph_core module.
+Built on top of the generic iris_vector_graph module.
 """
 
 from .biomedical_engine import BiomedicalGraphEngine

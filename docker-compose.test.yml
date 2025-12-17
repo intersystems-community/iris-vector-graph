@@ -3,8 +3,8 @@ services:
     image: intersystemsdc/iris-community:latest
     container_name: iris_test_vector_graph_ai
     ports:
-      - "1973:1972"   # IRIS SuperServer port (different from dev to avoid conflicts)
-      - "52774:52773" # IRIS Management Portal
+      - "1981:1972"   # IRIS SuperServer port (use 1981 to avoid harness cluster conflict)
+      - "52781:52773" # IRIS Management Portal
     environment:
       - IRISNAMESPACE=USER
       - ISC_DEFAULT_PASSWORD=SYS

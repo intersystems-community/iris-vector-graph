@@ -327,12 +327,124 @@ ClassMethod CorrectApproach() [ Language = python ]
 
 ---
 
+---
+
+## Graceful Degradation: The Fallback Pattern
+
+### Philosophy
+
+The `iris_vector_graph` package is designed to work in **two deployment scenarios**:
+
+1. **Production IRIS** - ObjectScript classes loaded, HNSW tables created, SQL functions available
+2. **Development/Testing IRIS** - Vanilla IRIS with just basic tables, no optimization setup
+
+To support both scenarios, performance-critical operations implement a **fallback pattern**:
+
+```
+Try optimized path (IRIS-native) → Catch failure → Fall back to pure Python
+```
+
+### Fallback Matrix
+
+| Method | Primary Path | Fallback Path | When Fallback Triggers |
+|--------|-------------|---------------|------------------------|
+| `kg_KNN_VEC` | HNSW index (`kg_NodeEmbeddings_optimized` table with `VECTOR` type) | Python CSV parsing (`kg_NodeEmbeddings` table with CSV strings) | `kg_NodeEmbeddings_optimized` table doesn't exist |
+| `kg_PERSONALIZED_PAGERANK` | SQL function → ObjectScript embedded Python | Pure Python in `IRISGraphEngine` | `kg_PPR` SQL function doesn't exist |
+| `kg_TXT` | SQL with JSON_TABLE | ❌ No fallback | Core IRIS SQL feature, always available |
+| `kg_NEIGHBORHOOD_EXPANSION` | SQL with JSON_TABLE | ❌ No fallback | Core IRIS SQL feature, always available |
+| `kg_RRF_FUSE` | Inherits from `kg_KNN_VEC` | Inherits fallback | Same as `kg_KNN_VEC` |
+| `kg_VECTOR_GRAPH_SEARCH` | Inherits from `kg_KNN_VEC` | Inherits fallback | Same as `kg_KNN_VEC` |
+
+### Design Principle
+
+**Fallbacks exist only for optional performance enhancements, not core SQL features.**
+
+- HNSW index is optional (requires special table and index setup)
+- ObjectScript classes are optional (requires loading `.cls` files into IRIS)
+- JSON_TABLE is a core IRIS SQL feature (always available, no fallback needed)
+
+### Performance Implications
+
+| Method | Optimized Path | Fallback Path | Slowdown |
+|--------|---------------|---------------|----------|
+| `kg_KNN_VEC` (10K vectors) | ~2ms (HNSW) | ~5800ms (Python scan) | ~2900x |
+| `kg_PERSONALIZED_PAGERANK` (1K nodes) | ~10ms (embedded Python) | ~25ms (pure Python) | ~2.5x |
+| `kg_PERSONALIZED_PAGERANK` (10K nodes) | ~50ms (embedded Python) | ~500ms (pure Python) | ~10x |
+
+### Implementation Pattern
+
+```python
+# Class-level cache to avoid repeated failed attempts
+class IRISGraphEngine:
+    _optimization_available = None  # None = unknown, True/False = cached result
+
+    def optimized_operation(self, ...):
+        # Skip if we already know optimization is unavailable
+        if self._optimization_available is False:
+            return self._fallback_implementation(...)
+
+        try:
+            result = self._try_optimized_path(...)
+            self._optimization_available = True  # Cache success
+            return result
+        except Exception as e:
+            if "not found" in str(e).lower() or "does not exist" in str(e).lower():
+                self._optimization_available = False  # Cache failure
+                logger.info("Optimization unavailable, using fallback")
+            return self._fallback_implementation(...)
+```
+
+**Key Features:**
+1. **Try optimized first** - Get full performance when available
+2. **Cache failure** - Don't retry failed SQL function calls on every request
+3. **Log degradation** - Users know when fallback is active
+4. **Same API contract** - Callers don't need to know which path was used
+
+### Enabling the Optimized Path
+
+To enable IRIS embedded Python for PageRank (10-50x speedup):
+
+```bash
+# 1. Load ObjectScript class into IRIS
+IRIS> Do $system.OBJ.Load("/path/to/iris/src/PageRankEmbedded.cls", "ck")
+
+# 2. Create SQL function (run in IRIS SQL tool)
+\i sql/operators.sql
+```
+
+To enable HNSW vector search (2900x speedup):
+
+```bash
+# 1. Create optimized embeddings table with VECTOR type
+\i sql/schema.sql  # Creates kg_NodeEmbeddings_optimized with HNSW index
+
+# 2. Migrate embeddings from CSV to VECTOR format
+# (Use migration script or re-ingest data)
+```
+
+### Testing Fallback Behavior
+
+```python
+# Force fallback for testing
+from iris_vector_graph import IRISGraphEngine
+
+# Reset cache to test fallback detection
+IRISGraphEngine.reset_sql_function_cache()
+
+# Or force fallback mode
+IRISGraphEngine._ppr_sql_function_available = False
+```
+
+---
+
 ## Summary
 
 **Golden Rule**: If vectors are involved, SQL is REQUIRED for that portion. Embedded Python is optional for pure graph operations.
 
-**NodePK PageRank**: Pure graph algorithm → embedded Python is perfect (10-50x speedup)
+**Fallback Rule**: Performance optimizations (HNSW, embedded Python) gracefully degrade to pure Python when not available. Core SQL features (JSON_TABLE) have no fallback because they're always available.
+
+**NodePK PageRank**: Pure graph algorithm → embedded Python is perfect (10-50x speedup), with pure Python fallback
 
 **Future Hybrid**: Vector search → SQL required → Graph expansion → embedded Python optional → Re-ranking → SQL required
 
-This architecture ensures we leverage HNSW performance while maximizing embedded Python benefits for graph operations.
+This architecture ensures we leverage HNSW performance while maximizing embedded Python benefits for graph operations, with graceful degradation for simpler deployments.

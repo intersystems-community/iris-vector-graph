@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS rdf_edges(
 CREATE INDEX IF NOT EXISTS idx_edges_s_p ON rdf_edges(s, p);
 CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON rdf_edges(p, o_id);
 CREATE INDEX IF NOT EXISTS idx_edges_s ON rdf_edges(s);
+CREATE INDEX IF NOT EXISTS idx_edges_oid ON rdf_edges(o_id);  -- For bidirectional PageRank reverse edge lookups
 
 -- Vector embeddings for semantic similarity (configurable dimensions)
 CREATE TABLE IF NOT EXISTS kg_NodeEmbeddings(

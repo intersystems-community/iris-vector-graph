@@ -48,7 +48,7 @@ WHERE n0.node_id = ?
 
 ### Files Created (9 files, 2,222 lines)
 
-#### Core Libraries (iris_vector_graph_core/cypher/)
+#### Core Libraries (iris_vector_graph/cypher/)
 
 1. **ast.py** (374 lines) - Complete AST class hierarchy
    - `CypherQuery` - Root AST node
@@ -333,7 +333,7 @@ All 8 constitutional principles followed:
    - Error responses with line/column/suggestion
 
 6. **Modular Core Library** ✅
-   - iris_vector_graph_core/cypher/ database-agnostic
+   - iris_vector_graph/cypher/ database-agnostic
    - Reusable AST, parser, translator
    - No IRIS-specific code in core
 
