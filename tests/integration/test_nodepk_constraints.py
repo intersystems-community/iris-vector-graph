@@ -12,27 +12,15 @@ Test Strategy:
 """
 
 import pytest
-import iris
 import os
 from datetime import datetime
 from dotenv import load_dotenv
 
+# NOTE: iris_module is not needed - tests use iris_connection fixture from conftest.py
 
-@pytest.fixture(scope="module")
-def iris_connection():
-    """Get IRIS database connection for testing."""
-    load_dotenv()
 
-    conn = iris.connect(
-        os.getenv('IRIS_HOST', 'localhost'),
-        int(os.getenv('IRIS_PORT', '1972')),
-        os.getenv('IRIS_NAMESPACE', 'USER'),
-        os.getenv('IRIS_USER', '_SYSTEM'),
-        os.getenv('IRIS_PASSWORD', 'SYS')
-    )
-
-    yield conn
-    conn.close()
+# NOTE: iris_connection fixture is provided by tests/conftest.py
+# Do not define a local fixture here to avoid shadowing
 
 
 @pytest.fixture(autouse=True)
@@ -164,8 +152,8 @@ class TestEdgeForeignKeys:
         # Try to insert edge with non-existent source
         with pytest.raises(Exception) as exc_info:
             cursor.execute(
-                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-                [999001, 'INVALID:source', 'relates_to', 'TEST:dest']
+                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                ['INVALID:source', 'relates_to', 'TEST:dest']
             )
             iris_connection.commit()
 
@@ -191,8 +179,8 @@ class TestEdgeForeignKeys:
         # Try to insert edge with non-existent destination
         with pytest.raises(Exception) as exc_info:
             cursor.execute(
-                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-                [999002, 'TEST:source', 'relates_to', 'INVALID:dest']
+                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                ['TEST:source', 'relates_to', 'INVALID:dest']
             )
             iris_connection.commit()
 
@@ -218,22 +206,22 @@ class TestEdgeForeignKeys:
 
         # Insert edge - should succeed
         cursor.execute(
-            "INSERT INTO rdf_edges (edge_id, s, p, o_id, qualifiers) VALUES (?, ?, ?, ?, ?)",
-            [999003, 'PROTEIN:TP53', 'associated_with', 'DISEASE:cancer', '{"confidence": 0.95}']
+            "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+            ['PROTEIN:TP53', 'associated_with', 'DISEASE:cancer', '{"confidence": 0.95}']
         )
         iris_connection.commit()
 
         # Verify edge exists
         cursor.execute(
-            "SELECT edge_id, s, p, o_id FROM rdf_edges WHERE s = ? AND o_id = ?",
+            "SELECT s, p, o_id FROM rdf_edges WHERE s = ? AND o_id = ?",
             ['PROTEIN:TP53', 'DISEASE:cancer']
         )
         result = cursor.fetchone()
 
         assert result is not None, "Edge should exist after insertion"
-        assert result[1] == 'PROTEIN:TP53', "Source should match"
-        assert result[2] == 'associated_with', "Predicate should match"
-        assert result[3] == 'DISEASE:cancer', "Destination should match"
+        assert result[0] == 'PROTEIN:TP53', "Source should match"
+        assert result[1] == 'associated_with', "Predicate should match"
+        assert result[2] == 'DISEASE:cancer', "Destination should match"
 
 
 @pytest.mark.requires_database
@@ -436,8 +424,8 @@ class TestNodeDeletion:
         cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:A'])
         cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:B'])
         cursor.execute(
-            "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-            [999004, 'NODE:A', 'relates_to', 'NODE:B']
+            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+            ['NODE:A', 'relates_to', 'NODE:B']
         )
         iris_connection.commit()
 
