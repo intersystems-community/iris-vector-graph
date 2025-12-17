@@ -44,7 +44,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```bash
 # Test Cypher parser
 uv run python -c "
-from iris_vector_graph_core.cypher import parse_query
+from iris_vector_graph.cypher import parse_query
 ast = parse_query('MATCH (n:Protein) RETURN n.name LIMIT 5')
 print('Parser OK:', ast is not None)
 "

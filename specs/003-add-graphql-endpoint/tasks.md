@@ -28,7 +28,7 @@
     - `/Users/tdyar/ws/iris-vector-graph/api/graphql/`
     - `/Users/tdyar/ws/iris-vector-graph/api/graphql/resolvers/`
     - `/Users/tdyar/ws/iris-vector-graph/api/models/`
-    - `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/graphql/`
+    - `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/graphql/`
     - `/Users/tdyar/ws/iris-vector-graph/tests/contract/`
     - `/Users/tdyar/ws/iris-vector-graph/tests/integration/graphql/`
     - `/Users/tdyar/ws/iris-vector-graph/scripts/performance/`
@@ -45,7 +45,7 @@
 
 - [X] **T003 [P]** Configure linting and type checking
   - Update `/Users/tdyar/ws/iris-vector-graph/pyproject.toml`:
-    - Add `api/` and `iris_vector_graph_core/graphql/` to mypy paths
+    - Add `api/` and `iris_vector_graph/graphql/` to mypy paths
     - Add `tests/integration/graphql/` to pytest paths
     - Configure async test timeout: 30 seconds
   - Dependencies: T002
@@ -584,7 +584,7 @@
   - Dependencies: T020, T026, T029
 
 - [ ] **T031** Implement query complexity extension (depth-based, 10-level max)
-  - File: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/graphql/complexity.py`
+  - File: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/graphql/complexity.py`
   - Implement depth-based complexity calculator:
     ```python
     from strawberry.extensions import Extension
@@ -620,7 +620,7 @@
   - Dependencies: T030
 
 - [ ] **T032** Implement resolver-level caching (60s TTL with manual invalidation)
-  - File: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/graphql/cache.py`
+  - File: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/graphql/cache.py`
   - Implement caching decorator:
     ```python
     import asyncio
@@ -708,7 +708,7 @@
     import iris
     from typing import AsyncGenerator, Dict, Any
     from api.graphql.loaders import ProteinLoader, EdgeLoader, PropertyLoader, LabelLoader
-    from iris_vector_graph_core.graphql.cache import ResolverCache
+    from iris_vector_graph.graphql.cache import ResolverCache
 
     async def get_iris_connection():
         """Get IRIS database connection from pool"""

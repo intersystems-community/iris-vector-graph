@@ -79,7 +79,7 @@
 - ✅ **Generic Core Architecture** - Schema-agnostic foundation
 
 **Key Files Created**:
-- `iris_vector_graph_core/cypher/` - Parser, AST, translator (9 files, 2,222 lines)
+- `iris_vector_graph/cypher/` - Parser, AST, translator (9 files, 2,222 lines)
 - `api/routers/cypher.py` - openCypher FastAPI endpoint
 - `api/gql/core/` - Generic GraphQL core
 - `examples/domains/biomedical/` - Example domain implementation

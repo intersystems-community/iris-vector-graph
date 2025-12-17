@@ -93,7 +93,7 @@ Issues = "https://github.com/iris-graph/iris-vector-graph/issues"
 networkx-loader = "scripts.ingest.networkx_loader:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["scripts", "tests"]
+packages = ["iris_vector_graph", "scripts", "tests"]
 
 # Tool configurations
 [tool.black]
