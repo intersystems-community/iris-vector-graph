@@ -489,7 +489,7 @@ params = [cypher_params['nodeId']]  # Bound via cursor.execute(sql, params)
 - NodePK schema: `/Users/tdyar/ws/iris-vector-graph/sql/schema.sql`
 - Graph traversal: `/Users/tdyar/ws/iris-vector-graph/sql/graph_path_globals.sql`
 - Vector operators: `/Users/tdyar/ws/iris-vector-graph/sql/operators.sql`
-- IRIS engine: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/engine.py`
+- IRIS engine: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/engine.py`
 
 ---
 

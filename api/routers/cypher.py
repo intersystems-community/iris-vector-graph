@@ -20,8 +20,8 @@ from api.models.cypher import (
     ErrorCode,
     QueryMetadata
 )
-from iris_vector_graph_core.cypher.parser import parse_query, CypherParseError
-from iris_vector_graph_core.cypher.translator import translate_to_sql
+from iris_vector_graph.cypher.parser import parse_query, CypherParseError
+from iris_vector_graph.cypher.translator import translate_to_sql
 
 
 router = APIRouter(prefix="/api", tags=["Cypher Queries"])

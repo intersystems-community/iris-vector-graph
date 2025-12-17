@@ -55,8 +55,8 @@
 - `/Users/tdyar/ws/iris-vector-graph/api/__init__.py`
 - `/Users/tdyar/ws/iris-vector-graph/api/routers/__init__.py`
 - `/Users/tdyar/ws/iris-vector-graph/api/models/__init__.py`
-- `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/__init__.py`
-**Description**: Create directory structure: api/, api/routers/, api/models/, iris_vector_graph_core/cypher/ with __init__.py files.
+- `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/__init__.py`
+**Description**: Create directory structure: api/, api/routers/, api/models/, iris_vector_graph/cypher/ with __init__.py files.
 **Dependencies**: None
 **Validation**: All directories exist and are importable
 
@@ -91,49 +91,49 @@
 **Run ONLY after contract tests are failing**
 
 ### T006 [P]: Create CypherQuery AST root node class
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/ast.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/ast.py`
 **Description**: Implement CypherQuery dataclass with fields: match_clauses (List[MatchClause]), where_clause (Optional[WhereClause]), return_clause (ReturnClause), order_by_clause, skip_clause, limit_clause, union_clause. Add validation: at least one MATCH clause, exactly one RETURN clause.
 **Dependencies**: T002
 **Data Model Reference**: data-model.md lines 11-40
 **Expected**: AST root node ready for parser integration
 
 ### T007 [P]: Create NodePattern and RelationshipPattern AST classes
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/ast.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/ast.py`
 **Description**: Implement NodePattern dataclass (variable, labels, properties) and RelationshipPattern dataclass (variable, types, direction, properties, variable_length). Add VariableLength dataclass (min_hops, max_hops with validation: 1 ≤ min_hops ≤ max_hops ≤ 10).
 **Dependencies**: T002
 **Data Model Reference**: data-model.md lines 84-155
 **Expected**: Node and relationship patterns ready for graph pattern construction
 
 ### T008 [P]: Create MatchClause and GraphPattern AST classes
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/ast.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/ast.py`
 **Description**: Implement MatchClause dataclass (optional: bool, pattern: GraphPattern) and GraphPattern dataclass (nodes: List[NodePattern], relationships: List[RelationshipPattern]). Add validation: len(relationships) = len(nodes) - 1.
 **Dependencies**: T007
 **Data Model Reference**: data-model.md lines 42-82
 **Expected**: MATCH clause structure complete
 
 ### T009 [P]: Create WhereClause and BooleanExpression AST classes
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/ast.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/ast.py`
 **Description**: Implement WhereClause dataclass and recursive BooleanExpression dataclass (operator, operands). Support operators: AND, OR, NOT, EQUALS, LIKE, IN, GT, LT, etc. Include PropertyReference and Literal helper classes.
 **Dependencies**: T002
 **Data Model Reference**: data-model.md lines 157-195
 **Expected**: WHERE clause filtering ready
 
 ### T010 [P]: Create ReturnClause AST class
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/ast.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/ast.py`
 **Description**: Implement ReturnClause dataclass (distinct: bool, items: List[ReturnItem]) and ReturnItem dataclass (expression, alias). Support PropertyReference, Variable, and AggregationFunction expressions.
 **Dependencies**: T002
 **Data Model Reference**: data-model.md lines 197-236
 **Expected**: RETURN clause projection ready
 
 ### T011 [P]: Create CypherProcedureCall AST class for vector search
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/ast.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/ast.py`
 **Description**: Implement CypherProcedureCall dataclass (procedure_name, arguments, yield_items). Support db.index.vector.queryNodes procedure for hybrid vector+graph queries.
 **Dependencies**: T002
 **Data Model Reference**: data-model.md lines 238-263
 **Expected**: Custom procedure invocation ready
 
 ### T012 [P]: Create SQLQuery translation artifact class
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/translator.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/translator.py`
 **Description**: Implement SQLQuery dataclass (sql: str, parameters: List[Any], query_metadata: QueryMetadata) and QueryMetadata dataclass (estimated_rows, index_usage, optimization_applied, complexity_score). Include TranslationContext for stateful SQL generation.
 **Dependencies**: T002
 **Data Model Reference**: data-model.md lines 265-343
@@ -157,14 +157,14 @@
 **Expected**: Tests FAIL (parser not implemented yet)
 
 ### T015: Implement Cypher parser wrapper using opencypher
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/parser.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/parser.py`
 **Description**: Implement parse_query() function wrapping opencypher.parse_query(). Convert opencypher AST to internal AST classes (CypherQuery, NodePattern, etc.). Extract line/column numbers from parser for error reporting.
 **Dependencies**: T014
 **Research Reference**: research.md lines 9-44 (opencypher selection)
 **Expected**: T014 tests PASS
 
 ### T016: Implement parser error handling with line/column numbers
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/parser.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/parser.py`
 **Description**: Add exception handling for opencypher SyntaxError. Return structured error with line, column, message, suggestion (e.g., "Did you mean 'RETURN'?" for typos). Include original query in error context.
 **Dependencies**: T015
 **Expected**: Syntax errors include actionable line/column information
@@ -180,21 +180,21 @@
 **Expected**: Tests FAIL (translator not implemented yet)
 
 ### T018: Implement AST-to-SQL translator for node patterns
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/translator.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/translator.py`
 **Description**: Implement translate_to_sql(cypher_query: CypherQuery) -> SQLQuery. Generate SELECT with JOINs to rdf_labels and rdf_props for node patterns. Use TranslationContext to track variable mappings and accumulate JOIN clauses. Apply label filter pushdown optimization.
 **Dependencies**: T017
 **Research Reference**: research.md lines 48-73 (node pattern translation)
 **Expected**: T017 tests PASS
 
 ### T019: Implement AST-to-SQL translator for relationship patterns
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/translator.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/translator.py`
 **Description**: Extend translator to handle relationship traversal. Generate JOINs to rdf_edges table with direction handling (outgoing, incoming, bidirectional). Support bidirectional relationships via UNION. Add property filters on relationships.
 **Dependencies**: T018
 **Research Reference**: research.md lines 75-95 (relationship translation)
 **Expected**: Graph traversal queries translate to SQL
 
 ### T020: Implement AST-to-SQL translator for WHERE clauses and RETURN clauses
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/translator.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/translator.py`
 **Description**: Translate BooleanExpression to SQL WHERE conditions. Support operators: AND, OR, NOT, EQUALS, LIKE, IN, comparison operators. Translate ReturnClause to SELECT projections with property references. Handle DISTINCT, ORDER BY, LIMIT, SKIP. Support aggregation functions (count, collect).
 **Dependencies**: T019
 **Data Model Reference**: data-model.md lines 157-236
@@ -211,7 +211,7 @@
 **Expected**: Tests FAIL (optimizer not implemented yet)
 
 ### T022 [P]: Implement query optimizer with label and property pushdown
-**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph_core/cypher/optimizer.py`
+**Files**: `/Users/tdyar/ws/iris-vector-graph/iris_vector_graph/cypher/optimizer.py`
 **Description**: Implement optimize_sql(sql_query: SQLQuery) -> SQLQuery. Apply label filter pushdown (move label filters from WHERE to JOIN ON). Apply property filter pushdown (combine property JOINs where possible). Add optional index hints for IRIS query planner. Update QueryMetadata.optimization_applied.
 **Dependencies**: T021
 **Research Reference**: research.md lines 175-240 (optimization strategies)

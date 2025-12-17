@@ -81,7 +81,7 @@ Add openCypher query endpoint with Cypher-to-SQL translation for intuitive graph
 - Performance metrics exposed: query rate, error rate, translation time, execution time
 
 **VI. Modular Core Library** ✅
-- Cypher parser module will be independent (iris_vector_graph_core/cypher/)
+- Cypher parser module will be independent (iris_vector_graph/cypher/)
 - AST-to-SQL translator will be database-agnostic (abstract SQL generation)
 - IRIS-specific integration in FastAPI router (api/routers/cypher.py)
 - Reusable for integration with other RAG systems
@@ -128,7 +128,7 @@ api/
 │   └── cypher.py           # NEW: Pydantic models for requests/responses
 └── dependencies.py         # NEW: IRIS connection pool, auth dependencies
 
-iris_vector_graph_core/
+iris_vector_graph/
 ├── cypher/                 # NEW: Cypher parser and translator (database-agnostic)
 │   ├── __init__.py
 │   ├── parser.py           # Cypher query parser (opencypher wrapper)
@@ -157,7 +157,7 @@ scripts/performance/
 ```
 
 **Structure Decision**: Web application structure with Python ASGI backend. Cypher components split into:
-1. **Database-agnostic core**: iris_vector_graph_core/cypher/ (parser, translator, optimizer)
+1. **Database-agnostic core**: iris_vector_graph/cypher/ (parser, translator, optimizer)
 2. **ASGI API layer**: api/ directory with FastAPI routers, Pydantic models, async endpoints
 3. **IRIS integration**: Connection pooling via dependencies.py, iris.connect() in async context
 
@@ -238,7 +238,7 @@ Re-evaluating design artifacts against constitutional principles:
 - queryMetadata optional field for debugging (SQL query, indexes used, optimizations applied)
 
 **VI. Modular Core Library** ✅
-- Cypher parser/translator in iris_vector_graph_core/cypher/ (database-agnostic)
+- Cypher parser/translator in iris_vector_graph/cypher/ (database-agnostic)
 - IRIS integration separated in Graph.KG.CypherService.cls
 - AST design allows reuse in other systems
 

@@ -2,7 +2,7 @@
 """
 Performance Validation Script for IRIS Graph Core Integration
 
-Validates that the iris_vector_graph_core module provides the expected performance
+Validates that the iris_vector_graph module provides the expected performance
 improvements and functionality when integrated with rag-templates.
 """
 
@@ -23,9 +23,9 @@ if rag_templates_path.exists():
     sys.path.insert(0, str(rag_templates_path))
 
 import iris
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
-from iris_vector_graph_core.vector_utils import VectorOptimizer
+from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.fusion import HybridSearchFusion
+from iris_vector_graph.vector_utils import VectorOptimizer
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 class IntegrationValidator:
-    """Validates iris_vector_graph_core integration and performance"""
+    """Validates iris_vector_graph integration and performance"""
 
     def __init__(self):
         """Initialize validator with IRIS connection"""
@@ -387,7 +387,7 @@ def main():
             print("⚠ Consider optimizing vector data or HNSW parameters")
         else:
             print("✗ Integration has critical issues")
-            print("✗ Check IRIS database setup and iris_vector_graph_core installation")
+            print("✗ Check IRIS database setup and iris_vector_graph installation")
 
         # Save detailed results
         results_file = Path(__file__).parent.parent / 'validation_results.json'

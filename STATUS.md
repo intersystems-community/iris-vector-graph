@@ -113,7 +113,7 @@ WHERE n0.node_id = ?
 - `iris/src/Graph/KG/Service.cls` - IRIS REST API
 
 **Core Libraries**:
-- `iris_vector_graph_core/cypher/` - Cypher parser + translator (NEW)
+- `iris_vector_graph/cypher/` - Cypher parser + translator (NEW)
 - `api/gql/core/` - Generic GraphQL core (NEW)
 - `python/iris_vector_graph_operators.py` - Graph operations
 
