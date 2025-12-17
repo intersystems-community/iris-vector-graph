@@ -204,6 +204,7 @@ Configure IRIS connection in `.env`:
 
 ### Key Technical Notes
 
+- **IRIS Import Conflict**: The project has an `iris/` directory containing ObjectScript sources. This causes `import iris` to resolve to the local directory instead of the `intersystems-irispython` package. **Solution**: Use `importlib.import_module('intersystems_irispython.iris')` or use `iris-devtester` which handles this automatically. Never use bare `import iris` in Python files.
 - **Vector embeddings**: Configured for 768-dimensional vectors (biomedical embeddings). HNSW optimization provides ~100x performance improvement.
 - **HNSW Index**: Optimized with ACORN=1 for production performance (1.7ms vs 5800ms baseline).
 - **RRF Fusion**: Uses Reciprocal Rank Fusion (Cormack & Clarke SIGIR'09) to combine vector and text search results.
@@ -437,6 +438,8 @@ See `docs/architecture/generic_graph_api_design.md` for full architecture detail
 ## Active Technologies
 - Python 3.11, ObjectScript (IRIS 2025.1+) + iris-vector-graph-core, IRIS embedded Python (005-bidirectional-ppr)
 - IRIS SQL tables (nodes, rdf_edges, rdf_labels) (005-bidirectional-ppr)
+- Python 3.11 + pytest, iris-devtester, intersystems-irispython, FastAPI (006-test-infra-fixes)
+- InterSystems IRIS with Vector Search (006-test-infra-fixes)
 
 ## Recent Changes
 - 005-bidirectional-ppr: Added Python 3.11, ObjectScript (IRIS 2025.1+) + iris-vector-graph-core, IRIS embedded Python
