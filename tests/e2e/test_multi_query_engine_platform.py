@@ -30,41 +30,8 @@ except ImportError:
     app = None
 
 
-@pytest.fixture
-def iris_connection():
-    """Fixture providing IRIS database connection via iris-devtester.
-
-    Uses iris-devtester for auto-discovery per constitution.
-    Falls back to .env if iris-devtester fails.
-    """
-    # Try iris-devtester auto-discovery first (per constitution)
-    try:
-        from iris_devtester.connections import auto_detect_iris_host_and_port
-        from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
-
-        host, port = auto_detect_iris_host_and_port()
-        conn = dbapi_connect(host, port, 'USER', '_SYSTEM', 'SYS')
-        yield conn
-        conn.close()
-        return
-    except Exception:
-        pass
-
-    # Fall back to intersystems-irispython
-    import importlib
-    iris_module = importlib.import_module('intersystems_irispython.iris')
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    conn = iris_module.connect(
-        os.getenv('IRIS_HOST', 'localhost'),
-        int(os.getenv('IRIS_PORT', '1972')),
-        os.getenv('IRIS_NAMESPACE', 'USER'),
-        os.getenv('IRIS_USER', '_SYSTEM'),
-        os.getenv('IRIS_PASSWORD', 'SYS')
-    )
-    yield conn
-    conn.close()
+# NOTE: iris_connection fixture is provided by tests/conftest.py
+# Do not define a local fixture here to avoid shadowing
 
 
 @pytest.fixture
