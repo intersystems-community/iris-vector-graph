@@ -30,7 +30,7 @@ def iris_connection_for_performance():
 
     # Clean up any test data from previous runs
     try:
-        cursor.execute("DELETE FROM rdf_edges WHERE edge_id >= 900000")
+        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'PERF:%'")
         cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'PERF:%'")
         conn.commit()
     except:
@@ -40,7 +40,7 @@ def iris_connection_for_performance():
 
     # Cleanup after test
     try:
-        cursor.execute("DELETE FROM rdf_edges WHERE edge_id >= 900000")
+        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'PERF:%'")
         cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'PERF:%'")
         conn.commit()
     except:
@@ -143,11 +143,10 @@ class TestNodePKPerformance:
         for i in range(edge_count):
             src = f'PERF:edge_test_src_{i}'
             dst = f'PERF:edge_test_dst_{i}'
-            edge_id = 900000 + i
 
             cursor.execute(
-                "INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-                [edge_id, src, 'perf:test', dst]
+                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                [src, 'perf:test', dst]
             )
 
         iris_connection_for_performance.commit()

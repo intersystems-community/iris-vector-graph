@@ -20,6 +20,7 @@ except ImportError as e:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestProteinQueryResolver:
     """Integration tests for protein query resolver"""
@@ -176,6 +177,7 @@ class TestProteinQueryResolver:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestGeneQueryResolver:
     """Integration tests for gene query resolver"""
@@ -243,6 +245,7 @@ class TestGeneQueryResolver:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestPathwayQueryResolver:
     """Integration tests for pathway query resolver"""
@@ -308,24 +311,17 @@ class TestPathwayQueryResolver:
         assert "Pathway" in pathway["labels"]
 
 
+# NOTE: iris_connection fixture is provided by tests/conftest.py
+# Do not define a local fixture here to avoid shadowing
+
+
 @pytest.fixture
-def iris_connection():
-    """Fixture providing live IRIS database connection"""
-    import iris
-    import os
-
-    conn = iris.connect(
-        os.getenv('IRIS_HOST', 'localhost'),
-        int(os.getenv('IRIS_PORT', '1972')),
-        os.getenv('IRIS_NAMESPACE', 'USER'),
-        os.getenv('IRIS_USER', '_SYSTEM'),
-        os.getenv('IRIS_PASSWORD', 'SYS')
-    )
-
-    yield conn
+def query_test_cleanup(iris_connection):
+    """Fixture to cleanup query test data"""
+    yield
 
     # Cleanup: Remove test data
-    cursor = conn.cursor()
+    cursor = iris_connection.cursor()
     test_nodes = [
         "PROTEIN:TP53_TEST",
         "PROTEIN:MINIMAL_TEST",
@@ -341,5 +337,4 @@ def iris_connection():
         except:
             pass
 
-    conn.commit()
-    conn.close()
+    iris_connection.commit()

@@ -9,9 +9,21 @@ and that the system is ready for production use.
 import sys
 import os
 import json
-import iris
 import numpy as np
 import time
+
+# NOTE: Uses iris-devtester for connection management
+# Targets specific test container: iris_test_vector_graph_ai
+import subprocess
+
+try:
+    from iris_devtester.utils.dbapi_compat import get_connection as devtester_connect
+    DEVTESTER_AVAILABLE = True
+except ImportError:
+    DEVTESTER_AVAILABLE = False
+
+# The dedicated test container name
+TEST_CONTAINER_NAME = 'iris_test_vector_graph_ai'
 
 # Add the python directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../python'))
@@ -19,11 +31,43 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../python'))
 from iris_vector_graph_operators import IRISGraphOperators
 
 
+def get_container_port(container_name: str, internal_port: int = 1972) -> int:
+    """Get the host port for a specific Docker container."""
+    try:
+        result = subprocess.run(
+            ['docker', 'port', container_name, str(internal_port)],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            port_line = result.stdout.strip().split('\n')[0]
+            port = int(port_line.split(':')[-1])
+            return port
+    except (subprocess.TimeoutExpired, ValueError, IndexError):
+        pass
+    return None
+
+
+def get_iris_connection():
+    """Get IRIS connection using the dedicated test container."""
+    if not DEVTESTER_AVAILABLE:
+        raise ImportError("iris-devtester not available")
+
+    host = os.getenv('IRIS_HOST', 'localhost')
+    container_name = os.getenv('IRIS_TEST_CONTAINER', TEST_CONTAINER_NAME)
+
+    # Get port from specific test container
+    port = get_container_port(container_name)
+    if port is None:
+        port = int(os.getenv('IRIS_PORT', '1972'))
+
+    return devtester_connect(host, port, 'USER', '_SYSTEM', 'SYS')
+
+
 def test_database_connection():
     """Test basic database connectivity"""
     print("🔌 Testing Database Connection...")
     try:
-        conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
+        conn = get_iris_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT 1 AS test")
         result = cursor.fetchone()
@@ -42,7 +86,7 @@ def test_native_vector_functions():
     """Test native IRIS vector functions"""
     print("🧮 Testing Native IRIS Vector Functions...")
     try:
-        conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
+        conn = get_iris_connection()
         cursor = conn.cursor()
 
         # Test TO_VECTOR
@@ -75,7 +119,7 @@ def test_data_availability():
     """Test that required data is available"""
     print("📊 Testing Data Availability...")
     try:
-        conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
+        conn = get_iris_connection()
         cursor = conn.cursor()
 
         # Check tables exist and have data
@@ -102,7 +146,7 @@ def test_python_operators():
     """Test all Python-based graph operators"""
     print("🐍 Testing Python Graph Operators...")
     try:
-        conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
+        conn = get_iris_connection()
         operators = IRISGraphOperators(conn)
 
         test_vector = json.dumps([0.1] * 768)
@@ -143,7 +187,7 @@ def test_performance_characteristics():
     """Test performance characteristics"""
     print("⚡ Testing Performance Characteristics...")
     try:
-        conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
+        conn = get_iris_connection()
         operators = IRISGraphOperators(conn)
 
         test_vector = json.dumps([0.1] * 768)
@@ -174,7 +218,7 @@ def test_graph_operations():
     """Test basic graph operations"""
     print("🕸️ Testing Graph Operations...")
     try:
-        conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
+        conn = get_iris_connection()
         cursor = conn.cursor()
 
         # Test basic graph queries

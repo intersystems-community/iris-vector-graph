@@ -6,11 +6,12 @@ Tests that native IRIS vector functions and custom procedures work correctly
 
 import pytest
 import json
-import iris
+import importlib
 import numpy as np
 
+# NOTE: Use importlib to avoid conflict with iris/ directory in project
 try:
-    import iris
+    iris_module = importlib.import_module('intersystems_irispython.iris')
     IRIS_AVAILABLE = True
 except ImportError:
     IRIS_AVAILABLE = False
@@ -27,7 +28,7 @@ class TestVectorFunctions:
             pytest.skip("IRIS Python driver not available")
 
         try:
-            cls.conn = iris.connect(
+            cls.conn = iris_module.connect(
                 hostname='localhost',
                 port=1973,
                 namespace='USER',

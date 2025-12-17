@@ -20,11 +20,24 @@ Constitutional Compliance:
 import argparse
 import logging
 import os
+import subprocess
 import sys
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
-import iris
 from dotenv import load_dotenv
+
+# Try iris-devtester first, fall back to direct iris module
+try:
+    from iris_devtester.utils.dbapi_compat import get_connection as devtester_connect
+    DEVTESTER_AVAILABLE = True
+except ImportError:
+    DEVTESTER_AVAILABLE = False
+
+try:
+    import iris
+    IRIS_AVAILABLE = True
+except ImportError:
+    IRIS_AVAILABLE = False
 
 
 # Configure logging
@@ -36,39 +49,100 @@ def setup_logging(verbose: bool = False):
     return logging.getLogger(__name__)
 
 
+# The dedicated test container name
+TEST_CONTAINER_NAME = 'iris_test_vector_graph_ai'
+
+
+def get_container_port(container_name: str, internal_port: int = 1972) -> int:
+    """Get the host port for a specific Docker container."""
+    try:
+        result = subprocess.run(
+            ['docker', 'port', container_name, str(internal_port)],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            port_line = result.stdout.strip().split('\n')[0]
+            port = int(port_line.split(':')[-1])
+            return port
+    except (subprocess.TimeoutExpired, ValueError, IndexError):
+        pass
+    return None
+
+
 # Database connection
 def get_connection():
     """
-    Get IRIS database connection from environment variables.
+    Get IRIS database connection.
+
+    Connection priority:
+    1. IRIS_TEST_CONTAINER env var - target specific test container (for tests)
+    2. IRIS_TEST_PORT env var - explicit test port override
+    3. IRIS_PORT env var from .env file (for production)
+
+    Uses iris-devtester if available, falls back to direct iris module.
 
     Returns:
-        iris.connection: Active database connection
+        Active database connection
 
     Raises:
         ValueError: If connection parameters are missing
         Exception: If connection fails
     """
     load_dotenv()
+    logger = logging.getLogger(__name__)
 
     # Get connection parameters
     host = os.getenv('IRIS_HOST', 'localhost')
-    port = int(os.getenv('IRIS_PORT', '1972'))
     namespace = os.getenv('IRIS_NAMESPACE', 'USER')
     username = os.getenv('IRIS_USER', '_SYSTEM')
     password = os.getenv('IRIS_PASSWORD', 'SYS')
 
-    if not all([host, port, namespace, username, password]):
+    # Port discovery - test container first, then env vars
+    port = None
+
+    # Priority 1: Check for specific test container
+    container_name = os.getenv('IRIS_TEST_CONTAINER', '')
+    if container_name:
+        port = get_container_port(container_name)
+        if port:
+            logger.debug(f"Using test container {container_name} on port {port}")
+
+    # Priority 2: Check for test-specific port override
+    if port is None:
+        test_port = os.getenv('IRIS_TEST_PORT')
+        if test_port:
+            port = int(test_port)
+            logger.debug(f"Using IRIS_TEST_PORT={port}")
+
+    # Priority 3: Check for running test container by default name (pytest detection)
+    if port is None and 'pytest' in sys.modules:
+        port = get_container_port(TEST_CONTAINER_NAME)
+        if port:
+            logger.debug(f"Detected pytest - using test container {TEST_CONTAINER_NAME} on port {port}")
+
+    # Priority 4: Use production port from .env
+    if port is None:
+        port = int(os.getenv('IRIS_PORT', '1972'))
+        logger.debug(f"Using IRIS_PORT={port}")
+
+    if not all([host, namespace, username, password]):
         raise ValueError(
             "Missing required IRIS connection parameters. "
-            "Please check your .env file has IRIS_HOST, IRIS_PORT, "
-            "IRIS_NAMESPACE, IRIS_USER, and IRIS_PASSWORD defined."
+            "Please check your .env file has IRIS_HOST, IRIS_NAMESPACE, "
+            "IRIS_USER, and IRIS_PASSWORD defined."
         )
 
+    # Use iris-devtester if available, otherwise direct iris module
     try:
-        conn = iris.connect(host, port, namespace, username, password)
+        if DEVTESTER_AVAILABLE:
+            conn = devtester_connect(host, port, namespace, username, password)
+        elif IRIS_AVAILABLE:
+            conn = iris.connect(host, port, namespace, username, password)
+        else:
+            raise ImportError("Neither iris-devtester nor iris module available")
         return conn
     except Exception as e:
-        raise Exception(f"Failed to connect to IRIS database: {e}")
+        raise Exception(f"Failed to connect to IRIS database at {host}:{port}: {e}")
 
 
 # Migration functions to be implemented in later tasks

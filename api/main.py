@@ -7,10 +7,12 @@ Provides:
 """
 
 import os
+import importlib
 from typing import Dict, Any
 from contextlib import asynccontextmanager
 
-import iris
+# NOTE: Use importlib to avoid conflict with iris/ directory in project
+iris_module = importlib.import_module('intersystems_irispython.iris')
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
@@ -55,7 +57,7 @@ class ConnectionPool:
             return self._connections.pop()
 
         # Create new connection
-        return iris.connect(
+        return iris_module.connect(
             IRIS_HOST,
             IRIS_PORT,
             IRIS_NAMESPACE,

@@ -21,6 +21,7 @@ except ImportError as e:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestCreateProteinMutation:
     """Integration tests for createProtein mutation with FK validation"""
@@ -78,6 +79,17 @@ class TestCreateProteinMutation:
 
     async def test_create_protein_with_embedding(self, iris_connection):
         """Test createProtein with 768-dimensional embedding vector"""
+        # Cleanup any existing test data first
+        cursor = iris_connection.cursor()
+        try:
+            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", ("PROTEIN:TEST_WITH_EMB",))
+            cursor.execute("DELETE FROM rdf_props WHERE s = ?", ("PROTEIN:TEST_WITH_EMB",))
+            cursor.execute("DELETE FROM rdf_labels WHERE s = ?", ("PROTEIN:TEST_WITH_EMB",))
+            cursor.execute("DELETE FROM nodes WHERE node_id = ?", ("PROTEIN:TEST_WITH_EMB",))
+            iris_connection.commit()
+        except:
+            iris_connection.rollback()
+
         # Generate normalized 768-dimensional embedding
         emb = np.random.randn(768)
         emb = emb / np.linalg.norm(emb)
@@ -204,6 +216,7 @@ class TestCreateProteinMutation:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestUpdateProteinMutation:
     """Integration tests for updateProtein mutation"""
@@ -348,6 +361,7 @@ class TestUpdateProteinMutation:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestDeleteProteinMutation:
     """Integration tests for deleteProtein mutation with FK cascade"""
@@ -468,24 +482,17 @@ class TestDeleteProteinMutation:
         assert "not found" in str(result.errors[0]).lower()
 
 
+# NOTE: iris_connection fixture is provided by tests/conftest.py
+# Do not define a local fixture here to avoid shadowing
+
+
 @pytest.fixture
-def iris_connection():
-    """Fixture providing live IRIS database connection"""
-    import iris
-    import os
-
-    conn = iris.connect(
-        os.getenv('IRIS_HOST', 'localhost'),
-        int(os.getenv('IRIS_PORT', '1972')),
-        os.getenv('IRIS_NAMESPACE', 'USER'),
-        os.getenv('IRIS_USER', '_SYSTEM'),
-        os.getenv('IRIS_PASSWORD', 'SYS')
-    )
-
-    yield conn
+def mutation_test_cleanup(iris_connection):
+    """Fixture to cleanup mutation test data"""
+    yield
 
     # Cleanup: Remove test data
-    cursor = conn.cursor()
+    cursor = iris_connection.cursor()
     test_nodes = [
         "PROTEIN:TEST_CREATE",
         "PROTEIN:TEST_WITH_EMB",
@@ -506,5 +513,4 @@ def iris_connection():
         except:
             pass
 
-    conn.commit()
-    conn.close()
+    iris_connection.commit()
