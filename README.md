@@ -37,7 +37,7 @@ Built with embedded Python for flexibility and IRIS SQL procedures for performan
                  │
 ┌────────────────▼────────────────────────────────┐
 │  Embedded Python (Graph.KG.PyOps)               │
-│  - Core engine (iris_vector_graph_core)         │
+│  - Core engine (iris_vector_graph)         │
 │  - NetworkX integration                         │
 │  - Vector utilities                             │
 └────────────────┬────────────────────────────────┘
@@ -65,7 +65,7 @@ sql/
     001_add_nodepk_table.sql
     002_add_fk_constraints.sql
 
-iris_vector_graph_core/   # Python engine
+iris_vector_graph/   # Python engine
   engine.py               # Core search/traversal logic
   fusion.py               # RRF hybrid search
   vector_utils.py         # Vector operations

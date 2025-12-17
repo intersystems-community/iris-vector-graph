@@ -127,7 +127,7 @@ kg_Documents   → Text content for hybrid search
 - **Monitoring stack** (metrics, logs, alerts)
 
 ### Development Environment
-- **Python 3.8+** for embedded operations and iris_vector_graph_core module
+- **Python 3.8+** for embedded operations and iris_vector_graph module
 - **UV package manager** for fast dependency management
 - **Git-based** version control
 - **CI/CD pipeline** with automated testing

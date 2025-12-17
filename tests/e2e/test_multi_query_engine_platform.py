@@ -17,7 +17,6 @@ Validates:
 
 import os
 import pytest
-import iris
 import json
 import numpy as np
 from fastapi.testclient import TestClient
@@ -31,18 +30,39 @@ except ImportError:
     app = None
 
 
-# IRIS connection configuration
-IRIS_HOST = os.getenv("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.getenv("IRIS_PORT", "1972"))
-IRIS_NAMESPACE = os.getenv("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.getenv("IRIS_USER", "_SYSTEM")
-IRIS_PASSWORD = os.getenv("IRIS_PASSWORD", "SYS")
-
-
 @pytest.fixture
 def iris_connection():
-    """Fixture providing IRIS database connection"""
-    conn = iris.connect(IRIS_HOST, IRIS_PORT, IRIS_NAMESPACE, IRIS_USER, IRIS_PASSWORD)
+    """Fixture providing IRIS database connection via iris-devtester.
+
+    Uses iris-devtester for auto-discovery per constitution.
+    Falls back to .env if iris-devtester fails.
+    """
+    # Try iris-devtester auto-discovery first (per constitution)
+    try:
+        from iris_devtester.connections import auto_detect_iris_host_and_port
+        from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
+
+        host, port = auto_detect_iris_host_and_port()
+        conn = dbapi_connect(host, port, 'USER', '_SYSTEM', 'SYS')
+        yield conn
+        conn.close()
+        return
+    except Exception:
+        pass
+
+    # Fall back to intersystems-irispython
+    import importlib
+    iris_module = importlib.import_module('intersystems_irispython.iris')
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    conn = iris_module.connect(
+        os.getenv('IRIS_HOST', 'localhost'),
+        int(os.getenv('IRIS_PORT', '1972')),
+        os.getenv('IRIS_NAMESPACE', 'USER'),
+        os.getenv('IRIS_USER', '_SYSTEM'),
+        os.getenv('IRIS_PASSWORD', 'SYS')
+    )
     yield conn
     conn.close()
 
@@ -153,11 +173,11 @@ def test_sql_direct_create_test_data(iris_connection, test_data_cleanup):
     cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
                    ("E2E:TEST:GENE1", "name", "E2E_TestGene1"))
 
-    # Add relationship
-    cursor.execute("INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-                   (999990001, "E2E:TEST:PROTEIN1", "INTERACTS_WITH", "E2E:TEST:PROTEIN2"))
-    cursor.execute("INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-                   (999990002, "E2E:TEST:GENE1", "ENCODES", "E2E:TEST:PROTEIN1"))
+    # Add relationship (edge_id is auto-generated via IDENTITY)
+    cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                   ("E2E:TEST:PROTEIN1", "INTERACTS_WITH", "E2E:TEST:PROTEIN2"))
+    cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                   ("E2E:TEST:GENE1", "ENCODES", "E2E:TEST:PROTEIN1"))
 
     # Add embeddings
     emb1 = np.random.randn(768)
@@ -468,8 +488,8 @@ def test_graph_traversal_cypher_vs_graphql(test_client, iris_connection, test_da
                    ("E2E:TEST:PROTEIN1", "name", "E2E_ProteinA"))
     cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
                    ("E2E:TEST:PROTEIN2", "name", "E2E_ProteinB"))
-    cursor.execute("INSERT INTO rdf_edges (edge_id, s, p, o_id) VALUES (?, ?, ?, ?)",
-                   (999990003, "E2E:TEST:PROTEIN1", "INTERACTS_WITH", "E2E:TEST:PROTEIN2"))
+    cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                   ("E2E:TEST:PROTEIN1", "INTERACTS_WITH", "E2E:TEST:PROTEIN2"))
     conn.commit()
 
     # Query via GraphQL - verify relationship traversal works

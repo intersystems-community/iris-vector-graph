@@ -2,14 +2,14 @@
 """
 Biomedical Graph Engine - Domain-Specific Wrapper
 
-Provides biomedical-specific functionality on top of the generic iris_vector_graph_core.
+Provides biomedical-specific functionality on top of the generic iris_vector_graph.
 Includes specialized entity types, predicates, and search methods for biomedical knowledge graphs.
 """
 
 import logging
 from typing import List, Tuple, Optional, Dict, Any
-from iris_vector_graph_core.engine import IRISGraphEngine
-from iris_vector_graph_core.fusion import HybridSearchFusion
+from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.fusion import HybridSearchFusion
 
 logger = logging.getLogger(__name__)
 

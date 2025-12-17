@@ -107,3 +107,43 @@ BEGIN
   RETURN
   SELECT id, rrf AS score FROM TABLE(kg_RRF_FUSE(topN, 200, 200, 60, queryVector, qtext));
 END;
+
+-- 6) Personalized PageRank with bidirectional edge traversal
+-- Calls PageRankEmbedded.cls for IRIS embedded Python performance (10-50ms)
+-- Bidirectional mode enables multi-hop reasoning in asymmetric knowledge graphs
+--
+-- Returns JSON array: [{"nodeId": "ENTITY:X", "pagerank": 0.15}, ...]
+-- Use JSON_TABLE in caller to parse results into rows
+--
+-- Example usage:
+--   SELECT entity_id, score
+--   FROM JSON_TABLE(
+--     kg_PPR('["PROTEIN:TP53"]', 0.85, 100, 1, 1.0),
+--     '$[*]' COLUMNS(entity_id VARCHAR(256) PATH '$.nodeId', score DOUBLE PATH '$.pagerank')
+--   )
+--   ORDER BY score DESC
+-- NOTE: Function named kg_PPR (not kg_PERSONALIZED_PAGERANK_JSON) due to IRIS bug:
+-- Function names containing _JSON or JSON_ patterns cause "Invalid number of parameters" errors
+CREATE OR REPLACE FUNCTION kg_PPR(
+  seedEntities VARCHAR(32000),        -- JSON array of seed entity IDs: '["PROTEIN:TP53"]'
+  dampingFactor DOUBLE DEFAULT 0.85,
+  maxIterations INT DEFAULT 100,
+  bidirectional INT DEFAULT 0,        -- 0=forward only, 1=bidirectional
+  reverseEdgeWeight DOUBLE DEFAULT 1.0
+)
+RETURNS VARCHAR(8000)                 -- NOTE: VARCHAR(MAX) causes empty result in Python dbapi
+LANGUAGE OBJECTSCRIPT
+{
+    // Call PageRankEmbedded with embedded Python for performance
+    set results = ##class(PageRankEmbedded).ComputePageRank(
+        "%",                        // nodeFilter - all nodes
+        maxIterations,
+        dampingFactor,
+        seedEntities,
+        bidirectional,
+        reverseEdgeWeight
+    )
+
+    // Return as JSON string
+    quit results.%ToJSON()
+}

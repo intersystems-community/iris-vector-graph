@@ -161,13 +161,13 @@ python scripts/performance/test_vector_performance.py
 # Check resource usage
 docker stats iris_test_graph_ai
 
-# Test iris_vector_graph_core functionality
+# Test iris_vector_graph functionality
 python -c "
-from iris_vector_graph_core.engine import IRISGraphEngine
+from iris_vector_graph.engine import IRISGraphEngine
 import iris
 conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
 engine = IRISGraphEngine(conn)
-print('✅ iris_vector_graph_core working')
+print('✅ iris_vector_graph working')
 conn.close()
 "
 ```
