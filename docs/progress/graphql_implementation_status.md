@@ -423,7 +423,7 @@ httpx = ">=0.28.0"  # For FastAPI testing
 3. **Performance as a Feature**: HNSW index, DataLoader batching, <10ms queries
 4. **Hybrid Search by Default**: Vector similarity + graph traversal via similar() resolver
 5. **Observability & Debuggability**: GraphQL error format, trace IDs, health checks
-6. **Modular Core Library**: iris_vector_graph_core ready for reuse (future refactor)
+6. **Modular Core Library**: iris_vector_graph ready for reuse (future refactor)
 7. **Explicit Error Handling**: GraphQL errors with actionable messages
 8. **Standardized Database Interfaces**: iris.connect() patterns, parameterized queries
 

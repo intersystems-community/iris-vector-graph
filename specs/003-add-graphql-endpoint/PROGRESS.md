@@ -28,7 +28,7 @@
 ### Phase 1: Setup (T001-T003) ✅
 
 - **T001**: Project structure created
-  - Directories: `api/graphql/`, `api/graphql/resolvers/`, `api/models/`, `iris_vector_graph_core/graphql/`, `tests/contract/`, `tests/integration/graphql/`
+  - Directories: `api/graphql/`, `api/graphql/resolvers/`, `api/models/`, `iris_vector_graph/graphql/`, `tests/contract/`, `tests/integration/graphql/`
   - All `__init__.py` files in place
 
 - **T002**: Dependencies installed
@@ -38,7 +38,7 @@
   - `pytest-asyncio>=0.23.0`
 
 - **T003**: Linting configured
-  - mypy paths: `api/`, `iris_vector_graph_core/graphql/`
+  - mypy paths: `api/`, `iris_vector_graph/graphql/`
   - pytest asyncio mode: auto, timeout: 30s
   - black async preview mode enabled
 

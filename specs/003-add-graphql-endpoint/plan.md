@@ -87,7 +87,7 @@ Add GraphQL API endpoint with type-safe schema and efficient DataLoader batching
 - DataLoader batch metrics tracked (batch size, SQL query count)
 
 **VI. Modular Core Library** ✅
-- GraphQL resolvers module will be independent (iris_vector_graph_core/graphql/)
+- GraphQL resolvers module will be independent (iris_vector_graph/graphql/)
 - Resolver logic will be database-agnostic (abstract data fetching)
 - IRIS-specific integration in FastAPI router (api/graphql/)
 - Reusable for integration with other RAG systems
@@ -145,7 +145,7 @@ api/
 │   └── graphql.py              # NEW: Pydantic models for validation
 └── dependencies.py             # IRIS connection pool, auth dependencies
 
-iris_vector_graph_core/
+iris_vector_graph/
 ├── graphql/                    # NEW: Database-agnostic GraphQL utilities
 │   ├── __init__.py
 │   ├── base_resolvers.py       # NEW: Abstract resolver base classes
@@ -170,7 +170,7 @@ scripts/performance/
 ```
 
 **Structure Decision**: Web application structure with Python ASGI backend following openCypher endpoint pattern. GraphQL components split into:
-1. **Database-agnostic core**: iris_vector_graph_core/graphql/ (base resolvers, DataLoader patterns, complexity calculation, caching)
+1. **Database-agnostic core**: iris_vector_graph/graphql/ (base resolvers, DataLoader patterns, complexity calculation, caching)
 2. **ASGI API layer**: api/graphql/ directory with Strawberry GraphQL schema, types, resolvers (query/mutation/subscription)
 3. **IRIS integration**: Connection pooling via dependencies.py, iris.connect() in async context, DataLoader batching for SQL queries
 
@@ -259,7 +259,7 @@ Re-evaluating design artifacts against constitutional principles:
 - Resolver performance metrics exposed (query rate, error rate, execution time)
 
 **VI. Modular Core Library** ✅
-- GraphQL utilities in iris_vector_graph_core/graphql/ (database-agnostic)
+- GraphQL utilities in iris_vector_graph/graphql/ (database-agnostic)
 - Resolver logic separated from IRIS integration
 - DataLoader pattern generic and reusable
 - Schema design allows integration with other RAG systems
@@ -296,11 +296,11 @@ No new violations introduced. Design aligns with all 8 core principles. ASGI arc
 2. **Core GraphQL Types** (independent, parallel):
    - api/graphql/types.py → Strawberry types (Node, Protein, Gene, Pathway)
    - api/models/graphql.py → Pydantic validation models
-   - iris_vector_graph_core/graphql/base_resolvers.py → Abstract resolver base classes
+   - iris_vector_graph/graphql/base_resolvers.py → Abstract resolver base classes
 
 3. **DataLoader Implementation** (depends on types):
    - api/graphql/loaders.py → ProteinLoader, EdgeLoader, PropertyLoader, LabelLoader
-   - iris_vector_graph_core/graphql/dataloader_base.py → Generic DataLoader patterns
+   - iris_vector_graph/graphql/dataloader_base.py → Generic DataLoader patterns
 
 4. **Resolvers** (depends on types and loaders):
    - api/graphql/resolvers/query.py → Query resolvers (protein, gene, pathway lookups)
@@ -310,8 +310,8 @@ No new violations introduced. Design aligns with all 8 core principles. ASGI arc
 5. **GraphQL Schema Integration** (depends on all above):
    - api/graphql/schema.py → Strawberry schema definition
    - api/main.py → FastAPI + Strawberry GraphQL integration
-   - iris_vector_graph_core/graphql/complexity.py → Query complexity calculator
-   - iris_vector_graph_core/graphql/cache.py → Resolver caching utilities
+   - iris_vector_graph/graphql/complexity.py → Query complexity calculator
+   - iris_vector_graph/graphql/cache.py → Resolver caching utilities
 
 6. **Integration Tests** (depends on full stack):
    - tests/integration/test_graphql_e2e.py → End-to-end GraphQL execution

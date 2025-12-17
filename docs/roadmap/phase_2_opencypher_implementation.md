@@ -341,7 +341,7 @@ ClassMethod ExecuteCypher() As %Status
 
 **Python Client**:
 ```python
-from iris_vector_graph_core import CypherClient
+from iris_vector_graph import CypherClient
 
 client = CypherClient(host='localhost', port=52773, namespace='USER',
                       username='_SYSTEM', password='SYS')
