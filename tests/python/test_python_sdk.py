@@ -21,6 +21,15 @@ except ImportError:
     IRIS_AVAILABLE = False
     pytest.skip("IRIS Python driver not available", allow_module_level=True)
 
+# Use iris-devtester for auto-discovery of IRIS container
+try:
+    from iris_devtester.connections import auto_detect_iris_host_and_port
+    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port()
+except ImportError:
+    # Fallback to defaults if iris-devtester not available
+    IRIS_HOST = 'localhost'
+    IRIS_PORT = 1972
+
 try:
     import networkx as nx
     NETWORKX_AVAILABLE = True
@@ -39,8 +48,8 @@ class TestIRISPythonSDK:
 
         try:
             cls.conn = iris.connect(
-                hostname='localhost',
-                port=1973,
+                hostname=IRIS_HOST,
+                port=IRIS_PORT,
                 namespace='USER',
                 username='_SYSTEM',
                 password='SYS'
@@ -50,12 +59,25 @@ class TestIRISPythonSDK:
             cursor = cls.conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
+
+            # Check if required schema tables exist
+            cursor.execute("""
+                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = 'SQLUser'
+                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+            """)
+            tables = [row[0].lower() for row in cursor.fetchall()]
             cursor.close()
 
-            print("✓ IRIS Python SDK connection established")
+            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+            if not required_tables.issubset(set(tables)):
+                missing = required_tables - set(tables)
+                pytest.skip(f"Required schema tables missing: {missing}. Run sql/schema.sql first.")
+
+            print(f"✓ IRIS Python SDK connection established ({IRIS_HOST}:{IRIS_PORT})")
 
         except Exception as e:
-            pytest.skip(f"IRIS database not accessible: {e}")
+            pytest.skip(f"IRIS database not accessible at {IRIS_HOST}:{IRIS_PORT}: {e}")
 
     @classmethod
     def teardown_class(cls):
@@ -340,8 +362,8 @@ class TestIRISPythonSDK:
             try:
                 # Create separate connection for each thread
                 local_conn = iris.connect(
-                    hostname='localhost',
-                    port=1973,
+                    hostname=IRIS_HOST,
+                    port=IRIS_PORT,
                     namespace='USER',
                     username='_SYSTEM',
                     password='SYS'
@@ -415,13 +437,32 @@ class TestNetworkXIntegration:
         if not IRIS_AVAILABLE:
             pytest.skip("IRIS Python driver not available")
 
-        cls.conn = iris.connect(
-            hostname='localhost',
-            port=1973,
-            namespace='USER',
-            username='_SYSTEM',
-            password='SYS'
-        )
+        try:
+            cls.conn = iris.connect(
+                hostname=IRIS_HOST,
+                port=IRIS_PORT,
+                namespace='USER',
+                username='_SYSTEM',
+                password='SYS'
+            )
+
+            # Check if required schema tables exist
+            cursor = cls.conn.cursor()
+            cursor.execute("""
+                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = 'SQLUser'
+                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+            """)
+            tables = [row[0].lower() for row in cursor.fetchall()]
+            cursor.close()
+
+            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+            if not required_tables.issubset(set(tables)):
+                missing = required_tables - set(tables)
+                pytest.skip(f"Required schema tables missing: {missing}")
+
+        except Exception as e:
+            pytest.skip(f"IRIS database not accessible: {e}")
 
     @classmethod
     def teardown_class(cls):
@@ -570,13 +611,32 @@ class TestDataFormatLoading:
         if not IRIS_AVAILABLE:
             pytest.skip("IRIS Python driver not available")
 
-        cls.conn = iris.connect(
-            hostname='localhost',
-            port=1973,
-            namespace='USER',
-            username='_SYSTEM',
-            password='SYS'
-        )
+        try:
+            cls.conn = iris.connect(
+                hostname=IRIS_HOST,
+                port=IRIS_PORT,
+                namespace='USER',
+                username='_SYSTEM',
+                password='SYS'
+            )
+
+            # Check if required schema tables exist
+            cursor = cls.conn.cursor()
+            cursor.execute("""
+                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = 'SQLUser'
+                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+            """)
+            tables = [row[0].lower() for row in cursor.fetchall()]
+            cursor.close()
+
+            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+            if not required_tables.issubset(set(tables)):
+                missing = required_tables - set(tables)
+                pytest.skip(f"Required schema tables missing: {missing}")
+
+        except Exception as e:
+            pytest.skip(f"IRIS database not accessible: {e}")
 
     @classmethod
     def teardown_class(cls):
@@ -717,13 +777,32 @@ class TestPerformanceBenchmarks:
         if not IRIS_AVAILABLE:
             pytest.skip("IRIS Python driver not available")
 
-        cls.conn = iris.connect(
-            hostname='localhost',
-            port=1973,
-            namespace='USER',
-            username='_SYSTEM',
-            password='SYS'
-        )
+        try:
+            cls.conn = iris.connect(
+                hostname=IRIS_HOST,
+                port=IRIS_PORT,
+                namespace='USER',
+                username='_SYSTEM',
+                password='SYS'
+            )
+
+            # Check if required schema tables exist
+            cursor = cls.conn.cursor()
+            cursor.execute("""
+                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = 'SQLUser'
+                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+            """)
+            tables = [row[0].lower() for row in cursor.fetchall()]
+            cursor.close()
+
+            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+            if not required_tables.issubset(set(tables)):
+                missing = required_tables - set(tables)
+                pytest.skip(f"Required schema tables missing: {missing}")
+
+        except Exception as e:
+            pytest.skip(f"IRIS database not accessible: {e}")
 
     @classmethod
     def teardown_class(cls):

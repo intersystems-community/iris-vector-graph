@@ -8,14 +8,15 @@ import sys
 import os
 import pytest
 import json
-import iris
+import importlib
 import numpy as np
 
 # Add the python directory to path to import operators
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../python'))
 
+# NOTE: Use importlib to avoid conflict with iris/ directory in project
 try:
-    import iris
+    iris_module = importlib.import_module('intersystems_irispython.iris')
     from iris_vector_graph_operators import IRISGraphOperators
     IRIS_AVAILABLE = True
 except ImportError:
@@ -33,7 +34,7 @@ class TestPythonGraphOperators:
             pytest.skip("IRIS Python driver not available")
 
         try:
-            cls.conn = iris.connect(
+            cls.conn = iris_module.connect(
                 hostname='localhost',
                 port=1973,
                 namespace='USER',

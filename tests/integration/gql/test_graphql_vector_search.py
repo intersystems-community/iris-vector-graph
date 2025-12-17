@@ -20,6 +20,7 @@ except ImportError as e:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
+@pytest.mark.asyncio
 @pytest.mark.skipif(not SCHEMA_EXISTS, reason="Schema not implemented yet - TDD gate")
 class TestVectorSimilarityResolver:
     """Integration tests for Protein.similar() field resolver with HNSW"""
@@ -27,6 +28,22 @@ class TestVectorSimilarityResolver:
     async def test_protein_similar_basic_search(self, iris_connection):
         """Test protein.similar() returns semantically similar proteins"""
         cursor = iris_connection.cursor()
+
+        # Cleanup any existing test data first
+        test_nodes = ["PROTEIN:TP53", "PROTEIN:MDM2", "PROTEIN:P21"]
+        for node_id in test_nodes:
+            try:
+                cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", (node_id,))
+                cursor.execute("DELETE FROM rdf_edges WHERE s = ? OR o_id = ?", (node_id, node_id))
+                cursor.execute("DELETE FROM rdf_props WHERE s = ?", (node_id,))
+                cursor.execute("DELETE FROM rdf_labels WHERE s = ?", (node_id,))
+                cursor.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))
+            except:
+                pass
+        try:
+            iris_connection.commit()
+        except:
+            iris_connection.rollback()
 
         # Setup: Create 3 proteins with embeddings
         proteins = [
@@ -154,6 +171,16 @@ class TestVectorSimilarityResolver:
         """Test similar() respects similarity threshold parameter"""
         cursor = iris_connection.cursor()
 
+        # Cleanup any existing test data first
+        try:
+            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", ("PROTEIN:TEST_THRESHOLD",))
+            cursor.execute("DELETE FROM rdf_props WHERE s = ?", ("PROTEIN:TEST_THRESHOLD",))
+            cursor.execute("DELETE FROM rdf_labels WHERE s = ?", ("PROTEIN:TEST_THRESHOLD",))
+            cursor.execute("DELETE FROM nodes WHERE node_id = ?", ("PROTEIN:TEST_THRESHOLD",))
+            iris_connection.commit()
+        except:
+            iris_connection.rollback()
+
         # Setup: Create protein with embedding
         try:
             cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ("PROTEIN:TEST_THRESHOLD",))
@@ -257,24 +284,17 @@ class TestVectorSimilarityResolver:
             assert len(similar) <= 2, "Should respect limit parameter"
 
 
+# NOTE: iris_connection fixture is provided by tests/conftest.py
+# Do not define a local fixture here to avoid shadowing
+
+
 @pytest.fixture
-def iris_connection():
-    """Fixture providing live IRIS database connection"""
-    import iris
-    import os
-
-    conn = iris.connect(
-        os.getenv('IRIS_HOST', 'localhost'),
-        int(os.getenv('IRIS_PORT', '1972')),
-        os.getenv('IRIS_NAMESPACE', 'USER'),
-        os.getenv('IRIS_USER', '_SYSTEM'),
-        os.getenv('IRIS_PASSWORD', 'SYS')
-    )
-
-    yield conn
+def vector_search_test_cleanup(iris_connection):
+    """Fixture to cleanup vector search test data"""
+    yield
 
     # Cleanup: Remove test data
-    cursor = conn.cursor()
+    cursor = iris_connection.cursor()
     test_nodes = [
         "PROTEIN:TP53", "PROTEIN:MDM2", "PROTEIN:P21",
         "PROTEIN:TEST_THRESHOLD"
@@ -289,5 +309,4 @@ def iris_connection():
         except:
             pass
 
-    conn.commit()
-    conn.close()
+    iris_connection.commit()

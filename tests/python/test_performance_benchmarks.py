@@ -2,11 +2,16 @@
 """
 Performance benchmark test suite for IRIS Graph-AI
 Tests system performance at scale and compares different access methods
+
+Uses iris-devtester for connection management.
+Targets specific test container: iris_test_vector_graph_ai
 """
 
 import pytest
 import time
 import json
+import os
+import subprocess
 import numpy as np
 import requests
 import statistics
@@ -15,15 +20,50 @@ from typing import List, Dict, Tuple
 import logging
 
 try:
-    import iris
-    IRIS_AVAILABLE = True
+    from iris_devtester.utils.dbapi_compat import get_connection as devtester_connect
+    DEVTESTER_AVAILABLE = True
 except ImportError:
-    IRIS_AVAILABLE = False
-    pytest.skip("IRIS Python driver not available", allow_module_level=True)
+    DEVTESTER_AVAILABLE = False
+    pytest.skip("iris-devtester not available", allow_module_level=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# The dedicated test container name
+TEST_CONTAINER_NAME = 'iris_test_vector_graph_ai'
+
+
+def get_container_port(container_name: str, internal_port: int = 1972) -> int:
+    """Get the host port for a specific Docker container."""
+    try:
+        result = subprocess.run(
+            ['docker', 'port', container_name, str(internal_port)],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            port_line = result.stdout.strip().split('\n')[0]
+            port = int(port_line.split(':')[-1])
+            return port
+    except (subprocess.TimeoutExpired, ValueError, IndexError):
+        pass
+    return None
+
+
+def get_iris_connection():
+    """Get IRIS connection using the dedicated test container."""
+    if not DEVTESTER_AVAILABLE:
+        raise ImportError("iris-devtester not available")
+
+    host = os.getenv('IRIS_HOST', 'localhost')
+    container_name = os.getenv('IRIS_TEST_CONTAINER', TEST_CONTAINER_NAME)
+
+    # Get port from specific test container
+    port = get_container_port(container_name)
+    if port is None:
+        port = int(os.getenv('IRIS_TEST_PORT', '1972'))
+
+    return devtester_connect(host, port, 'USER', '_SYSTEM', 'SYS')
 
 
 class TestPerformanceBenchmarks:
@@ -32,17 +72,11 @@ class TestPerformanceBenchmarks:
     @classmethod
     def setup_class(cls):
         """Setup performance test environment"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if not DEVTESTER_AVAILABLE:
+            pytest.skip("iris-devtester not available")
 
         try:
-            cls.conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            cls.conn = get_iris_connection()
 
             # Test connection
             cursor = cls.conn.cursor()
@@ -199,11 +233,10 @@ class TestPerformanceBenchmarks:
             logger.info(f"  {query_name:15s}: avg={metrics['avg_ms']:6.2f}ms "
                        f"p95={metrics['p95_ms']:6.2f}ms")
 
-    @pytest.mark.skipif(not hasattr(TestPerformanceBenchmarks, 'rest_api_available') or
-                        not TestPerformanceBenchmarks.rest_api_available,
-                        reason="REST API not available")
     def test_rest_api_performance(self):
-        """Test REST API performance vs direct IRIS connection"""
+        """Test REST API performance vs direct IRIS connection - skipped if REST API not available"""
+        if not getattr(self.__class__, 'rest_api_available', False):
+            pytest.skip("REST API not available")
         # Generate test vector
         test_vector = np.random.rand(768).tolist()
 
@@ -262,13 +295,7 @@ class TestPerformanceBenchmarks:
 
         def iris_worker(worker_id: int, iterations: int) -> Dict:
             """Worker function for direct IRIS access"""
-            local_conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            local_conn = get_iris_connection()
 
             times = []
             errors = 0
