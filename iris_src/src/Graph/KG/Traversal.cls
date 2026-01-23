@@ -47,7 +47,7 @@ ClassMethod BFS_JSON(srcId As %String, preds As %DynamicArray, maxHops As %Integ
     want_label = str(dstLabel) if dstLabel else ""
     pred_seq = []
     if preds is not None:
-        for i in range(1, preds._Size()+1):
+        for i in range(preds._Size()):
             pred_seq.append(str(preds._Get(i)))
 
     seen = set([src])
@@ -65,7 +65,7 @@ ClassMethod BFS_JSON(srcId As %String, preds As %DynamicArray, maxHops As %Integ
                 while True:
                     o = g.next("out", s, p, o)
                     if o == "": break
-                    if want_label and g.get("label", want_label, o) == "": 
+                    if want_label and g.get("label", want_label, o) is None: 
                         continue
                     path_id += 1
                     stepObj = {"id": path_id, "step": hop, "s": s, "p": p, "o": o}
@@ -80,7 +80,7 @@ ClassMethod BFS_JSON(srcId As %String, preds As %DynamicArray, maxHops As %Integ
                     while True:
                         o = g.next("out", s, p, o)
                         if o == "": break
-                        if want_label and g.get("label", want_label, o) == "":
+                        if want_label and g.get("label", want_label, o) is None:
                             continue
                         path_id += 1
                         stepObj = {"id": path_id, "step": hop, "s": s, "p": p, "o": o}
