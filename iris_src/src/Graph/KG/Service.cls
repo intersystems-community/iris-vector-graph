@@ -1,4 +1,4 @@
-Class Graph.KG.Service Extends (%CSP.REST, %RegisteredObject)
+Class Graph.KG.Service Extends (%RegisteredObject, %CSP.REST)
 {
 
 XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
@@ -20,7 +20,7 @@ ClassMethod CreateWebApp(path As %String = "/kg") As %Status
 		Set props("Enabled") = 1
 		Set props("MatchRoles") = ":/%All"
 		Set props("AutheEnabled") = 32
-		Do ##class(%SYS.REST).CreateApplication(.props)
+		Do ##class(Security.Applications).Create(webName, .props)
 		Return sc
 	} Catch ex {
 		Return ex.AsStatus()
