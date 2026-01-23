@@ -100,32 +100,32 @@ ClassMethod kgRRF_FUSE(k As %Integer = 50, k1 As %Integer = 200, k2 As %Integer 
     return results
 }
 
-ClassMethod kgGRAPH_PATH(srcId As %String, pred1 As %String, pred2 As %String, maxHops As %Integer = 2) As %DynamicArray [ Language = objectscript ]
+ClassMethod kgGRAPH_PATH(srcId As %String, pred1 As %String, pred2 As %String, maxHops As %Integer = 2) As %DynamicArray [ Language = cache ]
 {
-    &sql(DECLARE path_cursor CURSOR FOR
-         SELECT 1 AS path_id, 1 AS step, e1.s, e1.p, e1.o_id
-         FROM rdf_edges e1
-         WHERE e1.s = :srcId AND e1.p = :pred1
-         UNION ALL
-         SELECT 1 AS path_id, 2 AS step, e2.s, e2.p, e2.o_id
-         FROM rdf_edges e2
-         WHERE e2.p = :pred2
-           AND EXISTS (
-             SELECT 1 FROM rdf_edges e1
-             WHERE e1.s = :srcId AND e1.p = :pred1 AND e1.o_id = e2.s
-           )
-         ORDER BY step)
+	&sql(DECLARE path_cursor CURSOR FOR
+	     SELECT 1 AS path_id, 1 AS step, e1.s, e1.p, e1.o_id
+	     FROM rdf_edges e1
+	     WHERE e1.s = :srcId AND e1.p = :pred1
+	     UNION ALL
+	     SELECT 1 AS path_id, 2 AS step, e2.s, e2.p, e2.o_id
+	     FROM rdf_edges e2
+	     WHERE e2.p = :pred2
+	       AND EXISTS (
+	         SELECT 1 FROM rdf_edges e1
+	         WHERE e1.s = :srcId AND e1.p = :pred1 AND e1.o_id = e2.s
+	       )
+	     ORDER BY step)
 
-    &sql(OPEN path_cursor)
-    Set results = []
-    For {
-        &sql(FETCH path_cursor INTO :pathId, :step, :s, :p, :o)
-        Quit:SQLCODE'=0
-        Set obj = {"id": (pathId), "step": (step), "s": (s), "p": (p), "o": (o)}
-        Do results.%Push(obj)
-    }
-    &sql(CLOSE path_cursor)
-    Return results
+	&sql(OPEN path_cursor)
+	Set results = []
+	For {
+		&sql(FETCH path_cursor INTO :pathId, :step, :s, :p, :o)
+		Quit:SQLCODE'=0
+		Set obj = {"id": (pathId), "step": (step), "s": (s), "p": (p), "o": (o)}
+		Do results.%Push(obj)
+	}
+	&sql(CLOSE path_cursor)
+	Return results
 }
 
 ClassMethod kgRERANK(topN As %Integer, queryVector As %String, queryText As %String) As %DynamicArray [ Language = python ]

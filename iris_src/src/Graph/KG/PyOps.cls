@@ -13,7 +13,7 @@ ClassMethod VectorSearch(vec As %DynamicArray, k As %Integer = 50, label As %Str
 
     # Convert DynamicArray to JSON string for SQL procedure
     vector_list = []
-    for i in range(1, vec._Size() + 1):
+    for i in range(vec._Size()):
         vector_list.append(float(vec._Get(i)))
 
     vector_json = json.dumps(vector_list)
@@ -42,7 +42,7 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
 
     # Convert DynamicArray to JSON string for SQL procedure
     vector_list = []
-    for i in range(1, vec._Size() + 1):
+    for i in range(vec._Size()):
         vector_list.append(float(vec._Get(i)))
 
     vector_json = json.dumps(vector_list)
