@@ -26,9 +26,10 @@ The `iris_test_container` fixture (session scope) manages the container lifecycl
 
 1.  **Start**: Starts a dedicated Docker container named `iris_vector_graph_test`.
 2.  **Ready**: Waits for the IRIS SuperServer to be ready (120s timeout).
-3.  **Initialize**: Automatically executes `sql/schema.sql` and `sql/operators_fixed.sql`.
-4.  **Execute**: Runs the requested tests.
-5.  **Tear down**: Stops and removes the container at the end of the session (unless `--use-existing-iris` is specified).
+3.  **Initialize**: Automatically executes `sql/schema.sql` and `sql/operators_fixed.sql` using the **`SQLUser`** schema.
+4.  **Security**: Creates a dedicated **`test`** user with password **`test`** and ensures password expiry is disabled.
+5.  **Execute**: Runs the requested tests.
+6.  **Tear down**: Stops and removes the container at the end of the session (unless `--use-existing-iris` is specified).
 
 ## Key Fixtures
 
@@ -75,6 +76,20 @@ def test_my_feature(iris_connection, clean_test_data):
 | `IRIS_TEST_TIMEOUT` | `120` | Startup timeout in seconds. |
 
 ## Troubleshooting
+
+### "Password change required" or "Access Denied"
+IRIS Community Edition often enforces a password change on first login. The test infrastructure automatically handles this by:
+1. Creating a dedicated `test`/`test` user with `%ALL` roles.
+2. Forcefully clearing `ChangePassword` and `PasswordNeverExpires` flags via ObjectScript.
+
+If you encounter this when connecting manually:
+- Use the **`test`** user instead of `_SYSTEM`.
+- Or reset the `_SYSTEM` password: `Set usr = ##class(Security.Users).%OpenId("_SYSTEM"), usr.ChangePassword=0, usr.PasswordNeverExpires=1 Do usr.%Save()`
+
+### Schema Requirements (`SQLUser`)
+All tables and procedures are created in the **`SQLUser`** schema. If you are writing raw SQL queries in tests, ensure you either:
+- Use the **`iris_cursor`** fixture (which automatically runs `SET SCHEMA SQLUser`).
+- Or use fully qualified names: `SELECT * FROM SQLUser.nodes`.
 
 ### "AttributeError: module 'iris' has no attribute 'connect'"
 This used to happen because of a naming conflict with the `iris/` directory. That directory has been renamed to `iris_src/`, so `import iris` should now work correctly.
