@@ -1,0 +1,193 @@
+# Fraud Detection GraphQL Queries
+# Sample queries for E2E testing and demo scripts
+
+# =============================================================================
+# Query: Get Account by ID
+# =============================================================================
+query GetAccount($id: ID!) {
+  node(id: $id) {
+    __typename
+    id
+    labels
+    properties
+    ... on Account {
+      accountType
+      status
+      riskScore
+      holderName
+    }
+  }
+}
+
+# =============================================================================
+# Query: Get Transaction with Related Accounts
+# =============================================================================
+query GetTransactionWithAccounts($id: ID!) {
+  node(id: $id) {
+    __typename
+    id
+    ... on Transaction {
+      amount
+      currency
+      transactionType
+      timestamp
+      status
+      fromAccount {
+        id
+        accountType
+        riskScore
+      }
+      toAccount {
+        id
+        accountType
+        riskScore
+      }
+    }
+  }
+}
+
+# =============================================================================
+# Query: Find High-Risk Accounts
+# =============================================================================
+query FindHighRiskAccounts($threshold: Float = 0.7, $limit: Int = 10) {
+  accounts(filter: { riskScoreMin: $threshold }, first: $limit) {
+    id
+    accountType
+    riskScore
+    status
+    transactions(first: 5) {
+      id
+      amount
+      timestamp
+    }
+  }
+}
+
+# =============================================================================
+# Query: Detect Ring Pattern (Cycle Detection)
+# =============================================================================
+query DetectRingPattern($startAccountId: ID!, $maxHops: Int = 5) {
+  account(id: $startAccountId) {
+    id
+    accountType
+    connectedAccounts(depth: $maxHops, returnCycles: true) {
+      path {
+        id
+        accountType
+      }
+      isCycle
+      cycleLength
+    }
+  }
+}
+
+# =============================================================================
+# Query: Find Similar Accounts (Vector Search)
+# =============================================================================
+query FindSimilarAccounts($accountId: ID!, $limit: Int = 10, $threshold: Float = 0.7) {
+  account(id: $accountId) {
+    id
+    accountType
+    riskScore
+    similar(limit: $limit, threshold: $threshold) {
+      account {
+        id
+        accountType
+        riskScore
+      }
+      similarity
+    }
+  }
+}
+
+# =============================================================================
+# Query: Get Open Alerts with Details
+# =============================================================================
+query GetOpenAlerts($limit: Int = 20) {
+  alerts(filter: { status: "open" }, first: $limit, orderBy: { severity: DESC }) {
+    id
+    alertType
+    severity
+    confidence
+    triggeredAt
+    description
+    relatedTransactions {
+      id
+      amount
+      fromAccount {
+        id
+        riskScore
+      }
+      toAccount {
+        id
+        riskScore
+      }
+    }
+    involvedAccounts {
+      id
+      accountType
+      riskScore
+    }
+  }
+}
+
+# =============================================================================
+# Query: Account Transaction Velocity
+# =============================================================================
+query AccountTransactionVelocity($accountId: ID!, $hours: Int = 24) {
+  account(id: $accountId) {
+    id
+    accountType
+    transactionStats(timeWindowHours: $hours) {
+      totalCount
+      totalAmount
+      averageAmount
+      uniqueCounterparties
+      velocityScore
+    }
+  }
+}
+
+# =============================================================================
+# Query: Mule Account Detection (High-Degree Nodes)
+# =============================================================================
+query DetectMuleAccounts($minDegree: Int = 10, $limit: Int = 10) {
+  accounts(
+    filter: { minUniqueCounterparties: $minDegree }
+    first: $limit
+    orderBy: { uniqueCounterparties: DESC }
+  ) {
+    id
+    accountType
+    riskScore
+    uniqueCounterparties
+    totalTransactionVolume
+    incomingCount
+    outgoingCount
+  }
+}
+
+# =============================================================================
+# Mutation: Create Fraud Alert
+# =============================================================================
+mutation CreateFraudAlert($input: CreateAlertInput!) {
+  createAlert(input: $input) {
+    id
+    alertType
+    severity
+    confidence
+    status
+    triggeredAt
+  }
+}
+
+# =============================================================================
+# Mutation: Update Alert Status
+# =============================================================================
+mutation UpdateAlertStatus($alertId: ID!, $status: AlertStatus!, $notes: String) {
+  updateAlert(id: $alertId, input: { status: $status, notes: $notes }) {
+    id
+    status
+    updatedAt
+  }
+}

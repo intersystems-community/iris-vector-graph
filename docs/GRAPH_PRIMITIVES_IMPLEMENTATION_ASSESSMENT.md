@@ -61,16 +61,16 @@ The document outlines a comprehensive indexing palette including:
 
 **IRIS Globals B-tree Adjacency**:
 - **Structure**: `^KG("out", s, p, o)` and `^KG("in", o, p, s)`
-- **Builder**: [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:4-31)
+- **Builder**: [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:4-31)
 - **Design**: [`sql/globals_schema.sql:10`](sql/globals_schema.sql) - Global structure documentation
 
 **Degree Counters**:
-- **Implementation**: [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:23-24)
+- **Implementation**: [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:23-24)
 - **Globals**: `^KG("deg", s)`, `^KG("degp", s, p)`
 
 **All-Type Adjacency**:
 - **Support**: Via global iteration when predicate filter empty
-- **Implementation**: [`Graph.KG.Traversal.BFS_JSON()`](iris/src/Graph/KG/Traversal.cls:66-79)
+- **Implementation**: [`Graph.KG.Traversal.BFS_JSON()`](iris_src/src/Graph/KG/Traversal.cls:66-79)
 
 **Ordering/CSR Notes**:
 - ✅ **Sorted Access**: IRIS globals provide B-tree lexicographic ordering via `g.next()`
@@ -86,7 +86,7 @@ The document outlines a comprehensive indexing palette including:
 
 **Globals Postings**:
 - **Structure**: `^KG("label", label, s)`
-- **Builder**: [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:8-11)
+- **Builder**: [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:8-11)
 
 **Usage in Queries**:
 - **Test Validation**: [`tests/python/test_sql_queries.py:147`](tests/python/test_sql_queries.py) - Entity type filtering
@@ -101,7 +101,7 @@ The document outlines a comprehensive indexing palette including:
 
 **Globals Property Postings**:
 - **Structures**: `^KG("prop", key, val, s)` and `^KG("prop:", key, s)`
-- **Builder**: [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:13-16)
+- **Builder**: [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:13-16)
 
 **Gaps**:
 - ❌ **Composite Indexes**: Not implemented
@@ -134,7 +134,7 @@ The document outlines a comprehensive indexing palette including:
 #### ✅ Basic Traversal, Missing Advanced Accelerators
 
 **Working Traversal**:
-- **BFS over Globals**: [`Graph.KG.Traversal.BFS_JSON()`](iris/src/Graph/KG/Traversal.cls:33-84)
+- **BFS over Globals**: [`Graph.KG.Traversal.BFS_JSON()`](iris_src/src/Graph/KG/Traversal.cls:33-84)
 - **Python Alternative**: [`IRISGraphOperators.kg_GRAPH_WALK()`](python/iris_vector_graph_operators.py:390-488)
 - **Shortest Path**: [`sql/graph_path_globals.sql:143`](sql/graph_path_globals.sql) - Bidirectional BFS
 
@@ -151,7 +151,7 @@ The document outlines a comprehensive indexing palette including:
 #### ⚠️ Partial Implementation
 
 **Available Statistics**:
-- **Degree Stats**: [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:23-24) - `^KG("deg", s)`, `^KG("degp", s, p)`
+- **Degree Stats**: [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:23-24) - `^KG("deg", s)`, `^KG("degp", s, p)`
 - **Node Stats TVF**: [`sql/graph_path_globals.sql:282`](sql/graph_path_globals.sql) - Degree and label statistics
 
 **Missing Statistics**:
@@ -181,13 +181,13 @@ The document outlines a comprehensive indexing palette including:
 - [`iris_vector_graph/schema.py:15`](iris_vector_graph/schema.py) - Domain-agnostic schema utilities
 
 **Globals-Based Graph Layer**:
-- [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:4-31) - Builder for B-tree adjacency
+- [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:4-31) - Builder for B-tree adjacency
 - [`sql/globals_schema.sql`](sql/globals_schema.sql) - Design documentation and triggers
 
 ### Query Primitives Implementation
 
 **Graph Traversal**:
-- **REST MetaPath**: [`Graph.KG.Traversal.BFS_JSON()`](iris/src/Graph/KG/Traversal.cls:33-84) via [`Graph.KG.Service.MetaPath`](iris/src/Graph/KG/Service.cls:66)
+- **REST MetaPath**: [`Graph.KG.Traversal.BFS_JSON()`](iris_src/src/Graph/KG/Traversal.cls:33-84) via [`Graph.KG.Service.MetaPath`](iris_src/src/Graph/KG/Service.cls:66)
 - **Python Traversal**: [`IRISGraphOperators.kg_GRAPH_WALK()`](python/iris_vector_graph_operators.py:390-488)
 - **SQL Procedures**: [`sql/graph_path_globals.sql:5`](sql/graph_path_globals.sql) - Globals-based traversal
 
@@ -207,10 +207,10 @@ The document outlines a comprehensive indexing palette including:
 ### REST API Exposure
 
 **IRIS-Native REST**:
-- **Route Map**: [`Graph.KG.Service.UrlMap`](iris/src/Graph/KG/Service.cls:4-11)
-- **Vector Search**: [`Graph.KG.Service.VectorSearch`](iris/src/Graph/KG/Service.cls:43-52) → [`Graph.KG.PyOps.VectorSearch()`](iris/src/Graph/KG/PyOps.cls:4-30)
-- **Hybrid Search**: [`Graph.KG.Service.HybridSearch`](iris/src/Graph/KG/Service.cls:54-64) → [`Graph.KG.PyOps.HybridSearch()`](iris/src/Graph/KG/PyOps.cls:32-58)
-- **Graph Traversal**: [`Graph.KG.Service.MetaPath`](iris/src/Graph/KG/Service.cls:66-76) → [`Graph.KG.PyOps.MetaPath()`](iris/src/Graph/KG/PyOps.cls:60-67)
+- **Route Map**: [`Graph.KG.Service.UrlMap`](iris_src/src/Graph/KG/Service.cls:4-11)
+- **Vector Search**: [`Graph.KG.Service.VectorSearch`](iris_src/src/Graph/KG/Service.cls:43-52) → [`Graph.KG.PyOps.VectorSearch()`](iris_src/src/Graph/KG/PyOps.cls:4-30)
+- **Hybrid Search**: [`Graph.KG.Service.HybridSearch`](iris_src/src/Graph/KG/Service.cls:54-64) → [`Graph.KG.PyOps.HybridSearch()`](iris_src/src/Graph/KG/PyOps.cls:32-58)
+- **Graph Traversal**: [`Graph.KG.Service.MetaPath`](iris_src/src/Graph/KG/Service.cls:66-76) → [`Graph.KG.PyOps.MetaPath()`](iris_src/src/Graph/KG/PyOps.cls:60-67)
 
 ## Validation and Testing
 
@@ -231,11 +231,11 @@ The document outlines a comprehensive indexing palette including:
 ## Critical Dependencies
 
 ### InterSystems IRIS Features
-- **Native REST**: [`Graph.KG.Service`](iris/src/Graph/KG/Service.cls:1) extends `%CSP.REST`
-- **Embedded Python**: [`Graph.KG.PyOps`](iris/src/Graph/KG/PyOps.cls:1), [`iris.vector.graph.GraphOperators`](iris/src/iris_vector_graph/GraphOperators.cls:1)
+- **Native REST**: [`Graph.KG.Service`](iris_src/src/Graph/KG/Service.cls:1) extends `%CSP.REST`
+- **Embedded Python**: [`Graph.KG.PyOps`](iris_src/src/Graph/KG/PyOps.cls:1), [`iris_vector_graph.GraphOperators`](iris_src/src/iris_vector_graph/GraphOperators.cls:1)
 - **VECTOR Types**: [`IRISGraphOperators._kg_KNN_VEC_hnsw_optimized()`](python/iris_vector_graph_operators.py:51-89) uses VECTOR_COSINE/TO_VECTOR
 - **iFind Text Search**: [`TextSearchEngine.search_documents()`](iris_vector_graph/text_search.py:24-82) uses %FIND
-- **Globals**: [`Graph.KG.Traversal.BuildKG()`](iris/src/Graph/KG/Traversal.cls:4-31) uses `^KG` globals
+- **Globals**: [`Graph.KG.Traversal.BuildKG()`](iris_src/src/Graph/KG/Traversal.cls:4-31) uses `^KG` globals
 
 ### Python Libraries
 - **iris**: Python driver used throughout operators and tests
@@ -279,7 +279,7 @@ Based on [`docs/architecture/ACTUAL_SCHEMA.md`](docs/architecture/ACTUAL_SCHEMA.
 
 ### TVF Implementation
 - **SQL TVFs**: Require class-based implementation in IRIS
-- **Working Alternative**: Globals-based BFS traversal via [`Graph.KG.Traversal.BFS_JSON()`](iris/src/Graph/KG/Traversal.cls:33-84)
+- **Working Alternative**: Globals-based BFS traversal via [`Graph.KG.Traversal.BFS_JSON()`](iris_src/src/Graph/KG/Traversal.cls:33-84)
 
 ## Recommendations
 

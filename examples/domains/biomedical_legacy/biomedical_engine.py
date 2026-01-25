@@ -7,7 +7,8 @@ Includes specialized entity types, predicates, and search methods for biomedical
 """
 
 import logging
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
+
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.fusion import HybridSearchFusion
 
@@ -21,14 +22,31 @@ class BiomedicalGraphEngine(IRISGraphEngine):
 
     # Biomedical entity types
     BIOMEDICAL_ENTITY_TYPES = [
-        'protein', 'gene', 'disease', 'drug', 'compound', 'pathway',
-        'tissue', 'cell_type', 'organism', 'phenotype', 'variant'
+        "protein",
+        "gene",
+        "disease",
+        "drug",
+        "compound",
+        "pathway",
+        "tissue",
+        "cell_type",
+        "organism",
+        "phenotype",
+        "variant",
     ]
 
     # Biomedical predicates/relationships
     BIOMEDICAL_PREDICATES = [
-        'interacts_with', 'regulates', 'causes', 'treats', 'associates_with',
-        'expressed_in', 'located_in', 'part_of', 'similar_to', 'binds_to'
+        "interacts_with",
+        "regulates",
+        "causes",
+        "treats",
+        "associates_with",
+        "expressed_in",
+        "located_in",
+        "part_of",
+        "similar_to",
+        "binds_to",
     ]
 
     def __init__(self, connection):
@@ -36,7 +54,9 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         super().__init__(connection)
         self.fusion_engine = HybridSearchFusion(self)
 
-    def search_proteins(self, query_vector: str = None, query_text: str = None, k: int = 15) -> List[Dict[str, Any]]:
+    def search_proteins(
+        self, query_vector: str = None, query_text: str = None, k: int = 15
+    ) -> List[Dict[str, Any]]:
         """
         Search for proteins using hybrid search
 
@@ -51,12 +71,14 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         return self.fusion_engine.multi_modal_search(
             query_vector=query_vector,
             query_text=query_text,
-            entity_types=['protein'],
+            entity_types=["protein"],
             k=k,
-            fusion_method='rrf'
+            fusion_method="rrf",
         )
 
-    def search_genes(self, query_vector: str = None, query_text: str = None, k: int = 15) -> List[Dict[str, Any]]:
+    def search_genes(
+        self, query_vector: str = None, query_text: str = None, k: int = 15
+    ) -> List[Dict[str, Any]]:
         """
         Search for genes using hybrid search
 
@@ -71,12 +93,14 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         return self.fusion_engine.multi_modal_search(
             query_vector=query_vector,
             query_text=query_text,
-            entity_types=['gene'],
+            entity_types=["gene"],
             k=k,
-            fusion_method='rrf'
+            fusion_method="rrf",
         )
 
-    def search_diseases(self, query_vector: str = None, query_text: str = None, k: int = 15) -> List[Dict[str, Any]]:
+    def search_diseases(
+        self, query_vector: str = None, query_text: str = None, k: int = 15
+    ) -> List[Dict[str, Any]]:
         """
         Search for diseases using hybrid search
 
@@ -91,9 +115,9 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         return self.fusion_engine.multi_modal_search(
             query_vector=query_vector,
             query_text=query_text,
-            entity_types=['disease'],
+            entity_types=["disease"],
             k=k,
-            fusion_method='rrf'
+            fusion_method="rrf",
         )
 
     def drug_target_interactions(self, drug_entity: str, k: int = 20) -> List[Dict[str, Any]]:
@@ -108,27 +132,29 @@ class BiomedicalGraphEngine(IRISGraphEngine):
             List of target interactions with confidence scores
         """
         expansion_results = self.kg_NEIGHBORHOOD_EXPANSION(
-            [drug_entity],
-            expansion_depth=1,
-            confidence_threshold=600
+            [drug_entity], expansion_depth=1, confidence_threshold=600
         )
 
         # Filter for interaction predicates
         interactions = []
         for item in expansion_results:
-            if any(pred in item['predicate'] for pred in ['binds_to', 'targets', 'interacts_with']):
-                interactions.append({
-                    'drug': drug_entity,
-                    'target': item['target'],
-                    'interaction_type': item['predicate'],
-                    'confidence': item['confidence']
-                })
+            if any(pred in item["predicate"] for pred in ["binds_to", "targets", "interacts_with"]):
+                interactions.append(
+                    {
+                        "drug": drug_entity,
+                        "target": item["target"],
+                        "interaction_type": item["predicate"],
+                        "confidence": item["confidence"],
+                    }
+                )
 
         # Sort by confidence and return top k
-        interactions.sort(key=lambda x: x['confidence'], reverse=True)
+        interactions.sort(key=lambda x: x["confidence"], reverse=True)
         return interactions[:k]
 
-    def protein_protein_interactions(self, protein_entity: str, k: int = 20) -> List[Dict[str, Any]]:
+    def protein_protein_interactions(
+        self, protein_entity: str, k: int = 20
+    ) -> List[Dict[str, Any]]:
         """
         Find protein-protein interactions for a given protein
 
@@ -140,23 +166,23 @@ class BiomedicalGraphEngine(IRISGraphEngine):
             List of protein interactions with confidence scores
         """
         expansion_results = self.kg_NEIGHBORHOOD_EXPANSION(
-            [protein_entity],
-            expansion_depth=1,
-            confidence_threshold=500
+            [protein_entity], expansion_depth=1, confidence_threshold=500
         )
 
         # Filter for protein interaction predicates
         interactions = []
         for item in expansion_results:
-            if 'interacts_with' in item['predicate'] or 'binds_to' in item['predicate']:
-                interactions.append({
-                    'protein_a': protein_entity,
-                    'protein_b': item['target'],
-                    'interaction_type': item['predicate'],
-                    'confidence': item['confidence']
-                })
+            if "interacts_with" in item["predicate"] or "binds_to" in item["predicate"]:
+                interactions.append(
+                    {
+                        "protein_a": protein_entity,
+                        "protein_b": item["target"],
+                        "interaction_type": item["predicate"],
+                        "confidence": item["confidence"],
+                    }
+                )
 
-        interactions.sort(key=lambda x: x['confidence'], reverse=True)
+        interactions.sort(key=lambda x: x["confidence"], reverse=True)
         return interactions[:k]
 
     def disease_gene_associations(self, disease_entity: str, k: int = 20) -> List[Dict[str, Any]]:
@@ -171,23 +197,25 @@ class BiomedicalGraphEngine(IRISGraphEngine):
             List of gene associations with confidence scores
         """
         expansion_results = self.kg_NEIGHBORHOOD_EXPANSION(
-            [disease_entity],
-            expansion_depth=1,
-            confidence_threshold=600
+            [disease_entity], expansion_depth=1, confidence_threshold=600
         )
 
         # Filter for disease-gene associations
         associations = []
         for item in expansion_results:
-            if any(pred in item['predicate'] for pred in ['associates_with', 'causes', 'linked_to']):
-                associations.append({
-                    'disease': disease_entity,
-                    'gene': item['target'],
-                    'association_type': item['predicate'],
-                    'confidence': item['confidence']
-                })
+            if any(
+                pred in item["predicate"] for pred in ["associates_with", "causes", "linked_to"]
+            ):
+                associations.append(
+                    {
+                        "disease": disease_entity,
+                        "gene": item["target"],
+                        "association_type": item["predicate"],
+                        "confidence": item["confidence"],
+                    }
+                )
 
-        associations.sort(key=lambda x: x['confidence'], reverse=True)
+        associations.sort(key=lambda x: x["confidence"], reverse=True)
         return associations[:k]
 
     def pathway_analysis(self, entity_list: List[str], k: int = 15) -> List[Dict[str, Any]]:
@@ -203,16 +231,14 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         """
         # Expand around all entities to find pathway connections
         expansion_results = self.kg_NEIGHBORHOOD_EXPANSION(
-            entity_list,
-            expansion_depth=2,
-            confidence_threshold=500
+            entity_list, expansion_depth=2, confidence_threshold=500
         )
 
         # Group by pathway entities
         pathway_connections = {}
         for item in expansion_results:
-            if 'pathway' in item.get('predicate', '').lower():
-                pathway_id = item['target']
+            if "pathway" in item.get("predicate", "").lower():
+                pathway_id = item["target"]
                 if pathway_id not in pathway_connections:
                     pathway_connections[pathway_id] = []
                 pathway_connections[pathway_id].append(item)
@@ -221,18 +247,21 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         pathway_scores = []
         for pathway_id, connections in pathway_connections.items():
             enrichment_score = len(connections) / len(entity_list)  # Simple enrichment
-            avg_confidence = sum(conn['confidence'] for conn in connections) / len(connections)
+            avg_confidence = sum(conn["confidence"] for conn in connections) / len(connections)
 
-            pathway_scores.append({
-                'pathway_id': pathway_id,
-                'connected_entities': len(connections),
-                'enrichment_score': enrichment_score,
-                'avg_confidence': avg_confidence,
-                'input_coverage': len(set(conn['source'] for conn in connections)) / len(entity_list)
-            })
+            pathway_scores.append(
+                {
+                    "pathway_id": pathway_id,
+                    "connected_entities": len(connections),
+                    "enrichment_score": enrichment_score,
+                    "avg_confidence": avg_confidence,
+                    "input_coverage": len(set(conn["source"] for conn in connections))
+                    / len(entity_list),
+                }
+            )
 
         # Sort by enrichment score
-        pathway_scores.sort(key=lambda x: x['enrichment_score'], reverse=True)
+        pathway_scores.sort(key=lambda x: x["enrichment_score"], reverse=True)
         return pathway_scores[:k]
 
     def semantic_drug_discovery(self, disease_query: str, k: int = 20) -> List[Dict[str, Any]]:
@@ -248,56 +277,53 @@ class BiomedicalGraphEngine(IRISGraphEngine):
         """
         # First, find related diseases/targets
         disease_results = self.fusion_engine.multi_modal_search(
-            query_text=disease_query,
-            entity_types=['disease'],
-            k=10,
-            fusion_method='rrf'
+            query_text=disease_query, entity_types=["disease"], k=10, fusion_method="rrf"
         )
 
         if not disease_results:
             return []
 
         # Get disease entities and expand to find targets
-        disease_entities = [result['entity_id'] for result in disease_results[:5]]
+        disease_entities = [result["entity_id"] for result in disease_results[:5]]
         target_expansion = self.kg_NEIGHBORHOOD_EXPANSION(
-            disease_entities,
-            expansion_depth=2,
-            confidence_threshold=600
+            disease_entities, expansion_depth=2, confidence_threshold=600
         )
 
         # Find drugs that target these entities
         drug_candidates = []
-        target_entities = list(set([item['target'] for item in target_expansion]))
+        target_entities = list(set([item["target"] for item in target_expansion]))
 
         if target_entities:
             drug_expansion = self.kg_NEIGHBORHOOD_EXPANSION(
                 target_entities[:20],  # Limit to prevent explosion
                 expansion_depth=1,
-                confidence_threshold=500
+                confidence_threshold=500,
             )
 
             # Group by potential drug entities
             drug_connections = {}
             for item in drug_expansion:
-                if any(pred in item['predicate'] for pred in ['treats', 'targets', 'inhibits']):
-                    drug_id = item['source']  # Drug is the source targeting the target
+                if any(pred in item["predicate"] for pred in ["treats", "targets", "inhibits"]):
+                    drug_id = item["source"]  # Drug is the source targeting the target
                     if drug_id not in drug_connections:
                         drug_connections[drug_id] = []
                     drug_connections[drug_id].append(item)
 
             # Score drug candidates
             for drug_id, connections in drug_connections.items():
-                avg_confidence = sum(conn['confidence'] for conn in connections) / len(connections)
-                target_coverage = len(set(conn['target'] for conn in connections))
+                avg_confidence = sum(conn["confidence"] for conn in connections) / len(connections)
+                target_coverage = len(set(conn["target"] for conn in connections))
 
-                drug_candidates.append({
-                    'drug_candidate': drug_id,
-                    'target_count': target_coverage,
-                    'avg_confidence': avg_confidence,
-                    'mechanism_score': avg_confidence * target_coverage,
-                    'connected_targets': [conn['target'] for conn in connections]
-                })
+                drug_candidates.append(
+                    {
+                        "drug_candidate": drug_id,
+                        "target_count": target_coverage,
+                        "avg_confidence": avg_confidence,
+                        "mechanism_score": avg_confidence * target_coverage,
+                        "connected_targets": [conn["target"] for conn in connections],
+                    }
+                )
 
         # Sort by mechanism score
-        drug_candidates.sort(key=lambda x: x['mechanism_score'], reverse=True)
+        drug_candidates.sort(key=lambda x: x["mechanism_score"], reverse=True)
         return drug_candidates[:k]

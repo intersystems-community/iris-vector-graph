@@ -262,7 +262,7 @@ ORDER BY g.confidence DESC;
 
 -- Combine with vector search
 SELECT v.id, g.target_entity, g.confidence
-FROM kg_NodeEmbeddings_optimized v
+FROM kg_NodeEmbeddings v
 JOIN Graph_Walk(v.id, 2, 'BFS', NULL, 0.6) g ON v.id = g.source_entity
 WHERE VECTOR_COSINE(v.emb, TO_VECTOR('[0.1, 0.2, ...]', FLOAT, 768)) > 0.8
 ORDER BY VECTOR_COSINE(v.emb, TO_VECTOR('[0.1, 0.2, ...]', FLOAT, 768)) DESC;
