@@ -7,12 +7,10 @@ Provides:
 """
 
 import os
-import importlib
-from typing import Dict, Any
+from typing import Dict, Any, Generator
 from contextlib import asynccontextmanager
 
-# NOTE: Use importlib to avoid conflict with iris/ directory in project
-iris_module = importlib.import_module('intersystems_irispython.iris')
+from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
@@ -35,12 +33,16 @@ from examples.domains.biomedical.loaders import (
 from api.routers.cypher import router as cypher_router
 
 
-# Database connection configuration
-IRIS_HOST = os.getenv("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.getenv("IRIS_PORT", "1972"))
-IRIS_NAMESPACE = os.getenv("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.getenv("IRIS_USER", "_SYSTEM")
-IRIS_PASSWORD = os.getenv("IRIS_PASSWORD", "SYS")
+def get_db_config():
+    """Get database configuration from environment variables"""
+    port = os.getenv("IRIS_PORT", "1972")
+    return {
+        "host": os.getenv("IRIS_HOST", "localhost"),
+        "port": int(port),
+        "namespace": os.getenv("IRIS_NAMESPACE", "USER"),
+        "user": os.getenv("IRIS_USER", "_SYSTEM"),
+        "password": os.getenv("IRIS_PASSWORD", "SYS"),
+    }
 
 
 # Database connection pool
@@ -56,14 +58,23 @@ class ConnectionPool:
         if self._connections:
             return self._connections.pop()
 
-        # Create new connection
-        return iris_module.connect(
-            IRIS_HOST,
-            IRIS_PORT,
-            IRIS_NAMESPACE,
-            IRIS_USER,
-            IRIS_PASSWORD
+        config = get_db_config()
+        conn = iris_connect(
+            config["host"],
+            config["port"],
+            config["namespace"],
+            config["user"],
+            config["password"]
         )
+        # Ensure schema is set
+        schema = os.getenv("IRIS_SCHEMA", "SQLUser")
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"SET OPTION %SCHEMA = '{schema}'")
+            cursor.close()
+        except:
+            pass
+        return conn
 
     def release_connection(self, conn):
         """Return connection to pool"""
@@ -80,17 +91,19 @@ class ConnectionPool:
 
 
 # Global connection pool
-connection_pool = ConnectionPool(max_connections=10)
+# NOTE: IRIS Community Edition has 5 concurrent connection limit
+connection_pool = ConnectionPool(max_connections=3)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan context manager for startup/shutdown"""
     # Startup: Initialize connection pool
+    config = get_db_config()
     print(f"✓ IRIS Vector Graph API - Multi-Query-Engine Platform")
     print(f"  GraphQL endpoint: /graphql")
     print(f"  openCypher endpoint: /api/cypher")
-    print(f"  Connecting to IRIS at {IRIS_HOST}:{IRIS_PORT}/{IRIS_NAMESPACE}")
+    print(f"  Connecting to IRIS at {config['host']}:{config['port']}/{config['namespace']}")
     yield
     # Shutdown: Close all connections
     connection_pool.close_all()
@@ -116,15 +129,41 @@ app.add_middleware(
 )
 
 
+def get_db_connection():
+    """Get database connection from pool with schema initialized"""
+    return connection_pool.get_connection()
+
+
 async def get_context() -> Dict[str, Any]:
     """
     Build GraphQL context with database connection and DataLoaders.
 
     Creates request-scoped DataLoaders for batching and caching.
     Each request gets fresh loaders to prevent data staleness.
+    
+    NOTE: Creates a fresh connection per request to avoid connection
+    exhaustion issues with IRIS CE's 5-connection limit. The connection
+    is stored in context but should be used synchronously within request.
     """
-    # Get database connection from pool
-    db_connection = connection_pool.get_connection()
+    # Create fresh connection for this request (not from pool)
+    # This ensures connection is not held across requests
+    config = get_db_config()
+    db_connection = iris_connect(
+        config["host"],
+        config["port"],
+        config["namespace"],
+        config["user"],
+        config["password"]
+    )
+    
+    # Set schema
+    schema = os.getenv("IRIS_SCHEMA", "SQLUser")
+    try:
+        cursor = db_connection.cursor()
+        cursor.execute(f"SET OPTION %SCHEMA = '{schema}'")
+        cursor.close()
+    except:
+        pass
 
     # Create request-scoped DataLoaders
     context = {
@@ -141,6 +180,7 @@ async def get_context() -> Dict[str, Any]:
 
 
 # Create GraphQL router with Strawberry
+# NOTE: DatabaseConnectionExtension is added to schema in api/gql/schema.py
 graphql_app = GraphQLRouter(
     schema,
     context_getter=get_context,

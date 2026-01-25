@@ -10,9 +10,28 @@ This demonstrates the hybrid architecture: generic core + domain extension.
 
 import strawberry
 from typing import Optional, List
+from strawberry.extensions import SchemaExtension
 
 from .core.types import Node, GraphStats, PropertyFilter
 from .core.resolvers import CoreQuery
+
+
+class DatabaseConnectionExtension(SchemaExtension):
+    """
+    Strawberry extension to manage database connection lifecycle.
+    
+    Ensures connections are properly closed after each GraphQL request,
+    which is critical for IRIS Community Edition's 5-connection limit.
+    """
+    
+    def on_request_end(self):
+        """Close database connection when request ends."""
+        context = self.execution_context.context
+        if context and "db_connection" in context:
+            try:
+                context["db_connection"].close()
+            except Exception:
+                pass  # Connection may already be closed
 
 # Import biomedical domain types and resolvers
 # NOTE: Biomedical is an EXAMPLE domain - you can create your own domains
@@ -128,8 +147,9 @@ class Mutation:
             return await biomed_resolver._delete_protein_mutation(info, id)
 
 
-# Create schema
+# Create schema with connection management extension
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation if BIOMEDICAL_AVAILABLE else None,
+    extensions=[DatabaseConnectionExtension],
 )
