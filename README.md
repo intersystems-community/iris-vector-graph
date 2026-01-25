@@ -8,16 +8,9 @@
 
 IRIS Vector Graph is a high-performance knowledge graph system that combines **graph traversal**, **HNSW vector similarity**, and **lexical search** in a single, unified database.
 
-![GraphQL Playground](docs/images/graphql-playground.png)
-
-<p align="center">
-  <img src="docs/images/api-home.png" width="45%" />
-  <img src="docs/images/api-docs.png" width="45%" />
-</p>
-
 ---
 
-## 🚀 Why IRIS Vector Graph?
+## Why IRIS Vector Graph?
 
 - **Multi-Query Power**: Query your graph via **SQL**, **openCypher**, or **GraphQL** — all on the same data.
 - **Blazing Fast Vectors**: Native HNSW indexing delivering **~1.7ms** search latency (vs 5.8s standard).
@@ -26,16 +19,15 @@ IRIS Vector Graph is a high-performance knowledge graph system that combines **g
 
 ---
 
-## ⚡ 30-Second Quick Start
+## Quick Start
 
 ```bash
 # 1. Clone & Sync
-git clone https://github.com/isc-tdyar/iris-vector-graph.git && cd iris-vector-graph
+git clone https://github.com/intersystems-community/iris-vector-graph.git && cd iris-vector-graph
 uv sync
 
 # 2. Spin up IRIS
-# Uses iris-devtester for automatic dynamic port and password handling
-python scripts/setup_iris.py 
+docker-compose up -d
 
 # 3. Start API
 uvicorn api.main:app --reload
@@ -47,7 +39,7 @@ Visit:
 
 ---
 
-## 🛠 Unified Query Engines
+## Unified Query Engines
 
 ### openCypher
 ```cypher
@@ -76,7 +68,7 @@ ORDER BY score DESC
 
 ---
 
-## 📊 Performance at a Glance
+## Performance
 
 | Operation | Standard IRIS | ACORN-1 (HNSW) | Gain |
 |-----------|---------------|----------------|------|
@@ -86,19 +78,15 @@ ORDER BY score DESC
 
 ---
 
-## 🎮 Interactive Demos
+## Interactive Demos
 
 Experience the power of IRIS Vector Graph through our interactive demo applications.
 
 ### Biomedical Research Demo
 Explore protein-protein interaction networks with vector similarity and D3.js visualization.
-![Biomedical Demo](docs/images/demo-biomedical.png)
-*View the [Biomedical Architecture](docs/images/demo-biomedical-architecture.png) popup in the UI.*
 
 ### Fraud Detection Demo
-Real-time fraud scoring with 130M transactions and bitemporal audit trails.
-![Fraud Demo](docs/images/demo-fraud.png)
-*View the [Fraud Architecture](docs/images/demo-fraud-architecture.png) popup in the UI.*
+Real-time fraud scoring with transaction networks and bitemporal audit trails.
 
 To run the demos:
 ```bash
@@ -110,7 +98,7 @@ Visit [http://localhost:8200](http://localhost:8200) to begin.
 
 ---
 
-## 🤖 iris-vector-rag Integration
+## iris-vector-rag Integration
 
 IRIS Vector Graph is the core engine powering [iris-vector-rag](https://github.com/intersystems-community/iris-vector-rag). You can use it in your RAG pipelines like this:
 
@@ -129,16 +117,14 @@ result = pipeline.query(
 
 ---
 
-## 📚 Documentation & Links
+## Documentation
 
-- 📖 **[Detailed Architecture](docs/architecture/ARCHITECTURE.md)**
-- 🧬 **[Biomedical Domain Examples](examples/domains/biomedical/)**
-- 🧪 **[Full Test Suite](tests/)**
-- 🤖 **[iris-vector-rag Integration](https://github.com/intersystems-community/iris-vector-rag)**
-- 📜 **[Verbose README](docs/README_VERBOSE.md)** (Legacy)
+- [Detailed Architecture](docs/architecture/ARCHITECTURE.md)
+- [Biomedical Domain Examples](examples/domains/biomedical/)
+- [Full Test Suite](tests/)
+- [iris-vector-rag Integration](https://github.com/intersystems-community/iris-vector-rag)
+- [Verbose README](docs/README_VERBOSE.md) (Legacy)
 
 ---
 
 **Author: Thomas Dyar** (thomas.dyar@intersystems.com)
-
-
