@@ -22,16 +22,22 @@ class DatabaseConnectionExtension(SchemaExtension):
     
     Ensures connections are properly closed after each GraphQL request,
     which is critical for IRIS Community Edition's 5-connection limit.
+    
+    When context contains 'owns_connection': True, the extension will
+    close the db_connection after the request. When False or absent,
+    the connection is assumed to be externally managed (e.g., in tests).
     """
     
     def on_request_end(self):
-        """Close database connection when request ends."""
+        """Close database connection when request ends if we own it."""
         context = self.execution_context.context
-        if context and "db_connection" in context:
-            try:
-                context["db_connection"].close()
-            except Exception:
-                pass  # Connection may already be closed
+        # Only close if we created/own the connection (not externally provided)
+        if context and context.get("owns_connection", False):
+            if "db_connection" in context:
+                try:
+                    context["db_connection"].close()
+                except Exception:
+                    pass  # Connection may already be closed
 
 # Import biomedical domain types and resolvers
 # NOTE: Biomedical is an EXAMPLE domain - you can create your own domains

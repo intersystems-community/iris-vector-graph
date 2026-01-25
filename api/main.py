@@ -166,8 +166,11 @@ async def get_context() -> Dict[str, Any]:
         pass
 
     # Create request-scoped DataLoaders
+    # owns_connection=True tells the extension to close this connection
+    # when the request ends (prevents license exhaustion on IRIS CE)
     context = {
         "db_connection": db_connection,
+        "owns_connection": True,  # Extension will close after request
         "protein_loader": ProteinLoader(db_connection),
         "gene_loader": GeneLoader(db_connection),
         "pathway_loader": PathwayLoader(db_connection),
