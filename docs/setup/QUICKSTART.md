@@ -121,7 +121,7 @@ POST http://localhost:52773/kg/metaPath
 
 ```
 iris-vector-graph/
-├── iris/src/          # IRIS ObjectScript classes
+├── iris_src/src/          # IRIS ObjectScript classes
 ├── scripts/
 │   ├── setup/         # Environment setup
 │   ├── performance/   # Performance testing

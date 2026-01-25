@@ -69,7 +69,7 @@ kg_Documents(doc_id INT, node_id INT, txt VARCHAR(1000000))
 - **Performance**: Direct IRIS processing, no external app server
 
 ### 2. Embedded Python Operations
-- **File**: `iris/src/Graph/KG/PyOps.cls`
+- **File**: `iris_src/src/Graph/KG/PyOps.cls`
 - **Functions**: Vector operations, graph traversal, data processing
 - **Benefits**: In-database computation, optimal memory usage
 
