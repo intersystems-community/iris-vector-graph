@@ -348,7 +348,7 @@ Try optimized path (IRIS-native) → Catch failure → Fall back to pure Python
 
 | Method | Primary Path | Fallback Path | When Fallback Triggers |
 |--------|-------------|---------------|------------------------|
-| `kg_KNN_VEC` | HNSW index (`kg_NodeEmbeddings_optimized` table with `VECTOR` type) | Python CSV parsing (`kg_NodeEmbeddings` table with CSV strings) | `kg_NodeEmbeddings_optimized` table doesn't exist |
+| `kg_KNN_VEC` | HNSW index (`kg_NodeEmbeddings` table with `VECTOR` type) | Python CSV parsing (`kg_NodeEmbeddings_old` table with CSV strings) | `kg_NodeEmbeddings` table doesn't exist or has wrong type |
 | `kg_PERSONALIZED_PAGERANK` | SQL function → ObjectScript embedded Python | Pure Python in `IRISGraphEngine` | `kg_PPR` SQL function doesn't exist |
 | `kg_TXT` | SQL with JSON_TABLE | ❌ No fallback | Core IRIS SQL feature, always available |
 | `kg_NEIGHBORHOOD_EXPANSION` | SQL with JSON_TABLE | ❌ No fallback | Core IRIS SQL feature, always available |
@@ -406,7 +406,7 @@ To enable IRIS embedded Python for PageRank (10-50x speedup):
 
 ```bash
 # 1. Load ObjectScript class into IRIS
-IRIS> Do $system.OBJ.Load("/path/to/iris/src/PageRankEmbedded.cls", "ck")
+IRIS> Do $system.OBJ.Load("/path/to/iris_src/src/PageRankEmbedded.cls", "ck")
 
 # 2. Create SQL function (run in IRIS SQL tool)
 \i sql/operators.sql
@@ -416,7 +416,7 @@ To enable HNSW vector search (2900x speedup):
 
 ```bash
 # 1. Create optimized embeddings table with VECTOR type
-\i sql/schema.sql  # Creates kg_NodeEmbeddings_optimized with HNSW index
+\i sql/schema.sql  # Creates kg_NodeEmbeddings with HNSW index
 
 # 2. Migrate embeddings from CSV to VECTOR format
 # (Use migration script or re-ingest data)

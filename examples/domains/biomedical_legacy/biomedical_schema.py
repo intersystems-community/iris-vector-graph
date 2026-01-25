@@ -7,6 +7,7 @@ Builds on the base RDF schema with biomedical entity types and relationships.
 """
 
 from typing import Dict, List, Optional
+
 from iris_vector_graph.schema import GraphSchema
 
 
@@ -138,53 +139,47 @@ CREATE INDEX IF NOT EXISTS idx_evidence_type ON biomedical_evidence(evidence_typ
         """
         return [
             # Protein relationships
-            'interacts_with',
-            'binds_to',
-            'phosphorylates',
-            'ubiquitinates',
-            'regulates',
-            'inhibits',
-            'activates',
-
+            "interacts_with",
+            "binds_to",
+            "phosphorylates",
+            "ubiquitinates",
+            "regulates",
+            "inhibits",
+            "activates",
             # Gene relationships
-            'encodes',
-            'co_expressed_with',
-            'co_regulated_with',
-            'orthologous_to',
-            'paralogous_to',
-
+            "encodes",
+            "co_expressed_with",
+            "co_regulated_with",
+            "orthologous_to",
+            "paralogous_to",
             # Disease relationships
-            'associates_with',
-            'causes',
-            'risk_factor_for',
-            'comorbid_with',
-            'phenotype_of',
-
+            "associates_with",
+            "causes",
+            "risk_factor_for",
+            "comorbid_with",
+            "phenotype_of",
             # Drug relationships
-            'treats',
-            'targets',
-            'contraindicated_for',
-            'side_effect_of',
-            'metabolized_by',
-            'transported_by',
-
+            "treats",
+            "targets",
+            "contraindicated_for",
+            "side_effect_of",
+            "metabolized_by",
+            "transported_by",
             # Pathway relationships
-            'part_of_pathway',
-            'upstream_of',
-            'downstream_of',
-            'catalyzes',
-
+            "part_of_pathway",
+            "upstream_of",
+            "downstream_of",
+            "catalyzes",
             # Anatomical relationships
-            'expressed_in',
-            'located_in',
-            'part_of',
-            'develops_from',
-
+            "expressed_in",
+            "located_in",
+            "part_of",
+            "develops_from",
             # Functional relationships
-            'has_function',
-            'has_role',
-            'participates_in',
-            'involved_in'
+            "has_function",
+            "has_role",
+            "participates_in",
+            "involved_in",
         ]
 
     @staticmethod
@@ -197,48 +192,43 @@ CREATE INDEX IF NOT EXISTS idx_evidence_type ON biomedical_evidence(evidence_typ
         """
         return [
             # Molecular entities
-            'protein',
-            'gene',
-            'rna',
-            'dna',
-            'transcript',
-            'variant',
-            'mutation',
-
+            "protein",
+            "gene",
+            "rna",
+            "dna",
+            "transcript",
+            "variant",
+            "mutation",
             # Chemical entities
-            'drug',
-            'compound',
-            'metabolite',
-            'lipid',
-            'carbohydrate',
-
+            "drug",
+            "compound",
+            "metabolite",
+            "lipid",
+            "carbohydrate",
             # Biological processes
-            'pathway',
-            'biological_process',
-            'molecular_function',
-            'cellular_component',
-
+            "pathway",
+            "biological_process",
+            "molecular_function",
+            "cellular_component",
             # Diseases and phenotypes
-            'disease',
-            'disorder',
-            'phenotype',
-            'symptom',
-            'syndrome',
-
+            "disease",
+            "disorder",
+            "phenotype",
+            "symptom",
+            "syndrome",
             # Anatomical entities
-            'tissue',
-            'organ',
-            'cell_type',
-            'cell_line',
-            'organism',
-            'species',
-
+            "tissue",
+            "organ",
+            "cell_type",
+            "cell_line",
+            "organism",
+            "species",
             # Research entities
-            'publication',
-            'clinical_trial',
-            'assay',
-            'experiment',
-            'database'
+            "publication",
+            "clinical_trial",
+            "assay",
+            "experiment",
+            "database",
         ]
 
     @staticmethod
@@ -257,13 +247,13 @@ CREATE INDEX IF NOT EXISTS idx_evidence_type ON biomedical_evidence(evidence_typ
 
         # Then validate biomedical extensions
         biomedical_tables = [
-            'biomedical_proteins',
-            'biomedical_genes',
-            'biomedical_diseases',
-            'biomedical_drugs',
-            'biomedical_trials',
-            'biomedical_publications',
-            'biomedical_evidence'
+            "biomedical_proteins",
+            "biomedical_genes",
+            "biomedical_diseases",
+            "biomedical_drugs",
+            "biomedical_trials",
+            "biomedical_publications",
+            "biomedical_evidence",
         ]
 
         biomedical_status = {}
@@ -330,9 +320,9 @@ WHERE e.p IN ('associates_with', 'risk_factor_for', 'causes');
 """
 
         # Execute each view creation separately
-        for view_sql in views_sql.split('CREATE OR REPLACE VIEW')[1:]:
+        for view_sql in views_sql.split("CREATE OR REPLACE VIEW")[1:]:
             try:
-                cursor.execute('CREATE OR REPLACE VIEW' + view_sql)
+                cursor.execute("CREATE OR REPLACE VIEW" + view_sql)
             except Exception as e:
                 # Views might not be supported, continue
                 pass

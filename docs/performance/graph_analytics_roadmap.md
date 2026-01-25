@@ -132,7 +132,7 @@ ClassMethod ComputePageRank(
 - Runs in IRIS process (no network)
 - Can use `iris.gref()` for direct global access
 
-**Status**: ✅ Implemented in `iris/src/PageRankEmbedded.cls`
+**Status**: ✅ Implemented in `iris_src/src/PageRankEmbedded.cls`
 
 **Timeline**: Available NOW!
 
