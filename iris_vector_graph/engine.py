@@ -34,6 +34,18 @@ class IRISGraphEngine:
         """Initialize with IRIS database connection"""
         self.conn = connection
 
+    def _validate_k(self, k: Any) -> int:
+        """
+        Validates and caps the 'k' parameter (TOP clause limit)
+        1 <= k <= 1000, defaults to 50.
+        Handles non-numeric strings by failing safe to 50.
+        """
+        try:
+            k = int(k or 50)
+        except (ValueError, TypeError):
+            return 50
+        return min(max(1, k), 1000)
+
     @classmethod
     def reset_sql_function_cache(cls):
         """Reset the SQL function availability cache (useful for testing)."""
@@ -42,64 +54,34 @@ class IRISGraphEngine:
     # Vector Search Operations
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
-        K-Nearest Neighbors vector search using HNSW optimization
+        K-Nearest Neighbors vector search using server-side SQL procedure
 
         Args:
             query_vector: JSON array string like "[0.1,0.2,0.3,...]"
             k: Number of top results to return
-            label_filter: Optional label to filter by (e.g., 'protein', 'gene', 'person', 'company')
+            label_filter: Optional label to filter by
 
         Returns:
             List of (entity_id, similarity_score) tuples
         """
-        # Try optimized HNSW vector search first (50ms performance)
+        cursor = self.conn.cursor()
         try:
-            return self._kg_KNN_VEC_hnsw_optimized(query_vector, k, label_filter)
+            # Call server-side procedure for unified logic
+            # Signature: (queryVector, k, labelFilter)
+            cursor.execute("CALL iris_vector_graph.kg_KNN_VEC(?, ?, ?)", [query_vector, k, label_filter or ""])
+            results = cursor.fetchall()
+            return [(entity_id, float(similarity)) for entity_id, similarity in results]
         except Exception as e:
-            logger.warning(f"HNSW optimized search failed: {e}")
-            # Fallback to Python CSV implementation
-            logger.warning("Falling back to Python CSV vector computation")
+            logger.warning(f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic.")
+            # Fallback to Python CSV implementation if procedure not available
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
 
     def _kg_KNN_VEC_hnsw_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
         HNSW-optimized vector search using native IRIS VECTOR functions
-
-        Uses kg_NodeEmbeddings_optimized table with VECTOR(FLOAT, 768) and HNSW index.
-        Performance: ~50ms for 10K vectors
+        Deprecated: Use kg_KNN_VEC which calls the server-side procedure.
         """
-        cursor = self.conn.cursor()
-        try:
-            # Build query with optional label filter
-            if label_filter is None:
-                sql = f"""
-                    SELECT TOP {k}
-                        n.id,
-                        VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity
-                    FROM kg_NodeEmbeddings_optimized n
-                    ORDER BY similarity DESC
-                """
-                cursor.execute(sql, [query_vector])
-            else:
-                sql = f"""
-                    SELECT TOP {k}
-                        n.id,
-                        VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity
-                    FROM kg_NodeEmbeddings_optimized n
-                    LEFT JOIN rdf_labels L ON L.s = n.id
-                    WHERE L.label = ?
-                    ORDER BY similarity DESC
-                """
-                cursor.execute(sql, [query_vector, label_filter])
-
-            results = cursor.fetchall()
-            return [(entity_id, float(similarity)) for entity_id, similarity in results]
-
-        except Exception as e:
-            logger.error(f"HNSW optimized kg_KNN_VEC failed: {e}")
-            raise
-        finally:
-            cursor.close()
+        return self.kg_KNN_VEC(query_vector, k, label_filter)
 
     def _kg_KNN_VEC_python_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
@@ -169,7 +151,7 @@ class IRISGraphEngine:
     # Text Search Operations
     def kg_TXT(self, query_text: str, k: int = 50, min_confidence: int = 0) -> List[Tuple[str, float]]:
         """
-        Enhanced text search using JSON_TABLE for structured qualifier filtering
+        Enhanced text search using server-side SQL procedure
 
         Args:
             query_text: Text query string
@@ -181,24 +163,9 @@ class IRISGraphEngine:
         """
         cursor = self.conn.cursor()
         try:
-            sql = f"""
-                SELECT TOP {k}
-                    e.s AS entity_id,
-                    (CAST(jt.confidence AS FLOAT) / 1000.0 +
-                     CASE WHEN e.o_id LIKE ? THEN 0.5 ELSE 0.0 END) AS relevance_score
-                FROM rdf_edges e,
-                     JSON_TABLE(
-                        e.qualifiers, '$'
-                        COLUMNS(confidence INTEGER PATH '$.confidence')
-                     ) jt
-                WHERE jt.confidence >= ? OR e.o_id LIKE ?
-                ORDER BY relevance_score DESC
-            """
-
-            # Use text query for LIKE matching
-            like_pattern = f'%{query_text}%'
-            cursor.execute(sql, [like_pattern, min_confidence, like_pattern])
-
+            # Call server-side procedure for unified logic
+            # Signature: (queryText, k, minConfidence)
+            cursor.execute("CALL iris_vector_graph.kg_TXT(?, ?, ?)", [query_text, k, min_confidence])
             results = cursor.fetchall()
             return [(entity_id, float(score)) for entity_id, score in results]
 
@@ -260,9 +227,7 @@ class IRISGraphEngine:
     # Hybrid Fusion Operations
     def kg_RRF_FUSE(self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str) -> List[Tuple[str, float, float, float]]:
         """
-        Reciprocal Rank Fusion combining vector and text search results
-
-        Implements the RRF algorithm from Cormack & Clarke (SIGIR 2009)
+        Reciprocal Rank Fusion using server-side SQL procedure
 
         Args:
             k: Final number of results to return
@@ -275,45 +240,19 @@ class IRISGraphEngine:
         Returns:
             List of (entity_id, rrf_score, vector_score, text_score) tuples
         """
+        cursor = self.conn.cursor()
         try:
-            # Get vector search results
-            vector_results = self.kg_KNN_VEC(query_vector, k=k1)
-            vector_dict = {entity_id: (rank + 1, score) for rank, (entity_id, score) in enumerate(vector_results)}
-
-            # Get text search results
-            text_results = self.kg_TXT(query_text, k=k2)
-            text_dict = {entity_id: (rank + 1, score) for rank, (entity_id, score) in enumerate(text_results)}
-
-            # Calculate RRF scores
-            all_entities = set(vector_dict.keys()) | set(text_dict.keys())
-            rrf_scores = []
-
-            for entity_id in all_entities:
-                rrf_score = 0.0
-
-                # Vector contribution
-                if entity_id in vector_dict:
-                    vector_rank, vector_score = vector_dict[entity_id]
-                    rrf_score += 1.0 / (c + vector_rank)
-                else:
-                    vector_score = 0.0
-
-                # Text contribution
-                if entity_id in text_dict:
-                    text_rank, text_score = text_dict[entity_id]
-                    rrf_score += 1.0 / (c + text_rank)
-                else:
-                    text_score = 0.0
-
-                rrf_scores.append((entity_id, rrf_score, vector_score, text_score))
-
-            # Sort by RRF score and return top k
-            rrf_scores.sort(key=lambda x: x[1], reverse=True)
-            return rrf_scores[:k]
+            # Call server-side procedure for unified logic
+            # Signature: (k, k1, k2, c, queryVector, queryText)
+            cursor.execute("CALL iris_vector_graph.kg_RRF_FUSE(?, ?, ?, ?, ?, ?)", [k, k1, k2, c, query_vector, query_text])
+            results = cursor.fetchall()
+            return [(entity_id, float(rrf), float(v), float(t)) for entity_id, rrf, v, t in results]
 
         except Exception as e:
             logger.error(f"kg_RRF_FUSE failed: {e}")
             raise
+        finally:
+            cursor.close()
 
     def kg_VECTOR_GRAPH_SEARCH(self, query_vector: str, query_text: str = None, k: int = 15,
                              expansion_depth: int = 1, min_confidence: float = 0.5) -> List[Dict[str, Any]]:
