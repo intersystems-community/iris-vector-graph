@@ -42,29 +42,23 @@ A mule account might have perfectly normal transaction vectors, but graph traver
 
 ## Architecture Overview
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Fraud Investigation Query               │
-│              (account embedding + "suspicious activity")     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-    ┌──────────┐    ┌──────────┐    ┌──────────┐
-    │  Vector  │    │   Text   │    │  Graph   │
-    │ Similarity│    │   BM25   │    │   PPR    │
-    └────┬─────┘    └────┬─────┘    └────┬─────┘
-          │               │               │
-          └───────────────┼───────────────┘
-                          ▼
-                 ┌─────────────────┐
-                 │   RRF Fusion    │
-                 │  (rank-based)   │
-                 └────────┬────────┘
-                          ▼
-                 ┌─────────────────┐
-                 │ Fraud Risk Score│
-                 └─────────────────┘
+```mermaid
+flowchart TD
+    Query["Fraud Investigation Query<br/>(account embedding + 'suspicious activity')"]
+    
+    Query --> Vector["Vector Similarity<br/>HNSW KNN"]
+    Query --> Text["Text Search<br/>BM25"]
+    Query --> Graph["Graph Traversal<br/>PPR"]
+    
+    Vector --> RRF["RRF Fusion<br/>(rank-based)"]
+    Text --> RRF
+    Graph --> RRF
+    
+    RRF --> Result["Fraud Risk Score"]
+    
+    style Query fill:#e1f5fe
+    style RRF fill:#fff3e0
+    style Result fill:#e8f5e9
 ```
 
 All operations execute within IRIS—no external services, no data movement overhead.
