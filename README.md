@@ -6,7 +6,7 @@
 [![InterSystems IRIS](https://img.shields.io/badge/IRIS-2025.1+-purple.svg)](https://www.intersystems.com/products/intersystems-iris/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-IRIS Vector Graph is a high-performance knowledge graph system that combines **graph traversal**, **HNSW vector similarity**, and **lexical search** in a single, unified database.
+IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. It combines **graph traversal**, **HNSW vector similarity**, and **lexical search** in a single, unified database.
 
 ---
 

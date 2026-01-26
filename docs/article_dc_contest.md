@@ -81,7 +81,7 @@ Most fraud detection systems rely on one primary approach:
 
 ## What is IRIS Vector Graph?
 
-`iris-vector-graph` is a knowledge graph system built on InterSystems IRIS that combines:
+`iris-vector-graph` is a general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. It combines:
 
 - **Graph traversal** — Multi-hop relationship queries via SQL or Cypher
 - **Vector similarity search** — HNSW-indexed embeddings (~1.7ms queries)
