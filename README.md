@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![InterSystems IRIS](https://img.shields.io/badge/IRIS-2025.1+-purple.svg)](https://www.intersystems.com/products/intersystems-iris/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/intersystems-community/iris-vector-graph/blob/main/LICENSE)
 
 IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. It combines **graph traversal**, **HNSW vector similarity**, and **lexical search** in a single, unified database.
 
@@ -133,11 +133,11 @@ result = pipeline.query(
 
 ## Documentation
 
-- [Detailed Architecture](docs/architecture/ARCHITECTURE.md)
-- [Biomedical Domain Examples](examples/domains/biomedical/)
-- [Full Test Suite](tests/)
+- [Detailed Architecture](https://github.com/intersystems-community/iris-vector-graph/blob/main/docs/architecture/ARCHITECTURE.md)
+- [Biomedical Domain Examples](https://github.com/intersystems-community/iris-vector-graph/tree/main/examples/domains/biomedical/)
+- [Full Test Suite](https://github.com/intersystems-community/iris-vector-graph/tree/main/tests/)
 - [iris-vector-rag Integration](https://github.com/intersystems-community/iris-vector-rag)
-- [Verbose README](docs/README_VERBOSE.md) (Legacy)
+- [Verbose README](https://github.com/intersystems-community/iris-vector-graph/blob/main/docs/README_VERBOSE.md) (Legacy)
 
 ---
 
