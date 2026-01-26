@@ -77,14 +77,18 @@ ORDER BY score DESC
 
 ---
 
-## Performance
+## Scaling & Performance
 
-| Operation | Standard IRIS | HNSW (Functional Index) | Gain |
-|-----------|---------------|-------------------------|------|
-| **Vector Search** | 5,800ms | **1.7ms** | **3400x** |
-| **Graph Hop** | 1.0ms | **0.09ms** | **11x** |
-| **Parsing Overhead** | N/A | **0.04ms** | **High** |
-| **Ingestion** | 29 nodes/s | **6,496 nodes/s** | **224x** |
+The integration of a native **HNSW (Hierarchical Navigable Small World)** functional index directly into InterSystems IRIS provides massive scaling benefits for hybrid graph-vector workloads. 
+
+By keeping the vector index in-process with the graph data, we achieve **subsecond multi-modal queries** that would otherwise require complex application-side joins across multiple databases.
+
+### Why fast vector search matters for graphs
+Consider a "Find-and-Follow" query common in fraud detection:
+1.  **Find** the top 10 accounts most semantically similar to a known fraudulent pattern (Vector Search).
+2.  **Follow** all outbound transactions from those 10 accounts to identify the next layer of the money laundering ring (Graph Hop).
+
+In a standard database without HNSW, the first step (vector search) can take several seconds as the dataset grows, blocking the subsequent graph traversals. With `iris-vector-graph`, the vector lookup is reduced to **~1.7ms**, enabling the entire hybrid traversal to complete in a fraction of a second.
 
 ---
 

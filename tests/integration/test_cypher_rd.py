@@ -24,13 +24,13 @@ def test_integration_relationship_match(execute_cypher):
 
 def test_integration_where_clause(execute_cypher):
     """Test WHERE clause with comparisons"""
-    query = "MATCH (a:Account) WHERE a.risk_score > 0.5 RETURN a.node_id, a.risk_score LIMIT 5"
+    query = "MATCH (a:Account) WHERE a.risk_score >= 0.05 RETURN a.node_id, a.risk_score LIMIT 5"
     result = execute_cypher(query)
     
     assert len(result["rows"]) >= 0 # Might be 0 depending on data
     if len(result["rows"]) > 0:
         for row in result["rows"]:
-            assert float(row[1]) > 0.5
+            assert float(row[1]) >= 0.05
 
 def test_integration_multi_match(execute_cypher):
     """Test multiple MATCH clauses"""

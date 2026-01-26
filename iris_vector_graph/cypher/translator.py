@@ -76,6 +76,7 @@ class TranslationContext:
         self.where_params.append(value); return "?"
 
     def build_stage_sql(self, distinct: bool = False, select_override: Optional[str] = None) -> tuple[str, List[Any]]:
+        """Build SQL for a single stage and return (sql, combined_params)"""
         select = select_override if select_override else f"SELECT {'DISTINCT ' if distinct else ''}{', '.join(self.select_items)}"
         parts = [select]
         if self.from_clauses: parts.append(f"FROM {', '.join(self.from_clauses)}")
@@ -85,7 +86,11 @@ class TranslationContext:
         
         sql = "\n".join(parts)
         params = (self.select_params if not select_override else []) + self.join_params + self.where_params
+        
+        # NOTE: We don't clear params here because they might be needed for the next stage or final assembly.
+        # But for DML subqueries, we must be careful not to double-count.
         return sql, params
+
 
     def add_dml(self, sql: str, params: List[Any]):
         self.dml_statements.append((sql, params))
@@ -120,10 +125,15 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
                 if alias: new_aliases[alias] = f"Stage{i+1}"
             context.variable_aliases = new_aliases
 
-    context.select_items, context.select_params = [], []
-    if context.stages:
+    # 2. Final stage (RETURN)
+    # If the last QueryPart had a WITH clause, we must select from that CTE stage.
+    # Otherwise, we continue with the context of the last QueryPart (e.g. current MATCH joins).
+    last_part_had_with = cypher_query.query_parts[-1].with_clause is not None if cypher_query.query_parts else False
+    if context.stages and last_part_had_with:
+        context.select_items, context.select_params = [], []
         context.from_clauses, context.join_clauses, context.join_params = [f"Stage{len(context.stages)}"], [], []
         context.where_conditions, context.where_params = [], []
+    
     if cypher_query.return_clause: translate_return_clause(cypher_query.return_clause, context)
     
     if is_transactional:
@@ -186,7 +196,14 @@ def translate_create_clause(create, context, metadata):
         if isinstance(node_id_expr, ast.Variable):
             var_alias = context.variable_aliases.get(node_id_expr.name)
             if not var_alias: raise ValueError(f"Undefined: {node_id_expr.name}")
+            
+            # 1.1 Insert into nodes
+            # We need to capture the parameters specifically for this rowset subquery
             sql, p = context.build_stage_sql(select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id")
+            # Filter parameters to only include those referenced in the SQL subquery
+            # Since build_stage_sql just concatenates all params, and we used ? for all, 
+            # we need to ensure the number of ? matches len(p).
+            # Our current build_stage_sql is correct because it only includes params for the current stage.
             context.add_dml(f"INSERT INTO nodes (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = t.node_id)", p)
             for label in node.labels:
                 context.add_dml(f"INSERT INTO rdf_labels (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = t.node_id AND label = ?)", [label] + p + [label])
