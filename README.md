@@ -4,7 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![InterSystems IRIS](https://img.shields.io/badge/IRIS-2025.1+-purple.svg)](https://www.intersystems.com/products/intersystems-iris/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/intersystems-community/iris-vector-graph/blob/main/LICENSE)
 
 IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. It combines **graph traversal**, **HNSW vector similarity**, and **lexical search** in a single, unified database.
 
@@ -12,7 +12,8 @@ IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS 
 
 ## Why IRIS Vector Graph?
 
-- **Multi-Query Power**: Query your graph via **SQL**, **openCypher**, or **GraphQL** — all on the same data.
+- **Multi-Query Power**: Query your graph via **SQL**, **openCypher (v1.3 with DML)**, or **GraphQL** — all on the same data.
+- **Transactional Engine**: Beyond retrieval — support for `CREATE`, `DELETE`, and `MERGE` operations.
 - **Blazing Fast Vectors**: Native HNSW indexing delivering **~1.7ms** search latency (vs 5.8s standard).
 - **Zero-Dependency Integration**: Built with IRIS Embedded Python — no external vector DBs or graph engines required.
 - **Production-Ready**: The engine behind [iris-vector-rag](https://github.com/intersystems-community/iris-vector-rag) for advanced RAG pipelines.
@@ -41,11 +42,19 @@ Visit:
 
 ## Unified Query Engines
 
-### openCypher
+### openCypher (Advanced RD Parser)
+IRIS Vector Graph features a custom recursive-descent Cypher parser supporting multi-stage queries and transactional updates:
+
 ```cypher
-MATCH (p:Protein {id: "PROTEIN:TP53"})-[:interacts_with*1..2]->(target)
-RETURN p.name, target.name
+// Complex fraud analysis with WITH and Aggregations
+MATCH (a:Account)-[r]->(t:Transaction)
+WITH a, count(t) AS txn_count
+WHERE txn_count > 5
+MATCH (a)-[:OWNED_BY]->(p:Person)
+RETURN p.name, txn_count
 ```
+
+**Supported Clauses:** `MATCH`, `OPTIONAL MATCH`, `WITH`, `WHERE`, `RETURN`, `UNWIND`, `CREATE`, `DELETE`, `DETACH DELETE`, `MERGE`, `SET`, `REMOVE`.
 
 ### GraphQL
 ```graphql
@@ -58,7 +67,7 @@ query {
 }
 ```
 
-### SQL (Hybrid)
+### SQL (Hybrid Search)
 ```sql
 SELECT TOP 10 id, 
        kg_RRF_FUSE(id, vector, 'cancer suppressor') as score
@@ -68,13 +77,18 @@ ORDER BY score DESC
 
 ---
 
-## Performance
+## Scaling & Performance
 
-| Operation | Standard IRIS | ACORN-1 (HNSW) | Gain |
-|-----------|---------------|----------------|------|
-| **Vector Search** | 5,800ms | **1.7ms** | **3400x** |
-| **Graph Hop** | 1.0ms | **0.09ms** | **11x** |
-| **Ingestion** | 29 nodes/s | **6,496 nodes/s** | **224x** |
+The integration of a native **HNSW (Hierarchical Navigable Small World)** functional index directly into InterSystems IRIS provides massive scaling benefits for hybrid graph-vector workloads. 
+
+By keeping the vector index in-process with the graph data, we achieve **subsecond multi-modal queries** that would otherwise require complex application-side joins across multiple databases.
+
+### Why fast vector search matters for graphs
+Consider a "Find-and-Follow" query common in fraud detection:
+1.  **Find** the top 10 accounts most semantically similar to a known fraudulent pattern (Vector Search).
+2.  **Follow** all outbound transactions from those 10 accounts to identify the next layer of the money laundering ring (Graph Hop).
+
+In a standard database without HNSW, the first step (vector search) can take several seconds as the dataset grows, blocking the subsequent graph traversals. With `iris-vector-graph`, the vector lookup is reduced to **~1.7ms**, enabling the entire hybrid traversal to complete in a fraction of a second.
 
 ---
 
@@ -119,11 +133,11 @@ result = pipeline.query(
 
 ## Documentation
 
-- [Detailed Architecture](docs/architecture/ARCHITECTURE.md)
-- [Biomedical Domain Examples](examples/domains/biomedical/)
-- [Full Test Suite](tests/)
+- [Detailed Architecture](https://github.com/intersystems-community/iris-vector-graph/blob/main/docs/architecture/ARCHITECTURE.md)
+- [Biomedical Domain Examples](https://github.com/intersystems-community/iris-vector-graph/tree/main/examples/domains/biomedical/)
+- [Full Test Suite](https://github.com/intersystems-community/iris-vector-graph/tree/main/tests/)
 - [iris-vector-rag Integration](https://github.com/intersystems-community/iris-vector-rag)
-- [Verbose README](docs/README_VERBOSE.md) (Legacy)
+- [Verbose README](https://github.com/intersystems-community/iris-vector-graph/blob/main/docs/README_VERBOSE.md) (Legacy)
 
 ---
 
