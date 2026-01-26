@@ -1,6 +1,6 @@
 # IRIS Vector Graph
 
-A knowledge graph system built on InterSystems IRIS that combines graph traversal, vector similarity search, and full-text search in a single database. Designed for biomedical research use cases like protein interaction networks and literature mining.
+A general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. Combines graph traversal, vector similarity search, and full-text search in a single database. Includes examples for biomedical research use cases like protein interaction networks and literature mining.
 
 ## What is InterSystems IRIS?
 
