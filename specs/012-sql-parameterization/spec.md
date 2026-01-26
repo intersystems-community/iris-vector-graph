@@ -5,6 +5,15 @@
 **Status**: Draft  
 **Input**: User description: "Fix SQL interpolation security risk in GraphOperators.cls by using parameterized queries"
 
+## Clarifications
+
+### Session 2026-01-26
+
+- Q: What should be the maximum allowed value for k (TOP clause)? → A: 1000 (Standard)
+- Q: How should the system handle a k value that exceeds the maximum limit (1000)? → A: Cap at 1000 (Succeed with maximum allowed)
+- Q: How should the system handle a non-integer k value (e.g., "50" or 50.5)? → A: Coerce to integer (e.g., int(k))
+- Q: Should the system enforce a default value for k if it is null or omitted? → A: Use default of 50 (Recommended)
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Secure Query Execution (Priority: P1)
@@ -56,9 +65,8 @@ As a developer maintaining the codebase, I want all SQL queries across GraphOper
 
 ### Edge Cases
 
-- What happens when k is passed as a string representation of a number (e.g., "50")?
-- How does the system handle k values at the boundary (k=1, k=MAX_LIMIT)?
-- What happens when k is a floating-point number?
+- **k value interpretation**: Non-integer k values (strings or floats) are coerced to integers; invalid inputs are rejected
+- **Boundary k values**: Fails for k < 1; capped at 1000 for k > 1000
 - How does the system behave if the SQL parameter binding itself fails?
 
 ## Requirements *(mandatory)*
@@ -67,8 +75,8 @@ As a developer maintaining the codebase, I want all SQL queries across GraphOper
 
 - **FR-001**: The kgTXT method MUST use SQL parameter binding for the TOP clause value rather than f-string interpolation
 - **FR-002**: System MUST maintain backward compatibility - valid integer k values produce identical results
-- **FR-003**: System SHOULD validate that k is a positive integer before query execution
-- **FR-004**: System SHOULD enforce a maximum value for k to prevent resource exhaustion
+- **FR-003**: System MUST validate that k is a positive integer before query execution; non-integer inputs MUST be coerced to integer if possible, otherwise rejected; if k is null or omitted, it MUST default to 50
+- **FR-004**: System MUST enforce a maximum value of 1000 for k; values exceeding this limit MUST be capped at 1000 to prevent resource exhaustion
 - **FR-005**: All SQL queries in GraphOperators.cls MUST use parameter binding for any dynamic values
 - **FR-006**: Error messages for invalid k values MUST NOT reveal internal implementation details
 
