@@ -37,21 +37,21 @@ def main():
 
         # Step 2: Check fraud network data
         with runner.step("Loading fraud network"):
-            # Count fraud entities
+            # Count fraud entities (case-insensitive for compatibility)
             cursor.execute(
                 """
-                SELECT label, COUNT(*) 
+                SELECT UPPER(label), COUNT(*) 
                 FROM rdf_labels 
-                WHERE label IN ('Account', 'Transaction', 'Alert')
-                GROUP BY label
+                WHERE UPPER(label) IN ('ACCOUNT', 'TRANSACTION', 'ALERT')
+                GROUP BY UPPER(label)
             """
             )
 
             counts = {row[0]: row[1] for row in cursor.fetchall()}
 
-            account_count = counts.get("Account", 0)
-            transaction_count = counts.get("Transaction", 0)
-            alert_count = counts.get("Alert", 0)
+            account_count = counts.get("ACCOUNT", 0)
+            transaction_count = counts.get("TRANSACTION", 0)
+            alert_count = counts.get("ALERT", 0)
 
             if account_count == 0:
                 raise DemoError(
@@ -117,13 +117,12 @@ def main():
             # Find high-degree nodes (accounts with many counterparties)
             cursor.execute(
                 """
-                SELECT o_id as account_id, COUNT(DISTINCT s) as txn_count
+                SELECT TOP 5 o_id as account_id, COUNT(DISTINCT s) as txn_count
                 FROM rdf_edges
                 WHERE p IN ('FROM_ACCOUNT', 'TO_ACCOUNT')
                 AND o_id LIKE 'ACCOUNT:MULE%'
                 GROUP BY o_id
                 ORDER BY txn_count DESC
-                LIMIT 5
             """
             )
 
@@ -143,12 +142,11 @@ def main():
                 # Broader search
                 cursor.execute(
                     """
-                    SELECT o_id, COUNT(*) as cnt
+                    SELECT TOP 3 o_id, COUNT(*) as cnt
                     FROM rdf_edges
                     WHERE p IN ('FROM_ACCOUNT', 'TO_ACCOUNT')
                     GROUP BY o_id
                     ORDER BY cnt DESC
-                    LIMIT 3
                 """
                 )
 
