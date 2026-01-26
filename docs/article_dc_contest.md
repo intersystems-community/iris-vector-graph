@@ -270,41 +270,33 @@ AND EXISTS (
 AND e1.o_id LIKE 'ACCOUNT:RING%'
 ```
 
-### 2. Cypher: Mule Account Detection
+### 2. SQL: Mule Account Detection
 
-Find high-degree nodes using graph pattern matching:
+Find accounts with high transaction volume (potential mules):
+
+```sql
+-- Find accounts involved in many transactions (mule pattern)
+SELECT e.o_id as account_id, COUNT(*) as txn_count
+FROM rdf_edges e
+WHERE e.p IN ('FROM_ACCOUNT', 'TO_ACCOUNT')
+  AND e.o_id LIKE 'ACCOUNT:MULE%'
+GROUP BY e.o_id
+ORDER BY txn_count DESC
+```
+
+### 3. Cypher: Simple Account Query
+
+Query account properties via the Cypher API:
 
 ```bash
 curl -X POST http://localhost:8000/api/cypher \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "MATCH (t:Transaction)-[:FROM_ACCOUNT|TO_ACCOUNT]->(a:Account) 
-              WHERE a.node_id STARTS WITH \"ACCOUNT:MULE\" 
-              RETURN a.node_id, count(t) as txn_count 
-              ORDER BY txn_count DESC"
+    "query": "MATCH (a:Account) RETURN a.account_type, a.risk_score LIMIT 10"
   }'
 ```
 
-### 3. GraphQL: Interactive Investigation
-
-Navigate the fraud network with type-safe queries:
-
-```graphql
-query {
-  node(id: "ACCOUNT:MULE1") {
-    id
-    labels
-    properties
-    edges {
-      predicate
-      target {
-        id
-        labels
-      }
-    }
-  }
-}
-```
+*Note: The Cypher API supports common patterns. For complex graph traversals, use SQL directly.*
 
 ---
 
@@ -405,14 +397,14 @@ ppr = engine.kg_PERSONALIZED_PAGERANK(
 connected = [(acc, score) for acc, score in ppr.items() if score > 0.01]
 print(f"Connected accounts: {len(connected)}")
 
-# Step 4: Get relationship details
-relationships = engine.kg_NEIGHBORHOOD_EXPANSION(
-    entity_list=[seed_account],
-    expansion_depth=1,
-    confidence_threshold=0
-)
-for rel in relationships:
-    print(f"  {rel['source']} --{rel['predicate']}--> {rel['target']}")
+# Step 4: Get relationship details via SQL
+cursor = connection.cursor()
+cursor.execute("""
+    SELECT s, p, o_id FROM rdf_edges 
+    WHERE s = ? OR o_id = ?
+""", (seed_account, seed_account))
+for row in cursor.fetchall():
+    print(f"  {row[0]} --{row[1]}--> {row[2]}")
 ```
 
 ---
