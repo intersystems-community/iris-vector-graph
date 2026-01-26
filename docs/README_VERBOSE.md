@@ -1,6 +1,6 @@
 # IRIS Vector Graph
 
-A general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. Combines graph traversal, vector similarity search, and full-text search in a single database. Includes examples for biomedical research use cases like protein interaction networks and literature mining.
+A general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. Combines graph traversal, vector similarity search, and full-text search in a single database. Features a robust **recursive-descent Cypher parser** with multi-stage query support (`WITH`), aggregations, and transactional DML (`CREATE`, `DELETE`, `MERGE`).
 
 ## What is InterSystems IRIS?
 
@@ -9,12 +9,13 @@ IRIS is a multi-model database that supports SQL, objects, documents, and key-va
 ## What This Does
 
 Stores graph data (nodes, edges, properties) in IRIS SQL tables and provides:
+- **Transactional Cypher Engine** - `CREATE`, `DELETE`, `MERGE`, `SET`, `REMOVE` with ACID consistency
 - **Vector similarity search** - Find semantically similar entities using embeddings
-- **Graph traversal** - Multi-hop path queries across relationships
+- **Multi-stage graph traversal** - Chained logic using `WITH` and recursive paths
 - **Hybrid search** - Combine vector similarity with keyword search using RRF (Reciprocal Rank Fusion)
 - **Referential integrity** - Foreign key constraints ensure data consistency across all graph entities
 - **Graph analytics** - PageRank, Connected Components, and other algorithms optimized with embedded Python
-- **REST API** - Access all features via HTTP endpoints
+- **Advanced API** - openCypher, GraphQL, and SQL interfaces
 
 Built with embedded Python for flexibility and IRIS SQL procedures for performance.
 

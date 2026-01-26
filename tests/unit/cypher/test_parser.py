@@ -8,8 +8,9 @@ def test_parse_basic_match():
     
     assert len(q.query_parts) == 1
     part = q.query_parts[0]
-    assert len(part.match_clauses) == 1
-    pattern = part.match_clauses[0].pattern
+    match_clause = next(c for c in part.clauses if isinstance(c, ast.MatchClause))
+    assert len(match_clause.patterns) == 1
+    pattern = match_clause.patterns[0]
     assert len(pattern.nodes) == 1
     assert pattern.nodes[0].variable == "n"
     assert pattern.nodes[0].labels == ["Person"]
@@ -29,20 +30,22 @@ def test_parse_relationship_patterns():
     
     for q_str in queries:
         q = parse_query(q_str)
-        assert len(q.query_parts[0].match_clauses[0].pattern.relationships) == 1
+        match_clause = next(c for c in q.query_parts[0].clauses if isinstance(c, ast.MatchClause))
+        assert len(match_clause.patterns[0].relationships) == 1
 
 def test_parse_multi_match():
     query = "MATCH (a:A) MATCH (b:B) RETURN a, b"
     q = parse_query(query)
     
     assert len(q.query_parts) == 1
-    assert len(q.query_parts[0].match_clauses) == 2
+    matches = [c for c in q.query_parts[0].clauses if isinstance(c, ast.MatchClause)]
+    assert len(matches) == 2
 
 def test_parse_where_clause():
     query = "MATCH (n) WHERE n.name = 'Alice' AND n.age > 30 RETURN n"
     q = parse_query(query)
     
-    where = q.query_parts[0].where_clause
+    where = next(c for c in q.query_parts[0].clauses if isinstance(c, ast.WhereClause))
     assert where is not None
     assert isinstance(where.expression, ast.BooleanExpression)
     assert where.expression.operator == ast.BooleanOperator.AND
@@ -75,28 +78,48 @@ def test_parse_with_clause():
     assert q.query_parts[0].with_clause is not None
     assert len(q.query_parts[0].with_clause.items) == 2
     assert q.query_parts[0].with_clause.where_clause is not None
-    assert q.query_parts[1].match_clauses[0].pattern.nodes[0].variable == "a"
+    
+    match_clause = next(c for c in q.query_parts[1].clauses if isinstance(c, ast.MatchClause))
+    assert match_clause.patterns[0].nodes[0].variable == "a"
 
 def test_parse_aggregations():
     query = "MATCH (t:Transaction) RETURN count(t), sum(t.amount), avg(t.amount)"
     q = parse_query(query)
     
+    assert q.return_clause is not None
     items = q.return_clause.items
     assert len(items) == 3
-    assert isinstance(items[0].expression, ast.AggregationFunction)
-    assert items[0].expression.function_name == "count"
-    assert items[1].expression.function_name == "sum"
-    assert items[2].expression.function_name == "avg"
+    
+    expr0 = items[0].expression
+    assert isinstance(expr0, ast.AggregationFunction)
+    assert expr0.function_name == "count"
+    
+    expr1 = items[1].expression
+    assert isinstance(expr1, ast.AggregationFunction)
+    assert expr1.function_name == "sum"
+    
+    expr2 = items[2].expression
+    assert isinstance(expr2, ast.AggregationFunction)
+    assert expr2.function_name == "avg"
 
 def test_parse_built_in_functions():
     query = "MATCH (n) RETURN id(n), type(r), labels(n)"
     q = parse_query(query)
     
+    assert q.return_clause is not None
     items = q.return_clause.items
     assert len(items) == 3
-    assert isinstance(items[0].expression, ast.FunctionCall)
-    assert items[0].expression.function_name == "id"
-    assert items[1].expression.function_name == "type"
-    assert items[2].expression.function_name == "labels"
+    
+    expr0 = items[0].expression
+    assert isinstance(expr0, ast.FunctionCall)
+    assert expr0.function_name == "id"
+    
+    expr1 = items[1].expression
+    assert isinstance(expr1, ast.FunctionCall)
+    assert expr1.function_name == "type"
+    
+    expr2 = items[2].expression
+    assert isinstance(expr2, ast.FunctionCall)
+    assert expr2.function_name == "labels"
 
 

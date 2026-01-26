@@ -12,7 +12,8 @@ IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS 
 
 ## Why IRIS Vector Graph?
 
-- **Multi-Query Power**: Query your graph via **SQL**, **openCypher**, or **GraphQL** — all on the same data.
+- **Multi-Query Power**: Query your graph via **SQL**, **openCypher (v1.3 with DML)**, or **GraphQL** — all on the same data.
+- **Transactional Engine**: Beyond retrieval — support for `CREATE`, `DELETE`, and `MERGE` operations.
 - **Blazing Fast Vectors**: Native HNSW indexing delivering **~1.7ms** search latency (vs 5.8s standard).
 - **Zero-Dependency Integration**: Built with IRIS Embedded Python — no external vector DBs or graph engines required.
 - **Production-Ready**: The engine behind [iris-vector-rag](https://github.com/intersystems-community/iris-vector-rag) for advanced RAG pipelines.
@@ -41,11 +42,19 @@ Visit:
 
 ## Unified Query Engines
 
-### openCypher
+### openCypher (Advanced RD Parser)
+IRIS Vector Graph features a custom recursive-descent Cypher parser supporting multi-stage queries and transactional updates:
+
 ```cypher
-MATCH (p:Protein {id: "PROTEIN:TP53"})-[:interacts_with*1..2]->(target)
-RETURN p.name, target.name
+// Complex fraud analysis with WITH and Aggregations
+MATCH (a:Account)-[r]->(t:Transaction)
+WITH a, count(t) AS txn_count
+WHERE txn_count > 5
+MATCH (a)-[:OWNED_BY]->(p:Person)
+RETURN p.name, txn_count
 ```
+
+**Supported Clauses:** `MATCH`, `OPTIONAL MATCH`, `WITH`, `WHERE`, `RETURN`, `UNWIND`, `CREATE`, `DELETE`, `DETACH DELETE`, `MERGE`, `SET`, `REMOVE`.
 
 ### GraphQL
 ```graphql
@@ -58,7 +67,7 @@ query {
 }
 ```
 
-### SQL (Hybrid)
+### SQL (Hybrid Search)
 ```sql
 SELECT TOP 10 id, 
        kg_RRF_FUSE(id, vector, 'cancer suppressor') as score
@@ -70,10 +79,11 @@ ORDER BY score DESC
 
 ## Performance
 
-| Operation | Standard IRIS | ACORN-1 (HNSW) | Gain |
-|-----------|---------------|----------------|------|
+| Operation | Standard IRIS | HNSW (Functional Index) | Gain |
+|-----------|---------------|-------------------------|------|
 | **Vector Search** | 5,800ms | **1.7ms** | **3400x** |
 | **Graph Hop** | 1.0ms | **0.09ms** | **11x** |
+| **Parsing Overhead** | N/A | **0.04ms** | **High** |
 | **Ingestion** | 29 nodes/s | **6,496 nodes/s** | **224x** |
 
 ---

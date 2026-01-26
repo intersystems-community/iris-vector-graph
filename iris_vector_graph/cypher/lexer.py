@@ -28,6 +28,14 @@ class TokenType(enum.Enum):
     WITH_KW = "WITH_KW" # For STARTS WITH
     CONTAINS = "CONTAINS"
     ENDS = "ENDS"
+    UNWIND = "UNWIND"
+    CREATE = "CREATE"
+    MERGE = "MERGE"
+    DELETE = "DELETE"
+    SET = "SET"
+    REMOVE = "REMOVE"
+    ON = "ON"
+    DETACH = "DETACH"
 
     # Literals and Identifiers
     IDENTIFIER = "IDENTIFIER"
@@ -183,13 +191,8 @@ class Lexer:
                     value += self.source[self.cursor]
             else:
                 value += self.source[self.cursor]
-            
-            if self.source[self.cursor] == '\n':
-                self.line += 1
-                self.column = 1
-            else:
-                self.column += 1
             self.cursor += 1
+            self.column += 1
         
         if self.cursor >= len(self.source):
             raise SyntaxError(f"Unterminated string starting at line {self.line}, col {start_col}")
@@ -251,7 +254,6 @@ class Lexer:
     def _peek_keyword(self, keyword: str) -> bool:
         # Simple peek for multi-word keywords
         current_cursor = self.cursor
-        current_col = self.column
         
         # Skip whitespace
         while current_cursor < len(self.source) and self.source[current_cursor].isspace():

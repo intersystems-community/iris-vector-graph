@@ -1,124 +1,101 @@
-"""
-Cypher Query Router
-
-FastAPI router for POST /api/cypher endpoint.
-Implements openCypher query execution against IRIS Vector Graph.
-"""
-
-import time
-import uuid
-import os
-from typing import Any
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
-import iris
+import time
+import logging
+import uuid
+from typing import List, Any, Dict, Optional, Union
 
-from api.models.cypher import (
-    CypherQueryRequest,
-    CypherQueryResponse,
+from ..models.cypher import (
+    CypherQueryRequest, 
+    CypherQueryResponse, 
     CypherErrorResponse,
-    ErrorCode,
-    QueryMetadata
+    QueryMetadata,
+    ErrorCode
 )
+from ..dependencies import get_db_connection
 from iris_vector_graph.cypher.parser import parse_query, CypherParseError
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher import ast
 
+# Use iris-devtester dbapi_compat for IRIS connectivity
+try:
+    import iris
+except ImportError:
+    import intersystems_irispython as iris
 
-router = APIRouter(prefix="/api", tags=["Cypher Queries"])
+router = APIRouter(prefix="/api/cypher", tags=["cypher"])
+logger = logging.getLogger(__name__)
 
-
-def get_iris_connection():
-    """
-    Dependency to get IRIS database connection.
-
-    Reads connection params from environment variables.
-    """
-    try:
-        conn = iris.connect(
-            os.getenv("IRIS_HOST", "localhost"),
-            int(os.getenv("IRIS_PORT", "1972")),
-            os.getenv("IRIS_NAMESPACE", "USER"),
-            os.getenv("IRIS_USER", "_SYSTEM"),
-            os.getenv("IRIS_PASSWORD", "SYS")
-        )
-        return conn
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to connect to IRIS database: {str(e)}"
-        )
-
-
-@router.post("/cypher")
+@router.post("", response_model=Union[CypherQueryResponse, CypherErrorResponse])
 async def execute_cypher_query(
     request: CypherQueryRequest,
-    db_connection: Any = Depends(get_iris_connection)
-) -> CypherQueryResponse | CypherErrorResponse:
-    """
-    Execute openCypher query against IRIS Vector Graph.
-
-    **Request Body**:
-    - `query` (required): openCypher query string
-    - `parameters` (optional): Named parameters for query
-    - `timeout` (optional): Query timeout in seconds (default: 30, max: 300)
-    - `enableOptimization` (optional): Enable query optimization (default: true)
-    - `enableCache` (optional): Enable query caching (default: true)
-
-    **Response**:
-    - Success (200): CypherQueryResponse with columns, rows, timing, traceId
-    - Syntax Error (400): CypherErrorResponse with error details
-    - Timeout (408): CypherErrorResponse with timeout message
-    - Complexity Limit (413): CypherErrorResponse with limit exceeded
-    - Execution Error (500): CypherErrorResponse with SQL error
-
-    **Example**:
-    ```
-    POST /api/cypher
-    {
-      "query": "MATCH (p:Protein {id: $proteinId}) RETURN p.name",
-      "parameters": {"proteinId": "PROTEIN:TP53"}
-    }
-    ```
-    """
-    trace_id = f"cypher-{uuid.uuid4().hex[:12]}"
+    db_connection = Depends(get_db_connection)
+):
+    """Execute an openCypher query against InterSystems IRIS"""
+    trace_id = f"cypher-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     translation_start = time.time()
-
+    
     try:
-        # Parse Cypher query
-        query_ast = parse_query(request.query, request.parameters)
+        # 1. Parse Cypher query
+        query_ast = parse_query(request.query)
 
-        # Translate to SQL
-        sql_query = translate_to_sql(query_ast)
+        # 2. Translate to SQL
+        sql_query = translate_to_sql(query_ast, params=request.parameters)
         translation_time_ms = (time.time() - translation_start) * 1000
 
-        # Execute SQL query
+        # 3. Execute SQL query
         execution_start = time.time()
         cursor = db_connection.cursor()
+        rows = []
+        sql_text = ""
 
         try:
-            cursor.execute(sql_query.sql, sql_query.parameters)
-            rows = cursor.fetchall()
+            if sql_query.is_transactional:
+                cursor.execute("START TRANSACTION")
+                try:
+                    stmts = sql_query.sql if isinstance(sql_query.sql, list) else [sql_query.sql]
+                    all_params = sql_query.parameters
+                    
+                    for i, stmt in enumerate(stmts[:-1]):
+                        params = all_params[i] if i < len(all_params) else []
+                        cursor.execute(stmt, params)
+                    
+                    if len(stmts) > 0:
+                        last_stmt = stmts[-1]
+                        last_params = all_params[-1] if len(all_params) >= len(stmts) else []
+                        cursor.execute(last_stmt, last_params)
+                        if cursor.description:
+                            rows = cursor.fetchall()
+                    
+                    cursor.execute("COMMIT")
+                    sql_text = "\n".join(stmts) if isinstance(sql_query.sql, list) else str(sql_query.sql)
+                except Exception as e:
+                    cursor.execute("ROLLBACK")
+                    raise e
+            else:
+                sql_str = sql_query.sql if isinstance(sql_query.sql, str) else "\n".join(sql_query.sql)
+                sql_text = sql_str
+                params = sql_query.parameters[0] if sql_query.parameters else []
+                cursor.execute(sql_str, params)
+                rows = cursor.fetchall()
+            
             execution_time_ms = (time.time() - execution_start) * 1000
 
-            # Get column names from return clause
+            # 4. Build success response
             columns = []
             if query_ast.return_clause:
                 for item in query_ast.return_clause.items:
                     if item.alias:
                         columns.append(item.alias)
                     elif isinstance(item.expression, ast.PropertyReference):
-                        columns.append(f"{item.expression.variable}.{item.expression.property_name}")
+                        columns.append(f"{item.expression.variable}_{item.expression.property_name}")
                     elif isinstance(item.expression, ast.Variable):
                         columns.append(item.expression.name)
-                    elif isinstance(item.expression, ast.AggregationFunction):
-                        columns.append(f"{item.expression.function_name}_res")
-                    elif isinstance(item.expression, ast.FunctionCall):
+                    elif isinstance(item.expression, (ast.AggregationFunction, ast.FunctionCall)):
                         columns.append(f"{item.expression.function_name}_res")
                     else:
                         columns.append("result")
 
-            # Build response
             return CypherQueryResponse(
                 columns=columns,
                 rows=[list(row) for row in rows],
@@ -126,42 +103,31 @@ async def execute_cypher_query(
                 executionTimeMs=execution_time_ms,
                 translationTimeMs=translation_time_ms,
                 queryMetadata=QueryMetadata(
-                    sqlQuery=sql_query.sql if request.enable_optimization else None,
+                    sqlQuery=sql_text if request.enable_optimization else None,
                     optimizationsApplied=sql_query.query_metadata.optimization_applied
                 ),
                 traceId=trace_id
             )
 
-        except iris.Error as e:
+        except Exception as e:
             # SQL execution error
-            error_message = str(e)
-
-            # Check for FK constraint violation
-            if "FOREIGN KEY" in error_message.upper():
-                return JSONResponse(
-                    status_code=500,
-                    content=CypherErrorResponse(
-                        errorType="execution",
-                        message=f"Foreign key constraint violation: {error_message}",
-                        errorCode=ErrorCode.FK_CONSTRAINT_VIOLATION,
-                        traceId=trace_id,
-                        sqlQuery=sql_query.sql
-                    ).model_dump(by_alias=True)
-                )
-            else:
-                return JSONResponse(
-                    status_code=500,
-                    content=CypherErrorResponse(
-                        errorType="execution",
-                        message=f"SQL execution failed: {error_message}",
-                        errorCode=ErrorCode.SQL_EXECUTION_ERROR,
-                        traceId=trace_id,
-                        sqlQuery=sql_query.sql
-                    ).model_dump(by_alias=True)
-                )
+            error_msg = str(e)
+            error_code = ErrorCode.SQL_EXECUTION_ERROR
+            if "FOREIGN KEY" in error_msg.upper():
+                error_code = ErrorCode.FK_CONSTRAINT_VIOLATION
+                
+            return JSONResponse(
+                status_code=500,
+                content=CypherErrorResponse(
+                    errorType="execution",
+                    message=f"SQL execution failed: {error_msg}",
+                    errorCode=error_code,
+                    traceId=trace_id,
+                    sqlQuery=sql_text
+                ).model_dump(by_alias=True)
+            )
 
     except CypherParseError as e:
-        # Syntax error
         return JSONResponse(
             status_code=400,
             content=CypherErrorResponse(
@@ -176,47 +142,30 @@ async def execute_cypher_query(
         )
 
     except ValueError as e:
-        # Translation error (undefined variable, complexity limit, etc.)
-        error_message = str(e)
-
-        # Check for complexity limit
-        if "complexity" in error_message.lower() or "max_hops" in error_message.lower():
-            return JSONResponse(
-                status_code=413,
-                content=CypherErrorResponse(
-                    errorType="translation",
-                    message=error_message,
-                    errorCode=ErrorCode.COMPLEXITY_LIMIT_EXCEEDED,
-                    suggestion="Reduce max_hops in variable-length path pattern",
-                    traceId=trace_id
-                ).model_dump(by_alias=True)
-            )
-        else:
-            # Generic translation error
-            return JSONResponse(
-                status_code=400,
-                content=CypherErrorResponse(
-                    errorType="translation",
-                    message=error_message,
-                    errorCode=ErrorCode.UNDEFINED_VARIABLE,
-                    traceId=trace_id
-                ).model_dump(by_alias=True)
-            )
+        error_msg = str(e)
+        status = 400
+        error_code = ErrorCode.UNDEFINED_VARIABLE
+        if "complexity" in error_msg.lower():
+            status = 413
+            error_code = ErrorCode.COMPLEXITY_LIMIT_EXCEEDED
+            
+        return JSONResponse(
+            status_code=status,
+            content=CypherErrorResponse(
+                errorType="translation",
+                message=error_msg,
+                errorCode=error_code,
+                traceId=trace_id
+            ).model_dump(by_alias=True)
+        )
 
     except Exception as e:
-        # Unexpected error
         return JSONResponse(
             status_code=500,
             content=CypherErrorResponse(
                 errorType="execution",
-                message=f"Internal server error: {str(e)}",
+                message=f"Internal error: {str(e)}",
                 errorCode=ErrorCode.INTERNAL_ERROR,
                 traceId=trace_id
             ).model_dump(by_alias=True)
         )
-    finally:
-        # Close connection
-        try:
-            db_connection.close()
-        except:
-            pass

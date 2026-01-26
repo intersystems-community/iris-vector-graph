@@ -152,8 +152,8 @@ class WhereClause:
 
 @dataclass(slots=True)
 class MatchClause:
-    """MATCH clause with optional pattern"""
-    pattern: GraphPattern
+    """MATCH clause with one or more patterns"""
+    patterns: List[GraphPattern]
     optional: bool = False
 
 
@@ -173,10 +173,69 @@ class WithClause:
 
 
 @dataclass(slots=True)
+class UpdateItem:
+    """Base class for updating items (SET, REMOVE)"""
+    pass
+
+@dataclass(slots=True)
+class SetItem(UpdateItem):
+    """SET item (property update or label addition)"""
+    expression: Union[PropertyReference, Variable]
+    value: Any # For SET n.prop = value or SET n:Label
+
+@dataclass(slots=True)
+class RemoveItem(UpdateItem):
+    """REMOVE item (property or label removal)"""
+    expression: Union[PropertyReference, Variable]
+
+@dataclass(slots=True)
+class UpdatingClause:
+    """Base class for clauses that update the graph"""
+    pass
+
+@dataclass(slots=True)
+class CreateClause(UpdatingClause):
+    """CREATE clause"""
+    pattern: GraphPattern
+
+@dataclass(slots=True)
+class DeleteClause(UpdatingClause):
+    """DELETE clause"""
+    expressions: List[Variable]
+    detach: bool = False
+
+@dataclass(slots=True)
+class MergeAction:
+    """ON CREATE or ON MATCH action for MERGE"""
+    items: List[UpdateItem]
+
+@dataclass(slots=True)
+class MergeClause(UpdatingClause):
+    """MERGE clause"""
+    pattern: GraphPattern
+    on_create: Optional[MergeAction] = None
+    on_match: Optional[MergeAction] = None
+
+@dataclass(slots=True)
+class SetClause(UpdatingClause):
+    """SET clause"""
+    items: List[SetItem]
+
+@dataclass(slots=True)
+class RemoveClause(UpdatingClause):
+    """REMOVE clause"""
+    items: List[RemoveItem]
+
+@dataclass(slots=True)
+class UnwindClause:
+    """UNWIND clause for collection expansion"""
+    expression: Union[Variable, Literal, FunctionCall]
+    alias: str
+
+@dataclass(slots=True)
 class QueryPart:
-    """A stage in a multi-stage query"""
-    match_clauses: List[MatchClause] = field(default_factory=list)
-    where_clause: Optional[WhereClause] = None
+    """A stage in a multi-stage query (sequence of clauses)"""
+    clauses: List[Union[MatchClause, UnwindClause, UpdatingClause, WhereClause]] = field(default_factory=list)
     with_clause: Optional[WithClause] = None
 
 

@@ -70,12 +70,20 @@ Most fraud detection systems rely on one primary approach:
 
 **The insight:** Each method catches different fraud signals. Combining them—what we call **hybrid retrieval**—catches what no single method can find alone.
 
-| Method | Catches | Misses |
-|--------|---------|--------|
-| **Vector-only** | Accounts with similar transaction patterns | Ring structures, network topology |
-| **Text-only** | Flagged accounts, keyword matches | Mule accounts that look normal |
-| **Graph-only** | Connected networks, high-degree nodes | Isolated accounts with unusual behavior |
-| **Hybrid (all three)** | All of the above | Much less |
+### Comparison of Detection Methods
+
+- **Vector-only**
+    - **Catches:** Accounts with similar transaction patterns
+    - **Misses:** Ring structures, network topology
+- **Text-only**
+    - **Catches:** Flagged accounts, keyword matches
+    - **Misses:** Mule accounts that look normal
+- **Graph-only**
+    - **Catches:** Connected networks, high-degree nodes
+    - **Misses:** Isolated accounts with unusual behavior
+- **Hybrid (all three)**
+    - **Catches:** All of the above
+    - **Misses:** Much less
 
 ---
 
@@ -231,11 +239,9 @@ Demo completed successfully
 
 The repository includes a realistic fraud detection dataset in `sql/fraud_sample_data.sql` with 150+ entities implementing all three fraud patterns:
 
-| Entity Type | Count | Description |
-|-------------|-------|-------------|
-| Accounts | 75 | 50 normal + 15 ring + 2 mule + 8 velocity |
-| Transactions | 50+ | With FROM_ACCOUNT, TO_ACCOUNT edges |
-| Alerts | 25 | Severity: critical/high/medium/low |
+- **Accounts (75)**: 50 normal + 15 ring + 2 mule + 8 velocity
+- **Transactions (50+)**: With FROM_ACCOUNT, TO_ACCOUNT edges
+- **Alerts (25)**: Severity ranging from critical to low
 
 The data is structured using an RDF-inspired schema that's domain-agnostic:
 
@@ -425,15 +431,61 @@ for row in cursor.fetchall():
 
 Benchmarks with HNSW indexing enabled:
 
-| Operation | Latency | Notes |
-|-----------|---------|-------|
-| Vector KNN (k=20) | **1.7ms** | HNSW index |
-| Graph traversal (2-hop) | **0.25ms** | SQL join on indexed edges |
-| Text search (BM25) | **5ms** | iFind full-text search |
-| Full hybrid query | **<50ms** | All modalities combined |
-| PageRank (1K nodes) | **5.3ms** | IRIS embedded Python |
+- **Vector KNN (k=20)**: 1.7ms (via HNSW index)
+- **Graph traversal (2-hop)**: 0.25ms (SQL join on indexed edges)
+- **Text search (BM25)**: 5ms (via iFind full-text search)
+- **Full hybrid query**: <50ms (All modalities combined)
+- **PageRank (1K nodes)**: 5.3ms (via IRIS embedded Python)
 
 Without HNSW, vector search falls back to ~5.8s—a 3400x difference. The HNSW index is critical for real-time fraud detection.
+
+---
+
+## Under the Hood: How IRIS Powers the Graph
+
+The system uses a highly optimized relational schema to store graph data, leveraging InterSystems IRIS's multi-model capabilities.
+
+### Data Model (ERD)
+
+```mermaid
+erDiagram
+    nodes ||--o{ rdf_labels : has
+    nodes ||--o{ rdf_props : has
+    nodes ||--o{ rdf_edges : source
+    nodes ||--o{ rdf_edges : target
+    nodes ||--o| kg_NodeEmbeddings : has_vector
+
+    nodes {
+        string node_id PK
+        timestamp created_at
+    }
+    rdf_labels {
+        string s FK
+        string label
+    }
+    rdf_props {
+        string s FK
+        string key
+        string val
+    }
+    rdf_edges {
+        string s FK
+        string p
+        string o_id FK
+    }
+    kg_NodeEmbeddings {
+        string s FK
+        vector embedding
+    }
+```
+
+### Functional Indexes and Globals
+
+One of the unique strengths of InterSystems IRIS is its ability to define custom index structures using **Functional Indexes**. In `iris-vector-graph`, we use this to implement the HNSW vector index.
+
+Instead of a standard B-Tree index, the HNSW index uses a specialized global structure to store the graph-based proximity layers. This allows for lightning-fast similarity search that scales to millions of vectors while maintaining transactional consistency.
+
+When you execute a vector search, the SQL engine calls into our custom index implementation, which traverses the HNSW global structure directly in IRIS memory, avoiding the overhead of traditional relational indexing for high-dimensional data.
 
 ---
 
@@ -449,13 +501,11 @@ Traditional GraphRAG pipelines require:
 
 **IRIS Vector Graph consolidates all three:**
 
-| Capability | Traditional Stack | IRIS Vector Graph |
-|------------|------------------|-------------------|
-| Vector search | Separate service | Native HNSW |
-| Graph queries | Separate service | SQL + Cypher |
-| Text search | Separate service | BM25 via iFind |
-| Cross-modal joins | Application code | Single SQL query |
-| Transactional consistency | Complex | ACID guaranteed |
+- **Vector search**: Native HNSW (replaces separate services like Pinecone)
+- **Graph queries**: SQL + Cypher (replaces separate services like Neo4j)
+- **Text search**: BM25 via iFind (replaces separate services like Elasticsearch)
+- **Cross-modal joins**: Single SQL query (replaces complex application-side logic)
+- **Transactional consistency**: ACID guaranteed (replaces eventual consistency sync issues)
 
 For an LLM investigating fraud, this means richer context: not just similar transaction patterns, but also the network structure, connected entities, and alert history—all retrieved in one query.
 
@@ -463,15 +513,13 @@ For an LLM investigating fraud, this means richer context: not just similar tran
 
 ## Extending to Your Domain
 
-The fraud detection patterns demonstrated here apply broadly:
+The fraud detection patterns demonstrated here apply broadly across many industries:
 
-| Domain | Ring Pattern | Star Pattern | Anomaly Detection |
-|--------|-------------|--------------|-------------------|
-| **Fraud** | Money laundering cycles | Mule accounts | Unusual transactions |
-| **Healthcare** | Referral loops | High-volume prescribers | Outlier diagnoses |
-| **Supply Chain** | Circular dependencies | Hub suppliers | Demand anomalies |
-| **Social Networks** | Bot rings | Influencer accounts | Fake engagement |
-| **Cybersecurity** | Attack paths | C2 servers | Behavioral anomalies |
+- **Fraud**: Money laundering cycles, mule accounts, unusual transactions
+- **Healthcare**: Referral loops, high-volume prescribers, outlier diagnoses
+- **Supply Chain**: Circular dependencies, hub suppliers, demand anomalies
+- **Social Networks**: Bot rings, influencer accounts, fake engagement
+- **Cybersecurity**: Attack paths, C2 servers, behavioral anomalies
 
 The schema is domain-agnostic. Change the labels and properties, and the same queries work.
 

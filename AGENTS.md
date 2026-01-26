@@ -24,6 +24,7 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 010-cypher-advanced-features: Added Python 3.11 + `intersystems-irispython`, `fastapi`, `strawberry-graphql`.
 - 001-cypher-rd-parser: Added Python 3.11 + `intersystems-irispython`, `fastapi`, `strawberry-graphql`. Research needed for lexer/parser pattern.
 
 - 001-cypher-relationship-patterns: Added Python 3.11, InterSystems IRIS 2025.1+ + `intersystems-irispython`, `fastapi`, `strawberry-graphql`

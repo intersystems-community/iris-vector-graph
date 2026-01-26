@@ -71,8 +71,10 @@ class Parser:
             query_parts[-1].with_clause = with_clause
             query_parts.append(part)
             
-        # Final projection
-        return_clause = self.parse_return_clause()
+        # Final projection (Optional in Cypher if updating clauses are present)
+        return_clause = None
+        if self.peek().kind == TokenType.RETURN:
+            return_clause = self.parse_return_clause()
         
         # Optional clauses
         order_by = self.parse_order_by_clause()
@@ -112,25 +114,156 @@ class Parser:
         return ast.WithClause(items=items, distinct=distinct, where_clause=where_clause)
 
     def parse_query_part(self) -> ast.QueryPart:
-        """Parse a single stage of a query (MATCH... WHERE...)"""
-        match_clauses = []
+        """Parse a single stage of a query (MATCH... UNWIND... WHERE... UPDATE...)"""
+        clauses = []
         
-        # At least one MATCH or standalone CALL
-        while self.peek().kind == TokenType.MATCH:
-            match_clauses.append(self.parse_match_clause())
+        while True:
+            tok = self.peek()
+            kind = tok.kind
+            if kind == TokenType.MATCH:
+                clauses.append(self.parse_match_clause(optional=False))
+            elif kind == TokenType.IDENTIFIER and tok.value and tok.value.upper() == "OPTIONAL":
+                # Check for OPTIONAL MATCH
+                self.eat() # OPTIONAL
+                self.expect(TokenType.MATCH)
+                clauses.append(self.parse_match_clause(optional=True))
+            elif kind == TokenType.UNWIND:
+                clauses.append(self.parse_unwind_clause())
+            elif kind in (TokenType.CREATE, TokenType.DELETE, TokenType.MERGE, TokenType.SET, TokenType.REMOVE, TokenType.DETACH):
+                clauses.append(self.parse_updating_clause())
+            elif kind == TokenType.WHERE:
+                clauses.append(self.parse_where_clause())
+            else:
+                break
             
-        where_clause = self.parse_where_clause()
-        
-        return ast.QueryPart(
-            match_clauses=match_clauses,
-            where_clause=where_clause
-        )
+        return ast.QueryPart(clauses=clauses)
 
-    def parse_match_clause(self) -> ast.MatchClause:
-        """Parse MATCH (n:Label)-[r:TYPE]->(m)"""
-        self.expect(TokenType.MATCH)
+    def parse_match_clause(self, optional: bool = False) -> ast.MatchClause:
+        """Parse [OPTIONAL] MATCH (n:Label)-[r:TYPE]->(m), (x:Other)"""
+        # Note: MATCH already eaten by caller if OPTIONAL
+        if not optional:
+            self.expect(TokenType.MATCH)
+        
+        # Cypher allows multiple comma-separated patterns in a single MATCH
+        # For MVP, we'll return the first one or we need to update AST
+        # Actually, let's update AST to support multiple patterns in MatchClause
+        patterns = []
+        while True:
+            patterns.append(self.parse_graph_pattern())
+            if not self.matches(TokenType.COMMA):
+                break
+        
+        # Simplified for now: use first pattern if only one expected by downstream?
+        # No, let's fix ast.py MatchClause
+        return ast.MatchClause(patterns=patterns, optional=optional)
+
+    def parse_unwind_clause(self) -> ast.UnwindClause:
+        """Parse UNWIND [1,2,3] AS x"""
+        self.expect(TokenType.UNWIND)
+        expr = self.parse_expression()
+        self.expect(TokenType.AS)
+        alias_tok = self.expect(TokenType.IDENTIFIER)
+        alias = alias_tok.value
+        if alias is None:
+            raise CypherParseError("Expected alias for UNWIND", line=alias_tok.line, column=alias_tok.column)
+        return ast.UnwindClause(expression=expr, alias=alias)
+
+    def parse_updating_clause(self) -> ast.UpdatingClause:
+        """Parse CREATE, MERGE, DELETE, SET, REMOVE"""
+        kind = self.peek().kind
+        if kind == TokenType.CREATE: return self.parse_create_clause()
+        if kind in (TokenType.DELETE, TokenType.DETACH): return self.parse_delete_clause()
+        if kind == TokenType.MERGE: return self.parse_merge_clause()
+        if kind == TokenType.SET: return self.parse_set_clause()
+        if kind == TokenType.REMOVE: return self.parse_remove_clause()
+        raise CypherParseError(f"Unexpected token {kind} in updating clause")
+
+    def parse_create_clause(self) -> ast.CreateClause:
+        self.expect(TokenType.CREATE)
         pattern = self.parse_graph_pattern()
-        return ast.MatchClause(pattern=pattern)
+        return ast.CreateClause(pattern=pattern)
+
+    def parse_delete_clause(self) -> ast.DeleteClause:
+        detach = self.matches(TokenType.DETACH)
+        self.expect(TokenType.DELETE)
+        vars = []
+        while True:
+            var_tok = self.expect(TokenType.IDENTIFIER)
+            var_name = var_tok.value
+            if var_name is None:
+                raise CypherParseError("Expected variable for DELETE")
+            vars.append(ast.Variable(var_name))
+            if not self.matches(TokenType.COMMA):
+                break
+        return ast.DeleteClause(expressions=vars, detach=detach)
+
+    def parse_merge_clause(self) -> ast.MergeClause:
+        self.expect(TokenType.MERGE)
+        pattern = self.parse_graph_pattern()
+        
+        on_create = None
+        on_match = None
+        
+        while self.peek().kind == TokenType.ON:
+            self.eat() # ON
+            # action_type can be CREATE or MATCH keyword
+            action_tok = self.eat()
+            action_type = action_tok.kind.value.upper() if action_tok.kind in (TokenType.CREATE, TokenType.MATCH) else ""
+            if not action_type:
+                raise CypherParseError(f"Expected CREATE or MATCH after ON, got {action_tok.kind}")
+                
+            self.expect(TokenType.SET)
+            items = self.parse_set_items()
+            # Convert list of SetItem to list of UpdateItem for typing
+            action = ast.MergeAction(items=[i for i in items])
+            if action_type == "CREATE":
+                on_create = action
+            elif action_type == "MATCH":
+                on_match = action
+                
+        return ast.MergeClause(pattern=pattern, on_create=on_create, on_match=on_match)
+
+    def parse_set_clause(self) -> ast.SetClause:
+        self.expect(TokenType.SET)
+        return ast.SetClause(items=self.parse_set_items())
+
+    def parse_set_items(self) -> List[ast.SetItem]:
+        items = []
+        while True:
+            target = self.parse_primary_expression()
+            if not isinstance(target, (ast.PropertyReference, ast.Variable)):
+                raise CypherParseError("SET target must be property reference or variable")
+            
+            if self.matches(TokenType.EQUALS):
+                value = self.parse_expression()
+                items.append(ast.SetItem(expression=target, value=value))
+            elif self.matches(TokenType.COLON):
+                # SET n:Label
+                label_tok = self.expect(TokenType.IDENTIFIER)
+                label = label_tok.value if label_tok.value else ""
+                items.append(ast.SetItem(expression=target, value=label))
+            else:
+                raise CypherParseError("Expected '=' or ':' in SET item")
+                
+            if not self.matches(TokenType.COMMA):
+                break
+        return items
+
+    def parse_remove_clause(self) -> ast.RemoveClause:
+        self.expect(TokenType.REMOVE)
+        items = []
+        while True:
+            target = self.parse_primary_expression()
+            if not isinstance(target, (ast.PropertyReference, ast.Variable)):
+                raise CypherParseError("REMOVE target must be property reference or variable")
+            items.append(ast.RemoveItem(expression=target))
+            if not self.matches(TokenType.COMMA):
+                break
+        return ast.RemoveClause(items=items)
+
+    def last_token_value(self) -> str:
+        # Helper to get value of token just consumed
+        return self.lexer.tokens[self.lexer.token_index - 1].value or ""
 
     def parse_graph_pattern(self) -> ast.GraphPattern:
         """Parse a full graph pattern (node)-[rel]->(node)"""
@@ -363,6 +496,21 @@ class Parser:
                     raise CypherParseError("Expected property name", prop_tok.line, prop_tok.column)
                 return ast.PropertyReference(name, prop_tok.value)
             return ast.Variable(name)
+
+        if tok.kind == TokenType.PARAMETER:
+            return ast.Variable(self.eat().value or "")
+
+        if tok.kind == TokenType.LBRACKET:
+            # List literal
+            self.eat()
+            items = []
+            if not self.matches(TokenType.RBRACKET):
+                while True:
+                    items.append(self.parse_expression())
+                    if not self.matches(TokenType.COMMA):
+                        break
+                self.expect(TokenType.RBRACKET)
+            return ast.Literal(items)
             
         if tok.kind == TokenType.INTEGER_LITERAL:
             val = self.eat().value
@@ -390,9 +538,8 @@ class Parser:
             if key is None:
                 raise CypherParseError("Expected property key", key_tok.line, key_tok.column)
             self.expect(TokenType.COLON)
-            val = self.parse_primary_expression() # Simplified
-            if isinstance(val, ast.Literal):
-                props[key] = val.value
+            val = self.parse_primary_expression()
+            props[key] = val
             if not self.matches(TokenType.COMMA):
                 break
         return props
