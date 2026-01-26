@@ -3,8 +3,6 @@ Cypher AST (Abstract Syntax Tree) Classes
 
 Internal representation of parsed openCypher queries.
 These classes are parser-agnostic and used for SQL translation.
-
-Based on data-model.md from specs/002-add-opencypher-endpoint/
 """
 
 from dataclasses import dataclass, field
@@ -38,38 +36,29 @@ class BooleanOperator(Enum):
     LIKE = "LIKE"
     IS_NULL = "IS NULL"
     IS_NOT_NULL = "IS NOT NULL"
+    STARTS_WITH = "STARTS WITH"
+    ENDS_WITH = "ENDS WITH"
+    CONTAINS = "CONTAINS"
 
 
 # ==============================================================================
-# Graph Pattern Elements (data-model.md lines 84-155)
+# Graph Pattern Elements
 # ==============================================================================
 
-@dataclass
+@dataclass(slots=True)
 class NodePattern:
     """
     Node pattern in MATCH clause.
-
     Example: (p:Protein {id: 'PROTEIN:TP53'})
-    - variable: 'p'
-    - labels: ['Protein']
-    - properties: {'id': 'PROTEIN:TP53'}
     """
-    variable: Optional[str] = None  # Variable name (e.g., 'p')
-    labels: List[str] = field(default_factory=list)  # Node labels (e.g., ['Protein'])
-    properties: Dict[str, Any] = field(default_factory=dict)  # Property filters
+    variable: Optional[str] = None
+    labels: List[str] = field(default_factory=list)
+    properties: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class VariableLength:
-    """
-    Variable-length path specification.
-
-    Example: *1..3
-    - min_hops: 1
-    - max_hops: 3
-
-    Validation: 1 ≤ min_hops ≤ max_hops ≤ 10
-    """
+    """Variable-length path specification: *min..max"""
     min_hops: int = 1
     max_hops: int = 1
 
@@ -82,34 +71,22 @@ class VariableLength:
             raise ValueError("max_hops must be <= 10 (complexity limit)")
 
 
-@dataclass
+@dataclass(slots=True)
 class RelationshipPattern:
     """
     Relationship pattern in MATCH clause.
-
     Example: -[:INTERACTS_WITH*1..2]->
-    - types: ['INTERACTS_WITH']
-    - direction: Direction.OUTGOING
-    - variable_length: VariableLength(1, 2)
     """
-    types: List[str] = field(default_factory=list)  # Relationship types
-    direction: Direction = Direction.BOTH  # Traversal direction
-    variable: Optional[str] = None  # Variable name for relationship
-    properties: Dict[str, Any] = field(default_factory=dict)  # Property filters
-    variable_length: Optional[VariableLength] = None  # Variable-length path
+    types: List[str] = field(default_factory=list)
+    direction: Direction = Direction.BOTH
+    variable: Optional[str] = None
+    properties: Dict[str, Any] = field(default_factory=dict)
+    variable_length: Optional[VariableLength] = None
 
 
-@dataclass
+@dataclass(slots=True)
 class GraphPattern:
-    """
-    Complete graph pattern (nodes + relationships).
-
-    Example: (p:Protein)-[:INTERACTS_WITH]->(t:Protein)
-    - nodes: [NodePattern('p', ['Protein']), NodePattern('t', ['Protein'])]
-    - relationships: [RelationshipPattern(['INTERACTS_WITH'], Direction.OUTGOING)]
-
-    Validation: len(relationships) == len(nodes) - 1
-    """
+    """Complete graph pattern (nodes + relationships)"""
     nodes: List[NodePattern] = field(default_factory=list)
     relationships: List[RelationshipPattern] = field(default_factory=list)
 
@@ -122,202 +99,129 @@ class GraphPattern:
 
 
 # ==============================================================================
-# Clause Elements
+# Expressions and Clauses
 # ==============================================================================
 
-@dataclass
-class MatchClause:
-    """
-    MATCH clause with optional OPTIONAL modifier.
-
-    Example: OPTIONAL MATCH (p:Protein)-[:INTERACTS_WITH]->(t)
-    - optional: True
-    - pattern: GraphPattern(...)
-    """
-    pattern: GraphPattern
-    optional: bool = False
-
-
-@dataclass
+@dataclass(slots=True)
 class PropertyReference:
     """Reference to a node/relationship property (e.g., p.name)"""
-    variable: str  # Variable name (e.g., 'p')
-    property_name: str  # Property name (e.g., 'name')
+    variable: str
+    property_name: str
 
 
-@dataclass
+@dataclass(slots=True)
 class Literal:
     """Literal value (string, number, boolean, null)"""
     value: Any
 
 
-@dataclass
+@dataclass(slots=True)
 class Variable:
     """Variable reference (e.g., p, r, m)"""
     name: str
 
 
-@dataclass
+@dataclass(slots=True)
+class AggregationFunction:
+    """Aggregation function (count, sum, avg, collect, etc.)"""
+    function_name: str
+    argument: Optional[Union['BooleanExpression', 'PropertyReference', 'Variable', 'Literal', 'FunctionCall']] = None
+    distinct: bool = False
+
+
+@dataclass(slots=True)
+class FunctionCall:
+    """Function call (id, type, labels, etc.)"""
+    function_name: str
+    arguments: List[Union['BooleanExpression', 'PropertyReference', 'Variable', 'Literal', 'FunctionCall']]
+
+
+@dataclass(slots=True)
 class BooleanExpression:
-    """
-    Boolean expression in WHERE clause (recursive).
-
-    Examples:
-    - p.name = 'TP53': BooleanExpression(EQUALS, [PropertyReference('p', 'name'), Literal('TP53')])
-    - p.score > 0.8 AND p.type = 'kinase': BooleanExpression(AND, [expr1, expr2])
-    """
+    """Boolean expression in WHERE clause (recursive)"""
     operator: BooleanOperator
-    operands: List[Union['BooleanExpression', PropertyReference, Literal, Variable]]
+    operands: List[Union['BooleanExpression', 'PropertyReference', 'Literal', 'Variable', 'AggregationFunction', 'FunctionCall']]
 
 
-@dataclass
+
+@dataclass(slots=True)
 class WhereClause:
     """WHERE clause with filter expression"""
     expression: BooleanExpression
 
 
-@dataclass
-class AggregationFunction:
-    """Aggregation function (count, sum, avg, collect, etc.)"""
-    function_name: str  # 'count', 'sum', 'collect', etc.
-    argument: Union[PropertyReference, Variable, Literal]
-    distinct: bool = False
+@dataclass(slots=True)
+class MatchClause:
+    """MATCH clause with optional pattern"""
+    pattern: GraphPattern
+    optional: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class ReturnItem:
-    """
-    Single item in RETURN clause.
-
-    Examples:
-    - p.name: ReturnItem(PropertyReference('p', 'name'), None)
-    - p.name AS protein_name: ReturnItem(PropertyReference('p', 'name'), 'protein_name')
-    - count(p): ReturnItem(AggregationFunction('count', Variable('p')), None)
-    """
-    expression: Union[PropertyReference, Variable, AggregationFunction, Literal]
+    """Single item in RETURN or WITH clause"""
+    expression: Union[PropertyReference, Variable, AggregationFunction, Literal, BooleanExpression]
     alias: Optional[str] = None
 
 
-@dataclass
-class ReturnClause:
-    """
-    RETURN clause with projection items.
+@dataclass(slots=True)
+class WithClause:
+    """WITH clause for chaining queries"""
+    items: List[ReturnItem]
+    distinct: bool = False
+    where_clause: Optional[WhereClause] = None
 
-    Example: RETURN DISTINCT p.name, p.function AS func
-    - distinct: True
-    - items: [ReturnItem(...), ReturnItem(...)]
-    """
+
+@dataclass(slots=True)
+class QueryPart:
+    """A stage in a multi-stage query"""
+    match_clauses: List[MatchClause] = field(default_factory=list)
+    where_clause: Optional[WhereClause] = None
+    with_clause: Optional[WithClause] = None
+
+
+@dataclass(slots=True)
+class ReturnClause:
+    """Final projection of the query"""
     items: List[ReturnItem]
     distinct: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class OrderByItem:
     """Single item in ORDER BY clause"""
     expression: Union[PropertyReference, Variable]
     ascending: bool = True
 
 
-@dataclass
+@dataclass(slots=True)
 class OrderByClause:
     """ORDER BY clause"""
     items: List[OrderByItem]
 
 
-# ==============================================================================
-# Custom Procedures (data-model.md lines 238-263)
-# ==============================================================================
-
-@dataclass
+@dataclass(slots=True)
 class CypherProcedureCall:
-    """
-    Custom procedure call (e.g., CALL db.index.vector.queryNodes).
-
-    Example: CALL db.index.vector.queryNodes('protein_embeddings', 10, $queryVector)
-    - procedure_name: 'db.index.vector.queryNodes'
-    - arguments: [Literal('protein_embeddings'), Literal(10), Variable('queryVector')]
-    - yield_items: ['node', 'score']
-    """
+    """Custom procedure call (CALL clause)"""
     procedure_name: str
     arguments: List[Union[Literal, Variable, PropertyReference]]
     yield_items: List[str] = field(default_factory=list)
 
 
-# ==============================================================================
-# Root Query Node (data-model.md lines 11-40)
-# ==============================================================================
-
-@dataclass
+@dataclass(slots=True)
 class CypherQuery:
-    """
-    Root AST node for openCypher query.
-
-    Complete query structure with all clauses.
-
-    Validation:
-    - At least one MATCH clause required
-    - Exactly one RETURN clause required
-    """
-    match_clauses: List[MatchClause] = field(default_factory=list)
-    where_clause: Optional[WhereClause] = None
+    """Root AST node for openCypher query"""
+    query_parts: List[QueryPart] = field(default_factory=list)
     return_clause: Optional[ReturnClause] = None
     order_by_clause: Optional[OrderByClause] = None
     skip: Optional[int] = None
     limit: Optional[int] = None
-    procedure_call: Optional[CypherProcedureCall] = None  # CALL clause
+    procedure_call: Optional[CypherProcedureCall] = None
 
     def __post_init__(self):
-        # Either MATCH or CALL required
-        if not self.match_clauses and not self.procedure_call:
-            raise ValueError("Query must have at least one MATCH clause or CALL clause")
-
-        # RETURN required
-        if not self.return_clause:
-            raise ValueError("Query must have exactly one RETURN clause")
-
-
-# ==============================================================================
-# Helper Functions
-# ==============================================================================
-
-def create_simple_match(
-    variable: str,
-    labels: List[str],
-    properties: Optional[Dict[str, Any]] = None
-) -> MatchClause:
-    """
-    Helper to create simple single-node MATCH clause.
-
-    Example: create_simple_match('p', ['Protein'], {'id': 'PROTEIN:TP53'})
-    → MATCH (p:Protein {id: 'PROTEIN:TP53'})
-    """
-    node = NodePattern(variable=variable, labels=labels, properties=properties or {})
-    pattern = GraphPattern(nodes=[node], relationships=[])
-    return MatchClause(pattern=pattern)
-
-
-def create_relationship_match(
-    source_var: str,
-    source_labels: List[str],
-    rel_types: List[str],
-    direction: Direction,
-    target_var: str,
-    target_labels: List[str],
-    variable_length: Optional[VariableLength] = None
-) -> MatchClause:
-    """
-    Helper to create two-node relationship MATCH clause.
-
-    Example: create_relationship_match('p', ['Protein'], ['INTERACTS_WITH'],
-                                       Direction.OUTGOING, 't', ['Protein'])
-    → MATCH (p:Protein)-[:INTERACTS_WITH]->(t:Protein)
-    """
-    source = NodePattern(variable=source_var, labels=source_labels)
-    target = NodePattern(variable=target_var, labels=target_labels)
-    rel = RelationshipPattern(
-        types=rel_types,
-        direction=direction,
-        variable_length=variable_length
-    )
-    pattern = GraphPattern(nodes=[source, target], relationships=[rel])
-    return MatchClause(pattern=pattern)
+        if not self.query_parts and not self.procedure_call:
+            raise ValueError("Query must have at least one MATCH/WITH stage or CALL clause")
+        if not self.return_clause and not self.procedure_call:
+            # RETURN is not required if there's a standalone procedure call, 
+            # but usually Cypher expects RETURN.
+            pass

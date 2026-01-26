@@ -284,19 +284,31 @@ GROUP BY e.o_id
 ORDER BY txn_count DESC
 ```
 
-### 3. Cypher: Simple Account Query
+### 3. Cypher: Graph Pattern Matching
 
-Query account properties via the Cypher API:
+Query relationships and nodes using Cypher patterns via the API:
 
 ```bash
 curl -X POST http://localhost:8000/api/cypher \
   -H "Content-Type: application/json" \
   -d '{
-    "query": "MATCH (a:Account) RETURN a.account_type, a.risk_score LIMIT 10"
+    "query": "MATCH (t:Transaction)-[r:FROM_ACCOUNT|TO_ACCOUNT]->(a:Account) 
+              WHERE a.node_id = \"ACCOUNT:MULE1\" 
+              RETURN t.node_id, r, t.amount LIMIT 5"
   }'
 ```
 
-*Note: The Cypher API supports common patterns. For complex graph traversals, use SQL directly.*
+The new recursive-descent Cypher engine also supports multi-stage queries, allowing complex fraud analysis:
+
+```cypher
+MATCH (a:Account)-[r]->(t:Transaction)
+WITH a, count(t) AS txn_count
+WHERE txn_count > 5
+MATCH (a)-[:OWNED_BY]->(p:Person)
+RETURN p.name, txn_count
+```
+
+The parser translates these patterns into optimized IRIS SQL Common Table Expressions (CTEs) automatically.
 
 ---
 

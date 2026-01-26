@@ -1,362 +1,431 @@
 """
-Cypher Parser (MVP - Pattern-Based)
+Recursive-Descent Cypher Parser
 
-TEMPORARY IMPLEMENTATION: Pattern-based parser for common Cypher queries.
-This is a pragmatic MVP solution to unblock development.
-
-Supported Patterns:
-- MATCH (n:Label) RETURN n.property
-- MATCH (n:Label {prop: value}) RETURN n
-- MATCH (a)-[r:TYPE]->(b) RETURN a, b
-- WHERE clause with simple conditions
-- Parameters ($param)
-
-Future: Replace with libcypher-parser or full grammar (lark/pyparsing)
+Translates Cypher query strings into an Abstract Syntax Tree (AST).
+Replaces the temporary regex-based implementation.
 """
 
-import re
-from typing import Dict, Any, Optional, List, Tuple
-from .ast import (
-    CypherQuery, MatchClause, NodePattern, RelationshipPattern,
-    GraphPattern, WhereClause, ReturnClause, ReturnItem,
-    PropertyReference, Variable, Literal, BooleanExpression,
-    BooleanOperator, Direction, VariableLength, OrderByClause, OrderByItem
-)
+from typing import List, Optional, Any, Dict, Union
+from .lexer import Lexer, Token, TokenType
+from . import ast
+import logging
 
+logger = logging.getLogger(__name__)
 
 class CypherParseError(Exception):
-    """Cypher parsing error with line/column information"""
-    def __init__(
-        self,
-        message: str,
-        line: int = 1,
-        column: int = 1,
-        suggestion: Optional[str] = None
-    ):
+    """Raised when Cypher parsing fails"""
+    def __init__(self, message: str, line: int = 0, column: int = 0, suggestion: Optional[str] = None):
         self.message = message
         self.line = line
         self.column = column
         self.suggestion = suggestion
-        super().__init__(message)
+        super().__init__(self._format_message())
 
+    def _format_message(self) -> str:
+        msg = f"Cypher error at line {self.line}, col {self.column}: {self.message}"
+        if self.suggestion:
+            msg += f"\nSuggestion: {self.suggestion}"
+        return msg
 
-class SimpleCypherParser:
-    """
-    MVP Parser for common Cypher patterns.
+class Parser:
+    """Base Recursive-Descent Parser for Cypher"""
+    
+    def __init__(self, lexer: Lexer):
+        self.lexer = lexer
 
-    This is a TEMPORARY implementation using regex pattern matching.
-    Supports common use cases to unblock development.
+    def peek(self) -> Token:
+        return self.lexer.peek()
 
-    Limitations:
-    - No complex nested expressions
-    - Limited WHERE clause support
-    - No subqueries or WITH clauses
-    - No UNION or complex OPTIONAL MATCH
+    def eat(self) -> Token:
+        return self.lexer.eat()
 
-    For production, replace with libcypher-parser or full grammar parser.
-    """
-
-    # Regex patterns for common Cypher elements
-    NODE_PATTERN = r'\((\w+)(?::(\w+))?\s*(?:\{([^}]+)\})?\)'
-    REL_PATTERN = r'-\[(?:(\w+):)?(\w+)(?:\*(\d+)\.\.(\d+))?\]->'
-    PROPERTY_REF = r'(\w+)\.(\w+)'
-    PARAM_REF = r'\$(\w+)'
-
-    def parse(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> CypherQuery:
-        """
-        Parse Cypher query string to AST.
-
-        Args:
-            query: Cypher query string
-            parameters: Optional named parameters ($param -> value)
-
-        Returns:
-            CypherQuery AST
-
-        Raises:
-            CypherParseError: If query syntax is invalid
-        """
-        self.query = query.strip()
-        self.parameters = parameters or {}
-        self.pos = 0
-
-        # Check for common syntax errors
-        self._check_syntax_errors()
-
-        # Parse clauses
-        match_clauses = self._parse_match_clauses()
-        where_clause = self._parse_where_clause()
-        return_clause = self._parse_return_clause()
-        order_by_clause = self._parse_order_by_clause()
-        limit, skip = self._parse_limit_skip()
-
-        # Build CypherQuery
-        try:
-            return CypherQuery(
-                match_clauses=match_clauses,
-                where_clause=where_clause,
-                return_clause=return_clause,
-                order_by_clause=order_by_clause,
-                limit=limit,
-                skip=skip
+    def expect(self, kind: TokenType) -> Token:
+        tok = self.peek()
+        if tok.kind != kind:
+            raise CypherParseError(
+                f"Expected {kind.value}, got {tok.kind.value if tok.kind.value else tok.kind}",
+                line=tok.line,
+                column=tok.column
             )
-        except ValueError as e:
-            raise CypherParseError(str(e))
+        return self.eat()
 
-    def _check_syntax_errors(self):
-        """Check for common syntax errors and provide suggestions"""
-        # Check for common typos
-        typos = {
-            'RETRUN': 'RETURN',
-            'METCH': 'MATCH',
-            'WERE': 'WHERE',
-            'ODER BY': 'ORDER BY'
-        }
+    def matches(self, kind: TokenType) -> bool:
+        if self.peek().kind == kind:
+            self.eat()
+            return True
+        return False
 
-        for typo, correct in typos.items():
-            if typo in self.query.upper():
-                # Find line and column
-                lines = self.query.split('\n')
-                for line_num, line in enumerate(lines, 1):
-                    if typo in line.upper():
-                        col = line.upper().index(typo) + 1
-                        raise CypherParseError(
-                            f"Unexpected token '{typo}' at line {line_num}, column {col}",
-                            line=line_num,
-                            column=col,
-                            suggestion=f"Did you mean '{correct}'?"
-                        )
+    def parse(self) -> ast.CypherQuery:
+        """Entry point for parsing a complete query"""
+        query_parts = []
+        
+        # Parse first QueryPart (MATCH ...)
+        query_parts.append(self.parse_query_part())
+        
+        # Parse subsequent stages (WITH ...)
+        while self.peek().kind == TokenType.WITH:
+            with_clause = self.parse_with_clause()
+            # Each WITH starts a new QueryPart
+            part = self.parse_query_part()
+            # Attached to the stage that just finished
+            query_parts[-1].with_clause = with_clause
+            query_parts.append(part)
+            
+        # Final projection
+        return_clause = self.parse_return_clause()
+        
+        # Optional clauses
+        order_by = self.parse_order_by_clause()
+        skip = self.parse_skip()
+        limit = self.parse_limit()
+        
+        self.expect(TokenType.EOF)
+        
+        return ast.CypherQuery(
+            query_parts=query_parts,
+            return_clause=return_clause,
+            order_by_clause=order_by,
+            skip=skip,
+            limit=limit
+        )
 
-    def _parse_match_clauses(self) -> List[MatchClause]:
-        """Parse MATCH clauses"""
-        clauses = []
+    def parse_with_clause(self) -> ast.WithClause:
+        """Parse WITH a, b.prop AS alias WHERE ..."""
+        self.expect(TokenType.WITH)
+        
+        distinct = self.matches(TokenType.DISTINCT)
+        items = []
+        
+        while True:
+            expr = self.parse_expression()
+            alias = None
+            if self.matches(TokenType.AS):
+                alias = self.expect(TokenType.IDENTIFIER).value
+            
+            items.append(ast.ReturnItem(expression=expr, alias=alias))
+            
+            if not self.matches(TokenType.COMMA):
+                break
+                
+        where_clause = self.parse_where_clause()
+        
+        return ast.WithClause(items=items, distinct=distinct, where_clause=where_clause)
 
-        # Find all MATCH clauses
-        match_pattern = re.compile(r'MATCH\s+(.+?)(?=\s+(?:WHERE|RETURN|ORDER|LIMIT|$))', re.IGNORECASE)
-        matches = match_pattern.findall(self.query)
+    def parse_query_part(self) -> ast.QueryPart:
+        """Parse a single stage of a query (MATCH... WHERE...)"""
+        match_clauses = []
+        
+        # At least one MATCH or standalone CALL
+        while self.peek().kind == TokenType.MATCH:
+            match_clauses.append(self.parse_match_clause())
+            
+        where_clause = self.parse_where_clause()
+        
+        return ast.QueryPart(
+            match_clauses=match_clauses,
+            where_clause=where_clause
+        )
 
-        if not matches:
-            # Try to find if MATCH is misspelled
-            if 'RETURN' in self.query.upper() and 'MATCH' not in self.query.upper():
-                raise CypherParseError(
-                    "Query must have at least one MATCH clause",
-                    suggestion="Add MATCH clause before RETURN"
-                )
+    def parse_match_clause(self) -> ast.MatchClause:
+        """Parse MATCH (n:Label)-[r:TYPE]->(m)"""
+        self.expect(TokenType.MATCH)
+        pattern = self.parse_graph_pattern()
+        return ast.MatchClause(pattern=pattern)
 
-        for match_str in matches:
-            pattern = self._parse_graph_pattern(match_str.strip())
-            clauses.append(MatchClause(pattern=pattern))
-
-        return clauses
-
-    def _parse_graph_pattern(self, pattern_str: str) -> GraphPattern:
-        """Parse graph pattern (nodes and relationships)"""
+    def parse_graph_pattern(self) -> ast.GraphPattern:
+        """Parse a full graph pattern (node)-[rel]->(node)"""
         nodes = []
         relationships = []
+        
+        nodes.append(self.parse_node_pattern())
+        
+        while self.peek().kind in (TokenType.MINUS, TokenType.ARROW_LEFT):
+            relationships.append(self.parse_relationship_pattern())
+            nodes.append(self.parse_node_pattern())
+            
+        return ast.GraphPattern(nodes=nodes, relationships=relationships)
 
-        # Simple pattern: (n:Label)-[:TYPE]->(m:Label)
-        # Split by relationship arrows
-        parts = re.split(r'(-\[.*?\]->)', pattern_str)
+    def parse_node_pattern(self) -> ast.NodePattern:
+        """Parse (variable:Label {props})"""
+        self.expect(TokenType.LPAREN)
+        
+        var = None
+        if self.peek().kind == TokenType.IDENTIFIER:
+            var = self.eat().value
+            
+        labels = []
+        while self.matches(TokenType.COLON):
+            label_tok = self.expect(TokenType.IDENTIFIER)
+            if label_tok.value:
+                labels.append(label_tok.value)
+            
+        props = {}
+        if self.matches(TokenType.LBRACE):
+            props = self.parse_map_literal()
+            self.expect(TokenType.RBRACE)
+            
+        self.expect(TokenType.RPAREN)
+        return ast.NodePattern(variable=var, labels=labels, properties=props)
 
-        for i, part in enumerate(parts):
-            part = part.strip()
-            if not part:
-                continue
+    def parse_relationship_pattern(self) -> ast.RelationshipPattern:
+        """Parse -[r:TYPE]-> or <-[r:TYPE]- or -[r:TYPE]-"""
+        direction = ast.Direction.BOTH
+        
+        if self.matches(TokenType.ARROW_LEFT):
+            direction = ast.Direction.INCOMING
+            self.expect(TokenType.LBRACKET)
+        else:
+            self.expect(TokenType.MINUS)
+            if self.matches(TokenType.LBRACKET):
+                # -[...]
+                pass
+            else:
+                # Malformed
+                tok = self.peek()
+                raise CypherParseError("Expected '[' after '-'", tok.line, tok.column)
+        
+        # Inside brackets [...]
+        var = None
+        if self.peek().kind == TokenType.IDENTIFIER:
+            var = self.eat().value
+            
+        types = []
+        if self.matches(TokenType.COLON):
+            type_tok = self.expect(TokenType.IDENTIFIER)
+            if type_tok.value:
+                types.append(type_tok.value)
+            while self.matches(TokenType.PIPE):
+                next_type_tok = self.expect(TokenType.IDENTIFIER)
+                if next_type_tok.value:
+                    types.append(next_type_tok.value)
+                
+        # Optional variable length *1..3
+        var_len = None
+        if self.matches(TokenType.STAR):
+            min_h = 1
+            max_h = 1
+            if self.peek().kind == TokenType.INTEGER_LITERAL:
+                min_tok = self.eat()
+                if min_tok.value:
+                    min_h = int(min_tok.value)
+                if self.matches(TokenType.DOT):
+                    self.expect(TokenType.DOT)
+                    max_tok = self.expect(TokenType.INTEGER_LITERAL)
+                    if max_tok.value:
+                        max_h = int(max_tok.value)
+            var_len = ast.VariableLength(min_h, max_h)
+            
+        self.expect(TokenType.RBRACKET)
+        
+        # Closing arrow
+        if direction == ast.Direction.INCOMING:
+            self.expect(TokenType.MINUS)
+        else:
+            if self.matches(TokenType.ARROW_RIGHT):
+                direction = ast.Direction.OUTGOING
+            else:
+                self.expect(TokenType.MINUS)
+                direction = ast.Direction.BOTH
+                
+        return ast.RelationshipPattern(
+            variable=var, 
+            types=types, 
+            direction=direction,
+            variable_length=var_len
+        )
 
-            if part.startswith('('):
-                # Node pattern
-                node_match = re.match(self.NODE_PATTERN, part)
-                if node_match:
-                    var, label, props_str = node_match.groups()
-                    labels = [label] if label else []
-                    properties = self._parse_properties(props_str) if props_str else {}
-                    nodes.append(NodePattern(variable=var, labels=labels, properties=properties))
-            elif part.startswith('-['):
-                # Relationship pattern
-                rel_match = re.match(self.REL_PATTERN, part)
-                if rel_match:
-                    var, rel_type, min_hops, max_hops = rel_match.groups()
-                    types = [rel_type] if rel_type else []
+    def parse_return_clause(self) -> ast.ReturnClause:
+        """Parse RETURN a, b.prop AS alias"""
+        self.expect(TokenType.RETURN)
+        
+        distinct = self.matches(TokenType.DISTINCT)
+        items = []
+        
+        while True:
+            expr = self.parse_expression()
+            alias = None
+            if self.matches(TokenType.AS):
+                alias = self.expect(TokenType.IDENTIFIER).value
+            
+            items.append(ast.ReturnItem(expression=expr, alias=alias))
+            
+            if not self.matches(TokenType.COMMA):
+                break
+                
+        return ast.ReturnClause(items=items, distinct=distinct)
 
-                    variable_length = None
-                    if min_hops and max_hops:
-                        variable_length = VariableLength(int(min_hops), int(max_hops))
-
-                    relationships.append(RelationshipPattern(
-                        variable=var,
-                        types=types,
-                        direction=Direction.OUTGOING,
-                        variable_length=variable_length
-                    ))
-
-        return GraphPattern(nodes=nodes, relationships=relationships)
-
-    def _parse_properties(self, props_str: str) -> Dict[str, Any]:
-        """Parse property map {key: value, key2: value2}"""
-        properties = {}
-        # Simple key:value parsing (MVP - doesn't handle nested objects)
-        pairs = props_str.split(',')
-        for pair in pairs:
-            if ':' in pair:
-                key, value = pair.split(':', 1)
-                key = key.strip().strip('"').strip("'")
-                value = value.strip().strip('"').strip("'")
-                # Try to parse as number
-                try:
-                    if '.' in value:
-                        value = float(value)
-                    else:
-                        value = int(value)
-                except ValueError:
-                    pass  # Keep as string
-                properties[key] = value
-        return properties
-
-    def _parse_where_clause(self) -> Optional[WhereClause]:
-        """Parse WHERE clause (simple conditions only)"""
-        where_match = re.search(r'WHERE\s+(.+?)(?=\s+(?:RETURN|ORDER|LIMIT|$))', self.query, re.IGNORECASE)
-        if not where_match:
+    def parse_where_clause(self) -> Optional[ast.WhereClause]:
+        """Parse WHERE ..."""
+        if not self.matches(TokenType.WHERE):
             return None
+        expr = self.parse_expression()
+        return ast.WhereClause(expression=expr)
 
-        condition_str = where_match.group(1).strip()
+    def parse_expression(self) -> Any:
+        """Parse boolean expression with OR precedence"""
+        return self.parse_or_expression()
 
-        # Simple condition: p.name = 'TP53' or p.score > 0.8
-        # For MVP, create simple equality/comparison expressions
-        if '=' in condition_str and '!=' not in condition_str and '<>' not in condition_str:
-            left, right = condition_str.split('=', 1)
-            left = left.strip()
-            right = right.strip().strip('"').strip("'")
+    def parse_or_expression(self) -> Any:
+        left = self.parse_and_expression()
+        while self.matches(TokenType.OR):
+            right = self.parse_and_expression()
+            left = ast.BooleanExpression(ast.BooleanOperator.OR, [left, right])
+        return left
 
-            # Parse left side (property reference)
-            prop_match = re.match(self.PROPERTY_REF, left)
-            if prop_match:
-                var, prop = prop_match.groups()
-                left_expr = PropertyReference(variable=var, property_name=prop)
-            else:
-                left_expr = Variable(name=left)
+    def parse_and_expression(self) -> Any:
+        left = self.parse_not_expression()
+        while self.matches(TokenType.AND):
+            right = self.parse_not_expression()
+            left = ast.BooleanExpression(ast.BooleanOperator.AND, [left, right])
+        return left
 
-            # Parse right side (literal or parameter)
-            if right.startswith('$'):
-                param_name = right[1:]
-                right_expr = Literal(value=self.parameters.get(param_name))
-            else:
-                right_expr = Literal(value=right)
+    def parse_not_expression(self) -> Any:
+        if self.matches(TokenType.NOT):
+            operand = self.parse_not_expression()
+            return ast.BooleanExpression(ast.BooleanOperator.NOT, [operand])
+        return self.parse_comparison_expression()
 
-            expr = BooleanExpression(
-                operator=BooleanOperator.EQUALS,
-                operands=[left_expr, right_expr]
-            )
-            return WhereClause(expression=expr)
+    def parse_comparison_expression(self) -> Any:
+        left = self.parse_primary_expression()
+        
+        # Binary comparisons
+        tok = self.peek()
+        op = None
+        match tok.kind:
+            case TokenType.EQUALS: op = ast.BooleanOperator.EQUALS
+            case TokenType.NOT_EQUALS: op = ast.BooleanOperator.NOT_EQUALS
+            case TokenType.LESS_THAN: op = ast.BooleanOperator.LESS_THAN
+            case TokenType.LESS_THAN_OR_EQUAL: op = ast.BooleanOperator.LESS_THAN_OR_EQUAL
+            case TokenType.GREATER_THAN: op = ast.BooleanOperator.GREATER_THAN
+            case TokenType.GREATER_THAN_OR_EQUAL: op = ast.BooleanOperator.GREATER_THAN_OR_EQUAL
+            case TokenType.STARTS:
+                self.eat() # STARTS
+                self.expect(TokenType.WITH_KW)
+                op = ast.BooleanOperator.STARTS_WITH
+            case TokenType.ENDS:
+                self.eat() # ENDS
+                self.expect(TokenType.WITH_KW)
+                op = ast.BooleanOperator.ENDS_WITH
+            case TokenType.CONTAINS:
+                op = ast.BooleanOperator.CONTAINS
+            case TokenType.IN:
+                op = ast.BooleanOperator.IN
+            case TokenType.IS:
+                self.eat() # IS
+                if self.matches(TokenType.NOT):
+                    self.expect(TokenType.NULL)
+                    return ast.BooleanExpression(ast.BooleanOperator.IS_NOT_NULL, [left])
+                self.expect(TokenType.NULL)
+                return ast.BooleanExpression(ast.BooleanOperator.IS_NULL, [left])
+        
+        if op:
+            self.eat()
+            right = self.parse_primary_expression()
+            return ast.BooleanExpression(op, [left, right])
+            
+        return left
 
+    def parse_primary_expression(self) -> Any:
+        """Parse atomic expression elements"""
+        tok = self.peek()
+        
+        if tok.kind == TokenType.LPAREN:
+            self.eat()
+            expr = self.parse_expression()
+            self.expect(TokenType.RPAREN)
+            return expr
+
+        if tok.kind == TokenType.IDENTIFIER:
+            name = self.eat().value
+            if name is None:
+                raise CypherParseError("Expected identifier value", tok.line, tok.column)
+            
+            if self.matches(TokenType.LPAREN):
+                # Function call or aggregation
+                distinct = self.matches(TokenType.DISTINCT)
+                args = []
+                if not self.matches(TokenType.RPAREN):
+                    while True:
+                        args.append(self.parse_expression())
+                        if not self.matches(TokenType.COMMA):
+                            break
+                    self.expect(TokenType.RPAREN)
+                
+                if name.lower() in ["count", "sum", "avg", "min", "max", "collect"]:
+                    arg = args[0] if args else None
+                    return ast.AggregationFunction(name.lower(), arg, distinct)
+                else:
+                    return ast.FunctionCall(name.lower(), args)
+
+            if self.matches(TokenType.DOT):
+                prop_tok = self.expect(TokenType.IDENTIFIER)
+                if prop_tok.value is None:
+                    raise CypherParseError("Expected property name", prop_tok.line, prop_tok.column)
+                return ast.PropertyReference(name, prop_tok.value)
+            return ast.Variable(name)
+            
+        if tok.kind == TokenType.INTEGER_LITERAL:
+            val = self.eat().value
+            return ast.Literal(int(val) if val is not None else 0)
+            
+        if tok.kind == TokenType.FLOAT_LITERAL:
+            val = self.eat().value
+            return ast.Literal(float(val) if val is not None else 0.0)
+            
+        if tok.kind == TokenType.STRING_LITERAL:
+            return ast.Literal(self.eat().value)
+            
+        if tok.kind == TokenType.STAR:
+            self.eat()
+            return ast.Literal("*")
+            
+        raise CypherParseError(f"Unexpected token in expression: {tok.kind}", tok.line, tok.column)
+
+    def parse_map_literal(self) -> Dict[str, Any]:
+        """Parse {key: value, ...}"""
+        props = {}
+        while self.peek().kind == TokenType.IDENTIFIER:
+            key_tok = self.eat()
+            key = key_tok.value
+            if key is None:
+                raise CypherParseError("Expected property key", key_tok.line, key_tok.column)
+            self.expect(TokenType.COLON)
+            val = self.parse_primary_expression() # Simplified
+            if isinstance(val, ast.Literal):
+                props[key] = val.value
+            if not self.matches(TokenType.COMMA):
+                break
+        return props
+
+    def parse_order_by_clause(self) -> Optional[ast.OrderByClause]:
+        if not self.matches(TokenType.ORDER): return None
+        self.expect(TokenType.BY)
+        items = []
+        while True:
+            expr = self.parse_primary_expression()
+            asc = True
+            if self.matches(TokenType.DESC): asc = False
+            else: self.matches(TokenType.ASC)
+            
+            if isinstance(expr, (ast.PropertyReference, ast.Variable)):
+                items.append(ast.OrderByItem(expr, asc))
+            if not self.matches(TokenType.COMMA): break
+        return ast.OrderByClause(items=items)
+
+    def parse_limit(self) -> Optional[int]:
+        if self.matches(TokenType.LIMIT):
+            tok = self.expect(TokenType.INTEGER_LITERAL)
+            return int(tok.value) if tok.value is not None else None
         return None
 
-    def _parse_return_clause(self) -> Optional[ReturnClause]:
-        """Parse RETURN clause"""
-        return_match = re.search(r'RETURN\s+(DISTINCT\s+)?(.+?)(?:\s+ORDER|\s+LIMIT|$)', self.query, re.IGNORECASE | re.DOTALL)
-        if not return_match:
-            raise CypherParseError(
-                "Query must have exactly one RETURN clause",
-                suggestion="Add RETURN clause to specify query results"
-            )
+    def parse_skip(self) -> Optional[int]:
+        if self.matches(TokenType.SKIP):
+            tok = self.expect(TokenType.INTEGER_LITERAL)
+            return int(tok.value) if tok.value is not None else None
+        return None
 
-        distinct_keyword, items_str = return_match.groups()
-        distinct = distinct_keyword is not None
-
-        items = []
-        for item_str in items_str.split(','):
-            item_str = item_str.strip()
-
-            # Check for alias (AS)
-            alias = None
-            if ' AS ' in item_str.upper():
-                item_str, alias = re.split(r'\s+AS\s+', item_str, 1, re.IGNORECASE)
-                alias = alias.strip()
-
-            # Parse item (property reference or variable)
-            prop_match = re.match(self.PROPERTY_REF, item_str)
-            if prop_match:
-                var, prop = prop_match.groups()
-                expr = PropertyReference(variable=var, property_name=prop)
-            else:
-                expr = Variable(name=item_str)
-
-            items.append(ReturnItem(expression=expr, alias=alias))
-
-        return ReturnClause(items=items, distinct=distinct)
-
-    def _parse_order_by_clause(self) -> Optional[OrderByClause]:
-        """Parse ORDER BY clause"""
-        order_match = re.search(r'ORDER\s+BY\s+(.+?)(?=\s+(?:LIMIT|$))', self.query, re.IGNORECASE)
-        if not order_match:
-            return None
-
-        items_str = order_match.group(1).strip()
-        items = []
-
-        for item_str in items_str.split(','):
-            item_str = item_str.strip()
-
-            # Check for ASC/DESC
-            ascending = True
-            if item_str.upper().endswith(' DESC'):
-                ascending = False
-                item_str = item_str[:-5].strip()
-            elif item_str.upper().endswith(' ASC'):
-                item_str = item_str[:-4].strip()
-
-            # Parse expression
-            prop_match = re.match(self.PROPERTY_REF, item_str)
-            if prop_match:
-                var, prop = prop_match.groups()
-                expr = PropertyReference(variable=var, property_name=prop)
-            else:
-                expr = Variable(name=item_str)
-
-            items.append(OrderByItem(expression=expr, ascending=ascending))
-
-        return OrderByClause(items=items) if items else None
-
-    def _parse_limit_skip(self) -> Tuple[Optional[int], Optional[int]]:
-        """Parse LIMIT and SKIP clauses"""
-        limit = None
-        skip = None
-
-        limit_match = re.search(r'LIMIT\s+(\d+)', self.query, re.IGNORECASE)
-        if limit_match:
-            limit = int(limit_match.group(1))
-
-        skip_match = re.search(r'SKIP\s+(\d+)', self.query, re.IGNORECASE)
-        if skip_match:
-            skip = int(skip_match.group(1))
-
-        return limit, skip
-
-
-# ==============================================================================
-# Public API
-# ==============================================================================
-
-def parse_query(
-    query: str,
-    parameters: Optional[Dict[str, Any]] = None
-) -> CypherQuery:
-    """
-    Parse openCypher query string to AST.
-
-    Args:
-        query: Cypher query string
-        parameters: Optional named parameters
-
-    Returns:
-        CypherQuery AST
-
-    Raises:
-        CypherParseError: If query syntax is invalid
-
-    Example:
-        >>> ast = parse_query("MATCH (p:Protein {id: 'PROTEIN:TP53'}) RETURN p.name")
-        >>> print(ast.return_clause.items[0].expression.property_name)
-        'name'
-    """
-    parser = SimpleCypherParser()
-    return parser.parse(query, parameters)
+def parse_query(query_str: str, params: Optional[Dict[str, Any]] = None) -> ast.CypherQuery:
+    """Convenience function to parse a Cypher query string"""
+    lexer = Lexer(query_str)
+    parser = Parser(lexer)
+    return parser.parse()

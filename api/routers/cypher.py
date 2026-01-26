@@ -22,6 +22,7 @@ from api.models.cypher import (
 )
 from iris_vector_graph.cypher.parser import parse_query, CypherParseError
 from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.cypher import ast
 
 
 router = APIRouter(prefix="/api", tags=["Cypher Queries"])
@@ -85,10 +86,10 @@ async def execute_cypher_query(
 
     try:
         # Parse Cypher query
-        ast = parse_query(request.query, request.parameters)
+        query_ast = parse_query(request.query, request.parameters)
 
         # Translate to SQL
-        sql_query = translate_to_sql(ast)
+        sql_query = translate_to_sql(query_ast)
         translation_time_ms = (time.time() - translation_start) * 1000
 
         # Execute SQL query
@@ -102,28 +103,33 @@ async def execute_cypher_query(
 
             # Get column names from return clause
             columns = []
-            for item in ast.return_clause.items:
-                if item.alias:
-                    columns.append(item.alias)
-                elif hasattr(item.expression, 'property_name'):
-                    # PropertyReference
-                    columns.append(f"{item.expression.variable}.{item.expression.property_name}")
-                else:
-                    # Variable
-                    columns.append(item.expression.name)
+            if query_ast.return_clause:
+                for item in query_ast.return_clause.items:
+                    if item.alias:
+                        columns.append(item.alias)
+                    elif isinstance(item.expression, ast.PropertyReference):
+                        columns.append(f"{item.expression.variable}.{item.expression.property_name}")
+                    elif isinstance(item.expression, ast.Variable):
+                        columns.append(item.expression.name)
+                    elif isinstance(item.expression, ast.AggregationFunction):
+                        columns.append(f"{item.expression.function_name}_res")
+                    elif isinstance(item.expression, ast.FunctionCall):
+                        columns.append(f"{item.expression.function_name}_res")
+                    else:
+                        columns.append("result")
 
             # Build response
             return CypherQueryResponse(
                 columns=columns,
                 rows=[list(row) for row in rows],
-                row_count=len(rows),
-                execution_time_ms=execution_time_ms,
-                translation_time_ms=translation_time_ms,
-                query_metadata=QueryMetadata(
-                    sql_query=sql_query.sql if request.enable_optimization else None,
-                    optimizations_applied=sql_query.query_metadata.optimization_applied
+                rowCount=len(rows),
+                executionTimeMs=execution_time_ms,
+                translationTimeMs=translation_time_ms,
+                queryMetadata=QueryMetadata(
+                    sqlQuery=sql_query.sql if request.enable_optimization else None,
+                    optimizationsApplied=sql_query.query_metadata.optimization_applied
                 ),
-                trace_id=trace_id
+                traceId=trace_id
             )
 
         except iris.Error as e:
@@ -135,22 +141,22 @@ async def execute_cypher_query(
                 return JSONResponse(
                     status_code=500,
                     content=CypherErrorResponse(
-                        error_type="execution",
+                        errorType="execution",
                         message=f"Foreign key constraint violation: {error_message}",
-                        error_code=ErrorCode.FK_CONSTRAINT_VIOLATION,
-                        trace_id=trace_id,
-                        sql_query=sql_query.sql
+                        errorCode=ErrorCode.FK_CONSTRAINT_VIOLATION,
+                        traceId=trace_id,
+                        sqlQuery=sql_query.sql
                     ).model_dump(by_alias=True)
                 )
             else:
                 return JSONResponse(
                     status_code=500,
                     content=CypherErrorResponse(
-                        error_type="execution",
+                        errorType="execution",
                         message=f"SQL execution failed: {error_message}",
-                        error_code=ErrorCode.SQL_EXECUTION_ERROR,
-                        trace_id=trace_id,
-                        sql_query=sql_query.sql
+                        errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                        traceId=trace_id,
+                        sqlQuery=sql_query.sql
                     ).model_dump(by_alias=True)
                 )
 
@@ -159,13 +165,13 @@ async def execute_cypher_query(
         return JSONResponse(
             status_code=400,
             content=CypherErrorResponse(
-                error_type="syntax",
+                errorType="syntax",
                 message=e.message,
                 line=e.line,
                 column=e.column,
-                error_code=ErrorCode.SYNTAX_ERROR,
+                errorCode=ErrorCode.SYNTAX_ERROR,
                 suggestion=e.suggestion,
-                trace_id=trace_id
+                traceId=trace_id
             ).model_dump(by_alias=True)
         )
 
@@ -178,11 +184,11 @@ async def execute_cypher_query(
             return JSONResponse(
                 status_code=413,
                 content=CypherErrorResponse(
-                    error_type="translation",
+                    errorType="translation",
                     message=error_message,
-                    error_code=ErrorCode.COMPLEXITY_LIMIT_EXCEEDED,
+                    errorCode=ErrorCode.COMPLEXITY_LIMIT_EXCEEDED,
                     suggestion="Reduce max_hops in variable-length path pattern",
-                    trace_id=trace_id
+                    traceId=trace_id
                 ).model_dump(by_alias=True)
             )
         else:
@@ -190,10 +196,10 @@ async def execute_cypher_query(
             return JSONResponse(
                 status_code=400,
                 content=CypherErrorResponse(
-                    error_type="translation",
+                    errorType="translation",
                     message=error_message,
-                    error_code=ErrorCode.UNDEFINED_VARIABLE,
-                    trace_id=trace_id
+                    errorCode=ErrorCode.UNDEFINED_VARIABLE,
+                    traceId=trace_id
                 ).model_dump(by_alias=True)
             )
 
@@ -202,10 +208,10 @@ async def execute_cypher_query(
         return JSONResponse(
             status_code=500,
             content=CypherErrorResponse(
-                error_type="execution",
+                errorType="execution",
                 message=f"Internal server error: {str(e)}",
-                error_code=ErrorCode.INTERNAL_ERROR,
-                trace_id=trace_id
+                errorCode=ErrorCode.INTERNAL_ERROR,
+                traceId=trace_id
             ).model_dump(by_alias=True)
         )
     finally:
