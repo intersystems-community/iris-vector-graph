@@ -3,8 +3,8 @@ services:
     image: intersystemsdc/iris-community:latest-em
     container_name: iris_vector_graph
     ports:
-      - "1975:1972"   # IRIS SuperServer port
-      - "52775:52773" # IRIS Management Portal
+      - "1972:1972"   # IRIS SuperServer port
+      - "52773:52773" # IRIS Management Portal
     environment:
       - IRISNAMESPACE=USER
       - ISC_DEFAULT_PASSWORD=SYS
