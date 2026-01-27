@@ -99,7 +99,7 @@ run-tests = "scripts.test:main"
 networkx-loader = "scripts.ingest.networkx_loader:main"
 
 [tool.hatch.build.targets.sdist]
-include = ["/iris_vector_graph", "/iris_src", "/sql", "/README.md", "/LICENSE"]
+include = ["/iris_vector_graph", "/iris_src", "/sql", "/examples", "/tests", "/README.md", "/LICENSE"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["iris_vector_graph"]
