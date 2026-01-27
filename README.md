@@ -20,6 +20,14 @@ IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS 
 
 ---
 
+## Installation
+
+```bash
+pip install iris-vector-graph
+```
+
+Note: Requires **InterSystems IRIS 2025.1+** with the `irispython` runtime enabled.
+
 ## Quick Start
 
 ```bash

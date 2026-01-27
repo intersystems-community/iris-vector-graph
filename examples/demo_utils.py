@@ -167,6 +167,15 @@ class DemoRunner:
                 port = 1972  # Default fallback
 
             self.connection = dbapi_connect(host or "localhost", port, "USER", "_SYSTEM", "SYS")
+            # Ensure Graph_KG schema is used
+            cursor = self.connection.cursor()
+            try:
+                cursor.execute("SET OPTION DEFAULT_SCHEMA = Graph_KG")
+            except Exception:
+                try:
+                    cursor.execute("SET SCHEMA Graph_KG")
+                except Exception:
+                    pass
             return self.connection
 
         except ImportError:

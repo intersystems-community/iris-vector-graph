@@ -17,9 +17,9 @@ ALTER TABLE rdf_edges ADD CONSTRAINT fk_edges_dest
 ALTER TABLE rdf_labels ADD CONSTRAINT fk_labels_node
   FOREIGN KEY (s) REFERENCES nodes(node_id);
 
--- T019: FK constraint for rdf_props
-ALTER TABLE rdf_props ADD CONSTRAINT fk_props_node
-  FOREIGN KEY (s) REFERENCES nodes(node_id);
+-- T019: FK constraint for rdf_props - Disabled to allow edge_id as subject (RDF 1.2)
+-- ALTER TABLE rdf_props ADD CONSTRAINT fk_props_node
+--   FOREIGN KEY (s) REFERENCES nodes(node_id);
 
 -- T020: FK constraint for kg_NodeEmbeddings
 -- NOTE: Skipped for test environment - kg_NodeEmbeddings requires VECTOR type support

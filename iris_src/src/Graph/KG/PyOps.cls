@@ -12,7 +12,7 @@ ClassMethod getDefaultDimension() As %Integer
 /// Get table name containing vector embeddings for dimension inference
 ClassMethod getVectorTable() As %String
 {
-    Return "kg_NodeEmbeddings"
+    Return "Graph_KG.kg_NodeEmbeddings"
 }
 
 /// Get column name containing vector data for dimension inference  
@@ -28,12 +28,17 @@ ClassMethod getExpectedDimension() As %Integer [ Language = python ]
 {
     import iris
     
-    table = iris.cls("Graph.KG.PyOps").getVectorTable()
+    table_full = iris.cls("Graph.KG.PyOps").getVectorTable()
     column = iris.cls("Graph.KG.PyOps").getVectorColumn()
     default_dim = iris.cls("Graph.KG.PyOps").getDefaultDimension()
     
-    sql = "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?"
-    rs = iris.sql.exec(sql, table, column)
+    if "." in table_full:
+        schema, table = table_full.split(".")
+    else:
+        schema, table = "SQLUser", table_full
+    
+    sql = "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?"
+    rs = iris.sql.exec(sql, schema, table, column)
     
     for row in rs:
         if row[0]:

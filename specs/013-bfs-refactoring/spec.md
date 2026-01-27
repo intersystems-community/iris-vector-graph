@@ -5,6 +5,15 @@
 **Status**: Draft  
 **Input**: User description: "Reduce deep nesting in BFS_JSON by extracting traversal logic into helper methods"
 
+## Clarifications
+
+### Session 2026-01-26
+
+- Q: What scale of synthetic graph should be used for benchmarking? → A: Medium (10k nodes, branching 10-20) for initial tests, with scalability to Large (100k+) stress tests.
+- Q: Where should benchmark results be saved? → A: Save to file (e.g., benchmarks.json in feature dir)
+- Q: How should the system handle a non-existent or null srcId? → A: Return empty %DynamicArray (Safe)
+- Q: How should the system handle maxHops values that are 0 or negative? → A: Treat as 0 - return empty %DynamicArray (Safe)
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Developer Reads and Understands BFS Logic (Priority: P1)
@@ -68,11 +77,26 @@ As a system operator, I need the BFS traversal to handle errors gracefully so th
 
 ---
 
+### User Story 5 - Performance Benchmarking (Priority: P2)
+
+As a developer, I want to verify that the refactoring does not introduce performance regressions and ideally improves traversal speed, so that I can maintain the system's responsiveness for large graph traversals.
+
+**Why this priority**: While readability is the primary goal, graph traversal is a performance-critical operation. Benchmarking ensures that architectural improvements don't come at the cost of execution speed.
+
+**Independent Test**: Can be tested by running a standardized set of benchmarks (varying depth and branching factor) before and after the refactoring.
+
+**Acceptance Scenarios**:
+
+1. **Given** a standardized benchmark script, **When** run against the pre-refactor and post-refactor code, **Then** the results show no significant performance regression (>5%)
+2. **Given** the move to direct object creation, **When** benchmarking specifically the object instantiation phase, **Then** the results show a measurable improvement in latency per step
+
+---
+
 ### Edge Cases
 
-- What happens when srcId is an empty string or null?
+- **Empty or null srcId**: Returns empty %DynamicArray without error
+- **Non-positive maxHops**: Values <= 0 are treated as 0, returning an empty %DynamicArray
 - How does the system handle cycles in the graph?
-- What happens when maxHops is 0 or negative?
 - How does the system perform with very large traversal results (memory issues)?
 - What happens when preds contains empty strings or null values?
 
@@ -87,6 +111,7 @@ As a system operator, I need the BFS traversal to handle errors gracefully so th
 - **FR-005**: Object creation MUST use direct ._New() and ._Set() pattern instead of ._FromJSON(json.dumps())
 - **FR-006**: The main BFS_JSON method SHOULD have a maximum nesting depth of 3 levels
 - **FR-007**: Error handling SHOULD be added for invalid inputs (srcId, maxHops)
+- **FR-008**: System MUST provide a benchmarking script to measure traversal latency and throughput
 
 ### Key Entities
 
@@ -104,3 +129,5 @@ As a system operator, I need the BFS traversal to handle errors gracefully so th
 - **SC-003**: All existing traversal tests pass without modification
 - **SC-004**: Zero uses of ._FromJSON(json.dumps()) pattern in Traversal.cls
 - **SC-005**: Code review confirms the refactored code is easier to understand
+- **SC-006**: Benchmark results show <= 5% regression in total traversal time for depths 1-3
+- **SC-007**: Object creation benchmarks show >= 20% improvement in instantiation latency
