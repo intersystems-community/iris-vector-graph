@@ -5,11 +5,15 @@ IRIS Graph-AI Operators - Python Implementation
 This module implements the graph retrieval operators as Python functions,
 since IRIS doesn't support standard SQL stored procedures through the Python driver.
 
-Based on working patterns from rag-templates and actual kg_NodeEmbeddings table structure.
-Table structure: kg_NodeEmbeddings(node_id, id, emb) where emb contains CSV string embeddings.
+Based on working patterns from rag-templates and actual Graph_KG.kg_NodeEmbeddings table structure.
+Table structure: Graph_KG.kg_NodeEmbeddings(node_id, id, emb) where emb contains CSV string embeddings.
 """
 
 import json
+try:
+    import iris
+except ImportError:
+    iris = None
 from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any, Union, cast
@@ -55,7 +59,7 @@ class IRISGraphOperators:
         """
         HNSW-optimized vector search using native IRIS VECTOR functions
 
-        Uses kg_NodeEmbeddings_optimized table with VECTOR(FLOAT, 768) and HNSW index.
+        Uses Graph_KG.kg_NodeEmbeddings_optimized table with VECTOR(FLOAT, 768) and HNSW index.
         Performance: ~40ms for 10K vectors (1790x improvement vs CSV fallback)
         """
         cursor = self.conn.cursor()
@@ -66,7 +70,7 @@ class IRISGraphOperators:
                     SELECT TOP {k}
                         n.id,
                         VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity
-                    FROM kg_NodeEmbeddings_optimized n
+                    FROM Graph_KG.kg_NodeEmbeddings_optimized n
                     ORDER BY similarity DESC
                 """
                 cursor.execute(sql, [query_vector])
@@ -75,8 +79,8 @@ class IRISGraphOperators:
                     SELECT TOP {k}
                         n.id,
                         VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity
-                    FROM kg_NodeEmbeddings_optimized n
-                    LEFT JOIN rdf_labels L ON L.s = n.id
+                    FROM Graph_KG.kg_NodeEmbeddings_optimized n
+                    LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.id
                     WHERE L.label = ?
                     ORDER BY similarity DESC
                 """
@@ -106,15 +110,15 @@ class IRISGraphOperators:
             if label_filter is None:
                 sql = """
                     SELECT n.id, n.emb
-                    FROM kg_NodeEmbeddings n
+                    FROM Graph_KG.kg_NodeEmbeddings n
                     WHERE n.emb IS NOT NULL
                 """
                 cursor.execute(sql)
             else:
                 sql = """
                     SELECT n.id, n.emb
-                    FROM kg_NodeEmbeddings n
-                    LEFT JOIN rdf_labels L ON L.s = n.id
+                    FROM Graph_KG.kg_NodeEmbeddings n
+                    LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.id
                     WHERE n.emb IS NOT NULL
                       AND L.label = ?
                 """
@@ -180,7 +184,7 @@ class IRISGraphOperators:
                     e.s AS entity_id,
                     (CAST(jt.confidence AS FLOAT) / 1000.0 +
                      CASE WHEN e.o_id LIKE ? THEN 0.5 ELSE 0.0 END) AS relevance_score
-                FROM rdf_edges e,
+                FROM Graph_KG.rdf_edges e,
                      JSON_TABLE(
                         e.qualifiers, '$'
                         COLUMNS(
@@ -223,7 +227,7 @@ class IRISGraphOperators:
                         CASE WHEN e.qualifiers LIKE ? THEN 1.0 ELSE 0.0 END +
                         CASE WHEN e.o_id LIKE ? THEN 0.5 ELSE 0.0 END
                     ) AS bm25_score
-                FROM rdf_edges e
+                FROM Graph_KG.rdf_edges e
                 WHERE e.qualifiers LIKE ?
                    OR e.o_id LIKE ?
                 ORDER BY bm25_score DESC
@@ -314,14 +318,14 @@ class IRISGraphOperators:
         try:
             sql = """
                 SELECT 1 AS path_id, 1 AS step, e1.s, e1.p, e1.o_id
-                FROM rdf_edges e1
+                FROM Graph_KG.rdf_edges e1
                 WHERE e1.s = ? AND e1.p = ?
                 UNION ALL
                 SELECT 1 AS path_id, 2 AS step, e2.s, e2.p, e2.o_id
-                FROM rdf_edges e2
+                FROM Graph_KG.rdf_edges e2
                 WHERE e2.p = ?
                   AND EXISTS (
-                    SELECT 1 FROM rdf_edges e1
+                    SELECT 1 FROM Graph_KG.rdf_edges e1
                     WHERE e1.s = ? AND e1.p = ? AND e1.o_id = e2.s
                   )
                 ORDER BY step
@@ -381,30 +385,63 @@ class IRISGraphOperators:
                 if current_depth >= max_depth:
                     continue
 
-                # Build neighbor query with optional predicate filter
-                if predicate_filter:
-                    neighbor_sql = """
-                        SELECT e.s, e.p, e.o_id,
-                               ROW_NUMBER() OVER (ORDER BY e.s) as rn
-                        FROM rdf_edges e
-                        WHERE e.s = ? AND e.p LIKE ?
-                        ORDER BY e.s
-                        LIMIT ?
-                    """
-                    params = [current_entity, f'%{predicate_filter}%', max_degree]
-                else:
-                    neighbor_sql = """
-                        SELECT e.s, e.p, e.o_id,
-                               ROW_NUMBER() OVER (ORDER BY e.s) as rn
-                        FROM rdf_edges e
-                        WHERE e.s = ?
-                        ORDER BY e.s
-                        LIMIT ?
-                    """
-                    params = [current_entity, max_degree]
+                # Attempt to use IRIS global access for neighbor expansion (performance optimization)
+                neighbors = []
+                optimized_success = False
 
-                cursor.execute(neighbor_sql, params)
-                neighbors = cursor.fetchall()
+                if iris is not None:
+                    try:
+                        kg_global = iris.gref("^KG")
+                        p = ""
+                        count = 0
+                        while count < max_degree:
+                            p = kg_global.order([current_entity, p])
+                            if p is None:
+                                break
+
+                            # Adhere to predicate_filter (approximate SQL LIKE behavior)
+                            if predicate_filter and predicate_filter not in p:
+                                continue
+
+                            t = ""
+                            while count < max_degree:
+                                t = kg_global.order([current_entity, p, t])
+                                if t is None:
+                                    break
+
+                                # Match expected format: (source, predicate, target, rn)
+                                neighbors.append((current_entity, p, t, count + 1))
+                                count += 1
+                        optimized_success = True
+                    except Exception as e:
+                        logger.debug(f"IRIS global expansion for {current_entity} failed: {e}")
+                        optimized_success = False
+
+                if not optimized_success:
+                    # Fallback to existing SQL-based approach if iris is not available or fails
+                    if predicate_filter:
+                        neighbor_sql = """
+                            SELECT e.s, e.p, e.o_id,
+                                   ROW_NUMBER() OVER (ORDER BY e.s) as rn
+                            FROM Graph_KG.rdf_edges e
+                            WHERE e.s = ? AND e.p LIKE ?
+                            ORDER BY e.s
+                            LIMIT ?
+                        """
+                        params = [current_entity, f"%{predicate_filter}%", max_degree]
+                    else:
+                        neighbor_sql = """
+                            SELECT e.s, e.p, e.o_id,
+                                   ROW_NUMBER() OVER (ORDER BY e.s) as rn
+                            FROM Graph_KG.rdf_edges e
+                            WHERE e.s = ?
+                            ORDER BY e.s
+                            LIMIT ?
+                        """
+                        params = [current_entity, max_degree]
+
+                    cursor.execute(neighbor_sql, params)
+                    neighbors = cursor.fetchall()
 
                 # Process neighbors
                 for source, predicate, target, _ in neighbors:
@@ -466,7 +503,7 @@ class IRISGraphOperators:
                     e.p as predicate,
                     e.o_id as target,
                     jt.confidence as confidence
-                FROM rdf_edges e,
+                FROM Graph_KG.rdf_edges e,
                      JSON_TABLE(
                         e.qualifiers, '$'
                         COLUMNS(

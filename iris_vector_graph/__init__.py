@@ -18,7 +18,7 @@ from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
 from .fusion import RRFFusion
 
-__version__ = "1.0.0"
+__version__ = "1.3.3"
 __all__ = [
     "IRISGraphEngine",
     "GraphSchema",

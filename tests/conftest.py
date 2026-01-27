@@ -220,6 +220,9 @@ def clean_test_data(iris_connection):
         iris_connection.commit()
 
 
+from iris_vector_graph.utils import _split_sql_statements
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line("markers", "requires_database: mark test as requiring live IRIS database")

@@ -32,9 +32,9 @@ BEGIN
   // Clear existing globals
   KILL ^KG
 
-  // Build forward and reverse adjacency from rdf_edges
+  // Build forward and reverse adjacency from Graph_KG.rdf_edges
   &SQL(DECLARE edges_cursor CURSOR FOR
-    SELECT s, p, o_id, edge_id FROM rdf_edges)
+    SELECT s, p, o_id, edge_id FROM Graph_KG.rdf_edges)
   &SQL(OPEN edges_cursor)
 
   FOR {
@@ -57,9 +57,9 @@ BEGIN
 
   &SQL(CLOSE edges_cursor)
 
-  // Build label postings from rdf_labels
+  // Build label postings from Graph_KG.rdf_labels
   &SQL(DECLARE labels_cursor CURSOR FOR
-    SELECT s, label FROM rdf_labels)
+    SELECT s, label FROM Graph_KG.rdf_labels)
   &SQL(OPEN labels_cursor)
 
   FOR {
@@ -71,9 +71,9 @@ BEGIN
 
   &SQL(CLOSE labels_cursor)
 
-  // Build property postings from rdf_props
+  // Build property postings from Graph_KG.rdf_props
   &SQL(DECLARE props_cursor CURSOR FOR
-    SELECT s, key, val FROM rdf_props)
+    SELECT s, key, val FROM Graph_KG.rdf_props)
   &SQL(OPEN props_cursor)
 
   FOR {
@@ -118,7 +118,7 @@ END;
 -- Trigger to maintain globals on edge insertion
 -- Note: In production, consider batch updates for better performance
 CREATE TRIGGER kg_edges_insert_trigger
-AFTER INSERT ON rdf_edges
+AFTER INSERT ON Graph_KG.rdf_edges
 FOR EACH ROW
 BEGIN
   // Update globals on edge insert
@@ -127,7 +127,7 @@ END;
 
 -- Trigger to maintain globals on edge deletion
 CREATE TRIGGER kg_edges_delete_trigger
-AFTER DELETE ON rdf_edges
+AFTER DELETE ON Graph_KG.rdf_edges
 FOR EACH ROW
 BEGIN
   // Update globals on edge delete

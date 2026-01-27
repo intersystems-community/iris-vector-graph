@@ -295,7 +295,8 @@ def translate_match_clause(match_clause, context, metadata):
 
 def translate_node_pattern(node, context, metadata, optional=False):
     if node.variable and node.variable in context.variable_aliases:
-        if context.variable_aliases[node.variable].startswith('Stage'): return
+        # If variable is already bound, we don't need to join nodes or labels again
+        return
     alias = context.register_variable(node.variable) if node.variable else context.next_alias("n")
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
     if not context.from_clauses: context.from_clauses.append(f"nodes {alias}")
@@ -315,11 +316,15 @@ def translate_node_pattern(node, context, metadata, optional=False):
 
 
 def translate_relationship_pattern(rel, source_node, target_node, context, metadata, optional=False):
-    source_alias, target_alias = context.variable_aliases[source_node.variable], context.register_variable(target_node.variable)
+    source_alias = context.variable_aliases[source_node.variable]
+    is_new_target = target_node.variable not in context.variable_aliases
+    target_alias = context.register_variable(target_node.variable)
     edge_alias = context.register_variable(rel.variable, prefix="e") if rel.variable else context.next_alias("e")
+    
     s_col = source_node.variable if source_alias.startswith('Stage') else "node_id"
     t_col = target_node.variable if target_alias.startswith('Stage') else "node_id"
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
+    
     if rel.direction == ast.Direction.OUTGOING:
         edge_cond, target_on = f"{edge_alias}.s = {source_alias}.{s_col}", f"{target_alias}.{t_col} = {edge_alias}.o_id"
     elif rel.direction == ast.Direction.INCOMING:
@@ -327,12 +332,18 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
     else:
         edge_cond = f"({edge_alias}.s = {source_alias}.{s_col} OR {edge_alias}.o_id = {source_alias}.{s_col})"
         target_on = f"({target_alias}.{t_col} = {edge_alias}.o_id OR {target_alias}.{t_col} = {edge_alias}.s)"
+        
     if rel.types:
         if len(rel.types) == 1: edge_cond += f" AND {edge_alias}.p = {context.add_join_param(rel.types[0])}"
         else: edge_cond += f" AND {edge_alias}.p IN ({', '.join([context.add_join_param(t) for t in rel.types])})"
+        
     context.join_clauses.append(f"{jt} rdf_edges {edge_alias} ON {edge_cond}")
-    if not target_alias.startswith('Stage'): context.join_clauses.append(f"{jt} nodes {target_alias} ON {target_on}")
-    else: context.where_conditions.append(target_on)
+    
+    if is_new_target and not target_alias.startswith('Stage'):
+        context.join_clauses.append(f"{jt} nodes {target_alias} ON {target_on}")
+    else:
+        # If target node is already joined, add the connection as a WHERE condition
+        context.where_conditions.append(target_on)
 
 
 def translate_where_clause(where, context):

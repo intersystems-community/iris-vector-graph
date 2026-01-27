@@ -177,10 +177,20 @@ def load_sql_file(connection, sql_file_path):
     _ensure_nodes_exist(connection, sql_content)
     
     # 2. Split into statements using the robust splitter
-    from tests.conftest import _split_sql_statements
+    from iris_vector_graph.utils import _split_sql_statements
     statements = _split_sql_statements(sql_content)
     
     cursor = connection.cursor()
+    try:
+        # Set default schema for the session
+        cursor.execute("SET OPTION DEFAULT_SCHEMA = Graph_KG")
+    except Exception:
+        # Fallback if SET OPTION is not supported
+        try:
+            cursor.execute("SET SCHEMA Graph_KG")
+        except Exception:
+            pass
+        
     for stmt in statements:
         stmt = stmt.strip()
         if not stmt:
@@ -198,8 +208,15 @@ def load_sql_file(connection, sql_file_path):
                 # IRIS SQL sometimes doesn't like trailing semicolons in execute()
                 if single_stmt.endswith(';') and not single_stmt.upper().endswith('END;'):
                     single_stmt = single_stmt[:-1]
+                
+                # Ensure Graph_KG schema prefix for known tables
+                processed_stmt = single_stmt
+                targets = ["nodes", "rdf_labels", "rdf_props", "rdf_edges", "kg_NodeEmbeddings", "docs"]
+                for target in targets:
+                    pattern = re.compile(rf"\bINSERT\s+INTO\s+(?![Gg]raph_[Kk][Gg]\.){target}\b", re.IGNORECASE)
+                    processed_stmt = pattern.sub(f"INSERT INTO Graph_KG.{target}", processed_stmt)
                     
-                cursor.execute(single_stmt)
+                cursor.execute(processed_stmt)
             except Exception as e:
                 # Benign errors (already exists, etc.)
                 msg = str(e).lower()

@@ -9,7 +9,7 @@ description = "Transactional Graph + Vector retrieval system for InterSystems IR
 readme = "README.md"
 license = "MIT"
 authors = [
-    {name = "IRIS Graph Team"}
+  { name = "InterSystems Community Team", email = "grants@intersystems.com" },
 ]
 keywords = [
     "graph",
@@ -98,8 +98,11 @@ Issues = "https://github.com/isc-tdyar/iris-vector-graph/issues"
 run-tests = "scripts.test:main"
 networkx-loader = "scripts.ingest.networkx_loader:main"
 
+[tool.hatch.build.targets.sdist]
+include = ["/iris_vector_graph", "/iris_src", "/sql", "/README.md", "/LICENSE"]
+
 [tool.hatch.build.targets.wheel]
-packages = ["iris_vector_graph", "scripts", "tests"]
+packages = ["iris_vector_graph"]
 
 # Tool configurations
 [tool.black]
