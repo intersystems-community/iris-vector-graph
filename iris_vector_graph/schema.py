@@ -25,14 +25,14 @@ CREATE TABLE Graph_KG.rdf_labels(
   label      VARCHAR(128) %EXACT NOT NULL,
   CONSTRAINT pk_labels PRIMARY KEY (s, label),
   CONSTRAINT fk_labels_node FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id)
-);
+) WITH STORAGELAYOUT = COLUMNAR;
 
 CREATE TABLE Graph_KG.rdf_props(
   s      VARCHAR(256) %EXACT NOT NULL,
   key    VARCHAR(128) %EXACT NOT NULL,
   val    VARCHAR(64000) %EXACT,
   CONSTRAINT pk_props PRIMARY KEY (s, key)
-);
+) WITH STORAGELAYOUT = COLUMNAR;
 
 CREATE TABLE Graph_KG.rdf_edges(
   edge_id    BIGINT IDENTITY PRIMARY KEY,
@@ -43,7 +43,7 @@ CREATE TABLE Graph_KG.rdf_edges(
   CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id),
   CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES Graph_KG.nodes(node_id),
   CONSTRAINT u_spo UNIQUE (s, p, o_id)
-);
+) WITH STORAGELAYOUT = COLUMNAR;
 
 CREATE TABLE Graph_KG.kg_NodeEmbeddings (
     id VARCHAR(256) %EXACT PRIMARY KEY,

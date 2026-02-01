@@ -46,11 +46,9 @@ def labels_subquery(node_expr: str) -> str:
 
 
 def properties_subquery(node_expr: str) -> str:
-    # VARCHAR(32000) supports REPLACE directly - no CAST or %EXTERNAL needed
+    # Use native JSON_OBJECT for much faster execution and automatic escaping
     return (
-        "(SELECT JSON_ARRAYAGG("
-        "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
-        "'\",\"value\":\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"}') "
+        f"(SELECT JSON_ARRAYAGG(JSON_OBJECT('key':\"key\", 'value':val)) "
         f"FROM {_table('rdf_props')} WHERE s = {node_expr})"
     )
 
@@ -447,7 +445,7 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"{alias}.{expr.variable}_{expr.property_name}"
         if expr.property_name in ("node_id", "id"): return f"{alias}.node_id"
         p_alias = context.next_alias("p")
-        context.join_clauses.append(f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.key = {context.add_join_param(expr.property_name)}")
+        context.join_clauses.append(f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(expr.property_name)}")
         return f"{p_alias}.val"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)
