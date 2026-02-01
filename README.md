@@ -166,6 +166,10 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.3 (2025-01-31)
+- **Composite Indexes**: Added (s,key), (s,p), (p,o_id), (s,label) based on TrustGraph patterns
+- **12 indexes total**: Optimized for label filtering, property lookups, edge traversal
+
 ### v1.4.2 (2025-01-31)
 - **Performance Indexes**: Added indexes on rdf_labels, rdf_props, rdf_edges for fast graph traversal
 - **ensure_indexes()**: New method to add indexes to existing databases
