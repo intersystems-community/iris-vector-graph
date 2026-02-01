@@ -30,11 +30,11 @@ Constitutional Compliance:
 import pytest
 import time
 from collections import defaultdict, deque
-from scripts.migrations.migrate_to_nodepk import get_connection, bulk_insert_nodes
+from scripts.migrations.migrate_to_nodepk import bulk_insert_nodes
 
 
-@pytest.fixture(scope="module")
-def iris_connection_with_graph_analytics():
+@pytest.fixture(scope="function")
+def iris_connection_with_graph_analytics(iris_connection):
     """
     Setup IRIS connection with graph structure suitable for analytics.
 
@@ -43,7 +43,7 @@ def iris_connection_with_graph_analytics():
     - Directed edges with realistic degree distribution
     - Labels indicating community membership
     """
-    conn = get_connection()
+    conn = iris_connection
     cursor = conn.cursor()
 
     print("\n🔧 Setting up graph analytics benchmark dataset...")
@@ -142,8 +142,7 @@ def iris_connection_with_graph_analytics():
         conn.commit()
     except:
         conn.rollback()
-
-    conn.close()
+    # Don't close - connection managed by conftest
 
 
 @pytest.mark.performance

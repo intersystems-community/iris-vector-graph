@@ -1,5 +1,5 @@
 import pytest
-from tests.conftest import _split_sql_statements
+from iris_vector_graph.utils import _split_sql_statements
 from scripts.setup import _decompose_multi_row_insert
 
 def test_split_simple_statements():
