@@ -46,10 +46,12 @@ def labels_subquery(node_expr: str) -> str:
 
 
 def properties_subquery(node_expr: str) -> str:
+    # CAST val to VARCHAR for REPLACE - IRIS doesn't support string functions on LONGVARCHAR streams
+    # Truncate to 32000 chars (max VARCHAR) for JSON aggregation; full value accessible via direct property access
     return (
         "(SELECT JSON_ARRAYAGG("
         "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
-        "'\",\"value\":\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"}') "
+        "'\",\"value\":\"' || REPLACE(REPLACE(CAST(val AS VARCHAR(32000)), '\\', '\\\\'), '\"', '\\\"') || '\"}') "
         f"FROM {_table('rdf_props')} WHERE s = {node_expr})"
     )
 

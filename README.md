@@ -166,6 +166,9 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.6 (2025-01-31)
+- **Fix LONGVARCHAR REPLACE**: CAST val to VARCHAR for JSON aggregation (IRIS stream limitation)
+
 ### v1.4.5 (2025-01-31)
 - **Large Value Support**: `rdf_props.val` changed from VARCHAR(4000) to LONGVARCHAR (up to 2GB)
 - **JSON Documents**: Store JSON documents and large text in node properties
