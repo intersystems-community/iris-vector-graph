@@ -144,6 +144,12 @@ class TestGraphKGTraversal:
         cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'BFS_TEST:%' OR o_id LIKE 'BFS_TEST:%'")
         cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'BFS_TEST:%'")
         cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'BFS_TEST:%'")
+        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'BFS_TEST:%'")
+        
+        # Create nodes first (FK requirement)
+        nodes = ['BFS_TEST:ROOT', 'BFS_TEST:L1_A', 'BFS_TEST:L1_B', 'BFS_TEST:L2_A', 'BFS_TEST:L2_B']
+        for node_id in nodes:
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
         
         # Create edges for BFS
         edges = [
@@ -249,6 +255,12 @@ class TestGraphOperatorsClass:
         
         # Clean up
         cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'VEC_TEST:%'")
+        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'VEC_TEST:%'")
+        
+        # Create nodes first (FK requirement)
+        for i in range(5):
+            node_id = f'VEC_TEST:{i}'
+            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
         
         # Insert test embeddings (768-dimensional CSV strings)
         test_embedding = ','.join([str(0.1)] * 768)
@@ -264,6 +276,7 @@ class TestGraphOperatorsClass:
         
         # Cleanup
         cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'VEC_TEST:%'")
+        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'VEC_TEST:%'")
         iris_connection.commit()
         cursor.close()
 
