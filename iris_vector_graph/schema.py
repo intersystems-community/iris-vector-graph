@@ -16,29 +16,29 @@ class GraphSchema:
         """Get SQL for base schema. Using explicit Graph_KG schema qualification and robust types."""
         return """
 CREATE TABLE Graph_KG.nodes(
-  node_id    VARCHAR(256) PRIMARY KEY,
+  node_id    VARCHAR(256) %EXACT PRIMARY KEY,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE Graph_KG.rdf_labels(
-  s          VARCHAR(256) NOT NULL,
-  label      VARCHAR(128) NOT NULL,
+  s          VARCHAR(256) %EXACT NOT NULL,
+  label      VARCHAR(128) %EXACT NOT NULL,
   CONSTRAINT pk_labels PRIMARY KEY (s, label),
   CONSTRAINT fk_labels_node FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id)
 );
 
 CREATE TABLE Graph_KG.rdf_props(
-  s      VARCHAR(256) NOT NULL,
-  key    VARCHAR(128) NOT NULL,
-  val    VARCHAR(64000),
+  s      VARCHAR(256) %EXACT NOT NULL,
+  key    VARCHAR(128) %EXACT NOT NULL,
+  val    VARCHAR(64000) %EXACT,
   CONSTRAINT pk_props PRIMARY KEY (s, key)
 );
 
 CREATE TABLE Graph_KG.rdf_edges(
   edge_id    BIGINT IDENTITY PRIMARY KEY,
-  s          VARCHAR(256) NOT NULL,
-  p          VARCHAR(128) NOT NULL,
-  o_id       VARCHAR(256) NOT NULL,
+  s          VARCHAR(256) %EXACT NOT NULL,
+  p          VARCHAR(128) %EXACT NOT NULL,
+  o_id       VARCHAR(256) %EXACT NOT NULL,
   qualifiers %Library.DynamicObject,
   CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id),
   CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES Graph_KG.nodes(node_id),
@@ -46,22 +46,22 @@ CREATE TABLE Graph_KG.rdf_edges(
 );
 
 CREATE TABLE Graph_KG.kg_NodeEmbeddings (
-    id VARCHAR(256) PRIMARY KEY,
+    id VARCHAR(256) %EXACT PRIMARY KEY,
     emb VECTOR(DOUBLE, 768),
     metadata %Library.DynamicObject,
     CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)
 );
 
 CREATE TABLE Graph_KG.kg_NodeEmbeddings_optimized (
-    id VARCHAR(256) PRIMARY KEY,
+    id VARCHAR(256) %EXACT PRIMARY KEY,
     emb VECTOR(DOUBLE, 768),
     metadata %Library.DynamicObject,
     CONSTRAINT fk_emb_node_opt FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)
 );
 
 CREATE TABLE Graph_KG.docs(
-  id    VARCHAR(256) PRIMARY KEY,
-  text  VARCHAR(4000)
+  id    VARCHAR(256) %EXACT PRIMARY KEY,
+  text  VARCHAR(4000) %EXACT
 );
 
 -- Indexes for graph traversal performance (based on TrustGraph patterns)

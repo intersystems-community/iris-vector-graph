@@ -166,6 +166,11 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.9 (2025-01-31)
+- **Exact Collation**: Added `%EXACT` to VARCHAR columns for case-sensitive matching
+- **Performance**: Prevents default `UPPER` collation behavior in IRIS 2024.2+
+- **Case Sensitivity**: Ensures node IDs, labels, and property keys are case-sensitive
+
 ### v1.4.8 (2025-01-31)
 - **Fix SUBSCRIPT error**: Removed `idx_props_key_val` which caused errors with large values
 - **Improved Performance**: Maintained composite indexes that don't include large VARCHAR columns
