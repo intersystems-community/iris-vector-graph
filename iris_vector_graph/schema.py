@@ -64,9 +64,65 @@ CREATE TABLE Graph_KG.docs(
   text  VARCHAR(4000)
 );
 
--- Index for faster discovery
+-- Indexes for graph traversal performance
+CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s);
+CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label);
+CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s);
+CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key);
+CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val);
+CREATE INDEX idx_edges_s ON Graph_KG.rdf_edges (s);
 CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id);
+CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p);
+CREATE INDEX idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id);
 """
+
+    @staticmethod
+    def get_indexes_sql() -> str:
+        """Get SQL to create performance indexes. Safe to run on existing databases."""
+        return """
+CREATE INDEX IF NOT EXISTS idx_labels_s ON Graph_KG.rdf_labels (s);
+CREATE INDEX IF NOT EXISTS idx_labels_label ON Graph_KG.rdf_labels (label);
+CREATE INDEX IF NOT EXISTS idx_props_s ON Graph_KG.rdf_props (s);
+CREATE INDEX IF NOT EXISTS idx_props_key ON Graph_KG.rdf_props (key);
+CREATE INDEX IF NOT EXISTS idx_props_key_val ON Graph_KG.rdf_props (key, val);
+CREATE INDEX IF NOT EXISTS idx_edges_s ON Graph_KG.rdf_edges (s);
+CREATE INDEX IF NOT EXISTS idx_edges_oid ON Graph_KG.rdf_edges (o_id);
+CREATE INDEX IF NOT EXISTS idx_edges_p ON Graph_KG.rdf_edges (p);
+CREATE INDEX IF NOT EXISTS idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id);
+"""
+
+    @staticmethod
+    def ensure_indexes(cursor) -> Dict[str, bool]:
+        """
+        Create performance indexes if they don't exist. Safe for existing databases.
+        
+        Returns:
+            Dict mapping index name to success status
+        """
+        indexes = [
+            ("idx_labels_s", "CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s)"),
+            ("idx_labels_label", "CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label)"),
+            ("idx_props_s", "CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s)"),
+            ("idx_props_key", "CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key)"),
+            ("idx_props_key_val", "CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val)"),
+            ("idx_edges_s", "CREATE INDEX idx_edges_s ON Graph_KG.rdf_edges (s)"),
+            ("idx_edges_oid", "CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)"),
+            ("idx_edges_p", "CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p)"),
+            ("idx_emb_id", "CREATE INDEX idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id)"),
+        ]
+        
+        status = {}
+        for name, sql in indexes:
+            try:
+                cursor.execute(sql)
+                status[name] = True
+            except Exception as e:
+                # Index already exists is OK
+                if "already exists" in str(e).lower() or "already has" in str(e).lower():
+                    status[name] = True
+                else:
+                    status[name] = False
+        return status
 
     @staticmethod
     def validate_schema(cursor) -> Dict[str, bool]:
