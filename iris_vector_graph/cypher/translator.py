@@ -13,6 +13,46 @@ from . import ast
 
 logger = logging.getLogger(__name__)
 
+# Module-level schema prefix configuration
+# Set to "Graph_KG" to use Graph_KG.nodes, Graph_KG.rdf_labels, etc.
+# Set to "" (empty string) for unqualified table names
+_schema_prefix: str = ""
+
+
+def set_schema_prefix(prefix: str) -> None:
+    """Set the schema prefix for all table references in generated SQL.
+    
+    Args:
+        prefix: Schema name (e.g., "Graph_KG") or empty string for unqualified names
+    """
+    global _schema_prefix
+    _schema_prefix = prefix
+
+
+def get_schema_prefix() -> str:
+    """Get the current schema prefix."""
+    return _schema_prefix
+
+
+def _table(name: str) -> str:
+    """Return fully qualified table name with schema prefix if configured."""
+    if _schema_prefix:
+        return f"{_schema_prefix}.{name}"
+    return name
+
+
+def labels_subquery(node_expr: str) -> str:
+    return f"(SELECT JSON_ARRAYAGG(label) FROM {_table('rdf_labels')} WHERE s = {node_expr})"
+
+
+def properties_subquery(node_expr: str) -> str:
+    return (
+        "(SELECT JSON_ARRAYAGG("
+        "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
+        "'\",\"value\":\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"}') "
+        f"FROM {_table('rdf_props')} WHERE s = {node_expr})"
+    )
+
 @dataclass
 class QueryMetadata:
     """Query execution metadata tracking."""
@@ -136,13 +176,16 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
     
     if cypher_query.return_clause: translate_return_clause(cypher_query.return_clause, context)
     
+    # Process ORDER BY BEFORE building SQL to ensure JOINs are included
+    order_by_items = preprocess_order_by(cypher_query, context)
+    
     if is_transactional:
         stmts, all_params = [], []
         for s, p in context.dml_statements:
             stmts.append(s); all_params.append(p)
         if cypher_query.return_clause:
             sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
-            sql = apply_pagination(sql, cypher_query, context)
+            sql = apply_pagination(sql, cypher_query, context, order_by_items)
             if context.stages:
                 sql = "WITH " + ",\n".join(context.stages) + "\n" + sql
                 all_params.append(context.all_stage_params + p)
@@ -151,20 +194,28 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         return SQLQuery(sql=stmts, parameters=all_params, query_metadata=metadata, is_transactional=True)
     else:
         sql, p = context.build_stage_sql(cypher_query.return_clause.distinct if cypher_query.return_clause else False)
-        sql = apply_pagination(sql, cypher_query, context)
+        sql = apply_pagination(sql, cypher_query, context, order_by_items)
         if context.stages:
             sql = "WITH " + ",\n".join(context.stages) + "\n" + sql
             return SQLQuery(sql=sql, parameters=[context.all_stage_params + p], query_metadata=metadata)
         return SQLQuery(sql=sql, parameters=[p], query_metadata=metadata)
 
 
-def apply_pagination(sql: str, query: ast.CypherQuery, context: TranslationContext) -> str:
-    if query.order_by_clause:
-        items = []
-        for item in query.order_by_clause.items:
-            expr = translate_expression(item.expression, context, segment="where")
-            items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
-        sql += f"\nORDER BY {', '.join(items)}"
+def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> list:
+    """Process ORDER BY expressions BEFORE building SQL to ensure JOINs are added."""
+    if not query.order_by_clause:
+        return []
+    items = []
+    for item in query.order_by_clause.items:
+        expr = translate_expression(item.expression, context, segment="where")
+        # IRIS doesn't support NULLS LAST, so we omit it
+        items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
+    return items
+
+
+def apply_pagination(sql: str, query: ast.CypherQuery, context: TranslationContext, order_by_items: list = None) -> str:
+    if order_by_items:
+        sql += f"\nORDER BY {', '.join(order_by_items)}"
     if query.limit is not None: sql += f"\nLIMIT {query.limit}"
     if query.skip is not None: sql += f"\nOFFSET {query.skip}"
     return sql
@@ -204,18 +255,18 @@ def translate_create_clause(create, context, metadata):
             # Since build_stage_sql just concatenates all params, and we used ? for all, 
             # we need to ensure the number of ? matches len(p).
             # Our current build_stage_sql is correct because it only includes params for the current stage.
-            context.add_dml(f"INSERT INTO nodes (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = t.node_id)", p)
+            context.add_dml(f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)", p)
             for label in node.labels:
-                context.add_dml(f"INSERT INTO rdf_labels (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = t.node_id AND label = ?)", [label] + p + [label])
+                context.add_dml(f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)", [label] + p + [label])
         else:
             node_id = node_id_expr.value if isinstance(node_id_expr, ast.Literal) else node_id_expr
-            context.add_dml("INSERT INTO nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ?)", [node_id, node_id])
+            context.add_dml(f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)", [node_id, node_id])
             for label in node.labels:
-                context.add_dml("INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ?)", [node_id, label, node_id, label])
+                context.add_dml(f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)", [node_id, label, node_id, label])
             for k, v in node.properties.items():
                 if k not in ("id", "node_id"):
                     val = v.value if isinstance(v, ast.Literal) else v
-                    context.add_dml("INSERT INTO rdf_props (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_props WHERE s = ? AND \"key\" = ?)", [node_id, k, val, node_id, k])
+                    context.add_dml(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)", [node_id, k, val, node_id, k])
         if node.variable: context.register_variable(node.variable)
     
     for i, rel in enumerate(create.pattern.relationships):
@@ -225,7 +276,7 @@ def translate_create_clause(create, context, metadata):
         s_id = s_id_expr.value if isinstance(s_id_expr, ast.Literal) else s_id_expr if not isinstance(s_id_expr, ast.Variable) else None
         t_id = t_id_expr.value if isinstance(t_id_expr, ast.Literal) else t_id_expr if not isinstance(t_id_expr, ast.Variable) else None
         if s_id and t_id:
-            for rt in rel.types: context.add_dml("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)", [s_id, rt, t_id])
+            for rt in rel.types: context.add_dml(f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)", [s_id, rt, t_id])
         else:
             s_alias = context.variable_aliases.get(source_node.variable) if source_node.variable else None
             t_alias = context.variable_aliases.get(target_node.variable) if target_node.variable else None
@@ -233,7 +284,7 @@ def translate_create_clause(create, context, metadata):
             t_expr, t_p = ("?", [t_id]) if t_id else (f"{t_alias}.{target_node.variable}" if t_alias and t_alias.startswith('Stage') else f"{t_alias}.node_id", [])
             for rt in rel.types:
                 sql, p = context.build_stage_sql(select_override=f"SELECT {s_expr}, ?, {t_expr}")
-                context.add_dml(f"INSERT INTO rdf_edges (s, p, o_id) {sql}", s_p + [rt] + t_p + p)
+                context.add_dml(f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}", s_p + [rt] + t_p + p)
 
 
 def translate_delete_clause(delete, context, metadata):
@@ -241,12 +292,12 @@ def translate_delete_clause(delete, context, metadata):
         alias = context.variable_aliases.get(var.name)
         if not alias: raise ValueError(f"Undefined: {var.name}")
         subquery, subparams = context.build_stage_sql(select_override=f"SELECT {alias}.node_id")
-        if delete.detach: context.add_dml(f"DELETE FROM rdf_edges WHERE s IN ({subquery}) OR o_id IN ({subquery})", subparams + subparams)
+        if delete.detach: context.add_dml(f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({subquery}) OR o_id IN ({subquery})", subparams + subparams)
         if not alias.startswith('e'):
-            context.add_dml(f"DELETE FROM rdf_labels WHERE s IN ({subquery})", subparams)
-            context.add_dml(f"DELETE FROM rdf_props WHERE s IN ({subquery})", subparams)
-            context.add_dml(f"DELETE FROM nodes WHERE node_id IN ({subquery})", subparams)
-        else: context.add_dml(f"DELETE FROM rdf_edges WHERE s = (SELECT s FROM rdf_edges {alias}) AND p = (SELECT p FROM rdf_edges {alias}) AND o_id = (SELECT o_id FROM rdf_edges {alias})", [])
+            context.add_dml(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({subquery})", subparams)
+            context.add_dml(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})", subparams)
+            context.add_dml(f"DELETE FROM {_table('nodes')} WHERE node_id IN ({subquery})", subparams)
+        else: context.add_dml(f"DELETE FROM {_table('rdf_edges')} WHERE s = (SELECT s FROM {_table('rdf_edges')} {alias}) AND p = (SELECT p FROM {_table('rdf_edges')} {alias}) AND o_id = (SELECT o_id FROM {_table('rdf_edges')} {alias})", [])
 
 
 def translate_merge_clause(merge, context, metadata):
@@ -258,8 +309,8 @@ def translate_merge_clause(merge, context, metadata):
                     node_id = context.variable_aliases.get(item.expression.variable)
                     k, v = item.expression.property_name, item.value
                     val = v.value if isinstance(v, ast.Literal) else v
-                    if is_create: context.add_dml(f"INSERT INTO rdf_props (s, \"key\", val) SELECT node_id, ?, ? FROM nodes WHERE node_id = ? AND NOT EXISTS (SELECT 1 FROM rdf_props WHERE s = ? AND \"key\" = ?)", [k, val, node_id, node_id, k])
-                    else: context.add_dml(f"UPDATE rdf_props SET val = ? WHERE s = ? AND \"key\" = ?", [val, node_id, k])
+                    if is_create: context.add_dml(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT node_id, ?, ? FROM {_table('nodes')} WHERE node_id = ? AND NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)", [k, val, node_id, node_id, k])
+                    else: context.add_dml(f"UPDATE {_table('rdf_props')} SET val = ? WHERE s = ? AND \"key\" = ?", [val, node_id, k])
 
 
 def translate_set_clause(set_cl, context, metadata):
@@ -268,12 +319,12 @@ def translate_set_clause(set_cl, context, metadata):
             alias, k, v = context.variable_aliases.get(item.expression.variable), item.expression.property_name, item.value
             val = v.value if isinstance(v, ast.Literal) else v
             subquery, subparams = context.build_stage_sql(select_override=f"SELECT {alias}.node_id")
-            context.add_dml(f"UPDATE rdf_props SET val = ? WHERE s IN ({subquery}) AND \"key\" = ?", [val] + subparams + [k])
-            context.add_dml(f"INSERT INTO rdf_props (s, \"key\", val) SELECT node_id, ?, ? FROM nodes WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM rdf_props WHERE s = nodes.node_id AND \"key\" = ?)", [k, val] + subparams + [k])
+            context.add_dml(f"UPDATE {_table('rdf_props')} SET val = ? WHERE s IN ({subquery}) AND \"key\" = ?", [val] + subparams + [k])
+            context.add_dml(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT node_id, ?, ? FROM {_table('nodes')} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = {_table('nodes')}.node_id AND \"key\" = ?)", [k, val] + subparams + [k])
         elif isinstance(item.expression, ast.Variable):
             alias, label = context.variable_aliases.get(item.expression.name), str(item.value.value if isinstance(item.value, ast.Literal) else item.value)
             subquery, subparams = context.build_stage_sql(select_override=f"SELECT {alias}.node_id")
-            context.add_dml(f"INSERT INTO rdf_labels (s, label) SELECT node_id, ? FROM nodes WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = nodes.node_id AND label = ?)", [label] + subparams + [label])
+            context.add_dml(f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT node_id, ? FROM {_table('nodes')} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = {_table('nodes')}.node_id AND label = ?)", [label] + subparams + [label])
 
 
 def translate_remove_clause(remove, context, metadata):
@@ -281,7 +332,7 @@ def translate_remove_clause(remove, context, metadata):
         if isinstance(item.expression, ast.PropertyReference):
             alias, k = context.variable_aliases.get(item.expression.variable), item.expression.property_name
             subquery, subparams = context.build_stage_sql(select_override=f"SELECT {alias}.node_id")
-            context.add_dml(f"DELETE FROM rdf_props WHERE s IN ({subquery}) AND \"key\" = ?", subparams + [k])
+            context.add_dml(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery}) AND \"key\" = ?", subparams + [k])
 
 
 def translate_match_clause(match_clause, context, metadata):
@@ -299,18 +350,19 @@ def translate_node_pattern(node, context, metadata, optional=False):
         return
     alias = context.register_variable(node.variable) if node.variable else context.next_alias("n")
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
-    if not context.from_clauses: context.from_clauses.append(f"nodes {alias}")
-    elif f"nodes {alias}" not in context.from_clauses and not any(alias in j for j in context.join_clauses): context.join_clauses.append(f"CROSS JOIN nodes {alias}")
+    nodes_tbl = _table('nodes')
+    if not context.from_clauses: context.from_clauses.append(f"{nodes_tbl} {alias}")
+    elif f"{nodes_tbl} {alias}" not in context.from_clauses and not any(alias in j for j in context.join_clauses): context.join_clauses.append(f"CROSS JOIN {nodes_tbl} {alias}")
     for label in node.labels:
         l_alias = context.next_alias("l")
-        context.join_clauses.append(f"{jt} rdf_labels {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label = {context.add_join_param(label)}")
+        context.join_clauses.append(f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label = {context.add_join_param(label)}")
         if not optional: context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
     for k, v in node.properties.items():
         val = v.value if isinstance(v, ast.Literal) else v
         if k in ("node_id", "id"): context.where_conditions.append(f"{alias}.node_id = {context.add_where_param(val)}")
         else:
             p_alias = context.next_alias("p")
-            context.join_clauses.append(f"{jt} rdf_props {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.key = {context.add_join_param(k)}")
+            context.join_clauses.append(f"{jt} {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.key = {context.add_join_param(k)}")
             if optional: context.where_conditions.append(f"({p_alias}.s IS NULL OR {p_alias}.val = {context.add_where_param(val)})")
             else: context.where_conditions.append(f"{p_alias}.val = {context.add_where_param(val)}")
 
@@ -337,10 +389,10 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
         if len(rel.types) == 1: edge_cond += f" AND {edge_alias}.p = {context.add_join_param(rel.types[0])}"
         else: edge_cond += f" AND {edge_alias}.p IN ({', '.join([context.add_join_param(t) for t in rel.types])})"
         
-    context.join_clauses.append(f"{jt} rdf_edges {edge_alias} ON {edge_cond}")
+    context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
     
     if is_new_target and not target_alias.startswith('Stage'):
-        context.join_clauses.append(f"{jt} nodes {target_alias} ON {target_on}")
+        context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
     else:
         # If target node is already joined, add the connection as a WHERE condition
         context.where_conditions.append(target_on)
@@ -356,10 +408,22 @@ def translate_boolean_expression(expr, context) -> str:
     if op == ast.BooleanOperator.AND: return "(" + " AND ".join(translate_boolean_expression(o, context) for o in expr.operands) + ")"
     if op == ast.BooleanOperator.OR: return "(" + " OR ".join(translate_boolean_expression(o, context) for o in expr.operands) + ")"
     if op == ast.BooleanOperator.NOT: return f"NOT ({translate_boolean_expression(expr.operands[0], context)})"
-    left = translate_expression(expr.operands[0], context, segment="where")
+    left_expr = expr.operands[0]
+    right_expr = expr.operands[1] if len(expr.operands) > 1 else None
+    left = translate_expression(left_expr, context, segment="where")
     if op == ast.BooleanOperator.IS_NULL: return f"{left} IS NULL"
     if op == ast.BooleanOperator.IS_NOT_NULL: return f"{left} IS NOT NULL"
-    right = translate_expression(expr.operands[1], context, segment="where")
+    right = translate_expression(right_expr, context, segment="where")
+    if op in (
+        ast.BooleanOperator.LESS_THAN,
+        ast.BooleanOperator.LESS_THAN_OR_EQUAL,
+        ast.BooleanOperator.GREATER_THAN,
+        ast.BooleanOperator.GREATER_THAN_OR_EQUAL,
+    ):
+        if isinstance(left_expr, ast.PropertyReference):
+            left = f"CAST({left} AS DOUBLE)"
+        if isinstance(right_expr, ast.PropertyReference):
+            right = f"CAST({right} AS DOUBLE)"
     if op == ast.BooleanOperator.EQUALS: return f"{left} = {right}"
     if op == ast.BooleanOperator.NOT_EQUALS: return f"{left} <> {right}"
     if op == ast.BooleanOperator.LESS_THAN: return f"{left} < {right}"
@@ -382,7 +446,7 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"{alias}.{expr.variable}_{expr.property_name}"
         if expr.property_name in ("node_id", "id"): return f"{alias}.node_id"
         p_alias = context.next_alias("p")
-        context.join_clauses.append(f"JOIN rdf_props {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.key = {context.add_join_param(expr.property_name)}")
+        context.join_clauses.append(f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.key = {context.add_join_param(expr.property_name)}")
         return f"{p_alias}.val"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)
@@ -414,7 +478,8 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"(SELECT TOP 1 path FROM ({inner}) WHERE 1=1)"
         fn, args = expr.function_name.lower(), [translate_expression(arg, context, segment=segment) for arg in expr.arguments]
         if fn in ("id", "type"): return args[0] if args else "NULL"
-        if fn == "labels": return f"(SELECT JSON_ARRAYAGG(label) FROM rdf_labels WHERE s = {args[0] if args else 'NULL'})"
+        if fn == "labels": return labels_subquery(args[0] if args else "NULL")
+        if fn == "properties": return properties_subquery(args[0] if args else "NULL")
         return f"{fn.upper()}({', '.join(args)})"
     return "NULL"
 
@@ -422,6 +487,16 @@ def translate_expression(expr, context, segment="select") -> str:
 def translate_return_clause(ret, context):
     has_agg = any(isinstance(i.expression, ast.AggregationFunction) for i in ret.items)
     for item in ret.items:
+        if isinstance(item.expression, ast.Variable):
+            var_name = item.expression.name
+            alias_name = context.variable_aliases.get(var_name)
+            if alias_name and not alias_name.startswith("e"):
+                prefix = item.alias or var_name
+                node_expr = f"{alias_name}.{var_name}" if alias_name.startswith("Stage") else f"{alias_name}.node_id"
+                context.select_items.append(f"{node_expr} AS {prefix}_id")
+                context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
+                context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")
+                continue
         sql = translate_expression(item.expression, context, segment="select")
         alias = item.alias
         if alias is None:

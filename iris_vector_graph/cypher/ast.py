@@ -160,7 +160,7 @@ class MatchClause:
 @dataclass(slots=True)
 class ReturnItem:
     """Single item in RETURN or WITH clause"""
-    expression: Union[PropertyReference, Variable, AggregationFunction, Literal, BooleanExpression]
+    expression: Union[PropertyReference, Variable, AggregationFunction, Literal, BooleanExpression, FunctionCall]
     alias: Optional[str] = None
 
 

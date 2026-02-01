@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, List, Any
+from typing import Optional, List
 import enum
 
 class TokenType(enum.Enum):
@@ -243,6 +243,12 @@ class Lexer:
             # Check for STARTS WITH
             if upper_value == "STARTS" and self._peek_keyword("WITH"):
                 self.tokens.append(Token(TokenType.STARTS, value, start_pos, self.line, start_col))
+                self._consume_keyword("WITH", TokenType.WITH_KW)
+                return
+
+            # Check for ENDS WITH
+            if upper_value == "ENDS" and self._peek_keyword("WITH"):
+                self.tokens.append(Token(TokenType.ENDS, value, start_pos, self.line, start_col))
                 self._consume_keyword("WITH", TokenType.WITH_KW)
                 return
 

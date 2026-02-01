@@ -12,6 +12,10 @@ import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 import logging
 
+from iris_vector_graph.cypher.parser import parse_query
+from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.schema import GraphSchema
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +37,160 @@ class IRISGraphEngine:
     def __init__(self, connection):
         """Initialize with IRIS database connection"""
         self.conn = connection
+
+    def execute_cypher(self, query: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        ast = parse_query(query)
+        sql_query = translate_to_sql(ast, params=params)
+
+        cursor = self.conn.cursor()
+
+        if sql_query.is_transactional:
+            cursor.execute("START TRANSACTION")
+            try:
+                stmts = sql_query.sql if isinstance(sql_query.sql, list) else [sql_query.sql]
+                all_params = sql_query.parameters
+                rows = []
+                for i, stmt in enumerate(stmts):
+                    p = all_params[i] if i < len(all_params) else []
+                    cursor.execute(stmt, p)
+                    if cursor.description:
+                        rows = cursor.fetchall()
+                cursor.execute("COMMIT")
+
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                return {"columns": columns, "rows": rows}
+            except Exception as e:
+                cursor.execute("ROLLBACK")
+                raise e
+        else:
+            sql_str = sql_query.sql if isinstance(sql_query.sql, str) else "\n".join(sql_query.sql)
+            p = sql_query.parameters[0] if sql_query.parameters else []
+            cursor.execute(sql_str, p)
+
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+
+            return {
+                "columns": columns,
+                "rows": rows,
+                "sql": sql_str,
+                "params": p,
+            }
+
+    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+        cypher = f"MATCH (n) WHERE n.id = '{node_id}' RETURN n"
+        result = self.execute_cypher(cypher)
+
+        if not result.get("rows"):
+            return None
+
+        row = result["rows"][0]
+        columns = result["columns"]
+        row_map = dict(zip(columns, row))
+
+        id_key = next((k for k in row_map if k.endswith("_id")), None)
+        if not id_key:
+            return None
+
+        prefix = id_key[:-3]
+        labels_key = f"{prefix}_labels"
+        props_key = f"{prefix}_props"
+
+        labels_raw = row_map.get(labels_key)
+        props_raw = row_map.get(props_key)
+
+        labels = json.loads(labels_raw) if labels_raw else []
+        props_items = json.loads(props_raw) if props_raw else []
+        if props_items and isinstance(props_items[0], str):
+            props_items = [json.loads(item) for item in props_items]
+        props = {item["key"]: item["value"] for item in props_items}
+
+        return {"id": row_map[id_key], "labels": labels, **props}
+
+    def _get_embedding_dimension(self) -> int:
+        cursor = self.conn.cursor()
+        dim = GraphSchema.get_embedding_dimension(cursor)
+        if dim:
+            return int(dim)
+
+        try:
+            cursor.execute(
+                """
+                SELECT DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'Graph_KG'
+                  AND TABLE_NAME = 'kg_NodeEmbeddings'
+                  AND COLUMN_NAME = 'emb'
+                """
+            )
+            result = cursor.fetchone()
+            if result and result[0]:
+                data_type = str(result[0])
+                digits = "".join(ch for ch in data_type if ch.isdigit())
+                if digits:
+                    return int(digits)
+        except Exception:
+            pass
+
+        raise ValueError("Embedding dimension could not be determined")
+
+    def _assert_node_exists(self, node_id: str) -> None:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", [node_id])
+        result = cursor.fetchone()
+        if not result or result[0] == 0:
+            raise ValueError(f"Node does not exist: {node_id}")
+
+    def store_embedding(
+        self, node_id: str, embedding: List[float], metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        self._assert_node_exists(node_id)
+        dim = self._get_embedding_dimension()
+        if len(embedding) != dim:
+            raise ValueError(f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}")
+
+        cursor = self.conn.cursor()
+        emb_str = ",".join(str(x) for x in embedding)
+        meta_json = json.dumps(metadata) if metadata else None
+
+        cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", [node_id])
+        cursor.execute(
+            "INSERT INTO kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+            [node_id, emb_str, meta_json],
+        )
+        self.conn.commit()
+        return True
+
+    def store_embeddings(self, items: List[Dict[str, Any]]) -> bool:
+        dim = self._get_embedding_dimension()
+        for item in items:
+            node_id = item["node_id"]
+            embedding = item["embedding"]
+            if len(embedding) != dim:
+                raise ValueError(f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}")
+            self._assert_node_exists(node_id)
+
+        cursor = self.conn.cursor()
+        cursor.execute("START TRANSACTION")
+        try:
+            for item in items:
+                node_id = item["node_id"]
+                embedding = item["embedding"]
+                metadata = item.get("metadata")
+
+                emb_str = ",".join(str(x) for x in embedding)
+                meta_json = json.dumps(metadata) if metadata else None
+
+                cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", [node_id])
+                cursor.execute(
+                    "INSERT INTO kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+                    [node_id, emb_str, meta_json],
+                )
+            cursor.execute("COMMIT")
+            return True
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            raise e
 
     def _validate_k(self, k: Any) -> int:
         """

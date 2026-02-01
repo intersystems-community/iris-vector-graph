@@ -5,7 +5,7 @@ Translates Cypher query strings into an Abstract Syntax Tree (AST).
 Replaces the temporary regex-based implementation.
 """
 
-from typing import List, Optional, Any, Dict, Union
+from typing import List, Optional, Any, Dict
 from .lexer import Lexer, Token, TokenType
 from . import ast
 import logging
@@ -424,6 +424,7 @@ class Parser:
         # Binary comparisons
         tok = self.peek()
         op = None
+        already_consumed = False  # Track if operator tokens were consumed in the match block
         match tok.kind:
             case TokenType.EQUALS: op = ast.BooleanOperator.EQUALS
             case TokenType.NOT_EQUALS: op = ast.BooleanOperator.NOT_EQUALS
@@ -435,10 +436,12 @@ class Parser:
                 self.eat() # STARTS
                 self.expect(TokenType.WITH_KW)
                 op = ast.BooleanOperator.STARTS_WITH
+                already_consumed = True
             case TokenType.ENDS:
                 self.eat() # ENDS
                 self.expect(TokenType.WITH_KW)
                 op = ast.BooleanOperator.ENDS_WITH
+                already_consumed = True
             case TokenType.CONTAINS:
                 op = ast.BooleanOperator.CONTAINS
             case TokenType.IN:
@@ -452,7 +455,8 @@ class Parser:
                 return ast.BooleanExpression(ast.BooleanOperator.IS_NULL, [left])
         
         if op:
-            self.eat()
+            if not already_consumed:
+                self.eat()
             right = self.parse_primary_expression()
             return ast.BooleanExpression(op, [left, right])
             

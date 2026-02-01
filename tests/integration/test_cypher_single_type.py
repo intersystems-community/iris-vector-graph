@@ -7,13 +7,14 @@ def test_single_relationship_type(execute_cypher):
     result = execute_cypher(query)
     
     assert len(result["rows"]) > 0
-    assert "t" in result["columns"]
-    assert "a" in result["columns"]
+    # Nodes expand to {var}_id, {var}_labels, {var}_props
+    assert "t_id" in result["columns"]
+    assert "a_id" in result["columns"]
     
-    # Check that rows contain node IDs
+    # Check that rows contain node IDs (t_id is first column, a_id is 4th column)
     for row in result["rows"]:
         assert row[0].startswith("TXN:")
-        assert row[1].startswith("ACCOUNT:")
+        assert row[3].startswith("ACCOUNT:")  # a_id is at index 3 (after t_id, t_labels, t_props)
 
 def test_relationship_with_variable(execute_cypher):
     """Test MATCH (a)-[r:TYPE]->(b)"""
@@ -23,8 +24,7 @@ def test_relationship_with_variable(execute_cypher):
     assert len(result["rows"]) > 0
     assert "r" in result["columns"]
     
-    # Check that r is returned as a relationship ID or metadata
-    # In current implementation, it might be the predicate or the edge ID if we return it
+    # Columns: t_id, t_labels, t_props, r, a_id, a_labels, a_props
+    # r is at index 3
     for row in result["rows"]:
-        # row[0]=t, row[1]=r, row[2]=a
-        assert row[1] == "FROM_ACCOUNT" # Currently translator maps r to edge.p in some cases or we need to fix it
+        assert row[3] == "FROM_ACCOUNT"  # r maps to edge.p (the relationship type)
