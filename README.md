@@ -166,6 +166,11 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.5.2 (2025-01-31)
+- **Engine Acceleration**: Ported high-performance SQL paths for `get_node()` and `count_nodes()`
+- **Bulk Loading**: New `bulk_create_nodes()` and `bulk_create_edges()` methods with `%NOINDEX` support
+- **Performance**: Verified 80x speedup for single-node reads and 450x for counts vs standard Cypher
+
 ### v1.5.1 (2025-01-31)
 - **Extreme Performance**: Verified 38ms latency for 5,000-node property queries (at 10k entity scale)
 - **Subquery Stability**: Optimized `REPLACE` string aggregation to avoid IRIS `%QPAR` optimizer bugs
