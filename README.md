@@ -166,6 +166,10 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.1 (2025-01-31)
+- **Embedding API**: Added `get_embedding()`, `get_embeddings()`, `delete_embedding()` methods
+- **Schema Prefix in Engine**: All engine SQL now uses configurable schema prefix
+
 ### v1.4.0 (2025-01-31)
 - **Schema Prefix Support**: `set_schema_prefix('Graph_KG')` for qualified table names
 - **Pattern Operators Fixed**: `CONTAINS`, `STARTS WITH`, `ENDS WITH` now work correctly

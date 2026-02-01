@@ -13,7 +13,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import logging
 
 from iris_vector_graph.cypher.parser import parse_query
-from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.cypher.translator import translate_to_sql, _table
 from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ class IRISGraphEngine:
 
     def _assert_node_exists(self, node_id: str) -> None:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", [node_id])
+        cursor.execute(f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?", [node_id])
         result = cursor.fetchone()
         if not result or result[0] == 0:
             raise ValueError(f"Node does not exist: {node_id}")
@@ -153,9 +153,9 @@ class IRISGraphEngine:
         emb_str = ",".join(str(x) for x in embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
-        cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", [node_id])
+        cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
         cursor.execute(
-            "INSERT INTO kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
             [node_id, emb_str, meta_json],
         )
         self.conn.commit()
@@ -181,9 +181,9 @@ class IRISGraphEngine:
                 emb_str = ",".join(str(x) for x in embedding)
                 meta_json = json.dumps(metadata) if metadata else None
 
-                cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", [node_id])
+                cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
                 cursor.execute(
-                    "INSERT INTO kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
                     [node_id, emb_str, meta_json],
                 )
             cursor.execute("COMMIT")
@@ -191,6 +191,83 @@ class IRISGraphEngine:
         except Exception as e:
             cursor.execute("ROLLBACK")
             raise e
+
+    def get_embedding(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve embedding for a node.
+        
+        Args:
+            node_id: The node ID to get embedding for
+            
+        Returns:
+            Dict with 'id', 'embedding' (as list of floats), and 'metadata' (if present)
+            None if node has no embedding
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"SELECT id, emb, metadata FROM {_table('kg_NodeEmbeddings')} WHERE id = ?",
+            [node_id]
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        node_id, emb_csv, metadata_json = row
+        embedding = [float(x) for x in emb_csv.split(',')] if emb_csv else []
+        metadata = json.loads(metadata_json) if metadata_json else None
+        
+        result = {'id': node_id, 'embedding': embedding}
+        if metadata:
+            result['metadata'] = metadata
+        return result
+
+    def get_embeddings(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Retrieve embeddings for multiple nodes.
+        
+        Args:
+            node_ids: List of node IDs
+            
+        Returns:
+            List of dicts with 'id', 'embedding', and 'metadata' for nodes that have embeddings
+        """
+        if not node_ids:
+            return []
+        
+        cursor = self.conn.cursor()
+        placeholders = ','.join(['?'] * len(node_ids))
+        cursor.execute(
+            f"SELECT id, emb, metadata FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({placeholders})",
+            node_ids
+        )
+        
+        results = []
+        for row in cursor.fetchall():
+            node_id, emb_csv, metadata_json = row
+            embedding = [float(x) for x in emb_csv.split(',')] if emb_csv else []
+            metadata = json.loads(metadata_json) if metadata_json else None
+            
+            result = {'id': node_id, 'embedding': embedding}
+            if metadata:
+                result['metadata'] = metadata
+            results.append(result)
+        
+        return results
+
+    def delete_embedding(self, node_id: str) -> bool:
+        """
+        Delete embedding for a node.
+        
+        Args:
+            node_id: The node ID
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def _validate_k(self, k: Any) -> int:
         """
@@ -252,18 +329,20 @@ class IRISGraphEngine:
             query_array = np.array(json.loads(query_vector))
 
             # Get embeddings with optional label filter (optimized query)
+            emb_table = _table('kg_NodeEmbeddings')
+            labels_table = _table('rdf_labels')
             if label_filter is None:
-                sql = """
+                sql = f"""
                     SELECT n.id, n.emb
-                    FROM kg_NodeEmbeddings n
+                    FROM {emb_table} n
                     WHERE n.emb IS NOT NULL
                 """
                 cursor.execute(sql)
             else:
-                sql = """
+                sql = f"""
                     SELECT n.id, n.emb
-                    FROM kg_NodeEmbeddings n
-                    LEFT JOIN rdf_labels L ON L.s = n.id
+                    FROM {emb_table} n
+                    LEFT JOIN {labels_table} L ON L.s = n.id
                     WHERE n.emb IS NOT NULL
                       AND L.label = ?
                 """
