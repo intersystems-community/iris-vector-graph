@@ -166,6 +166,11 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.5 (2025-01-31)
+- **Large Value Support**: `rdf_props.val` changed from VARCHAR(4000) to LONGVARCHAR (up to 2GB)
+- **JSON Documents**: Store JSON documents and large text in node properties
+- **upgrade_val_column()**: Migrate existing databases to LONGVARCHAR
+
 ### v1.4.4 (2025-01-31)
 - **Bulk Loading Support**: `%NOINDEX` INSERTs, `disable_indexes()`, `rebuild_indexes()`
 - **Fast Ingest**: Skip index maintenance during bulk loads, rebuild after

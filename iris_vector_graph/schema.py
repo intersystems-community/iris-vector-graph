@@ -30,7 +30,7 @@ CREATE TABLE Graph_KG.rdf_labels(
 CREATE TABLE Graph_KG.rdf_props(
   s      VARCHAR(256) NOT NULL,
   key    VARCHAR(128) NOT NULL,
-  val    VARCHAR(4000),
+  val    LONGVARCHAR,
   CONSTRAINT pk_props PRIMARY KEY (s, key)
 );
 
@@ -204,6 +204,26 @@ CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
         if table not in templates:
             raise ValueError(f"Unknown table: {table}. Valid: {list(templates.keys())}")
         return templates[table]
+
+    @staticmethod
+    def upgrade_val_column(cursor) -> bool:
+        """
+        Upgrade rdf_props.val from VARCHAR(4000) to LONGVARCHAR for JSON document support.
+        
+        Safe to run on existing databases - will alter column type if needed.
+        LONGVARCHAR supports values up to 2GB.
+        
+        Returns:
+            True if upgraded or already LONGVARCHAR, False on error
+        """
+        try:
+            cursor.execute("ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val LONGVARCHAR")
+            return True
+        except Exception as e:
+            # Already LONGVARCHAR or other issue
+            if "already" in str(e).lower() or "same" in str(e).lower():
+                return True
+            return False
 
     @staticmethod
     def validate_schema(cursor) -> Dict[str, bool]:
