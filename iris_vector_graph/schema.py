@@ -141,6 +141,71 @@ CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
         return status
 
     @staticmethod
+    def disable_indexes(cursor) -> Dict[str, bool]:
+        """
+        Disable indexes for bulk loading. Re-enable with rebuild_indexes() after loading.
+        
+        This dramatically speeds up bulk INSERT operations by skipping index maintenance.
+        
+        Returns:
+            Dict mapping index name to success status
+        """
+        # IRIS: ALTER INDEX ... DISABLE or DROP INDEX
+        indexes = [
+            "idx_labels_s", "idx_labels_label", "idx_labels_s_label",
+            "idx_props_s", "idx_props_key", "idx_props_key_val", "idx_props_s_key",
+            "idx_edges_s", "idx_edges_oid", "idx_edges_p", "idx_edges_s_p", "idx_edges_p_oid",
+        ]
+        
+        status = {}
+        for name in indexes:
+            try:
+                cursor.execute(f"DROP INDEX {name}")
+                status[name] = True
+            except Exception as e:
+                if "does not exist" in str(e).lower():
+                    status[name] = True  # Already gone
+                else:
+                    status[name] = False
+        return status
+
+    @staticmethod
+    def rebuild_indexes(cursor) -> Dict[str, bool]:
+        """
+        Rebuild all indexes after bulk loading. Call this after disable_indexes() + bulk INSERT.
+        
+        Returns:
+            Dict mapping index name to success status
+        """
+        return GraphSchema.ensure_indexes(cursor)
+
+    @staticmethod
+    def get_bulk_insert_sql(table: str) -> str:
+        """
+        Get INSERT statement with %NOINDEX hint for bulk loading.
+        
+        Args:
+            table: Table name ('nodes', 'rdf_labels', 'rdf_props', 'rdf_edges', 'kg_NodeEmbeddings')
+            
+        Returns:
+            INSERT SQL with %NOINDEX for fast bulk loading
+            
+        Example:
+            sql = GraphSchema.get_bulk_insert_sql('rdf_labels')
+            cursor.execute(sql, [node_id, label])
+        """
+        templates = {
+            'nodes': "INSERT %NOINDEX INTO Graph_KG.nodes (node_id) VALUES (?)",
+            'rdf_labels': "INSERT %NOINDEX INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
+            'rdf_props': "INSERT %NOINDEX INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
+            'rdf_edges': "INSERT %NOINDEX INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+            'kg_NodeEmbeddings': "INSERT %NOINDEX INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+        }
+        if table not in templates:
+            raise ValueError(f"Unknown table: {table}. Valid: {list(templates.keys())}")
+        return templates[table]
+
+    @staticmethod
     def validate_schema(cursor) -> Dict[str, bool]:
         """
         Validates that required schema tables exist
