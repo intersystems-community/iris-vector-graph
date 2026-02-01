@@ -52,7 +52,10 @@ class IRISGraphEngine:
                 rows = []
                 for i, stmt in enumerate(stmts):
                     p = all_params[i] if i < len(all_params) else []
-                    cursor.execute(stmt, p)
+                    if p:
+                        cursor.execute(stmt, p)
+                    else:
+                        cursor.execute(stmt)
                     if cursor.description:
                         rows = cursor.fetchall()
                 cursor.execute("COMMIT")
@@ -65,7 +68,11 @@ class IRISGraphEngine:
         else:
             sql_str = sql_query.sql if isinstance(sql_query.sql, str) else "\n".join(sql_query.sql)
             p = sql_query.parameters[0] if sql_query.parameters else []
-            cursor.execute(sql_str, p)
+            
+            if p:
+                cursor.execute(sql_str, p)
+            else:
+                cursor.execute(sql_str)
 
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()

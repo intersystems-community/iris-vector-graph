@@ -46,9 +46,14 @@ def labels_subquery(node_expr: str) -> str:
 
 
 def properties_subquery(node_expr: str) -> str:
-    # Use native JSON_OBJECT for much faster execution and automatic escaping
+    # Stable string-based JSON aggregation.
+    # We avoid native JSON_OBJECT in subqueries as it triggers an IRIS optimizer bug 
+    # (looking for %QPAR in the local schema) in some versions (e.g. 2025.1).
+    # We use minimal REPLACE calls for performance while ensuring valid JSON escaping.
     return (
-        f"(SELECT JSON_ARRAYAGG(JSON_OBJECT('key':\"key\", 'value':val)) "
+        "(SELECT JSON_ARRAYAGG("
+        "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
+        "'\",\"value\":\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"}') "
         f"FROM {_table('rdf_props')} WHERE s = {node_expr})"
     )
 
