@@ -166,6 +166,10 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.8 (2025-01-31)
+- **Fix SUBSCRIPT error**: Removed `idx_props_key_val` which caused errors with large values
+- **Improved Performance**: Maintained composite indexes that don't include large VARCHAR columns
+
 ### v1.4.7 (2025-01-31)
 - **Revert to VARCHAR(64000)**: LONGVARCHAR broke REPLACE; VARCHAR(64000) keeps compatibility
 - **Large Values**: 64KB property values, REPLACE works, no CAST needed

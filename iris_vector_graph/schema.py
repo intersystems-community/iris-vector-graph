@@ -75,7 +75,6 @@ CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id);
 CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p);
 
 -- Composite indexes for common query patterns
-CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val);
 CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key);
 CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
 CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
@@ -95,11 +94,12 @@ CREATE INDEX IF NOT EXISTS idx_edges_s ON Graph_KG.rdf_edges (s);
 CREATE INDEX IF NOT EXISTS idx_edges_oid ON Graph_KG.rdf_edges (o_id);
 CREATE INDEX IF NOT EXISTS idx_edges_p ON Graph_KG.rdf_edges (p);
 -- Composite indexes for common patterns
-CREATE INDEX IF NOT EXISTS idx_props_key_val ON Graph_KG.rdf_props (key, val);
 CREATE INDEX IF NOT EXISTS idx_props_s_key ON Graph_KG.rdf_props (s, key);
 CREATE INDEX IF NOT EXISTS idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
 CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
 CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
+-- Drop problematic indexes
+DROP INDEX IF EXISTS idx_props_key_val;
 """
 
     @staticmethod
@@ -120,11 +120,12 @@ CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
             ("idx_edges_oid", "CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)"),
             ("idx_edges_p", "CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p)"),
             # Composite indexes for common patterns
-            ("idx_props_key_val", "CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val)"),
             ("idx_props_s_key", "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)"),
             ("idx_edges_s_p", "CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p)"),
             ("idx_edges_p_oid", "CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id)"),
             ("idx_labels_s_label", "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)"),
+            # Drop problematic indexes
+            ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
         
         status = {}
@@ -153,7 +154,7 @@ CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
         # IRIS: ALTER INDEX ... DISABLE or DROP INDEX
         indexes = [
             "idx_labels_s", "idx_labels_label", "idx_labels_s_label",
-            "idx_props_s", "idx_props_key", "idx_props_key_val", "idx_props_s_key",
+            "idx_props_s", "idx_props_key", "idx_props_s_key",
             "idx_edges_s", "idx_edges_oid", "idx_edges_p", "idx_edges_s_p", "idx_edges_p_oid",
         ]
         
