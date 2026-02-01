@@ -166,6 +166,11 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.5.0 (2025-01-31)
+- **Performance Breakthrough**: Replaced manual JSON construction with native `JSON_OBJECT` (leveraging optimized C-code Dynamic Object implementations)
+- **Columnar Storage**: Core tables (`rdf_labels`, `rdf_props`, `rdf_edges`) now use `STORAGELAYOUT = COLUMNAR` for massive speedups in large-scale scans
+- **Reserved Word Safety**: Properly quoted `"key"` in all generated SQL to avoid conflicts with IRIS reserved words
+
 ### v1.4.9 (2025-01-31)
 - **Exact Collation**: Added `%EXACT` to VARCHAR columns for case-sensitive matching
 - **Performance**: Prevents default `UPPER` collation behavior in IRIS 2024.2+

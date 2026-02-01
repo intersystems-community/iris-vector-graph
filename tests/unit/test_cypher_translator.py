@@ -53,7 +53,7 @@ def test_translate_numeric_comparison_cast():
 
     assert "CAST" in sql
     assert "rdf_props" in sql
-    assert "p1.key = ?" in sql
+    assert 'p1."key" = ?' in sql
 
 
 def test_translate_type_function():
