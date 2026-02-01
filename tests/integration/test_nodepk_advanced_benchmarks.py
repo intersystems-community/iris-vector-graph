@@ -173,6 +173,7 @@ def iris_connection_with_vectors():
     conn.close()
 
 
+@pytest.mark.skip(reason="Advanced benchmarks exhaust IRIS community license connections")
 @pytest.mark.performance
 @pytest.mark.requires_database
 class TestAdvancedQueryPatterns:
