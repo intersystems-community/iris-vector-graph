@@ -164,4 +164,15 @@ result = pipeline.query(
 
 ---
 
+## Changelog
+
+### v1.4.0 (2025-01-31)
+- **Schema Prefix Support**: `set_schema_prefix('Graph_KG')` for qualified table names
+- **Pattern Operators Fixed**: `CONTAINS`, `STARTS WITH`, `ENDS WITH` now work correctly
+- **IRIS Compatibility**: Removed recursive CTEs and `NULLS LAST` (unsupported by IRIS)
+- **ORDER BY Fix**: Properties in ORDER BY now properly join rdf_props table
+- **type(r) Verified**: Relationship type function works in RETURN/WHERE clauses
+
+---
+
 **Author: Thomas Dyar** (thomas.dyar@intersystems.com)

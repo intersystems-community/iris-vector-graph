@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+*.log
+.env*
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+coverage/
+.DS_Store
+.vscode/
+.idea/
