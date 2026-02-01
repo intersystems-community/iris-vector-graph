@@ -166,13 +166,13 @@ result = pipeline.query(
 
 ## Changelog
 
-### v1.4.6 (2025-01-31)
-- **Fix LONGVARCHAR REPLACE**: CAST val to VARCHAR for JSON aggregation (IRIS stream limitation)
+### v1.4.7 (2025-01-31)
+- **Revert to VARCHAR(64000)**: LONGVARCHAR broke REPLACE; VARCHAR(64000) keeps compatibility
+- **Large Values**: 64KB property values, REPLACE works, no CAST needed
 
-### v1.4.5 (2025-01-31)
-- **Large Value Support**: `rdf_props.val` changed from VARCHAR(4000) to LONGVARCHAR (up to 2GB)
-- **JSON Documents**: Store JSON documents and large text in node properties
-- **upgrade_val_column()**: Migrate existing databases to LONGVARCHAR
+### ~~v1.4.5/1.4.6~~ (deprecated - use 1.4.7)
+- v1.4.5 used LONGVARCHAR which broke REPLACE function
+- v1.4.6 used CAST which broke on old schemas
 
 ### v1.4.4 (2025-01-31)
 - **Bulk Loading Support**: `%NOINDEX` INSERTs, `disable_indexes()`, `rebuild_indexes()`

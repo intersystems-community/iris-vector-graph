@@ -30,7 +30,7 @@ CREATE TABLE Graph_KG.rdf_labels(
 CREATE TABLE Graph_KG.rdf_props(
   s      VARCHAR(256) NOT NULL,
   key    VARCHAR(128) NOT NULL,
-  val    LONGVARCHAR,
+  val    VARCHAR(64000),
   CONSTRAINT pk_props PRIMARY KEY (s, key)
 );
 
@@ -208,19 +208,19 @@ CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
     @staticmethod
     def upgrade_val_column(cursor) -> bool:
         """
-        Upgrade rdf_props.val from VARCHAR(4000) to LONGVARCHAR for JSON document support.
+        Upgrade rdf_props.val from VARCHAR(4000) to VARCHAR(64000) for large value support.
         
         Safe to run on existing databases - will alter column type if needed.
-        LONGVARCHAR supports values up to 2GB.
+        VARCHAR(64000) supports values up to 64KB while keeping REPLACE function compatibility.
         
         Returns:
-            True if upgraded or already LONGVARCHAR, False on error
+            True if upgraded or already large enough, False on error
         """
         try:
-            cursor.execute("ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val LONGVARCHAR")
+            cursor.execute("ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)")
             return True
         except Exception as e:
-            # Already LONGVARCHAR or other issue
+            # Already correct size or other issue
             if "already" in str(e).lower() or "same" in str(e).lower():
                 return True
             return False
