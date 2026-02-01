@@ -64,31 +64,42 @@ CREATE TABLE Graph_KG.docs(
   text  VARCHAR(4000)
 );
 
--- Indexes for graph traversal performance
+-- Indexes for graph traversal performance (based on TrustGraph patterns)
+-- Single-column indexes for basic lookups
 CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s);
 CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label);
 CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s);
 CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key);
-CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val);
 CREATE INDEX idx_edges_s ON Graph_KG.rdf_edges (s);
 CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id);
 CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p);
-CREATE INDEX idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id);
+
+-- Composite indexes for common query patterns
+CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val);
+CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key);
+CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
+CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
+CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
 """
 
     @staticmethod
     def get_indexes_sql() -> str:
         """Get SQL to create performance indexes. Safe to run on existing databases."""
         return """
+-- Single-column indexes
 CREATE INDEX IF NOT EXISTS idx_labels_s ON Graph_KG.rdf_labels (s);
 CREATE INDEX IF NOT EXISTS idx_labels_label ON Graph_KG.rdf_labels (label);
 CREATE INDEX IF NOT EXISTS idx_props_s ON Graph_KG.rdf_props (s);
 CREATE INDEX IF NOT EXISTS idx_props_key ON Graph_KG.rdf_props (key);
-CREATE INDEX IF NOT EXISTS idx_props_key_val ON Graph_KG.rdf_props (key, val);
 CREATE INDEX IF NOT EXISTS idx_edges_s ON Graph_KG.rdf_edges (s);
 CREATE INDEX IF NOT EXISTS idx_edges_oid ON Graph_KG.rdf_edges (o_id);
 CREATE INDEX IF NOT EXISTS idx_edges_p ON Graph_KG.rdf_edges (p);
-CREATE INDEX IF NOT EXISTS idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id);
+-- Composite indexes for common patterns
+CREATE INDEX IF NOT EXISTS idx_props_key_val ON Graph_KG.rdf_props (key, val);
+CREATE INDEX IF NOT EXISTS idx_props_s_key ON Graph_KG.rdf_props (s, key);
+CREATE INDEX IF NOT EXISTS idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
+CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
+CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
 """
 
     @staticmethod
@@ -100,15 +111,20 @@ CREATE INDEX IF NOT EXISTS idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id);
             Dict mapping index name to success status
         """
         indexes = [
+            # Single-column indexes
             ("idx_labels_s", "CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s)"),
             ("idx_labels_label", "CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label)"),
             ("idx_props_s", "CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s)"),
             ("idx_props_key", "CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key)"),
-            ("idx_props_key_val", "CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val)"),
             ("idx_edges_s", "CREATE INDEX idx_edges_s ON Graph_KG.rdf_edges (s)"),
             ("idx_edges_oid", "CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)"),
             ("idx_edges_p", "CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p)"),
-            ("idx_emb_id", "CREATE INDEX idx_emb_id ON Graph_KG.kg_NodeEmbeddings (id)"),
+            # Composite indexes for common patterns
+            ("idx_props_key_val", "CREATE INDEX idx_props_key_val ON Graph_KG.rdf_props (key, val)"),
+            ("idx_props_s_key", "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)"),
+            ("idx_edges_s_p", "CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p)"),
+            ("idx_edges_p_oid", "CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id)"),
+            ("idx_labels_s_label", "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)"),
         ]
         
         status = {}
