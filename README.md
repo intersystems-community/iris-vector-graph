@@ -166,6 +166,10 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.4 (2025-01-31)
+- **Bulk Loading Support**: `%NOINDEX` INSERTs, `disable_indexes()`, `rebuild_indexes()`
+- **Fast Ingest**: Skip index maintenance during bulk loads, rebuild after
+
 ### v1.4.3 (2025-01-31)
 - **Composite Indexes**: Added (s,key), (s,p), (p,o_id), (s,label) based on TrustGraph patterns
 - **12 indexes total**: Optimized for label filtering, property lookups, edge traversal
