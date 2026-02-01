@@ -166,6 +166,11 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.4.2 (2025-01-31)
+- **Performance Indexes**: Added indexes on rdf_labels, rdf_props, rdf_edges for fast graph traversal
+- **ensure_indexes()**: New method to add indexes to existing databases
+- **Composite Index**: Added (key, val) index on rdf_props for property value lookups
+
 ### v1.4.1 (2025-01-31)
 - **Embedding API**: Added `get_embedding()`, `get_embeddings()`, `delete_embedding()` methods
 - **Schema Prefix in Engine**: All engine SQL now uses configurable schema prefix
