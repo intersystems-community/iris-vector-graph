@@ -6,7 +6,7 @@ Parameter SUPPORTSSHARDING = 1;
 /// Insert a relationship into the ^KG global
 ClassMethod InsertIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "") As %Status [ ServerOnly = 1 ]
 {
-    Set weight = ..ExtractWeight(qualifiers)
+    Set weight = ##class(Graph.KG.GraphIndex).ExtractWeight(qualifiers)
     
     // Maintain adjacency lists with weight
     Set ^KG("out", s, p, o) = weight
@@ -48,15 +48,16 @@ ClassMethod DeleteIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary
 /// Extract weight from qualifiers JSON
 ClassMethod ExtractWeight(qualifiers As %String) As %Double
 {
-    If qualifiers = "" Quit 1.0
+    Set result = 1.0
+    If qualifiers = "" Return result
     Try {
         Set obj = ##class(%DynamicObject).%FromJSON(qualifiers)
         Set weight = obj.weight
-        If weight = "" Quit 1.0
-        Quit weight
-    } Catch {
-        Quit 1.0
+        If weight '= "" Set result = weight
+    } Catch ex {
+        // Ignore parse errors, use default
     }
+    Return result
 }
 
 /// Purge the entire ^KG global

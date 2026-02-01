@@ -26,7 +26,13 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Try iris-devtester first, fall back to direct iris module
+# Try iris-devtester first, fall back to direct iris module or irisnative
+try:
+    import irisnative
+    IRISNATIVE_AVAILABLE = True
+except ImportError:
+    IRISNATIVE_AVAILABLE = False
+
 try:
     from iris_devtester.utils.dbapi_compat import get_connection as devtester_connect
     DEVTESTER_AVAILABLE = True
@@ -35,7 +41,8 @@ except ImportError:
 
 try:
     import iris
-    IRIS_AVAILABLE = True
+    # Check if this is the DB-API iris module or shadowing kernel module
+    IRIS_AVAILABLE = hasattr(iris, 'connect')
 except ImportError:
     IRIS_AVAILABLE = False
 
@@ -132,16 +139,29 @@ def get_connection():
             "IRIS_USER, and IRIS_PASSWORD defined."
         )
 
-    # Use iris-devtester if available, otherwise direct iris module
+    # Use irisnative if available (most robust against shadowing)
     try:
-        if DEVTESTER_AVAILABLE:
+        if IRISNATIVE_AVAILABLE:
+            conn = irisnative.createConnection(host, port, namespace, username, password)
+        elif DEVTESTER_AVAILABLE:
             conn = devtester_connect(host, port, namespace, username, password)
         elif IRIS_AVAILABLE:
             conn = iris.connect(host, port, namespace, username, password)
         else:
-            raise ImportError("Neither iris-devtester nor iris module available")
+            raise ImportError("Neither irisnative, iris-devtester, nor iris module available")
+        
+        # T013: Ensure Graph_KG schema is used
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SET SCHEMA Graph_KG")
+        except:
+            pass
+            
         return conn
     except Exception as e:
+        if "password" in str(e).lower() and "change" in str(e).lower():
+            raise Exception(f"Failed to connect to IRIS: Password change required for {username}. "
+                          f"Run 'docker exec -it <container> iris session iris -U %SYS \"##class(Security.Users).UnExpirePassword(\\\"{username}\\\")\"'")
         raise Exception(f"Failed to connect to IRIS database at {host}:{port}: {e}")
 
 
