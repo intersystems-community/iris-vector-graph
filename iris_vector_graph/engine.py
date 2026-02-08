@@ -34,22 +34,83 @@ class IRISGraphEngine:
     # SQL function name - MUST NOT contain '_JSON' or 'JSON_' due to IRIS naming bug
     _PPR_SQL_FUNCTION_NAME = "kg_PPR"
 
-    def __init__(self, connection):
-        """Initialize with IRIS database connection"""
+    def __init__(self, connection, embedding_dimension: Optional[int] = None):
+        """
+        Initialize with IRIS database connection.
+        
+        Args:
+            connection: IRIS database connection object
+            embedding_dimension: Optional fixed dimension for vector embeddings.
+                                If not provided, it will be auto-detected from the schema.
+        """
         self.conn = connection
+        self.embedding_dimension = embedding_dimension
 
-    def execute_cypher(self, query: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        ast = parse_query(query)
-        sql_query = translate_to_sql(ast, params=params)
+    def _get_embedding_dimension(self) -> int:
+        """
+        Get the vector embedding dimension, either from initialization or auto-detection.
+        """
+        if self.embedding_dimension is not None:
+            return self.embedding_dimension
 
         cursor = self.conn.cursor()
+        dim = GraphSchema.get_embedding_dimension(cursor)
+        if dim:
+            self.embedding_dimension = int(dim)
+            return self.embedding_dimension
 
+        try:
+            cursor.execute(
+                """
+                SELECT DATA_TYPE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'Graph_KG'
+                  AND TABLE_NAME = 'kg_NodeEmbeddings'
+                  AND COLUMN_NAME = 'emb'
+                """
+            )
+            result = cursor.fetchone()
+            if result and result[0]:
+                data_type = str(result[0])
+                digits = "".join(ch for ch in data_type if ch.isdigit())
+                if digits:
+                    self.embedding_dimension = int(digits)
+                    return self.embedding_dimension
+        except Exception:
+            pass
+
+        raise ValueError("Embedding dimension could not be determined. Please provide it during IRISGraphEngine initialization.")
+
+    def _assert_node_exists(self, node_id: str) -> None:
+        cursor = self.conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?", [node_id])
+        result = cursor.fetchone()
+        if not result or result[0] == 0:
+            raise ValueError(f"Node does not exist: {node_id}")
+
+    def execute_cypher(self, cypher_query: str, parameters: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Execute a Cypher query by translating it to IRIS SQL.
+        
+        Args:
+            cypher_query: Cypher query string
+            parameters: Optional query parameters
+            
+        Returns:
+            Dict containing 'columns', 'rows', and 'metadata'
+        """
+        parsed = parse_query(cypher_query)
+        sql_query = translate_to_sql(parsed, parameters)
+        
+        cursor = self.conn.cursor()
+        metadata = sql_query.query_metadata
+        
         if sql_query.is_transactional:
+            stmts = sql_query.sql
+            all_params = sql_query.parameters
+            
             cursor.execute("START TRANSACTION")
             try:
-                stmts = sql_query.sql if isinstance(sql_query.sql, list) else [sql_query.sql]
-                all_params = sql_query.parameters
-                rows = []
                 for i, stmt in enumerate(stmts):
                     p = all_params[i] if i < len(all_params) else []
                     if p:
@@ -58,10 +119,16 @@ class IRISGraphEngine:
                         cursor.execute(stmt)
                     if cursor.description:
                         rows = cursor.fetchall()
+                
                 cursor.execute("COMMIT")
-
                 columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                return {"columns": columns, "rows": rows}
+                return {
+                    "columns": columns,
+                    "rows": rows,
+                    "sql": stmts[-1],
+                    "params": all_params[-1] if all_params else [],
+                    "metadata": metadata
+                }
             except Exception as e:
                 cursor.execute("ROLLBACK")
                 raise e
@@ -82,6 +149,7 @@ class IRISGraphEngine:
                 "rows": rows,
                 "sql": sql_str,
                 "params": p,
+                "metadata": metadata
             }
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
@@ -332,46 +400,19 @@ class IRISGraphEngine:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
 
-
-    def _get_embedding_dimension(self) -> int:
-        cursor = self.conn.cursor()
-        dim = GraphSchema.get_embedding_dimension(cursor)
-        if dim:
-            return int(dim)
-
-        try:
-            cursor.execute(
-                """
-                SELECT DATA_TYPE
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = 'Graph_KG'
-                  AND TABLE_NAME = 'kg_NodeEmbeddings'
-                  AND COLUMN_NAME = 'emb'
-                """
-            )
-            result = cursor.fetchone()
-            if result and result[0]:
-                data_type = str(result[0])
-                digits = "".join(ch for ch in data_type if ch.isdigit())
-                if digits:
-                    return int(digits)
-        except Exception:
-            pass
-
-        raise ValueError("Embedding dimension could not be determined")
-
-    def _assert_node_exists(self, node_id: str) -> None:
-        cursor = self.conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?", [node_id])
-        result = cursor.fetchone()
-        if not result or result[0] == 0:
-            raise ValueError(f"Node does not exist: {node_id}")
-
     def store_embedding(
         self, node_id: str, embedding: List[float], metadata: Optional[Dict[str, Any]] = None
     ) -> bool:
         self._assert_node_exists(node_id)
-        dim = self._get_embedding_dimension()
+        
+        try:
+            dim = self._get_embedding_dimension()
+        except ValueError:
+            # Infer dimension from input if auto-detection fails
+            dim = len(embedding)
+            self.embedding_dimension = dim
+            logger.warning(f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input.")
+
         if len(embedding) != dim:
             raise ValueError(f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}")
 
@@ -388,7 +429,17 @@ class IRISGraphEngine:
         return True
 
     def store_embeddings(self, items: List[Dict[str, Any]]) -> bool:
-        dim = self._get_embedding_dimension()
+        if not items:
+            return True
+
+        try:
+            dim = self._get_embedding_dimension()
+        except ValueError:
+            # Infer dimension from first item if auto-detection fails
+            dim = len(items[0]["embedding"])
+            self.embedding_dimension = dim
+            logger.warning(f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input.")
+
         for item in items:
             node_id = item["node_id"]
             embedding = item["embedding"]
@@ -536,13 +587,6 @@ class IRISGraphEngine:
             logger.warning(f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic.")
             # Fallback to Python CSV implementation if procedure not available
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
-
-    def _kg_KNN_VEC_hnsw_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
-        """
-        HNSW-optimized vector search using native IRIS VECTOR functions
-        Deprecated: Use kg_KNN_VEC which calls the server-side procedure.
-        """
-        return self.kg_KNN_VEC(query_vector, k, label_filter)
 
     def _kg_KNN_VEC_python_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """

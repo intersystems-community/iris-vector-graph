@@ -166,6 +166,12 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.5.3 (2025-01-31)
+- **Robust Embeddings**: Fixed embedding dimension detection for IRIS Community 2025.1
+- **API Improvements**: Added `embedding_dimension` param to `IRISGraphEngine` for manual override
+- **Auto-Inference**: Automatically infers dimension from input if detection fails
+- **Code Quality**: Major cleanup of `engine.py` to remove legacy duplicates
+
 ### v1.5.2 (2025-01-31)
 - **Engine Acceleration**: Ported high-performance SQL paths for `get_node()` and `count_nodes()`
 - **Bulk Loading**: New `bulk_create_nodes()` and `bulk_create_edges()` methods with `%NOINDEX` support
