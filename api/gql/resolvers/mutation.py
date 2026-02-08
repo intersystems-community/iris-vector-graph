@@ -49,46 +49,27 @@ class Mutation:
             raise Exception(f"Protein with ID {input.id} already exists")
 
         try:
-            # Create node
+            # All operations in a single transaction
+            # Phase 1: Core Node data
             cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", (str(input.id),))
-
-            # Add Protein label
-            cursor.execute(
-                "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
-                (str(input.id), "Protein")
-            )
-
-            # Add required name property
-            cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+            cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", (str(input.id), "Protein"))
+            
+            # Phase 2: Properties
+            prop_data = [
                 (str(input.id), "name", input.name)
-            )
-
-            # Add optional properties
+            ]
             if input.function:
-                cursor.execute(
-                    "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                    (str(input.id), "function", input.function)
-                )
-
+                prop_data.append((str(input.id), "function", input.function))
             if input.organism:
-                cursor.execute(
-                    "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                    (str(input.id), "organism", input.organism)
-                )
+                prop_data.append((str(input.id), "organism", input.organism))
+            
+            cursor.executemany("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)", prop_data)
 
-            # Commit node and properties before inserting embedding (FK validation)
-            db_connection.commit()
-
-            # Add embedding if provided
+            # Phase 3: Embedding if provided
             if input.embedding and len(input.embedding) > 0:
-                # Validate embedding dimension (should be 768 for OpenAI text-embedding-ada-002)
                 if len(input.embedding) != 768:
                     raise Exception(f"Embedding must be 768-dimensional, got {len(input.embedding)}")
-
-                # Convert to JSON array string for TO_VECTOR()
                 emb_str = "[" + ",".join([str(x) for x in input.embedding]) + "]"
-
                 cursor.execute(
                     "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
                     (str(input.id), emb_str)
@@ -144,58 +125,25 @@ class Mutation:
             raise Exception(f"Protein with ID {id} not found")
 
         try:
-            # Update name if provided
+            # Batch all property updates in one transaction
+            updates = []
             if input.name is not None:
-                # Check if property exists
-                cursor.execute(
-                    "SELECT COUNT(*) FROM rdf_props WHERE s = ? AND key = ?",
-                    (str(id), "name")
-                )
-                if cursor.fetchone()[0] > 0:
-                    # Update existing
-                    cursor.execute(
-                        "UPDATE rdf_props SET val = ? WHERE s = ? AND key = ?",
-                        (input.name, str(id), "name")
-                    )
-                else:
-                    # Insert new
-                    cursor.execute(
-                        "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                        (str(id), "name", input.name)
-                    )
-
-            # Update function if provided
+                updates.append(("name", input.name))
             if input.function is not None:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM rdf_props WHERE s = ? AND key = ?",
-                    (str(id), "function")
-                )
-                if cursor.fetchone()[0] > 0:
-                    cursor.execute(
-                        "UPDATE rdf_props SET val = ? WHERE s = ? AND key = ?",
-                        (input.function, str(id), "function")
-                    )
-                else:
-                    cursor.execute(
-                        "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                        (str(id), "function", input.function)
-                    )
-
-            # Update confidence if provided
+                updates.append(("function", input.function))
             if input.confidence is not None:
+                updates.append(("confidence", str(input.confidence)))
+
+            for key, val in updates:
+                # Use UPSERT pattern: Try update, if 0 rows, then insert
                 cursor.execute(
-                    "SELECT COUNT(*) FROM rdf_props WHERE s = ? AND key = ?",
-                    (str(id), "confidence")
+                    "UPDATE rdf_props SET val = ? WHERE s = ? AND key = ?",
+                    (val, str(id), key)
                 )
-                if cursor.fetchone()[0] > 0:
-                    cursor.execute(
-                        "UPDATE rdf_props SET val = ? WHERE s = ? AND key = ?",
-                        (str(input.confidence), str(id), "confidence")
-                    )
-                else:
+                if cursor.rowcount == 0:
                     cursor.execute(
                         "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                        (str(id), "confidence", str(input.confidence))
+                        (str(id), key, val)
                     )
 
             db_connection.commit()
