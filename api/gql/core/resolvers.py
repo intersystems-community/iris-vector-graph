@@ -55,24 +55,35 @@ class CoreQuery:
         if not db_connection:
             return None
 
-        cursor = db_connection.cursor()
+        node_loader = info.context.get("node_loader")
+        if node_loader:
+            node_data = await node_loader.load(str(id))
+            if not node_data:
+                return None
+            
+            labels = node_data.get("labels", [])
+            properties = node_data.get("properties", {})
+            created_at = node_data.get("created_at")
+        else:
+            # Fallback to direct SQL if loader not available
+            cursor = db_connection.cursor()
 
-        # Query nodes table directly
-        cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", (str(id),))
-        if cursor.fetchone()[0] == 0:
-            return None
+            # Query nodes table directly
+            cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", (str(id),))
+            if cursor.fetchone()[0] == 0:
+                return None
 
-        # Load labels
-        cursor.execute("SELECT label FROM rdf_labels WHERE s = ?", (str(id),))
-        labels = [row[0] for row in cursor.fetchall()]
+            # Load labels
+            cursor.execute("SELECT label FROM rdf_labels WHERE s = ?", (str(id),))
+            labels = [row[0] for row in cursor.fetchall()]
 
-        # Load properties
-        cursor.execute("SELECT key, val FROM rdf_props WHERE s = ?", (str(id),))
-        properties = {row[0]: row[1] for row in cursor.fetchall()}
+            # Load properties
+            cursor.execute("SELECT key, val FROM rdf_props WHERE s = ?", (str(id),))
+            properties = {row[0]: row[1] for row in cursor.fetchall()}
 
-        # Load created_at
-        cursor.execute("SELECT created_at FROM nodes WHERE node_id = ?", (str(id),))
-        created_at = cursor.fetchone()[0]
+            # Load created_at
+            cursor.execute("SELECT created_at FROM nodes WHERE node_id = ?", (str(id),))
+            created_at = cursor.fetchone()[0]
 
         # Try to resolve to domain-specific type using domain resolvers
         domain_resolver = info.context.get("domain_resolver")
@@ -176,7 +187,44 @@ class CoreQuery:
         cursor.execute(query, params)
         node_ids = [row[0] for row in cursor.fetchall()]
 
-        # Load each node using node() resolver
+        if not node_ids:
+            return []
+
+        # Load all nodes in batch using node_loader
+        node_loader = info.context.get("node_loader")
+        if node_loader:
+            nodes_data = await node_loader.load_many(node_ids)
+            
+            nodes = []
+            domain_resolver = info.context.get("domain_resolver")
+            
+            for i, data in enumerate(nodes_data):
+                if not data:
+                    continue
+                
+                node_id = node_ids[i]
+                labels = data.get("labels", [])
+                properties = data.get("properties", {})
+                created_at = data.get("created_at")
+                
+                domain_node = None
+                if domain_resolver:
+                    domain_node = await domain_resolver.resolve_node(
+                        info, str(node_id), labels, properties, created_at
+                    )
+                
+                if domain_node:
+                    nodes.append(domain_node)
+                else:
+                    nodes.append(GenericNode(
+                        id=strawberry.ID(str(node_id)),
+                        labels=labels,
+                        properties=properties,
+                        created_at=created_at,
+                    ))
+            return nodes
+
+        # Fallback to individual loading if loader not available
         nodes = []
         for node_id in node_ids:
             node = await self.node(info, strawberry.ID(node_id))

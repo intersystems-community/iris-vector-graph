@@ -20,6 +20,7 @@ from api.gql.core.loaders import (
     EdgeLoader,
     PropertyLoader,
     LabelLoader,
+    GenericNodeLoader,
 )
 
 # Import biomedical domain loaders (example domain)
@@ -177,6 +178,7 @@ async def get_context() -> Dict[str, Any]:
         "edge_loader": EdgeLoader(db_connection),
         "property_loader": PropertyLoader(db_connection),
         "label_loader": LabelLoader(db_connection),
+        "node_loader": GenericNodeLoader(db_connection),
     }
 
     return context

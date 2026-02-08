@@ -162,3 +162,50 @@ class LabelLoader(DataLoader):
 
         # Return in same order as keys
         return [labels_by_node[key] for key in keys]
+
+
+class GenericNodeLoader(DataLoader):
+    """Batch load generic nodes by ID including labels and properties"""
+
+    def __init__(self, db_connection: Any) -> None:
+        self.db = db_connection
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
+        """
+        Batch load nodes for given IDs using efficient batch SQL.
+        Eliminates N+1 queries by fetching all data for multiple nodes in 3 queries.
+        """
+        if not keys:
+            return []
+
+        cursor = self.db.cursor()
+        
+        # 1. Check which nodes exist and get created_at
+        placeholders = ",".join(["?" for _ in keys])
+        query = f"SELECT node_id, created_at FROM nodes WHERE node_id IN ({placeholders})"
+        cursor.execute(query, keys)
+        existing_nodes = {row[0]: row[1] for row in cursor.fetchall()}
+
+        if not existing_nodes:
+            return [None for _ in keys]
+
+        # 2. Batch load properties and labels
+        # We reuse the existing loaders for consistency
+        prop_loader = PropertyLoader(self.db)
+        label_loader = LabelLoader(self.db)
+
+        props_list = await prop_loader.load_many(list(existing_nodes.keys()))
+        labels_list = await label_loader.load_many(list(existing_nodes.keys()))
+
+        # 3. Build result map
+        node_map = {}
+        for i, nid in enumerate(existing_nodes.keys()):
+            node_map[nid] = {
+                "id": nid,
+                "created_at": existing_nodes[nid],
+                "labels": labels_list[i],
+                "properties": props_list[i]
+            }
+
+        return [node_map.get(key) for key in keys]

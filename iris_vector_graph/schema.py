@@ -79,6 +79,12 @@ CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key);
 CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
 CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
 CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
+
+-- Substring indexing on rdf_props.val for fast property lookups
+CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic;
+
+-- Functional index on edge confidence for fast filtering
+CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER));
 """
 
     @staticmethod
@@ -98,9 +104,16 @@ CREATE INDEX IF NOT EXISTS idx_props_s_key ON Graph_KG.rdf_props (s, key);
 CREATE INDEX IF NOT EXISTS idx_edges_s_p ON Graph_KG.rdf_edges (s, p);
 CREATE INDEX IF NOT EXISTS idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id);
 CREATE INDEX IF NOT EXISTS idx_labels_s_label ON Graph_KG.rdf_labels (s, label);
--- Drop problematic indexes
-DROP INDEX IF EXISTS idx_props_key_val;
+
+-- Substring indexing on rdf_props.val for fast property lookups
+-- Uses IRIS iFind for high-performance substring/text search
+CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic;
+
+-- Functional index on edge confidence for fast filtering
+-- Optimizes JSON processing by indexing the value inside the DynamicObject
+CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER));
 """
+
 
     @staticmethod
     def ensure_indexes(cursor) -> Dict[str, bool]:
@@ -124,6 +137,9 @@ DROP INDEX IF EXISTS idx_props_key_val;
             ("idx_edges_s_p", "CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p)"),
             ("idx_edges_p_oid", "CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id)"),
             ("idx_labels_s_label", "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)"),
+            # Substring and Functional Indexes
+            ("idx_props_val_ifind", "CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic"),
+            ("idx_edges_confidence", "CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER))"),
             # Drop problematic indexes
             ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
@@ -139,6 +155,10 @@ DROP INDEX IF EXISTS idx_props_key_val;
                     status[name] = True
                 else:
                     status[name] = False
+        
+        # Upgrade val column size
+        status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
+        
         return status
 
     @staticmethod
@@ -196,11 +216,11 @@ DROP INDEX IF EXISTS idx_props_key_val;
             cursor.execute(sql, [node_id, label])
         """
         templates = {
-            'nodes': "INSERT %NOINDEX INTO Graph_KG.nodes (node_id) VALUES (?)",
-            'rdf_labels': "INSERT %NOINDEX INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
-            'rdf_props': "INSERT %NOINDEX INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
-            'rdf_edges': "INSERT %NOINDEX INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-            'kg_NodeEmbeddings': "INSERT %NOINDEX INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+            'nodes': "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)",
+            'rdf_labels': "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
+            'rdf_props': "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
+            'rdf_edges': "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+            'kg_NodeEmbeddings': "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
         }
         if table not in templates:
             raise ValueError(f"Unknown table: {table}. Valid: {list(templates.keys())}")

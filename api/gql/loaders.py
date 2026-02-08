@@ -40,11 +40,12 @@ class ProteinLoader(DataLoader):
 
         cursor = self.db.cursor()
 
-        # Query nodes with Protein label
+        # Query nodes with Protein label and get created_at
         placeholders = ",".join(["?" for _ in keys])
         query = f"""
-            SELECT DISTINCT l.s as id
+            SELECT l.s as id, n.created_at
             FROM rdf_labels l
+            JOIN nodes n ON l.s = n.node_id
             WHERE l.s IN ({placeholders})
               AND l.label = 'Protein'
         """
@@ -52,8 +53,9 @@ class ProteinLoader(DataLoader):
         cursor.execute(query, keys)
         rows = cursor.fetchall()
 
-        # Create dict of existing protein IDs
-        existing_ids = {row[0] for row in rows}
+        # Create dict of existing protein IDs and their created_at
+        existing_nodes = {row[0]: row[1] for row in rows}
+        existing_ids = list(existing_nodes.keys())
 
         # Load properties for all proteins in batch
         if existing_ids:
@@ -61,12 +63,12 @@ class ProteinLoader(DataLoader):
             label_loader = LabelLoader(self.db)
 
             # Batch load properties and labels
-            props_list = await property_loader.load_many(list(existing_ids))
-            labels_list = await label_loader.load_many(list(existing_ids))
+            props_list = await property_loader.load_many(existing_ids)
+            labels_list = await label_loader.load_many(existing_ids)
 
             # Build protein data dicts
             protein_dict: Dict[str, Dict[str, Any]] = {}
-            for i, protein_id in enumerate(list(existing_ids)):
+            for i, protein_id in enumerate(existing_ids):
                 props = props_list[i]
                 labels = labels_list[i]
 
@@ -74,11 +76,11 @@ class ProteinLoader(DataLoader):
                     "id": protein_id,
                     "labels": labels,
                     "properties": props,
-                    "created_at": datetime.now(),  # TODO: Get from nodes.created_at
+                    "created_at": existing_nodes[protein_id],
                     "name": props.get("name", ""),
                     "function": props.get("function"),
                     "organism": props.get("organism"),
-                    "confidence": float(props["confidence"]) if "confidence" in props else None
+                    "confidence": float(props["confidence"]) if "confidence" in props and props["confidence"] else None
                 }
         else:
             protein_dict = {}
@@ -101,29 +103,31 @@ class GeneLoader(DataLoader):
 
         cursor = self.db.cursor()
 
-        # Query nodes with Gene label
+        # Query nodes with Gene label and get created_at
         placeholders = ",".join(["?" for _ in keys])
         query = f"""
-            SELECT DISTINCT l.s as id
+            SELECT l.s as id, n.created_at
             FROM rdf_labels l
+            JOIN nodes n ON l.s = n.node_id
             WHERE l.s IN ({placeholders})
               AND l.label = 'Gene'
         """
 
         cursor.execute(query, keys)
         rows = cursor.fetchall()
-        existing_ids = {row[0] for row in rows}
+        existing_nodes = {row[0]: row[1] for row in rows}
+        existing_ids = list(existing_nodes.keys())
 
         # Load properties and labels for all genes in batch
         if existing_ids:
             property_loader = PropertyLoader(self.db)
             label_loader = LabelLoader(self.db)
 
-            props_list = await property_loader.load_many(list(existing_ids))
-            labels_list = await label_loader.load_many(list(existing_ids))
+            props_list = await property_loader.load_many(existing_ids)
+            labels_list = await label_loader.load_many(existing_ids)
 
             gene_dict: Dict[str, Dict[str, Any]] = {}
-            for i, gene_id in enumerate(list(existing_ids)):
+            for i, gene_id in enumerate(existing_ids):
                 props = props_list[i]
                 labels = labels_list[i]
 
@@ -131,10 +135,10 @@ class GeneLoader(DataLoader):
                     "id": gene_id,
                     "labels": labels,
                     "properties": props,
-                    "created_at": datetime.now(),
+                    "created_at": existing_nodes[gene_id],
                     "name": props.get("name", ""),
                     "chromosome": props.get("chromosome"),
-                    "position": int(props["position"]) if "position" in props else None
+                    "position": int(props["position"]) if "position" in props and props["position"] else None
                 }
         else:
             gene_dict = {}
@@ -156,29 +160,31 @@ class PathwayLoader(DataLoader):
 
         cursor = self.db.cursor()
 
-        # Query nodes with Pathway label
+        # Query nodes with Pathway label and get created_at
         placeholders = ",".join(["?" for _ in keys])
         query = f"""
-            SELECT DISTINCT l.s as id
+            SELECT l.s as id, n.created_at
             FROM rdf_labels l
+            JOIN nodes n ON l.s = n.node_id
             WHERE l.s IN ({placeholders})
               AND l.label = 'Pathway'
         """
 
         cursor.execute(query, keys)
         rows = cursor.fetchall()
-        existing_ids = {row[0] for row in rows}
+        existing_nodes = {row[0]: row[1] for row in rows}
+        existing_ids = list(existing_nodes.keys())
 
         # Load properties and labels for all pathways in batch
         if existing_ids:
             property_loader = PropertyLoader(self.db)
             label_loader = LabelLoader(self.db)
 
-            props_list = await property_loader.load_many(list(existing_ids))
-            labels_list = await label_loader.load_many(list(existing_ids))
+            props_list = await property_loader.load_many(existing_ids)
+            labels_list = await label_loader.load_many(existing_ids)
 
             pathway_dict: Dict[str, Dict[str, Any]] = {}
-            for i, pathway_id in enumerate(list(existing_ids)):
+            for i, pathway_id in enumerate(existing_ids):
                 props = props_list[i]
                 labels = labels_list[i]
 
@@ -186,7 +192,7 @@ class PathwayLoader(DataLoader):
                     "id": pathway_id,
                     "labels": labels,
                     "properties": props,
-                    "created_at": datetime.now(),
+                    "created_at": existing_nodes[pathway_id],
                     "name": props.get("name", ""),
                     "description": props.get("description")
                 }

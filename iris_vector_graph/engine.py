@@ -13,7 +13,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import logging
 
 from iris_vector_graph.cypher.parser import parse_query
-from iris_vector_graph.cypher.translator import translate_to_sql, _table
+from iris_vector_graph.cypher.translator import translate_to_sql, _table, set_schema_prefix
 from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ class IRISGraphEngine:
         """
         self.conn = connection
         self.embedding_dimension = embedding_dimension
+        set_schema_prefix("Graph_KG")
 
     def _get_embedding_dimension(self) -> int:
         """
@@ -164,50 +165,79 @@ class IRISGraphEngine:
         Returns:
             Dict with 'id', 'labels', and properties, or None if not found
         """
+        nodes = self.get_nodes([node_id])
+        return nodes[0] if nodes else None
+
+    def get_nodes(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Retrieve multiple nodes by ID using optimized batch SQL.
+        
+        Eliminates N+1 query patterns by fetching all labels and properties
+        for a set of nodes in two efficient queries.
+        
+        Args:
+            node_ids: List of node identifiers
+            
+        Returns:
+            List of node dicts with 'id', 'labels', and properties
+        """
+        if not node_ids:
+            return []
+
         try:
             cursor = self.conn.cursor()
+            placeholders = ",".join(["?"] * len(node_ids))
+            
+            # 1. Initialize node map
+            node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
 
-            # 1. Get labels
+            # 2. Get all labels in one query
             cursor.execute(
-                f"SELECT label FROM {_table('rdf_labels')} WHERE s = ?",
-                [node_id]
+                f"SELECT s, label FROM {_table('rdf_labels')} WHERE s IN ({placeholders})",
+                node_ids
             )
-            label_rows = cursor.fetchall()
-            if not label_rows:
-                # Check if node exists at least
-                cursor.execute(f"SELECT 1 FROM {_table('nodes')} WHERE node_id = ?", [node_id])
-                if not cursor.fetchone():
-                    return None
-                labels = []
-            else:
-                labels = [row[0] for row in label_rows]
+            for s, label in cursor.fetchall():
+                if s in node_map:
+                    node_map[s]["labels"].append(label)
 
-            # 2. Get properties
+            # 3. Get all properties in one query
             cursor.execute(
-                f"SELECT \"key\", val FROM {_table('rdf_props')} WHERE s = ?",
-                [node_id]
+                f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
+                node_ids
             )
-            prop_rows = cursor.fetchall()
-            props = {}
-            for key, val in prop_rows:
-                if val is not None:
-                    try:
-                        # Attempt to parse JSON if it looks like a collection
-                        if (val.startswith('{') and val.endswith('}')) or (val.startswith('[') and val.endswith(']')):
-                            props[key] = json.loads(val)
-                        else:
-                            props[key] = val
-                    except:
-                        props[key] = val
-                else:
-                    props[key] = val
+            for s, key, val in cursor.fetchall():
+                if s in node_map:
+                    if val is not None:
+                        try:
+                            if (val.startswith('{') and val.endswith('}')) or (val.startswith('[') and val.endswith(']')):
+                                node_map[s][key] = json.loads(val)
+                            else:
+                                node_map[s][key] = val
+                        except:
+                            node_map[s][key] = val
+                    else:
+                        node_map[s][key] = val
 
-            return {"id": node_id, "labels": labels, **props}
+            # 4. Filter out nodes that don't exist (if they had no labels and no props)
+            # We verify existence via the nodes table for any remaining empty ones
+            empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and len(data) == 2]
+            if empty_nids:
+                e_placeholders = ",".join(["?"] * len(empty_nids))
+                cursor.execute(f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})", empty_nids)
+                existing_empty = {row[0] for row in cursor.fetchall()}
+                return [node_map[nid] for nid in node_ids if nid in existing_empty or nid not in empty_nids]
+            
+            return [node_map[nid] for nid in node_ids if nid in node_map]
 
         except Exception as e:
-            logger.error(f"Optimized get_node failed: {str(e)}")
-            # Fallback to Cypher if SQL fails
-            return self._get_node_cypher_fallback(node_id)
+            logger.error(f"Batch get_nodes failed: {str(e)}")
+            # Fallback to individual lookups (which might use Cypher fallback)
+            results = []
+            for nid in node_ids:
+                node = self._get_node_cypher_fallback(nid)
+                if node:
+                    results.append(node)
+            return results
 
     def _get_node_cypher_fallback(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Original Cypher-based get_node implementation as safety fallback."""
@@ -264,6 +294,56 @@ class IRISGraphEngine:
         except Exception as e:
             logger.error(f"Count nodes failed: {e}")
             return 0
+
+    def create_node(self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None) -> bool:
+        """
+        Create a single node with labels and properties in a single transaction.
+        Optimized for individual creations with proper batching of internal inserts.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("START TRANSACTION")
+            
+            # 1. Create node
+            cursor.execute(f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id])
+            
+            # 2. Batch labels
+            if labels:
+                label_data = [[node_id, l] for l in labels]
+                cursor.executemany(f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)", label_data)
+                
+            # 3. Batch properties
+            if properties:
+                prop_data = []
+                for k, v in properties.items():
+                    val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                    prop_data.append([node_id, k, val_str])
+                cursor.executemany(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)", prop_data)
+                
+            cursor.execute("COMMIT")
+            return True
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            logger.error(f"create_node failed: {e}")
+            return False
+
+    def create_edge(self, source_id: str, predicate: str, target_id: str, qualifiers: Dict[str, Any] = None) -> bool:
+        """
+        Create a directed edge between nodes with optional qualifiers.
+        """
+        cursor = self.conn.cursor()
+        try:
+            qual_json = json.dumps(qualifiers) if qualifiers else None
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                [source_id, predicate, target_id, qual_json]
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"create_edge failed: {e}")
+            return False
 
     def bulk_create_nodes(
         self,
@@ -327,10 +407,9 @@ class IRISGraphEngine:
                     all_props.append((node_id, k, val_str))
 
             # 4. Batch Execution (Transactional phases for FK safety)
-            cursor.execute("SET %CHECK_FOREIGN_KEY = 0")
-            
             # Phase 1: Nodes
             cursor.executemany(node_sql, valid_nodes)
+            self.conn.commit()
             
             # Phase 2: Labels
             if all_labels:
@@ -340,7 +419,6 @@ class IRISGraphEngine:
             if all_props:
                 cursor.executemany(prop_sql, all_props)
 
-            cursor.execute("SET %CHECK_FOREIGN_KEY = 1")
             self.conn.commit()
             return created_ids
 
@@ -385,9 +463,7 @@ class IRISGraphEngine:
                 if all(k in e for k in ('source_id', 'predicate', 'target_id')):
                     edge_params.append([e['source_id'], e['predicate'], e['target_id']])
 
-            cursor.execute("SET %CHECK_FOREIGN_KEY = 0")
             cursor.executemany(edge_sql, edge_params)
-            cursor.execute("SET %CHECK_FOREIGN_KEY = 1")
             
             self.conn.commit()
             return len(edge_params)
