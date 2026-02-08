@@ -15,6 +15,7 @@ import logging
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql, _table, set_schema_prefix
 from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.security import sanitize_identifier, validate_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,9 @@ class IRISGraphEngine:
 
     def _assert_node_exists(self, node_id: str) -> None:
         cursor = self.conn.cursor()
-        cursor.execute(f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?", [node_id])
+        # Use constant table names or sanitized identifiers
+        table = validate_table_name("nodes")
+        cursor.execute(f"SELECT COUNT(*) FROM Graph_KG.{table} WHERE node_id = ?", [node_id])
         result = cursor.fetchone()
         if not result or result[0] == 0:
             raise ValueError(f"Node does not exist: {node_id}")
@@ -241,8 +244,9 @@ class IRISGraphEngine:
 
     def _get_node_cypher_fallback(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Original Cypher-based get_node implementation as safety fallback."""
-        cypher = f"MATCH (n) WHERE n.id = '{node_id}' RETURN n"
-        result = self.execute_cypher(cypher)
+        # Use parameters to prevent Cypher injection
+        cypher = "MATCH (n) WHERE n.id = $node_id RETURN n"
+        result = self.execute_cypher(cypher, parameters={"node_id": node_id})
 
         if not result.get("rows"):
             return None
@@ -285,9 +289,10 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             if label:
-                cursor.execute(f"SELECT COUNT(*) FROM {_table('rdf_labels')} WHERE label = ?", [label])
+                # Use constant table names
+                cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
             else:
-                cursor.execute(f"SELECT COUNT(*) FROM {_table('nodes')}")
+                cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
             
             result = cursor.fetchone()
             return result[0] if result else 0
