@@ -15,6 +15,8 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
+from iris_vector_graph.security import validate_table_name, VALID_GRAPH_TABLES
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +39,9 @@ class VectorOptimizer:
         Returns:
             Dictionary with availability status and performance metrics
         """
+        # Validate table name against allowlist
+        validate_table_name(table_name)
+        
         cursor = self.conn.cursor()
         try:
             # Check if optimized table exists
@@ -97,6 +102,10 @@ class VectorOptimizer:
         Returns:
             Migration results
         """
+        # Validate table names against allowlist
+        validate_table_name(source_table)
+        validate_table_name(target_table)
+        
         cursor = self.conn.cursor()
         insert_cursor = self.conn.cursor()
 
@@ -353,6 +362,9 @@ class VectorOptimizer:
         Returns:
             Vector statistics
         """
+        # Validate table name against allowlist
+        validate_table_name(table_name)
+        
         cursor = self.conn.cursor()
         try:
             # Basic counts

@@ -7,6 +7,7 @@ Extracted from the biomedical-specific implementation for reusability.
 """
 
 from typing import Dict, List, Optional
+from .security import sanitize_identifier, validate_table_name
 
 class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
@@ -181,7 +182,9 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         status = {}
         for name in indexes:
             try:
-                cursor.execute(f"DROP INDEX {name}")
+                # Sanitize index name to prevent SQL injection
+                safe_name = sanitize_identifier(name)
+                cursor.execute(f"DROP INDEX {safe_name}")
                 status[name] = True
             except Exception as e:
                 if "does not exist" in str(e).lower():
@@ -263,7 +266,9 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         status = {}
         for table in required_tables:
             try:
-                cursor.execute(f"SELECT TOP 1 * FROM {table}")
+                # Validate table name against allowlist
+                safe_table = validate_table_name(table)
+                cursor.execute(f"SELECT TOP 1 * FROM {safe_table}")
                 status[table] = True
             except Exception:
                 status[table] = False

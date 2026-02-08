@@ -21,18 +21,24 @@ elif no_display and not is_headless:
 
 def run_agent_browser(commands: str):
     """Run agent-browser commands in a single session and return output"""
+    import shlex
     # Use a unique session name for each call to ensure isolation.
     session_name = f"e2e_fraud_{time.time_ns()}"
-    headless_flag = "" if is_headless else " --headed"
     
     last_stdout = ""
     for line in commands.strip().split("\n"):
         command = line.strip()
         if not command:
             continue
-            
-        full_command = f"agent-browser --session {session_name}{headless_flag} {command}"
-        result = subprocess.run(full_command, shell=True, capture_output=True, text=True)
+        
+        # Build command as a list to avoid shell injection
+        cmd_args = ["agent-browser", "--session", session_name]
+        if not is_headless:
+            cmd_args.append("--headed")
+        # Use shlex.split to safely parse the command portion
+        cmd_args.extend(shlex.split(command))
+        
+        result = subprocess.run(cmd_args, capture_output=True, text=True)
         if result.returncode != 0:
             raise Exception(f"agent-browser failed on '{command}': {result.stderr or result.stdout}")
         last_stdout = result.stdout

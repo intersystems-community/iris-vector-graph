@@ -10,6 +10,7 @@ from typing import List, Any, Dict, Optional, Union
 import logging
 import json
 from . import ast
+from iris_vector_graph.security import validate_table_name, VALID_GRAPH_TABLES
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,23 @@ def get_schema_prefix() -> str:
 
 
 def _table(name: str) -> str:
-    """Return fully qualified table name with schema prefix if configured."""
+    """Return fully qualified table name with schema prefix if configured.
+    
+    Security: Validates name against VALID_GRAPH_TABLES allowlist to prevent
+    SQL injection via table name manipulation.
+    
+    Args:
+        name: Table name (must be in VALID_GRAPH_TABLES)
+        
+    Returns:
+        Schema-qualified table name (e.g., "Graph_KG.nodes")
+        
+    Raises:
+        ValueError: If name is not in the allowlist
+    """
+    # Validate against allowlist - raises ValueError if invalid
+    validate_table_name(name)
+    
     if _schema_prefix:
         return f"{_schema_prefix}.{name}"
     return name
