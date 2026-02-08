@@ -253,19 +253,12 @@ DROP INDEX IF EXISTS idx_props_key_val;
     @staticmethod
     def get_embedding_dimension(cursor, table_name: str = "Graph_KG.kg_NodeEmbeddings") -> Optional[int]:
         """
-        Detects the vector embedding dimension for a table
+        Detects the vector embedding dimension for a table.
+        
+        Note: Standard IRIS SQL does not have a VECTOR_DIMENSION function.
+        Returns None to allow IRISGraphEngine to infer dimension from input or use explicit config.
         """
-        try:
-            cursor.execute(f"""
-                SELECT VECTOR_DIMENSION(emb) as dim
-                FROM {table_name}
-                WHERE emb IS NOT NULL
-                LIMIT 1
-            """)
-            result = cursor.fetchone()
-            return result[0] if result else None
-        except Exception:
-            return None
+        return None
 
     @staticmethod
     def create_domain_table(cursor, table_name: str, columns: Dict[str, str], indexes: Optional[List[str]] = None):
