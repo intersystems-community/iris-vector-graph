@@ -166,6 +166,10 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.5.4 (2025-01-31)
+- **Schema Cleanup**: Removed invalid `VECTOR_DIMENSION` call from schema utilities
+- **Refinement**: Engine now relies solely on inference and explicit config for dimensions
+
 ### v1.5.3 (2025-01-31)
 - **Robust Embeddings**: Fixed embedding dimension detection for IRIS Community 2025.1
 - **API Improvements**: Added `embedding_dimension` param to `IRISGraphEngine` for manual override
