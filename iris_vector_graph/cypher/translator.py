@@ -234,11 +234,27 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
     return items
 
 
+def _resolve_pagination_value(value, context: TranslationContext) -> Optional[int]:
+    """Resolve a SKIP/LIMIT value that may be an integer literal or a parameter variable."""
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, ast.Variable):
+        resolved = context.input_params.get(value.name)
+        if resolved is None:
+            raise ValueError(f"Parameter '${value.name}' used in SKIP/LIMIT but not provided in params dict")
+        return int(resolved)
+    return int(value)
+
+
 def apply_pagination(sql: str, query: ast.CypherQuery, context: TranslationContext, order_by_items: list = None) -> str:
     if order_by_items:
         sql += f"\nORDER BY {', '.join(order_by_items)}"
-    if query.limit is not None: sql += f"\nLIMIT {query.limit}"
-    if query.skip is not None: sql += f"\nOFFSET {query.skip}"
+    limit = _resolve_pagination_value(query.limit, context)
+    skip = _resolve_pagination_value(query.skip, context)
+    if limit is not None: sql += f"\nLIMIT {limit}"
+    if skip is not None: sql += f"\nOFFSET {skip}"
     return sql
 
 
@@ -482,6 +498,10 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"{alias}.p" if alias.startswith('e') else f"{alias}.node_id"
     if isinstance(expr, ast.Literal):
         v = expr.value
+        # Boolean/NULL literals translate to SQL constants — no parameterization needed
+        if v is True: return "1"
+        if v is False: return "0"
+        if v is None: return "NULL"
         if segment == "select": return context.add_select_param(v)
         if segment == "join": return context.add_join_param(v)
         return context.add_where_param(v)
@@ -501,7 +521,38 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn in ("id", "type"): return args[0] if args else "NULL"
         if fn == "labels": return labels_subquery(args[0] if args else "NULL")
         if fn == "properties": return properties_subquery(args[0] if args else "NULL")
-        return f"{fn.upper()}({', '.join(args)})"
+        # Cypher → SQL function name mapping
+        _CYPHER_FN_MAP = {
+            "tolower": "LOWER",
+            "toupper": "UPPER",
+            "trim": "TRIM",
+            "ltrim": "LTRIM",
+            "rtrim": "RTRIM",
+            "tostring": "CAST",   # handled below
+            "tointeger": "CAST",  # handled below
+            "tofloat": "CAST",    # handled below
+            "size": "LENGTH",
+            "length": "LENGTH",
+            "substring": "SUBSTRING",
+            "left": "LEFT",
+            "right": "RIGHT",
+            "split": "STRTOK_TO_TABLE",  # IRIS equivalent
+            "replace": "REPLACE",
+            "reverse": "REVERSE",
+            "abs": "ABS",
+            "ceil": "CEILING",
+            "floor": "FLOOR",
+            "round": "ROUND",
+            "sqrt": "SQRT",
+            "sign": "SIGN",
+            "coalesce": "COALESCE",
+            "nullif": "NULLIF",
+            "exists": "EXISTS",
+            "keys": "NULL",  # not directly supported
+            "toboolean": "CASE WHEN",  # handled below
+        }
+        sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
+        return f"{sql_fn}({', '.join(args)})"
     return "NULL"
 
 
