@@ -48,6 +48,46 @@ class IRISGraphEngine:
         self.embedding_dimension = embedding_dimension
         set_schema_prefix("Graph_KG")
 
+    def initialize_schema(self) -> None:
+        """
+        Create the base schema tables in IRIS, using the configured embedding_dimension.
+
+        Safe to call on existing databases — statements that fail with "already exists"
+        are silently ignored.  Raises if ``embedding_dimension`` has not been set (either
+        via the constructor or prior calls to :meth:`store_embedding`).
+
+        Example::
+
+            engine = IRISGraphEngine(conn, embedding_dimension=384)
+            engine.initialize_schema()
+        """
+        from iris_vector_graph.utils import _split_sql_statements
+
+        dim = self.embedding_dimension
+        if dim is None:
+            raise ValueError(
+                "embedding_dimension must be set before calling initialize_schema(). "
+                "Pass it to IRISGraphEngine(conn, embedding_dimension=<N>) or call "
+                "store_embedding() first so the dimension can be inferred."
+            )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("CREATE SCHEMA Graph_KG")
+        except Exception:
+            pass  # already exists
+
+        sql = GraphSchema.get_base_schema_sql(embedding_dimension=dim)
+        for stmt in _split_sql_statements(sql):
+            if not stmt.strip():
+                continue
+            try:
+                cursor.execute(stmt)
+            except Exception as e:
+                err = str(e).lower()
+                if "already exists" not in err and "already has a" not in err:
+                    logger.warning("Schema setup warning: %s | Statement: %.100s", e, stmt)
+
     def _get_embedding_dimension(self) -> int:
         """
         Get the vector embedding dimension, either from initialization or auto-detection.

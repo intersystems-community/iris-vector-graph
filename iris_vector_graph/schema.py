@@ -13,9 +13,15 @@ class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
 
     @staticmethod
-    def get_base_schema_sql() -> str:
-        """Get SQL for base schema. Using explicit Graph_KG schema qualification and robust types."""
-        return """
+    def get_base_schema_sql(embedding_dimension: int = 768) -> str:
+        """Get SQL for base schema. Using explicit Graph_KG schema qualification and robust types.
+
+        Args:
+            embedding_dimension: Dimension of the vector embeddings. Defaults to 768 for
+                                 backward compatibility, but should be set to match your
+                                 actual embedding model (e.g. 384 for all-MiniLM-L6-v2).
+        """
+        return f"""
 CREATE TABLE Graph_KG.nodes(
   node_id    VARCHAR(256) %EXACT PRIMARY KEY,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -48,14 +54,14 @@ CREATE TABLE Graph_KG.rdf_edges(
 
 CREATE TABLE Graph_KG.kg_NodeEmbeddings (
     id VARCHAR(256) %EXACT PRIMARY KEY,
-    emb VECTOR(DOUBLE, 768),
+    emb VECTOR(DOUBLE, {embedding_dimension}),
     metadata %Library.DynamicObject,
     CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)
 );
 
 CREATE TABLE Graph_KG.kg_NodeEmbeddings_optimized (
     id VARCHAR(256) %EXACT PRIMARY KEY,
-    emb VECTOR(DOUBLE, 768),
+    emb VECTOR(DOUBLE, {embedding_dimension}),
     metadata %Library.DynamicObject,
     CONSTRAINT fk_emb_node_opt FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)
 );
