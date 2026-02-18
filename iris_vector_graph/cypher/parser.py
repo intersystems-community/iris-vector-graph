@@ -530,7 +530,19 @@ class Parser:
         if tok.kind == TokenType.STAR:
             self.eat()
             return ast.Literal("*")
-            
+
+        if tok.kind == TokenType.TRUE:
+            self.eat()
+            return ast.Literal(True)
+
+        if tok.kind == TokenType.FALSE:
+            self.eat()
+            return ast.Literal(False)
+
+        if tok.kind == TokenType.NULL:
+            self.eat()
+            return ast.Literal(None)
+
         raise CypherParseError(f"Unexpected token in expression: {tok.kind}", tok.line, tok.column)
 
     def parse_map_literal(self) -> Dict[str, Any]:
@@ -563,14 +575,24 @@ class Parser:
             if not self.matches(TokenType.COMMA): break
         return ast.OrderByClause(items=items)
 
-    def parse_limit(self) -> Optional[int]:
+    def parse_limit(self) -> Any:
+        """Parse LIMIT clause. Accepts integer literals or parameter references ($name)."""
         if self.matches(TokenType.LIMIT):
+            tok = self.peek()
+            if tok.kind == TokenType.PARAMETER:
+                self.eat()
+                return ast.Variable(tok.value or "")  # resolved later against params
             tok = self.expect(TokenType.INTEGER_LITERAL)
             return int(tok.value) if tok.value is not None else None
         return None
 
-    def parse_skip(self) -> Optional[int]:
+    def parse_skip(self) -> Any:
+        """Parse SKIP clause. Accepts integer literals or parameter references ($name)."""
         if self.matches(TokenType.SKIP):
+            tok = self.peek()
+            if tok.kind == TokenType.PARAMETER:
+                self.eat()
+                return ast.Variable(tok.value or "")  # resolved later against params
             tok = self.expect(TokenType.INTEGER_LITERAL)
             return int(tok.value) if tok.value is not None else None
         return None
