@@ -9,11 +9,13 @@ This demonstrates the hybrid architecture: generic core + domain extension.
 """
 
 import strawberry
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, cast
 from strawberry.extensions import SchemaExtension
 
-from .core.types import Node, GraphStats, PropertyFilter
+from .core.types import JSON, Node, GraphStats, PropertyFilter
 from .core.resolvers import CoreQuery
+from iris_vector_graph.cypher.parser import parse_query
+from iris_vector_graph.cypher.translator import translate_to_sql
 
 
 class DatabaseConnectionExtension(SchemaExtension):
@@ -58,6 +60,9 @@ except ImportError:
     Protein = None
     Gene = None
     Pathway = None
+    CreateProteinInput = None
+    UpdateProteinInput = None
+    BiomedicalDomainResolver = None
 
 
 @strawberry.type
@@ -110,6 +115,76 @@ class Query(CoreQuery):
                 info.context.get("db_connection")
             )
             return await biomed_resolver._pathway_query(info, id)
+
+    @strawberry.field(description="Execute a Cypher query and return JSON results.")
+    async def execute_cypher(
+        self,
+        info: strawberry.Info,
+        query: str,
+        params: Optional[JSON] = None,
+    ) -> JSON:
+        """Run openCypher, translate to SQL, and return rows as JSON objects."""
+        db_connection = info.context.get("db_connection")
+        if not db_connection:
+            return cast(JSON, {"error": "database connection unavailable"})
+
+        cursor = db_connection.cursor()
+        try:
+            cypher_ast = parse_query(query)
+            translator_params: Optional[Dict[str, Any]] = None
+            if isinstance(params, dict):
+                translator_params = cast(Dict[str, Any], params)
+            sql_query = translate_to_sql(cypher_ast, params=translator_params)
+
+            rows: List[List[Any]] = []
+            columns: List[str] = []
+
+            if sql_query.is_transactional:
+                cursor.execute("START TRANSACTION")
+                try:
+                    statements = (
+                        sql_query.sql
+                        if isinstance(sql_query.sql, list)
+                        else [sql_query.sql]
+                    )
+                    all_params = sql_query.parameters or []
+
+                    for idx, statement in enumerate(statements):
+                        params_for_stmt = (
+                            all_params[idx] if idx < len(all_params) else []
+                        )
+                        cursor.execute(statement, params_for_stmt)
+                        if idx == len(statements) - 1 and cursor.description:
+                            columns = [desc[0] for desc in cursor.description]
+                            rows = cursor.fetchall()
+                    cursor.execute("COMMIT")
+                except Exception:
+                    cursor.execute("ROLLBACK")
+                    raise
+            else:
+                sql_text = (
+                    sql_query.sql
+                    if isinstance(sql_query.sql, str)
+                    else "\n".join(sql_query.sql)
+                )
+                exec_params = sql_query.parameters[0] if sql_query.parameters else []
+                cursor.execute(sql_text, exec_params)
+                if cursor.description:
+                    columns = [desc[0] for desc in cursor.description]
+                    rows = cursor.fetchall()
+
+            results: List[Dict[str, Any]] = []
+            if columns:
+                results = [dict(zip(columns, row)) for row in rows]
+
+            return cast(JSON, results)
+        except Exception as exc:
+            return cast(JSON, {"error": str(exc)})
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
 
 @strawberry.type

@@ -153,7 +153,16 @@ class GraphStats:
 
 @strawberry.input
 class PropertyFilter:
-    """Filter for node properties in Query.nodes()"""
+    """
+    Filter for node properties in Query.nodes().
+
+    Supported operators:
+    - ``equals`` (default) — exact match
+    - ``contains`` — substring match
+    - ``starts_with`` — prefix match
+    - ``ends_with`` — suffix match
+    - ``gt`` / ``lt`` / ``gte`` / ``lte`` — numeric comparisons
+    """
     key: str
     value: str
-    operator: Optional[str] = "equals"  # equals, contains, starts_with, etc.
+    operator: Optional[str] = "equals"
