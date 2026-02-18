@@ -23,6 +23,11 @@ from api.gql.core.loaders import (
     GenericNodeLoader,
 )
 
+try:
+    from api.gql.core.domain_resolver import CompositeDomainResolver
+except ImportError:
+    CompositeDomainResolver = None
+
 # Import biomedical domain loaders (example domain)
 from examples.domains.biomedical.loaders import (
     ProteinLoader,
@@ -179,6 +184,7 @@ async def get_context() -> Dict[str, Any]:
         "property_loader": PropertyLoader(db_connection),
         "label_loader": LabelLoader(db_connection),
         "node_loader": GenericNodeLoader(db_connection),
+        "domain_resolver": CompositeDomainResolver(db_connection) if CompositeDomainResolver else None,
     }
 
     return context

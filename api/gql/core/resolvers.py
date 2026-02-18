@@ -110,22 +110,34 @@ class CoreQuery:
         where: Optional[PropertyFilter] = None,
         limit: int = 100,
         offset: int = 0,
+        order_by: Optional[str] = None,
+        order_direction: Optional[str] = "DESC",
     ) -> List[Node]:
         """
         Query multiple nodes by label and/or property filter.
 
         Example:
             query {
-              nodes(labels: ["Protein"], where: {key: "organism", value: "Homo sapiens"}) {
+              nodes(
+                labels: ["Drug"],
+                where: {key: "status", value: "approved", operator: "equals"},
+                orderBy: "name",
+                orderDirection: "ASC",
+                limit: 20,
+                offset: 0
+              ) {
                 property(key: "name")
               }
             }
 
         Args:
             labels: Filter by node labels (e.g., ["Protein", "Gene"])
-            where: Filter by property key/value
+            where: Filter by property key/value with optional operator
+                   (equals, contains, starts_with, ends_with, gt, lt, gte, lte)
             limit: Maximum number of results
             offset: Offset for pagination
+            order_by: Property key to sort by, or "id" / "created_at" (default)
+            order_direction: "ASC" or "DESC" (default DESC)
 
         Returns:
             List of Node objects
@@ -134,55 +146,101 @@ class CoreQuery:
         if not db_connection:
             return []
 
+        # Validate and sanitize sort direction
+        direction = "DESC" if order_direction not in ("ASC", "DESC") else order_direction
+
+        # Build ORDER BY clause and any extra JOIN needed for property ordering
+        order_join = ""
+        order_params_prefix: list = []
+        if order_by is None or order_by == "created_at":
+            order_clause = f"ORDER BY n.created_at {direction}"
+        elif order_by == "id":
+            order_clause = f"ORDER BY n.node_id {direction}"
+        else:
+            # Order by a property value — LEFT JOIN so nodes without the property still appear
+            order_join = "LEFT JOIN rdf_props order_p ON order_p.s = n.node_id AND order_p.key = ?"
+            order_params_prefix = [order_by]
+            order_clause = f"ORDER BY order_p.val {direction}"
+
+        # Build WHERE condition for property filter (operator-aware)
+        def _where_condition(val_placeholder: str = "?") -> str:
+            op = (where.operator or "equals").lower() if where else "equals"
+            if op == "contains":
+                return f"p.val LIKE '%' || {val_placeholder} || '%'"
+            if op == "starts_with":
+                return f"p.val LIKE {val_placeholder} || '%'"
+            if op == "ends_with":
+                return f"p.val LIKE '%' || {val_placeholder}"
+            if op == "gt":
+                return f"CAST(p.val AS DOUBLE) > CAST({val_placeholder} AS DOUBLE)"
+            if op == "lt":
+                return f"CAST(p.val AS DOUBLE) < CAST({val_placeholder} AS DOUBLE)"
+            if op == "gte":
+                return f"CAST(p.val AS DOUBLE) >= CAST({val_placeholder} AS DOUBLE)"
+            if op == "lte":
+                return f"CAST(p.val AS DOUBLE) <= CAST({val_placeholder} AS DOUBLE)"
+            return f"p.val = {val_placeholder}"  # default: equals
+
         cursor = db_connection.cursor()
 
         # Build query based on filters
         if labels and where:
-            # Filter by both labels and properties
             query = """
                 SELECT DISTINCT n.node_id
                 FROM nodes n
                 JOIN rdf_labels l ON l.s = n.node_id
-                JOIN rdf_props p ON p.s = n.node_id
-                WHERE l.label IN ({})
-                  AND p.key = ?
-                  AND p.val = ?
-                ORDER BY n.created_at DESC
+                JOIN rdf_props p ON p.s = n.node_id AND p.key = ?
+                {order_join}
+                WHERE l.label IN ({placeholders})
+                  AND {where_cond}
+                {order_clause}
                 LIMIT ? OFFSET ?
-            """.format(",".join(["?" for _ in labels]))
-            params = labels + [where.key, where.value, limit, offset]
+            """.format(
+                order_join=order_join,
+                placeholders=",".join(["?" for _ in labels]),
+                where_cond=_where_condition(),
+                order_clause=order_clause,
+            )
+            params = order_params_prefix + [where.key] + labels + [where.value, limit, offset]
         elif labels:
-            # Filter by labels only
             query = """
                 SELECT DISTINCT n.node_id
                 FROM nodes n
                 JOIN rdf_labels l ON l.s = n.node_id
-                WHERE l.label IN ({})
-                ORDER BY n.created_at DESC
+                {order_join}
+                WHERE l.label IN ({placeholders})
+                {order_clause}
                 LIMIT ? OFFSET ?
-            """.format(",".join(["?" for _ in labels]))
-            params = labels + [limit, offset]
+            """.format(
+                order_join=order_join,
+                placeholders=",".join(["?" for _ in labels]),
+                order_clause=order_clause,
+            )
+            params = order_params_prefix + labels + [limit, offset]
         elif where:
-            # Filter by properties only
             query = """
                 SELECT DISTINCT n.node_id
                 FROM nodes n
-                JOIN rdf_props p ON p.s = n.node_id
-                WHERE p.key = ?
-                  AND p.val = ?
-                ORDER BY n.created_at DESC
+                JOIN rdf_props p ON p.s = n.node_id AND p.key = ?
+                {order_join}
+                WHERE {where_cond}
+                {order_clause}
                 LIMIT ? OFFSET ?
-            """
-            params = [where.key, where.value, limit, offset]
+            """.format(
+                order_join=order_join,
+                where_cond=_where_condition(),
+                order_clause=order_clause,
+            )
+            params = order_params_prefix + [where.key, where.value, limit, offset]
         else:
-            # No filters - return all nodes
             query = """
-                SELECT node_id
-                FROM nodes
-                ORDER BY created_at DESC
+                SELECT n.node_id
+                FROM nodes n
+                {order_join}
+                {order_clause}
                 LIMIT ? OFFSET ?
-            """
-            params = [limit, offset]
+            """.format(order_join=order_join, order_clause=order_clause)
+            params = order_params_prefix + [limit, offset]
 
         cursor.execute(query, params)
         node_ids = [row[0] for row in cursor.fetchall()]
