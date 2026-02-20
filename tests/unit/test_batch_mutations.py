@@ -39,9 +39,13 @@ def test_create_node_transactional(engine, mock_conn):
     label_call = next(c for c in cursor.executemany.call_args_list if "rdf_labels" in c[0][0])
     assert label_call[0][1] == [["test-node", "L1"], ["test-node", "L2"]]
     
-    # Props verify
+    # Props verify — 3 rows: 'name', 'val', plus auto-injected 'id'
     prop_call = next(c for c in cursor.executemany.call_args_list if "rdf_props" in c[0][0])
-    assert len(prop_call[0][1]) == 2
+    prop_keys = [row[1] for row in prop_call[0][1]]
+    assert len(prop_call[0][1]) == 3
+    assert "id" in prop_keys, "create_node must store 'id' in rdf_props for Cypher queryability"
+    assert "name" in prop_keys
+    assert "val" in prop_keys
 
 def test_create_node_rollback_on_failure(engine, mock_conn):
     cursor = mock_conn.cursor.return_value

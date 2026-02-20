@@ -358,12 +358,16 @@ class IRISGraphEngine:
                 cursor.executemany(f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)", label_data)
                 
             # 3. Batch properties
-            if properties:
-                prop_data = []
-                for k, v in properties.items():
-                    val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                    prop_data.append([node_id, k, val_str])
-                cursor.executemany(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)", prop_data)
+            # Always include 'id' in rdf_props so Cypher queries like
+            # MATCH (n {id: $value}) or WHERE n.id = $value can find the node.
+            props = dict(properties) if properties else {}
+            if "id" not in props:
+                props["id"] = node_id
+            prop_data = []
+            for k, v in props.items():
+                val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                prop_data.append([node_id, k, val_str])
+            cursor.executemany(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)", prop_data)
                 
             cursor.execute("COMMIT")
             return True
