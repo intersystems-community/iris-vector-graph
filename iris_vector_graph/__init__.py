@@ -18,7 +18,11 @@ from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
 from .fusion import RRFFusion
 
-__version__ = "1.3.3"
+try:
+    from importlib.metadata import version
+    __version__ = version("iris-vector-graph")
+except Exception:
+    __version__ = "unknown"
 __all__ = [
     "IRISGraphEngine",
     "GraphSchema",
