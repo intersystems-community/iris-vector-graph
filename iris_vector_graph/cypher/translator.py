@@ -301,9 +301,10 @@ def translate_create_clause(create, context, metadata):
             for label in node.labels:
                 context.add_dml(f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)", [node_id, label, node_id, label])
             for k, v in node.properties.items():
-                if k not in ("id", "node_id"):
-                    val = v.value if isinstance(v, ast.Literal) else v
-                    context.add_dml(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)", [node_id, k, val, node_id, k])
+                val = v.value if isinstance(v, ast.Literal) else v
+                # Property 'id' or 'node_id' is stored in both nodes table AND rdf_props
+                # for Cypher query consistency.
+                context.add_dml(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)", [node_id, k, val, node_id, k])
         if node.variable: context.register_variable(node.variable)
     
     for i, rel in enumerate(create.pattern.relationships):
@@ -395,13 +396,19 @@ def translate_node_pattern(node, context, metadata, optional=False):
         context.join_clauses.append(f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label = {context.add_join_param(label)}")
         if not optional: context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
     for k, v in node.properties.items():
-        val = v.value if isinstance(v, ast.Literal) else v
-        if k in ("node_id", "id"): context.where_conditions.append(f"{alias}.node_id = {context.add_where_param(val)}")
+        val_sql = translate_expression(v, context, segment="where")
+        if k in ("node_id", "id"):
+            context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
             p_alias = context.next_alias("p")
-            context.join_clauses.append(f"{jt} {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.key = {context.add_join_param(k)}")
-            if optional: context.where_conditions.append(f"({p_alias}.s IS NULL OR {p_alias}.val = {context.add_where_param(val)})")
-            else: context.where_conditions.append(f"{p_alias}.val = {context.add_where_param(val)}")
+            context.join_clauses.append(
+                f"{jt} {_table('rdf_props')} {p_alias} "
+                f"ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
+            )
+            if optional:
+                context.where_conditions.append(f"({p_alias}.s IS NULL OR {p_alias}.val = {val_sql})")
+            else:
+                context.where_conditions.append(f"{p_alias}.val = {val_sql}")
 
 
 def translate_relationship_pattern(rel, source_node, target_node, context, metadata, optional=False):

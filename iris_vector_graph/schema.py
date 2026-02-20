@@ -225,11 +225,11 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             cursor.execute(sql, [node_id, label])
         """
         templates = {
-            'nodes': "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)",
-            'rdf_labels': "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
-            'rdf_props': "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
-            'rdf_edges': "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-            'kg_NodeEmbeddings': "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+            'nodes': "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
+            'rdf_labels': "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
+            'rdf_props': "INSERT INTO Graph_KG.rdf_props (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND \"key\" = ?)",
+            'rdf_edges': "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
+            'kg_NodeEmbeddings': "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) SELECT ?, TO_VECTOR(?), ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
         }
         if table not in templates:
             raise ValueError(f"Unknown table: {table}. Valid: {list(templates.keys())}")
@@ -284,11 +284,68 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     @staticmethod
     def get_embedding_dimension(cursor, table_name: str = "Graph_KG.kg_NodeEmbeddings") -> Optional[int]:
         """
-        Detects the vector embedding dimension for a table.
-        
-        Note: Standard IRIS SQL does not have a VECTOR_DIMENSION function.
-        Returns None to allow IRISGraphEngine to infer dimension from input or use explicit config.
+        Detects the vector embedding dimension for a table using IRIS metadata.
         """
+        # IRIS stores vector dimension in class metadata
+        # Table Graph_KG.kg_NodeEmbeddings is usually class Graph.KG.kgNodeEmbeddings
+        # We'll search for the 'emb' property across classes containing 'Graph' and 'NodeEmbeddings'
+        try:
+            # Query IRIS CompiledProperty metadata directly for the most reliable dimension info
+            cursor.execute(
+                """
+                SELECT Parameters 
+                FROM %Dictionary.CompiledProperty 
+                WHERE Name = 'emb' 
+                  AND (Parent [ 'Graph' OR Parent [ 'graph' )
+                  AND (Parent [ 'Embeddings' OR Parent [ 'embeddings' )
+                """
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                params = str(row[0])
+                if 'LEN,' in params:
+                    # Parse 'LEN,768' from params string
+                    parts = params.split(',')
+                    for i, p in enumerate(parts):
+                        if p == 'LEN' and i + 1 < len(parts):
+                            return int(parts[i+1])
+        except Exception:
+            pass
+
+        # Fallback to INFORMATION_SCHEMA (though IRIS often reports VECTOR as VARCHAR there)
+        schema = "Graph_KG"
+        table = "kg_NodeEmbeddings"
+        if "." in table_name:
+            schema, table = table_name.split(".", 1)
+            
+        try:
+            result = None
+            for s_name, t_name in [(schema, table), (schema.upper(), table.upper())]:
+                cursor.execute(
+                    """
+                    SELECT DTD_IDENTIFIER, COLUMN_TYPE, DATA_TYPE
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = ?
+                      AND TABLE_NAME = ?
+                      AND COLUMN_NAME = 'emb'
+                    """,
+                    [s_name, t_name]
+                )
+                result = cursor.fetchone()
+                if result: break
+            
+            if result:
+                for val in result:
+                    if not val: continue
+                    val_str = str(val)
+                    import re
+                    matches = re.findall(r'(\d+)\s*\)', val_str)
+                    if matches: return int(matches[-1])
+                    digits = "".join(ch for ch in val_str if ch.isdigit())
+                    if digits: return int(digits)
+        except Exception:
+            pass
+            
         return None
 
     @staticmethod

@@ -88,38 +88,36 @@ class IRISGraphEngine:
                 if "already exists" not in err and "already has a" not in err:
                     logger.warning("Schema setup warning: %s | Statement: %.100s", e, stmt)
 
+        # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
+        GraphSchema.ensure_indexes(cursor)
+
+        # 4. Check for dimension mismatch on existing tables
+        try:
+            db_dim = self._get_embedding_dimension()
+            if db_dim != dim:
+                logger.error(
+                    "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
+                    "Vector operations will fail. You must drop and recreate kg_NodeEmbeddings to change dimension.",
+                    db_dim, dim
+                )
+        except Exception as e:
+            logger.warning("Could not verify embedding dimension: %s", e)
+
     def _get_embedding_dimension(self) -> int:
         """
         Get the vector embedding dimension, either from initialization or auto-detection.
+        Prioritizes database detection if the schema exists.
         """
-        if self.embedding_dimension is not None:
-            return self.embedding_dimension
-
         cursor = self.conn.cursor()
+        
+        # 1. Try to detect from DB first
         dim = GraphSchema.get_embedding_dimension(cursor)
         if dim:
-            self.embedding_dimension = int(dim)
-            return self.embedding_dimension
+            return int(dim)
 
-        try:
-            cursor.execute(
-                """
-                SELECT DATA_TYPE
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = 'Graph_KG'
-                  AND TABLE_NAME = 'kg_NodeEmbeddings'
-                  AND COLUMN_NAME = 'emb'
-                """
-            )
-            result = cursor.fetchone()
-            if result and result[0]:
-                data_type = str(result[0])
-                digits = "".join(ch for ch in data_type if ch.isdigit())
-                if digits:
-                    self.embedding_dimension = int(digits)
-                    return self.embedding_dimension
-        except Exception:
-            pass
+        # 2. Fallback to instance variable if DB detection fails or table doesn't exist
+        if self.embedding_dimension is not None:
+            return self.embedding_dimension
 
         raise ValueError("Embedding dimension could not be determined. Please provide it during IRISGraphEngine initialization.")
 
@@ -232,7 +230,7 @@ class IRISGraphEngine:
             placeholders = ",".join(["?"] * len(node_ids))
             
             # 1. Initialize node map
-            node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
+            node_map = {nid: {"id": nid, "labels": [], "properties": {}} for nid in node_ids}
 
             # 2. Get all labels in one query
             cursor.execute(
@@ -251,15 +249,15 @@ class IRISGraphEngine:
             for s, key, val in cursor.fetchall():
                 if s in node_map:
                     if val is not None:
+                        parsed_val = val
                         try:
-                            if (val.startswith('{') and val.endswith('}')) or (val.startswith('[') and val.endswith(']')):
-                                node_map[s][key] = json.loads(val)
-                            else:
-                                node_map[s][key] = val
+                            if (str(val).startswith('{') and str(val).endswith('}')) or (str(val).startswith('[') and str(val).endswith(']')):
+                                parsed_val = json.loads(val)
                         except:
-                            node_map[s][key] = val
+                            pass
+                        node_map[s]["properties"][key] = parsed_val
                     else:
-                        node_map[s][key] = val
+                        node_map[s]["properties"][key] = val
 
             # 4. Filter out nodes that don't exist (if they had no labels and no props)
             # We verify existence via the nodes table for any remaining empty ones
@@ -314,7 +312,7 @@ class IRISGraphEngine:
         
         props = {item["key"]: item["value"] for item in props_items if isinstance(item, dict)}
 
-        return {"id": row_map[id_key], "labels": labels, **props}
+        return {"id": row_map[id_key], "labels": labels, "properties": props}
 
     def count_nodes(self, label: Optional[str] = None) -> int:
         """
@@ -363,11 +361,16 @@ class IRISGraphEngine:
             props = dict(properties) if properties else {}
             if "id" not in props:
                 props["id"] = node_id
+            
             prop_data = []
             for k, v in props.items():
                 val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                prop_data.append([node_id, k, val_str])
-            cursor.executemany(f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)", prop_data)
+                # Use safe INSERT pattern to prevent duplicate property violations
+                # params: [s, key, val, s, key]
+                prop_data.append([node_id, k, val_str, node_id, k])
+            
+            prop_sql = f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)"
+            cursor.executemany(prop_sql, prop_data)
                 
             cursor.execute("COMMIT")
             return True
@@ -441,10 +444,12 @@ class IRISGraphEngine:
                 if not node_id: continue
                 
                 created_ids.append(node_id)
-                valid_nodes.append([node_id])
+                # params: [node_id, node_id] for WHERE NOT EXISTS
+                valid_nodes.append([node_id, node_id])
                 
                 for label in node.get('labels', []):
-                    all_labels.append((node_id, label))
+                    # params: [s, label, s, label]
+                    all_labels.append((node_id, label, node_id, label))
                 
                 props = node.get('properties', {})
                 # Ensure ID is in properties for consistency with Cypher CREATE
@@ -453,7 +458,8 @@ class IRISGraphEngine:
                 for k, v in props.items():
                     if v is None: continue
                     val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                    all_props.append((node_id, k, val_str))
+                    # params: [s, key, val, s, key]
+                    all_props.append((node_id, k, val_str, node_id, k))
 
             # 4. Batch Execution (Transactional phases for FK safety)
             # Phase 1: Nodes
@@ -510,7 +516,9 @@ class IRISGraphEngine:
             edge_params = []
             for e in edges:
                 if all(k in e for k in ('source_id', 'predicate', 'target_id')):
-                    edge_params.append([e['source_id'], e['predicate'], e['target_id']])
+                    # params: [s, p, o_id, s, p, o_id] for WHERE NOT EXISTS
+                    s, p, o = e['source_id'], e['predicate'], e['target_id']
+                    edge_params.append([s, p, o, s, p, o])
 
             cursor.executemany(edge_sql, edge_params)
             
