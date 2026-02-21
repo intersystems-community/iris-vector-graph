@@ -33,6 +33,13 @@
 
 [Gates determined based on constitution file]
 
+**Principle IV gate (IRIS-backend features)**: If this feature has IRIS as a backend
+component, confirm the plan includes:
+- [ ] A dedicated, named IRIS container (`los-iris`) managed by `iris-devtester`
+- [ ] An explicit e2e test phase (non-optional, not in "polish") covering all user stories
+- [ ] `SKIP_IRIS_TESTS` defaulting to `"false"` in all new test files
+- [ ] No hardcoded IRIS ports; all resolved via `IRISContainer.attach("los-iris").get_exposed_port(1972)`
+
 ## Project Structure
 
 ### Documentation (this feature)
