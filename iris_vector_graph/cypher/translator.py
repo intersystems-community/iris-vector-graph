@@ -99,7 +99,10 @@ class TranslationContext:
         self.variable_aliases: Dict[str, str] = {}
         if parent is not None:
             self.variable_aliases = parent.variable_aliases.copy()
-        
+
+        # Variables that are scalar (not graph nodes) — skip node expansion in RETURN
+        self.scalar_variables: set = set() if parent is None else parent.scalar_variables.copy()
+
         self.select_items: List[str] = []
         self.from_clauses: List[str] = []
         self.join_clauses: List[str] = []
@@ -157,11 +160,147 @@ class TranslationContext:
         self.dml_statements.append((sql, params))
 
 
+def translate_procedure_call(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    """Translate a CALL procedure into a VecSearch CTE prepended to context.stages.
+
+    Supported procedure: ivg.vector.search(label, property, query_input, limit [, options])
+
+    Mode 1 — pre-computed vector (list[float]):
+        SELECT TOP {limit} node_id AS node, VECTOR_COSINE(..., TO_VECTOR(?)) AS score ...
+    Mode 2 — text via IRIS EMBEDDING() (requires IRIS 2024.3+):
+        SELECT TOP {limit} node_id AS node, VECTOR_COSINE(..., EMBEDDING(?, ?)) AS score ...
+
+    The caller (engine.execute_cypher) is responsible for detecting Mode 2 availability
+    and raising UnsupportedOperationError before SQL is executed if EMBEDDING() is absent.
+
+    Precondition: This function is ONLY called for procedure_name == "ivg.vector.search".
+    """
+    if proc.procedure_name != "ivg.vector.search":
+        raise ValueError(f"Unknown procedure: {proc.procedure_name!r}. Only 'ivg.vector.search' is supported.")
+
+    args = proc.arguments
+    if len(args) < 4:
+        raise ValueError(
+            f"ivg.vector.search requires at least 4 arguments "
+            f"(label, property, query_input, limit), got {len(args)}"
+        )
+
+    # Resolve label (arg 0) — must be a string literal
+    label_arg = args[0]
+    if not isinstance(label_arg, ast.Literal) or not isinstance(label_arg.value, str):
+        raise ValueError("ivg.vector.search: first argument (label) must be a string literal")
+    label = label_arg.value
+    # Security: validate label against allowlist-based table name check (reuse same validator)
+    validate_table_name("rdf_labels")  # warm validator cache
+    # Label itself goes into SQL as a parameterized value, not as a table name — safe.
+
+    # Resolve property (arg 1) — string literal, typically "embedding"
+    prop_arg = args[1]
+    if not isinstance(prop_arg, ast.Literal) or not isinstance(prop_arg.value, str):
+        raise ValueError("ivg.vector.search: second argument (property) must be a string literal")
+    # property name is unused in SQL (embedding column is always 'emb') but stored for future use
+
+    # Resolve query_input (arg 2) — list[float] or str (for Mode 2)
+    query_input_arg = args[2]
+    if isinstance(query_input_arg, ast.Literal):
+        raw = query_input_arg.value
+        # Parser wraps list literals as list[ast.Literal]; unwrap to list[float]
+        if isinstance(raw, list):
+            query_input: Any = [item.value if isinstance(item, ast.Literal) else item for item in raw]
+        else:
+            query_input = raw
+    elif isinstance(query_input_arg, ast.Variable):
+        var_name = query_input_arg.name
+        if var_name in context.input_params:
+            query_input = context.input_params[var_name]
+        else:
+            raise ValueError(f"ivg.vector.search: parameter '${var_name}' not found in params")
+    else:
+        raise ValueError("ivg.vector.search: third argument (query_input) must be a literal or parameter")
+
+    # Resolve limit (arg 3) — integer literal or parameter
+    limit_arg = args[3]
+    if isinstance(limit_arg, ast.Literal):
+        limit_val = limit_arg.value
+    elif isinstance(limit_arg, ast.Variable):
+        var_name = limit_arg.name
+        if var_name in context.input_params:
+            limit_val = context.input_params[var_name]
+        else:
+            raise ValueError(f"ivg.vector.search: parameter '${var_name}' not found in params")
+    else:
+        raise ValueError("ivg.vector.search: fourth argument (limit) must be an integer literal or parameter")
+    try:
+        limit_int = int(limit_val)
+    except (TypeError, ValueError):
+        raise ValueError(f"ivg.vector.search: limit must be an integer, got {limit_val!r}")
+    if limit_int <= 0:
+        raise ValueError(f"ivg.vector.search: limit must be > 0, got {limit_int}")
+
+    # Resolve options
+    raw_options = proc.options or {}
+    # Resolve any Literal-wrapped option values
+    options: Dict[str, Any] = {}
+    for k, v in raw_options.items():
+        options[k] = v.value if isinstance(v, ast.Literal) else v
+
+    similarity = options.get("similarity", "cosine")
+    if similarity not in ("cosine", "dot_product"):
+        raise ValueError(f"ivg.vector.search: similarity must be 'cosine' or 'dot_product', got {similarity!r}")
+
+    vector_fn = "VECTOR_COSINE" if similarity == "cosine" else "VECTOR_DOT_PRODUCT"
+    emb_table = _table("kg_NodeEmbeddings")
+    labels_tbl = _table("rdf_labels")
+
+    # Determine mode and build SQL expression + ordered params
+    if isinstance(query_input, list):
+        # Mode 1: pre-computed vector
+        vec_json = json.dumps(query_input)
+        similarity_expr = f"{vector_fn}(e.emb, TO_VECTOR(?))"
+        ordered_params: List[Any] = [vec_json, label]
+    elif isinstance(query_input, str):
+        # Mode 2: text via IRIS EMBEDDING() function
+        embedding_config: Optional[str] = options.get("embedding_config")
+        if not embedding_config:
+            raise ValueError(
+                "ivg.vector.search: 'embedding_config' option required when query_input is a string (Mode 2)"
+            )
+        similarity_expr = f"{vector_fn}(e.emb, EMBEDDING(?, ?))"
+        ordered_params = [query_input, embedding_config, label]
+    else:
+        raise ValueError(
+            f"ivg.vector.search: query_input must be a list[float] or str, got {type(query_input).__name__}"
+        )
+
+    # Build VecSearch CTE SQL
+    # Uses HNSW index automatically via TOP N + ORDER BY similarity DESC pattern
+    cte_sql = (
+        f"SELECT TOP {limit_int} e.node_id AS node, {similarity_expr} AS score\n"
+        f"FROM {emb_table} e\n"
+        f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?\n"
+        f"ORDER BY score DESC"
+    )
+
+    context.all_stage_params.extend(ordered_params)
+    context.stages.insert(0, f"VecSearch AS (\n{cte_sql}\n)")
+
+    # Pre-populate variable_aliases so subsequent MATCH/RETURN can resolve YIELD variables.
+    # 'node' is the node_id column; 'score' is a scalar float — mark it accordingly.
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "VecSearch"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
 def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None) -> SQLQuery:
     context = TranslationContext()
     context.input_params = params or {}
     metadata = QueryMetadata()
     is_transactional = False
+
+    # Handle CALL procedure (vector search) — emits VecSearch CTE before any MATCH stages
+    if cypher_query.procedure_call is not None:
+        translate_procedure_call(cypher_query.procedure_call, context)
 
     for i, part in enumerate(cypher_query.query_parts):
         context.select_items, context.from_clauses, context.join_clauses = [], [], []
@@ -502,7 +641,10 @@ def translate_expression(expr, context, segment="select") -> str:
                 return context.add_where_param(v)
             raise ValueError(f"Undefined: {expr.name}")
         if alias.startswith('Stage'): return f"{alias}.{expr.name}"
-        return f"{alias}.p" if alias.startswith('e') else f"{alias}.node_id"
+        if alias.startswith('e'): return f"{alias}.p"
+        # Scalar variables from CALL YIELD (e.g. 'score') are referenced by column name directly
+        if expr.name in context.scalar_variables: return f"{alias}.{expr.name}"
+        return f"{alias}.node_id"
     if isinstance(expr, ast.Literal):
         v = expr.value
         # Boolean/NULL literals translate to SQL constants — no parameterization needed
@@ -569,7 +711,9 @@ def translate_return_clause(ret, context):
         if isinstance(item.expression, ast.Variable):
             var_name = item.expression.name
             alias_name = context.variable_aliases.get(var_name)
-            if alias_name and not alias_name.startswith("e"):
+            # Skip node expansion for scalar variables (e.g. 'score' from CALL YIELD)
+            is_scalar = var_name in context.scalar_variables
+            if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
                 node_expr = f"{alias_name}.{var_name}" if alias_name.startswith("Stage") else f"{alias_name}.node_id"
                 context.select_items.append(f"{node_expr} AS {prefix}_id")

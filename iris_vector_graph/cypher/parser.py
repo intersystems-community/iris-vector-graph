@@ -55,10 +55,94 @@ class Parser:
             return True
         return False
 
+    def parse_procedure_call(self) -> ast.CypherProcedureCall:
+        """Parse CALL ivg.vector.search(args...) YIELD node, score [, ...]"""
+        self.expect(TokenType.CALL)
+
+        # Parse dotted procedure name: IDENTIFIER (DOT IDENTIFIER)*
+        name_tok = self.expect(TokenType.IDENTIFIER)
+        procedure_name = name_tok.value or ""
+        while self.peek().kind == TokenType.DOT:
+            self.eat()  # consume DOT
+            part_tok = self.expect(TokenType.IDENTIFIER)
+            procedure_name += "." + (part_tok.value or "")
+
+        # Parse argument list
+        self.expect(TokenType.LPAREN)
+        arguments = []
+        options: Dict[str, Any] = {}
+        if self.peek().kind != TokenType.RPAREN:
+            while True:
+                # Options map literal as last argument: {key: value, ...}
+                if self.peek().kind == TokenType.LBRACE:
+                    self.eat()  # consume LBRACE
+                    options = self.parse_map_literal()
+                    self.expect(TokenType.RBRACE)
+                else:
+                    arguments.append(self.parse_expression())
+                if not self.matches(TokenType.COMMA):
+                    break
+        self.expect(TokenType.RPAREN)
+
+        # Parse YIELD items
+        yield_items: List[str] = []
+        if self.peek().kind == TokenType.YIELD:
+            self.eat()  # consume YIELD
+            while True:
+                tok = self.expect(TokenType.IDENTIFIER)
+                yield_items.append(tok.value or "")
+                if not self.matches(TokenType.COMMA):
+                    break
+
+        return ast.CypherProcedureCall(
+            procedure_name=procedure_name,
+            arguments=arguments,
+            yield_items=yield_items,
+            options=options,
+        )
+
     def parse(self) -> ast.CypherQuery:
         """Entry point for parsing a complete query"""
         query_parts = []
-        
+
+        # CALL clause — must appear before any MATCH
+        if self.peek().kind == TokenType.CALL:
+            proc = self.parse_procedure_call()
+
+            # Optional subsequent MATCH/WITH stages
+            while self.peek().kind in (TokenType.MATCH, TokenType.WITH) or (
+                self.peek().kind == TokenType.IDENTIFIER
+                and self.peek().value
+                and self.peek().value.upper() == "OPTIONAL"
+            ):
+                if self.peek().kind == TokenType.WITH:
+                    with_clause = self.parse_with_clause()
+                    part = self.parse_query_part()
+                    if query_parts:
+                        query_parts[-1].with_clause = with_clause
+                    query_parts.append(part)
+                else:
+                    query_parts.append(self.parse_query_part())
+
+            return_clause = None
+            if self.peek().kind == TokenType.RETURN:
+                return_clause = self.parse_return_clause()
+
+            order_by = self.parse_order_by_clause()
+            skip = self.parse_skip()
+            limit = self.parse_limit()
+
+            self.expect(TokenType.EOF)
+
+            return ast.CypherQuery(
+                query_parts=query_parts,
+                return_clause=return_clause,
+                order_by_clause=order_by,
+                skip=skip,
+                limit=limit,
+                procedure_call=proc,
+            )
+
         # Parse first QueryPart (MATCH ...)
         query_parts.append(self.parse_query_part())
         
