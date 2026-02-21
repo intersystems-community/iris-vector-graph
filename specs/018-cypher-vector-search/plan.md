@@ -18,7 +18,7 @@ The implementation extends the existing recursive-descent parser and CTE-based S
 **Language/Version**: Python 3.11 (same as existing library)  
 **Primary Dependencies**: `intersystems-irispython>=3.2.0`, `iris-devtester>=1.8.1` (dev/test only) — no new runtime dependencies  
 **Storage**: InterSystems IRIS — `Graph_KG.kg_NodeEmbeddings`, `Graph_KG.nodes`, `Graph_KG.rdf_labels`, `Graph_KG.rdf_edges` (no schema changes)  
-**Testing**: `pytest` — unit (no IRIS), integration (IRIS SQL layer), e2e (full round-trip via `IRISContainer.attach("los-iris")`)  
+**Testing**: `pytest` — unit (no IRIS), integration (IRIS SQL layer), e2e (full round-trip via `IRISContainer.attach("iris_vector_graph")`)  
 **Target Platform**: Any platform running IRIS 2024.1+ (Mode 1); IRIS 2024.3+ required for Mode 2  
 **Performance Goals**: Top-10 cosine search < 100ms for datasets up to 1M nodes on recommended IRIS infrastructure (SC-001)  
 **Constraints**: No new PyPI dependencies added to `[project.dependencies]`; `iris-vector-rag` MUST NOT become a dependency  
@@ -37,10 +37,10 @@ The implementation extends the existing recursive-descent parser and CTE-based S
 **Principle III (Test-First)**: ✅ Unit tests written and verified failing before implementation; integration and e2e tests written before implementation of e2e path.
 
 **Principle IV (IRIS Integration & E2E — non-negotiable)**:
-- [x] Dedicated named IRIS container `los-iris` managed by `iris-devtester`
+- [x] Dedicated named IRIS container `iris_vector_graph` managed by `iris-devtester`
 - [x] Explicit e2e test phase (Phase 4 below — non-optional)
 - [x] `SKIP_IRIS_TESTS` defaults to `"false"` in all new test files
-- [x] No hardcoded IRIS ports — all resolved via `IRISContainer.attach("los-iris").get_exposed_port(1972)`
+- [x] No hardcoded IRIS ports — all resolved via `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)`
 
 **Principle V (Simplicity)**: ✅ CTE-based translation reuses existing `context.stages` machinery. No new abstraction layers. Procedure dispatch is a single `if procedure_name == "ivg.vector.search"` check.
 
@@ -80,7 +80,7 @@ tests/
 ├── integration/
 │   └── test_cypher_vector_search.py    # NEW — 6 integration tests, live IRIS SQL
 └── e2e/
-    └── test_cypher_vector_search.py    # NEW — 7 e2e tests, IRISContainer.attach("los-iris")
+    └── test_cypher_vector_search.py    # NEW — 7 e2e tests, IRISContainer.attach("iris_vector_graph")
 ```
 
 **Structure Decision**: Single project layout (existing). No new packages, modules, or directories beyond the 3 new test files and 5 modified source files.
@@ -106,7 +106,7 @@ All NEEDS CLARIFICATION items resolved:
 | HNSW auto-use | Yes — `TOP N + ORDER BY VECTOR_COSINE(...) DESC` triggers it; no hint needed |
 | Node hydration | Two-query via existing `get_nodes()` after SQL returns `(node_id, score)` |
 | Security | `kg_NodeEmbeddings` in `VALID_GRAPH_TABLES`; `label` validated via `validate_table_name` |
-| e2e container | `IRISContainer.attach("los-iris").get_exposed_port(1972)` |
+| e2e container | `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)` |
 
 ---
 
@@ -198,7 +198,7 @@ All principles hold. No complexity violations. No abstraction layers added beyon
 **File**: `tests/e2e/test_cypher_vector_search.py`
 
 - 7 e2e tests — full `execute_cypher()` round-trip including node hydration, composability, Mode 2, error handling, benchmark
-- Uses `IRISContainer.attach("los-iris").get_exposed_port(1972)`
+- Uses `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)`
 - `SKIP_IRIS_TESTS` defaults to `"false"`
 - Test fixture creates HNSW index and seeds test data before tests run
 

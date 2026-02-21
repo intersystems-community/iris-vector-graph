@@ -74,8 +74,12 @@ Examples of foundational tasks (adjust based on your project):
   If this feature has IRIS as a backend component, ADD the following tasks
   to this phase. They BLOCK all user story work.
 
-  - [ ] TXXX Verify iris-devtester `IRISContainer.attach("los-iris")` resolves correctly
-  - [ ] TXXX Confirm IRIS container name is `los-iris` (dedicated to this project)
+  > **Principle VI**: Before filling in any value below, verify it against the
+  > authoritative source. Container name → docker-compose.yml. Port → docker-compose.yml.
+  > NEVER assume. NEVER copy from another project.
+
+  - [ ] TXXX Verify container name in docker-compose.yml is `iris_vector_graph` (re-check before every feature)
+  - [ ] TXXX Verify iris-devtester `IRISContainer.attach("iris_vector_graph")` resolves correctly
   - [ ] TXXX Confirm all new test files use `os.environ.get("SKIP_IRIS_TESTS", "false")`
   - [ ] TXXX Confirm no hardcoded ports (1972, 11972, etc.) in test code or fixtures
 
@@ -83,7 +87,7 @@ Examples of foundational tasks (adjust based on your project):
 
   ## Phase N-1: End-to-End Tests (IRIS — Principle IV, Non-Optional)
 
-  **Purpose**: Validate all user stories against the live `los-iris` IRIS container
+  **Purpose**: Validate all user stories against the live `iris_vector_graph` IRIS container
 
   - [ ] TXXX [US1] e2e test: [user story 1 scenario] in tests/e2e/test_[feature].py
   - [ ] TXXX [US2] e2e test: [user story 2 scenario] in tests/e2e/test_[feature].py

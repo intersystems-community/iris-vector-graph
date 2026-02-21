@@ -1,30 +1,23 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.0.0 → 1.1.0 (MINOR — Principle IV materially expanded; new tooling constraint added)
-Bump rationale: Adding mandatory e2e test discipline with named IRIS container managed by iris-devtester
-  is a material expansion of existing Principle IV (Integration Testing for IRIS). No principles removed
-  or redefined; no backward-incompatible governance changes.
+Version change: 1.1.0 → 1.1.1 (PATCH — clarification; no principles added or removed)
+Bump rationale: Principle IV example container name corrected from "los-iris" (a different
+  project's container) to the actual project container name "iris_vector_graph" (from
+  docker-compose.yml). Added Principle VI (Grounding Rule) to prevent recurrence: any
+  infrastructure detail written into specs, tests, or templates MUST first be verified
+  against the authoritative source in the repository (docker-compose.yml, pyproject.toml,
+  conftest.py) before use. No placeholder values, no assumed names from other projects.
 
 Modified principles:
-  - IV. Integration Testing for IRIS → IV. Integration & End-to-End Testing for IRIS
-    (expanded: e2e tests now mandatory for any feature with IRIS as a backend component;
-     container MUST be named, dedicated to the project, and managed by iris-devtester)
-
-Added sections: none
-Removed sections: none
+  - IV: example container name corrected (iris_vector_graph, not los-iris)
+  - VI: new principle added — Grounding Rule (verify before you write)
 
 Templates requiring updates:
-  ✅ .specify/templates/tasks-template.md — Phase 2 Foundational section updated to reference
-     iris-devtester container setup as a blocking prerequisite for IRIS-backend features.
-  ✅ .specify/templates/plan-template.md — Constitution Check section updated to gate on
-     Principle IV (e2e test requirement).
-  ⚠  .specify/templates/spec-template.md — No structural change required; Principle IV is
-     enforced at plan/tasks time, not at spec time. No update needed.
-  ⚠  .specify/templates/agent-file-template.md — Review manually if it references testing
-     discipline; not read (out of scope for this amendment).
+  ✅ .specify/templates/plan-template.md — container name corrected
+  ✅ .specify/templates/tasks-template.md — container name corrected
 
-Deferred items: none — all placeholders resolved.
+Deferred items: none.
 -->
 
 # iris-vector-graph Constitution
@@ -54,9 +47,11 @@ Any feature that includes IRIS as a backend component MUST include comprehensive
 (e2e) tests that run against a live IRIS container. The following rules are non-negotiable:
 
 - The IRIS container MUST be named and dedicated to this project (not shared or anonymous).
+  The container name for this project is `iris_vector_graph` (defined in `docker-compose.yml`).
+  NEVER use a container name from another project.
 - Container lifecycle (start, stop, port resolution, credentials) MUST be managed exclusively
-  by `iris-devtester` (`IRISContainer.attach("los-iris")` pattern). IRIS ports MUST NOT be
-  hardcoded in test code or fixtures.
+  by `iris-devtester` (`IRISContainer.attach("iris_vector_graph")` pattern). IRIS ports MUST
+  NOT be hardcoded in test code or fixtures.
 - The environment variable `SKIP_IRIS_TESTS` MUST default to `"false"`. Tests always hit the
   live database unless explicitly overridden by the developer.
 - Changes that affect database behavior or SQL translation MUST additionally include
@@ -73,6 +68,25 @@ historically caused regressions discovered only by downstream consumers (`posos`
 Prefer the simplest design that meets requirements. Avoid unnecessary abstractions or
 over-engineering. Every layer of indirection MUST be justified by a concrete requirement.
 
+### VI. Grounding Rule (Verify Before You Write)
+
+Any infrastructure detail — container names, port numbers, schema names, credentials,
+package names, file paths — written into specs, tests, templates, or commit messages MUST
+first be verified against the authoritative source in this repository before use.
+
+**Authoritative sources**:
+- Container name → `docker-compose.yml` (`container_name:` field)
+- IRIS port → `docker-compose.yml` (`ports:` field)
+- Package name / version → `pyproject.toml`
+- Schema prefix → `iris_vector_graph/engine.py` (`set_schema_prefix(...)` call)
+- Test infrastructure → `tests/conftest.py`
+
+**Never assume. Never copy from another project. Always look first.**
+
+Violation of this rule caused the `los-iris` incident (Feb 2026): a container name from
+an unrelated project was propagated into the constitution, all spec artifacts, and test
+code before being caught. The fix required amending 8+ files. The cost is not acceptable.
+
 ## Additional Constraints
 
 - Use the existing RDF schema (`nodes`, `rdf_labels`, `rdf_props`, `rdf_edges`,
@@ -88,6 +102,8 @@ over-engineering. Every layer of indirection MUST be justified by a concrete req
 - Feature changes MUST be grouped by user story to support incremental delivery.
 - Every plan for a feature with an IRIS backend component MUST include an explicit e2e test
   task group (per Principle IV) as a non-optional phase, not as a polish/optional item.
+- Before writing any infrastructure detail into a spec or test, verify it against the
+  authoritative source (Principle VI). This is a blocking prerequisite, not a suggestion.
 
 ## Governance
 
@@ -96,4 +112,4 @@ amendments MUST be documented and explicitly approved before implementation begi
 Version increments follow semantic versioning: MAJOR for backward-incompatible governance
 changes, MINOR for new or materially expanded principles, PATCH for clarifications.
 
-**Version**: 1.1.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-02-21
+**Version**: 1.1.1 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-02-21

@@ -154,7 +154,7 @@ The CTE exposes `node_id AS node`. When the YIELD variable `node` is referenced 
 ## 7. iris-devtester e2e Pattern
 
 ### Current state (Principle IV violation)
-The existing `tests/integration/conftest.py` uses `os.getenv("IRIS_PORT", 1972)` — hardcoded default port, no container management. The primary `tests/conftest.py` uses `IRISContainer(image=...).start()` with container name `"iris-vector-graph-main"` — not `"los-iris"`.
+The existing `tests/integration/conftest.py` uses `os.getenv("IRIS_PORT", 1972)` — hardcoded default port, no container management. The primary `tests/conftest.py` uses `IRISContainer(image=...).start()` with container name `"iris-vector-graph-main"` — not `"iris_vector_graph"`.
 
 ### Decision for feature 018 e2e tests
 New e2e test file `tests/e2e/test_cypher_vector_search.py` will use:
@@ -167,7 +167,7 @@ SKIP = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 @pytest.fixture(scope="session")
 def iris_conn():
-    container = IRISContainer.attach("los-iris")
+    container = IRISContainer.attach("iris_vector_graph")
     port = container.get_exposed_port(1972)
     # ... connect
 ```
@@ -201,4 +201,4 @@ Both `cosine` and `dot_product` are supported as translator options. The transla
 | Vector input mode 2 | `str` + `embedding_config` → `EMBEDDING(?, ?)` with lazy IRIS probe |
 | Node shape | Two-query hydration via `get_nodes()` after SQL returns `(node_id, score)` |
 | HNSW index auto-use | Yes, via `TOP N + ORDER BY VECTOR_COSINE(...) DESC` — no hint needed |
-| e2e test container | `IRISContainer.attach("los-iris").get_exposed_port(1972)` |
+| e2e test container | `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)` |

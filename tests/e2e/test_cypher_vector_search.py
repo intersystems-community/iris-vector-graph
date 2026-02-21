@@ -4,8 +4,8 @@ E2E tests for CALL ivg.vector.search(...) YIELD node, score
 Full round-trip tests via IRISGraphEngine.execute_cypher(), exercising the
 complete stack: Cypher parser → SQL translator → IRIS execution → node hydration.
 
-Container management: iris-devtester manages the 'los-iris' named container.
-Port resolution: IRISContainer.attach("los-iris").get_exposed_port(1972)
+Container management: iris-devtester manages the 'iris_vector_graph' named container.
+Port resolution: IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)
 SKIP_IRIS_TESTS defaults to "false" — tests always hit live IRIS.
 
 Constitution Principle IV: mandatory e2e coverage, no hardcoded ports.
@@ -28,7 +28,7 @@ TEST_PREFIX = "ivg_e2e_vs:"
 
 @pytest.fixture(scope="module")
 def iris_engine():
-    """Connect to the los-iris container and return an IRISGraphEngine instance.
+    """Connect to the iris_vector_graph container and return an IRISGraphEngine instance.
 
     Uses iris-devtester for port resolution — no hardcoded ports.
     """
@@ -38,10 +38,10 @@ def iris_engine():
         pytest.skip("iris-devtester not installed")
 
     try:
-        container = IRISContainer.attach("los-iris")
+        container = IRISContainer.attach("iris_vector_graph")
         port = container.get_exposed_port(1972)
     except Exception as e:
-        pytest.skip(f"Could not attach to los-iris container: {e}")
+        pytest.skip(f"Could not attach to iris_vector_graph container: {e}")
 
     try:
         import irisnative

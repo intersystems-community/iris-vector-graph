@@ -178,8 +178,8 @@ except ValueError as e:
 ## Running the E2E Tests
 
 ```bash
-# Ensure the los-iris container is running (managed by idt)
-idt start los-iris
+# Ensure the iris_vector_graph container is running (managed by idt)
+idt start iris_vector_graph
 
 # Run all feature 018 tests
 cd /path/to/iris-vector-graph

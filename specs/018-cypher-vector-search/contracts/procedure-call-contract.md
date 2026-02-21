@@ -184,7 +184,7 @@ Runs against live IRIS, validates SQL layer:
 
 ## E2E Test Contract (`tests/e2e/test_cypher_vector_search.py`)
 
-Full round-trip via `IRISContainer.attach("los-iris")`:
+Full round-trip via `IRISContainer.attach("iris_vector_graph")`:
 
 1. `execute_cypher` returns hydrated node dicts with correct shape
 2. `score` values are numeric and in expected range for cosine
