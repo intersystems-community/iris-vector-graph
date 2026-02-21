@@ -36,6 +36,8 @@ class TokenType(enum.Enum):
     REMOVE = "REMOVE"
     ON = "ON"
     DETACH = "DETACH"
+    CALL = "CALL"
+    YIELD = "YIELD"
 
     # Literals and Identifiers
     IDENTIFIER = "IDENTIFIER"
