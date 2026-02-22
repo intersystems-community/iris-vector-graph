@@ -39,19 +39,9 @@ def iris_engine():
 
     try:
         container = IRISContainer.attach("iris_vector_graph")
-        port = container.get_exposed_port(1972)
+        conn = container.get_connection()
     except Exception as e:
         pytest.skip(f"Could not attach to iris_vector_graph container: {e}")
-
-    try:
-        import irisnative
-        conn = irisnative.createConnection("localhost", port, "USER", "_SYSTEM", "SYS")
-    except Exception:
-        try:
-            from iris_devtester.utils.dbapi_compat import get_connection
-            conn = get_connection("localhost", port, "USER", "_SYSTEM", "SYS")
-        except Exception as e:
-            pytest.skip(f"Could not connect to IRIS at port {port}: {e}")
 
     from iris_vector_graph.engine import IRISGraphEngine
     engine = IRISGraphEngine(conn, embedding_dimension=3)
@@ -105,10 +95,12 @@ def vector_test_nodes(iris_engine):
                 pass
             vec_json = json.dumps(vec)
             try:
+                # NOTE: kg_NodeEmbeddings uses 'id' as PK column (not 'node_id')
                 cursor.execute(
-                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (node_id, emb) "
-                    f"VALUES (?, TO_VECTOR(?))",
-                    [node_id, vec_json],
+                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) "
+                    f"SELECT ?, TO_VECTOR(?) WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM {_table('kg_NodeEmbeddings')} WHERE id = ?)",
+                    [node_id, vec_json, node_id],
                 )
             except Exception:
                 pass
@@ -138,7 +130,7 @@ def vector_test_nodes(iris_engine):
     try:
         for node_id in node_ids:
             cursor.execute(
-                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id = ?", [node_id]
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
             )
             cursor.execute(
                 f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id]
@@ -176,7 +168,7 @@ class TestVectorSearchE2E:
             "YIELD node, score RETURN node, score"
         )
         score_col = result["columns"].index("score")
-        scores = [row[score_col] for row in result["rows"]]
+        scores = [float(row[score_col]) for row in result["rows"]]
         assert scores == sorted(scores, reverse=True), f"Out of order: {scores}"
 
     def test_label_filter_only_returns_genes(self, iris_engine, vector_test_nodes):

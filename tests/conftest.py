@@ -225,7 +225,7 @@ def iris_test_container(request):
     container.stop()
 
 
-@pytest.fixture(scope="function", autouse=True)
+@pytest.fixture(scope="function")
 def iris_master_cleanup(iris_connection):
     """Ensure a clean state at the start of each test."""
     cursor = iris_connection.cursor()

@@ -46,21 +46,30 @@ def vec_search_data(iris_connection):
 
     try:
         for node_id, label, vec in nodes:
-            # Insert node
-            cursor.execute(
-                "INSERT OR IGNORE INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id]
-            )
-            cursor.execute(
-                "INSERT OR IGNORE INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
-                [node_id, label],
-            )
+            # Insert node — ignore duplicate key errors (IRIS does not support INSERT OR IGNORE)
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id]
+                )
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
+                    [node_id, label],
+                )
+            except Exception:
+                pass
             # Insert embedding (3-d)
+            # NOTE: kg_NodeEmbeddings uses 'id' as PK column (not 'node_id')
             vec_json = json.dumps(vec)
-            cursor.execute(
-                "INSERT OR IGNORE INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) "
-                "VALUES (?, TO_VECTOR(?))",
-                [node_id, vec_json],
-            )
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                    [node_id, vec_json],
+                )
+            except Exception:
+                pass
         iris_connection.commit()
     except Exception:
         iris_connection.rollback()
@@ -87,7 +96,7 @@ def vec_search_data(iris_connection):
     try:
         for node_id in node_ids:
             cursor.execute(
-                "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", [node_id]
+                "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?", [node_id]
             )
             cursor.execute(
                 "DELETE FROM Graph_KG.rdf_labels WHERE s = ?", [node_id]
@@ -148,7 +157,7 @@ class TestVectorSearchSQL:
             "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
             "YIELD node, score RETURN node, score",
         )
-        scores = [row[result["columns"].index("score")] for row in result["rows"]]
+        scores = [float(row[result["columns"].index("score")]) for row in result["rows"]]
         assert scores == sorted(scores, reverse=True), f"Scores not descending: {scores}"
 
     def test_label_filter_restricts_results(self, vec_search_data):
