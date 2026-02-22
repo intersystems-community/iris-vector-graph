@@ -265,6 +265,7 @@ class CypherProcedureCall:
     procedure_name: str
     arguments: List[Union[Literal, Variable, PropertyReference]]
     yield_items: List[str] = field(default_factory=list)
+    options: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

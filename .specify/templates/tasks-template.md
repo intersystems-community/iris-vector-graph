@@ -69,6 +69,33 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] T008 Configure error handling and logging infrastructure
 - [ ] T009 Setup environment configuration management
 
+<!--
+  IRIS-BACKEND FEATURES (Constitution Principle IV — non-negotiable):
+  If this feature has IRIS as a backend component, ADD the following tasks
+  to this phase. They BLOCK all user story work.
+
+  > **Principle VI**: Before filling in any value below, verify it against the
+  > authoritative source. Container name → docker-compose.yml. Port → docker-compose.yml.
+  > NEVER assume. NEVER copy from another project.
+
+  - [ ] TXXX Verify container name in docker-compose.yml is `iris_vector_graph` (re-check before every feature)
+  - [ ] TXXX Verify iris-devtester `IRISContainer.attach("iris_vector_graph")` resolves correctly
+  - [ ] TXXX Confirm all new test files use `os.environ.get("SKIP_IRIS_TESTS", "false")`
+  - [ ] TXXX Confirm no hardcoded ports (1972, 11972, etc.) in test code or fixtures
+
+  AND ADD a dedicated e2e test phase BEFORE the Polish phase (not inside it):
+
+  ## Phase N-1: End-to-End Tests (IRIS — Principle IV, Non-Optional)
+
+  **Purpose**: Validate all user stories against the live `iris_vector_graph` IRIS container
+
+  - [ ] TXXX [US1] e2e test: [user story 1 scenario] in tests/e2e/test_[feature].py
+  - [ ] TXXX [US2] e2e test: [user story 2 scenario] in tests/e2e/test_[feature].py
+  - [ ] TXXX [USN] e2e test: [user story N scenario] in tests/e2e/test_[feature].py
+
+  **Checkpoint**: All acceptance scenarios from spec.md pass against live IRIS
+-->
+
 **Checkpoint**: Foundation ready - user story implementation can now begin in parallel
 
 ---
