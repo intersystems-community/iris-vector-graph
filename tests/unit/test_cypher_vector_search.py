@@ -119,7 +119,7 @@ class TestTranslator:
         sql_q = translate_to_sql(q)
         assert "VecSearch AS" in sql_q.sql
         assert "VECTOR_COSINE" in sql_q.sql
-        assert "TO_VECTOR(?)" in sql_q.sql
+        assert "TO_VECTOR(?" in sql_q.sql  # matches TO_VECTOR(?, 'DOUBLE')
         assert "kg_NodeEmbeddings" in sql_q.sql
 
     def test_mode1_label_filter_in_sql(self):

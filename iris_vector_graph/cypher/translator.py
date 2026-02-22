@@ -166,9 +166,9 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     Supported procedure: ivg.vector.search(label, property, query_input, limit [, options])
 
     Mode 1 — pre-computed vector (list[float]):
-        SELECT TOP {limit} node_id AS node, VECTOR_COSINE(..., TO_VECTOR(?)) AS score ...
+        SELECT TOP {limit} e.id AS node, VECTOR_COSINE(..., TO_VECTOR(?)) AS score ...
     Mode 2 — text via IRIS EMBEDDING() (requires IRIS 2024.3+):
-        SELECT TOP {limit} node_id AS node, VECTOR_COSINE(..., EMBEDDING(?, ?)) AS score ...
+        SELECT TOP {limit} e.id AS node, VECTOR_COSINE(..., EMBEDDING(?, ?)) AS score ...
 
     The caller (engine.execute_cypher) is responsible for detecting Mode 2 availability
     and raising UnsupportedOperationError before SQL is executed if EMBEDDING() is absent.
@@ -255,8 +255,10 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     # Determine mode and build SQL expression + ordered params
     if isinstance(query_input, list):
         # Mode 1: pre-computed vector
+        # Use TO_VECTOR(?, DOUBLE) — unquoted keyword — to match VECTOR(DOUBLE, N) column type.
+        # IRIS requires the type specifier as a keyword literal (not a string literal or bind param).
         vec_json = json.dumps(query_input)
-        similarity_expr = f"{vector_fn}(e.emb, TO_VECTOR(?))"
+        similarity_expr = f"{vector_fn}(e.emb, TO_VECTOR(?, DOUBLE))"
         ordered_params: List[Any] = [vec_json, label]
     elif isinstance(query_input, str):
         # Mode 2: text via IRIS EMBEDDING() function
@@ -274,10 +276,11 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
 
     # Build VecSearch CTE SQL
     # Uses HNSW index automatically via TOP N + ORDER BY similarity DESC pattern
+    # NOTE: kg_NodeEmbeddings uses 'id' as the primary key column (not 'node_id')
     cte_sql = (
-        f"SELECT TOP {limit_int} e.node_id AS node, {similarity_expr} AS score\n"
+        f"SELECT TOP {limit_int} e.id AS node, {similarity_expr} AS score\n"
         f"FROM {emb_table} e\n"
-        f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?\n"
+        f"JOIN {labels_tbl} lbl ON lbl.s = e.id AND lbl.label = ?\n"
         f"ORDER BY score DESC"
     )
 
@@ -285,7 +288,7 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     context.stages.insert(0, f"VecSearch AS (\n{cte_sql}\n)")
 
     # Pre-populate variable_aliases so subsequent MATCH/RETURN can resolve YIELD variables.
-    # 'node' is the node_id column; 'score' is a scalar float — mark it accordingly.
+    # 'node' is the id column aliased as 'node'; 'score' is a scalar float — mark it accordingly.
     for item in proc.yield_items:
         context.variable_aliases[item] = "VecSearch"
     if "score" in proc.yield_items:
@@ -301,12 +304,21 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
     # Handle CALL procedure (vector search) — emits VecSearch CTE before any MATCH stages
     if cypher_query.procedure_call is not None:
         translate_procedure_call(cypher_query.procedure_call, context)
+        # If there are no subsequent query parts (pure CALL ... YIELD ... RETURN), set FROM now.
+        # If there are query parts, FROM is set per-part in the loop below.
+        if not cypher_query.query_parts:
+            context.from_clauses.append("VecSearch")
 
     for i, part in enumerate(cypher_query.query_parts):
         context.select_items, context.from_clauses, context.join_clauses = [], [], []
         context.where_conditions, context.group_by_items = [], []
         context.select_params, context.join_params, context.where_params = [], [], []
-        if i > 0: context.from_clauses.append(f"Stage{i}")
+        if i > 0:
+            context.from_clauses.append(f"Stage{i}")
+        elif cypher_query.procedure_call is not None:
+            # Re-add VecSearch as the primary FROM source for the first query part
+            # when a CALL procedure is present (it was cleared by the reset above).
+            context.from_clauses.append("VecSearch")
         for clause in part.clauses:
             if isinstance(clause, ast.MatchClause): translate_match_clause(clause, context, metadata)
             elif isinstance(clause, ast.UnwindClause): translate_unwind_clause(clause, context)
@@ -556,8 +568,15 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
     target_alias = context.register_variable(target_node.variable)
     edge_alias = context.register_variable(rel.variable, prefix="e") if rel.variable else context.next_alias("e")
     
-    s_col = source_node.variable if source_alias.startswith('Stage') else "node_id"
-    t_col = target_node.variable if target_alias.startswith('Stage') else "node_id"
+    # Stage CTEs expose the variable name as the column; VecSearch exposes 'node' as the column.
+    # Regular node tables expose 'node_id'. CTE aliases that start with 'Stage' or equal 'VecSearch'
+    # use the variable name directly.
+    def _node_col(variable, alias):
+        if alias.startswith('Stage') or alias == 'VecSearch':
+            return variable
+        return "node_id"
+    s_col = _node_col(source_node.variable, source_alias)
+    t_col = _node_col(target_node.variable, target_alias)
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
     
     if rel.direction == ast.Direction.OUTGOING:
@@ -715,7 +734,8 @@ def translate_return_clause(ret, context):
             is_scalar = var_name in context.scalar_variables
             if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
-                node_expr = f"{alias_name}.{var_name}" if alias_name.startswith("Stage") else f"{alias_name}.node_id"
+                # VecSearch CTE columns are named by their alias (e.g. 'node'), not 'node_id'
+                node_expr = f"{alias_name}.{var_name}" if alias_name.startswith("Stage") or alias_name == "VecSearch" else f"{alias_name}.node_id"
                 context.select_items.append(f"{node_expr} AS {prefix}_id")
                 context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
                 context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")
