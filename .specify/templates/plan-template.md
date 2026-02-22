@@ -33,6 +33,18 @@
 
 [Gates determined based on constitution file]
 
+**Principle IV gate (IRIS-backend features)**: If this feature has IRIS as a backend
+component, confirm the plan includes:
+- [ ] A dedicated, named IRIS container (`iris_vector_graph`) managed by `iris-devtester`
+- [ ] An explicit e2e test phase (non-optional, not in "polish") covering all user stories
+- [ ] `SKIP_IRIS_TESTS` defaulting to `"false"` in all new test files
+- [ ] No hardcoded IRIS ports; all resolved via `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)`
+
+> **Principle VI reminder**: The container name `iris_vector_graph` above was verified from
+> `docker-compose.yml`. If you are using this template for a different project, re-verify
+> ALL infrastructure details (container name, port, schema) against that project's
+> authoritative sources before proceeding. NEVER assume or copy from another project.
+
 ## Project Structure
 
 ### Documentation (this feature)

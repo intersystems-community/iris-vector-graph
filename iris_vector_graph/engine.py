@@ -47,6 +47,8 @@ class IRISGraphEngine:
         self.conn = connection
         self.embedding_dimension = embedding_dimension
         set_schema_prefix("Graph_KG")
+        # Per-instance cache for IRIS EMBEDDING() function availability (Mode 2 vector search)
+        self._embedding_function_available: Optional[bool] = None
 
     def initialize_schema(self) -> None:
         """
@@ -121,6 +123,35 @@ class IRISGraphEngine:
 
         raise ValueError("Embedding dimension could not be determined. Please provide it during IRISGraphEngine initialization.")
 
+    def _probe_embedding_support(self) -> bool:
+        """Probe whether the IRIS EMBEDDING() SQL function is available (IRIS 2024.3+).
+
+        Result is cached per engine instance. Probe strategy:
+        - Execute ``SELECT EMBEDDING('__ivg_probe__', '__nonexistent_config__')``
+        - If the error message contains 'not found' / 'does not exist' → function absent → False
+        - Any other error (e.g. config missing) → function present → True
+        - No error → True
+        """
+        if self._embedding_function_available is not None:
+            return self._embedding_function_available
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT EMBEDDING('__ivg_probe__', '__nonexistent_config__')")
+            self._embedding_function_available = True
+        except Exception as e:
+            err = str(e).lower()
+            if "not found" in err or "does not exist" in err or "unknown function" in err:
+                self._embedding_function_available = False
+            else:
+                # Function exists but config is missing — that's expected for the probe
+                self._embedding_function_available = True
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return bool(self._embedding_function_available)
+
     def _assert_node_exists(self, node_id: str) -> None:
         cursor = self.conn.cursor()
         # Use constant table names or sanitized identifiers
@@ -141,7 +172,32 @@ class IRISGraphEngine:
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
+        from iris_vector_graph.cypher.ast import CypherProcedureCall
+
         parsed = parse_query(cypher_query)
+
+        # Mode 2 guard: if CALL uses a string query_input, verify EMBEDDING() is available
+        if parsed.procedure_call is not None:
+            proc = parsed.procedure_call
+            if proc.procedure_name == "ivg.vector.search" and len(proc.arguments) >= 3:
+                query_input_arg = proc.arguments[2]
+                from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
+                if isinstance(query_input_arg, CypherLiteral) and isinstance(query_input_arg.value, str):
+                    if not self._probe_embedding_support():
+                        raise RuntimeError(
+                            "ivg.vector.search Mode 2 (text input) requires the IRIS EMBEDDING() SQL function "
+                            "(available in IRIS 2024.3+). This IRIS instance does not support it. "
+                            "Pass a pre-computed list[float] vector instead."
+                        )
+                elif isinstance(query_input_arg, CypherVariable):
+                    param_val = (parameters or {}).get(query_input_arg.name)
+                    if isinstance(param_val, str) and not self._probe_embedding_support():
+                        raise RuntimeError(
+                            "ivg.vector.search Mode 2 (text input) requires the IRIS EMBEDDING() SQL function "
+                            "(available in IRIS 2024.3+). This IRIS instance does not support it. "
+                            "Pass a pre-computed list[float] vector instead."
+                        )
+
         sql_query = translate_to_sql(parsed, parameters)
         
         cursor = self.conn.cursor()
