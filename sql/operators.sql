@@ -2,22 +2,29 @@
 -- NOTE: Procedure syntax targets IRIS SQL.
 
 -- 1) KNN over vectors (uses HNSW when TOP + ORDER BY VECTOR_* DESC)
+-- Supports both pre-computed vectors (JSON) and raw text (via embeddingConfig)
 CREATE OR REPLACE PROCEDURE kg_KNN_VEC(
-  IN  queryVector VARCHAR(32000),  -- JSON array of 768 floats
+  IN  queryInput VARCHAR(32000),  -- JSON array of floats OR raw text
   IN  k INT DEFAULT 50,
-  IN  labelFilter VARCHAR(128) DEFAULT NULL
+  IN  labelFilter VARCHAR(128) DEFAULT NULL,
+  IN  embeddingConfig VARCHAR(128) DEFAULT NULL
 )
 RETURNS TABLE (id VARCHAR(256), score DOUBLE)
 LANGUAGE SQL
 BEGIN
-  DECLARE qvec VECTOR(768);
-  SET qvec = TO_VECTOR(queryVector);  -- Parse JSON array to VECTOR
+  DECLARE qvec VECTOR(1000); -- Large enough for most models (384, 768, etc.)
+  
+  IF embeddingConfig IS NOT NULL AND embeddingConfig <> '' THEN
+    SET qvec = EMBEDDING(queryInput, embeddingConfig);
+  ELSE
+    SET qvec = TO_VECTOR(queryInput);
+  END IF;
 
   RETURN
   SELECT TOP (k) n.id, VECTOR_COSINE(n.emb, qvec) AS score
   FROM kg_NodeEmbeddings n
   LEFT JOIN rdf_labels L ON L.s = n.id
-  WHERE labelFilter IS NULL OR L.label = labelFilter
+  WHERE (labelFilter IS NULL OR labelFilter = '' OR L.label = labelFilter)
   ORDER BY VECTOR_COSINE(n.emb, qvec) DESC;
 END;
 
