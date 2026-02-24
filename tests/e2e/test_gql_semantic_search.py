@@ -26,13 +26,15 @@ def test_gql_semantic_search(iris_connection):
     engine.store_embedding(node_id, vec)
     
     try:
-        # 2. Create app
-        app = create_app(engine)
+        # 2. Create app with a mock embedder
+        def mock_embedder(text):
+            return vec
+            
+        app = create_app(engine, embedder=mock_embedder)
         client = TestClient(app)
         
-        # 3. Test semantic search
-        # Query vector as JSON string
-        query_vec = json.dumps(vec)
+        # 3. Test semantic search with raw text
+        query_text = "diabetes medication"
         query = """
         query($query: String!) {
           semanticSearch(query: $query, label: "Searchable") {
@@ -46,7 +48,7 @@ def test_gql_semantic_search(iris_connection):
           }
         }
         """
-        response = client.post("/graphql", json={"query": query, "variables": {"query": query_vec}})
+        response = client.post("/graphql", json={"query": query, "variables": {"query": query_text}})
         assert response.status_code == 200
         data = response.json()
         assert "errors" not in data, f"GraphQL errors: {data.get('errors')}"

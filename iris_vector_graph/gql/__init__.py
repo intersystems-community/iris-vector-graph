@@ -12,10 +12,14 @@ from .pooling import get_pool
 
 logger = logging.getLogger(__name__)
 
-def create_app(engine: IRISGraphEngine, prefix: str = "/graphql") -> FastAPI:
+def create_app(engine: IRISGraphEngine, prefix: str = "/graphql", embedder: Optional[Any] = None) -> FastAPI:
     """
     Creates a FastAPI app with auto-generated GraphQL schema.
     """
+    # Configure engine embedder if provided
+    if embedder:
+        engine.embedder = embedder
+
     gql_engine = GQLGraphEngine(engine)
     schema = build_schema(gql_engine)
     app = FastAPI(title="IRIS Vector Graph Auto-Generated API")
@@ -54,11 +58,12 @@ def serve(
     host: str = "0.0.0.0",
     port: int = 8000,
     prefix: str = "/graphql",
+    embedder: Optional[Any] = None,
     **kwargs
 ):
     """
     Auto-generates and starts a GraphQL server over an IRIS graph store.
     """
-    app = create_app(engine, prefix=prefix)
+    app = create_app(engine, prefix=prefix, embedder=embedder)
     print(f"Starting auto-generated GraphQL server at http://{host}:{port}{prefix}")
     uvicorn.run(app, host=host, port=port, **kwargs)
