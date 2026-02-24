@@ -35,20 +35,50 @@ class IRISGraphEngine:
     # SQL function name - MUST NOT contain '_JSON' or 'JSON_' due to IRIS naming bug
     _PPR_SQL_FUNCTION_NAME = "kg_PPR"
 
-    def __init__(self, connection, embedding_dimension: Optional[int] = None):
+    def __init__(self, connection, embedding_dimension: Optional[int] = None, embedder: Optional[Any] = None):
         """
         Initialize with IRIS database connection.
         
         Args:
             connection: IRIS database connection object
             embedding_dimension: Optional fixed dimension for vector embeddings.
-                                If not provided, it will be auto-detected from the schema.
+                                 If not provided, it will be auto-detected from the schema.
+            embedder: Optional callable or object with .encode() or .embed() method 
+                      for text-to-vector conversion.
         """
         self.conn = connection
         self.embedding_dimension = embedding_dimension
+        self.embedder = embedder
         set_schema_prefix("Graph_KG")
         # Per-instance cache for IRIS EMBEDDING() function availability (Mode 2 vector search)
         self._embedding_function_available: Optional[bool] = None
+
+    def embed_text(self, text: str) -> List[float]:
+        """
+        Converts text to a vector embedding using the configured embedder.
+        """
+        if not self.embedder:
+            # Try to auto-load a default model if sentence-transformers is available
+            try:
+                from sentence_transformers import SentenceTransformer
+                # Use a standard small model if none provided
+                self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
+                logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
+            except ImportError:
+                raise RuntimeError(
+                    "No embedder configured and 'sentence-transformers' not installed. "
+                    "Pass an embedder to IRISGraphEngine or install sentence-transformers."
+                )
+
+        if hasattr(self.embedder, 'encode'):
+            return self.embedder.encode(text).tolist()
+        if hasattr(self.embedder, 'embed'):
+            return self.embedder.embed(text)
+        if callable(self.embedder):
+            return self.embedder(text)
+            
+        raise TypeError(f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)")
+
 
     def initialize_schema(self) -> None:
         """
