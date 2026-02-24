@@ -1,0 +1,61 @@
+interface Node {
+  id: ID!
+  labels: [String!]!
+  properties: [Property!]!
+  incoming(predicate: String, limit: Int): [Relationship!]!
+  outgoing(predicate: String, limit: Int): [Relationship!]!
+}
+
+type Property {
+  key: String!
+  value: String
+}
+
+type Relationship {
+  predicate: String!
+  targetId: ID!
+  node: Node!
+}
+
+type SemanticSearchResult {
+  score: Float!
+  node: Node!
+}
+
+type CypherResult {
+  columns: [String!]!
+  rows: [JSON!]!
+}
+
+scalar JSON
+
+enum Direction {
+  OUTGOING
+  INCOMING
+}
+
+type Query {
+  """
+  Lookup a single node by ID.
+  """
+  node(id: ID!): Node
+
+  """
+  Find nodes by label and optional property filters.
+  """
+  nodes(label: String!, limit: Int = 10, offset: Int = 0): [Node!]!
+
+  """
+  Semantic search using natural language.
+  """
+  semanticSearch(
+    query: String!, 
+    label: String, 
+    limit: Int = 5
+  ): [SemanticSearchResult!]!
+
+  """
+  Raw Cypher query passthrough.
+  """
+  cypher(query: String!, parameters: JSON): CypherResult!
+}

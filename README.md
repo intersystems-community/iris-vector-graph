@@ -83,6 +83,23 @@ FROM nodes
 ORDER BY score DESC
 ```
 
+### Auto-Generating GraphQL
+IRIS Vector Graph includes a generic, zero-config GraphQL layer that automatically builds a schema by introspecting your graph data.
+
+```python
+from iris_vector_graph import IRISGraphEngine, gql
+
+engine = IRISGraphEngine(conn)
+# Starts a FastAPI/Strawberry server with sampled properties and bi-directional traversal
+gql.serve(engine, port=8000)
+```
+
+**Features:**
+- **Dynamic Types**: Auto-generates types like `Protein` or `Account` based on discovered labels.
+- **Top-level Properties**: Maps sampled properties to schema fields with keyword collision handling.
+- **Bi-directional**: Follow both `incoming` and `outgoing` relationships.
+- **Connection Pooling**: Safely handles concurrency within IRIS Community connection limits.
+
 ---
 
 ## Scaling & Performance
