@@ -35,7 +35,13 @@ class IRISGraphEngine:
     # SQL function name - MUST NOT contain '_JSON' or 'JSON_' due to IRIS naming bug
     _PPR_SQL_FUNCTION_NAME = "kg_PPR"
 
-    def __init__(self, connection, embedding_dimension: Optional[int] = None, embedder: Optional[Any] = None):
+    def __init__(
+        self, 
+        connection, 
+        embedding_dimension: Optional[int] = None, 
+        embedder: Optional[Any] = None,
+        embedding_config: Optional[str] = None
+    ):
         """
         Initialize with IRIS database connection.
         
@@ -45,29 +51,54 @@ class IRISGraphEngine:
                                  If not provided, it will be auto-detected from the schema.
             embedder: Optional callable or object with .encode() or .embed() method 
                       for text-to-vector conversion.
+            embedding_config: Optional name of the IRIS embedding configuration 
+                              (for native IRIS 2024.3+ embedding).
         """
         self.conn = connection
         self.embedding_dimension = embedding_dimension
         self.embedder = embedder
+        self.embedding_config = embedding_config
         set_schema_prefix("Graph_KG")
         # Per-instance cache for IRIS EMBEDDING() function availability (Mode 2 vector search)
         self._embedding_function_available: Optional[bool] = None
 
     def embed_text(self, text: str) -> List[float]:
         """
-        Converts text to a vector embedding using the configured embedder.
+        Converts text to a vector embedding using the best available method.
+        Order of preference:
+        1. Native IRIS EMBEDDING() if embedding_config is set.
+        2. Configured Python embedder.
+        3. Default SentenceTransformer fallback.
         """
+        # 1. Native IRIS embedding if available
+        if self.embedding_config and self._probe_embedding_support():
+            cursor = self.conn.cursor()
+            try:
+                # Call SQL EMBEDDING function
+                cursor.execute("SELECT EMBEDDING(?, ?)", [text, self.embedding_config])
+                result = cursor.fetchone()
+                if result:
+                    # IRIS returns vector as string or list depending on driver version
+                    val = result[0]
+                    if isinstance(val, str):
+                        return [float(x) for x in val.strip('[]').split(',')]
+                    return list(val)
+            except Exception as e:
+                logger.warning(f"Native IRIS EMBEDDING failed for config '{self.embedding_config}': {e}. Falling back to Python.")
+            finally:
+                cursor.close()
+
+        # 2. Python-side embedding
         if not self.embedder:
             # Try to auto-load a default model if sentence-transformers is available
             try:
                 from sentence_transformers import SentenceTransformer
-                # Use a standard small model if none provided
                 self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
                 logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
             except ImportError:
                 raise RuntimeError(
-                    "No embedder configured and 'sentence-transformers' not installed. "
-                    "Pass an embedder to IRISGraphEngine or install sentence-transformers."
+                    "No embedder or embedding_config configured, and 'sentence-transformers' not installed. "
+                    "Pass an embedder/embedding_config to IRISGraphEngine or install sentence-transformers."
                 )
 
         if hasattr(self.embedder, 'encode'):
@@ -785,10 +816,11 @@ class IRISGraphEngine:
     # Vector Search Operations
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
-        K-Nearest Neighbors vector search using server-side SQL procedure
+        K-Nearest Neighbors vector search using server-side SQL procedure.
+        Leverages native IRIS EMBEDDING() if embedding_config is set.
 
         Args:
-            query_vector: JSON array string like "[0.1,0.2,0.3,...]"
+            query_vector: JSON array string OR raw text (if embedding_config is set)
             k: Number of top results to return
             label_filter: Optional label to filter by
 
@@ -797,14 +829,16 @@ class IRISGraphEngine:
         """
         cursor = self.conn.cursor()
         try:
-            # Call server-side procedure for unified logic
-            # Signature: (queryVector, k, labelFilter)
-            cursor.execute("CALL iris_vector_graph.kg_KNN_VEC(?, ?, ?)", [query_vector, k, label_filter or ""])
+            # Call server-side procedure with updated signature: (queryInput, k, labelFilter, embeddingConfig)
+            cursor.execute(
+                "CALL iris_vector_graph.kg_KNN_VEC(?, ?, ?, ?)", 
+                [query_vector, k, label_filter or "", self.embedding_config or ""]
+            )
             results = cursor.fetchall()
             return [(entity_id, float(similarity)) for entity_id, similarity in results]
         except Exception as e:
             logger.warning(f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic.")
-            # Fallback to Python CSV implementation if procedure not available
+            # Fallback to Python implementation
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
 
     def _kg_KNN_VEC_python_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:

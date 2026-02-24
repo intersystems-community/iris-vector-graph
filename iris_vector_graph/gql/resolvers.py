@@ -39,18 +39,22 @@ async def resolve_semantic_search(
     """Resolves semantic search results."""
     engine = info.context["engine"]
     try:
-        # If query doesn't look like a JSON vector, try to embed it
+        # Determine if we should vectorize in Python or let IRIS handle it (Mode 2)
         query_input = query
-        if not (query.strip().startswith('[') and query.strip().endswith(']')):
-            try:
-                vector = engine.embed_text(query)
-                query_input = json.dumps(vector)
-            except Exception as e:
-                # Fallback: maybe IRIS supports raw text (Mode 2)
-                # or engine.kg_KNN_VEC handles it.
-                # If embed_text fails, we pass raw string and let engine/IRIS handle it.
-                import logging
-                logging.getLogger(__name__).warning(f"Failed to embed query text: {e}. Passing raw text.")
+        is_vector = query.strip().startswith('[') and query.strip().endswith(']')
+        
+        if not is_vector:
+            if engine.embedding_config and engine._probe_embedding_support():
+                # Mode 2: Pass raw text directly, engine.kg_KNN_VEC will use SQL EMBEDDING()
+                query_input = query
+            else:
+                # Mode 1 Fallback: Embed in Python
+                try:
+                    vector = engine.embed_text(query)
+                    query_input = json.dumps(vector)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).warning(f"Failed to embed query text: {e}. Passing raw text as last resort.")
         
         results = engine.kg_KNN_VEC(query_input, k=limit, label_filter=label)
         from .schema import SemanticSearchResult
