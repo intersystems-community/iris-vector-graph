@@ -1,12 +1,24 @@
 # IRIS Vector Graph - Development Progress
 
-**Last Updated**: 2026-01-25
+**Last Updated**: 2026-02-27
 
 ## Project Evolution
 
 Research Prototype → Production Platform → Multi-Query-Engine System
 
 ## Completed Phases
+
+### Phase 7: Stored Procedure Installation Fix (Feature 020)
+**Goal**: Fix `initialize_schema()` to correctly install server-side stored procedures
+
+- **Fixed SyntaxError** in `schema.py` (dead code block lines 436–520 removed)
+- **Fixed `get_procedures_sql_list()`**: accepts `embedding_dimension` parameter; removed hardcoded dimension
+- **Fixed procedure DDL syntax**: `CREATE OR REPLACE PROCEDURE ... LANGUAGE SQL BEGIN SELECT ...; END` (correct IRIS syntax — no `RETURN`, no `DECLARE VECTOR`, no `RETURNS TABLE`)
+- **Fixed parameter syntax**: colon-prefix (`:param`) for procedure body parameter references in IRIS SQL
+- **Fixed row limiting**: `TOP :k` (not `FETCH FIRST :k`) for variable-limit queries
+- **Added RuntimeError** in `initialize_schema()` for unexpected DDL failures (optional procedures `kg_TXT`/`kg_RRF_FUSE` are non-fatal)
+- **Integration tests**: 11/12 pass; 1 xfailed (known IRIS dbapi limitation: schema-qualified `CALL schema.proc(?, ...)` not supported — procedure IS installed correctly)
+- **Known limitation**: IRIS Python dbapi 5.x does not support `CALL iris_vector_graph.proc(?, ...)` with `?` params; direct call workaround pending dbapi fix
 
 ### Phase 1: Foundation
 **Goal**: Core IRIS integration with graph operations

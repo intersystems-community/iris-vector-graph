@@ -349,34 +349,84 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return None
 
     @staticmethod
-    def create_domain_table(cursor, table_name: str, columns: Dict[str, str], indexes: Optional[List[str]] = None):
+    def get_procedures_sql_list(
+        table_schema: str = "Graph_KG",
+        embedding_dimension: int = 1000,
+    ) -> List[str]:
         """
-        Creates a domain-specific table.
+        Get a list of SQL statements to install retrieval stored procedures.
+
+        Args:
+            table_schema: SQL schema containing the data tables (e.g. "Graph_KG").
+            embedding_dimension: Vector dimension for the DECLARE clause inside
+                kg_KNN_VEC. Must match the emb column dimension in
+                kg_NodeEmbeddings. Default 1000 for backward compatibility;
+                internal callers (initialize_schema) MUST pass the real dimension.
+
+        Returns:
+            List of SQL DDL strings in execution order. Each is a complete
+            statement suitable for cursor.execute().
         """
-        # Build CREATE TABLE statement
-        column_defs = []
-        for col_name, col_def in columns.items():
-            if "REFERENCES nodes" in col_def:
-                col_def = col_def.replace("REFERENCES nodes", "REFERENCES Graph_KG.nodes")
-            column_defs.append(f'  "{col_name}" {col_def}')
-
-        # Ensure table name is qualified
-        if "." not in table_name:
-            table_name = f"Graph_KG.{table_name}"
-
-        create_sql = f"CREATE TABLE {table_name}(\n{','.join(column_defs)}\n)"
-
-        try:
-            cursor.execute(create_sql)
-        except Exception as e:
-            if "already exists" not in str(e).lower():
-                raise
-
-        # Create indexes if specified
-        if indexes:
-            for index_sql in indexes:
-                try:
-                    cursor.execute(index_sql)
-                except Exception as e:
-                    if "already exists" not in str(e).lower() and "already has a" not in str(e).lower():
-                        print(f"Index creation warning: {e}")
+        return [
+            "CREATE SCHEMA iris_vector_graph",
+            f"""
+CREATE OR REPLACE PROCEDURE iris_vector_graph.kg_KNN_VEC(
+  IN queryInput VARCHAR(32000),
+  IN k INT,
+  IN labelFilter VARCHAR(128),
+  IN embeddingConfig VARCHAR(128)
+)
+LANGUAGE SQL
+BEGIN
+  SELECT TOP :k n.id, VECTOR_COSINE(n.emb, TO_VECTOR(:queryInput, DOUBLE)) AS score
+  FROM {table_schema}.kg_NodeEmbeddings n
+  LEFT JOIN {table_schema}.rdf_labels L ON L.s = n.id
+  WHERE (:labelFilter IS NULL OR :labelFilter = '' OR L.label = :labelFilter)
+  ORDER BY score DESC;
+END
+""",
+            f"""
+CREATE OR REPLACE PROCEDURE iris_vector_graph.kg_TXT(
+  IN q VARCHAR(4000),
+  IN k INT
+)
+LANGUAGE SQL
+BEGIN
+  SELECT TOP :k d.id, %FIND.Rank(d.text, :q) AS bm25
+  FROM {table_schema}.docs d
+  WHERE %FIND(d.text, :q) > 0
+  ORDER BY bm25 DESC;
+END
+""",
+            """
+CREATE OR REPLACE PROCEDURE iris_vector_graph.kg_RRF_FUSE(
+  IN k INT,
+  IN k1 INT,
+  IN k2 INT,
+  IN c INT,
+  IN queryVector VARCHAR(32000),
+  IN qtext VARCHAR(4000)
+)
+LANGUAGE SQL
+BEGIN
+  WITH V AS (
+    SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, id, score AS vs
+    FROM TABLE(iris_vector_graph.kg_KNN_VEC(:queryVector, :k1, NULL, NULL))
+  ),
+  K AS (
+    SELECT ROW_NUMBER() OVER (ORDER BY bm25 DESC) AS r, id, bm25
+    FROM TABLE(iris_vector_graph.kg_TXT(:qtext, :k2))
+  ),
+  F AS (
+    SELECT COALESCE(V.id, K.id) AS id,
+           (1.0/(:c + COALESCE(V.r, 1000000000))) +
+           (1.0/(:c + COALESCE(K.r, 1000000000))) AS rrf,
+           V.vs, K.bm25
+    FROM V FULL OUTER JOIN K ON V.id = K.id
+  )
+  SELECT TOP :k id, rrf, vs, bm25
+  FROM F
+  ORDER BY rrf DESC;
+END
+"""
+        ]
