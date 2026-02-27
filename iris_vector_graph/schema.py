@@ -370,7 +370,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return [
             "CREATE SCHEMA iris_vector_graph",
             f"""
-CREATE OR REPLACE PROCEDURE iris_vector_graph.kg_KNN_VEC(
+CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
   IN k INT,
   IN labelFilter VARCHAR(128),
@@ -386,7 +386,7 @@ BEGIN
 END
 """,
             f"""
-CREATE OR REPLACE PROCEDURE iris_vector_graph.kg_TXT(
+CREATE OR REPLACE PROCEDURE {table_schema}.kg_TXT(
   IN q VARCHAR(4000),
   IN k INT
 )
@@ -398,8 +398,8 @@ BEGIN
   ORDER BY bm25 DESC;
 END
 """,
-            """
-CREATE OR REPLACE PROCEDURE iris_vector_graph.kg_RRF_FUSE(
+            f"""
+CREATE OR REPLACE PROCEDURE {table_schema}.kg_RRF_FUSE(
   IN k INT,
   IN k1 INT,
   IN k2 INT,
@@ -411,11 +411,11 @@ LANGUAGE SQL
 BEGIN
   WITH V AS (
     SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, id, score AS vs
-    FROM TABLE(iris_vector_graph.kg_KNN_VEC(:queryVector, :k1, NULL, NULL))
+    FROM TABLE({table_schema}.kg_KNN_VEC(:queryVector, :k1, NULL, NULL))
   ),
   K AS (
     SELECT ROW_NUMBER() OVER (ORDER BY bm25 DESC) AS r, id, bm25
-    FROM TABLE(iris_vector_graph.kg_TXT(:qtext, :k2))
+    FROM TABLE({table_schema}.kg_TXT(:qtext, :k2))
   ),
   F AS (
     SELECT COALESCE(V.id, K.id) AS id,
