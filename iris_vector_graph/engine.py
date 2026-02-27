@@ -166,6 +166,46 @@ class IRISGraphEngine:
         except Exception as e:
             logger.warning("Could not verify embedding dimension: %s", e)
 
+        # 5. Install stored procedures
+        procedure_errors = []
+        for stmt in GraphSchema.get_procedures_sql_list(
+            table_schema="Graph_KG",
+            embedding_dimension=dim,
+        ):
+            if not stmt.strip():
+                continue
+            try:
+                cursor.execute(stmt)
+            except Exception as e:
+                err = str(e).lower()
+                if "already exists" in err or "already has" in err:
+                    continue  # idempotent re-run — schema or procedure already installed
+                # Only kg_KNN_VEC is required for server-side vector search;
+                # kg_TXT and kg_RRF_FUSE are optional (depend on full-text search feature)
+                is_core = "procedure iris_vector_graph.kg_knn_vec" in stmt.lower()
+                if is_core:
+                    procedure_errors.append((stmt[:80], e))
+                    logger.error(
+                        "Procedure DDL failed: %s | Error: %s",
+                        stmt[:80],
+                        e,
+                    )
+                else:
+                    logger.warning(
+                        "Optional procedure DDL failed (non-fatal): %s | Error: %s",
+                        stmt[:80],
+                        e,
+                    )
+
+        if procedure_errors:
+            raise RuntimeError(
+                f"initialize_schema() failed to install {len(procedure_errors)} "
+                f"stored procedure(s). Server-side vector search will be unavailable. "
+                f"First error: {procedure_errors[0][1]}"
+            )
+
+        self.conn.commit()
+
     def _get_embedding_dimension(self) -> int:
         """
         Get the vector embedding dimension, either from initialization or auto-detection.
@@ -829,9 +869,9 @@ class IRISGraphEngine:
         """
         cursor = self.conn.cursor()
         try:
-            # Call server-side procedure with updated signature: (queryInput, k, labelFilter, embeddingConfig)
+            # Call server-side procedure via CALL — IRIS SQL stored procedure
             cursor.execute(
-                "CALL iris_vector_graph.kg_KNN_VEC(?, ?, ?, ?)", 
+                "CALL iris_vector_graph.kg_KNN_VEC(?, ?, ?, ?)",
                 [query_vector, k, label_filter or "", self.embedding_config or ""]
             )
             results = cursor.fetchall()

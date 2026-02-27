@@ -57,8 +57,14 @@ def _split_sql_statements(sql: str) -> list[str]:
                 continue
 
             # Handle Procedure blocks
-            upper_sql_slice = sql[i:i+20].upper()
-            if not in_procedure and (upper_sql_slice.startswith("CREATE PROCEDURE") or upper_sql_slice.startswith("CREATE FUNCTION")):
+            upper_sql_slice = sql[i:i+40].upper()
+            is_proc_start = (
+                "CREATE PROCEDURE" in upper_sql_slice or 
+                "CREATE OR REPLACE PROCEDURE" in upper_sql_slice or
+                "CREATE FUNCTION" in upper_sql_slice or
+                "CREATE OR REPLACE FUNCTION" in upper_sql_slice
+            )
+            if not in_procedure and is_proc_start:
                 in_procedure = True
             
             if in_procedure:
