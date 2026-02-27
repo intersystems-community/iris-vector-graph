@@ -25,37 +25,22 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def clean_procedures(iris_connection):
-    """
-    Drop and recreate the iris_vector_graph SQL schema before the test module runs.
-    Falls back to dropping procedures individually if CASCADE is unsupported.
-
-    Risk mitigation: 'DROP SCHEMA iris_vector_graph CASCADE' may not be supported
-    in all IRIS versions (Medium likelihood per plan.md). The fallback drops each
-    procedure by name.
-    """
+    """Drop Graph_KG procedures before the test module runs (clean slate)."""
     cursor = iris_connection.cursor()
 
     def _drop_procedures():
         for proc in ("kg_KNN_VEC", "kg_TXT", "kg_RRF_FUSE"):
             try:
-                cursor.execute(f"DROP PROCEDURE iris_vector_graph.{proc}")
+                cursor.execute(f"DROP PROCEDURE Graph_KG.{proc}")
             except Exception:
                 pass
 
-    # Attempt CASCADE first; fall back to individual drops
-    try:
-        cursor.execute("DROP SCHEMA iris_vector_graph CASCADE")
-    except Exception:
-        _drop_procedures()
-
+    _drop_procedures()
     iris_connection.commit()
     yield iris_connection
 
-    # Cleanup after module — drop again to leave DB clean for other test modules
-    try:
-        cursor.execute("DROP SCHEMA iris_vector_graph CASCADE")
-    except Exception:
-        _drop_procedures()
+    # Cleanup after module
+    _drop_procedures()
     iris_connection.commit()
 
 
@@ -66,7 +51,7 @@ def clean_procedures(iris_connection):
 @pytest.mark.integration
 def test_initialize_schema_installs_all_procedures(clean_procedures):
     """FR-007 / SC-002: After initialize_schema(), kg_KNN_VEC must exist in IRIS.
-    
+
     kg_TXT and kg_RRF_FUSE are optional (depend on full-text search availability).
     """
     from iris_vector_graph.engine import IRISGraphEngine
@@ -78,7 +63,7 @@ def test_initialize_schema_installs_all_procedures(clean_procedures):
     cursor = conn.cursor()
     cursor.execute(
         "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES "
-        "WHERE ROUTINE_SCHEMA = 'iris_vector_graph' "
+        "WHERE ROUTINE_SCHEMA = 'Graph_KG' "
         "ORDER BY ROUTINE_NAME"
     )
     rows = cursor.fetchall()
@@ -108,16 +93,8 @@ def test_kg_knn_vec_callable_after_init(clean_procedures):
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    reason=(
-        "IRIS Python dbapi 5.x does not support CALL with schema-qualified names and ? params "
-        "(SQLCODE -51). The procedure IS installed correctly; the call syntax limitation is a "
-        "known dbapi issue. Server-side path will work when dbapi supports schema-qualified CALL."
-    ),
-    strict=False,
-)
 def test_kg_knn_vec_uses_server_side_path(clean_procedures):
-    """SC-002: engine.kg_KNN_VEC() must use server-side CALL, not Python fallback."""
+    """SC-002: engine.kg_KNN_VEC() must use direct IRIS SQL (HNSW path), not slow Python fallback."""
     from iris_vector_graph.engine import IRISGraphEngine
 
     conn = clean_procedures
@@ -126,13 +103,14 @@ def test_kg_knn_vec_uses_server_side_path(clean_procedures):
 
     query_vec = json.dumps([math.sin(i * 0.01) for i in range(384)])
 
-    # Patch the Python fallback to raise — if it's invoked, the test fails
+    # Patch the slow Python fallback to raise — if it's invoked, the test fails.
+    # The engine now uses direct SQL (TOP k + VECTOR_COSINE + TO_VECTOR) which
+    # triggers IRIS HNSW index. The Python fallback is only used on SQL failure.
     with patch.object(
         engine,
         "_kg_KNN_VEC_python_optimized",
-        side_effect=AssertionError("Python fallback must not be invoked — server-side path should be used"),
+        side_effect=AssertionError("Python fallback must not be invoked — HNSW SQL path should be used"),
     ):
-        # Should succeed via server-side CALL; no AssertionError raised
         results = engine.kg_KNN_VEC(query_vec, k=5)
         assert isinstance(results, list)
 

@@ -182,7 +182,7 @@ class IRISGraphEngine:
                     continue  # idempotent re-run — schema or procedure already installed
                 # Only kg_KNN_VEC is required for server-side vector search;
                 # kg_TXT and kg_RRF_FUSE are optional (depend on full-text search feature)
-                is_core = "procedure iris_vector_graph.kg_knn_vec" in stmt.lower()
+                is_core = "procedure graph_kg.kg_knn_vec" in stmt.lower()
                 if is_core:
                     procedure_errors.append((stmt[:80], e))
                     logger.error(
@@ -869,11 +869,27 @@ class IRISGraphEngine:
         """
         cursor = self.conn.cursor()
         try:
-            # Call server-side procedure via CALL — IRIS SQL stored procedure
-            cursor.execute(
-                "CALL iris_vector_graph.kg_KNN_VEC(?, ?, ?, ?)",
-                [query_vector, k, label_filter or "", self.embedding_config or ""]
-            )
+            # Direct SQL vector search — IRIS HNSW index is used automatically
+            # via TOP k + ORDER BY VECTOR_COSINE DESC pattern.
+            # (CALL proc(?, ...) is broken in IRIS Python dbapi for result-set procedures)
+            emb_table = _table('kg_NodeEmbeddings')
+            labels_table = _table('rdf_labels')
+            if label_filter:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f" FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE L.label = ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, label_filter],
+                )
+            else:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f" FROM {emb_table} n"
+                    f" ORDER BY score DESC",
+                    [k, query_vector],
+                )
             results = cursor.fetchall()
             return [(entity_id, float(similarity)) for entity_id, similarity in results]
         except Exception as e:
