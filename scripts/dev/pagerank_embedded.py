@@ -183,7 +183,7 @@ if __name__ == '__main__':
     sys.path.insert(0, '.')
     from scripts.migrations.migrate_to_nodepk import get_connection
 
-    conn = get_connection()
+    conn = get_connection(container_name="iris-vector-graph-main")
 
     print("Testing embedded PageRank approach...")
     start = time.time()

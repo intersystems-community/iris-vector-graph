@@ -7,29 +7,26 @@ IRIS Vector Graph uses a **managed test container** approach to ensure reliable,
 ## Quick Start
 
 ```bash
-# Run all tests (container starts automatically)
+# Run all tests (container starts automatically, or attaches to existing)
 pytest
 
 # Run specific test category
 pytest -m integration
 pytest -m e2e
 pytest -m performance
-
-# Run with existing container (faster for development)
-# Start container once: python scripts/setup_iris.py
-pytest --use-existing-iris
 ```
 
 ## Test Container Lifecycle
 
 The `iris_test_container` fixture (session scope) manages the container lifecycle:
 
-1.  **Start**: Starts a dedicated Docker container named `iris_vector_graph_test`.
-2.  **Ready**: Waits for the IRIS SuperServer to be ready (120s timeout).
-3.  **Initialize**: Automatically executes `sql/schema.sql` and `sql/operators_fixed.sql` using the **`User`** schema.
+1.  **Attach or Start**: If a container named `iris-vector-graph-main` is already running, attaches to it via `IRISContainer.attach()`. Otherwise starts a fresh container.
+2.  **Ready**: Waits for the IRIS SuperServer to be ready (180s timeout).
+3.  **Initialize**: Automatically creates the `Graph_KG` schema, tables, views, and loads ObjectScript classes.
 4.  **Security**: Creates a dedicated **`test`** user with password **`test`** and ensures password expiry is disabled.
-5.  **Execute**: Runs the requested tests.
-6.  **Tear down**: Stops and removes the container at the end of the session (unless `--use-existing-iris` is specified).
+5.  **Verify**: Blocks until a real `test`/`test` connection succeeds — no test module ever races on a not-yet-ready container.
+6.  **Execute**: Runs the requested tests.
+7.  **Tear down**: Stops containers that were started by the fixture; leaves pre-existing containers running.
 
 ## Key Fixtures
 
@@ -71,9 +68,7 @@ def test_my_feature(iris_connection, clean_test_data):
 
 | Environment Variable | Default | Description |
 |----------------------|---------|-------------|
-| `IRIS_TEST_USE_EXISTING` | `false` | Set to `true` to reuse a running container. |
-| `IRIS_CONTAINER` | `iris_db` | Name of the container to attach to when using existing. |
-| `IRIS_TEST_TIMEOUT` | `120` | Startup timeout in seconds. |
+| `IRIS_TEST_TIMEOUT` | `180` | Startup timeout in seconds. |
 
 ## Troubleshooting
 
@@ -86,10 +81,8 @@ If you encounter this when connecting manually:
 - Use the **`test`** user instead of `_SYSTEM`.
 - Or reset the `_SYSTEM` password: `Set usr = ##class(Security.Users).%OpenId("_SYSTEM"), usr.ChangePassword=0, usr.PasswordNeverExpires=1 Do usr.%Save()`
 
-### Schema Requirements (`User`)
-All tables and procedures are created in the **`User`** schema. If you are writing raw SQL queries in tests, ensure you either:
-- Use the **`iris_cursor`** fixture (which automatically runs `SET SCHEMA User`).
-- Or use fully qualified names: `SELECT * FROM User.nodes`.
+### Schema (`Graph_KG`)
+All tables are created in the **`Graph_KG`** schema with views mirrored into `SQLUser` for unqualified access. Use fully-qualified names in tests (`Graph_KG.nodes`) or the unqualified view aliases (`nodes`, `rdf_edges`, etc.).
 
 ### "AttributeError: module 'iris' has no attribute 'connect'"
 This used to happen because of a naming conflict with the `iris/` directory. That directory has been renamed to `iris_src/`, so `import iris` should now work correctly.
@@ -99,8 +92,14 @@ The `iris_connection` fixture handles connection management for you.
 ### Resetting the Environment
 If the test container gets into a bad state:
 ```bash
-docker rm -f iris_vector_graph_test
+docker rm -f iris-vector-graph-main
 pytest
+```
+
+### Production-Scale Benchmarks
+The `test_nodepk_production_scale` tests create 100K nodes / 500K edges and are **skipped by default** to avoid multi-minute runtimes and segfaults under memory pressure. To run them:
+```bash
+RUN_PRODUCTION_SCALE=1 pytest tests/integration/test_nodepk_production_scale.py
 ```
 
 ## Constitutional Compliance

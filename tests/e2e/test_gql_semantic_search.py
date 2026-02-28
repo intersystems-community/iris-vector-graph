@@ -5,12 +5,12 @@ from iris_vector_graph import IRISGraphEngine
 from iris_vector_graph.gql import create_app
 
 @pytest.mark.requires_database
-def test_gql_semantic_search(iris_connection):
+def test_gql_semantic_search(iris_connection, iris_master_cleanup):
     """
     Test semantic search via GraphQL.
     """
-    # Use standard 384 dimension to match existing table if any
-    dim = 384
+    # Use 768 dimension to match the table created by conftest
+    dim = 768
     engine = IRISGraphEngine(iris_connection, embedding_dimension=dim)
     engine.initialize_schema()
     

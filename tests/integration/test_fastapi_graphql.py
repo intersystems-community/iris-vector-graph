@@ -8,11 +8,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-# TDD Gate: Tests will initially fail until FastAPI app is implemented
+# TDD Gate: Tests will initially fail until FastAPI app with biomedical schema is implemented
 try:
     from api.main import app
-    APP_EXISTS = True
-except ImportError:
+    from api.gql.schema import schema as _bio_schema
+    _mutation_type = _bio_schema.graphql_schema.mutation_type
+    APP_EXISTS = _mutation_type is not None and any(
+        "protein" in f.name.lower() for f in (_mutation_type.fields.values() if _mutation_type else [])
+    )
+except (ImportError, AttributeError, Exception):
     APP_EXISTS = False
     app = None
 

@@ -21,11 +21,17 @@ import json
 import numpy as np
 from fastapi.testclient import TestClient
 
-# Test if FastAPI app exists
+# Test if FastAPI app exists and has biomedical-specific schema
 try:
     from api.main import app
-    APP_EXISTS = True
-except ImportError:
+    # Check for biomedical mutations (createProtein etc.) — these require the
+    # full biomedical demo stack, not just the generic iris-vector-graph library.
+    from api.gql.schema import schema as _bio_schema
+    _mutation_type = _bio_schema.graphql_schema.mutation_type
+    APP_EXISTS = _mutation_type is not None and any(
+        "protein" in f.name.lower() for f in (_mutation_type.fields.values() if _mutation_type else [])
+    )
+except (ImportError, AttributeError, Exception):
     APP_EXISTS = False
     app = None
 

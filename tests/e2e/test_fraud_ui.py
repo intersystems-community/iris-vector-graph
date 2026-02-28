@@ -2,6 +2,7 @@
 """E2E UX tests for Fraud Detection demo application using agent-browser"""
 import os
 import shutil
+import socket
 import subprocess
 import time
 
@@ -18,6 +19,12 @@ if not has_agent_browser:
     skip_reason = "agent-browser CLI not found"
 elif no_display and not is_headless:
     skip_reason = "No display available and HEADLESS is not set to true"
+if not skip_reason:
+    try:
+        s = socket.create_connection(("127.0.0.1", 8200), timeout=1)
+        s.close()
+    except OSError:
+        skip_reason = "Demo server not running at 127.0.0.1:8200"
 
 def run_agent_browser(commands: str):
     """Run agent-browser commands in a single session and return output"""
@@ -62,6 +69,7 @@ def test_fraud_ui_navigation():
     assert "View Architecture" in snapshot
 
 
+@pytest.mark.skipif(skip_reason != "", reason=skip_reason)
 @pytest.mark.e2e
 def test_fraud_architecture_popup():
     """Test that the architecture diagram popup opens correctly"""
@@ -76,6 +84,7 @@ def test_fraud_architecture_popup():
     assert "Real-time SQL Trigger Loop" in snapshot
 
 
+@pytest.mark.skipif(skip_reason != "", reason=skip_reason)
 @pytest.mark.e2e
 def test_fraud_scenario_selection():
     """Test that selecting a scenario populates the transaction form"""
@@ -88,5 +97,4 @@ def test_fraud_scenario_selection():
     """)
     assert "acct:" in snapshot
     assert "149.99" in snapshot or "8500" in snapshot or "25000" in snapshot
-
 

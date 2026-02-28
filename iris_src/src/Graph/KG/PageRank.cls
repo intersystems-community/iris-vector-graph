@@ -89,4 +89,57 @@ ClassMethod Run(seedNodes As %DynamicArray, maxIter As %Integer = 20, alpha As %
     return count
 }
 
+/// Run PPR and return results as a JSON string.
+/// This is the primary entry point for Python callers — reads ^||PPR.Results
+/// in the same IRIS session so process-private globals are accessible.
+/// 
+/// @param seedJson   JSON array of seed node IDs, e.g. '["A","B"]'
+/// @param alpha      Damping factor (default 0.85)
+/// @param maxIter    Max iterations (default 20)
+/// @param bidir      1 = bidirectional edges, 0 = forward only (reserved, passed to Run)
+/// @param revWeight  Weight for reverse edges when bidir=1 (reserved)
+/// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
+ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String [ Language = python ]
+{
+    import iris
+    import json
+
+    # Parse seed list
+    try:
+        seeds = json.loads(seedJson) if seedJson else []
+    except Exception:
+        return "[]"
+
+    if not seeds:
+        return "[]"
+
+    # Build %DynamicArray for Run()
+    seed_arr = iris.cls("%DynamicArray")._New()
+    for s in seeds:
+        seed_arr._Push(s)
+
+    # Execute PPR — writes results to ^||PPR.Results(score) = node_id
+    count = iris.cls("Graph.KG.PageRank").Run(seed_arr, maxIter, alpha, 1e-6)
+
+    if count == 0:
+        return "[]"
+
+    # Read ^||PPR.Results back and collect into a list
+    ppr = iris.gref("^||PPR.Results")
+    results = []
+    key = ""
+    while True:
+        key = ppr.order([key])
+        if not key:
+            break
+        node_id = ppr.get([key])
+        if node_id:
+            results.append({"id": str(node_id), "score": float(key)})
+
+    # Sort descending by score
+    results.sort(key=lambda x: x["score"], reverse=True)
+
+    return json.dumps(results)
+}
+
 }

@@ -14,7 +14,7 @@ Performance: Reduces N+1 queries to ≤2 queries per nested GraphQL query.
 """
 
 from strawberry.dataloader import DataLoader
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class EdgeLoader(DataLoader):

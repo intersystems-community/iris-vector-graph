@@ -240,4 +240,46 @@ ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Intege
     Return ..BFS(srcId, preds, maxHops, dstLabel)
 }
 
+/// Run BFSFast and return results as a JSON string.
+/// Primary entry point for Python callers — reads ^||BFS.Results in the same session.
+/// 
+/// @param srcId    Source node ID
+/// @param predsJson JSON array of predicates per hop, e.g. '["rel1","rel2"]' or null/"" for all
+/// @param maxHops  Maximum hops (default 2)
+/// @param dstLabel Filter destination nodes by label (empty = no filter)
+/// @returns JSON array: [{"s":..,"p":..,"o":..,"w":..,"step":..}, ...] in traversal order
+ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "") As %String
+{
+    // Parse predicates JSON into a %DynamicArray (null/"" means all predicates)
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") {
+        Try {
+            Set preds = ##class(%DynamicArray).%FromJSON(predsJson)
+        } Catch {
+            Set preds = ""
+        }
+    }
+
+    // Run BFSFast — writes to ^||BFS.Results(i) = $ListBuild(s,p,o,w,step)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel)
+
+    If count = 0 Return "[]"
+
+    // Build JSON array from ^||BFS.Results
+    Set result = ##class(%DynamicArray).%New()
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        Set obj = ##class(%DynamicObject).%New()
+        Do obj.%Set("s",    $ListGet(lb, 1))
+        Do obj.%Set("p",    $ListGet(lb, 2))
+        Do obj.%Set("o",    $ListGet(lb, 3))
+        Do obj.%Set("w",    +$ListGet(lb, 4))
+        Do obj.%Set("step", +$ListGet(lb, 5))
+        Do result.%Push(obj)
+    }
+
+    Return result.%ToJSON()
+}
+
 }

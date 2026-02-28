@@ -18,6 +18,17 @@ import pytest
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 
+# Embedding dimension must match the kg_NodeEmbeddings table created by conftest
+_EMB_DIM = 768
+
+# Canonical test vectors (unit vectors in 768-d space)
+_VEC_GENE_A = [1.0] + [0.0] * (_EMB_DIM - 1)          # [1, 0, 0, ...]
+_VEC_GENE_B = [0.9, 0.1] + [0.0] * (_EMB_DIM - 2)     # close to gene-a
+_VEC_GENE_C = [0.0, 1.0] + [0.0] * (_EMB_DIM - 2)     # orthogonal
+_VEC_DRUG_A = [0.8, 0.2] + [0.0] * (_EMB_DIM - 2)     # close to gene-a
+_VEC_DRUG_B = [0.0, 0.0, 1.0] + [0.0] * (_EMB_DIM - 3)# orthogonal
+_QUERY_VEC  = [1.0] + [0.0] * (_EMB_DIM - 1)           # same as gene-a
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -37,11 +48,11 @@ def vec_search_data(iris_connection):
     prefix = "ivg_vs_test:"
 
     nodes = [
-        (f"{prefix}gene-a", "Gene", [1.0, 0.0, 0.0]),
-        (f"{prefix}gene-b", "Gene", [0.9, 0.1, 0.0]),
-        (f"{prefix}gene-c", "Gene", [0.0, 1.0, 0.0]),
-        (f"{prefix}drug-a", "Drug", [0.8, 0.2, 0.0]),
-        (f"{prefix}drug-b", "Drug", [0.0, 0.0, 1.0]),
+        (f"{prefix}gene-a", "Gene", _VEC_GENE_A),
+        (f"{prefix}gene-b", "Gene", _VEC_GENE_B),
+        (f"{prefix}gene-c", "Gene", _VEC_GENE_C),
+        (f"{prefix}drug-a", "Drug", _VEC_DRUG_A),
+        (f"{prefix}drug-b", "Drug", _VEC_DRUG_B),
     ]
 
     try:
@@ -144,7 +155,7 @@ class TestVectorSearchSQL:
         conn = vec_search_data
         result = _run_cypher(
             conn,
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3) "
             "YIELD node, score RETURN node, score",
         )
         assert len(result["rows"]) > 0
@@ -154,7 +165,7 @@ class TestVectorSearchSQL:
         conn = vec_search_data
         result = _run_cypher(
             conn,
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3) "
             "YIELD node, score RETURN node, score",
         )
         scores = [float(row[result["columns"].index("score")]) for row in result["rows"]]
@@ -166,7 +177,7 @@ class TestVectorSearchSQL:
         # Search Drug label — should not return Gene nodes
         result = _run_cypher(
             conn,
-            "CALL ivg.vector.search('Drug', 'embedding', [1.0, 0.0, 0.0], 5) "
+            f"CALL ivg.vector.search('Drug', 'embedding', {json.dumps(_QUERY_VEC)}, 5) "
             "YIELD node, score RETURN node, score",
         )
         prefix = "ivg_vs_test:"
@@ -182,7 +193,7 @@ class TestVectorSearchSQL:
         conn = vec_search_data
         result = _run_cypher(
             conn,
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 2) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 2) "
             "YIELD node, score RETURN node, score",
         )
         assert len(result["rows"]) <= 2
@@ -192,7 +203,7 @@ class TestVectorSearchSQL:
         conn = vec_search_data
         result = _run_cypher(
             conn,
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3, "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3, "
             "{similarity: 'dot_product'}) YIELD node, score RETURN node, score",
         )
         assert "columns" in result
@@ -205,7 +216,7 @@ class TestVectorSearchSQL:
         try:
             result = _run_cypher(
                 conn,
-                "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
+                f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3) "
                 "YIELD node, score "
                 "MATCH (node)-[:RELATED]->(m:Drug) "
                 "RETURN node, score",

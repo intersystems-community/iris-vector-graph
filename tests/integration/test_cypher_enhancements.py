@@ -3,10 +3,12 @@ import json
 import pytest
 
 
-def _cleanup_test_nodes(cursor):
+def _cleanup_test_nodes(cursor, conn=None):
     cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'TEST_NODE:%'")
     cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'TEST_NODE:%'")
     cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_NODE:%'")
+    if conn is not None:
+        conn.commit()
 
 
 def _parse_labels(raw):
@@ -22,7 +24,7 @@ def _parse_props(raw):
 
 def test_return_node_includes_labels_and_properties(iris_connection, execute_cypher):
     cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor)
+    _cleanup_test_nodes(cursor, iris_connection)
 
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:1')")
     cursor.execute("INSERT INTO rdf_labels (s, label) VALUES ('TEST_NODE:1', 'Label1')")
@@ -52,7 +54,7 @@ def test_return_node_includes_labels_and_properties(iris_connection, execute_cyp
 
 def test_labels_and_properties_functions(iris_connection, execute_cypher):
     cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor)
+    _cleanup_test_nodes(cursor, iris_connection)
 
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:2')")
     cursor.execute("INSERT INTO rdf_labels (s, label) VALUES ('TEST_NODE:2', 'Solo')")
@@ -76,7 +78,7 @@ def test_labels_and_properties_functions(iris_connection, execute_cypher):
 
 def test_order_by_limit(iris_connection, execute_cypher):
     cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor)
+    _cleanup_test_nodes(cursor, iris_connection)
 
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:order_1')")
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:order_2')")
@@ -98,7 +100,7 @@ def test_order_by_limit(iris_connection, execute_cypher):
 
 def test_numeric_comparison_filtering(iris_connection, execute_cypher):
     cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor)
+    _cleanup_test_nodes(cursor, iris_connection)
 
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_1')")
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_2')")
@@ -109,7 +111,7 @@ def test_numeric_comparison_filtering(iris_connection, execute_cypher):
     iris_connection.commit()
 
     result = execute_cypher(
-        "MATCH (n) WHERE n.confidence >= 0.7 RETURN n.id AS id"
+        "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:cmp_' AND n.confidence >= 0.7 RETURN n.id AS id"
     )
 
     ids = {row[result["columns"].index("id")] for row in result["rows"]}
@@ -118,7 +120,7 @@ def test_numeric_comparison_filtering(iris_connection, execute_cypher):
 
 def test_numeric_comparison_skips_non_numeric(iris_connection, execute_cypher):
     cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor)
+    _cleanup_test_nodes(cursor, iris_connection)
 
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_n1')")
     cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_n2')")
@@ -127,7 +129,7 @@ def test_numeric_comparison_skips_non_numeric(iris_connection, execute_cypher):
     iris_connection.commit()
 
     result = execute_cypher(
-        "MATCH (n) WHERE n.confidence >= 0.7 RETURN n.id AS id"
+        "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:cmp_' AND n.confidence >= 0.7 RETURN n.id AS id"
     )
 
     ids = {row[result["columns"].index("id")] for row in result["rows"]}

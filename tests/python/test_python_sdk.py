@@ -24,50 +24,58 @@ except ImportError:
 # Use iris-devtester for auto-discovery of IRIS container
 try:
     from iris_devtester.connections import auto_detect_iris_host_and_port
-    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port()
+    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port(container_name="iris-vector-graph-main")
 except ImportError:
     # Fallback to defaults if iris-devtester not available
     IRIS_HOST = 'localhost'
     IRIS_PORT = 1972
 
 try:
-    import networkx as nx
+    import networkx as nx  # type: ignore[import]
     NETWORKX_AVAILABLE = True
 except ImportError:
     NETWORKX_AVAILABLE = False
+    nx: Any = None
+
+class GraphNodeHelper:
+    def _ensure_node_exists(self, cursor, node_id):
+        """Insert node into Graph_KG.nodes if not exists (required before rdf_labels/props/edges)."""
+        try:
+            cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id])
+        except Exception:
+            pass
 
 
-class TestIRISPythonSDK:
+@pytest.fixture(scope="module", autouse=True)
+def inject_iris_sdk_connection(iris_connection):
+    """Inject the shared iris connection into the SDK test classes."""
+    for cls in [TestIRISPythonSDK, TestNetworkXIntegration, TestDataFormatLoading, TestPerformanceBenchmarks]:
+        cls.conn = iris_connection
+
+
+class TestIRISPythonSDK(GraphNodeHelper):
     """Test IRIS Python SDK direct database connectivity"""
+
+    conn: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup test class with IRIS connection"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
+        cursor = None
         try:
-            cls.conn = iris.connect(
-                hostname=IRIS_HOST,
-                port=IRIS_PORT,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-
-            # Test connection
             cursor = cls.conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
 
-            # Check if required schema tables exist
             cursor.execute("""
                 SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA = 'SQLUser'
+                WHERE TABLE_SCHEMA = 'Graph_KG'
                 AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
             """)
             tables = [row[0].lower() for row in cursor.fetchall()]
-            cursor.close()
 
             required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
             if not required_tables.issubset(set(tables)):
@@ -75,9 +83,11 @@ class TestIRISPythonSDK:
                 pytest.skip(f"Required schema tables missing: {missing}. Run sql/schema.sql first.")
 
             print(f"✓ IRIS Python SDK connection established ({IRIS_HOST}:{IRIS_PORT})")
-
         except Exception as e:
             pytest.skip(f"IRIS database not accessible at {IRIS_HOST}:{IRIS_PORT}: {e}")
+        finally:
+            if cursor:
+                cursor.close()
 
     @classmethod
     def teardown_class(cls):
@@ -85,28 +95,30 @@ class TestIRISPythonSDK:
         if hasattr(cls, 'conn'):
             # Clean up test data
             cursor = cls.conn.cursor()
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST:%'")
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'TEST:%'")
-            cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'TEST:%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TEST:%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'TEST:%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'TEST:%'")
             cursor.close()
-            cls.conn.close()
+        # Connection managed by shared fixture
 
     def test_basic_connection(self):
         """Test basic IRIS connection and query"""
         cursor = self.conn.cursor()
         cursor.execute("SELECT 1 as test_value")
         result = cursor.fetchone()
+        value = result[0]
         cursor.close()
 
-        assert result[0] == 1
+        assert value == 1
 
     def test_insert_entity(self):
         """Test inserting entity with properties"""
         cursor = self.conn.cursor()
 
         # Insert entity label
+        self._ensure_node_exists(cursor, 'TEST:PROTEIN_001')
         cursor.execute(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             ['TEST:PROTEIN_001', 'protein']
         )
 
@@ -118,19 +130,19 @@ class TestIRISPythonSDK:
         ]
 
         cursor.executemany(
-            "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
             properties
         )
 
         # Verify insertion
         cursor.execute(
-            "SELECT COUNT(*) FROM rdf_labels WHERE s = ?",
+            "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s = ?",
             ['TEST:PROTEIN_001']
         )
         label_count = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COUNT(*) FROM rdf_props WHERE s = ?",
+            "SELECT COUNT(*) FROM Graph_KG.rdf_props WHERE s = ?",
             ['TEST:PROTEIN_001']
         )
         prop_count = cursor.fetchone()[0]
@@ -149,8 +161,10 @@ class TestIRISPythonSDK:
             ('TEST:PROTEIN_002', 'protein'),
             ('TEST:PROTEIN_003', 'protein')
         ]
+        for entity_id, _ in entities:
+            self._ensure_node_exists(cursor, entity_id)
         cursor.executemany(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             entities
         )
 
@@ -162,23 +176,25 @@ class TestIRISPythonSDK:
         })
 
         cursor.execute(
-            "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
             ['TEST:PROTEIN_002', 'interacts_with', 'TEST:PROTEIN_003', qualifiers]
         )
 
         # Verify relationship
         cursor.execute(
-            "SELECT s, p, o_id, qualifiers FROM rdf_edges WHERE s = ?",
+            "SELECT s, p, o_id, qualifiers FROM Graph_KG.rdf_edges WHERE s = ?",
             ['TEST:PROTEIN_002']
         )
         result = cursor.fetchone()
+        # Extract values before closing cursor (IRIS driver invalidates rows on cursor close)
+        r0, r1, r2, r3 = result[0], result[1], result[2], result[3]
         cursor.close()
 
-        assert result[0] == 'TEST:PROTEIN_002'
-        assert result[1] == 'interacts_with'
-        assert result[2] == 'TEST:PROTEIN_003'
+        assert r0 == 'TEST:PROTEIN_002'
+        assert r1 == 'interacts_with'
+        assert r2 == 'TEST:PROTEIN_003'
 
-        parsed_qualifiers = json.loads(result[3])
+        parsed_qualifiers = json.loads(r3)
         assert parsed_qualifiers['confidence'] == 0.95
         assert parsed_qualifiers['source'] == 'test_suite'
 
@@ -203,13 +219,16 @@ class TestIRISPythonSDK:
         # Time batch insertion
         start_time = time.time()
 
+        for entity_id, _ in test_entities:
+            self._ensure_node_exists(cursor, entity_id)
+
         cursor.executemany(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             test_entities
         )
 
         cursor.executemany(
-            "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
             test_props
         )
 
@@ -217,12 +236,12 @@ class TestIRISPythonSDK:
 
         # Verify insertion
         cursor.execute(
-            "SELECT COUNT(*) FROM rdf_labels WHERE label = 'test_entity'"
+            "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'test_entity'"
         )
         entity_count = cursor.fetchone()[0]
 
         cursor.execute(
-            "SELECT COUNT(*) FROM rdf_props WHERE s LIKE 'TEST:BATCH_%'"
+            "SELECT COUNT(*) FROM Graph_KG.rdf_props WHERE s LIKE 'TEST:BATCH_%'"
         )
         prop_count = cursor.fetchone()[0]
 
@@ -246,8 +265,10 @@ class TestIRISPythonSDK:
             ('TEST:NODE_B', 'test_node'),
             ('TEST:NODE_C', 'test_node')
         ]
+        for entity_id, _ in test_nodes:
+            self._ensure_node_exists(cursor, entity_id)
         cursor.executemany(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             test_nodes
         )
 
@@ -256,13 +277,13 @@ class TestIRISPythonSDK:
             ('TEST:NODE_B', 'connects_to', 'TEST:NODE_C', '{}')
         ]
         cursor.executemany(
-            "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
             test_edges
         )
 
         # Test 1-hop traversal
         cursor.execute("""
-            SELECT o_id FROM rdf_edges
+            SELECT o_id FROM Graph_KG.rdf_edges
             WHERE s = ? AND p = ?
         """, ['TEST:NODE_A', 'connects_to'])
 
@@ -272,8 +293,8 @@ class TestIRISPythonSDK:
 
         # Test 2-hop traversal
         cursor.execute("""
-            SELECT e2.o_id FROM rdf_edges e1
-            JOIN rdf_edges e2 ON e1.o_id = e2.s
+            SELECT e2.o_id FROM Graph_KG.rdf_edges e1
+            JOIN Graph_KG.rdf_edges e2 ON e1.o_id = e2.s
             WHERE e1.s = ? AND e1.p = ? AND e2.p = ?
         """, ['TEST:NODE_A', 'connects_to', 'connects_to'])
 
@@ -288,14 +309,12 @@ class TestIRISPythonSDK:
         cursor = self.conn.cursor()
 
         # Test vector search procedure (if available)
+        test_vector = json.dumps([0.1] * 768)
         try:
-            test_vector = json.dumps([0.1] * 768)
             cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [test_vector, 5, None])
             results = cursor.fetchall()
             print(f"Vector search returned {len(results)} results")
-            # Don't assert specific results as data may vary
             assert isinstance(results, list)
-
         except Exception as e:
             print(f"Vector search procedure not available: {e}")
 
@@ -321,14 +340,15 @@ class TestIRISPythonSDK:
             cursor.execute("START TRANSACTION")
 
             # Insert test data
+            self._ensure_node_exists(cursor, 'TEST:TRANSACTION')
             cursor.execute(
-                "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                 ['TEST:TRANSACTION', 'test']
             )
 
             # Verify data exists in transaction
             cursor.execute(
-                "SELECT COUNT(*) FROM rdf_labels WHERE s = ?",
+                "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s = ?",
                 ['TEST:TRANSACTION']
             )
             count_in_transaction = cursor.fetchone()[0]
@@ -339,7 +359,7 @@ class TestIRISPythonSDK:
 
             # Verify data is gone after rollback
             cursor.execute(
-                "SELECT COUNT(*) FROM rdf_labels WHERE s = ?",
+                "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s = ?",
                 ['TEST:TRANSACTION']
             )
             count_after_rollback = cursor.fetchone()[0]
@@ -357,16 +377,25 @@ class TestIRISPythonSDK:
         results_queue = queue.Queue()
         errors_queue = queue.Queue()
 
+        # Get connection info from the managed container connection
+        try:
+            host = self.conn.hostname
+            port = self.conn.port
+        except Exception:
+            # Fall back to module-level detection
+            host = IRIS_HOST
+            port = IRIS_PORT
+
         def worker_thread(thread_id):
             """Worker thread for concurrent testing"""
             try:
-                # Create separate connection for each thread
-                local_conn = iris.connect(
-                    hostname=IRIS_HOST,
-                    port=IRIS_PORT,
+                # Create separate connection for each thread using test credentials
+                local_conn = iris.connect(  # type: ignore[attr-defined]
+                    hostname=host,
+                    port=port,
                     namespace='USER',
-                    username='_SYSTEM',
-                    password='SYS'
+                    username='test',
+                    password='test'
                 )
 
                 cursor = local_conn.cursor()
@@ -374,14 +403,15 @@ class TestIRISPythonSDK:
                 # Perform operations
                 for i in range(10):
                     entity_id = f'TEST:THREAD_{thread_id}_{i:02d}'
+                    self._ensure_node_exists(cursor, entity_id)
                     cursor.execute(
-                        "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                        "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                         [entity_id, 'concurrent_test']
                     )
 
                 # Verify insertions
                 cursor.execute(
-                    "SELECT COUNT(*) FROM rdf_labels WHERE s LIKE ?",
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s LIKE ?",
                     [f'TEST:THREAD_{thread_id}_%']
                 )
                 count = cursor.fetchone()[0]
@@ -423,57 +453,48 @@ class TestIRISPythonSDK:
 
         # Clean up concurrent test data
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM rdf_labels WHERE label = 'concurrent_test'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE label = 'concurrent_test'")
         cursor.close()
 
 
 @pytest.mark.skipif(not NETWORKX_AVAILABLE, reason="NetworkX not available")
-class TestNetworkXIntegration:
+class TestNetworkXIntegration(GraphNodeHelper):
     """Test NetworkX integration with IRIS"""
+
+    conn: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup NetworkX integration tests"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
-        try:
-            cls.conn = iris.connect(
-                hostname=IRIS_HOST,
-                port=IRIS_PORT,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+        cursor = cls.conn.cursor()
+        cursor.execute("""
+            SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = 'Graph_KG'
+            AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+        """)
+        tables = [row[0].lower() for row in cursor.fetchall()]
+        cursor.close()
 
-            # Check if required schema tables exist
-            cursor = cls.conn.cursor()
-            cursor.execute("""
-                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA = 'SQLUser'
-                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
-            """)
-            tables = [row[0].lower() for row in cursor.fetchall()]
-            cursor.close()
+        required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+        if not required_tables.issubset(set(tables)):
+            missing = required_tables - set(tables)
+            pytest.skip(f"Required schema tables missing: {missing}")
 
-            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
-            if not required_tables.issubset(set(tables)):
-                missing = required_tables - set(tables)
-                pytest.skip(f"Required schema tables missing: {missing}")
-
-        except Exception as e:
-            pytest.skip(f"IRIS database not accessible: {e}")
+        assert nx is not None, "NetworkX module not available"
 
     @classmethod
     def teardown_class(cls):
         """Clean up NetworkX integration tests"""
         if hasattr(cls, 'conn'):
             cursor = cls.conn.cursor()
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'NX_%'")
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'NX_%'")
-            cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'NX_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'NX_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'NX_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'NX_%'")
             cursor.close()
-            cls.conn.close()
+        # Connection managed by shared fixture
 
     def test_networkx_to_iris_import(self):
         """Test importing NetworkX graph to IRIS"""
@@ -492,14 +513,15 @@ class TestNetworkXIntegration:
 
         # Import nodes
         for node, attrs in G.nodes(data=True):
+            self._ensure_node_exists(cursor, node)
             cursor.execute(
-                "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                 [node, 'networkx_node']
             )
 
             for key, value in attrs.items():
                 cursor.execute(
-                    "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                    "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
                     [node, key, str(value)]
                 )
 
@@ -508,16 +530,18 @@ class TestNetworkXIntegration:
             relation = attrs.pop('relation', 'connected_to')
             qualifiers = json.dumps(attrs)
 
+            self._ensure_node_exists(cursor, source)
+            self._ensure_node_exists(cursor, target)
             cursor.execute(
-                "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
                 [source, relation, target, qualifiers]
             )
 
         # Verify import
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'networkx_node'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'networkx_node'")
         node_count = cursor.fetchone()[0]
 
-        cursor.execute("SELECT COUNT(*) FROM rdf_edges WHERE s LIKE 'NX_%'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'NX_%'")
         edge_count = cursor.fetchone()[0]
 
         cursor.close()
@@ -532,7 +556,7 @@ class TestNetworkXIntegration:
         # Load NetworkX graph from IRIS
         cursor.execute("""
             SELECT DISTINCT e.s, e.o_id, e.p, e.qualifiers
-            FROM rdf_edges e
+            FROM Graph_KG.rdf_edges e
             WHERE e.s LIKE 'NX_%'
         """)
         edges = cursor.fetchall()
@@ -550,7 +574,7 @@ class TestNetworkXIntegration:
 
         # Add node properties
         cursor.execute("""
-            SELECT s, key, val FROM rdf_props
+            SELECT s, key, val FROM Graph_KG.rdf_props
             WHERE s LIKE 'NX_%'
         """)
         props = cursor.fetchall()
@@ -578,7 +602,7 @@ class TestNetworkXIntegration:
         """Test NetworkX algorithms on IRIS-exported graph"""
         # Export graph from IRIS
         cursor = self.conn.cursor()
-        cursor.execute("SELECT s, o_id FROM rdf_edges WHERE s LIKE 'NX_%'")
+        cursor.execute("SELECT s, o_id FROM Graph_KG.rdf_edges WHERE s LIKE 'NX_%'")
         edges = cursor.fetchall()
         cursor.close()
 
@@ -594,59 +618,48 @@ class TestNetworkXIntegration:
         assert len(degree_centrality) == 3
         assert len(betweenness_centrality) == 3
 
-        # NX_A should have high centrality (connected to both B and C)
-        assert degree_centrality['NX_A'] > degree_centrality['NX_B']
+        # NX_A, NX_B, NX_C all have degree 2 in a 3-node complete graph → all degree_centrality == 1.0
+        assert degree_centrality['NX_A'] >= 0.5
 
         # Test shortest paths
         shortest_paths = dict(nx.all_pairs_shortest_path(G))
         assert len(shortest_paths['NX_A']['NX_C']) == 2  # Direct connection
 
 
-class TestDataFormatLoading:
+class TestDataFormatLoading(GraphNodeHelper):
     """Test loading various data formats"""
+
+    conn: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup data format tests"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
-        try:
-            cls.conn = iris.connect(
-                hostname=IRIS_HOST,
-                port=IRIS_PORT,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+        cursor = cls.conn.cursor()
+        cursor.execute("""
+            SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = 'Graph_KG'
+            AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+        """)
+        tables = [row[0].lower() for row in cursor.fetchall()]
+        cursor.close()
 
-            # Check if required schema tables exist
-            cursor = cls.conn.cursor()
-            cursor.execute("""
-                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA = 'SQLUser'
-                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
-            """)
-            tables = [row[0].lower() for row in cursor.fetchall()]
-            cursor.close()
-
-            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
-            if not required_tables.issubset(set(tables)):
-                missing = required_tables - set(tables)
-                pytest.skip(f"Required schema tables missing: {missing}")
-
-        except Exception as e:
-            pytest.skip(f"IRIS database not accessible: {e}")
+        required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+        if not required_tables.issubset(set(tables)):
+            missing = required_tables - set(tables)
+            pytest.skip(f"Required schema tables missing: {missing}")
 
     @classmethod
     def teardown_class(cls):
         """Clean up format tests"""
         if hasattr(cls, 'conn'):
             cursor = cls.conn.cursor()
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'FORMAT_%'")
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'FORMAT_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'FORMAT_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'FORMAT_%'")
             cursor.close()
-            cls.conn.close()
+        # Connection managed by shared fixture
 
     def test_tsv_loading(self):
         """Test loading TSV format data"""
@@ -673,24 +686,27 @@ FORMAT_PROTEIN_A\tregulates\tFORMAT_PROTEIN_C\t0.72"""
                 entities.add(row['target'])
 
             for entity in entities:
+                self._ensure_node_exists(cursor, entity)
                 cursor.execute(
-                    "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                    "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                     [entity, 'tsv_loaded']
                 )
 
             # Insert relationships
             for _, row in df.iterrows():
                 qualifiers = json.dumps({'confidence': float(row['confidence'])})
+                self._ensure_node_exists(cursor, row['source'])
+                self._ensure_node_exists(cursor, row['target'])
                 cursor.execute(
-                    "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
                     [row['source'], row['predicate'], row['target'], qualifiers]
                 )
 
             # Verify loading
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'tsv_loaded'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'tsv_loaded'")
             entity_count = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_edges WHERE s LIKE 'FORMAT_%'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'FORMAT_%'")
             edge_count = cursor.fetchone()[0]
 
             cursor.close()
@@ -739,8 +755,9 @@ FORMAT_PROTEIN_A\tregulates\tFORMAT_PROTEIN_C\t0.72"""
                 entities.add(item['target'])
 
             for entity in entities:
+                self._ensure_node_exists(cursor, entity)
                 cursor.execute(
-                    "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                    "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                     [entity, 'json_loaded']
                 )
 
@@ -751,68 +768,59 @@ FORMAT_PROTEIN_A\tregulates\tFORMAT_PROTEIN_C\t0.72"""
                     if k not in ['source', 'predicate', 'target']
                 })
 
+                self._ensure_node_exists(cursor, item['source'])
+                self._ensure_node_exists(cursor, item['target'])
                 cursor.execute(
-                    "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
                     [item['source'], item['predicate'], item['target'], qualifiers]
                 )
 
             # Verify loading
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'json_loaded'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'json_loaded'")
             entity_count = cursor.fetchone()[0]
 
             cursor.close()
 
-            assert entity_count == 4  # gene, protein, pathway + another entity
+            assert entity_count == 3  # FORMAT_GENE_X, FORMAT_PROTEIN_X, FORMAT_PATHWAY_1
 
         finally:
             os.unlink(json_file)
 
 
-class TestPerformanceBenchmarks:
+class TestPerformanceBenchmarks(GraphNodeHelper):
     """Performance benchmark tests"""
+
+    conn: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup performance tests"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
-        try:
-            cls.conn = iris.connect(
-                hostname=IRIS_HOST,
-                port=IRIS_PORT,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+        cursor = cls.conn.cursor()
+        cursor.execute("""
+            SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = 'Graph_KG'
+            AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
+        """)
+        tables = [row[0].lower() for row in cursor.fetchall()]
+        cursor.close()
 
-            # Check if required schema tables exist
-            cursor = cls.conn.cursor()
-            cursor.execute("""
-                SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-                WHERE TABLE_SCHEMA = 'SQLUser'
-                AND TABLE_NAME IN ('rdf_labels', 'rdf_props', 'rdf_edges')
-            """)
-            tables = [row[0].lower() for row in cursor.fetchall()]
-            cursor.close()
-
-            required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
-            if not required_tables.issubset(set(tables)):
-                missing = required_tables - set(tables)
-                pytest.skip(f"Required schema tables missing: {missing}")
-
-        except Exception as e:
-            pytest.skip(f"IRIS database not accessible: {e}")
+        required_tables = {'rdf_labels', 'rdf_props', 'rdf_edges'}
+        if not required_tables.issubset(set(tables)):
+            missing = required_tables - set(tables)
+            pytest.skip(f"Required schema tables missing: {missing}")
 
     @classmethod
     def teardown_class(cls):
         """Clean up performance tests"""
         if hasattr(cls, 'conn'):
             cursor = cls.conn.cursor()
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'PERF_%'")
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'PERF_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'PERF_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'PERF_%'")
             cursor.close()
-            cls.conn.close()
+        # Connection managed by shared fixture
 
     def test_large_batch_insert(self):
         """Test large batch insertion performance"""
@@ -822,14 +830,16 @@ class TestPerformanceBenchmarks:
         cursor = self.conn.cursor()
 
         start_time = time.time()
+        for entity_id, _ in entities:
+            self._ensure_node_exists(cursor, entity_id)
         cursor.executemany(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             entities
         )
         elapsed = time.time() - start_time
 
         # Verify insertion
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'performance_test'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'performance_test'")
         count = cursor.fetchone()[0]
         cursor.close()
 
@@ -851,7 +861,7 @@ class TestPerformanceBenchmarks:
         start_time = time.time()
 
         for i in range(query_count):
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'performance_test'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'performance_test'")
             cursor.fetchone()
 
         elapsed = time.time() - start_time
@@ -864,7 +874,7 @@ class TestPerformanceBenchmarks:
         start_time = time.time()
         for i in range(100):
             entity_id = f'PERF_ENTITY_{i:06d}'
-            cursor.execute("SELECT label FROM rdf_labels WHERE s = ?", [entity_id])
+            cursor.execute("SELECT label FROM Graph_KG.rdf_labels WHERE s = ?", [entity_id])
             cursor.fetchone()
 
         elapsed = time.time() - start_time
@@ -880,7 +890,7 @@ class TestPerformanceBenchmarks:
         cursor = self.conn.cursor()
 
         # Query large result set
-        cursor.execute("SELECT s FROM rdf_labels WHERE label = 'performance_test' LIMIT 5000")
+        cursor.execute("SELECT s FROM Graph_KG.rdf_labels WHERE label = 'performance_test' LIMIT 5000")
         results = cursor.fetchall()
 
         cursor.close()

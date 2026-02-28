@@ -48,12 +48,12 @@ def test_get_nodes_batching(engine, mock_conn):
     node1 = next(n for n in nodes if n["id"] == "node-1")
     assert "LabelA" in node1["labels"]
     assert "LabelB" in node1["labels"]
-    assert node1["name"] == "Node 1"
-    assert node1["meta"] == {"key": "val"}
+    assert node1["properties"]["name"] == "Node 1"
+    assert node1["properties"]["meta"] == {"key": "val"}
     
     node2 = next(n for n in nodes if n["id"] == "node-2")
     assert node2["labels"] == ["LabelC"]
-    assert node2["name"] == "Node 2"
+    assert node2["properties"]["name"] == "Node 2"
     
     # Verify exact number of queries (excluding potential empty node check)
     # Actually, the implementation calls fetchall() for labels, then for properties.

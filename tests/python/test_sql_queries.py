@@ -7,64 +7,70 @@ Tests only SQL patterns that actually work with the current IRIS schema
 import pytest
 import json
 import time
-import importlib
 from typing import Dict, List, Any, Optional
 
-# NOTE: Use importlib to avoid conflict with iris/ directory in project
-try:
-    iris_module = importlib.import_module('intersystems_irispython.iris')
-    IRIS_AVAILABLE = True
-except ImportError:
-    IRIS_AVAILABLE = False
-    pytest.skip("IRIS Python driver not available", allow_module_level=True)
+
+def _ensure_nodes_exist(cursor, node_ids):
+    """Insert nodes into Graph_KG.nodes if not exists (required before rdf inserts)."""
+    seen = set()
+    for node_id in node_ids:
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        try:
+            cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id])
+        except Exception:
+            pass  # Already exists
+
+
+@pytest.fixture(scope="module", autouse=True)
+def inject_iris_connection(iris_connection):
+    """Inject the shared iris_connection into the SQL query tests."""
+    TestWorkingSQLPatterns.conn = iris_connection
 
 
 class TestWorkingSQLPatterns:
     """Test suite for validated, working SQL patterns only"""
 
+    conn: Any = None
+
     @classmethod
     def setup_class(cls):
         """Setup working SQL pattern tests"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
+        cursor = None
         try:
-            cls.conn = iris_module.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-
-            # Test connection
             cursor = cls.conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
-            cursor.close()
-
             print("✓ IRIS connection for SQL pattern testing established")
-
-            # Create test data
-            cls._create_test_data()
-
         except Exception as e:
             pytest.skip(f"IRIS database not accessible: {e}")
+        finally:
+            if cursor:
+                cursor.close()
+
+        cls._create_test_data()
 
     @classmethod
     def teardown_class(cls):
         """Clean up SQL pattern tests"""
-        if hasattr(cls, 'conn'):
-            # Clean up test data
-            cursor = cls.conn.cursor()
-            try:
-                cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_%'")
-                cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'TEST_%'")
-                cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'TEST_%'")
-            except:
-                pass
+        if cls.conn is None:
+            return
+
+        cursor = cls.conn.cursor()
+        try:
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TEST_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'TEST_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'TEST_%'")
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST_%'")
+            cls.conn.commit()
+        except Exception:
+            pass
+        finally:
             cursor.close()
-            cls.conn.close()
 
     @classmethod
     def _create_test_data(cls):
@@ -83,12 +89,14 @@ class TestWorkingSQLPatterns:
         ]
 
         # Clean existing test data first
-        cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'TEST_%'")
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_%'")
-        cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'TEST_%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'TEST_%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TEST_%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'TEST_%'")
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST_%'")
 
+        _ensure_nodes_exist(cursor, [entity_id for entity_id, _ in test_entities])
         cursor.executemany(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             test_entities
         )
 
@@ -108,8 +116,10 @@ class TestWorkingSQLPatterns:
              '{"role": "enzyme", "pathway_position": "upstream"}')
         ]
 
+        edge_node_ids = [edge[0] for edge in test_edges] + [edge[2] for edge in test_edges]
+        _ensure_nodes_exist(cursor, edge_node_ids)
         cursor.executemany(
-            "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
             test_edges
         )
 
@@ -122,11 +132,14 @@ class TestWorkingSQLPatterns:
             ('TEST_DRUG_A', 'compound_id', 'TDA001')
         ]
 
+        prop_node_ids = [prop[0] for prop in test_props]
+        _ensure_nodes_exist(cursor, prop_node_ids)
         cursor.executemany(
-            "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
             test_props
         )
 
+        cls.conn.commit()
         cursor.close()
         print("✓ Test data created for SQL pattern validation")
 
@@ -135,7 +148,7 @@ class TestWorkingSQLPatterns:
         cursor = self.conn.cursor()
 
         # Pattern 1: Find entity by exact ID
-        cursor.execute("SELECT s, label FROM rdf_labels WHERE s = ?", ['TEST_PROTEIN_A'])
+        cursor.execute("SELECT s, label FROM Graph_KG.rdf_labels WHERE s = ?", ['TEST_PROTEIN_A'])
         result = cursor.fetchone()
 
         assert result is not None
@@ -150,7 +163,7 @@ class TestWorkingSQLPatterns:
         cursor = self.conn.cursor()
 
         # Pattern 2: Find all entities of specific type
-        cursor.execute("SELECT s FROM rdf_labels WHERE label = ?", ['protein'])
+        cursor.execute("SELECT s FROM Graph_KG.rdf_labels WHERE label = ?", ['protein'])
         results = cursor.fetchall()
 
         test_proteins = [r[0] for r in results if r[0].startswith('TEST_')]
@@ -166,7 +179,7 @@ class TestWorkingSQLPatterns:
         # Pattern 3: Find direct relationships from entity
         cursor.execute("""
             SELECT s, p, o_id
-            FROM rdf_edges
+            FROM Graph_KG.rdf_edges
             WHERE s = ? AND p = ?
         """, ['TEST_PROTEIN_A', 'interacts_with'])
 
@@ -188,8 +201,8 @@ class TestWorkingSQLPatterns:
         # Pattern 4: Two-hop traversal
         cursor.execute("""
             SELECT e1.s as source, e1.p as rel1, e2.s as intermediate, e2.p as rel2, e2.o_id as target
-            FROM rdf_edges e1
-            JOIN rdf_edges e2 ON e1.o_id = e2.s
+            FROM Graph_KG.rdf_edges e1
+            JOIN Graph_KG.rdf_edges e2 ON e1.o_id = e2.s
             WHERE e1.s = ?
             ORDER BY e1.p, e2.p
         """, ['TEST_PROTEIN_A'])
@@ -210,13 +223,13 @@ class TestWorkingSQLPatterns:
         # Pattern 5: Bidirectional neighbors
         cursor.execute("""
             SELECT 'outgoing' as direction, p as relationship, o_id as neighbor
-            FROM rdf_edges
+            FROM Graph_KG.rdf_edges
             WHERE s = ?
             UNION ALL
             SELECT 'incoming' as direction, p as relationship, s as neighbor
-            FROM rdf_edges
+            FROM Graph_KG.rdf_edges
             WHERE o_id = ?
-            ORDER BY direction, relationship
+            ORDER BY 1, 2
         """, ['TEST_PROTEIN_A', 'TEST_PROTEIN_A'])
 
         results = cursor.fetchall()
@@ -236,7 +249,7 @@ class TestWorkingSQLPatterns:
         # Pattern 6: Get all properties for entity
         cursor.execute("""
             SELECT key, val
-            FROM rdf_props
+            FROM Graph_KG.rdf_props
             WHERE s = ?
             ORDER BY key
         """, ['TEST_PROTEIN_A'])
@@ -258,7 +271,7 @@ class TestWorkingSQLPatterns:
         # Pattern 7: Search qualifiers for text patterns
         cursor.execute("""
             SELECT s, p, o_id, qualifiers
-            FROM rdf_edges
+            FROM Graph_KG.rdf_edges
             WHERE qualifiers LIKE ?
         """, ['%experimental%'])
 
@@ -274,11 +287,13 @@ class TestWorkingSQLPatterns:
 
         # Pattern 8: Count relationships by type
         cursor.execute("""
-            SELECT p as relationship_type, COUNT(*) as count
-            FROM rdf_edges
+            SELECT
+                p as relationship_type,
+                COUNT(*) as cnt
+            FROM Graph_KG.rdf_edges
             WHERE s LIKE 'TEST_%'
             GROUP BY p
-            ORDER BY count DESC
+            ORDER BY 2 DESC
         """, )
 
         results = cursor.fetchall()
@@ -294,10 +309,10 @@ class TestWorkingSQLPatterns:
         # Pattern 9: Calculate entity degrees
         cursor.execute("""
             SELECT s as entity, COUNT(*) as out_degree
-            FROM rdf_edges
+            FROM Graph_KG.rdf_edges
             WHERE s LIKE 'TEST_%'
             GROUP BY s
-            ORDER BY out_degree DESC
+            ORDER BY 2 DESC
         """)
 
         results = cursor.fetchall()
@@ -319,10 +334,10 @@ class TestWorkingSQLPatterns:
                 e.o_id as target_entity,
                 l2.label as target_type,
                 p.val as source_name
-            FROM rdf_edges e
-            JOIN rdf_labels l1 ON e.s = l1.s
-            JOIN rdf_labels l2 ON e.o_id = l2.s
-            LEFT JOIN rdf_props p ON e.s = p.s AND p.key = 'name'
+            FROM Graph_KG.rdf_edges e
+            JOIN Graph_KG.rdf_labels l1 ON e.s = l1.s
+            JOIN Graph_KG.rdf_labels l2 ON e.o_id = l2.s
+            LEFT JOIN Graph_KG.rdf_props p ON e.s = p.s AND p.key = 'name'
             WHERE e.s LIKE 'TEST_%'
             ORDER BY e.s, e.p
         """)
@@ -342,8 +357,8 @@ class TestWorkingSQLPatterns:
 
         cursor.execute("""
             SELECT COUNT(*)
-            FROM rdf_edges e
-            JOIN rdf_labels l ON e.s = l.s
+            FROM Graph_KG.rdf_edges e
+            JOIN Graph_KG.rdf_labels l ON e.s = l.s
             WHERE l.label = 'protein'
         """)
 
@@ -365,8 +380,8 @@ class TestWorkingSQLPatterns:
         start_time = time.time()
         cursor.execute("""
             SELECT e1.s, e2.o_id
-            FROM rdf_edges e1
-            JOIN rdf_edges e2 ON e1.o_id = e2.s
+            FROM Graph_KG.rdf_edges e1
+            JOIN Graph_KG.rdf_edges e2 ON e1.o_id = e2.s
             WHERE e1.s LIKE 'TEST_%'
         """)
         results = cursor.fetchall()
@@ -376,7 +391,7 @@ class TestWorkingSQLPatterns:
         # Test 2: Direct path query (docs claim 1-3ms)
         start_time = time.time()
         cursor.execute("""
-            SELECT s, p, o_id FROM rdf_edges
+            SELECT s, p, o_id FROM Graph_KG.rdf_edges
             WHERE s = 'TEST_PROTEIN_A'
         """)
         results = cursor.fetchall()
@@ -386,9 +401,9 @@ class TestWorkingSQLPatterns:
         # Test 3: Neighborhood expansion (docs claim 2-8ms)
         start_time = time.time()
         cursor.execute("""
-            SELECT 'outgoing' as direction, o_id as neighbor FROM rdf_edges WHERE s = 'TEST_PROTEIN_A'
+            SELECT 'outgoing' as direction, o_id as neighbor FROM Graph_KG.rdf_edges WHERE s = 'TEST_PROTEIN_A'
             UNION ALL
-            SELECT 'incoming' as direction, s as neighbor FROM rdf_edges WHERE o_id = 'TEST_PROTEIN_A'
+            SELECT 'incoming' as direction, s as neighbor FROM Graph_KG.rdf_edges WHERE o_id = 'TEST_PROTEIN_A'
         """)
         results = cursor.fetchall()
         elapsed = (time.time() - start_time) * 1000
@@ -397,7 +412,7 @@ class TestWorkingSQLPatterns:
         # Test 4: Text search (docs claim 5-15ms)
         start_time = time.time()
         cursor.execute("""
-            SELECT s, qualifiers FROM rdf_edges
+            SELECT s, qualifiers FROM Graph_KG.rdf_edges
             WHERE qualifiers LIKE '%experimental%'
         """)
         results = cursor.fetchall()
@@ -408,10 +423,10 @@ class TestWorkingSQLPatterns:
         start_time = time.time()
         cursor.execute("""
             SELECT s, COUNT(*) as degree
-            FROM rdf_edges
+            FROM Graph_KG.rdf_edges
             WHERE s LIKE 'TEST_%'
             GROUP BY s
-            ORDER BY degree DESC
+            ORDER BY 2 DESC
         """)
         results = cursor.fetchall()
         elapsed = (time.time() - start_time) * 1000
@@ -456,8 +471,8 @@ class TestWorkingSQLPatterns:
         # Pattern 11: Find orphaned entities (in edges but not in labels)
         cursor.execute("""
             SELECT DISTINCT e.s
-            FROM rdf_edges e
-            LEFT JOIN rdf_labels l ON e.s = l.s
+            FROM Graph_KG.rdf_edges e
+            LEFT JOIN Graph_KG.rdf_labels l ON e.s = l.s
             WHERE l.s IS NULL
               AND e.s LIKE 'TEST_%'
         """)
@@ -467,8 +482,8 @@ class TestWorkingSQLPatterns:
         # Pattern 12: Find entities with properties but no labels
         cursor.execute("""
             SELECT DISTINCT p.s
-            FROM rdf_props p
-            LEFT JOIN rdf_labels l ON p.s = l.s
+            FROM Graph_KG.rdf_props p
+            LEFT JOIN Graph_KG.rdf_labels l ON p.s = l.s
             WHERE l.s IS NULL
               AND p.s LIKE 'TEST_%'
         """)

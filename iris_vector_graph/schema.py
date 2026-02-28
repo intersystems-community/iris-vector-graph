@@ -6,8 +6,50 @@ Provides RDF-style graph schema utilities that can be used across domains.
 Extracted from the biomedical-specific implementation for reusability.
 """
 
-from typing import Dict, List, Optional
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from .capabilities import IRISCapabilities
 from .security import sanitize_identifier, validate_table_name
+
+logger = logging.getLogger(__name__)
+
+
+def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) -> Any:
+    """Call an IRIS ObjectScript class method using the native API.
+
+    Works with both the ``iris`` package (iris.createIRIS) and the
+    ``intersystems_iris`` package (intersystems_iris.createIRIS).  Tries
+    ``iris.createIRIS`` first because it accepts the connection objects
+    returned by ``iris.connect()`` (the standard test-fixture connection).
+
+    Resolves the connection from either a connection object directly or from
+    ``cursor._connection`` if a cursor is passed.
+
+    Returns the method's return value, or raises if the class/method does not
+    exist or the native API is unavailable.
+    """
+    # Accept either a connection or a cursor
+    if hasattr(conn_or_cursor, "cursor"):
+        conn = conn_or_cursor          # it's a connection
+    elif hasattr(conn_or_cursor, "_connection"):
+        conn = conn_or_cursor._connection  # it's a cursor
+    else:
+        conn = conn_or_cursor           # best-effort fallback
+
+    # Try iris.createIRIS first (accepts iris.IRISConnection from iris.connect())
+    try:
+        import iris as _iris_pkg  # type: ignore[import]
+        iris_obj = _iris_pkg.createIRIS(conn)
+        return iris_obj.classMethodValue(class_name, method_name, *args)
+    except (ImportError, AttributeError, TypeError):
+        pass
+
+    # Fall back to intersystems_iris.createIRIS (accepts intersystems_iris.IRISConnection)
+    import intersystems_iris as _iris_pkg2  # type: ignore[import]
+    iris_obj = _iris_pkg2.createIRIS(conn)
+    return iris_obj.classMethodValue(class_name, method_name, *args)
 
 class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
@@ -430,3 +472,147 @@ BEGIN
 END
 """
         ]
+
+    # ------------------------------------------------------------------
+    # ObjectScript (.cls) deployment helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def check_objectscript_classes(cursor, conn=None) -> "IRISCapabilities":
+        """
+        Detect which ObjectScript classes are compiled in IRIS.
+
+        Uses %Dictionary.ClassDefinition (fast); falls back to $CLASSMETHOD
+        %Exists if the dictionary query fails (e.g. restricted namespace).
+
+        Args:
+            cursor: Active IRIS dbapi cursor (for SQL queries).
+            conn:   Optional connection object for native API calls via
+                    createIRIS(). When None, the cursor itself is tried.
+
+        Returns:
+            IRISCapabilities with objectscript_deployed, graphoperators_deployed,
+            and kg_built flags set.
+        """
+        # Resolve the native-API handle: prefer explicit conn, else try cursor
+        _native_target = conn if conn is not None else cursor
+
+        caps = IRISCapabilities()
+
+        # --- Graph.KG.PageRank (sentinel: reliably compiles; Edge conflicts with existing DDL table) ---
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
+                "WHERE Name='Graph.KG.PageRank'"
+            )
+            row = cursor.fetchone()
+            caps.objectscript_deployed = bool(row and row[0])
+        except Exception:
+            try:
+                result = _call_classmethod(_native_target, 'Graph.KG.PageRank', '%Exists', 1)
+                caps.objectscript_deployed = bool(result)
+            except Exception:
+                caps.objectscript_deployed = False
+
+        # --- iris.vector.graph.GraphOperators ---
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
+                "WHERE Name='iris.vector.graph.GraphOperators'"
+            )
+            row = cursor.fetchone()
+            caps.graphoperators_deployed = bool(row and row[0])
+        except Exception:
+            try:
+                result = _call_classmethod(_native_target, 'iris.vector.graph.GraphOperators', '%Exists', 1)
+                caps.graphoperators_deployed = bool(result)
+            except Exception:
+                caps.graphoperators_deployed = False
+
+        # --- ^KG bootstrap marker via native API ---
+        try:
+            result = _call_classmethod(_native_target, 'Graph.KG.Meta', 'IsSet', 'kg_built')
+            caps.kg_built = bool(result)
+        except Exception:
+            caps.kg_built = False
+
+        return caps
+
+    @staticmethod
+    def deploy_objectscript_classes(cursor, iris_src_path: Path, conn=None) -> "IRISCapabilities":
+        """
+        Detect compiled ObjectScript classes and return capability flags.
+
+        In test environments, .cls files are loaded by the test fixture (conftest)
+        before this is called. In production (IRIS Embedded Python), callers should
+        pre-load classes via $system.OBJ.LoadDir() before calling initialize_schema().
+
+        This function intentionally does NOT attempt to load .cls files itself — the
+        dbapi cursor cannot execute $CLASSMETHOD SQL, and native API calls are
+        out-of-scope for a library function that doesn't own the connection lifecycle.
+
+        Args:
+            cursor:        Active IRIS dbapi cursor.
+            iris_src_path: Unused; kept for API compatibility.
+            conn:          Optional connection for native API calls; forwarded to
+                           check_objectscript_classes.
+
+        Returns:
+            IRISCapabilities reflecting what is currently compiled in IRIS.
+        """
+        try:
+            return GraphSchema.check_objectscript_classes(cursor, conn=conn)
+        except Exception as exc:
+            logger.warning("check_objectscript_classes failed: %s", exc)
+            return IRISCapabilities()
+
+    @staticmethod
+    def bootstrap_kg_global(cursor, conn=None) -> bool:
+        """
+        Backfill the ^KG global from existing SQL edge data using BuildKG().
+
+        Only runs once — records completion in Graph.KG.Meta so subsequent
+        calls are no-ops.  Safe to call on an empty database (returns False).
+
+        Args:
+            cursor: Active IRIS dbapi cursor (for SQL queries).
+            conn:   Optional connection for native API calls via createIRIS().
+                    When None, the cursor itself is tried.
+
+        Returns:
+            True if BuildKG() was called, False if already done or no edges.
+        """
+        _native = conn if conn is not None else cursor
+
+        # Already done?
+        try:
+            result = _call_classmethod(_native, 'Graph.KG.Meta', 'IsSet', 'kg_built')
+            if result:
+                return False
+        except Exception:
+            return False
+
+        # Any edges to backfill?
+        try:
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return False
+        except Exception:
+            return False
+
+        # Run BuildKG via native API
+        try:
+            _call_classmethod(_native, 'Graph.KG.Traversal', 'BuildKG')
+        except Exception as exc:
+            logger.warning("BuildKG() failed: %s", exc)
+            return False
+
+        # Record completion
+        try:
+            _call_classmethod(_native, 'Graph.KG.Meta', 'Set', 'kg_built', '1')
+        except Exception as exc:
+            logger.warning("Could not record kg_built in Graph.KG.Meta: %s", exc)
+
+        logger.info("^KG global bootstrapped from existing rdf_edges rows")
+        return True

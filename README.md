@@ -183,6 +183,25 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.9.0 (2026-02-28)
+- **ObjectScript Fast Paths**: Deployed `.cls` layer for PPR and BFS graph traversal — native IRIS ObjectScript execution for maximum throughput
+- **Reliable Test Infrastructure**: Eliminated `MockContainer` — `iris_test_container` now uses `IRISContainer.attach()` to connect to existing containers; session fixture blocks until `test/test` credentials are verified before yielding
+- **Correct Vector Dimensions**: Schema setup now drops and recreates `kg_NodeEmbeddings` (768-dim) to prevent silent 384→768 mismatch failures
+- **iris-devtester 1.14.0**: All container references use `container_name="iris-vector-graph-main"` for deterministic multi-container environments
+- **Auto-Generating GraphQL**: Connection pooling, `DYNAMIC_TYPES.clear()` on rebuild, dot-notation column name fixes
+- **FastAPI `/health` endpoint**: Always available regardless of engine state; `api_client` test fixture injects live engine
+- **Test isolation**: Numeric-comparison Cypher tests scoped to prefix; atomic fixture cleanup prevents FK-order rollback races
+
+### v1.8.0 (2026-01-15)
+- **NodePK Feature**: Primary-key node table (`Graph_KG.nodes`) with FK constraints on all edge/label/prop tables
+- **Migration Utilities**: `discover_nodes`, `bulk_insert_nodes`, `validate_migration`, `execute_migration` in `scripts/migrations/`
+- **Cypher Vector Search**: Native `ivg.vector.search` procedure for Cypher-embedded HNSW queries
+- **Stored Procedure Install**: `kg_KNN_VEC` server-side path with Python fallback
+
+### v1.7.0 (2026-01-01)
+- **Schema Stored Procedures**: Initialized via `iris_vector_graph.schema.initialize_schema()`
+- **GraphQL Auto-Generation**: Zero-config schema introspection from live graph labels
+
 ### v1.6.0 (2025-01-31)
 - **High-Performance Batch API**: New `get_nodes(node_ids)` reduces database round-trips by 100x+ for large result sets
 - **Advanced Substring Search**: Integrated IRIS `iFind` indexing for sub-20ms `CONTAINS` queries on 10,000+ records

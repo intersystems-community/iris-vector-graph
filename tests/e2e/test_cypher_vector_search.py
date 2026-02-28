@@ -4,8 +4,7 @@ E2E tests for CALL ivg.vector.search(...) YIELD node, score
 Full round-trip tests via IRISGraphEngine.execute_cypher(), exercising the
 complete stack: Cypher parser → SQL translator → IRIS execution → node hydration.
 
-Container management: iris-devtester manages the 'iris_vector_graph' named container.
-Port resolution: IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)
+Uses the shared iris_connection fixture (no hardcoded ports or container names).
 SKIP_IRIS_TESTS defaults to "false" — tests always hit live IRIS.
 
 Constitution Principle IV: mandatory e2e coverage, no hardcoded ports.
@@ -25,26 +24,27 @@ pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 
 TEST_PREFIX = "ivg_e2e_vs:"
 
+# 768-dim test vectors: meaningful in first 3 components, rest are zeros.
+# This preserves the cosine-similarity ordering logic of the original tests
+# while matching the kg_NodeEmbeddings VECTOR(DOUBLE, 768) column.
+DIM = 768
+
+def _vec(*leading):
+    """Pad leading values with zeros to DIM."""
+    return list(leading) + [0.0] * (DIM - len(leading))
+
+VEC_GENE_A = _vec(1.0, 0.0, 0.0)   # most similar to query
+VEC_GENE_B = _vec(0.9, 0.1, 0.0)   # second
+VEC_GENE_C = _vec(0.0, 1.0, 0.0)   # least similar
+VEC_DRUG_A = _vec(0.8, 0.2, 0.0)   # Drug label
+VEC_QUERY  = _vec(1.0, 0.0, 0.0)   # query vector
+
 
 @pytest.fixture(scope="module")
-def iris_engine():
-    """Connect to the iris_vector_graph container and return an IRISGraphEngine instance.
-
-    Uses iris-devtester for port resolution — no hardcoded ports.
-    """
-    try:
-        from iris_devtester import IRISContainer
-    except ImportError:
-        pytest.skip("iris-devtester not installed")
-
-    try:
-        container = IRISContainer.attach("iris_vector_graph")
-        conn = container.get_connection()
-    except Exception as e:
-        pytest.skip(f"Could not attach to iris_vector_graph container: {e}")
-
+def iris_engine(iris_connection):
+    """Return an IRISGraphEngine instance built on the shared iris_connection."""
     from iris_vector_graph.engine import IRISGraphEngine
-    engine = IRISGraphEngine(conn, embedding_dimension=3)
+    engine = IRISGraphEngine(iris_connection, embedding_dimension=DIM)
 
     # Ensure schema exists
     try:
@@ -53,9 +53,6 @@ def iris_engine():
         pass
 
     yield engine
-
-    conn.close()
-
 
 @pytest.fixture(scope="module")
 def vector_test_nodes(iris_engine):
@@ -70,10 +67,10 @@ def vector_test_nodes(iris_engine):
     cursor = conn.cursor()
 
     nodes = [
-        (f"{TEST_PREFIX}gene-a", "Gene", [1.0, 0.0, 0.0]),
-        (f"{TEST_PREFIX}gene-b", "Gene", [0.9, 0.1, 0.0]),
-        (f"{TEST_PREFIX}gene-c", "Gene", [0.0, 1.0, 0.0]),
-        (f"{TEST_PREFIX}drug-a", "Drug", [0.8, 0.2, 0.0]),
+        (f"{TEST_PREFIX}gene-a", "Gene", VEC_GENE_A),
+        (f"{TEST_PREFIX}gene-b", "Gene", VEC_GENE_B),
+        (f"{TEST_PREFIX}gene-c", "Gene", VEC_GENE_C),
+        (f"{TEST_PREFIX}drug-a", "Drug", VEC_DRUG_A),
     ]
 
     from iris_vector_graph.cypher.translator import _table
@@ -152,10 +149,13 @@ def vector_test_nodes(iris_engine):
 
 
 class TestVectorSearchE2E:
+    # Cypher literal for the query vector (768-dim, 1.0 in first slot)
+    Q = "[" + ", ".join(str(v) for v in VEC_QUERY) + "]"
+
     def test_execute_cypher_returns_results(self, iris_engine, vector_test_nodes):
         """execute_cypher() with CALL returns at least one row."""
         result = iris_engine.execute_cypher(
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 3) "
             "YIELD node, score RETURN node, score"
         )
         assert "rows" in result
@@ -164,7 +164,7 @@ class TestVectorSearchE2E:
     def test_results_are_ordered_by_score(self, iris_engine, vector_test_nodes):
         """Scores must be in descending order."""
         result = iris_engine.execute_cypher(
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 3) "
             "YIELD node, score RETURN node, score"
         )
         score_col = result["columns"].index("score")
@@ -174,7 +174,7 @@ class TestVectorSearchE2E:
     def test_label_filter_only_returns_genes(self, iris_engine, vector_test_nodes):
         """Gene search must not return Drug nodes."""
         result = iris_engine.execute_cypher(
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 5) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 5) "
             "YIELD node, score RETURN node, score"
         )
         node_col = result["columns"].index("node_id")
@@ -185,15 +185,15 @@ class TestVectorSearchE2E:
     def test_limit_caps_result_count(self, iris_engine, vector_test_nodes):
         """Result count must not exceed limit=2."""
         result = iris_engine.execute_cypher(
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 2) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 2) "
             "YIELD node, score RETURN node, score"
         )
         assert len(result["rows"]) <= 2
 
     def test_nearest_node_is_gene_a(self, iris_engine, vector_test_nodes):
-        """The closest node to [1,0,0] among Gene nodes must be gene-a."""
+        """The closest node to query vector among Gene nodes must be gene-a."""
         result = iris_engine.execute_cypher(
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 1) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 1) "
             "YIELD node, score RETURN node, score"
         )
         assert len(result["rows"]) >= 1
@@ -210,7 +210,7 @@ class TestVectorSearchE2E:
             pytest.skip("IRIS EMBEDDING() function is available; Mode 2 not testable as error path")
         with pytest.raises(RuntimeError, match="EMBEDDING"):
             iris_engine.execute_cypher(
-                "CALL ivg.vector.search('Gene', 'embedding', 'flu symptoms', 5, "
+                f"CALL ivg.vector.search('Gene', 'embedding', 'flu symptoms', 5, "
                 "{embedding_config: 'my_config'}) YIELD node, score RETURN node, score"
             )
 
@@ -218,7 +218,7 @@ class TestVectorSearchE2E:
         """Vector search for top-3 genes must complete in under 100ms."""
         start = time.perf_counter()
         iris_engine.execute_cypher(
-            "CALL ivg.vector.search('Gene', 'embedding', [1.0, 0.0, 0.0], 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 3) "
             "YIELD node, score RETURN node, score"
         )
         elapsed_ms = (time.perf_counter() - start) * 1000
