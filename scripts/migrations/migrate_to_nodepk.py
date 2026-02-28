@@ -77,7 +77,7 @@ def get_container_port(container_name: str, internal_port: int = 1972) -> int:
 
 
 # Database connection
-def get_connection():
+def get_connection(container_name: str | None = None):
     """
     Get IRIS database connection.
 
@@ -107,12 +107,12 @@ def get_connection():
     # Port discovery - test container first, then env vars
     port = None
 
-    # Priority 1: Check for specific test container
-    container_name = os.getenv('IRIS_TEST_CONTAINER', '')
-    if container_name:
-        port = get_container_port(container_name)
+    # Priority 1: Use explicit container override (argument > env var)
+    requested_container = container_name or os.getenv('IRIS_TEST_CONTAINER', '')
+    if requested_container:
+        port = get_container_port(requested_container)
         if port:
-            logger.debug(f"Using test container {container_name} on port {port}")
+            logger.debug(f"Using test container {requested_container} on port {port}")
 
     # Priority 2: Check for test-specific port override
     if port is None:
@@ -801,7 +801,7 @@ Examples:
     # Get database connection
     try:
         logger.info("Connecting to IRIS database...")
-        connection = get_connection()
+        connection = get_connection(container_name="iris-vector-graph-main")
         logger.info("Successfully connected to IRIS database")
     except Exception as e:
         logger.error(f"Failed to connect to database: {e}")

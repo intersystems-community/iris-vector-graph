@@ -14,6 +14,7 @@ graph and hybrid search capabilities.
 
 from .engine import IRISGraphEngine
 from .schema import GraphSchema
+from .capabilities import IRISCapabilities
 from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
 from .fusion import RRFFusion
@@ -26,6 +27,7 @@ except Exception:
 __all__ = [
     "IRISGraphEngine",
     "GraphSchema",
+    "IRISCapabilities",
     "VectorOptimizer",
     "TextSearchEngine",
     "RRFFusion"

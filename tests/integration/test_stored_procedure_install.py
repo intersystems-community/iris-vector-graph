@@ -98,10 +98,11 @@ def test_kg_knn_vec_uses_server_side_path(clean_procedures):
     from iris_vector_graph.engine import IRISGraphEngine
 
     conn = clean_procedures
-    engine = IRISGraphEngine(conn, embedding_dimension=384)
+    engine = IRISGraphEngine(conn, embedding_dimension=768)
     engine.initialize_schema()
 
-    query_vec = json.dumps([math.sin(i * 0.01) for i in range(384)])
+    import math
+    query_vec = json.dumps([math.sin(i * 0.01) for i in range(768)])
 
     # Patch the slow Python fallback to raise — if it's invoked, the test fails.
     # The engine now uses direct SQL (TOP k + VECTOR_COSINE + TO_VECTOR) which

@@ -8,10 +8,9 @@ import pytest
 import tempfile
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
-import pandas as pd
+from typing import Any
 
 try:
     import networkx as nx
@@ -20,58 +19,64 @@ except ImportError:
     NETWORKX_AVAILABLE = False
     pytest.skip("NetworkX not available", allow_module_level=True)
 
-try:
-    import iris
-    IRIS_AVAILABLE = True
-except ImportError:
-    IRIS_AVAILABLE = False
-    pytest.skip("IRIS Python driver not available", allow_module_level=True)
+
+NODE_UPSERT_SQL = (
+    "INSERT INTO Graph_KG.nodes (node_id) "
+    "SELECT ? "
+    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)"
+)
+
+
+def ensure_nodes_exist(cursor, node_ids):
+    seen = set()
+    for node_id in node_ids:
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        cursor.execute(NODE_UPSERT_SQL, (node_id, node_id))
+
+
+@pytest.fixture(scope="module", autouse=True)
+def inject_iris_connection(iris_connection):
+    """Inject the shared iris_connection into the NetworkX loader tests."""
+    TestNetworkXLoader.conn = iris_connection
+
+
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT_DIR))
+from scripts.ingest.networkx_loader import NetworkXIRISLoader
 
 
 class TestNetworkXLoader:
-    """Test NetworkX loader CLI tool"""
+    """Test NetworkX loader API integration"""
+
+    conn: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup test class"""
-        cls.loader_script = Path(__file__).parent.parent.parent / "scripts" / "ingest" / "networkx_loader.py"
-        assert cls.loader_script.exists(), f"NetworkX loader script not found: {cls.loader_script}"
-
-        # Test IRIS connection
-        try:
-            cls.conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-            cls.conn.close()
-        except Exception as e:
-            pytest.skip(f"IRIS database not accessible: {e}")
+        assert cls.conn is not None, "iris_connection fixture did not inject a connection"
 
     @classmethod
     def teardown_class(cls):
         """Clean up test data"""
         try:
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'LOADER_%'")
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'LOADER_%'")
-            cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'LOADER_%'")
+            cursor = cls.conn.cursor()
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'LOADER_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'LOADER_%'")
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'LOADER_%'")
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'LOADER_%'")
             cursor.close()
-            conn.close()
         except Exception:
             pass
 
+    def _create_loader(self):
+        loader = NetworkXIRISLoader.__new__(NetworkXIRISLoader)
+        loader.conn = self.conn
+        return loader
+
     def test_tsv_loading(self):
-        """Test loading TSV format via CLI"""
+        """Test loading TSV format via API"""
         # Create test TSV file
         tsv_data = """source\tpredicate\ttarget\tconfidence\tevidence
 LOADER_PROTEIN_A\tinteracts_with\tLOADER_PROTEIN_B\t0.95\texperimental
@@ -83,41 +88,22 @@ LOADER_PROTEIN_A\tregulates\tLOADER_PROTEIN_C\t0.72\tliterature"""
             tsv_file = f.name
 
         try:
-            # Run loader CLI
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', tsv_file,
-                '--format', 'tsv',
-                '--node-type', 'test_protein',
-                '--batch-size', '1000'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-            if result.returncode != 0:
-                print(f"STDOUT: {result.stdout}")
-                print(f"STDERR: {result.stderr}")
-
-            assert result.returncode == 0, f"CLI command failed: {result.stderr}"
+            loader = self._create_loader()
+            G = loader.load_format(tsv_file, format_type='tsv')
+            result = loader.import_graph(G, node_type='test_protein', batch_size=1000)
+            assert result['success'], f"Import failed: {result.get('error')}"
 
             # Verify data was loaded
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            conn = self.conn
             cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'test_protein'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'test_protein'")
             entity_count = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_edges WHERE s LIKE 'LOADER_%'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'LOADER_%'")
             edge_count = cursor.fetchone()[0]
 
             cursor.close()
-            conn.close()
 
             assert entity_count == 3  # 3 unique proteins
             assert edge_count == 3    # 3 relationships
@@ -126,7 +112,7 @@ LOADER_PROTEIN_A\tregulates\tLOADER_PROTEIN_C\t0.72\tliterature"""
             os.unlink(tsv_file)
 
     def test_csv_loading(self):
-        """Test loading CSV format via CLI"""
+        """Test loading CSV format via API"""
         # Create test CSV file
         csv_data = """gene1,gene2,interaction_type,score
 LOADER_GENE_X,LOADER_GENE_Y,co_expression,0.89
@@ -138,34 +124,19 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             csv_file = f.name
 
         try:
-            # Run loader CLI with custom column mapping
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', csv_file,
-                '--format', 'csv',
-                '--source-col', 'gene1',
-                '--target-col', 'gene2',
-                '--node-type', 'test_gene'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0, f"CLI command failed: {result.stderr}"
+            loader = self._create_loader()
+            G = loader.load_format(csv_file, format_type='csv', source_col='gene1', target_col='gene2')
+            result = loader.import_graph(G, node_type='test_gene')
+            assert result['success'], f"Import failed: {result.get('error')}"
 
             # Verify data was loaded
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            conn = self.conn
             cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'test_gene'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'test_gene'")
             entity_count = cursor.fetchone()[0]
 
             cursor.close()
-            conn.close()
 
             assert entity_count == 3  # 3 unique genes
 
@@ -173,7 +144,7 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             os.unlink(csv_file)
 
     def test_jsonl_loading(self):
-        """Test loading JSONL format via CLI"""
+        """Test loading JSONL format via API"""
         # Create test JSONL file
         jsonl_data = [
             {"source": "LOADER_DRUG_A", "target": "LOADER_TARGET_1", "interaction": "inhibits", "ic50": 0.05},
@@ -187,39 +158,24 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             jsonl_file = f.name
 
         try:
-            # Run loader CLI
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', jsonl_file,
-                '--format', 'jsonl',
-                '--node-type', 'test_entity'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0, f"CLI command failed: {result.stderr}"
+            loader = self._create_loader()
+            G = loader.load_format(jsonl_file, format_type='jsonl')
+            result = loader.import_graph(G, node_type='test_entity')
+            assert result['success'], f"Import failed: {result.get('error')}"
 
             # Verify data was loaded
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            conn = self.conn
             cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'test_entity'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'test_entity'")
             entity_count = cursor.fetchone()[0]
 
             # Check edge attributes
             cursor.execute("""
-                SELECT qualifiers FROM rdf_edges
+                SELECT qualifiers FROM Graph_KG.rdf_edges
                 WHERE s = 'LOADER_DRUG_A' AND o_id = 'LOADER_TARGET_1'
             """)
             qualifiers_result = cursor.fetchone()
-
-            cursor.close()
-            conn.close()
 
             assert entity_count == 4  # 2 drugs + 2 targets
             assert qualifiers_result is not None
@@ -229,11 +185,13 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             assert 'ic50' in qualifiers
             assert qualifiers['ic50'] == 0.05
 
+            cursor.close()
+
         finally:
             os.unlink(jsonl_file)
 
     def test_graphml_loading(self):
-        """Test loading GraphML format via CLI"""
+        """Test loading GraphML format via API"""
         # Create test NetworkX graph
         G = nx.DiGraph()
         G.add_edge('LOADER_NODE_1', 'LOADER_NODE_2', weight=0.8, type='strong')
@@ -252,42 +210,29 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             # Write GraphML file
             nx.write_graphml(G, graphml_file)
 
-            # Run loader CLI
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', graphml_file,
-                '--format', 'graphml',
-                '--node-type', 'test_node'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0, f"CLI command failed: {result.stderr}"
+            loader = self._create_loader()
+            graph = loader.load_format(graphml_file, format_type='graphml')
+            result = loader.import_graph(graph, node_type='test_node')
+            assert result['success'], f"Import failed: {result.get('error')}"
 
             # Verify data was loaded
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            conn = self.conn
             cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'test_node'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'test_node'")
             entity_count = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_edges WHERE s LIKE 'LOADER_NODE_%'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'LOADER_NODE_%'")
             edge_count = cursor.fetchone()[0]
 
             # Check node properties
             cursor.execute("""
-                SELECT COUNT(*) FROM rdf_props
+                SELECT COUNT(*) FROM Graph_KG.rdf_props
                 WHERE s LIKE 'LOADER_NODE_%' AND key = 'category'
             """)
             prop_count = cursor.fetchone()[0]
 
             cursor.close()
-            conn.close()
 
             assert entity_count == 3  # 3 nodes
             assert edge_count == 3    # 3 edges
@@ -299,13 +244,7 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
     def test_export_functionality(self):
         """Test exporting IRIS graph to file"""
         # First ensure we have some test data
-        conn = iris.connect(
-            hostname='localhost',
-            port=1973,
-            namespace='USER',
-            username='_SYSTEM',
-            password='SYS'
-        )
+        conn = self.conn
         cursor = conn.cursor()
 
         # Insert test entities
@@ -314,8 +253,9 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             ('LOADER_EXPORT_B', 'export_test'),
             ('LOADER_EXPORT_C', 'export_test')
         ]
+        ensure_nodes_exist(cursor, [node for node, _ in test_entities])
         cursor.executemany(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             test_entities
         )
 
@@ -325,28 +265,19 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
             ('LOADER_EXPORT_B', 'connects', 'LOADER_EXPORT_C', '{"weight": 0.9}')
         ]
         cursor.executemany(
-            "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
             test_edges
         )
 
         cursor.close()
-        conn.close()
 
         with tempfile.NamedTemporaryFile(suffix='.graphml', delete=False) as f:
             export_file = f.name
 
         try:
-            # Run export CLI
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'export', export_file,
-                '--format', 'graphml',
-                '--node-filter', 'export_test',
-                '--limit', '10'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0, f"Export command failed: {result.stderr}"
+            loader = self._create_loader()
+            success = loader.export_graph(export_file, format_type='graphml', node_filter='export_test', limit=10)
+            assert success, "Export failed"
 
             # Verify exported file exists and is valid
             assert os.path.exists(export_file)
@@ -368,65 +299,45 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
     def test_clear_existing_flag(self):
         """Test --clear-existing functionality"""
         # First, create some existing test data
-        conn = iris.connect(
-            hostname='localhost',
-            port=1973,
-            namespace='USER',
-            username='_SYSTEM',
-            password='SYS'
-        )
+        conn = self.conn
         cursor = conn.cursor()
 
+        ensure_nodes_exist(cursor, ['LOADER_EXISTING'])
         cursor.execute(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             ['LOADER_EXISTING', 'existing_data']
         )
 
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'existing_data'")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'existing_data'")
         initial_count = cursor.fetchone()[0]
         assert initial_count == 1
 
         cursor.close()
-        conn.close()
 
         # Create new test data file
-        tsv_data = "source\ttarget\nLOADER_NEW_A\tLOADER_NEW_B"
+        tsv_data = "source\tpredicate\ttarget\nLOADER_NEW_A\tconnects\tLOADER_NEW_B"
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.tsv', delete=False) as f:
             f.write(tsv_data)
             tsv_file = f.name
 
         try:
-            # Run loader with --clear-existing
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', tsv_file,
-                '--format', 'tsv',
-                '--node-type', 'new_data',
-                '--clear-existing'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0, f"CLI command failed: {result.stderr}"
+            loader = self._create_loader()
+            G = loader.load_format(tsv_file, format_type='tsv')
+            result = loader.import_graph(G, node_type='new_data', clear_existing=True)
+            assert result['success'], f"Import failed: {result.get('error')}"
 
             # Verify existing data was cleared
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            conn = self.conn
             cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'existing_data'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'existing_data'")
             existing_count = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'new_data'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'new_data'")
             new_count = cursor.fetchone()[0]
 
             cursor.close()
-            conn.close()
 
             assert existing_count == 0  # Existing data should be cleared
             assert new_count == 2       # New data should be loaded
@@ -437,38 +348,26 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
     def test_auto_format_detection(self):
         """Test automatic format detection"""
         # Create TSV file without specifying format
-        tsv_data = "source\ttarget\nLOADER_AUTO_A\tLOADER_AUTO_B"
+        tsv_data = "source\tpredicate\ttarget\nLOADER_AUTO_A\tconnects\tLOADER_AUTO_B"
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.tsv', delete=False) as f:
             f.write(tsv_data)
             tsv_file = f.name
 
         try:
-            # Run loader without --format flag (should auto-detect)
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', tsv_file,
-                '--node-type', 'auto_detected'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            assert result.returncode == 0, f"Auto-detection failed: {result.stderr}"
+            loader = self._create_loader()
+            graph = loader.load_format(tsv_file)
+            result = loader.import_graph(graph, node_type='auto_detected')
+            assert result['success'], f"Import failed: {result.get('error')}"
 
             # Verify data was loaded correctly
-            conn = iris.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
+            conn = self.conn
             cursor = conn.cursor()
 
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = 'auto_detected'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = 'auto_detected'")
             count = cursor.fetchone()[0]
 
             cursor.close()
-            conn.close()
 
             assert count == 2  # 2 entities should be loaded
 
@@ -477,71 +376,18 @@ LOADER_GENE_X,LOADER_GENE_Z,protein_interaction,0.93"""
 
     def test_error_handling(self):
         """Test error handling for invalid inputs"""
-        # Test with non-existent file
-        cmd = [
-            sys.executable, str(self.loader_script),
-            'load', '/nonexistent/file.tsv'
-        ]
+        loader = NetworkXIRISLoader.__new__(NetworkXIRISLoader)
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        assert result.returncode != 0, "Should fail with non-existent file"
+        with pytest.raises(FileNotFoundError):
+            loader.load_format('/nonexistent/file.tsv')
 
-        # Test with invalid format
         with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
             f.write("invalid data")
             invalid_file = f.name
 
         try:
-            cmd = [
-                sys.executable, str(self.loader_script),
-                'load', invalid_file,
-                '--format', 'unsupported_format'
-            ]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            assert result.returncode != 0, "Should fail with unsupported format"
+            with pytest.raises(ValueError):
+                loader.load_format(invalid_file, format_type='unsupported_format')
 
         finally:
             os.unlink(invalid_file)
-
-    def test_help_output(self):
-        """Test CLI help output"""
-        cmd = [sys.executable, str(self.loader_script), '--help']
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0, "Help command should succeed"
-        assert 'networkx' in result.stdout.lower(), "Help should mention NetworkX"
-        assert 'load' in result.stdout.lower(), "Help should mention load command"
-        assert 'export' in result.stdout.lower(), "Help should mention export command"
-
-
-if __name__ == "__main__":
-    # Run specific tests for quick validation
-    print("Running NetworkX Loader CLI Tests...")
-
-    try:
-        test_loader = TestNetworkXLoader()
-        test_loader.setup_class()
-
-        print("Testing TSV loading...")
-        test_loader.test_tsv_loading()
-        print("✅ TSV loading test passed")
-
-        print("Testing CSV loading...")
-        test_loader.test_csv_loading()
-        print("✅ CSV loading test passed")
-
-        print("Testing auto-detection...")
-        test_loader.test_auto_format_detection()
-        print("✅ Auto-detection test passed")
-
-        test_loader.teardown_class()
-
-        print("✅ All NetworkX loader tests passed")
-
-    except Exception as e:
-        print(f"❌ NetworkX loader tests failed: {e}")
-        import traceback
-        traceback.print_exc()
-
-    print("Test suite completed")

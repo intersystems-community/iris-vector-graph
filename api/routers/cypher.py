@@ -88,7 +88,7 @@ async def execute_cypher_query(
                     if item.alias:
                         columns.append(item.alias)
                     elif isinstance(item.expression, ast.PropertyReference):
-                        columns.append(f"{item.expression.variable}_{item.expression.property_name}")
+                        columns.append(f"{item.expression.variable}.{item.expression.property_name}")
                     elif isinstance(item.expression, ast.Variable):
                         columns.append(item.expression.name)
                     elif isinstance(item.expression, (ast.AggregationFunction, ast.FunctionCall)):

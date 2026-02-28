@@ -16,7 +16,7 @@ def test_fk_constraints():
     conn = None
     try:
         logger.info("Connecting to IRIS...")
-        conn = get_connection()
+        conn = get_connection(container_name="iris-vector-graph-main")
 
         logger.info("Adding FK constraints...")
         execute_sql_migration(conn, 'sql/migrations/002_add_fk_constraints.sql')

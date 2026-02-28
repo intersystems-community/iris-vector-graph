@@ -8,6 +8,7 @@ import pytest
 import json
 import importlib
 import numpy as np
+from typing import Any
 
 # NOTE: Use importlib to avoid conflict with iris/ directory in project
 try:
@@ -18,40 +19,40 @@ except ImportError:
     pytest.skip("IRIS Python driver not available", allow_module_level=True)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def inject_iris_connection(iris_connection):
+    """Inject the shared iris_connection into vector function tests."""
+    TestVectorFunctions.conn = iris_connection
+
+
 class TestVectorFunctions:
     """Test suite for IRIS vector functions and procedures"""
+
+    conn: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup vector function tests"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
+        cursor = None
         try:
-            cls.conn = iris_module.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-
-            # Test connection
             cursor = cls.conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
-            cursor.close()
-
             print("✓ IRIS connection for vector function testing established")
-
         except Exception as e:
             pytest.skip(f"IRIS database not accessible: {e}")
+        finally:
+            if cursor:
+                cursor.close()
 
     @classmethod
     def teardown_class(cls):
         """Clean up vector function tests"""
-        if hasattr(cls, 'conn'):
-            cls.conn.close()
+        # Connection is managed by shared fixture; nothing to close
+        pass
 
     def test_native_to_vector_function(self):
         """Test native IRIS TO_VECTOR function"""
@@ -107,7 +108,7 @@ class TestVectorFunctions:
         cursor = self.conn.cursor()
 
         # Check table exists and has sample data
-        cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings")
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
         count = cursor.fetchone()[0]
 
         assert count > 0, "kg_NodeEmbeddings table should have sample data"
@@ -177,7 +178,7 @@ class TestVectorFunctions:
         cursor = self.conn.cursor()
 
         # First check if we have sample data
-        cursor.execute("SELECT id, emb FROM kg_NodeEmbeddings LIMIT 1")
+        cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings LIMIT 1")
         sample = cursor.fetchone()
 
         if sample is None:

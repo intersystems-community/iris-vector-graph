@@ -97,7 +97,10 @@ def create_dynamic_node_type(label: str, properties: List[str]) -> Type:
 def build_schema(engine: GQLGraphEngine) -> strawberry.Schema:
     """
     Introspects the graph and builds the complete Strawberry schema.
+    Clears the dynamic type registry first so each call reflects the current DB state.
     """
+    DYNAMIC_TYPES.clear()
+
     metadata = engine.get_schema_metadata()
     
     for label, props in metadata.items():

@@ -49,7 +49,18 @@ def create_app(engine: IRISGraphEngine, prefix: str = "/graphql", embedder: Opti
     
     @app.get("/")
     async def root():
-        return {"message": "IRIS Vector Graph GraphQL API is running", "graphql_endpoint": prefix}
+        return {"name": "IRIS Vector Graph API", "graphql_endpoint": prefix}
+
+    @app.get("/health")
+    async def health():
+        try:
+            cursor = engine.conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            db_status = "connected"
+        except Exception:
+            db_status = "disconnected"
+        return {"status": "healthy", "database": db_status, "graphql": "available"}
     
     return app
 

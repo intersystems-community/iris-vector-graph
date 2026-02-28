@@ -4,7 +4,7 @@ from iris_vector_graph import IRISGraphEngine
 from iris_vector_graph.gql import create_app
 
 @pytest.mark.requires_database
-def test_gql_node_queries(iris_connection):
+def test_gql_node_queries(iris_connection, iris_master_cleanup):
     """
     Test that the auto-generated GraphQL server can query nodes and properties.
     """

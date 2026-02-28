@@ -5,6 +5,7 @@ Supports loading standard graph formats into IRIS using NetworkX
 """
 
 import argparse
+import csv
 import json
 import sys
 import time
@@ -21,13 +22,7 @@ except ImportError:
     print("Error: NetworkX not available. Install with: pip install networkx")
     sys.exit(1)
 
-try:
-    import iris
-    IRIS_AVAILABLE = True
-except ImportError:
-    IRIS_AVAILABLE = False
-    print("Error: IRIS Python driver not available. Install with: pip install intersystems_irispython")
-    sys.exit(1)
+from iris_devtester.connections import get_connection as idt_get_connection
 
 import pandas as pd
 import numpy as np
@@ -46,25 +41,19 @@ class NetworkXIRISLoader:
     High-performance loader for graph data using NetworkX → IRIS
     """
 
-    def __init__(self, connection_params: Dict = None):
+    def __init__(self, container_name: str = "iris-vector-graph-main"):
         """
-        Initialize loader with IRIS connection parameters
+        Initialize loader configured to connect to the shared IRIS container.
         """
-        self.conn_params = connection_params or {
-            'hostname': os.getenv('IRIS_HOST', 'localhost'),
-            'port': int(os.getenv('IRIS_PORT', 1973)),
-            'namespace': os.getenv('IRIS_NAMESPACE', 'USER'),
-            'username': os.getenv('IRIS_USER', '_SYSTEM'),
-            'password': os.getenv('IRIS_PASSWORD', 'SYS')
-        }
         self.conn = None
+        self._container_name = container_name
 
     def connect(self):
         """Establish IRIS connection with retry logic"""
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                self.conn = iris.connect(**self.conn_params)
+                self.conn = idt_get_connection(container_name=self._container_name)
 
                 # Test connection
                 cursor = self.conn.cursor()
@@ -105,10 +94,14 @@ class NetworkXIRISLoader:
             elif format_type == 'gml':
                 return nx.read_gml(file_path)
 
-            elif format_type == 'edgelist' or format_type == 'tsv':
-                # Handle TSV/CSV edge lists
-                delimiter = kwargs.get('delimiter', '\t' if format_type == 'tsv' else ' ')
+            elif format_type == 'edgelist':
+                # Handle generic edgelists
+                delimiter = kwargs.get('delimiter', ' ')
                 return nx.read_edgelist(file_path, delimiter=delimiter, data=True)
+
+            elif format_type == 'tsv':
+                delimiter = kwargs.get('delimiter', '\t')
+                return self._load_tsv_edge_list(file_path, delimiter=delimiter)
 
             elif format_type == 'csv':
                 return self._load_csv_edgelist(file_path, **kwargs)
@@ -175,6 +168,51 @@ class NetworkXIRISLoader:
 
         return G
 
+    def _load_tsv_edge_list(self, file_path: Path, delimiter: str = '\t') -> nx.Graph:
+        """Load TSV edge list and map header columns to attributes."""
+        G = nx.DiGraph()
+
+        with open(file_path, mode='r', encoding='utf-8', newline='') as fh:
+            reader = csv.DictReader(fh, delimiter=delimiter)
+            if not reader.fieldnames:
+                raise ValueError("TSV file is empty or missing headers")
+
+            field_map = {col.lower(): col for col in reader.fieldnames if col}
+            required = ['source', 'predicate', 'target']
+            missing = [req for req in required if req not in field_map]
+            if missing:
+                raise ValueError(f"TSV edge list must include columns: {', '.join(required)}")
+
+            source_key = field_map['source']
+            predicate_key = field_map['predicate']
+            target_key = field_map['target']
+
+            attribute_columns = [col for col in reader.fieldnames if col not in {source_key, predicate_key, target_key}]
+
+            for row in reader:
+                source = str(row[source_key]) if row[source_key] is not None else ''
+                target = str(row[target_key]) if row[target_key] is not None else ''
+
+                if not source or not target:
+                    continue
+
+                attrs = {}
+                for col in attribute_columns:
+                    value = row[col]
+                    if value is None:
+                        continue
+                    if value == '':
+                        continue
+                    attrs[col] = value
+
+                relation = row[predicate_key]
+                if relation:
+                    attrs['relation'] = relation
+
+                G.add_edge(source, target, **attrs)
+
+        return G
+
     def _find_column(self, df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
         """Find column name from candidates"""
         df_cols = [col.lower() for col in df.columns]
@@ -205,6 +243,24 @@ class NetworkXIRISLoader:
 
         return G
 
+    def _ensure_nodes_exist(self, cursor, nodes: List[str]):
+        """Ensure each node_id exists in Graph_KG.nodes to satisfy FK constraints."""
+        if not nodes:
+            return
+
+        insert_sql = (
+            "INSERT INTO Graph_KG.nodes (node_id) "
+            "SELECT ? "
+            "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)"
+        )
+
+        seen = set()
+        for node in nodes:
+            if node in seen:
+                continue
+            seen.add(node)
+            cursor.execute(insert_sql, (node, node))
+
     def import_graph(self, G: nx.Graph, node_type: str = 'entity',
                     batch_size: int = 5000, clear_existing: bool = False) -> Dict:
         """
@@ -222,9 +278,9 @@ class NetworkXIRISLoader:
             # Clear existing data if requested
             if clear_existing:
                 logger.info("Clearing existing graph data...")
-                cursor.execute("DELETE FROM rdf_edges")
-                cursor.execute("DELETE FROM rdf_labels")
-                cursor.execute("DELETE FROM rdf_props")
+                cursor.execute("DELETE FROM Graph_KG.rdf_edges")
+                cursor.execute("DELETE FROM Graph_KG.rdf_labels")
+                cursor.execute("DELETE FROM Graph_KG.rdf_props")
 
             # Insert node labels in batches
             logger.info(f"Importing {G.number_of_nodes()} nodes...")
@@ -232,9 +288,10 @@ class NetworkXIRISLoader:
                            for i in range(0, G.number_of_nodes(), batch_size)]
 
             for batch_num, node_batch in enumerate(node_batches):
+                self._ensure_nodes_exist(cursor, node_batch)
                 label_data = [(node, node_type) for node in node_batch]
                 cursor.executemany(
-                    "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                    "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                     label_data
                 )
                 stats['nodes'] += len(label_data)
@@ -255,7 +312,7 @@ class NetworkXIRISLoader:
 
                 for batch_num, prop_batch in enumerate(prop_batches):
                     cursor.executemany(
-                        "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                        "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
                         prop_batch
                     )
                     stats['properties'] += len(prop_batch)
@@ -278,7 +335,7 @@ class NetworkXIRISLoader:
                     edge_data.append((source, relation, target, qualifiers))
 
                 cursor.executemany(
-                    "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
                     edge_data
                 )
                 stats['edges'] += len(edge_data)
@@ -320,13 +377,13 @@ class NetworkXIRISLoader:
             # Build query with optional filters
             edge_query = """
                 SELECT DISTINCT e.s, e.p, e.o_id, e.qualifiers
-                FROM rdf_edges e
+                FROM Graph_KG.rdf_edges e
             """
 
             params = []
             if node_filter:
                 edge_query += """
-                    JOIN rdf_labels l1 ON e.s = l1.s
+                    JOIN Graph_KG.rdf_labels l1 ON e.s = l1.s
                     WHERE l1.label = ?
                 """
                 params.append(node_filter)
@@ -351,11 +408,11 @@ class NetworkXIRISLoader:
                 G.add_edge(source, target, **attrs)
 
             # Add node properties
-            prop_query = "SELECT s, key, val FROM rdf_props"
+            prop_query = "SELECT s, key, val FROM Graph_KG.rdf_props"
             if node_filter:
                 prop_query += """
                     WHERE s IN (
-                        SELECT s FROM rdf_labels WHERE label = ?
+                        SELECT s FROM Graph_KG.rdf_labels WHERE label = ?
                     )
                 """
                 cursor.execute(prop_query, [node_filter])

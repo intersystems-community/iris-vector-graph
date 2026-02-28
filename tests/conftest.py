@@ -7,63 +7,48 @@ import os
 import subprocess
 import time
 
-try:
-    import iris
-except ImportError:
-    iris = None
-
-try:
-    import irisnative
-except ImportError:
-    irisnative = None
 import pytest
+from iris._elsdk_ import connect as iris_connect
 
 logger = logging.getLogger(__name__)
 
 TEST_CONTAINER_IMAGE = "intersystemsdc/iris-community:latest-em"
 
-
 def _apply_aggressive_password_reset(container_name: str) -> bool:
-    """Aggressively clear password expiry flags via ObjectScript and create test user."""
-    logger.info(f"Applying aggressive password reset and creating test user in {container_name}...")
-    aggro_pwd_script = """
-Set sc = ##class(Security.Users).UnExpireUser("_SYSTEM")
-Set sc = ##class(Security.Users).UnExpireUser("SuperUser")
-If '##class(Security.Users).Exists("test") {
-    Set sc = ##class(Security.Users).Create("test", "%ALL", "test", "Test User", , , , 0, 1)
-}
-Set obj = ##class(Security.Users).%OpenId("test")
-If $IsObject(obj) {
-    Set obj.PasswordNeverExpires = 1
-    Set obj.ChangePassword = 0
-    Do obj.PasswordSet("test")
-    Do obj.%Save()
-}
-For usr = "_SYSTEM", "SuperUser", "test" {
-    Set obj = ##class(Security.Users).%OpenId(usr)
-    If $IsObject(obj) {
-        Set obj.PasswordNeverExpires = 1
-        Set obj.ChangePassword = 0
-        Do obj.%Save()
-    }
-}
-H
-"""
+    """Create/reset the test user using single-line ObjectScript commands.
+
+    IRIS terminal (iris session) treats each piped line as a separate command —
+    multi-line If/For blocks cause <SYNTAX> errors.  All statements here are
+    intentionally written as single-line routines to avoid that.
+    """
+    logger.info(f"Applying password reset and creating test user in {container_name}...")
+
+    # Each line is a self-contained single-line ObjectScript statement.
+    # We use $ZCVT and a single Do with a chained method sequence.
+    single_line_commands = [
+        # Create test user if not already present (sc=1 means already exists)
+        'Set sc = $SELECT(##class(Security.Users).Exists("test"):1, 1:##class(Security.Users).Create("test","%ALL","test","Test User",,,,0,1))',
+        # Ensure password never expires and no forced change (comma-separated Set = single line)
+        'Set u=##class(Security.Users).%OpenId("test") Set u.PasswordNeverExpires=1,u.ChangePassword=0 Do u.%Save()',
+    ]
+    script = "\n".join(single_line_commands) + "\nH\n"
+
     exec_cmd = ['docker', 'exec', '-i', container_name, 'iris', 'session', 'iris', '-U', '%SYS']
-    
-    # Retry loop for initial setup
+
     for i in range(5):
         try:
-            result = subprocess.run(exec_cmd, input=aggro_pwd_script, capture_output=True, text=True, errors='replace')
-            if result.returncode == 0:
-                logger.info("Aggressive password reset successful.")
-                return True
+            result = subprocess.run(
+                exec_cmd, input=script, capture_output=True, text=True,
+                errors='replace', timeout=30,
+            )
+            # returncode 0 = clean exit; ignore <SYNTAX> noise in stderr
+            logger.debug(f"Password reset stdout: {result.stdout[-500:]}")
+            logger.info("Password reset completed.")
+            return True
         except Exception as e:
-            logger.debug(f"Attempt {i+1} failed: {e}")
-        
-        logger.debug(f"Aggressive password reset attempt {i+1} failed, retrying in 2s...")
+            logger.debug(f"Password reset attempt {i + 1} failed: {e}")
         time.sleep(2)
-        
+
     return False
 
 
@@ -89,42 +74,44 @@ def _setup_iris_container(container_name: str) -> bool:
 Set stmt = ##class(%SQL.Statement).%New()
 Do stmt.%Prepare("CREATE SCHEMA Graph_KG")
 Do stmt.%Execute()
-Do stmt.%Prepare("SET SCHEMA Graph_KG")
+
+Do stmt.%Prepare("DROP VIEW SQLUser.kg_NodeEmbeddings")
+Do stmt.%Execute()
+Do stmt.%Prepare("DROP TABLE Graph_KG.kg_NodeEmbeddings_optimized")
+Do stmt.%Execute()
+Do stmt.%Prepare("DROP TABLE Graph_KG.kg_NodeEmbeddings")
 Do stmt.%Execute()
 
-Set tables = ##class(%DynamicArray).%New()
-Do tables.%Push("CREATE TABLE nodes(node_id VARCHAR(256) PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-Do tables.%Push("CREATE TABLE rdf_labels(s VARCHAR(256) NOT NULL, label VARCHAR(128) NOT NULL, CONSTRAINT pk_labels PRIMARY KEY (s, label), CONSTRAINT fk_labels_node FOREIGN KEY (s) REFERENCES nodes(node_id))")
-Do tables.%Push("CREATE TABLE rdf_props(s VARCHAR(256) NOT NULL, key VARCHAR(128) NOT NULL, val VARCHAR(4000), CONSTRAINT pk_props PRIMARY KEY (s, key))")
-Do tables.%Push("CREATE TABLE rdf_edges(edge_id BIGINT IDENTITY PRIMARY KEY, s VARCHAR(256) NOT NULL, p VARCHAR(128) NOT NULL, o_id VARCHAR(256) NOT NULL, qualifiers %Library.DynamicObject, CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES nodes(node_id), CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES nodes(node_id), CONSTRAINT u_spo UNIQUE (s, p, o_id))")
-Do tables.%Push("CREATE TABLE kg_NodeEmbeddings (id VARCHAR(256) PRIMARY KEY, emb VECTOR(DOUBLE, 768), metadata %Library.DynamicObject, CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES nodes(node_id))")
-Do tables.%Push("CREATE TABLE kg_NodeEmbeddings_optimized (id VARCHAR(256) PRIMARY KEY, emb VECTOR(DOUBLE, 768), metadata %Library.DynamicObject, CONSTRAINT fk_emb_node_opt FOREIGN KEY (id) REFERENCES nodes(node_id))")
-Do tables.%Push("CREATE TABLE docs(id VARCHAR(256) PRIMARY KEY, text VARCHAR(4000))")
-Do tables.%Push("CREATE INDEX idx_edges_oid ON rdf_edges (o_id)")
-
-Set iter = tables.%GetIterator()
-While iter.%GetNext(.key, .val) {
-    Do stmt.%Prepare(val)
-    Do stmt.%Execute()
-}
-
--- Views
-Do stmt.%Prepare("SET SCHEMA SQLUser")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.nodes(node_id VARCHAR(256) %EXACT PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE VIEW nodes AS SELECT node_id, created_at FROM Graph_KG.nodes")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_labels(s VARCHAR(256) %EXACT NOT NULL, label VARCHAR(128) %EXACT NOT NULL, CONSTRAINT pk_labels PRIMARY KEY (s, label), CONSTRAINT fk_labels_node FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id))")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE VIEW rdf_labels AS SELECT * FROM Graph_KG.rdf_labels")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_props(s VARCHAR(256) %EXACT NOT NULL, key VARCHAR(128) %EXACT NOT NULL, val VARCHAR(4000) %EXACT, CONSTRAINT pk_props PRIMARY KEY (s, key))")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE VIEW rdf_props AS SELECT * FROM Graph_KG.rdf_props")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_edges(edge_id BIGINT IDENTITY PRIMARY KEY, s VARCHAR(256) %EXACT NOT NULL, p VARCHAR(128) %EXACT NOT NULL, o_id VARCHAR(256) %EXACT NOT NULL, qualifiers %Library.DynamicObject, CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id), CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES Graph_KG.nodes(node_id), CONSTRAINT u_spo UNIQUE (s, p, o_id))")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE VIEW rdf_edges AS SELECT * FROM Graph_KG.rdf_edges")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.kg_NodeEmbeddings (id VARCHAR(256) %EXACT PRIMARY KEY, emb VECTOR(DOUBLE, 768), metadata %Library.DynamicObject, CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id))")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE VIEW kg_NodeEmbeddings AS SELECT * FROM Graph_KG.kg_NodeEmbeddings")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.kg_NodeEmbeddings_optimized (id VARCHAR(256) %EXACT PRIMARY KEY, emb VECTOR(DOUBLE, 768), metadata %Library.DynamicObject, CONSTRAINT fk_emb_node_opt FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id))")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE VIEW docs AS SELECT * FROM Graph_KG.docs")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.docs(id VARCHAR(256) %EXACT PRIMARY KEY, text VARCHAR(4000) %EXACT)")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)")
 Do stmt.%Execute()
 
--- Grants
+Do stmt.%Prepare("CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE VIEW SQLUser.rdf_labels AS SELECT * FROM Graph_KG.rdf_labels")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE VIEW SQLUser.rdf_props AS SELECT * FROM Graph_KG.rdf_props")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE VIEW SQLUser.rdf_edges AS SELECT * FROM Graph_KG.rdf_edges")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE VIEW SQLUser.kg_NodeEmbeddings AS SELECT * FROM Graph_KG.kg_NodeEmbeddings")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE VIEW SQLUser.docs AS SELECT * FROM Graph_KG.docs")
+Do stmt.%Execute()
+
 Do stmt.%Prepare("GRANT ALL PRIVILEGES ON Graph_KG.nodes TO test")
 Do stmt.%Execute()
 Do stmt.%Prepare("GRANT ALL PRIVILEGES ON Graph_KG.rdf_edges TO test")
@@ -143,7 +130,7 @@ H
         subprocess.run(os_cmd, input=sql_script, capture_output=True, text=True, errors='replace')
 
         # 3. Load Classes
-        load_cmd = "Do \$system.OBJ.LoadDir(\"/tmp/src\", \"ck\", .errors, 1)\nH\n"
+        load_cmd = 'Do $system.OBJ.LoadDir("/tmp/src", "ck", .errors, 1)\nH\n'
         subprocess.run(os_cmd, input=load_cmd, capture_output=True, text=True, errors='replace')
 
         logger.info("Robust IRIS setup completed.")
@@ -151,78 +138,86 @@ H
     except Exception as e:
         logger.error(f"IRIS setup failed: {e}", exc_info=True)
         return False
-    except Exception as e:
-        logger.error(f"IRIS setup failed with exception: {e}", exc_info=True)
-        return False
-    except Exception as e:
-        logger.error(f"IRIS setup failed with exception: {e}", exc_info=True)
-        return False
 
 
 @pytest.fixture(scope="session")
-def iris_test_container(request):
-    """Session-scoped managed IRIS container."""
-    use_existing = request.config.getoption("--use-existing-iris")
+def iris_test_container():
+    """Session-scoped managed IRIS container.
+
+    If a container named 'iris-vector-graph-main' is already running, attaches
+    to it via IRISContainer.attach() — no MockContainer, no hardcoded ports.
+    Otherwise starts a fresh container.  Either way, blocks until test credentials
+    are verified before yielding so that module-scoped iris_connection fixtures
+    never race on a not-yet-ready container.
+    """
     container_name = "iris-vector-graph-main"
-    
+
     from iris_devtester.containers.iris_container import IRISContainer
-    from iris_devtester.ports import PortRegistry
-    
-    if use_existing:
-        # Check if it's running
-        try:
-            result = subprocess.run(['docker', 'inspect', '-f', '{{.State.Running}}', container_name], 
-                                    capture_output=True, text=True)
-            if result.stdout.strip() == "true":
-                logger.info(f"Using existing container: {container_name}")
-                # Mock the container object
-                class MockContainer:
-                    def get_container_name(self): return container_name
-                    def get_assigned_port(self): return 1972
-                    def stop(self): pass
-                    def start(self): pass
-                
-                container = MockContainer()
-                _apply_aggressive_password_reset(container_name)
-                _setup_iris_container(container_name)
-                yield container
-                return
-        except Exception as e:
-            logger.warning(f"Failed to use existing container: {e}")
 
-    # Port Conflict Handling: Cleanup any existing containers with 'iris-test' in name
+    # ── Attach to existing container if it's already running ──────────────────
+    is_running = False
     try:
-        ps = subprocess.run(['docker', 'ps', '-a', '--filter', 'name=iris-test', '--format', '{{.Names}}'], 
-                            capture_output=True, text=True, errors='replace')
-        for name in ps.stdout.splitlines():
-            if name.strip():
-                logger.info(f"Cleaning up existing container: {name}")
-                subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
-    except Exception as e:
-        logger.debug(f"Pre-startup cleanup skipped: {e}")
+        result = subprocess.run(
+            ['docker', 'inspect', '-f', '{{.State.Running}}', container_name],
+            capture_output=True, text=True,
+        )
+        is_running = result.stdout.strip() == "true"
+    except Exception:
+        pass
 
-    # Initialize container
-    container = IRISContainer(image=TEST_CONTAINER_IMAGE)
-    container.start()
-    
-    # Wait for IRIS to be ready
-    container.wait_for_ready(timeout=180)
-    
-    container_name = container.get_container_name()
-    
-    # Pre-emptive password reset before any connection attempt
+    needs_setup = True
+    if is_running:
+        logger.info(f"Attaching to existing container: {container_name}")
+        container = IRISContainer.attach(container_name)
+        needs_setup = True  # always run setup; DDL is idempotent (CREATE TABLE is ignored if exists)
+    else:
+        # ── Start a fresh container ────────────────────────────────────────────
+        logger.info(f"Starting fresh IRIS container: {container_name}")
+        container = IRISContainer(image=TEST_CONTAINER_IMAGE, name=container_name)
+        container.start()
+        container.wait_for_ready(timeout=180)
+        container_name = container.get_container_name()
+        needs_setup = True
+
+    # ── Password reset (always) ───────────────────────────────────────────────
     _apply_aggressive_password_reset(container_name)
-    
-    # Stability: 20-second sleep after ready signal
-    logger.info("IRIS container reported ready. Waiting 20s for stabilization...")
-    time.sleep(20)
-    
-    # Execute unified setup
+
+    if not is_running:
+        # Fresh container: wait for IRIS to fully stabilise before setup
+        logger.info("Fresh container: waiting 20s for IRIS stabilisation...")
+        time.sleep(20)
+
     if not _setup_iris_container(container_name):
         logger.error("IRIS robust setup failed - tests may fail.")
-    
+
+    # ── Block until test credentials actually work ────────────────────────────
+    assigned_port = container.get_exposed_port(1972)
+    logger.info(f"Verifying test credentials on port {assigned_port}...")
+    for attempt in range(20):  # up to 100 s
+        try:
+            _verify_conn = iris_connect('localhost', int(assigned_port), 'USER', 'test', 'test')
+            cur = _verify_conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            cur.close()
+            _verify_conn.close()
+            logger.info(f"Container ready for tests (verified on attempt {attempt + 1})")
+            break
+        except Exception as e:
+            logger.debug(f"Credential verify attempt {attempt + 1}/20: {e}")
+            _apply_aggressive_password_reset(container_name)
+            time.sleep(5)
+    else:
+        raise RuntimeError(
+            f"IRIS container '{container_name}' never accepted test credentials after 100 s. "
+            "Cannot proceed — fix the container setup before running tests."
+        )
+
     yield container
-    container.stop()
+
+    if not is_running:
+        # Only stop containers we started; leave pre-existing ones running
+        container.stop()
 
 
 @pytest.fixture(scope="function")
@@ -255,50 +250,28 @@ def iris_connection(iris_test_container):
     assigned_port = iris_test_container.get_exposed_port(1972)
     container_name = iris_test_container.get_container_name()
     logger.info(f"Connecting to IRIS on port {assigned_port}...")
-    
-    conn = None
-    for attempt in range(3):
-        try:
-            # T013: Prefer irisnative for robust remote connectivity
-            if irisnative:
-                conn = irisnative.createConnection(
-                    'localhost',
-                    assigned_port,
-                    'USER',
-                    'test',
-                    'test'
-                )
-            elif iris and hasattr(iris, 'connect'):
-                # Use getattr to avoid shadowing issues
-                connect_fn = getattr(iris, 'connect')
-                conn = connect_fn(
-                    hostname='localhost',
-                    port=assigned_port,
-                    namespace='USER',
-                    username='test',
-                    password='test'
-                )
 
-            else:
-                raise ImportError("Neither iris.connect nor irisnative available for connection")
-            
-            # T013: Ensure Graph_KG schema is used
-            cursor = conn.cursor()
-            try:
-                cursor.execute("SET SCHEMA Graph_KG")
-            except:
-                pass
+    conn = None
+    for attempt in range(6):
+        try:
+            conn = iris_connect(
+                'localhost',
+                int(assigned_port),
+                'USER',
+                'test',
+                'test',
+            )
             break
         except Exception as e:
-            if attempt < 2 and ("Password change required" in str(e) or "Access Denied" in str(e) or "Authentication failed" in str(e)):
-                logger.warning(f"Connection attempt {attempt+1} failed: {e}. Retrying aggressive password reset...")
+            if attempt < 5 and any(k in str(e) for k in ("Password change required", "Access Denied", "Authentication failed")):
+                logger.warning(f"Connection attempt {attempt+1} failed: {e}. Retrying password reset...")
                 _apply_aggressive_password_reset(container_name)
-                time.sleep(2)
+                time.sleep(5)
             else:
                 logger.error(f"Failed to connect to IRIS on attempt {attempt+1}: {e}")
-                if attempt == 2:
-                    raise e
-            
+                if attempt == 5:
+                    raise
+
     yield conn
     if conn:
         conn.close()
@@ -346,4 +319,54 @@ def pytest_configure(config):
 
 def pytest_addoption(parser):
     """Add command line options."""
-    parser.addoption("--use-existing-iris", action="store_true", default=False, help="Use existing IRIS container")
+    pass
+
+
+def pytest_collect_file(parent, file_path):
+    """Guard: fail collection if any test file references a forbidden IRIS container name.
+
+    Checks two patterns:
+      1. Plain forbidden names that must never appear (other projects' containers).
+      2. IRISContainer.attach("wrong-name") — catches stale attach() calls.
+
+    The canonical container for this project is: iris-vector-graph-main
+    """
+    import re
+
+    # These strings must not appear anywhere in test files — they are other projects' containers.
+    FORBIDDEN_PLAIN = [
+        "los-iris",
+        "posos-iris",
+        "aicore-iris",
+        "aihub-iris",
+        "opsreview-iris",
+        "objectscript-coder",
+    ]
+
+    # IRISContainer.attach("X") where X is NOT our container.
+    ATTACH_PATTERN = re.compile(r'IRISContainer\.attach\(["\']([^"\']+)["\']\)')
+    CANONICAL_CONTAINER = "iris-vector-graph-main"
+
+    if file_path.suffix == ".py" and file_path.stat().st_size > 0 and file_path.name != "conftest.py":
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+
+            for forbidden in FORBIDDEN_PLAIN:
+                if forbidden in content:
+                    raise pytest.PytestCollectionWarning(
+                        f"Forbidden container name '{forbidden}' found in {file_path}. "
+                        f"This container belongs to another project. "
+                        f"Use '{CANONICAL_CONTAINER}' instead."
+                    )
+
+            for match in ATTACH_PATTERN.finditer(content):
+                name = match.group(1)
+                if name != CANONICAL_CONTAINER:
+                    raise pytest.PytestCollectionWarning(
+                        f"Wrong container in IRISContainer.attach('{name}') in {file_path}. "
+                        f"Use IRISContainer.attach('{CANONICAL_CONTAINER}') instead."
+                    )
+
+        except (OSError, UnicodeDecodeError):
+            pass
+    return None

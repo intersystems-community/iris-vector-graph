@@ -9,12 +9,14 @@ that can be used across any domain.
 
 import json
 import numpy as np
+from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 import logging
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql, _table, set_schema_prefix
 from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.security import sanitize_identifier, validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,8 @@ class IRISGraphEngine:
         set_schema_prefix("Graph_KG")
         # Per-instance cache for IRIS EMBEDDING() function availability (Mode 2 vector search)
         self._embedding_function_available: Optional[bool] = None
+        # Runtime capability flags — set by initialize_schema()
+        self.capabilities: IRISCapabilities = IRISCapabilities()
 
     def embed_text(self, text: str) -> List[float]:
         """
@@ -111,13 +115,19 @@ class IRISGraphEngine:
         raise TypeError(f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)")
 
 
-    def initialize_schema(self) -> None:
+    def initialize_schema(self, auto_deploy_objectscript: bool = True) -> None:
         """
         Create the base schema tables in IRIS, using the configured embedding_dimension.
 
         Safe to call on existing databases — statements that fail with "already exists"
         are silently ignored.  Raises if ``embedding_dimension`` has not been set (either
         via the constructor or prior calls to :meth:`store_embedding`).
+
+        Args:
+            auto_deploy_objectscript: When True (default), attempt to load and compile
+                the ObjectScript .cls files from iris_src/ into IRIS.  On failure a
+                warning is logged and the engine falls back to Python/SQL paths.
+                Set to False to skip .cls deployment entirely.
 
         Example::
 
@@ -205,6 +215,32 @@ class IRISGraphEngine:
             )
 
         self.conn.commit()
+
+        # 6. Deploy ObjectScript .cls layer (best-effort)
+        if auto_deploy_objectscript:
+            import importlib.resources as pkg_resources
+            # Locate iris_src/ relative to the installed package
+            try:
+                pkg_dir = Path(__file__).parent.parent / "iris_src"
+                if not pkg_dir.exists():
+                    # Installed wheel: iris_src shipped as package data alongside iris_vector_graph
+                    pkg_dir = Path(__file__).parent / ".." / "iris_src"
+                self.capabilities = GraphSchema.deploy_objectscript_classes(cursor, pkg_dir.resolve(), conn=self.conn)
+            except Exception as exc:
+                logger.warning("ObjectScript deploy step failed: %s", exc)
+                self.capabilities = IRISCapabilities()
+        else:
+            self.capabilities = IRISCapabilities()
+
+        # 7. Bootstrap ^KG global if ObjectScript is deployed and edges exist
+        if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
+            try:
+                built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn)
+                if built:
+                    self.capabilities.kg_built = True
+                    self.conn.commit()
+            except Exception as exc:
+                logger.warning("^KG bootstrap failed: %s", exc)
 
     def _get_embedding_dimension(self) -> int:
         """
@@ -418,7 +454,7 @@ class IRISGraphEngine:
 
             # 4. Filter out nodes that don't exist (if they had no labels and no props)
             # We verify existence via the nodes table for any remaining empty ones
-            empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and len(data) == 2]
+            empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and not data["properties"]]
             if empty_nids:
                 e_placeholders = ",".join(["?"] * len(empty_nids))
                 cursor.execute(f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})", empty_nids)
@@ -1180,64 +1216,70 @@ class IRISGraphEngine:
         if not seed_entities:
             raise ValueError("seed_entities must contain at least one entity")
 
-        # Skip SQL function if we already know it's not available (cached failure)
+        # --- Fast path: Graph.KG.PageRank.RunJson() via .cls layer ---
+        if self.capabilities.objectscript_deployed and self.capabilities.kg_built:
+            try:
+                import intersystems_iris as _iris_pkg
+                seed_json = json.dumps(seed_entities)
+                iris_obj = _iris_pkg.createIRIS(self.conn)
+                result_json = iris_obj.classMethodValue(
+                    'Graph.KG.PageRank', 'RunJson',
+                    seed_json, damping_factor, max_iterations,
+                    1 if bidirectional else 0, reverse_edge_weight,
+                )
+                if result_json:
+                    items = json.loads(str(result_json))
+                    scores = {item["id"]: item["score"] for item in items if item.get("score", 0) > 0}
+                    if return_top_k is not None and return_top_k > 0:
+                        scores = dict(sorted(scores.items(), key=lambda x: x[1], reverse=True)[:return_top_k])
+                    logger.debug("PageRank via Graph.KG.PageRank.RunJson(): %d results", len(scores))
+                    return scores
+            except Exception as exc:
+                logger.warning("Graph.KG.PageRank.RunJson() failed, falling back: %s", exc)
+
+        # --- Secondary path: auto-deployed inline LANGUAGE PYTHON SQL function ---
         if IRISGraphEngine._ppr_sql_function_available is False:
             return self._kg_PERSONALIZED_PAGERANK_python_fallback(
                 seed_entities, damping_factor, max_iterations, tolerance,
                 return_top_k, bidirectional, reverse_edge_weight
             )
 
-        # Auto-deploy SQL function if not yet attempted
         if IRISGraphEngine._ppr_sql_function_available is None:
             self._auto_deploy_ppr_sql_function()
 
         cursor = self.conn.cursor()
         try:
-            # Convert seed_entities list to JSON string for SQL function
             seed_json = json.dumps(seed_entities)
-
-            # Call IRIS embedded Python via SQL function for 10-50x speedup
             cursor.execute(f"""
                 SELECT {self._PPR_SQL_FUNCTION_NAME}(?, ?, ?, ?, ?)
             """, [
                 seed_json,
                 damping_factor,
                 max_iterations,
-                1 if bidirectional else 0,  # INT in SQL
+                1 if bidirectional else 0,
                 reverse_edge_weight
             ])
 
             result = cursor.fetchone()
             if result and result[0]:
-                # Mark SQL function as available
                 IRISGraphEngine._ppr_sql_function_available = True
-
-                # Parse JSON array: [{"nodeId": "X", "pagerank": 0.15}, ...]
                 json_results = json.loads(result[0])
                 scores = {item['nodeId']: item['pagerank'] for item in json_results}
-
-                # Filter out zero scores
                 scores = {k: v for k, v in scores.items() if v > 0}
-
-                # Apply return_top_k if specified
                 if return_top_k is not None and return_top_k > 0:
                     sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
                     scores = dict(sorted_items[:return_top_k])
-
                 logger.debug(f"PageRank via IRIS embedded Python: {len(scores)} results")
                 return scores
 
             return {}
 
         except Exception as e:
-            # Cache that SQL function is not available to avoid repeated failed attempts
             error_str = str(e).lower()
             if "not found" in error_str or "does not exist" in error_str:
                 IRISGraphEngine._ppr_sql_function_available = False
                 logger.info(f"IRIS SQL function {self._PPR_SQL_FUNCTION_NAME} not available, using Python fallback")
             elif "parameter" in error_str or "invalid argument" in error_str:
-                # Embedded Python call failed - likely schema mismatch or missing tables
-                # This is NOT a Community Edition issue - all IRIS versions have embedded Python
                 IRISGraphEngine._ppr_sql_function_available = False
                 logger.warning(f"IRIS embedded PageRank failed (check SQLUSER schema has nodes/rdf_edges views): {e}")
             else:
@@ -1251,7 +1293,7 @@ class IRISGraphEngine:
             try:
                 cursor.close()
             except Exception:
-                pass  # Already closed in fallback path
+                pass
 
     def _auto_deploy_ppr_sql_function(self) -> None:
         """Auto-deploy the PPR SQL function using IRIS embedded Python.

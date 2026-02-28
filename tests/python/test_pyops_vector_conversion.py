@@ -12,6 +12,7 @@ Run from host: docker exec iris_vector_graph python3 /path/to/test_pyops_integra
 import json
 import pytest
 import importlib
+from typing import Any
 
 # Import IRIS module avoiding conflict with project's iris/ directory
 try:
@@ -27,45 +28,56 @@ except ImportError:
         pytest.skip("IRIS Python driver not available", allow_module_level=True)
 
 
+# iris.cls is only available in embedded/in-process Python, not external connections
+IRIS_CLS_AVAILABLE = IRIS_AVAILABLE and hasattr(iris_module, 'cls') if IRIS_AVAILABLE else False
+
+
+@pytest.fixture(scope="module", autouse=True)
+def inject_iris_connection(iris_connection):
+    """Inject iris_connection and iris module into PyOps tests."""
+    for cls in [TestPyOpsVectorConversion, TestPyOpsIrisVectorRagCompatibility]:
+        cls.conn = iris_connection
+        cls.iris = iris_module
+
+
 @pytest.mark.integration
 @pytest.mark.requires_database
+@pytest.mark.skipif(
+    not IRIS_CLS_AVAILABLE,
+    reason="iris.cls not available in external Python mode (requires embedded IRIS)",
+)
 class TestPyOpsVectorConversion:
     """Test suite for Graph.KG.PyOps vector conversion refactoring"""
+
+    conn: Any = None
+    iris: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup IRIS connection for PyOps tests"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
+        cursor = None
         try:
-            cls.conn = iris_module.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-
-            # Verify connection
             cursor = cls.conn.cursor()
             cursor.execute("SELECT 1")
             cursor.fetchone()
-            cursor.close()
-
-            # Get IRIS object interface for class method calls
-            cls.iris = iris_module
-
             print("✓ IRIS connection for PyOps testing established")
-
         except Exception as e:
             pytest.skip(f"IRIS database not accessible: {e}")
+        finally:
+            if cursor:
+                cursor.close()
+
+        # Get IRIS object interface for class method calls
+        cls.iris = iris_module
 
     @classmethod
     def teardown_class(cls):
         """Clean up connections"""
-        if hasattr(cls, 'conn'):
-            cls.conn.close()
+        # Connection managed by shared fixture; nothing to do
+        pass
 
     # =========================================================================
     # Helper Method Tests
@@ -347,32 +359,40 @@ class TestPyOpsVectorConversion:
 
 @pytest.mark.integration
 @pytest.mark.requires_database
+@pytest.mark.skipif(
+    not IRIS_CLS_AVAILABLE,
+    reason="iris.cls not available in external Python mode (requires embedded IRIS)",
+)
 class TestPyOpsIrisVectorRagCompatibility:
     """Test iris-vector-rag compatibility patterns"""
+
+    conn: Any = None
+    iris: Any = None
 
     @classmethod
     def setup_class(cls):
         """Setup IRIS connection"""
-        if not IRIS_AVAILABLE:
-            pytest.skip("IRIS Python driver not available")
+        if cls.conn is None:
+            pytest.skip("iris_connection fixture did not provide a connection")
 
+        cursor = None
         try:
-            cls.conn = iris_module.connect(
-                hostname='localhost',
-                port=1973,
-                namespace='USER',
-                username='_SYSTEM',
-                password='SYS'
-            )
-            cls.iris = iris_module
+            cursor = cls.conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
             print("✓ IRIS connection established for iris-vector-rag compatibility tests")
         except Exception as e:
             pytest.skip(f"IRIS database not accessible: {e}")
+        finally:
+            if cursor:
+                cursor.close()
+
+        cls.iris = iris_module
 
     @classmethod
     def teardown_class(cls):
-        if hasattr(cls, 'conn'):
-            cls.conn.close()
+        # Connection managed by shared fixture
+        pass
 
     def test_error_message_format_matches_ivr(self):
         """Test error message format matches iris-vector-rag style"""

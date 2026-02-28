@@ -48,15 +48,21 @@ def iris_connection_with_graph_analytics(iris_connection):
 
     print("\n🔧 Setting up graph analytics benchmark dataset...")
 
-    # Clean up
+    # Clean up — must be in FK order and committed atomically
+    cleanup_statements = [
+        "DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'ANALYTICS:%' OR o_id LIKE 'ANALYTICS:%'",
+        "DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'ANALYTICS:%'",
+        "DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'ANALYTICS:%'",
+        "DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'",
+    ]
+
     try:
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'ANALYTICS:%'")
-        cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'ANALYTICS:%'")
-        cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'ANALYTICS:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
+        for stmt in cleanup_statements:
+            cursor.execute(stmt)
         conn.commit()
-    except:
+    except Exception as e:
         conn.rollback()
+        print(f"   Warning: cleanup failed — {e}")
 
     # Create 1000 nodes organized into 10 communities
     node_ids = [f'ANALYTICS:node_{i}' for i in range(1000)]
@@ -67,7 +73,7 @@ def iris_connection_with_graph_analytics(iris_connection):
     print(f"  Adding community labels...")
     for i, node_id in enumerate(node_ids):
         community_id = i // 100  # 0-9
-        cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+        cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                       [node_id, f'community_{community_id}'])
     conn.commit()
 
@@ -80,6 +86,8 @@ def iris_connection_with_graph_analytics(iris_connection):
     import random
     random.seed(42)  # Reproducible graph structure
 
+    seen_edges = set()  # Track (s, p, o_id) to avoid UNIQUE violations
+
     for i, node_id in enumerate(node_ids):
         community_id = i // 100
 
@@ -91,10 +99,13 @@ def iris_connection_with_graph_analytics(iris_connection):
         for _ in range(num_intra):
             target_idx = random.randint(community_start, community_end - 1)
             if target_idx != i:  # No self-loops
-                cursor.execute(
-                    "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                    [node_id, 'connects_to', node_ids[target_idx]]
-                )
+                edge_key = (node_id, 'connects_to', node_ids[target_idx])
+                if edge_key not in seen_edges:
+                    seen_edges.add(edge_key)
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                        list(edge_key)
+                    )
 
         # Inter-community edges (sparse)
         num_inter = random.randint(1, 2)
@@ -102,10 +113,13 @@ def iris_connection_with_graph_analytics(iris_connection):
             target_community = random.randint(0, 9)
             if target_community != community_id:
                 target_idx = random.randint(target_community * 100, (target_community + 1) * 100 - 1)
-                cursor.execute(
-                    "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                    [node_id, 'connects_to', node_ids[target_idx]]
-                )
+                edge_key = (node_id, 'connects_to', node_ids[target_idx])
+                if edge_key not in seen_edges:
+                    seen_edges.add(edge_key)
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                        list(edge_key)
+                    )
 
         if (i + 1) % 100 == 0:
             conn.commit()
@@ -114,13 +128,13 @@ def iris_connection_with_graph_analytics(iris_connection):
     conn.commit()
 
     # Verify setup
-    cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'")
     node_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM rdf_edges WHERE s LIKE 'ANALYTICS:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'ANALYTICS:%'")
     edge_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE s LIKE 'ANALYTICS:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s LIKE 'ANALYTICS:%'")
     label_count = cursor.fetchone()[0]
 
     print(f"\n✅ Graph analytics dataset ready:")
@@ -134,14 +148,20 @@ def iris_connection_with_graph_analytics(iris_connection):
 
     # Cleanup
     print("\n🧹 Cleaning up graph analytics data...")
-    try:
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'ANALYTICS:%'")
-        cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'ANALYTICS:%'")
-        cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'ANALYTICS:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
-        conn.commit()
-    except:
-        conn.rollback()
+    cleanup_statements = [
+        "DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'ANALYTICS:%' OR o_id LIKE 'ANALYTICS:%'",
+        "DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'ANALYTICS:%'",
+        "DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'ANALYTICS:%'",
+        "DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'",
+    ]
+
+    for stmt in cleanup_statements:
+        try:
+            cursor.execute(stmt)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            print(f"   Warning: cleanup failed for: {stmt[:60]} - {e}")
     # Don't close - connection managed by conftest
 
 
@@ -170,7 +190,7 @@ class TestGraphAnalytics:
         print("\n🔍 PageRank Algorithm Benchmark")
 
         # Get all nodes
-        cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
+        cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'")
         all_nodes = [row[0] for row in cursor.fetchall()]
         num_nodes = len(all_nodes)
 
@@ -179,9 +199,9 @@ class TestGraphAnalytics:
         # Get adjacency list (outgoing edges)
         cursor.execute("""
             SELECT e.s, e.o_id
-            FROM rdf_edges e
-            INNER JOIN nodes n_src ON e.s = n_src.node_id
-            INNER JOIN nodes n_dst ON e.o_id = n_dst.node_id
+            FROM Graph_KG.rdf_edges e
+            INNER JOIN Graph_KG.nodes n_src ON e.s = n_src.node_id
+            INNER JOIN Graph_KG.nodes n_dst ON e.o_id = n_dst.node_id
             WHERE e.s LIKE 'ANALYTICS:%'
         """)
         adjacency = defaultdict(list)
@@ -269,16 +289,16 @@ class TestGraphAnalytics:
         print("\n🔍 Connected Components (Pregel BSP) Benchmark")
 
         # Get all nodes
-        cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
+        cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'")
         all_nodes = [row[0] for row in cursor.fetchall()]
         num_nodes = len(all_nodes)
 
         # Get undirected adjacency (both directions)
         cursor.execute("""
             SELECT e.s, e.o_id
-            FROM rdf_edges e
-            INNER JOIN nodes n_src ON e.s = n_src.node_id
-            INNER JOIN nodes n_dst ON e.o_id = n_dst.node_id
+            FROM Graph_KG.rdf_edges e
+            INNER JOIN Graph_KG.nodes n_src ON e.s = n_src.node_id
+            INNER JOIN Graph_KG.nodes n_dst ON e.o_id = n_dst.node_id
             WHERE e.s LIKE 'ANALYTICS:%'
         """)
 
@@ -372,9 +392,9 @@ class TestGraphAnalytics:
         # Get adjacency list
         cursor.execute("""
             SELECT e.s, e.o_id
-            FROM rdf_edges e
-            INNER JOIN nodes n_src ON e.s = n_src.node_id
-            INNER JOIN nodes n_dst ON e.o_id = n_dst.node_id
+            FROM Graph_KG.rdf_edges e
+            INNER JOIN Graph_KG.nodes n_src ON e.s = n_src.node_id
+            INNER JOIN Graph_KG.nodes n_dst ON e.o_id = n_dst.node_id
             WHERE e.s LIKE 'ANALYTICS:%'
         """)
         adjacency = defaultdict(list)
@@ -385,7 +405,7 @@ class TestGraphAnalytics:
         import random
         random.seed(42)
 
-        cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
+        cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'")
         all_nodes = [row[0] for row in cursor.fetchall()]
 
         num_tests = 10
@@ -460,9 +480,9 @@ class TestGraphAnalytics:
             n.node_id,
             COUNT(DISTINCT e_out.o_id) AS out_degree,
             COUNT(DISTINCT e_in.s) AS in_degree
-        FROM nodes n
-        LEFT JOIN rdf_edges e_out ON n.node_id = e_out.s
-        LEFT JOIN rdf_edges e_in ON n.node_id = e_in.o_id
+        FROM Graph_KG.nodes n
+        LEFT JOIN Graph_KG.rdf_edges e_out ON n.node_id = e_out.s
+        LEFT JOIN Graph_KG.rdf_edges e_in ON n.node_id = e_in.o_id
         WHERE n.node_id LIKE 'ANALYTICS:%'
         GROUP BY n.node_id
         """
@@ -508,16 +528,16 @@ class TestGraphAnalytics:
         print("\n🔍 Community Detection (Label Propagation) Benchmark")
 
         # Get all nodes
-        cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE 'ANALYTICS:%'")
+        cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id LIKE 'ANALYTICS:%'")
         all_nodes = [row[0] for row in cursor.fetchall()]
         num_nodes = len(all_nodes)
 
         # Get undirected adjacency
         cursor.execute("""
             SELECT e.s, e.o_id
-            FROM rdf_edges e
-            INNER JOIN nodes n_src ON e.s = n_src.node_id
-            INNER JOIN nodes n_dst ON e.o_id = n_dst.node_id
+            FROM Graph_KG.rdf_edges e
+            INNER JOIN Graph_KG.nodes n_src ON e.s = n_src.node_id
+            INNER JOIN Graph_KG.nodes n_dst ON e.o_id = n_dst.node_id
             WHERE e.s LIKE 'ANALYTICS:%'
         """)
 
@@ -558,7 +578,7 @@ class TestGraphAnalytics:
                     label_counts[label] += 1
 
                 # Find most common label
-                most_common_label = max(label_counts, key=label_counts.get)
+                most_common_label = max(label_counts.items(), key=lambda item: item[1])[0]
 
                 if most_common_label != labels[node]:
                     new_labels[node] = most_common_label

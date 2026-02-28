@@ -39,22 +39,22 @@ def iris_connection_with_vectors():
     - 2000 edges connecting nodes
     - Labels and properties for rich graph structure
     """
-    conn = get_connection()
+    conn = get_connection(container_name="iris-vector-graph-main")
     cursor = conn.cursor()
 
     print("\n🔧 Setting up comprehensive benchmark dataset...")
 
     # Clean up any existing test data
     try:
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'BENCH:%'")
-        cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'BENCH:%'")
-        cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'BENCH:%'")
         # Try to clean kg_NodeEmbeddings if it exists
         try:
             cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'BENCH:%'")
         except:
             pass
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'BENCH:%'")
         conn.commit()
     except:
         conn.rollback()
@@ -70,7 +70,7 @@ def iris_connection_with_vectors():
     print(f"  Adding labels...")
     for i, node_id in enumerate(node_ids):
         label = labels[i % len(labels)]
-        cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+        cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                       [node_id, label])
     conn.commit()
 
@@ -81,7 +81,7 @@ def iris_connection_with_vectors():
         for j in range(num_props):
             key = f'prop_{j}'
             val = f'value_{i}_{j}'
-            cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+            cursor.execute("INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
                           [node_id, key, val])
     conn.commit()
 
@@ -97,7 +97,7 @@ def iris_connection_with_vectors():
             predicate = random.choice(predicates)
 
             cursor.execute(
-                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                 [source, predicate, target]
             )
     conn.commit()
@@ -134,16 +134,16 @@ def iris_connection_with_vectors():
         embeddings_added = 0
 
     # Verify setup
-    cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id LIKE 'BENCH:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id LIKE 'BENCH:%'")
     node_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM rdf_edges WHERE s LIKE 'BENCH:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'BENCH:%'")
     edge_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE s LIKE 'BENCH:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s LIKE 'BENCH:%'")
     label_count = cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(*) FROM rdf_props WHERE s LIKE 'BENCH:%'")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_props WHERE s LIKE 'BENCH:%'")
     prop_count = cursor.fetchone()[0]
 
     print(f"\n✅ Benchmark dataset ready:")
@@ -158,14 +158,14 @@ def iris_connection_with_vectors():
     # Cleanup
     print("\n🧹 Cleaning up benchmark data...")
     try:
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'BENCH:%'")
-        cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'BENCH:%'")
-        cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'BENCH:%'")
         try:
             cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'BENCH:%'")
         except:
             pass
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'BENCH:%'")
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'BENCH:%'")
         conn.commit()
     except:
         conn.rollback()
@@ -208,7 +208,7 @@ class TestAdvancedQueryPatterns:
         cursor.execute("""
             SELECT TOP 10 e.id, VECTOR_DOT_PRODUCT(e.emb, TO_VECTOR(?)) as similarity
             FROM kg_NodeEmbeddings e
-            INNER JOIN nodes n ON e.id = n.node_id
+            INNER JOIN Graph_KG.nodes n ON e.id = n.node_id
             WHERE e.id LIKE 'BENCH:%'
             ORDER BY similarity DESC
         """, [query_vector_str])
@@ -223,7 +223,7 @@ class TestAdvancedQueryPatterns:
             cursor.execute("""
                 SELECT TOP 10 e.id, VECTOR_DOT_PRODUCT(e.emb, TO_VECTOR(?)) as similarity
                 FROM kg_NodeEmbeddings e
-                INNER JOIN nodes n ON e.id = n.node_id
+                INNER JOIN Graph_KG.nodes n ON e.id = n.node_id
                 WHERE e.id LIKE 'BENCH:%'
                 ORDER BY similarity DESC
             """, [query_vector_str])
@@ -264,11 +264,11 @@ class TestAdvancedQueryPatterns:
             e1.o_id AS intermediate_node,
             e2.p AS edge2_predicate,
             e2.o_id AS destination_node
-        FROM rdf_edges e1
-        INNER JOIN nodes n1 ON e1.s = n1.node_id
-        INNER JOIN nodes n2 ON e1.o_id = n2.node_id
-        INNER JOIN rdf_edges e2 ON e1.o_id = e2.s
-        INNER JOIN nodes n3 ON e2.o_id = n3.node_id
+        FROM Graph_KG.rdf_edges e1
+        INNER JOIN Graph_KG.nodes n1 ON e1.s = n1.node_id
+        INNER JOIN Graph_KG.nodes n2 ON e1.o_id = n2.node_id
+        INNER JOIN Graph_KG.rdf_edges e2 ON e1.o_id = e2.s
+        INNER JOIN Graph_KG.nodes n3 ON e2.o_id = n3.node_id
         WHERE e1.s = ?
         """
 
@@ -341,13 +341,13 @@ class TestAdvancedQueryPatterns:
         FROM (
             SELECT TOP 20 e.id, VECTOR_DOT_PRODUCT(e.emb, TO_VECTOR(?)) as similarity
             FROM kg_NodeEmbeddings e
-            INNER JOIN nodes n ON e.id = n.node_id
+            INNER JOIN Graph_KG.nodes n ON e.id = n.node_id
             WHERE e.id LIKE 'BENCH:%'
             ORDER BY similarity DESC
         ) knn
-        LEFT JOIN rdf_edges e ON knn.id = e.s
-        LEFT JOIN nodes neighbor_n ON e.o_id = neighbor_n.node_id
-        LEFT JOIN rdf_labels l ON e.o_id = l.s
+        LEFT JOIN Graph_KG.rdf_edges e ON knn.id = e.s
+        LEFT JOIN Graph_KG.nodes neighbor_n ON e.o_id = neighbor_n.node_id
+        LEFT JOIN Graph_KG.rdf_labels l ON e.o_id = l.s
         """
 
         # Benchmark 5 hybrid queries
@@ -394,10 +394,10 @@ class TestAdvancedQueryPatterns:
             p.val,
             e.p AS edge_predicate,
             e.o_id AS connected_node
-        FROM nodes n
-        INNER JOIN rdf_labels l ON n.node_id = l.s
-        INNER JOIN rdf_props p ON n.node_id = p.s
-        LEFT JOIN rdf_edges e ON n.node_id = e.s
+        FROM Graph_KG.nodes n
+        INNER JOIN Graph_KG.rdf_labels l ON n.node_id = l.s
+        INNER JOIN Graph_KG.rdf_props p ON n.node_id = p.s
+        LEFT JOIN Graph_KG.rdf_edges e ON n.node_id = e.s
         WHERE n.node_id LIKE 'BENCH:node_%'
         AND n.node_id = ?
         """
@@ -439,22 +439,22 @@ class TestAdvancedQueryPatterns:
         """
         def execute_query(query_type, node_idx):
             """Execute a query and return execution time."""
-            conn = get_connection()
+            conn = get_connection(container_name="iris-vector-graph-main")
             cursor = conn.cursor()
             node = f'BENCH:node_{node_idx % 100}'
 
             start = time.perf_counter()
 
             if query_type == 'node_lookup':
-                cursor.execute("SELECT * FROM nodes WHERE node_id = ?", [node])
+                cursor.execute("SELECT * FROM Graph_KG.nodes WHERE node_id = ?", [node])
                 cursor.fetchall()
 
             elif query_type == 'graph_1hop':
                 cursor.execute("""
                     SELECT e.o_id, l.label
-                    FROM rdf_edges e
-                    INNER JOIN nodes n ON e.s = n.node_id
-                    LEFT JOIN rdf_labels l ON e.o_id = l.s
+                    FROM Graph_KG.rdf_edges e
+                    INNER JOIN Graph_KG.nodes n ON e.s = n.node_id
+                    LEFT JOIN Graph_KG.rdf_labels l ON e.o_id = l.s
                     WHERE e.s = ?
                 """, [node])
                 cursor.fetchall()
@@ -462,8 +462,8 @@ class TestAdvancedQueryPatterns:
             elif query_type == 'label_query':
                 cursor.execute("""
                     SELECT n.node_id, l.label
-                    FROM nodes n
-                    INNER JOIN rdf_labels l ON n.node_id = l.s
+                    FROM Graph_KG.nodes n
+                    INNER JOIN Graph_KG.rdf_labels l ON n.node_id = l.s
                     WHERE l.label = ?
                     AND n.node_id LIKE 'BENCH:%'
                 """, ['protein'])
@@ -525,10 +525,10 @@ class TestAdvancedQueryPatterns:
             l.label,
             COUNT(DISTINCT p.key) AS prop_count,
             COUNT(DISTINCT e.o_id) AS edge_count
-        FROM nodes n
-        INNER JOIN rdf_labels l ON n.node_id = l.s
-        LEFT JOIN rdf_props p ON n.node_id = p.s
-        LEFT JOIN rdf_edges e ON n.node_id = e.s
+        FROM Graph_KG.nodes n
+        INNER JOIN Graph_KG.rdf_labels l ON n.node_id = l.s
+        LEFT JOIN Graph_KG.rdf_props p ON n.node_id = p.s
+        LEFT JOIN Graph_KG.rdf_edges e ON n.node_id = e.s
         WHERE l.label = ?
         AND n.node_id LIKE 'BENCH:%'
         GROUP BY n.node_id, l.label

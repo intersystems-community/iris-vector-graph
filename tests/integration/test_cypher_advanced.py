@@ -1,20 +1,9 @@
 import pytest
-from iris_devtester.utils.dbapi_compat import get_connection
-import os
 
 @pytest.fixture(scope="module")
-def db_conn():
-    host = os.getenv("IRIS_HOST", "localhost")
-    port = int(os.getenv("IRIS_PORT", 1972))
-    namespace = os.getenv("IRIS_NAMESPACE", "USER")
-    username = os.getenv("IRIS_USERNAME", "_SYSTEM")
-    password = os.getenv("IRIS_PASSWORD", "SYS")
-    
-    conn = get_connection(host, port, namespace, username, password)
-    yield conn
-    # Cleanup any test data if necessary?
-    # For now, just close
-    conn.close()
+def db_conn(iris_connection):
+    """Use the managed test container connection."""
+    yield iris_connection
 
 def test_integration_create_delete_lifecycle(execute_cypher):
     """Test CREATE node followed by DELETE"""

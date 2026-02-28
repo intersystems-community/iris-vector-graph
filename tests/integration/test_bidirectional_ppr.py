@@ -268,10 +268,13 @@ class TestPerformance:
             for _ in range(5):
                 target = random.randint(0, num_nodes - 1)
                 if target != i:
-                    cursor.execute(
-                        "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                        [f"TEST_PERF:N{i}", 'connects_to', f"TEST_PERF:N{target}"]
-                    )
+                    try:
+                        cursor.execute(
+                            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                            [f"TEST_PERF:N{i}", 'connects_to', f"TEST_PERF:N{target}"]
+                        )
+                    except Exception:
+                        pass  # Skip duplicate edges (UNIQUE constraint on s,p,o_id)
 
         iris_connection.commit()
 
@@ -392,10 +395,13 @@ class TestIndexOptimization:
             for _ in range(5):
                 target = random.randint(0, num_nodes - 1)
                 if target != i:
-                    cursor.execute(
-                        "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                        [f"TEST_FALLBACK:N{i}", 'connects_to', f"TEST_FALLBACK:N{target}"]
-                    )
+                    try:
+                        cursor.execute(
+                            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                            [f"TEST_FALLBACK:N{i}", 'connects_to', f"TEST_FALLBACK:N{target}"]
+                        )
+                    except Exception:
+                        pass  # Skip duplicate edges (UNIQUE constraint on s,p,o_id)
 
         iris_connection.commit()
 

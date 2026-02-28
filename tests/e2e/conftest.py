@@ -17,15 +17,18 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture(scope="module")
-def api_client() -> Generator[TestClient, None, None]:
+def api_client(iris_connection) -> Generator[TestClient, None, None]:
     """
     Fixture providing FastAPI TestClient for E2E API tests.
-
+    Uses the shared iris_connection (test/test creds) so the app gets a live engine.
     Module-scoped for performance (reused across tests in same file).
     """
     try:
-        from api.main import app
+        from iris_vector_graph import IRISGraphEngine
+        from api.main import create_app
 
+        engine = IRISGraphEngine(iris_connection)
+        app = create_app(engine=engine)
         client = TestClient(app)
         yield client
     except ImportError:

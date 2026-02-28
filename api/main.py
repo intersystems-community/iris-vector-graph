@@ -1,9 +1,12 @@
 import os
 import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from iris_vector_graph import IRISGraphEngine, gql
 from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
 from api.routers.cypher import router as cypher_router
-from fastapi.middleware.cors import CORSMiddleware
+
 
 def get_engine():
     port = os.getenv("IRIS_PORT", "1972")
@@ -16,16 +19,29 @@ def get_engine():
     )
     return IRISGraphEngine(conn)
 
-if __name__ == "__main__":
-    engine = get_engine()
-    
-    # Create the auto-generated app
-    app = gql.create_app(engine)
-    
-    # Add back the Cypher router
+
+def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
+    """Create the FastAPI application. If no engine provided, attempts to connect via env vars."""
+    if engine is None:
+        try:
+            engine = get_engine()
+        except Exception:
+            # Tests may create the app without a live connection — use a stub engine
+            engine = None
+
+    if engine is not None:
+        app = gql.create_app(engine)
+        app.state.engine = engine
+        app.state.conn = engine.conn
+    else:
+        app = FastAPI(title="IRIS Vector Graph API")
+
+    @app.get("/health")
+    def health():
+        return {"status": "ok", "engine": engine is not None}
+
     app.include_router(cypher_router)
-    
-    # Add CORS
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
@@ -33,6 +49,12 @@ if __name__ == "__main__":
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+    return app
+
+
+# Module-level app for test imports and ASGI servers
+app = create_app()
+
+if __name__ == "__main__":
     print("✓ IRIS Vector Graph API - Auto-Generated Platform")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000)

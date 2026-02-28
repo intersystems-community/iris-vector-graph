@@ -34,11 +34,11 @@ def cleanup_test_data(iris_connection):
         try:
             # Clean dependent tables first (if they have FK constraints)
             # Skip kg_NodeEmbeddings - requires VECTOR type support not available in test environment
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [f"{prefix}%", f"{prefix}%"])
-            cursor.execute("DELETE FROM rdf_props WHERE s LIKE ?", [f"{prefix}%"])
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [f"{prefix}%", f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [f"{prefix}%"])
             # Clean nodes table last (if it exists)
-            cursor.execute("DELETE FROM nodes WHERE node_id LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [f"{prefix}%"])
             iris_connection.commit()
         except:
             # Tables might not exist yet (expected for initial test run)
@@ -49,10 +49,10 @@ def cleanup_test_data(iris_connection):
     # Clean up after test (same as before)
     for prefix in test_prefixes:
         try:
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [f"{prefix}%", f"{prefix}%"])
-            cursor.execute("DELETE FROM rdf_props WHERE s LIKE ?", [f"{prefix}%"])
-            cursor.execute("DELETE FROM rdf_labels WHERE s LIKE ?", [f"{prefix}%"])
-            cursor.execute("DELETE FROM nodes WHERE node_id LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [f"{prefix}%", f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [f"{prefix}%"])
             iris_connection.commit()
         except:
             iris_connection.rollback()
@@ -74,11 +74,11 @@ class TestNodeCreation:
         cursor = iris_connection.cursor()
 
         # Insert node
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:node1'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:node1'])
         iris_connection.commit()
 
         # Verify node exists
-        cursor.execute("SELECT node_id, created_at FROM nodes WHERE node_id = ?", ['TEST:node1'])
+        cursor.execute("SELECT node_id, created_at FROM Graph_KG.nodes WHERE node_id = ?", ['TEST:node1'])
         result = cursor.fetchone()
 
         assert result is not None, "Node should exist after insertion"
@@ -97,12 +97,12 @@ class TestNodeCreation:
         cursor = iris_connection.cursor()
 
         # First insertion should succeed
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:node1'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:node1'])
         iris_connection.commit()
 
         # Second insertion should fail with UNIQUE violation
         with pytest.raises(Exception) as exc_info:
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:node1'])
+            cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:node1'])
             iris_connection.commit()
 
         # Check for UNIQUE constraint violation
@@ -121,7 +121,7 @@ class TestNodeCreation:
         cursor = iris_connection.cursor()
 
         with pytest.raises(Exception) as exc_info:
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [None])
+            cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [None])
             iris_connection.commit()
 
         # Check for NOT NULL constraint violation
@@ -146,13 +146,13 @@ class TestEdgeForeignKeys:
         cursor = iris_connection.cursor()
 
         # Create destination node only
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:dest'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:dest'])
         iris_connection.commit()
 
         # Try to insert edge with non-existent source
         with pytest.raises(Exception) as exc_info:
             cursor.execute(
-                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                 ['INVALID:source', 'relates_to', 'TEST:dest']
             )
             iris_connection.commit()
@@ -173,13 +173,13 @@ class TestEdgeForeignKeys:
         cursor = iris_connection.cursor()
 
         # Create source node only
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:source'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:source'])
         iris_connection.commit()
 
         # Try to insert edge with non-existent destination
         with pytest.raises(Exception) as exc_info:
             cursor.execute(
-                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                 ['TEST:source', 'relates_to', 'INVALID:dest']
             )
             iris_connection.commit()
@@ -200,20 +200,20 @@ class TestEdgeForeignKeys:
         cursor = iris_connection.cursor()
 
         # Create both nodes
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['DISEASE:cancer'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['DISEASE:cancer'])
         iris_connection.commit()
 
         # Insert edge - should succeed
         cursor.execute(
-            "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
             ['PROTEIN:TP53', 'associated_with', 'DISEASE:cancer', '{"confidence": 0.95}']
         )
         iris_connection.commit()
 
         # Verify edge exists
         cursor.execute(
-            "SELECT s, p, o_id FROM rdf_edges WHERE s = ? AND o_id = ?",
+            "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE s = ? AND o_id = ?",
             ['PROTEIN:TP53', 'DISEASE:cancer']
         )
         result = cursor.fetchone()
@@ -241,7 +241,7 @@ class TestLabelForeignKeys:
 
         with pytest.raises(Exception) as exc_info:
             cursor.execute(
-                "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+                "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
                 ['INVALID:node', 'some_label']
             )
             iris_connection.commit()
@@ -262,18 +262,18 @@ class TestLabelForeignKeys:
         cursor = iris_connection.cursor()
 
         # Create node
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
         iris_connection.commit()
 
         # Assign label - should succeed
         cursor.execute(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
+            "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)",
             ['PROTEIN:TP53', 'tumor_suppressor']
         )
         iris_connection.commit()
 
         # Verify label exists
-        cursor.execute("SELECT s, label FROM rdf_labels WHERE s = ?", ['PROTEIN:TP53'])
+        cursor.execute("SELECT s, label FROM Graph_KG.rdf_labels WHERE s = ?", ['PROTEIN:TP53'])
         result = cursor.fetchone()
 
         assert result is not None, "Label should exist after insertion"
@@ -299,7 +299,7 @@ class TestPropertyForeignKeys:
 
         with pytest.raises(Exception) as exc_info:
             cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+                "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
                 ['INVALID:node', 'some_key', 'some_value']
             )
             iris_connection.commit()
@@ -320,19 +320,19 @@ class TestPropertyForeignKeys:
         cursor = iris_connection.cursor()
 
         # Create node
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
         iris_connection.commit()
 
         # Assign property - should succeed
         cursor.execute(
-            "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
             ['PROTEIN:TP53', 'chromosome', '17']
         )
         iris_connection.commit()
 
         # Verify property exists
         cursor.execute(
-            "SELECT s, key, val FROM rdf_props WHERE s = ? AND key = ?",
+            "SELECT s, key, val FROM Graph_KG.rdf_props WHERE s = ? AND key = ?",
             ['PROTEIN:TP53', 'chromosome']
         )
         result = cursor.fetchone()
@@ -385,7 +385,7 @@ class TestEmbeddingForeignKeys:
         cursor = iris_connection.cursor()
 
         # Create node
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
         iris_connection.commit()
 
         # Create dummy 768-dimensional vector
@@ -423,17 +423,17 @@ class TestNodeDeletion:
         cursor = iris_connection.cursor()
 
         # Create nodes and edge
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:A'])
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:B'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:B'])
         cursor.execute(
-            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
             ['NODE:A', 'relates_to', 'NODE:B']
         )
         iris_connection.commit()
 
         # Try to delete node with edges - should fail
         with pytest.raises(Exception) as exc_info:
-            cursor.execute("DELETE FROM nodes WHERE node_id = ?", ['NODE:A'])
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", ['NODE:A'])
             iris_connection.commit()
 
         # Check for FK constraint violation
@@ -452,13 +452,13 @@ class TestNodeDeletion:
         cursor = iris_connection.cursor()
 
         # Create node and label
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:A'])
-        cursor.execute("INSERT INTO rdf_labels (s, label) VALUES (?, ?)", ['NODE:A', 'test_label'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
+        cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", ['NODE:A', 'test_label'])
         iris_connection.commit()
 
         # Try to delete node with labels - should fail
         with pytest.raises(Exception) as exc_info:
-            cursor.execute("DELETE FROM nodes WHERE node_id = ?", ['NODE:A'])
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", ['NODE:A'])
             iris_connection.commit()
 
         error_msg = str(exc_info.value).lower()
@@ -477,13 +477,13 @@ class TestNodeDeletion:
         cursor = iris_connection.cursor()
 
         # Create node and property
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:A'])
-        cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)", ['NODE:A', 'key1', 'val1'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
+        cursor.execute("INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)", ['NODE:A', 'key1', 'val1'])
         iris_connection.commit()
 
         # Try to delete node with properties - should fail
         with pytest.raises(Exception) as exc_info:
-            cursor.execute("DELETE FROM nodes WHERE node_id = ?", ['NODE:A'])
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", ['NODE:A'])
             iris_connection.commit()
 
         error_msg = str(exc_info.value).lower()
@@ -502,7 +502,7 @@ class TestNodeDeletion:
         cursor = iris_connection.cursor()
 
         # Create node and embedding
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:A'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
         dummy_vector = '[' + ','.join(['0.1'] * 768) + ']'
         cursor.execute(
             "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
@@ -512,7 +512,7 @@ class TestNodeDeletion:
 
         # Try to delete node with embedding - should fail
         with pytest.raises(Exception) as exc_info:
-            cursor.execute("DELETE FROM nodes WHERE node_id = ?", ['NODE:A'])
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", ['NODE:A'])
             iris_connection.commit()
 
         error_msg = str(exc_info.value).lower()
@@ -530,15 +530,15 @@ class TestNodeDeletion:
         cursor = iris_connection.cursor()
 
         # Create bare node
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['NODE:BARE'])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:BARE'])
         iris_connection.commit()
 
         # Delete should succeed
-        cursor.execute("DELETE FROM nodes WHERE node_id = ?", ['NODE:BARE'])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", ['NODE:BARE'])
         iris_connection.commit()
 
         # Verify node is gone
-        cursor.execute("SELECT node_id FROM nodes WHERE node_id = ?", ['NODE:BARE'])
+        cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id = ?", ['NODE:BARE'])
         result = cursor.fetchone()
 
         assert result is None, "Node should be deleted"
@@ -566,7 +566,7 @@ class TestConcurrentNodeInsertion:
         def insert_node(thread_name):
             try:
                 cursor = iris_connection.cursor()
-                cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:concurrent'])
+                cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:concurrent'])
                 iris_connection.commit()
                 results[thread_name] = 'success'
             except Exception as e:
