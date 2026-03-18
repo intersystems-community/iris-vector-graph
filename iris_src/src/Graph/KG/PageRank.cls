@@ -1,69 +1,118 @@
 /// High-performance Personalized PageRank (PPR) for the Knowledge Graph
-/// Ported from HippoRAG and optimized for IRIS 2025.1+
+/// Pure ObjectScript — no iris module dependency, safe from any call context.
 Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 {
 
 /// Run PPR and return results as a JSON string.
-/// Self-contained: uses only iris.gref("^KG") and pure Python dicts.
-/// Safe to call via $CLASSMETHOD, native API bridge, or SQL function.
-/// 
+/// Pure ObjectScript: walks ^KG globals natively with $ORDER/$GET.
+/// Works from SQL stored procedure, native API bridge, or embedded Python.
+///
 /// @param seedJson   JSON array of seed node IDs, e.g. '["A","B"]'
 /// @param alpha      Damping factor (default 0.85)
 /// @param maxIter    Max iterations (default 20)
-/// @param bidir      1 = bidirectional edges, 0 = forward only (reserved)
-/// @param revWeight  Weight for reverse edges when bidir=1 (reserved)
+/// @param bidir      Reserved (unused, kept for API compat)
+/// @param revWeight  Reserved (unused, kept for API compat)
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
-ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String [ Language = python ]
+ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String
 {
-    import iris
-    import json
-
-    try:
-        seeds = json.loads(seedJson) if seedJson else []
-    except Exception:
-        return "[]"
-
-    if not seeds:
-        return "[]"
-
-    kg = iris.gref("^KG")
-
-    teleport_prob = 1.0 / len(seeds)
-    ranks = {s: teleport_prob for s in seeds}
-
-    for iteration in range(int(maxIter)):
-        new_ranks = {}
-
-        for s, r in ranks.items():
-            deg = kg.get(["deg", s])
-            if not deg or deg == 0:
-                new_ranks[s] = new_ranks.get(s, 0) + r * (1 - float(alpha))
-                continue
-
-            deg = int(deg)
-            p = ""
-            while True:
-                p = kg.order(["out", s, p])
-                if not p:
-                    break
-                o = ""
-                share = (float(alpha) * r) / deg
-                while True:
-                    o = kg.order(["out", s, p, o])
-                    if not o:
-                        break
-                    new_ranks[o] = new_ranks.get(o, 0) + share
-
-        teleport_share = (1 - float(alpha)) * teleport_prob
-        for s in seeds:
-            new_ranks[s] = new_ranks.get(s, 0) + teleport_share
-
-        ranks = new_ranks
-
-    sorted_ranks = sorted(ranks.items(), key=lambda x: x[1], reverse=True)
-    results = [{"id": str(nid), "score": float(score)} for nid, score in sorted_ranks[:1000]]
-
-    return json.dumps(results)
+	If seedJson = "" Return "[]"
+	
+	Try {
+		Set seedArr = ##class(%DynamicArray).%FromJSON(seedJson)
+	} Catch {
+		Return "[]"
+	}
+	If seedArr.%Size() = 0 Return "[]"
+	
+	// Build seed set and initial ranks
+	Set nSeeds = seedArr.%Size()
+	Set teleport = 1.0 / nSeeds
+	For i = 0:1:(nSeeds - 1) {
+		Set s = seedArr.%Get(i)
+		Set seeds(s) = ""
+		Set ranks(s) = teleport
+	}
+	
+	// Iterative power method
+	For iter = 1:1:maxIter {
+		Kill newRanks
+		
+		// Distribute ranks along outgoing edges
+		Set node = ""
+		For {
+			Set node = $Order(ranks(node), 1, rank)
+			Quit:node=""
+			
+			Set deg = +$Get(^KG("deg", node))
+			If deg = 0 {
+				// Sink node: retain (1-alpha) share
+				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - alpha))
+				Continue
+			}
+			
+			// Walk outgoing edges: ^KG("out", node, predicate, object)
+			Set p = ""
+			For {
+				Set p = $Order(^KG("out", node, p))
+				Quit:p=""
+				Set share = (alpha * rank) / deg
+				Set o = ""
+				For {
+					Set o = $Order(^KG("out", node, p, o))
+					Quit:o=""
+					Set newRanks(o) = $Get(newRanks(o), 0) + share
+				}
+			}
+		}
+		
+		// Add teleport back to seeds
+		Set teleportShare = (1 - alpha) * teleport
+		Set s = ""
+		For {
+			Set s = $Order(seeds(s))
+			Quit:s=""
+			Set newRanks(s) = $Get(newRanks(s), 0) + teleportShare
+		}
+		
+		// Swap: newRanks -> ranks
+		Kill ranks
+		Merge ranks = newRanks
+	}
+	
+	// Sort by score descending using a score-keyed temp array
+	// ^||PPR.Sort(score, node) — process-private, auto-cleaned
+	Kill ^||PPR
+	Set node = ""
+	For {
+		Set node = $Order(ranks(node), 1, score)
+		Quit:node=""
+		// Use negative score for descending $Order
+		Set ^||PPR(-score, node) = ""
+	}
+	
+	// Build JSON result array (top 1000)
+	Set result = ##class(%DynamicArray).%New()
+	Set negScore = ""
+	Set count = 0
+	For {
+		Set negScore = $Order(^||PPR(negScore))
+		Quit:negScore=""
+		Set n = ""
+		For {
+			Set n = $Order(^||PPR(negScore, n))
+			Quit:n=""
+			Set obj = ##class(%DynamicObject).%New()
+			Do obj.%Set("id", n)
+			Do obj.%Set("score", -negScore, "number")
+			Do result.%Push(obj)
+			Set count = count + 1
+			Quit:count>=1000
+		}
+		Quit:count>=1000
+	}
+	
+	Kill ^||PPR
+	Return result.%ToJSON()
 }
 
 }
