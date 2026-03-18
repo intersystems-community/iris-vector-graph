@@ -217,6 +217,97 @@ for protein, direct, indirect, entity in pathway_proteins[:10]:
     print(f"{protein} → {direct} → {indirect} → {entity}")
 ```
 
+## IRISGraphOperators API (v1.10+)
+
+The `IRISGraphOperators` class provides high-level graph retrieval methods that automatically use the fastest available path (HNSW index, `^KG` global, or SQL fallback).
+
+### Setup
+```python
+from iris_vector_graph.operators import IRISGraphOperators
+from iris_vector_graph.engine import IRISGraphEngine
+
+# Initialize engine (creates schema, installs SQL functions, deploys ObjectScript)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+engine.initialize_schema()
+
+# Create operators instance
+ops = IRISGraphOperators(conn)
+```
+
+### Vector Search (HNSW)
+```python
+import json, numpy as np
+
+query_vector = json.dumps(np.random.randn(768).tolist())
+results = ops.kg_KNN_VEC(query_vector, k=10)
+# Returns: List[Tuple[str, float]] — (node_id, cosine_similarity)
+for node_id, similarity in results:
+    print(f"{node_id}: {similarity:.3f}")
+```
+
+### Graph Traversal (BFS via ^KG)
+```python
+results = ops.kg_GRAPH_WALK("PROTEIN:TP53", max_depth=2, traversal_mode='BFS')
+# Returns: List[Tuple[str, str, str, int]] — (source, predicate, target, row_num)
+for source, predicate, target, _ in results:
+    print(f"{source} → {predicate} → {target}")
+```
+
+### Personalized PageRank
+```python
+ppr_results = ops.kg_PPR(
+    seed_entities=["PROTEIN:TP53", "PROTEIN:BRCA1"],
+    damping=0.85,
+    max_iterations=20,
+)
+# Returns: List[Tuple[str, float]] — (node_id, score) sorted descending
+for node_id, score in ppr_results[:10]:
+    print(f"{node_id}: {score:.6f}")
+```
+
+**Execution paths** (tried in order):
+1. `Graph.KG.PageRank.RunJson` via native API — pure ObjectScript, ~20ms on 10K nodes
+2. `Graph_KG.kg_PPR` SQL function — same ObjectScript, called via SQL
+3. Empty result with warning if both fail
+
+### Vector → Graph Hybrid Search
+```python
+results = ops.kg_VECTOR_GRAPH_SEARCH(
+    query_vector=query_vector,
+    k_vector=10,         # top-k vector seeds
+    k_final=20,          # final result count
+    expansion_depth=2,   # graph hops from seeds
+    min_confidence=0.5,
+)
+# Returns vector seeds + graph-expanded neighbors with combined scores
+```
+
+### RRF Fusion (Vector + Text)
+```python
+results = ops.kg_RRF_FUSE(
+    query_vector=query_vector,
+    query_text="cancer immunotherapy",
+    k=10,
+)
+```
+
+### Full MindWalk Pipeline Example
+```python
+# 1. Vector pivot — find seed articles
+seeds = ops.kg_KNN_VEC(query_vector, k=10)
+
+# 2. Graph walk — expand to entity neighbors
+for seed_id, _ in seeds[:5]:
+    neighbors = ops.kg_GRAPH_WALK(seed_id, max_depth=1)
+
+# 3. PPR — rank by graph proximity
+anchor_ids = [nid for nid, _ in seeds[:5]]
+ppr_scores = ops.kg_PPR(seed_entities=anchor_ids, damping=0.85)
+
+# 4. RRF fusion — combine vector + PPR rankings
+# (manual fusion or use kg_VECTOR_GRAPH_SEARCH for all-in-one)
+```
+
 ## Data Format Support
 
 ### 1. TSV/CSV Loading

@@ -667,6 +667,74 @@ class IRISGraphOperators:
             logger.error(f"Vector-graph search fallback failed: {e}")
             return []
 
+    def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,
+                     direction: str = "out", distinct: bool = True,
+                     chunk_size: int = 500) -> List[str]:
+        """1-hop neighborhood lookup: return node IDs reachable from source_ids.
+
+        The atomic graph step — equivalent to $Order(^KG("out", s, p, o)).
+        Compose with kg_KNN_VEC and kg_PPR for full retrieval pipelines:
+
+            anchors = ops.kg_NEIGHBORS(article_ids, predicate="MENTIONS")
+            accounts = ops.kg_NEIGHBORS(txn_ids, predicate="OWNED_BY", direction="out")
+            cited_by = ops.kg_NEIGHBORS([paper], predicate="CITES", direction="in")
+
+        Args:
+            source_ids: Node IDs to expand from
+            predicate: Edge predicate filter (None = all predicates)
+            direction: "out" (default), "in", or "both"
+            distinct: Deduplicate results (default True)
+            chunk_size: Max IDs per SQL query to avoid DBAPI parameter limits
+
+        Returns:
+            List of neighbor node IDs
+        """
+        if not source_ids:
+            return []
+
+        if direction not in ("out", "in", "both"):
+            raise ValueError(f"direction must be 'out', 'in', or 'both', got {direction!r}")
+
+        cursor = self.conn.cursor()
+        try:
+            all_targets: list = []
+            seen: set = set()
+
+            directions = ["out", "in"] if direction == "both" else [direction]
+            for d in directions:
+                src_col = "e.s" if d == "out" else "e.o_id"
+                tgt_col = "e.o_id" if d == "out" else "e.s"
+
+                for i in range(0, len(source_ids), chunk_size):
+                    chunk = source_ids[i:i + chunk_size]
+                    ph = ",".join("?" for _ in chunk)
+                    params = list(chunk)
+
+                    where = f"{src_col} IN ({ph})"
+                    if predicate is not None:
+                        where += " AND e.p = ?"
+                        params.append(predicate)
+
+                    sql = f"SELECT {tgt_col} FROM Graph_KG.rdf_edges e WHERE {where}"
+                    cursor.execute(sql, params)
+
+                    for row in cursor.fetchall():
+                        nid = row[0]
+                        if distinct:
+                            if nid in seen:
+                                continue
+                            seen.add(nid)
+                        all_targets.append(nid)
+
+            return all_targets
+        finally:
+            cursor.close()
+
+    def kg_MENTIONS(self, source_ids: List[str], predicate: str = "MENTIONS",
+                    distinct: bool = True) -> List[str]:
+        """Convenience alias: kg_NEIGHBORS with predicate='MENTIONS', direction='out'."""
+        return self.kg_NEIGHBORS(source_ids, predicate=predicate, distinct=distinct)
+
     def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
                max_iterations: int = 20, bidirectional: bool = False,
                reverse_weight: float = 1.0) -> List[Tuple[str, float]]:

@@ -79,3 +79,74 @@ class TestKgKNNVECSource:
         from iris_vector_graph.operators import IRISGraphOperators
         source = inspect.getsource(IRISGraphOperators._kg_KNN_VEC_hnsw_optimized)
         assert "DOUBLE" in source
+
+
+class TestKgNeighborsMethod:
+
+    def test_method_exists(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        assert hasattr(IRISGraphOperators, 'kg_NEIGHBORS')
+
+    def test_mentions_alias_exists(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        assert hasattr(IRISGraphOperators, 'kg_MENTIONS')
+
+    def test_empty_source_returns_empty(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(MagicMock())
+        assert ops.kg_NEIGHBORS(source_ids=[]) == []
+
+    def test_invalid_direction_raises(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(MagicMock())
+        try:
+            ops.kg_NEIGHBORS(source_ids=["A"], direction="sideways")
+            assert False, "Should have raised ValueError"
+        except ValueError:
+            pass
+
+    def test_out_direction_queries_s_column(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [("ENT_A",), ("ENT_B",)]
+        ops = IRISGraphOperators(mock_conn)
+        result = ops.kg_NEIGHBORS(["PMID:1"], predicate="MENTIONS")
+        assert result == ["ENT_A", "ENT_B"]
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "e.s IN" in sql
+        assert "e.o_id" in sql.split("SELECT")[1].split("FROM")[0]
+
+    def test_in_direction_queries_o_id_column(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [("PMID:1",)]
+        ops = IRISGraphOperators(mock_conn)
+        result = ops.kg_NEIGHBORS(["ENT_A"], predicate="CITES", direction="in")
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "e.o_id IN" in sql
+
+    def test_predicate_none_omits_filter(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [("X",)]
+        ops = IRISGraphOperators(mock_conn)
+        ops.kg_NEIGHBORS(source_ids=["A"], predicate=None)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "e.p = ?" not in sql
+
+    def test_chunking_large_lists(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+        ops = IRISGraphOperators(mock_conn)
+        ids = [f"ID:{i}" for i in range(1200)]
+        ops.kg_NEIGHBORS(source_ids=ids, chunk_size=500)
+        assert mock_cursor.execute.call_count == 3
