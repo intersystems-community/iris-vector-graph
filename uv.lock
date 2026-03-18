@@ -1033,7 +1033,7 @@ wheels = [
 
 [[package]]
 name = "iris-devtester"
-version = "1.8.1"
+version = "1.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -1045,14 +1045,14 @@ dependencies = [
     { name = "testcontainers" },
     { name = "testcontainers-iris" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a7/32/ad18d3e622ede320d6c8c0c4f10996e6c5dc8b33e660c798a2468451419a/iris_devtester-1.8.1.tar.gz", hash = "sha256:f360793fd51d3b13bd9a5aa3d9f01a79ea5ce94b9e22b150ca252b12fa053b2c", size = 462046, upload-time = "2026-01-17T21:24:08.228Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/42/0d413b4c3f193f548cb80a8ad2e1e487ad31de8aa735e09819808d0c4ed3/iris_devtester-1.14.0.tar.gz", hash = "sha256:169bf05676420b942d4b6e69daabeeba79d07cd623b1c3868f714a15c47ed5e9", size = 509633, upload-time = "2026-02-28T14:02:31.473Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/e7/014afeb1b80c2218602ac813fa5f617cf93cea0d6a940aebde422666bd14/iris_devtester-1.8.1-py3-none-any.whl", hash = "sha256:c5e129e971a0e3011a1788dd8671b8e99fea4fa844f035bf9898eed75ddf6037", size = 151453, upload-time = "2026-01-17T21:24:06.668Z" },
+    { url = "https://files.pythonhosted.org/packages/63/79/5188509722217c6d08ebfe5cfaee593d43c20fda55d68e0e746faaf197a1/iris_devtester-1.14.0-py3-none-any.whl", hash = "sha256:46eca3225a6d4c5e8cde75d1d101db3d89558c65b74fa81a8456de44f30f62e1", size = 163804, upload-time = "2026-02-28T14:02:30.005Z" },
 ]
 
 [[package]]
 name = "iris-vector-graph"
-version = "1.1.9"
+version = "1.9.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1117,7 +1117,7 @@ requires-dist = [
     { name = "graphviz", marker = "extra == 'visualization'", specifier = ">=0.20.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "intersystems-irispython", specifier = ">=3.2.0" },
-    { name = "iris-devtester", marker = "extra == 'dev'", specifier = ">=1.8.1" },
+    { name = "iris-devtester", marker = "extra == 'dev'", specifier = ">=1.14.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "matplotlib", marker = "extra == 'visualization'", specifier = ">=3.7.0" },
     { name = "memory-profiler", marker = "extra == 'performance'", specifier = ">=0.61.0" },

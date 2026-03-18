@@ -470,6 +470,21 @@ BEGIN
   FROM F
   ORDER BY rrf DESC;
 END
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_PPR(
+  seedEntities VARCHAR(32000),
+  dampingFactor DOUBLE DEFAULT 0.85,
+  maxIterations INT DEFAULT 100,
+  bidirectional INT DEFAULT 0,
+  reverseEdgeWeight DOUBLE DEFAULT 1.0
+)
+RETURNS VARCHAR(8000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight)
+    quit result
+}}
 """
         ]
 

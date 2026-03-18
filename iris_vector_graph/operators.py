@@ -20,6 +20,8 @@ from typing import List, Tuple, Optional, Dict, Any, Union, cast
 from collections import deque
 import logging
 
+from iris_vector_graph.schema import _call_classmethod
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,7 +61,7 @@ class IRISGraphOperators:
         """
         HNSW-optimized vector search using native IRIS VECTOR functions
 
-        Uses Graph_KG.kg_NodeEmbeddings_optimized table with VECTOR(FLOAT, 768) and HNSW index.
+        Uses Graph_KG.kg_NodeEmbeddings table with VECTOR(DOUBLE, N) and HNSW index.
         Performance: ~40ms for 10K vectors (1790x improvement vs CSV fallback)
         """
         cursor = self.conn.cursor()
@@ -69,8 +71,8 @@ class IRISGraphOperators:
                 sql = f"""
                     SELECT TOP {k}
                         n.id,
-                        VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity
-                    FROM Graph_KG.kg_NodeEmbeddings_optimized n
+                        VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) as similarity
+                    FROM Graph_KG.kg_NodeEmbeddings n
                     ORDER BY similarity DESC
                 """
                 cursor.execute(sql, [query_vector])
@@ -78,8 +80,8 @@ class IRISGraphOperators:
                 sql = f"""
                     SELECT TOP {k}
                         n.id,
-                        VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity
-                    FROM Graph_KG.kg_NodeEmbeddings_optimized n
+                        VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) as similarity
+                    FROM Graph_KG.kg_NodeEmbeddings n
                     LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.id
                     WHERE L.label = ?
                     ORDER BY similarity DESC
@@ -395,7 +397,7 @@ class IRISGraphOperators:
                         p = ""
                         count = 0
                         while count < max_degree:
-                            p = kg_global.order([current_entity, p])
+                            p = kg_global.order(["out", current_entity, p])
                             if p is None:
                                 break
 
@@ -405,7 +407,7 @@ class IRISGraphOperators:
 
                             t = ""
                             while count < max_degree:
-                                t = kg_global.order([current_entity, p, t])
+                                t = kg_global.order(["out", current_entity, p, t])
                                 if t is None:
                                     break
 
@@ -664,6 +666,66 @@ class IRISGraphOperators:
         except Exception as e:
             logger.error(f"Vector-graph search fallback failed: {e}")
             return []
+
+    def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
+               max_iterations: int = 20, bidirectional: bool = False,
+               reverse_weight: float = 1.0) -> List[Tuple[str, float]]:
+        """
+        Personalized PageRank from seed entities.
+
+        Hierarchy:
+        1. Primary: Graph.KG.PageRank.RunJson() via native IRIS API (reads ^KG global)
+        2. Fallback: kg_PPR SQL function (reads SQL tables via PageRankEmbedded)
+        3. Last resort: Empty result with warning
+
+        Args:
+            seed_entities: List of seed node IDs to start PPR from
+            damping: Damping factor (default 0.85, higher = more exploration)
+            max_iterations: Maximum PPR iterations (default 20)
+            bidirectional: Whether to traverse edges in both directions
+            reverse_weight: Weight for reverse edges when bidirectional=True
+
+        Returns:
+            List of (node_id, score) tuples sorted by score descending
+        """
+        if not seed_entities:
+            return []
+
+        seed_json = json.dumps(seed_entities)
+        bidir_int = 1 if bidirectional else 0
+
+        # Primary path: Graph.KG.PageRank.RunJson via native API
+        try:
+            result_json = _call_classmethod(
+                self.conn,
+                'Graph.KG.PageRank', 'RunJson',
+                seed_json, damping, max_iterations, bidir_int, reverse_weight
+            )
+            if result_json:
+                parsed = json.loads(result_json)
+                return [(item['id'], float(item['score'])) for item in parsed]
+        except Exception as e:
+            logger.warning(f"PPR via Graph.KG.PageRank.RunJson failed: {e}")
+
+        # Fallback: kg_PPR SQL function
+        try:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT Graph_KG.kg_PPR(?, ?, ?, ?, ?)",
+                    [seed_json, damping, max_iterations, bidir_int, reverse_weight]
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    parsed = json.loads(row[0])
+                    return [(item['id'], float(item['score'])) for item in parsed]
+            finally:
+                cursor.close()
+        except Exception as e:
+            logger.warning(f"PPR via SQL function failed: {e}")
+
+        logger.warning("All PPR paths failed. Returning empty results.")
+        return []
 
     def kg_RERANK(self, top_n: int, query_vector: str, query_text: str) -> List[Tuple[str, float]]:
         """
