@@ -45,6 +45,8 @@ ClassMethod Run(seedNodes As %DynamicArray, maxIter As %Integer = 20, alpha As %
                 # Sink node - rank stays with s (simplified)
                 new_ranks[s] = new_ranks.get(s, 0) + r * (1 - alpha)
                 continue
+            
+            deg = int(deg)
                 
             # Distribute rank along outgoing edges
             # Current rank r contributes (alpha * r / deg) to each neighbor
@@ -90,13 +92,13 @@ ClassMethod Run(seedNodes As %DynamicArray, maxIter As %Integer = 20, alpha As %
 }
 
 /// Run PPR and return results as a JSON string.
-/// This is the primary entry point for Python callers — reads ^||PPR.Results
-/// in the same IRIS session so process-private globals are accessible.
+/// Self-contained implementation that does not rely on process-private globals,
+/// making it safe to call via $CLASSMETHOD or the native API bridge.
 /// 
 /// @param seedJson   JSON array of seed node IDs, e.g. '["A","B"]'
 /// @param alpha      Damping factor (default 0.85)
 /// @param maxIter    Max iterations (default 20)
-/// @param bidir      1 = bidirectional edges, 0 = forward only (reserved, passed to Run)
+/// @param bidir      1 = bidirectional edges, 0 = forward only (reserved)
 /// @param revWeight  Weight for reverse edges when bidir=1 (reserved)
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
 ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String [ Language = python ]
@@ -104,7 +106,6 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
     import iris
     import json
 
-    # Parse seed list
     try:
         seeds = json.loads(seedJson) if seedJson else []
     except Exception:
@@ -113,31 +114,42 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
     if not seeds:
         return "[]"
 
-    # Build %DynamicArray for Run()
-    seed_arr = iris.cls("%DynamicArray")._New()
-    for s in seeds:
-        seed_arr._Push(s)
+    kg = iris.gref("^KG")
 
-    # Execute PPR — writes results to ^||PPR.Results(score) = node_id
-    count = iris.cls("Graph.KG.PageRank").Run(seed_arr, maxIter, alpha, 1e-6)
+    teleport_prob = 1.0 / len(seeds)
+    ranks = {s: teleport_prob for s in seeds}
 
-    if count == 0:
-        return "[]"
+    for iteration in range(int(maxIter)):
+        new_ranks = {}
 
-    # Read ^||PPR.Results back and collect into a list
-    ppr = iris.gref("^||PPR.Results")
-    results = []
-    key = ""
-    while True:
-        key = ppr.order([key])
-        if not key:
-            break
-        node_id = ppr.get([key])
-        if node_id:
-            results.append({"id": str(node_id), "score": float(key)})
+        for s, r in ranks.items():
+            deg = kg.get(["deg", s])
+            if not deg or deg == 0:
+                new_ranks[s] = new_ranks.get(s, 0) + r * (1 - float(alpha))
+                continue
 
-    # Sort descending by score
-    results.sort(key=lambda x: x["score"], reverse=True)
+            deg = int(deg)
+            p = ""
+            while True:
+                p = kg.order(["out", s, p])
+                if not p:
+                    break
+                o = ""
+                share = (float(alpha) * r) / deg
+                while True:
+                    o = kg.order(["out", s, p, o])
+                    if not o:
+                        break
+                    new_ranks[o] = new_ranks.get(o, 0) + share
+
+        teleport_share = (1 - float(alpha)) * teleport_prob
+        for s in seeds:
+            new_ranks[s] = new_ranks.get(s, 0) + teleport_share
+
+        ranks = new_ranks
+
+    sorted_ranks = sorted(ranks.items(), key=lambda x: x[1], reverse=True)
+    results = [{"id": str(nid), "score": float(score)} for nid, score in sorted_ranks[:1000]]
 
     return json.dumps(results)
 }

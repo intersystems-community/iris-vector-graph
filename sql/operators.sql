@@ -116,7 +116,7 @@ BEGIN
 END;
 
 -- 6) Personalized PageRank with bidirectional edge traversal
--- Calls PageRankEmbedded.cls for IRIS embedded Python performance (10-50ms)
+-- Calls Graph.KG.PageRank.RunJson for IRIS ObjectScript performance (2-10ms)
 -- Bidirectional mode enables multi-hop reasoning in asymmetric knowledge graphs
 --
 -- Returns JSON array: [{"nodeId": "ENTITY:X", "pagerank": 0.15}, ...]
@@ -141,16 +141,14 @@ CREATE OR REPLACE FUNCTION kg_PPR(
 RETURNS VARCHAR(8000)                 -- NOTE: VARCHAR(MAX) causes empty result in Python dbapi
 LANGUAGE OBJECTSCRIPT
 {
-    // Call PageRankEmbedded with embedded Python for performance
-    set results = ##class(PageRankEmbedded).ComputePageRank(
-        "%",                        // nodeFilter - all nodes
-        maxIterations,
-        dampingFactor,
+    // Call Graph.KG.PageRank.RunJson — reads ^KG global for performance
+    // Returns JSON string directly: [{"id":"node","score":0.12}, ...]
+    set result = ##class(Graph.KG.PageRank).RunJson(
         seedEntities,
+        dampingFactor,
+        maxIterations,
         bidirectional,
         reverseEdgeWeight
     )
-
-    // Return as JSON string
-    quit results.%ToJSON()
+    quit result
 }

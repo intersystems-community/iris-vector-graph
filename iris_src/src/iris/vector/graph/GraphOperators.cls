@@ -22,7 +22,7 @@ ClassMethod kgTXT(queryText As %String, k As %Integer = 50, minConfidence As %In
 	Set sql = "SELECT TOP ? "
 	Set sql = sql_" e.s AS entity_id, "
 	Set sql = sql_" (CAST(jt.confidence AS FLOAT) / 1000.0 + CASE WHEN e.o_id LIKE ? THEN 0.5 ELSE 0.0 END) AS relevance_score "
-	Set sql = sql_" FROM SQLUSER.rdf_edges e, "
+	Set sql = sql_" FROM Graph_KG.rdf_edges e, "
 	Set sql = sql_" JSON_TABLE(e.qualifiers, '$' COLUMNS(confidence INTEGER PATH '$.confidence')) jt "
 	Set sql = sql_" WHERE jt.confidence >= ? OR e.o_id LIKE ? "
 	Set sql = sql_" ORDER BY relevance_score DESC"
@@ -49,10 +49,10 @@ ClassMethod kgKNNVEC(queryVector As %String, k As %Integer = 50, labelFilter As 
 	Set k = ..ValidateK(k)
 	
 	Set sql = "SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity "
-	Set sql = sql_" FROM SQLUSER.kg_NodeEmbeddings_optimized n "
+	Set sql = sql_" FROM Graph_KG.kg_NodeEmbeddings_optimized n "
 	
 	If labelFilter '= "" {
-		Set sql = sql_" LEFT JOIN SQLUSER.rdf_labels L ON L.s = n.id "
+		Set sql = sql_" LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.id "
 		Set sql = sql_" WHERE L.label = ? "
 	}
 	
@@ -84,11 +84,11 @@ ClassMethod kgGRAPHPATH(srcId As %String, pred1 As %String, pred2 As %String, ma
 	Set results = ##class(%DynamicArray).%New()
 	
 	Set sql = "SELECT 1 AS path_id, 1 AS step, e1.s, e1.p, e1.o_id "
-	Set sql = sql_"FROM SQLUSER.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? "
+	Set sql = sql_"FROM Graph_KG.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? "
 	Set sql = sql_"UNION ALL "
 	Set sql = sql_"SELECT 1 AS path_id, 2 AS step, e2.s, e2.p, e2.o_id "
-	Set sql = sql_"FROM SQLUSER.rdf_edges e2 WHERE e2.p = ? "
-	Set sql = sql_"AND EXISTS (SELECT 1 FROM SQLUSER.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? AND e1.o_id = e2.s) "
+	Set sql = sql_"FROM Graph_KG.rdf_edges e2 WHERE e2.p = ? "
+	Set sql = sql_"AND EXISTS (SELECT 1 FROM Graph_KG.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? AND e1.o_id = e2.s) "
 	Set sql = sql_"ORDER BY step"
 	
 	Set stmt = ##class(%SQL.Statement).%New()
