@@ -1052,7 +1052,7 @@ wheels = [
 
 [[package]]
 name = "iris-vector-graph"
-version = "1.10.0"
+version = "1.10.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

@@ -2,7 +2,7 @@
 
 **Feature Branch**: `022-wire-up-operators`  
 **Created**: 2026-03-18  
-**Status**: Draft  
+**Status**: Complete (v1.10.2 released to PyPI)  
 **Depends on**: 021-deploy-cls-layer (provides .cls deployment + ^KG bootstrap)  
 **Input**: Audit of 6 gaps between iris-vector-graph library code and actual runtime behavior
 

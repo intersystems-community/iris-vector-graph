@@ -213,6 +213,82 @@ class TestKgKNNVECE2E:
         assert len(fallbacks) == 0, f"HNSW fell back: {[r.message for r in fallbacks]}"
 
 
+class TestKgNeighborsE2E:
+
+    @pytest.fixture(autouse=True)
+    def setup(self, iris_connection):
+        self.conn = iris_connection
+        self.cursor = iris_connection.cursor()
+        self.prefix = f"NBR_{uuid.uuid4().hex[:6]}_"
+        self._insert_data()
+        yield
+        _cleanup(self.cursor, self.conn, self.prefix)
+
+    def _insert_data(self):
+        for n in ["A1", "A2", "E1", "E2", "E3", "X1"]:
+            nid = f"{self.prefix}{n}"
+            try:
+                self.cursor.execute(
+                    "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+            except Exception:
+                pass
+        edges = [
+            ("A1", "MENTIONS", "E1"), ("A1", "MENTIONS", "E2"),
+            ("A2", "MENTIONS", "E2"), ("A2", "MENTIONS", "E3"),
+            ("A1", "CITES", "X1"),
+            ("X1", "CITES", "A2"),
+        ]
+        for s, p, o in edges:
+            try:
+                self.cursor.execute(
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                    [f"{self.prefix}{s}", p, f"{self.prefix}{o}"])
+            except Exception:
+                pass
+        self.conn.commit()
+
+    def test_out_mentions(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        result = ops.kg_NEIGHBORS(
+            [f"{self.prefix}A1", f"{self.prefix}A2"], predicate="MENTIONS")
+        assert f"{self.prefix}E1" in result
+        assert f"{self.prefix}E2" in result
+        assert f"{self.prefix}E3" in result
+
+    def test_in_direction(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        result = ops.kg_NEIGHBORS(
+            [f"{self.prefix}A2"], predicate="CITES", direction="in")
+        assert f"{self.prefix}X1" in result
+
+    def test_both_direction(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        result = ops.kg_NEIGHBORS(
+            [f"{self.prefix}X1"], predicate="CITES", direction="both")
+        assert f"{self.prefix}A1" in result or f"{self.prefix}A2" in result
+
+    def test_no_predicate_returns_all(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        result = ops.kg_NEIGHBORS([f"{self.prefix}A1"], predicate=None)
+        assert len(result) >= 3
+
+    def test_mentions_alias(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        result = ops.kg_MENTIONS([f"{self.prefix}A1", f"{self.prefix}A2"])
+        assert f"{self.prefix}E1" in result
+        assert f"{self.prefix}E2" in result
+
+    def test_empty_source(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        assert ops.kg_NEIGHBORS([]) == []
+
+
 class TestVectorGraphSearchE2E:
 
     @pytest.fixture(autouse=True)

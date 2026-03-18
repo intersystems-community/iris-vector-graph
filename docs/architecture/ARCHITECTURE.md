@@ -68,10 +68,13 @@ kg_Documents(doc_id INT, node_id INT, txt VARCHAR(1000000))
 - **Format**: JSON request/response
 - **Performance**: Direct IRIS processing, no external app server
 
-### 2. Embedded Python Operations
-- **File**: `iris_src/src/Graph/KG/PyOps.cls`
-- **Functions**: Vector operations, graph traversal, data processing
-- **Benefits**: In-database computation, optimal memory usage
+### 2. ObjectScript Graph Operations (v1.10+)
+- **`Graph.KG.Traversal`**: Pure ObjectScript BFS/DFS over `^KG` global — `BuildKG()`, `BFS()`, `BFSFast()`, `BFSFastJson()`
+- **`Graph.KG.PageRank`**: Pure ObjectScript PPR — `RunJson()` walks `^KG` with `$ORDER`/`$GET`, returns JSON. No `Language = python` dependency — works from SQL functions, native API bridge, and embedded Python.
+- **`Graph.KG.PyOps`**: Embedded Python wrappers — `VectorSearch()`, `HybridSearch()`, `MetaPath()`
+- **`iris.vector.graph.GraphOperators`**: SqlProc methods exposing `kg_KNN_VEC`, `kg_TXT`, `kg_GRAPH_PATH`, `kg_RRF_FUSE` as SQL functions
+
+**Architecture rule**: Methods callable via `classMethodValue()` (native API bridge) MUST be pure ObjectScript. `Language = python` methods using `iris.gref()` only work inside IRIS embedded Python contexts (SQL functions, triggers). See `docs/architecture/embedded_python_architecture.md` for details.
 
 ### 3. HNSW Vector Index with ACORN-1
 - **Dimensions**: 768 (OpenAI text-embedding-ada-002 compatible)

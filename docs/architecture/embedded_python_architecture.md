@@ -41,6 +41,60 @@ When designing PageRank and graph analytics:
 
 ---
 
+## Call Context Constraints (v1.10.2 — Critical)
+
+### The Three Call Contexts
+
+| Context | `Language = python` (`iris.gref`) | Pure ObjectScript (`$ORDER`) |
+|---------|----------------------------------|------------------------------|
+| **SQL function** (`SELECT kg_PPR(...)`) | ✅ runs inside IRIS | ✅ |
+| **Native API bridge** (`classMethodValue()`) | ❌ `iris.gref` unavailable | ✅ |
+| **Direct `iris session`** | ✅ runs inside IRIS | ✅ |
+
+### Why This Matters
+
+When Python code calls an ObjectScript method via `_call_classmethod()` → `iris.createIRIS(conn).classMethodValue(...)`, the method executes through the **external native API bridge**. In this context:
+
+- **`iris.gref()`** — ❌ Not available. Raises `ValueError: iris.gref: invalid arg passed in`
+- **`iris.cls()`** — ❌ Not available. `iris.cls('%DynamicArray')._New()` fails
+- **`iris.gref("^||...")`** — ❌ Process-private globals are unreliable through the bridge
+- **`$ORDER`, `$GET`, `$INCREMENT`** — ✅ Pure ObjectScript always works
+- **`%DynamicArray`, `%DynamicObject`** — ✅ ObjectScript JSON classes always work
+- **`&sql(...)` embedded SQL** — ✅ Always works
+
+### The Rule
+
+**If a method might be called via `classMethodValue()` from an external Python process, it MUST be pure ObjectScript.** `Language = python` methods should only be used when the caller is guaranteed to be inside IRIS (e.g., SQL functions, triggers, computed columns).
+
+### Example: PageRank.RunJson (v1.10.2)
+
+**Before** (broken through bridge):
+```objectscript
+ClassMethod RunJson(...) As %String [ Language = python ]
+{
+    import iris
+    kg = iris.gref("^KG")  // FAILS via classMethodValue()
+    ...
+}
+```
+
+**After** (works everywhere):
+```objectscript
+ClassMethod RunJson(...) As %String
+{
+    // Pure ObjectScript: $ORDER/$GET on ^KG
+    Set p = $Order(^KG("out", node, p))
+    ...
+    Return result.%ToJSON()
+}
+```
+
+### Impact on `IRISGraphOperators.kg_PPR()`
+
+`kg_PPR()` tries the native API bridge first (`_call_classmethod` → `RunJson`), then falls back to the SQL function path. With pure ObjectScript `RunJson`, the primary path succeeds in ~20ms. Without it, the fallback takes ~2s (loads adjacency into Python).
+
+---
+
 ## Correct Usage Patterns
 
 ### Pattern 1: Pure Graph Analytics (Embedded Python OK)

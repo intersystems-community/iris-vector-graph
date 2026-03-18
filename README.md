@@ -183,6 +183,15 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.10.2 (2026-03-18)
+- **Pure ObjectScript PageRank**: Rewrote `Graph.KG.PageRank.RunJson` as pure ObjectScript — eliminates all `iris.gref`/`iris.cls` dependencies. Works from every call context: SQL stored procedure, native API bridge, and embedded Python. Previous `Language = python` implementation only worked inside IRIS embedded Python, failing through the external `classMethodValue()` bridge.
+- **850x Vector Search Fix**: `kg_KNN_VEC` HNSW path now queries `Graph_KG.kg_NodeEmbeddings` (canonical table) with `TO_VECTOR(?, DOUBLE)`. Previously queried non-existent `kg_NodeEmbeddings_optimized` (FLOAT) causing -259 datatype mismatch → 42s brute-force fallback on 143K vectors vs 50ms with HNSW.
+- **Personalized PageRank API**: New `ops.kg_PPR(seed_entities, damping, max_iterations)` method on `IRISGraphOperators`. Primary path calls `Graph.KG.PageRank.RunJson` via native API; falls back to SQL function; returns `List[Tuple[str, float]]` sorted by score.
+- **kg_PPR SQL Function Auto-Install**: `GraphSchema.get_procedures_sql_list()` now includes `kg_PPR` calling `Graph.KG.PageRank.RunJson` (pure ObjectScript). Previously referenced non-existent `PageRankEmbedded.ComputePageRank`.
+- **^KG Subscript Fix**: `kg_GRAPH_WALK` now accesses `^KG("out", entity, predicate)` — previously used `^KG(entity, predicate)` (missing "out" prefix), causing the fast `^KG` global path to always return empty and fall back to SQL.
+- **GraphOperators.cls Schema Fix**: All SQL queries in `iris.vector.graph.GraphOperators` changed from `SQLUSER.*` to `Graph_KG.*` schema references.
+- **Comprehensive E2E Tests**: 10 unit tests + 11 e2e tests against live IRIS verify all operator wiring fixes. Star-graph PPR topology test, HNSW no-fallback test, vector-graph search expansion test, idempotent schema init test.
+
 ### v1.9.0 (2026-02-28)
 - **ObjectScript Fast Paths**: Deployed `.cls` layer for PPR and BFS graph traversal — native IRIS ObjectScript execution for maximum throughput
 - **Reliable Test Infrastructure**: Eliminated `MockContainer` — `iris_test_container` now uses `IRISContainer.attach()` to connect to existing containers; session fixture blocks until `test/test` credentials are verified before yielding
