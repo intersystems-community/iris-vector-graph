@@ -714,7 +714,17 @@ class IRISGraphOperators:
             logger.error(f"Vector-graph search fallback failed: {e}")
             return []
 
-    def kg_PAGERANK(self, damping: float = 0.85, max_iterations: int = 20) -> List[Tuple[str, float]]:
+    def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
+                    damping: float = 0.85, max_iterations: int = 20,
+                    bidirectional: bool = False,
+                    reverse_weight: float = 1.0) -> List[Tuple[str, float]]:
+        if seed_entities:
+            return self._kg_pagerank_personalized(
+                seed_entities, damping, max_iterations, bidirectional, reverse_weight
+            )
+        return self._kg_pagerank_global(damping, max_iterations)
+
+    def _kg_pagerank_global(self, damping: float, max_iterations: int) -> List[Tuple[str, float]]:
         try:
             result_json = _call_classmethod(
                 self.conn, 'Graph.KG.PageRank', 'PageRankGlobalJson',
@@ -725,6 +735,42 @@ class IRISGraphOperators:
                 return [(item['id'], float(item['score'])) for item in parsed]
         except Exception as e:
             logger.warning(f"PageRankGlobalJson failed: {e}")
+        return []
+
+    def _kg_pagerank_personalized(self, seed_entities: List[str], damping: float,
+                                   max_iterations: int, bidirectional: bool,
+                                   reverse_weight: float) -> List[Tuple[str, float]]:
+        seed_json = json.dumps(seed_entities)
+        bidir_int = 1 if bidirectional else 0
+
+        try:
+            result_json = _call_classmethod(
+                self.conn, 'Graph.KG.PageRank', 'RunJson',
+                seed_json, damping, max_iterations, bidir_int, reverse_weight
+            )
+            if result_json:
+                parsed = json.loads(result_json)
+                return [(item['id'], float(item['score'])) for item in parsed]
+        except Exception as e:
+            logger.warning(f"PPR via RunJson failed: {e}")
+
+        try:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT Graph_KG.kg_PPR(?, ?, ?, ?, ?)",
+                    [seed_json, damping, max_iterations, bidir_int, reverse_weight]
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    parsed = json.loads(row[0])
+                    return [(item['id'], float(item['score'])) for item in parsed]
+            finally:
+                cursor.close()
+        except Exception as e:
+            logger.warning(f"PPR via SQL function failed: {e}")
+
+        logger.warning("All PPR paths failed. Returning empty results.")
         return []
 
     def kg_WCC(self, max_iterations: int = 100) -> Dict[str, str]:
@@ -973,62 +1019,11 @@ class IRISGraphOperators:
     def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
                max_iterations: int = 20, bidirectional: bool = False,
                reverse_weight: float = 1.0) -> List[Tuple[str, float]]:
-        """
-        Personalized PageRank from seed entities.
-
-        Hierarchy:
-        1. Primary: Graph.KG.PageRank.RunJson() via native IRIS API (reads ^KG global)
-        2. Fallback: kg_PPR SQL function (reads SQL tables via PageRankEmbedded)
-        3. Last resort: Empty result with warning
-
-        Args:
-            seed_entities: List of seed node IDs to start PPR from
-            damping: Damping factor (default 0.85, higher = more exploration)
-            max_iterations: Maximum PPR iterations (default 20)
-            bidirectional: Whether to traverse edges in both directions
-            reverse_weight: Weight for reverse edges when bidirectional=True
-
-        Returns:
-            List of (node_id, score) tuples sorted by score descending
-        """
-        if not seed_entities:
-            return []
-
-        seed_json = json.dumps(seed_entities)
-        bidir_int = 1 if bidirectional else 0
-
-        # Primary path: Graph.KG.PageRank.RunJson via native API
-        try:
-            result_json = _call_classmethod(
-                self.conn,
-                'Graph.KG.PageRank', 'RunJson',
-                seed_json, damping, max_iterations, bidir_int, reverse_weight
-            )
-            if result_json:
-                parsed = json.loads(result_json)
-                return [(item['id'], float(item['score'])) for item in parsed]
-        except Exception as e:
-            logger.warning(f"PPR via Graph.KG.PageRank.RunJson failed: {e}")
-
-        # Fallback: kg_PPR SQL function
-        try:
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute(
-                    "SELECT Graph_KG.kg_PPR(?, ?, ?, ?, ?)",
-                    [seed_json, damping, max_iterations, bidir_int, reverse_weight]
-                )
-                row = cursor.fetchone()
-                if row and row[0]:
-                    parsed = json.loads(row[0])
-                    return [(item['id'], float(item['score'])) for item in parsed]
-            finally:
-                cursor.close()
-        except Exception as e:
-            logger.warning(f"PPR via SQL function failed: {e}")
-
-        logger.warning("All PPR paths failed. Returning empty results.")
-        return []
+        return self.kg_PAGERANK(
+            seed_entities=seed_entities, damping=damping,
+            max_iterations=max_iterations, bidirectional=bidirectional,
+            reverse_weight=reverse_weight
+        )
 
     def kg_RERANK(self, top_n: int, query_vector: str, query_text: str) -> List[Tuple[str, float]]:
         """
