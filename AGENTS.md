@@ -10,6 +10,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 - Python 3.11 + `intersystems-irispython>=3.2.0`, `iris-devtester>=1.8.1` (018-cypher-vector-search)
 - Python 3.11 (project target per AGENTS.md) + `intersystems-irispython`, `iris-devtester` (test only) (020-initialize-schema-stored-procedures)
 - InterSystems IRIS — SQL schema `Graph_KG` (data), `iris_vector_graph` (procedures) (020-initialize-schema-stored-procedures)
+- Python 3.11 + ObjectScript (IRIS 2025.1+) + `intersystems-irispython`, `iris-devtester` (test only) (024-graph-kernels)
+- InterSystems IRIS — `Graph_KG` schema, `^KG` global (adjacency index) (024-graph-kernels)
 
 ## Project Structure
 ```text
@@ -29,9 +31,9 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 024-graph-kernels: Added Python 3.11 + ObjectScript (IRIS 2025.1+) + `intersystems-irispython`, `iris-devtester` (test only)
 - 020-initialize-schema-stored-procedures: Added Python 3.11 (project target per AGENTS.md) + `intersystems-irispython`, `iris-devtester` (test only)
 - 019-ivg-gql-autogen: Added auto-generating GraphQL layer with connection pooling.
-- 018-cypher-vector-search: Added native Cypher `ivg.vector.search` procedure.
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
