@@ -31,10 +31,8 @@ class IRISGraphEngine:
     - Reciprocal Rank Fusion for hybrid ranking
     """
 
-    # Class-level cache for SQL function availability (avoid repeated failed attempts)
+    # Class-level cache for backward compat (deprecated — use capabilities instead)
     _ppr_sql_function_available = None
-
-    # SQL function name - MUST NOT contain '_JSON' or 'JSON_' due to IRIS naming bug
     _PPR_SQL_FUNCTION_NAME = "kg_PPR"
 
     def __init__(
@@ -1237,170 +1235,10 @@ class IRISGraphEngine:
             except Exception as exc:
                 logger.warning("Graph.KG.PageRank.RunJson() failed, falling back: %s", exc)
 
-        # --- Secondary path: auto-deployed inline LANGUAGE PYTHON SQL function ---
-        if IRISGraphEngine._ppr_sql_function_available is False:
-            return self._kg_PERSONALIZED_PAGERANK_python_fallback(
-                seed_entities, damping_factor, max_iterations, tolerance,
-                return_top_k, bidirectional, reverse_edge_weight
-            )
-
-        if IRISGraphEngine._ppr_sql_function_available is None:
-            self._auto_deploy_ppr_sql_function()
-
-        cursor = self.conn.cursor()
-        try:
-            seed_json = json.dumps(seed_entities)
-            cursor.execute(f"""
-                SELECT {self._PPR_SQL_FUNCTION_NAME}(?, ?, ?, ?, ?)
-            """, [
-                seed_json,
-                damping_factor,
-                max_iterations,
-                1 if bidirectional else 0,
-                reverse_edge_weight
-            ])
-
-            result = cursor.fetchone()
-            if result and result[0]:
-                IRISGraphEngine._ppr_sql_function_available = True
-                json_results = json.loads(result[0])
-                scores = {item['nodeId']: item['pagerank'] for item in json_results}
-                scores = {k: v for k, v in scores.items() if v > 0}
-                if return_top_k is not None and return_top_k > 0:
-                    sorted_items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-                    scores = dict(sorted_items[:return_top_k])
-                logger.debug(f"PageRank via IRIS embedded Python: {len(scores)} results")
-                return scores
-
-            return {}
-
-        except Exception as e:
-            error_str = str(e).lower()
-            if "not found" in error_str or "does not exist" in error_str:
-                IRISGraphEngine._ppr_sql_function_available = False
-                logger.info(f"IRIS SQL function {self._PPR_SQL_FUNCTION_NAME} not available, using Python fallback")
-            elif "parameter" in error_str or "invalid argument" in error_str:
-                IRISGraphEngine._ppr_sql_function_available = False
-                logger.warning(f"IRIS embedded PageRank failed (check SQLUSER schema has nodes/rdf_edges views): {e}")
-            else:
-                logger.warning(f"IRIS embedded PageRank failed: {e}, falling back to pure Python")
-            cursor.close()
-            return self._kg_PERSONALIZED_PAGERANK_python_fallback(
-                seed_entities, damping_factor, max_iterations, tolerance,
-                return_top_k, bidirectional, reverse_edge_weight
-            )
-        finally:
-            try:
-                cursor.close()
-            except Exception:
-                pass
-
-    def _auto_deploy_ppr_sql_function(self) -> None:
-        """Auto-deploy the PPR SQL function using IRIS embedded Python.
-
-        This enables 10-50x performance improvement by executing PageRank
-        directly in the IRIS server process using LANGUAGE PYTHON SQL functions.
-        """
-        cursor = self.conn.cursor()
-        try:
-            # Drop existing function to ensure clean state
-            try:
-                cursor.execute(f"DROP FUNCTION IF EXISTS {self._PPR_SQL_FUNCTION_NAME}")
-                self.conn.commit()
-            except Exception:
-                pass  # Function might not exist
-
-            # Create SQL function using LANGUAGE PYTHON directly
-            # This is more portable than calling ObjectScript class methods
-            # NOTE: Use VARCHAR(65535) instead of VARCHAR(MAX) - MAX doesn't work
-            # correctly with LANGUAGE PYTHON return types in some IRIS versions
-            # NOTE: Use explicit SQLUSER schema prefix for table access
-            # NOTE: Function name MUST NOT contain '_JSON' or 'JSON_' due to IRIS bug
-            # NOTE: Cannot use f-string here because Python code in LANGUAGE PYTHON has {}
-            ppr_function_sql = '''
-                CREATE OR REPLACE FUNCTION ''' + self._PPR_SQL_FUNCTION_NAME + '''(
-                  seedEntities VARCHAR(32000),
-                  dampingFactor DOUBLE DEFAULT 0.85,
-                  maxIterations INT DEFAULT 100,
-                  bidirectional INT DEFAULT 0,
-                  reverseEdgeWeight DOUBLE DEFAULT 1.0
-                )
-                RETURNS VARCHAR(65535)
-                LANGUAGE PYTHON
-                {
-                    import iris
-                    import json
-
-                    # Parse seed entities
-                    seeds = set()
-                    if seedEntities and seedEntities.strip():
-                        try:
-                            seeds = set(json.loads(seedEntities))
-                        except:
-                            pass
-
-                    # Get nodes - use SQLUSER schema explicitly
-                    nodes = [r[0] for r in iris.sql.exec("SELECT node_id FROM SQLUSER.nodes")]
-                    num_nodes = len(nodes)
-                    if num_nodes == 0:
-                        return "[]"
-
-                    # Build adjacency
-                    in_edges = {}
-                    out_degree = {}
-                    for src, dst in iris.sql.exec("SELECT s, o_id FROM SQLUSER.rdf_edges"):
-                        in_edges.setdefault(dst, []).append((src, 1.0))
-                        out_degree[src] = out_degree.get(src, 0) + 1
-
-                    # Reverse edges if bidirectional
-                    if bidirectional and reverseEdgeWeight > 0:
-                        for dst, src in iris.sql.exec("SELECT o_id, s FROM SQLUSER.rdf_edges"):
-                            in_edges.setdefault(src, []).append((dst, reverseEdgeWeight))
-                            out_degree[dst] = out_degree.get(dst, 0) + 1
-
-                    for n in nodes:
-                        if n not in out_degree:
-                            out_degree[n] = 0
-
-                    # Initialize ranks (personalized if seeds provided)
-                    valid_seeds = [s for s in seeds if s in set(nodes)]
-                    if valid_seeds:
-                        seed_set = set(valid_seeds)
-                        seed_count = len(valid_seeds)
-                        ranks = {n: (1.0/seed_count if n in seed_set else 0) for n in nodes}
-                        teleport = (1.0 - dampingFactor) / seed_count
-                    else:
-                        seed_set = set(nodes)
-                        ranks = {n: 1.0/num_nodes for n in nodes}
-                        teleport = (1.0 - dampingFactor) / num_nodes
-
-                    # PageRank iterations
-                    for _ in range(int(maxIterations)):
-                        new_ranks = {}
-                        for node in nodes:
-                            rank = teleport if node in seed_set else 0
-                            for src, w in in_edges.get(node, []):
-                                if out_degree.get(src, 0) > 0:
-                                    rank += dampingFactor * w * ranks.get(src, 0) / out_degree[src]
-                            new_ranks[node] = rank
-                        ranks = new_ranks
-
-                    # Build result as JSON array
-                    results = [{"nodeId": n, "pagerank": r} for n, r in sorted(ranks.items(), key=lambda x: -x[1]) if r > 0]
-                    return json.dumps(results)
-                }
-            '''
-
-            cursor.execute(ppr_function_sql)
-            self.conn.commit()
-            IRISGraphEngine._ppr_sql_function_available = True
-            logger.info("IVG PPR SQL function auto-deployed (LANGUAGE PYTHON)")
-
-        except Exception as e:
-            logger.debug(f"Could not auto-deploy PPR SQL function: {e}")
-            IRISGraphEngine._ppr_sql_function_available = False
-        finally:
-            cursor.close()
+        return self._kg_PERSONALIZED_PAGERANK_python_fallback(
+            seed_entities, damping_factor, max_iterations, tolerance,
+            return_top_k, bidirectional, reverse_edge_weight
+        )
 
     def _kg_PERSONALIZED_PAGERANK_python_fallback(
         self,

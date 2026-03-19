@@ -37,7 +37,6 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 	For iter = 1:1:maxIter {
 		Kill newRanks
 		
-		// Distribute ranks along outgoing edges
 		Set node = ""
 		For {
 			Set node = $Order(ranks(node), 1, rank)
@@ -45,12 +44,10 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			
 			Set deg = +$Get(^KG("deg", node))
 			If deg = 0 {
-				// Sink node: retain (1-alpha) share
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - alpha))
 				Continue
 			}
 			
-			// Walk outgoing edges: ^KG("out", node, predicate, object)
 			Set p = ""
 			For {
 				Set p = $Order(^KG("out", node, p))
@@ -65,7 +62,6 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			}
 		}
 		
-		// Add teleport back to seeds
 		Set teleportShare = (1 - alpha) * teleport
 		Set s = ""
 		For {
@@ -74,7 +70,25 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			Set newRanks(s) = $Get(newRanks(s), 0) + teleportShare
 		}
 		
-		// Swap: newRanks -> ranks
+		// Early termination: check max rank delta between iterations
+		If iter > 2 {
+			Set maxDelta = 0
+			Set ck = ""
+			For {
+				Set ck = $Order(newRanks(ck), 1, newVal)
+				Quit:ck=""
+				Set oldVal = +$Get(ranks(ck))
+				Set delta = newVal - oldVal
+				If delta < 0 Set delta = -delta
+				If delta > maxDelta Set maxDelta = delta
+			}
+			If maxDelta < 0.0001 {
+				Kill ranks
+				Merge ranks = newRanks
+				Quit
+			}
+		}
+		
 		Kill ranks
 		Merge ranks = newRanks
 	}
