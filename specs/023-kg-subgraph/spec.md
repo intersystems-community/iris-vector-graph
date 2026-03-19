@@ -11,7 +11,7 @@
 
 Developers building RAG pipelines and ML workflows need to extract a complete bounded subgraph — all nodes, edges, properties, and embeddings within k hops of seed nodes — in a single call. Today this requires 4+ separate SQL queries, manual assembly, and produces no standard format.
 
-This is the gap Kumo AI identified in graph databases: systems optimized for *query* (filter, join, aggregate) rather than *extraction* (give me the raw adjacency and features for this neighborhood). The MindWalk pipeline demonstrates the need: after vector search finds seed articles and neighbor expansion finds anchor entities, the next step is "give me the full local graph around these anchors" — and there's no single method for that.
+Graph databases are typically optimized for *query* (filter, join, aggregate) rather than *extraction* (give me the raw adjacency and features for this neighborhood). The MindWalk pipeline demonstrates the need: after vector search finds seed articles and neighbor expansion finds anchor entities, the next step is "give me the full local graph around these anchors" — and there's no single method for that.
 
 ---
 

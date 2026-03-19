@@ -6,7 +6,7 @@
 
 ## Summary
 
-Add `kg_SUBGRAPH` — a single-call k-hop bounded subgraph extraction method that collects all nodes, edges, properties, labels, and (optionally) embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` for structure extraction; Python-side SQL for embedding fetch. Returns a `SubgraphData` dataclass. Addresses the "extraction vs query" gap identified by Kumo AI.
+Add `kg_SUBGRAPH` — a single-call k-hop bounded subgraph extraction method that collects all nodes, edges, properties, labels, and (optionally) embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` for structure extraction; Python-side SQL for embedding fetch. Returns a `SubgraphData` dataclass.
 
 ---
 
