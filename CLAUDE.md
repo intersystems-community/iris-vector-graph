@@ -444,6 +444,8 @@ See `docs/architecture/generic_graph_api_design.md` for full architecture detail
 - InterSystems IRIS with Vector Search (006-test-infra-fixes)
 - Python 3.11 + pytest, FastAPI (TestClient), strawberry-graphql, iris-devtester (008-demo-ux-e2e-tests)
 - InterSystems IRIS 2025.1+ (vector search, HNSW index) (008-demo-ux-e2e-tests)
+- Python 3.11 + ObjectScript (IRIS 2025.1+) + `intersystems-irispython`, `iris-devtester` (test only), `numpy` (optional, for tensor output) (023-kg-subgraph)
+- InterSystems IRIS — `Graph_KG` schema, `^KG` global (adjacency index) (023-kg-subgraph)
 
 ## Recent Changes
 - 005-bidirectional-ppr: Added Python 3.11, ObjectScript (IRIS 2025.1+) + iris-vector-graph-core, IRIS embedded Python

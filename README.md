@@ -183,6 +183,14 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.14.0 (2026-03-19)
+- **`kg_SUBGRAPH`**: New bounded k-hop subgraph extraction — single call returns all nodes, edges, properties, labels, and optionally embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` globals (<100ms on 10K-node graphs). Addresses Kumo AI's "extraction vs query" gap in graph databases.
+- **`SubgraphData` model**: New dataclass with `nodes`, `edges`, `node_properties`, `node_labels`, `node_embeddings`, `seed_ids` fields. Returned by `kg_SUBGRAPH()`.
+- **Edge type filtering**: `edge_types=["MENTIONS"]` restricts BFS traversal to specified predicates only.
+- **Safety limits**: `max_nodes=10000` caps subgraph size, preventing memory exhaustion on dense graphs.
+- **Embedding inclusion**: `include_embeddings=True` bulk-fetches embedding vectors via SQL for nodes in the extracted subgraph.
+- **8 unit + 17 e2e tests**: Chain graph, edge filtering, safety limits, cyclic deduplication, embeddings, server-side JSON, empty input — all against live IRIS.
+
 ### v1.13.0 (2026-03-18)
 - **Cypher `ivg.neighbors`**: New procedure — `CALL ivg.neighbors($sources, 'MENTIONS', 'out') YIELD neighbor`. Supports `out`/`in`/`both` direction with optional predicate filter. Generates efficient `IN (?,?,...)` CTE.
 - **Cypher `ivg.ppr`**: New procedure — `CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score`. Calls `Graph_KG.kg_PPR` server-side, wraps JSON result via `JSON_TABLE` for tabular output.
