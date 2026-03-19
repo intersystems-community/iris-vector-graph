@@ -183,6 +183,11 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.16.0 (2026-03-19)
+- **`kg_PAGERANK`**: Global PageRank — uniform teleport across all nodes, early termination on convergence. Pure ObjectScript over `^KG`. Returns `List[Tuple[str, float]]` sorted descending.
+- **`kg_WCC`**: Weakly Connected Components — bidirectional label propagation over `^KG("out")` + `^KG("in")`. Returns `Dict[str, str]` mapping node → component label (min node ID).
+- **`kg_CDLP`**: Community Detection via Label Propagation — most-frequent-neighbor-label with smallest-label tie-breaking. Returns `Dict[str, str]` mapping node → community label.
+
 ### v1.14.0 (2026-03-19)
 - **`kg_SUBGRAPH`**: New bounded k-hop subgraph extraction — single call returns all nodes, edges, properties, labels, and optionally embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` globals (<100ms on 10K-node graphs).
 - **`SubgraphData` model**: New dataclass with `nodes`, `edges`, `node_properties`, `node_labels`, `node_embeddings`, `seed_ids` fields. Returned by `kg_SUBGRAPH()`.

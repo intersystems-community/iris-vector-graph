@@ -714,6 +714,43 @@ class IRISGraphOperators:
             logger.error(f"Vector-graph search fallback failed: {e}")
             return []
 
+    def kg_PAGERANK(self, damping: float = 0.85, max_iterations: int = 20) -> List[Tuple[str, float]]:
+        try:
+            result_json = _call_classmethod(
+                self.conn, 'Graph.KG.PageRank', 'PageRankGlobalJson',
+                damping, max_iterations
+            )
+            if result_json:
+                parsed = json.loads(result_json)
+                return [(item['id'], float(item['score'])) for item in parsed]
+        except Exception as e:
+            logger.warning(f"PageRankGlobalJson failed: {e}")
+        return []
+
+    def kg_WCC(self, max_iterations: int = 100) -> Dict[str, str]:
+        try:
+            result_json = _call_classmethod(
+                self.conn, 'Graph.KG.Algorithms', 'WCCJson',
+                max_iterations
+            )
+            if result_json:
+                return json.loads(result_json)
+        except Exception as e:
+            logger.warning(f"WCCJson failed: {e}")
+        return {}
+
+    def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, str]:
+        try:
+            result_json = _call_classmethod(
+                self.conn, 'Graph.KG.Algorithms', 'CDLPJson',
+                max_iterations
+            )
+            if result_json:
+                return json.loads(result_json)
+        except Exception as e:
+            logger.warning(f"CDLPJson failed: {e}")
+        return {}
+
     def kg_SUBGRAPH(self, seed_ids: List[str], k_hops: int = 2,
                     edge_types: Optional[List[str]] = None,
                     include_properties: bool = True,

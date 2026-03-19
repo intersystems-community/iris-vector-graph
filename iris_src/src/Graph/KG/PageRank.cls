@@ -129,4 +129,110 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 	Return result.%ToJSON()
 }
 
+ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
+{
+	Set nodeCount = 0
+	Set node = ""
+	For {
+		Set node = $Order(^KG("deg", node))
+		Quit:node=""
+		Set nodeCount = nodeCount + 1
+		Set ranks(node) = 1
+	}
+	If nodeCount = 0 Return "[]"
+	
+	Set initRank = 1.0 / nodeCount
+	Set node = ""
+	For {
+		Set node = $Order(ranks(node))
+		Quit:node=""
+		Set ranks(node) = initRank
+	}
+	
+	For iter = 1:1:maxIter {
+		Kill newRanks
+		
+		Set node = ""
+		For {
+			Set node = $Order(ranks(node), 1, rank)
+			Quit:node=""
+			Set deg = +$Get(^KG("deg", node))
+			If deg = 0 {
+				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - damping))
+				Continue
+			}
+			Set p = ""
+			For {
+				Set p = $Order(^KG("out", node, p))
+				Quit:p=""
+				Set share = (damping * rank) / deg
+				Set o = ""
+				For {
+					Set o = $Order(^KG("out", node, p, o))
+					Quit:o=""
+					Set newRanks(o) = $Get(newRanks(o), 0) + share
+				}
+			}
+		}
+		
+		Set teleportShare = (1 - damping) / nodeCount
+		Set node = ""
+		For {
+			Set node = $Order(ranks(node))
+			Quit:node=""
+			Set newRanks(node) = $Get(newRanks(node), 0) + teleportShare
+		}
+		
+		If iter > 2 {
+			Set maxDelta = 0
+			Set ck = ""
+			For {
+				Set ck = $Order(newRanks(ck), 1, newVal)
+				Quit:ck=""
+				Set delta = newVal - (+$Get(ranks(ck)))
+				If delta < 0 Set delta = -delta
+				If delta > maxDelta Set maxDelta = delta
+			}
+			If maxDelta < 0.0001 {
+				Kill ranks
+				Merge ranks = newRanks
+				Quit
+			}
+		}
+		
+		Kill ranks
+		Merge ranks = newRanks
+	}
+	
+	Kill ^||PPR
+	Set node = ""
+	For {
+		Set node = $Order(ranks(node), 1, score)
+		Quit:node=""
+		Set ^||PPR(-score, node) = ""
+	}
+	
+	Set result = ##class(%DynamicArray).%New()
+	Set negScore = ""
+	Set count = 0
+	For {
+		Set negScore = $Order(^||PPR(negScore))
+		Quit:negScore=""
+		Set n = ""
+		For {
+			Set n = $Order(^||PPR(negScore, n))
+			Quit:n=""
+			Set obj = ##class(%DynamicObject).%New()
+			Do obj.%Set("id", n)
+			Do obj.%Set("score", -negScore, "number")
+			Do result.%Push(obj)
+			Set count = count + 1
+			Quit:count>=10000
+		}
+		Quit:count>=10000
+	}
+	Kill ^||PPR
+	Return result.%ToJSON()
+}
+
 }
