@@ -150,3 +150,42 @@ class TestKgNeighborsMethod:
         ids = [f"ID:{i}" for i in range(1200)]
         ops.kg_NEIGHBORS(source_ids=ids, chunk_size=500)
         assert mock_cursor.execute.call_count == 3
+
+
+class TestKgKNNVECNodeId:
+
+    def test_json_array_uses_hnsw_path(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [("N1", 0.95)]
+        ops = IRISGraphOperators(mock_conn)
+        result = ops.kg_KNN_VEC("[0.1, 0.2, 0.3]", k=5)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "TO_VECTOR" in sql
+        assert "SELECT e.emb" not in sql
+
+    def test_node_id_uses_subquery_path(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [("N2", 0.90)]
+        ops = IRISGraphOperators(mock_conn)
+        result = ops.kg_KNN_VEC("PMID:630", k=5)
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "SELECT e.emb FROM Graph_KG.kg_NodeEmbeddings e WHERE e.id = ?" in sql
+        assert "n.id != ?" in sql
+
+    def test_node_id_excludes_self(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = [("OTHER", 0.88)]
+        ops = IRISGraphOperators(mock_conn)
+        ops.kg_KNN_VEC("PMID:630", k=5)
+        params = mock_cursor.execute.call_args[0][1]
+        assert params[0] == "PMID:630"
+        assert params[1] == "PMID:630"
