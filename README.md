@@ -184,7 +184,7 @@ result = pipeline.query(
 ## Changelog
 
 ### v1.14.0 (2026-03-19)
-- **`kg_SUBGRAPH`**: New bounded k-hop subgraph extraction — single call returns all nodes, edges, properties, labels, and optionally embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` globals (<100ms on 10K-node graphs). Addresses Kumo AI's "extraction vs query" gap in graph databases.
+- **`kg_SUBGRAPH`**: New bounded k-hop subgraph extraction — single call returns all nodes, edges, properties, labels, and optionally embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` globals (<100ms on 10K-node graphs).
 - **`SubgraphData` model**: New dataclass with `nodes`, `edges`, `node_properties`, `node_labels`, `node_embeddings`, `seed_ids` fields. Returned by `kg_SUBGRAPH()`.
 - **Edge type filtering**: `edge_types=["MENTIONS"]` restricts BFS traversal to specified predicates only.
 - **Safety limits**: `max_nodes=10000` caps subgraph size, preventing memory exhaustion on dense graphs.
