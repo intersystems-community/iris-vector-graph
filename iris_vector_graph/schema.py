@@ -556,25 +556,41 @@ LANGUAGE OBJECTSCRIPT
     @staticmethod
     def deploy_objectscript_classes(cursor, iris_src_path: Path, conn=None) -> "IRISCapabilities":
         """
-        Detect compiled ObjectScript classes and return capability flags.
+        Deploy ObjectScript .cls files to IRIS and return capability flags.
 
-        In test environments, .cls files are loaded by the test fixture (conftest)
-        before this is called. In production (IRIS Embedded Python), callers should
-        pre-load classes via $system.OBJ.LoadDir() before calling initialize_schema().
-
-        This function intentionally does NOT attempt to load .cls files itself — the
-        dbapi cursor cannot execute $CLASSMETHOD SQL, and native API calls are
-        out-of-scope for a library function that doesn't own the connection lifecycle.
+        Attempts to load .cls files via $system.OBJ.LoadDir through the native
+        API bridge. If files are not accessible from the IRIS server filesystem,
+        falls back to detection-only (check what's already compiled).
 
         Args:
             cursor:        Active IRIS dbapi cursor.
-            iris_src_path: Unused; kept for API compatibility.
-            conn:          Optional connection for native API calls; forwarded to
-                           check_objectscript_classes.
+            iris_src_path: Path to iris_src/src/ directory containing .cls files.
+            conn:          Connection for native API calls.
 
         Returns:
-            IRISCapabilities reflecting what is currently compiled in IRIS.
+            IRISCapabilities reflecting what is compiled in IRIS after deployment.
         """
+        _native = conn if conn is not None else cursor
+
+        src_dir = str(iris_src_path / "src") if iris_src_path else ""
+        deployed = False
+        for candidate_dir in [src_dir, "/tmp/src/", "/irisdev/app/iris_src/src/"]:
+            if not candidate_dir:
+                continue
+            try:
+                _call_classmethod(_native, '%SYSTEM.OBJ', 'LoadDir', candidate_dir, 'ck', '', 1)
+                logger.info("ObjectScript classes loaded from %s", candidate_dir)
+                deployed = True
+                break
+            except Exception:
+                continue
+
+        if not deployed:
+            logger.warning(
+                "Could not load .cls files from any known path. "
+                "Classes may need to be pre-loaded via docker cp + $system.OBJ.LoadDir."
+            )
+
         try:
             return GraphSchema.check_objectscript_classes(cursor, conn=conn)
         except Exception as exc:
