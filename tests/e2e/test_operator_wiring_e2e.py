@@ -201,6 +201,15 @@ class TestKgKNNVECE2E:
         assert len(results) > 0
         assert all(nid.startswith(self.prefix) for nid, _ in results)
 
+    def test_node_id_input(self):
+        from iris_vector_graph.operators import IRISGraphOperators
+        ops = IRISGraphOperators(self.conn)
+        node_id = f"{self.prefix}N0"
+        results = ops.kg_KNN_VEC(node_id, k=3)
+        assert len(results) > 0
+        assert all(nid != node_id for nid, _ in results)
+        assert all(isinstance(sim, float) for _, sim in results)
+
     def test_no_fallback_warning(self, caplog):
         import logging
         import numpy as np

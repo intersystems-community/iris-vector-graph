@@ -34,28 +34,75 @@ class IRISGraphOperators:
 
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
-        K-Nearest Neighbors vector search with multi-tier fallback
-
-        Hierarchy:
-        1. Primary: HNSW optimized (native IRIS VECTOR functions)
-        2. Fallback: Python CSV computation (numpy-optimized)
+        K-Nearest Neighbors vector search with multi-tier fallback.
 
         Args:
-            query_vector: JSON array string like "[0.1,0.2,0.3,...]"
+            query_vector: Either a JSON array string "[0.1,0.2,...]" or a node ID
+                          (e.g. "PMID:630"). Node IDs use a server-side subquery
+                          that lets IRIS activate the HNSW index.
             k: Number of top results to return
             label_filter: Optional label to filter by (e.g., 'protein', 'gene')
 
         Returns:
             List of (entity_id, similarity_score) tuples
         """
-        # Try optimized HNSW vector search first (6ms performance)
+        is_node_id = not query_vector.lstrip().startswith("[")
+
+        if is_node_id:
+            try:
+                return self._kg_KNN_VEC_by_node_id(query_vector, k, label_filter)
+            except Exception as e:
+                logger.warning(f"HNSW node-ID search failed: {e}")
+
         try:
             return self._kg_KNN_VEC_hnsw_optimized(query_vector, k, label_filter)
         except Exception as e:
             logger.warning(f"HNSW optimized search failed: {e}")
-            # Fallback to Python CSV implementation (5.8s performance)
             logger.warning("Falling back to Python CSV vector computation")
             return self._kg_KNN_VEC_python(query_vector, k, label_filter)
+
+    def _kg_KNN_VEC_by_node_id(self, node_id: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
+        """HNSW vector search using a node ID with server-side subquery.
+
+        Uses the pattern: VECTOR_COSINE(emb, (SELECT emb WHERE id = ?))
+        which lets IRIS constant-fold the subquery and activate the HNSW index.
+        ~50ms vs ~400ms for the literal-vector-through-bridge approach.
+        """
+        cursor = self.conn.cursor()
+        try:
+            if label_filter is None:
+                sql = f"""
+                    SELECT TOP {k}
+                        n.id,
+                        VECTOR_COSINE(n.emb,
+                            (SELECT e.emb FROM Graph_KG.kg_NodeEmbeddings e WHERE e.id = ?)
+                        ) AS similarity
+                    FROM Graph_KG.kg_NodeEmbeddings n
+                    WHERE n.id != ?
+                    ORDER BY similarity DESC
+                """
+                cursor.execute(sql, [node_id, node_id])
+            else:
+                sql = f"""
+                    SELECT TOP {k}
+                        n.id,
+                        VECTOR_COSINE(n.emb,
+                            (SELECT e.emb FROM Graph_KG.kg_NodeEmbeddings e WHERE e.id = ?)
+                        ) AS similarity
+                    FROM Graph_KG.kg_NodeEmbeddings n
+                    LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.id
+                    WHERE n.id != ? AND L.label = ?
+                    ORDER BY similarity DESC
+                """
+                cursor.execute(sql, [node_id, node_id, label_filter])
+
+            results = cursor.fetchall()
+            return [(entity_id, float(similarity)) for entity_id, similarity in results]
+        except Exception as e:
+            logger.error(f"HNSW node-ID kg_KNN_VEC failed: {e}")
+            raise
+        finally:
+            cursor.close()
 
     def _kg_KNN_VEC_hnsw_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
