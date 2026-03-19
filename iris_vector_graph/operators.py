@@ -714,6 +714,157 @@ class IRISGraphOperators:
             logger.error(f"Vector-graph search fallback failed: {e}")
             return []
 
+    def kg_SUBGRAPH(self, seed_ids: List[str], k_hops: int = 2,
+                    edge_types: Optional[List[str]] = None,
+                    include_properties: bool = True,
+                    include_embeddings: bool = False,
+                    max_nodes: int = 10000) -> 'SubgraphData':
+        from iris_vector_graph.models import SubgraphData
+
+        if not seed_ids:
+            return SubgraphData(seed_ids=list(seed_ids))
+
+        seed_json = json.dumps(seed_ids)
+        edge_types_json = json.dumps(edge_types) if edge_types else ""
+
+        # Primary: server-side SubgraphJson over ^KG
+        try:
+            result_json = _call_classmethod(
+                self.conn, 'Graph.KG.Subgraph', 'SubgraphJson',
+                seed_json, k_hops, edge_types_json, max_nodes
+            )
+            if result_json:
+                parsed = json.loads(result_json)
+                nodes = parsed.get("nodes", [])
+                edges = [
+                    (e["s"], e["p"], e["o"]) for e in parsed.get("edges", [])
+                ]
+                props = parsed.get("properties", {})
+                labels = parsed.get("labels", {})
+
+                sg = SubgraphData(
+                    nodes=nodes,
+                    edges=edges,
+                    node_properties=props if include_properties else {},
+                    node_labels=labels if include_properties else {},
+                    node_embeddings={},
+                    seed_ids=list(seed_ids),
+                )
+
+                if include_embeddings and nodes:
+                    sg.node_embeddings = self._fetch_embeddings(nodes)
+
+                return sg
+        except Exception as e:
+            logger.warning(f"SubgraphJson failed: {e}, using Python fallback")
+
+        # Fallback: Python-side BFS via kg_NEIGHBORS + SQL
+        return self._subgraph_fallback(
+            seed_ids, k_hops, edge_types, include_properties, include_embeddings, max_nodes
+        )
+
+    def _fetch_embeddings(self, node_ids: List[str]) -> dict:
+        cursor = self.conn.cursor()
+        try:
+            result = {}
+            for i in range(0, len(node_ids), 500):
+                chunk = node_ids[i:i + 500]
+                ph = ",".join("?" for _ in chunk)
+                cursor.execute(
+                    f"SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings WHERE id IN ({ph})",
+                    chunk
+                )
+                for row in cursor.fetchall():
+                    nid, emb = row[0], row[1]
+                    if emb:
+                        result[nid] = [float(x) for x in str(emb).split(",")]
+            return result
+        finally:
+            cursor.close()
+
+    def _subgraph_fallback(self, seed_ids, k_hops, edge_types, include_properties,
+                           include_embeddings, max_nodes):
+        from iris_vector_graph.models import SubgraphData
+
+        seen = set()
+        frontier = set()
+        all_edges = []
+        edge_set = set()
+
+        for s in seed_ids:
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id = ?", [s])
+                if cursor.fetchone():
+                    seen.add(s)
+                    frontier.add(s)
+            finally:
+                cursor.close()
+
+        for hop in range(k_hops):
+            if not frontier or len(seen) >= max_nodes:
+                break
+            next_frontier = set()
+            pred_filter = edge_types[0] if edge_types and len(edge_types) == 1 else None
+            neighbors_with_edges = []
+
+            for src in frontier:
+                cursor = self.conn.cursor()
+                try:
+                    if edge_types:
+                        ph_types = ",".join("?" for _ in edge_types)
+                        cursor.execute(
+                            f"SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE s = ? AND p IN ({ph_types})",
+                            [src] + list(edge_types)
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE s = ?", [src]
+                        )
+                    for row in cursor.fetchall():
+                        s_val, p_val, o_val = row[0], row[1], row[2]
+                        edge_key = (s_val, p_val, o_val)
+                        if edge_key not in edge_set:
+                            edge_set.add(edge_key)
+                            all_edges.append(edge_key)
+                        if o_val not in seen and len(seen) < max_nodes:
+                            seen.add(o_val)
+                            next_frontier.add(o_val)
+                finally:
+                    cursor.close()
+
+            frontier = next_frontier
+
+        node_props = {}
+        node_labels = {}
+        if include_properties and seen:
+            cursor = self.conn.cursor()
+            try:
+                for nid in seen:
+                    cursor.execute("SELECT key, val FROM Graph_KG.rdf_props WHERE s = ?", [nid])
+                    props = {r[0]: r[1] for r in cursor.fetchall()}
+                    if props:
+                        node_props[nid] = props
+                    cursor.execute("SELECT label FROM Graph_KG.rdf_labels WHERE s = ?", [nid])
+                    lbls = [r[0] for r in cursor.fetchall()]
+                    if lbls:
+                        node_labels[nid] = lbls
+            finally:
+                cursor.close()
+
+        embs = {}
+        if include_embeddings and seen:
+            embs = self._fetch_embeddings(list(seen))
+
+        return SubgraphData(
+            nodes=list(seen),
+            edges=list(all_edges),
+            node_properties=node_props,
+            node_labels=node_labels,
+            node_embeddings=embs,
+            seed_ids=list(seed_ids),
+        )
+
     def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,
                      direction: str = "out", distinct: bool = True,
                      chunk_size: int = 500) -> List[str]:
