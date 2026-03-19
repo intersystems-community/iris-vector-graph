@@ -59,7 +59,7 @@ As a developer, I want a max_nodes parameter that caps the subgraph size so I do
 
 **Acceptance Scenarios**:
 
-1. **Given** a hub node with 500 neighbors, **When** extracted with max_nodes=50, **Then** result contains exactly 50 nodes (hub + 49 neighbors) and BFS stops expanding.
+1. **Given** a hub node with 500 neighbors, **When** extracted with k_hops=1 and max_nodes=50, **Then** result contains at most 50 nodes (hub + up to 49 neighbors) and BFS stops expanding the frontier.
 2. **Given** max_nodes=10000 (default), **When** graph is smaller, **Then** all reachable nodes are included.
 
 ---

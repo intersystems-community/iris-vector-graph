@@ -25,8 +25,8 @@
 
 **Purpose**: Verify IRIS container and test infrastructure before any implementation
 
-- [ ] T004 Verify container name `iris_vector_graph` in `docker-compose.yml`
-- [ ] T005 Verify `IRISContainer.attach("iris_vector_graph")` resolves correctly in tests/conftest.py
+- [ ] T004 Verify canonical test container name `iris-vector-graph-main` in `tests/conftest.py:153`
+- [ ] T005 Verify `IRISContainer.attach("iris-vector-graph-main")` resolves correctly in tests/conftest.py
 - [ ] T006 Confirm `tests/e2e/test_subgraph_e2e.py` uses `os.environ.get("SKIP_IRIS_TESTS", "false")`
 - [ ] T007 Confirm no hardcoded ports in new test files
 
@@ -235,5 +235,5 @@ After Phase 3: Phases 4, 5, 6 can run in parallel (independent user stories)
 - P1 tasks (Phases 4-6): **14**
 - Stretch tasks (Phases 8-9): **6**
 - Polish tasks: **5**
-- E2E tests: **15** (all against live IRIS container `iris_vector_graph`)
+- E2E tests: **15** (all against live IRIS container `iris-vector-graph-main`)
 - Unit tests: **8**

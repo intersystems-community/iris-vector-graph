@@ -16,7 +16,7 @@ Add `kg_SUBGRAPH` — a single-call k-hop bounded subgraph extraction method tha
 **Primary Dependencies**: `intersystems-irispython`, `iris-devtester` (test only), `numpy` (optional, for tensor output)
 **Storage**: InterSystems IRIS — `Graph_KG` schema, `^KG` global (adjacency index)
 **Testing**: `pytest`; unit tests with `unittest.mock`; e2e tests via `iris-devtester` container
-**Container**: `iris_vector_graph` (verified from `docker-compose.yml`)
+**Container**: `iris-vector-graph-main` (verified from `tests/conftest.py` line 153 — the canonical test container name. Note: `docker-compose.yml` uses `iris_vector_graph` but the test infrastructure overrides this.)
 **Performance Goals**: 2-hop extraction on 10K-node graph (avg degree 10) in <100ms
 **Constraints**: Backward-compatible; no new dependencies beyond numpy; all existing tests must pass
 **Scale/Scope**: Typical subgraphs: 10-1000 nodes. Safety cap: max_nodes=10000 default.
@@ -31,12 +31,12 @@ Add `kg_SUBGRAPH` — a single-call k-hop bounded subgraph extraction method tha
 **Principle II (Compatibility-First)**: `kg_SUBGRAPH()` is additive. No existing signatures changed. ✅
 **Principle III (Test-First)**: Tests written BEFORE implementation for each phase. ✅
 **Principle IV (Integration & E2E Testing for IRIS)**:
-- [x] Dedicated container `iris_vector_graph` (from `docker-compose.yml`)
+- [x] Dedicated container `iris-vector-graph-main` (canonical test container from `tests/conftest.py:153`)
 - [x] Explicit e2e test phase covering all P0/P1 user stories
 - [x] `SKIP_IRIS_TESTS` defaults to `"false"` in all new test files
-- [x] No hardcoded ports; resolved via `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)`
+- [x] No hardcoded ports; resolved via `IRISContainer.attach("iris-vector-graph-main").get_exposed_port(1972)`
 **Principle V (Simplicity)**: Single ObjectScript method + single Python method + dataclass. No new abstractions. ✅
-**Principle VI (Grounding)**: Container name `iris_vector_graph` verified from `docker-compose.yml`. Schema `Graph_KG` verified from `engine.py`. ✅
+**Principle VI (Grounding)**: Container name `iris-vector-graph-main` verified from `tests/conftest.py:153`. Schema `Graph_KG` verified from `engine.py`. ✅
 
 ---
 
