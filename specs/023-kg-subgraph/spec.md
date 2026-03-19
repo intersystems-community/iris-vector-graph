@@ -186,3 +186,12 @@ As a Cypher user, I want `CALL ivg.subgraph($seeds, 2) YIELD nodes, edges` to wo
 - Node embeddings are stored in a queryable table alongside the graph schema
 - The server-side implementation follows the same pure-ObjectScript pattern established in spec 022 (PageRank.RunJson, BFSFast)
 - The Python API result format (SubgraphData) will be a dataclass or named structure, not a raw dict
+- Initial implementation: server-side returns graph structure (nodes, edges, properties, labels) from adjacency globals; Python layer fetches embeddings via a single SQL query for the returned node IDs. The server-side method is not prohibited from using embedded SQL in the future — IRIS SQL is globals underneath and has negligible overhead — but the v1 split keeps the traversal hot path simple and independently testable.
+
+---
+
+## Clarifications
+
+### Session 2026-03-19
+
+- Q: Should the server-side method fetch embeddings (requiring embedded SQL), or should Python fetch embeddings separately after receiving the node list? → A: Option B — server-side returns structure only; Python fetches embeddings in one SQL query. But the architecture should not prohibit server-side embedded SQL in future iterations since IRIS SQL is globals underneath with negligible overhead.
