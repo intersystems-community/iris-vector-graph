@@ -88,6 +88,12 @@ kg_Documents(doc_id INT, node_id INT, txt VARCHAR(1000000))
 - **Benchmarks**: Latency, throughput, scalability analysis
 - **Comparison**: Community Edition vs ACORN-1
 
+### 5. Cypher-to-SQL Translator (v1.13+)
+- **Parser**: Hand-written recursive-descent parser for openCypher subset (MATCH, WHERE, RETURN, WITH, CREATE, SET, DELETE, CALL...YIELD)
+- **Procedures**: `ivg.vector.search` (3 modes: vector, text, node ID), `ivg.neighbors` (1-hop with direction/predicate), `ivg.ppr` (PageRank via `JSON_TABLE`)
+- **Translation**: Cypher patterns → SQL CTEs with JOINs on `rdf_edges`/`rdf_labels`/`nodes`
+- **Path algorithms**: BFS/DFS via iterative SQL (IRIS lacks recursive CTEs)
+
 ## Data Flow
 
 ### Vector Search Operation

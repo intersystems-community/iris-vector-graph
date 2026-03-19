@@ -308,6 +308,55 @@ ppr_scores = ops.kg_PPR(seed_entities=anchor_ids, damping=0.85)
 # (manual fusion or use kg_VECTOR_GRAPH_SEARCH for all-in-one)
 ```
 
+## Cypher Procedures (v1.13+)
+
+The library's Cypher translator supports three graph-AI procedures via `CALL ... YIELD`:
+
+### `ivg.vector.search` — Vector Similarity
+```cypher
+// Mode 1: pre-computed vector
+CALL ivg.vector.search('Gene', 'emb', [0.1, 0.2, ...], 10) YIELD node, score
+
+// Mode 2: text via IRIS EMBEDDING()
+CALL ivg.vector.search('Gene', 'emb', 'cancer immunotherapy', 10,
+  {embedding_config: 'my-model'}) YIELD node, score
+
+// Mode 3: node ID (HNSW subquery activation, ~50ms)
+CALL ivg.vector.search('Article', 'emb', 'PMID:630', 10) YIELD node, score
+```
+
+### `ivg.neighbors` — 1-Hop Neighborhood
+```cypher
+// Outgoing edges with predicate filter
+CALL ivg.neighbors($article_ids, 'MENTIONS', 'out') YIELD neighbor
+RETURN neighbor
+
+// Incoming edges (reverse traversal)
+CALL ivg.neighbors($entity_ids, 'CITES', 'in') YIELD neighbor
+
+// All edges (no predicate filter)
+CALL ivg.neighbors('PMID:630') YIELD neighbor
+```
+
+### `ivg.ppr` — Personalized PageRank
+```cypher
+CALL ivg.ppr($seed_entities, 0.85, 20) YIELD node, score
+RETURN node, score ORDER BY score DESC LIMIT 20
+```
+
+### MindWalk Pipeline in Cypher
+```cypher
+// Each step is a standalone CALL — compose them in application code
+// Step 1: Vector pivot from seed article
+CALL ivg.vector.search('Article', 'emb', 'PMID:630', 10) YIELD node, score
+
+// Step 2: Expand MENTIONS edges to anchor entities
+CALL ivg.neighbors($vector_hit_ids, 'MENTIONS', 'out') YIELD neighbor
+
+// Step 3: PPR ranking from anchors
+CALL ivg.ppr($anchor_ids, 0.85, 20) YIELD node, score
+```
+
 ## Data Format Support
 
 ### 1. TSV/CSV Loading

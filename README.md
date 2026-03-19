@@ -183,6 +183,19 @@ result = pipeline.query(
 
 ## Changelog
 
+### v1.13.0 (2026-03-18)
+- **Cypher `ivg.neighbors`**: New procedure — `CALL ivg.neighbors($sources, 'MENTIONS', 'out') YIELD neighbor`. Supports `out`/`in`/`both` direction with optional predicate filter. Generates efficient `IN (?,?,...)` CTE.
+- **Cypher `ivg.ppr`**: New procedure — `CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score`. Calls `Graph_KG.kg_PPR` server-side, wraps JSON result via `JSON_TABLE` for tabular output.
+- **Cypher `ivg.vector.search` Mode 3**: String query without `embedding_config` is now treated as a **node ID** — uses HNSW subquery activation (`SELECT e2.emb WHERE e2.id = ?`) with self-exclusion. String WITH `embedding_config` remains Mode 2 (EMBEDDING function).
+
+### v1.12.0 (2026-03-18)
+- **`kg_KNN_VEC` accepts node ID**: `ops.kg_KNN_VEC("PMID:630", k=10)` detects non-JSON input and uses server-side subquery `VECTOR_COSINE(emb, (SELECT emb WHERE id = ?))` — lets IRIS constant-fold and activate HNSW index. ~50ms vs ~400ms for literal-vector-through-bridge.
+
+### v1.11.0 (2026-03-18)
+- **`kg_NEIGHBORS`**: New 1-hop neighborhood primitive on `IRISGraphOperators`. Supports `out`/`in`/`both` direction, optional predicate filter, chunked `IN` queries for >500 source IDs. Follows NetworkX/APOC naming conventions.
+- **`kg_MENTIONS`**: Convenience alias — `ops.kg_MENTIONS(article_ids)` = `ops.kg_NEIGHBORS(article_ids, predicate="MENTIONS")`.
+- **Documentation overhaul**: v1.10.2 changelog, embedded Python bridge constraint matrix, `IRISGraphOperators` API reference in PYTHON_SDK, call-context architecture docs.
+
 ### v1.10.2 (2026-03-18)
 - **Pure ObjectScript PageRank**: Rewrote `Graph.KG.PageRank.RunJson` as pure ObjectScript — eliminates all `iris.gref`/`iris.cls` dependencies. Works from every call context: SQL stored procedure, native API bridge, and embedded Python. Previous `Language = python` implementation only worked inside IRIS embedded Python, failing through the external `classMethodValue()` bridge.
 - **850x Vector Search Fix**: `kg_KNN_VEC` HNSW path now queries `Graph_KG.kg_NodeEmbeddings` (canonical table) with `TO_VECTOR(?, DOUBLE)`. Previously queried non-existent `kg_NodeEmbeddings_optimized` (FLOAT) causing -259 datatype mismatch → 42s brute-force fallback on 143K vectors vs 50ms with HNSW.
