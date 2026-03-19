@@ -195,17 +195,19 @@ class TestTranslator:
         with pytest.raises(ValueError, match="at least 4 arguments"):
             translate_procedure_call(proc, ctx)
 
-    def test_mode2_missing_embedding_config_raises(self):
+    def test_string_without_embedding_config_is_node_id_mode(self):
         from iris_vector_graph.cypher.ast import CypherProcedureCall, Literal
         proc = CypherProcedureCall(
             procedure_name="ivg.vector.search",
-            arguments=[Literal("Gene"), Literal("emb"), Literal("some text"), Literal(5)],
+            arguments=[Literal("Gene"), Literal("emb"), Literal("PMID:630"), Literal(5)],
             yield_items=["node", "score"],
-            options={},  # no embedding_config
+            options={},  # no embedding_config → Mode 3 (node ID)
         )
         ctx = TranslationContext()
-        with pytest.raises(ValueError, match="embedding_config"):
-            translate_procedure_call(proc, ctx)
+        translate_procedure_call(proc, ctx)
+        cte = ctx.stages[0]
+        assert "SELECT e2.emb FROM" in cte
+        assert "e.id != ?" in cte
 
     def test_mode2_sql_uses_embedding_function(self):
         from iris_vector_graph.cypher.ast import CypherProcedureCall, Literal

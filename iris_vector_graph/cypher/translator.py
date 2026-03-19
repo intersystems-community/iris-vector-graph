@@ -161,22 +161,45 @@ class TranslationContext:
 
 
 def translate_procedure_call(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
-    """Translate a CALL procedure into a VecSearch CTE prepended to context.stages.
+    """Translate a CALL procedure into a CTE prepended to context.stages.
 
-    Supported procedure: ivg.vector.search(label, property, query_input, limit [, options])
-
-    Mode 1 — pre-computed vector (list[float]):
-        SELECT TOP {limit} e.id AS node, VECTOR_COSINE(..., TO_VECTOR(?)) AS score ...
-    Mode 2 — text via IRIS EMBEDDING() (requires IRIS 2024.3+):
-        SELECT TOP {limit} e.id AS node, VECTOR_COSINE(..., EMBEDDING(?, ?)) AS score ...
-
-    The caller (engine.execute_cypher) is responsible for detecting Mode 2 availability
-    and raising UnsupportedOperationError before SQL is executed if EMBEDDING() is absent.
-
-    Precondition: This function is ONLY called for procedure_name == "ivg.vector.search".
+    Supported procedures:
+    - ivg.vector.search(label, property, query_input, limit [, options])
+    - ivg.neighbors(source_node_or_list, predicate, direction)
+    - ivg.ppr(seed_node_or_list, alpha, max_iterations)
     """
-    if proc.procedure_name != "ivg.vector.search":
-        raise ValueError(f"Unknown procedure: {proc.procedure_name!r}. Only 'ivg.vector.search' is supported.")
+    name = proc.procedure_name
+    if name == "ivg.vector.search":
+        _translate_vector_search(proc, context)
+    elif name == "ivg.neighbors":
+        _translate_neighbors(proc, context)
+    elif name == "ivg.ppr":
+        _translate_ppr(proc, context)
+    else:
+        raise ValueError(f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr")
+
+
+def _resolve_arg(arg, context: TranslationContext, name: str, expected_type=None):
+    """Resolve a procedure argument (literal, variable/parameter, or list)."""
+    if isinstance(arg, ast.Literal):
+        val = arg.value
+        if isinstance(val, list):
+            return [item.value if isinstance(item, ast.Literal) else item for item in val]
+        return val
+    elif isinstance(arg, ast.Variable):
+        if arg.name in context.input_params:
+            return context.input_params[arg.name]
+        raise ValueError(f"{name}: parameter '${arg.name}' not found in params")
+    raise ValueError(f"{name}: argument must be a literal or parameter")
+
+
+def _translate_vector_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    """Translate ivg.vector.search into a VecSearch CTE.
+
+    Mode 1 — pre-computed vector (list[float]): TO_VECTOR(?, DOUBLE)
+    Mode 2 — text via IRIS EMBEDDING(): EMBEDDING(?, ?)
+    Mode 3 — node ID (string, not a list): subquery (SELECT emb WHERE id = ?)
+    """
 
     args = proc.arguments
     if len(args) < 4:
@@ -255,34 +278,37 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     # Determine mode and build SQL expression + ordered params
     if isinstance(query_input, list):
         # Mode 1: pre-computed vector
-        # Use TO_VECTOR(?, DOUBLE) — unquoted keyword — to match VECTOR(DOUBLE, N) column type.
-        # IRIS requires the type specifier as a keyword literal (not a string literal or bind param).
         vec_json = json.dumps(query_input)
         similarity_expr = f"{vector_fn}(e.emb, TO_VECTOR(?, DOUBLE))"
         ordered_params: List[Any] = [vec_json, label]
+        exclude_self = False
     elif isinstance(query_input, str):
-        # Mode 2: text via IRIS EMBEDDING() function
         embedding_config: Optional[str] = options.get("embedding_config")
-        if not embedding_config:
-            raise ValueError(
-                "ivg.vector.search: 'embedding_config' option required when query_input is a string (Mode 2)"
-            )
-        similarity_expr = f"{vector_fn}(e.emb, EMBEDDING(?, ?))"
-        ordered_params = [query_input, embedding_config, label]
+        if embedding_config:
+            # Mode 2: text via IRIS EMBEDDING() function
+            similarity_expr = f"{vector_fn}(e.emb, EMBEDDING(?, ?))"
+            ordered_params = [query_input, embedding_config, label]
+            exclude_self = False
+        else:
+            # Mode 3: node ID — subquery lets IRIS activate HNSW index
+            similarity_expr = f"{vector_fn}(e.emb, (SELECT e2.emb FROM {emb_table} e2 WHERE e2.id = ?))"
+            ordered_params = [query_input, label]
+            exclude_self = True
     else:
         raise ValueError(
             f"ivg.vector.search: query_input must be a list[float] or str, got {type(query_input).__name__}"
         )
 
     # Build VecSearch CTE SQL
-    # Uses HNSW index automatically via TOP N + ORDER BY similarity DESC pattern
-    # NOTE: kg_NodeEmbeddings uses 'id' as the primary key column (not 'node_id')
     cte_sql = (
         f"SELECT TOP {limit_int} e.id AS node, {similarity_expr} AS score\n"
         f"FROM {emb_table} e\n"
         f"JOIN {labels_tbl} lbl ON lbl.s = e.id AND lbl.label = ?\n"
-        f"ORDER BY score DESC"
     )
+    if exclude_self:
+        cte_sql += f"WHERE e.id != ?\n"
+        ordered_params.append(query_input)
+    cte_sql += f"ORDER BY score DESC"
 
     context.all_stage_params.extend(ordered_params)
     context.stages.insert(0, f"VecSearch AS (\n{cte_sql}\n)")
@@ -295,19 +321,115 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
         context.scalar_variables.add("score")
 
 
+def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    """CALL ivg.neighbors($sources, 'MENTIONS', 'out') YIELD neighbor
+
+    Args: source (str or list[str]), predicate (str, optional), direction ('out'/'in'/'both', default 'out')
+    Yields: neighbor (node ID)
+    """
+    args = proc.arguments
+    if len(args) < 1:
+        raise ValueError("ivg.neighbors requires at least 1 argument (source_ids)")
+
+    sources = _resolve_arg(args[0], context, "ivg.neighbors")
+    if isinstance(sources, str):
+        sources = [sources]
+    if not isinstance(sources, list):
+        raise ValueError(f"ivg.neighbors: source must be a string or list, got {type(sources).__name__}")
+
+    predicate = _resolve_arg(args[1], context, "ivg.neighbors") if len(args) > 1 else None
+    direction = _resolve_arg(args[2], context, "ivg.neighbors") if len(args) > 2 else "out"
+    if direction not in ("out", "in", "both"):
+        raise ValueError(f"ivg.neighbors: direction must be 'out', 'in', or 'both', got {direction!r}")
+
+    edges_tbl = _table("rdf_edges")
+    ph = ", ".join(["?"] * len(sources))
+    parts = []
+
+    if direction in ("out", "both"):
+        sql = f"SELECT DISTINCT e.o_id AS neighbor FROM {edges_tbl} e WHERE e.s IN ({ph})"
+        p = list(sources)
+        if predicate:
+            sql += " AND e.p = ?"
+            p.append(predicate)
+        parts.append((sql, p))
+
+    if direction in ("in", "both"):
+        sql = f"SELECT DISTINCT e.s AS neighbor FROM {edges_tbl} e WHERE e.o_id IN ({ph})"
+        p = list(sources)
+        if predicate:
+            sql += " AND e.p = ?"
+            p.append(predicate)
+        parts.append((sql, p))
+
+    if len(parts) == 1:
+        cte_sql, cte_params = parts[0]
+    else:
+        cte_sql = " UNION ".join(sql for sql, _ in parts)
+        cte_params = []
+        for _, p in parts:
+            cte_params.extend(p)
+
+    context.all_stage_params.extend(cte_params)
+    context.stages.insert(0, f"Neighbors AS (\n{cte_sql}\n)")
+
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "Neighbors"
+
+
+def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    """CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score
+
+    Generates SQL: SELECT Graph_KG.kg_PPR(?, ?, ?, 0, 1.0)
+    Then wraps in JSON_TABLE to produce rows of (node, score).
+    """
+    args = proc.arguments
+    if len(args) < 1:
+        raise ValueError("ivg.ppr requires at least 1 argument (seed_ids)")
+
+    seeds = _resolve_arg(args[0], context, "ivg.ppr")
+    if isinstance(seeds, str):
+        seeds = [seeds]
+    if not isinstance(seeds, list):
+        raise ValueError(f"ivg.ppr: seeds must be a string or list, got {type(seeds).__name__}")
+
+    alpha = float(_resolve_arg(args[1], context, "ivg.ppr")) if len(args) > 1 else 0.85
+    max_iter = int(_resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
+
+    seed_json = json.dumps(seeds)
+    ppr_fn = f"{_schema_prefix}.kg_PPR" if _schema_prefix else "kg_PPR"
+
+    cte_sql = (
+        f"SELECT j.node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {ppr_fn}(?, ?, ?, 0, 1.0),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([seed_json, alpha, max_iter])
+    context.stages.insert(0, f"PPR AS (\n{cte_sql}\n)")
+
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "PPR"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
 def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None) -> SQLQuery:
     context = TranslationContext()
     context.input_params = params or {}
     metadata = QueryMetadata()
     is_transactional = False
 
-    # Handle CALL procedure (vector search) — emits VecSearch CTE before any MATCH stages
+    # Handle CALL procedure — emits a CTE before any MATCH stages
     if cypher_query.procedure_call is not None:
         translate_procedure_call(cypher_query.procedure_call, context)
-        # If there are no subsequent query parts (pure CALL ... YIELD ... RETURN), set FROM now.
-        # If there are query parts, FROM is set per-part in the loop below.
         if not cypher_query.query_parts:
-            context.from_clauses.append("VecSearch")
+            cte_name = context.stages[0].split(" AS ")[0].strip() if context.stages else "VecSearch"
+            context.from_clauses.append(cte_name)
 
     for i, part in enumerate(cypher_query.query_parts):
         context.select_items, context.from_clauses, context.join_clauses = [], [], []
@@ -316,9 +438,8 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         if i > 0:
             context.from_clauses.append(f"Stage{i}")
         elif cypher_query.procedure_call is not None:
-            # Re-add VecSearch as the primary FROM source for the first query part
-            # when a CALL procedure is present (it was cleared by the reset above).
-            context.from_clauses.append("VecSearch")
+            cte_name = context.stages[0].split(" AS ")[0].strip() if context.stages else "VecSearch"
+            context.from_clauses.append(cte_name)
         for clause in part.clauses:
             if isinstance(clause, ast.MatchClause): translate_match_clause(clause, context, metadata)
             elif isinstance(clause, ast.UnwindClause): translate_unwind_clause(clause, context)
