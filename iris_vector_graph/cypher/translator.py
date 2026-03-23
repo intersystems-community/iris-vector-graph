@@ -606,6 +606,7 @@ def translate_delete_clause(delete, context, metadata):
         if not alias.startswith('e'):
             context.add_dml(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({subquery})", subparams)
             context.add_dml(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})", subparams)
+            context.add_dml(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({subquery})", subparams)
             context.add_dml(f"DELETE FROM {_table('nodes')} WHERE node_id IN ({subquery})", subparams)
         else: context.add_dml(f"DELETE FROM {_table('rdf_edges')} WHERE s = (SELECT s FROM {_table('rdf_edges')} {alias}) AND p = (SELECT p FROM {_table('rdf_edges')} {alias}) AND o_id = (SELECT o_id FROM {_table('rdf_edges')} {alias})", [])
 

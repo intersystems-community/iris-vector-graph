@@ -421,7 +421,7 @@ class IRISGraphEngine:
             placeholders = ",".join(["?"] * len(node_ids))
             
             # 1. Initialize node map
-            node_map = {nid: {"id": nid, "labels": [], "properties": {}} for nid in node_ids}
+            node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
 
             # 2. Get all labels in one query
             cursor.execute(
@@ -446,13 +446,13 @@ class IRISGraphEngine:
                                 parsed_val = json.loads(val)
                         except:
                             pass
-                        node_map[s]["properties"][key] = parsed_val
+                        node_map[s][key] = parsed_val
                     else:
-                        node_map[s]["properties"][key] = val
+                        node_map[s][key] = val
 
             # 4. Filter out nodes that don't exist (if they had no labels and no props)
             # We verify existence via the nodes table for any remaining empty ones
-            empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and not data["properties"]]
+            empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2]
             if empty_nids:
                 e_placeholders = ",".join(["?"] * len(empty_nids))
                 cursor.execute(f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})", empty_nids)
@@ -854,6 +854,22 @@ class IRISGraphEngine:
             results.append(result)
         
         return results
+
+    def delete_node(self, node_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+            cursor.execute(f"DELETE FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?", [node_id, node_id])
+            cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id])
+            cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [node_id])
+            cursor.execute(f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [node_id])
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"delete_node({node_id}) failed: {e}")
+            return False
+        finally:
+            cursor.close()
 
     def delete_embedding(self, node_id: str) -> bool:
         """
