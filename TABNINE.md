@@ -1,1 +1,0 @@
-/Users/tdyar/ws/TABNINE-TEMPLATE.md
