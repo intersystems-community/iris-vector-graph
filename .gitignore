@@ -101,3 +101,14 @@ dmypy.json
 test_results.json
 docs/dc_contest_raw.md
 .mcp.json
+
+# Agent-specific config (not project docs)
+CODEX.md
+TABNINE.md
+
+# Build artifacts
+dist/
+
+# Benchmark caches
+.benchmarks/
+.ruff_cache/
