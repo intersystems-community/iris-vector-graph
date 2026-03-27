@@ -74,6 +74,7 @@ def create_dynamic_node_type(label: str, properties: List[str]) -> Type:
         "labels": List[str],
     }
     
+    defaults = {}
     for prop in properties:
         if prop.lower() in EXCLUDED_PROPERTIES:
             continue
@@ -83,11 +84,12 @@ def create_dynamic_node_type(label: str, properties: List[str]) -> Type:
             field_name = f"p_{prop}"
         
         annotations[field_name] = Optional[str]
+        defaults[field_name] = None
 
     dynamic_type = type(
         label,
         (Node,),
-        {"__annotations__": annotations}
+        {"__annotations__": annotations, **defaults}
     )
     
     st_type = strawberry.type(dynamic_type)

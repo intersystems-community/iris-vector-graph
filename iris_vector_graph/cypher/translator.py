@@ -103,6 +103,11 @@ class TranslationContext:
         # Variables that are scalar (not graph nodes) — skip node expansion in RETURN
         self.scalar_variables: set = set() if parent is None else parent.scalar_variables.copy()
 
+        # Named path registry: path variable → AST NamedPath + SQL aliases
+        self.named_paths: Dict[str, ast.NamedPath] = {} if parent is None else parent.named_paths.copy()
+        self.path_node_aliases: Dict[str, List[str]] = {} if parent is None else parent.path_node_aliases.copy()
+        self.path_edge_aliases: Dict[str, List[str]] = {} if parent is None else parent.path_edge_aliases.copy()
+
         self.select_items: List[str] = []
         self.from_clauses: List[str] = []
         self.join_clauses: List[str] = []
@@ -443,6 +448,7 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         for clause in part.clauses:
             if isinstance(clause, ast.MatchClause): translate_match_clause(clause, context, metadata)
             elif isinstance(clause, ast.UnwindClause): translate_unwind_clause(clause, context)
+            elif isinstance(clause, ast.SubqueryCall): translate_subquery_call(clause, context, metadata)
             elif isinstance(clause, ast.UpdatingClause):
                 is_transactional = True
                 translate_updating_clause(clause, context, metadata)
@@ -654,6 +660,125 @@ def translate_match_clause(match_clause, context, metadata):
             translate_relationship_pattern(rel, pattern.nodes[i], pattern.nodes[i+1], context, metadata, optional=match_clause.optional)
             translate_node_pattern(pattern.nodes[i+1], context, metadata, optional=match_clause.optional)
 
+    for np in match_clause.named_paths:
+        context.named_paths[np.variable] = np
+        node_aliases = [
+            context.variable_aliases.get(n.variable, f"n{i}")
+            for i, n in enumerate(np.pattern.nodes)
+        ]
+        edge_aliases = [
+            context.variable_aliases.get(r.variable, f"e{i}")
+            for i, r in enumerate(np.pattern.relationships)
+        ]
+        context.path_node_aliases[np.variable] = node_aliases
+        context.path_edge_aliases[np.variable] = edge_aliases
+
+
+def translate_subquery_call(subquery: ast.SubqueryCall, context: TranslationContext, metadata):
+    inner = subquery.inner_query
+    is_correlated = len(subquery.import_variables) > 0
+
+    if is_correlated:
+        if not inner.return_clause or len(inner.return_clause.items) != 1:
+            raise ValueError("Correlated subquery Phase 1 requires exactly one RETURN column (scalar)")
+
+        ret_item = inner.return_clause.items[0]
+        alias = ret_item.alias or "sub_result"
+
+        child_ctx = TranslationContext()
+        child_ctx.input_params = context.input_params
+        child_ctx._alias_counter = context._alias_counter
+
+        for var in subquery.import_variables:
+            if var not in context.variable_aliases:
+                raise ValueError(f"Imported variable '{var}' is not defined in outer scope")
+            child_ctx.variable_aliases[var] = context.variable_aliases[var]
+
+        for part in inner.query_parts:
+            for clause in part.clauses:
+                if isinstance(clause, ast.MatchClause):
+                    translate_match_clause(clause, child_ctx, metadata)
+                elif isinstance(clause, ast.WhereClause):
+                    translate_where_clause(clause, child_ctx)
+
+        inner_expr = translate_expression(ret_item.expression, child_ctx, segment="select")
+
+        inner_sql_parts = [f"SELECT {inner_expr}"]
+        if child_ctx.from_clauses:
+            inner_sql_parts.append(f"FROM {', '.join(child_ctx.from_clauses)}")
+            if child_ctx.join_clauses:
+                inner_sql_parts.extend(child_ctx.join_clauses)
+        elif child_ctx.join_clauses:
+            first_join = child_ctx.join_clauses[0].replace("JOIN ", "", 1).replace("CROSS JOIN ", "", 1)
+            on_idx = first_join.find(" ON ")
+            if on_idx > 0:
+                from_part = first_join[:on_idx]
+                on_part = first_join[on_idx + 4:]
+                inner_sql_parts.append(f"FROM {from_part}")
+                if child_ctx.join_clauses[1:]:
+                    inner_sql_parts.extend(child_ctx.join_clauses[1:])
+                if child_ctx.where_conditions:
+                    child_ctx.where_conditions.insert(0, on_part)
+                else:
+                    child_ctx.where_conditions.append(on_part)
+            else:
+                inner_sql_parts.append(f"FROM {first_join}")
+                if child_ctx.join_clauses[1:]:
+                    inner_sql_parts.extend(child_ctx.join_clauses[1:])
+        if child_ctx.where_conditions:
+            inner_sql_parts.append(f"WHERE {' AND '.join(child_ctx.where_conditions)}")
+
+        scalar_sql = "\n".join(inner_sql_parts)
+        all_params = child_ctx.select_params + child_ctx.join_params + child_ctx.where_params
+        for p in all_params:
+            context.select_params.append(p)
+
+        context.select_items.append(f"COALESCE(({scalar_sql}), 0) AS {alias}")
+        context.scalar_variables.add(alias)
+        context.variable_aliases[alias] = "scalar"
+    else:
+        child_ctx = TranslationContext()
+        child_ctx.input_params = context.input_params
+
+        for part in inner.query_parts:
+            for clause in part.clauses:
+                if isinstance(clause, ast.MatchClause):
+                    translate_match_clause(clause, child_ctx, metadata)
+                elif isinstance(clause, ast.WhereClause):
+                    translate_where_clause(clause, child_ctx)
+                elif isinstance(clause, ast.UnwindClause):
+                    translate_unwind_clause(clause, child_ctx)
+
+        if inner.return_clause:
+            translate_return_clause(inner.return_clause, child_ctx)
+
+        inner_sql, inner_params = child_ctx.build_stage_sql(
+            inner.return_clause.distinct if inner.return_clause else False
+        )
+
+        cte_name = f"SubQuery{len(context.stages)}"
+        context.all_stage_params.extend(inner_params)
+        context.stages.append(f"{cte_name} AS (\n{inner_sql}\n)")
+
+        if not context.from_clauses:
+            context.from_clauses.append(cte_name)
+        else:
+            context.join_clauses.append(f"CROSS JOIN {cte_name}")
+
+        if inner.return_clause:
+            for item in inner.return_clause.items:
+                alias = item.alias
+                if alias is None:
+                    if isinstance(item.expression, ast.Variable):
+                        alias = item.expression.name
+                    elif isinstance(item.expression, ast.PropertyReference):
+                        alias = f"{item.expression.variable}_{item.expression.property_name}"
+                    elif isinstance(item.expression, (ast.AggregationFunction, ast.FunctionCall)):
+                        alias = f"{item.expression.function_name}_res"
+                if alias:
+                    context.variable_aliases[alias] = cte_name
+                    context.scalar_variables.add(alias)
+
 
 def translate_node_pattern(node, context, metadata, optional=False):
     if node.variable and node.variable in context.variable_aliases:
@@ -783,8 +908,10 @@ def translate_expression(expr, context, segment="select") -> str:
             raise ValueError(f"Undefined: {expr.name}")
         if alias.startswith('Stage'): return f"{alias}.{expr.name}"
         if alias.startswith('e'): return f"{alias}.p"
-        # Scalar variables from CALL YIELD (e.g. 'score') are referenced by column name directly
-        if expr.name in context.scalar_variables: return f"{alias}.{expr.name}"
+        if expr.name in context.scalar_variables:
+            if alias == "scalar":
+                return expr.name
+            return f"{alias}.{expr.name}"
         return f"{alias}.node_id"
     if isinstance(expr, ast.Literal):
         v = expr.value
@@ -801,6 +928,23 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
     if isinstance(expr, ast.FunctionCall):
         fn = expr.function_name.lower()
+
+        if fn in ("length", "nodes", "relationships") and len(expr.arguments) == 1:
+            arg = expr.arguments[0]
+            if isinstance(arg, ast.Variable) and arg.name in context.named_paths:
+                path_var = arg.name
+                if fn == "length":
+                    return str(len(context.named_paths[path_var].pattern.relationships))
+                elif fn == "nodes":
+                    aliases = context.path_node_aliases[path_var]
+                    return f"JSON_ARRAY({', '.join(f'{a}.node_id' for a in aliases)})"
+                else:
+                    aliases = context.path_edge_aliases[path_var]
+                    return f"JSON_ARRAY({', '.join(f'{a}.p' for a in aliases)})"
+            elif isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
+                if fn in ("nodes", "relationships"):
+                    raise ValueError(f"'{arg.name}' is not a named path variable")
+
         if fn in ("shortestpath", "allshortestpaths"):
             from .algorithms.paths import generate_shortest_path_sql
             args = [translate_expression(arg, context, segment=segment) for arg in expr.arguments]
@@ -851,9 +995,19 @@ def translate_return_clause(ret, context):
     for item in ret.items:
         if isinstance(item.expression, ast.Variable):
             var_name = item.expression.name
+            if var_name in context.named_paths:
+                alias = item.alias or var_name
+                node_aliases = context.path_node_aliases[var_name]
+                edge_aliases = context.path_edge_aliases[var_name]
+                nodes_arr = ", ".join(f"{a}.node_id" for a in node_aliases)
+                rels_arr = ", ".join(f"{a}.p" for a in edge_aliases)
+                json_expr = f"JSON_OBJECT('nodes': JSON_ARRAY({nodes_arr}), 'rels': JSON_ARRAY({rels_arr}))"
+                context.select_items.append(f"{json_expr} AS {alias}")
+                continue
             alias_name = context.variable_aliases.get(var_name)
-            # Skip node expansion for scalar variables (e.g. 'score' from CALL YIELD)
             is_scalar = var_name in context.scalar_variables
+            if alias_name == "scalar":
+                continue
             if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
                 # VecSearch CTE columns are named by their alias (e.g. 'node'), not 'node_id'

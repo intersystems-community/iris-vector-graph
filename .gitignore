@@ -103,8 +103,11 @@ docs/dc_contest_raw.md
 .mcp.json
 
 # Agent-specific config (not project docs)
+CLAUDE.md
 CODEX.md
 TABNINE.md
+DOCS_IRIS_PYTHON_ISSUES.md
+docker-compose.test.yml
 
 # Build artifacts
 dist/

@@ -38,6 +38,8 @@ class TokenType(enum.Enum):
     DETACH = "DETACH"
     CALL = "CALL"
     YIELD = "YIELD"
+    TRANSACTIONS = "TRANSACTIONS"
+    ROWS = "ROWS"
 
     # Literals and Identifiers
     IDENTIFIER = "IDENTIFIER"
@@ -288,6 +290,12 @@ class Lexer:
     def peek(self) -> Token:
         if self.token_index < len(self.tokens):
             return self.tokens[self.token_index]
+        return self.tokens[-1]
+
+    def peek_ahead(self, offset: int) -> Token:
+        idx = self.token_index + offset
+        if idx < len(self.tokens):
+            return self.tokens[idx]
         return self.tokens[-1]
 
     def eat(self) -> Token:

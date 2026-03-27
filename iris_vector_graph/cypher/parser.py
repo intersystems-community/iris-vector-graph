@@ -105,43 +105,45 @@ class Parser:
         """Entry point for parsing a complete query"""
         query_parts = []
 
-        # CALL clause — must appear before any MATCH
+        # CALL clause — procedure or subquery
         if self.peek().kind == TokenType.CALL:
-            proc = self.parse_procedure_call()
+            if self.lexer.peek_ahead(1).kind == TokenType.LBRACE:
+                pass  # fall through to normal query_part parsing below
+            else:
+                proc = self.parse_procedure_call()
 
-            # Optional subsequent MATCH/WITH stages
-            while self.peek().kind in (TokenType.MATCH, TokenType.WITH) or (
-                self.peek().kind == TokenType.IDENTIFIER
-                and self.peek().value
-                and self.peek().value.upper() == "OPTIONAL"
-            ):
-                if self.peek().kind == TokenType.WITH:
-                    with_clause = self.parse_with_clause()
-                    part = self.parse_query_part()
-                    if query_parts:
-                        query_parts[-1].with_clause = with_clause
-                    query_parts.append(part)
-                else:
-                    query_parts.append(self.parse_query_part())
+                while self.peek().kind in (TokenType.MATCH, TokenType.WITH) or (
+                    self.peek().kind == TokenType.IDENTIFIER
+                    and self.peek().value
+                    and self.peek().value.upper() == "OPTIONAL"
+                ):
+                    if self.peek().kind == TokenType.WITH:
+                        with_clause = self.parse_with_clause()
+                        part = self.parse_query_part()
+                        if query_parts:
+                            query_parts[-1].with_clause = with_clause
+                        query_parts.append(part)
+                    else:
+                        query_parts.append(self.parse_query_part())
 
-            return_clause = None
-            if self.peek().kind == TokenType.RETURN:
-                return_clause = self.parse_return_clause()
+                return_clause = None
+                if self.peek().kind == TokenType.RETURN:
+                    return_clause = self.parse_return_clause()
 
-            order_by = self.parse_order_by_clause()
-            skip = self.parse_skip()
-            limit = self.parse_limit()
+                order_by = self.parse_order_by_clause()
+                skip = self.parse_skip()
+                limit = self.parse_limit()
 
-            self.expect(TokenType.EOF)
+                self.expect(TokenType.EOF)
 
-            return ast.CypherQuery(
-                query_parts=query_parts,
-                return_clause=return_clause,
-                order_by_clause=order_by,
-                skip=skip,
-                limit=limit,
-                procedure_call=proc,
-            )
+                return ast.CypherQuery(
+                    query_parts=query_parts,
+                    return_clause=return_clause,
+                    order_by_clause=order_by,
+                    skip=skip,
+                    limit=limit,
+                    procedure_call=proc,
+                )
 
         # Parse first QueryPart (MATCH ...)
         query_parts.append(self.parse_query_part())
@@ -217,29 +219,38 @@ class Parser:
                 clauses.append(self.parse_updating_clause())
             elif kind == TokenType.WHERE:
                 clauses.append(self.parse_where_clause())
+            elif kind == TokenType.CALL and self.lexer.peek_ahead(1).kind == TokenType.LBRACE:
+                clauses.append(self.parse_subquery_call())
             else:
                 break
             
         return ast.QueryPart(clauses=clauses)
 
     def parse_match_clause(self, optional: bool = False) -> ast.MatchClause:
-        """Parse [OPTIONAL] MATCH (n:Label)-[r:TYPE]->(m), (x:Other)"""
-        # Note: MATCH already eaten by caller if OPTIONAL
+        """Parse [OPTIONAL] MATCH p = (n:Label)-[r:TYPE]->(m), (x:Other)"""
         if not optional:
             self.expect(TokenType.MATCH)
         
-        # Cypher allows multiple comma-separated patterns in a single MATCH
-        # For MVP, we'll return the first one or we need to update AST
-        # Actually, let's update AST to support multiple patterns in MatchClause
         patterns = []
+        named_paths = []
         while True:
-            patterns.append(self.parse_graph_pattern())
+            # 2-token lookahead: IDENTIFIER EQUALS before LPAREN means named path
+            path_var = None
+            if (self.peek().kind == TokenType.IDENTIFIER
+                    and self.lexer.peek_ahead(1).kind == TokenType.EQUALS):
+                path_var = self.eat().value
+                self.eat()
+
+            pattern = self.parse_graph_pattern()
+            patterns.append(pattern)
+
+            if path_var:
+                named_paths.append(ast.NamedPath(variable=path_var, pattern=pattern))
+
             if not self.matches(TokenType.COMMA):
                 break
         
-        # Simplified for now: use first pattern if only one expected by downstream?
-        # No, let's fix ast.py MatchClause
-        return ast.MatchClause(patterns=patterns, optional=optional)
+        return ast.MatchClause(patterns=patterns, named_paths=named_paths, optional=optional)
 
     def parse_unwind_clause(self) -> ast.UnwindClause:
         """Parse UNWIND [1,2,3] AS x"""
@@ -251,6 +262,67 @@ class Parser:
         if alias is None:
             raise CypherParseError("Expected alias for UNWIND", line=alias_tok.line, column=alias_tok.column)
         return ast.UnwindClause(expression=expr, alias=alias)
+
+    def parse_subquery_call(self) -> ast.SubqueryCall:
+        self.expect(TokenType.CALL)
+        self.expect(TokenType.LBRACE)
+
+        import_variables: list = []
+        if self.peek().kind == TokenType.WITH:
+            self.eat()
+            while True:
+                var_tok = self.expect(TokenType.IDENTIFIER)
+                if var_tok.value:
+                    import_variables.append(var_tok.value)
+                if not self.matches(TokenType.COMMA):
+                    break
+
+        inner_parts = [self.parse_query_part()]
+
+        while self.peek().kind == TokenType.WITH and self.peek().kind != TokenType.RBRACE:
+            with_clause = self.parse_with_clause()
+            part = self.parse_query_part()
+            inner_parts[-1].with_clause = with_clause
+            inner_parts.append(part)
+
+        inner_return = None
+        if self.peek().kind == TokenType.RETURN:
+            inner_return = self.parse_return_clause()
+
+        if inner_return is None:
+            tok = self.peek()
+            raise CypherParseError(
+                "Subquery must contain a RETURN clause",
+                line=tok.line, column=tok.column,
+            )
+
+        self.expect(TokenType.RBRACE)
+
+        inner_query = ast.CypherQuery(
+            query_parts=inner_parts,
+            return_clause=inner_return,
+        )
+
+        in_transactions = False
+        batch_size = None
+        if self.peek().kind == TokenType.IN:
+            self.eat()
+            if self.peek().kind == TokenType.TRANSACTIONS:
+                self.eat()
+                in_transactions = True
+                if self.peek().kind == TokenType.IDENTIFIER and self.peek().value and self.peek().value.upper() == "OF":
+                    self.eat()
+                    size_tok = self.expect(TokenType.INTEGER_LITERAL)
+                    batch_size = int(size_tok.value) if size_tok.value else None
+                    if self.peek().kind == TokenType.ROWS:
+                        self.eat()
+
+        return ast.SubqueryCall(
+            inner_query=inner_query,
+            import_variables=import_variables,
+            in_transactions=in_transactions,
+            transactions_batch_size=batch_size,
+        )
 
     def parse_updating_clause(self) -> ast.UpdatingClause:
         """Parse CREATE, MERGE, DELETE, SET, REMOVE"""

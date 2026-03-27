@@ -1,3 +1,0 @@
-image: intersystemsdc/iris-community:latest-em
-env:
-  - IRIS_PASSWORD=SYS
