@@ -14,7 +14,10 @@ try:
     import iris
 except ImportError:
     iris = None
-from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
+try:
+    from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
+except ImportError:
+    iris_connect = None
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any, Union, cast
 from collections import deque
@@ -718,7 +721,9 @@ class IRISGraphOperators:
                     damping: float = 0.85, max_iterations: int = 20,
                     bidirectional: bool = False,
                     reverse_weight: float = 1.0) -> List[Tuple[str, float]]:
-        if seed_entities:
+        if seed_entities is not None:
+            if len(seed_entities) == 0:
+                return []
             return self._kg_pagerank_personalized(
                 seed_entities, damping, max_iterations, bidirectional, reverse_weight
             )
@@ -946,6 +951,99 @@ class IRISGraphOperators:
             node_labels=node_labels,
             node_embeddings=embs,
             seed_ids=list(seed_ids),
+        )
+
+    def kg_PPR_GUIDED_SUBGRAPH(
+        self,
+        seed_ids: List[str],
+        alpha: float = 0.15,
+        eps: float = 1e-5,
+        top_k: int = 50,
+        max_hops: int = 5,
+        edge_types: Optional[List[str]] = None,
+    ) -> 'PprGuidedSubgraphData':
+        from iris_vector_graph.models import PprGuidedSubgraphData
+
+        if not seed_ids:
+            return PprGuidedSubgraphData(seed_ids=[])
+
+        # Fast path: server-side ObjectScript
+        try:
+            seed_json = json.dumps(seed_ids)
+            et_json = json.dumps(edge_types) if edge_types else ""
+            result_json = _call_classmethod(
+                self.conn, 'Graph.KG.Subgraph', 'PPRGuidedJson',
+                seed_json, alpha, eps, top_k, max_hops, et_json
+            )
+            if result_json:
+                parsed = json.loads(result_json)
+                ppr_scores = [
+                    (item['id'], float(item['score']))
+                    for item in parsed.get('ppr_scores', [])
+                ]
+                edges = [
+                    {"src": e["src"], "dst": e["dst"], "type": e["type"]}
+                    for e in parsed.get('edges', [])
+                ]
+                return PprGuidedSubgraphData(
+                    nodes=parsed.get('nodes', []),
+                    edges=edges,
+                    ppr_scores=ppr_scores,
+                    seed_ids=list(seed_ids),
+                    nodes_before_pruning=parsed.get('nodes_before_pruning', 0),
+                    nodes_after_pruning=parsed.get('nodes_after_pruning', 0),
+                )
+        except Exception as e:
+            logger.debug(f"PPRGuidedJson fast path failed, using Python fallback: {e}")
+
+        return self._kg_ppr_guided_subgraph_python(
+            seed_ids, alpha, eps, top_k, max_hops, edge_types
+        )
+
+    def _kg_ppr_guided_subgraph_python(
+        self,
+        seed_ids: List[str],
+        alpha: float,
+        eps: float,
+        top_k: int,
+        max_hops: int,
+        edge_types: Optional[List[str]],
+    ) -> 'PprGuidedSubgraphData':
+        from iris_vector_graph.models import PprGuidedSubgraphData
+
+        # alpha = teleport probability; kg_PAGERANK takes damping = 1 - alpha
+        ppr = self.kg_PAGERANK(
+            seed_entities=seed_ids,
+            damping=1.0 - alpha,
+            max_iterations=50,
+        )
+        if not ppr:
+            return PprGuidedSubgraphData(seed_ids=list(seed_ids))
+
+        max_score = ppr[0][1]
+        threshold = eps * max_score
+        pruned = [(n, s) for n, s in ppr if s >= threshold][:top_k]
+        pruned_ids = [n for n, _ in pruned]
+
+        subgraph = self.kg_SUBGRAPH(
+            seed_ids=pruned_ids,
+            k_hops=max_hops,
+            edge_types=edge_types,
+            max_nodes=top_k * 2,
+        )
+
+        edges = [
+            {"src": s, "dst": d, "type": t}
+            for s, t, d in subgraph.edges
+        ]
+
+        return PprGuidedSubgraphData(
+            nodes=subgraph.nodes,
+            edges=edges,
+            ppr_scores=pruned,
+            seed_ids=list(seed_ids),
+            nodes_before_pruning=len(ppr),
+            nodes_after_pruning=len(pruned),
         )
 
     def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,

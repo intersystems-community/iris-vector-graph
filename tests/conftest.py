@@ -8,7 +8,7 @@ import subprocess
 import time
 
 import pytest
-from iris._elsdk_ import connect as iris_connect
+from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
 
 logger = logging.getLogger(__name__)
 

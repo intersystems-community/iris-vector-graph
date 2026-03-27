@@ -161,10 +161,14 @@ def serialize_value(val: Any) -> Any:
 def map_node_data(node_data: Dict[str, Any], info) -> Any:
     """Maps raw IRIS node data to a Strawberry dynamic type instance."""
     labels = node_data.get("labels", [])
-    properties = node_data.get("properties", {})
     node_id = node_data.get("id")
     primary_label = labels[0] if labels else "Node"
     dynamic_class = DYNAMIC_TYPES.get(primary_label)
+
+    properties = node_data.get("properties")
+    if properties is None:
+        properties = {k: v for k, v in node_data.items() if k not in ("id", "labels")}
+
     mapped_props = {}
     for k, v in properties.items():
         field_name = k

@@ -98,6 +98,12 @@ class GraphPattern:
             )
 
 
+@dataclass(slots=True)
+class NamedPath:
+    variable: str
+    pattern: GraphPattern
+
+
 # ==============================================================================
 # Expressions and Clauses
 # ==============================================================================
@@ -154,6 +160,7 @@ class WhereClause:
 class MatchClause:
     """MATCH clause with one or more patterns"""
     patterns: List[GraphPattern]
+    named_paths: List[NamedPath] = field(default_factory=list)
     optional: bool = False
 
 
@@ -233,9 +240,16 @@ class UnwindClause:
     alias: str
 
 @dataclass(slots=True)
+class SubqueryCall:
+    inner_query: 'CypherQuery'
+    import_variables: List[str] = field(default_factory=list)
+    in_transactions: bool = False
+    transactions_batch_size: Optional[int] = None
+
+@dataclass(slots=True)
 class QueryPart:
     """A stage in a multi-stage query (sequence of clauses)"""
-    clauses: List[Union[MatchClause, UnwindClause, UpdatingClause, WhereClause]] = field(default_factory=list)
+    clauses: List[Union[MatchClause, UnwindClause, UpdatingClause, WhereClause, 'SubqueryCall']] = field(default_factory=list)
     with_clause: Optional[WithClause] = None
 
 
