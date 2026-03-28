@@ -39,7 +39,7 @@ ClassMethod InternNode(id As %String) As %Integer
 
 ClassMethod InternLabel(label As %String) As %Integer
 {
-	Do ..InitStructuralLabels()
+	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	Lock +^NKG("$LI", label):0
 	If '$Test {
 		Lock +^NKG("$LI", label):5
@@ -67,9 +67,9 @@ ClassMethod InsertIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary
 	Set tmp = $Increment(^KG("deg", s))
 	Set tmp = $Increment(^KG("degp", s, p))
 
-	Set sIdx = ..InternNode(s)
-	Set oIdx = ..InternNode(o)
-	Set pIdx = ..InternLabel(p)
+	Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
+	Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(o)
+	Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(p)
 	Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight
 	Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
 	Set tmp = $Increment(^NKG(-3, sIdx))

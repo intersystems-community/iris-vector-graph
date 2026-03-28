@@ -96,9 +96,11 @@ ClassMethod BuildNKG() As %Status
 				Set dst = $Order(^KG("out", src, pred, dst), 1, weight)
 				Quit:dst=""
 				Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(dst)
-				Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight
-				Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
-				Set edgeCount = edgeCount + 1
+				If '$Data(^NKG(-1, sIdx, -(pIdx+1), oIdx)) {
+					Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight
+					Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
+					Set edgeCount = edgeCount + 1
+				}
 			}
 		}
 		Set ^NKG(-3, sIdx) = $Get(^KG("deg", src))
