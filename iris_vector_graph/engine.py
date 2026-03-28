@@ -871,6 +871,27 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
+    def get_kg_anchors(self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh") -> List[str]:
+        if not icd_codes:
+            return []
+        cursor = self.conn.cursor()
+        try:
+            placeholders = ", ".join(["?"] * len(icd_codes))
+            sql = (
+                f"SELECT DISTINCT b.kg_node_id "
+                f"FROM {_table('fhir_bridges')} b "
+                f"JOIN {_table('nodes')} n ON n.node_id = b.kg_node_id "
+                f"WHERE b.fhir_code IN ({placeholders}) "
+                f"AND b.bridge_type = ?"
+            )
+            cursor.execute(sql, icd_codes + [bridge_type])
+            return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.warning(f"get_kg_anchors failed: {e}")
+            return []
+        finally:
+            cursor.close()
+
     def delete_embedding(self, node_id: str) -> bool:
         """
         Delete embedding for a node.
