@@ -437,8 +437,10 @@ class IRISGraphEngine:
                 f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
                 node_ids
             )
+            _STRUCTURAL_KEYS = ("id", "labels")
             for s, key, val in cursor.fetchall():
                 if s in node_map:
+                    store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
                     if val is not None:
                         parsed_val = val
                         try:
@@ -446,9 +448,9 @@ class IRISGraphEngine:
                                 parsed_val = json.loads(val)
                         except:
                             pass
-                        node_map[s][key] = parsed_val
+                        node_map[s][store_key] = parsed_val
                     else:
-                        node_map[s][key] = val
+                        node_map[s][store_key] = val
 
             # 4. Filter out nodes that don't exist (if they had no labels and no props)
             # We verify existence via the nodes table for any remaining empty ones

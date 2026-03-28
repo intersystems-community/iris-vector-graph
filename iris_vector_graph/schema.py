@@ -467,11 +467,11 @@ LANGUAGE SQL
 BEGIN
   WITH V AS (
     SELECT ROW_NUMBER() OVER (ORDER BY score DESC) AS r, id, score AS vs
-    FROM TABLE({table_schema}.kg_KNN_VEC(:queryVector, :k1, NULL, NULL))
+    FROM {table_schema}.kg_KNN_VEC(:queryVector, :k1, NULL, NULL)
   ),
   K AS (
     SELECT ROW_NUMBER() OVER (ORDER BY bm25 DESC) AS r, id, bm25
-    FROM TABLE({table_schema}.kg_TXT(:qtext, :k2))
+    FROM {table_schema}.kg_TXT(:qtext, :k2)
   ),
   F AS (
     SELECT COALESCE(V.id, K.id) AS id,

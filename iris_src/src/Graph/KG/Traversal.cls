@@ -65,11 +65,47 @@ ClassMethod BuildKG() As %Status
 		&sql(CLOSE c3)
 		
 		TCommit
+		
+		Do ..BuildNKG()
+		
 		Return $$$OK
 	} Catch ex {
 		TRollback
 		Return ex.AsStatus()
 	}
+}
+
+ClassMethod BuildNKG() As %Status
+{
+	Kill ^NKG
+	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
+	
+	Set edgeCount = 0
+	Set src = ""
+	For {
+		Set src = $Order(^KG("out", src))
+		Quit:src=""
+		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(src)
+		Set pred = ""
+		For {
+			Set pred = $Order(^KG("out", src, pred))
+			Quit:pred=""
+			Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(pred)
+			Set dst = ""
+			For {
+				Set dst = $Order(^KG("out", src, pred, dst), 1, weight)
+				Quit:dst=""
+				Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(dst)
+				Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight
+				Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
+				Set edgeCount = edgeCount + 1
+			}
+		}
+		Set ^NKG(-3, sIdx) = $Get(^KG("deg", src))
+	}
+	Set ^NKG("$meta", "edgeCount") = edgeCount
+	Set tmp = $Increment(^NKG("$meta", "version"))
+	Return $$$OK
 }
 
 /// Helper for single predicate traversal
