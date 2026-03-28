@@ -59,10 +59,10 @@ class IRISGraphEngine:
         self.embedder = embedder
         self.embedding_config = embedding_config
         set_schema_prefix("Graph_KG")
-        # Per-instance cache for IRIS EMBEDDING() function availability (Mode 2 vector search)
         self._embedding_function_available: Optional[bool] = None
-        # Runtime capability flags — set by initialize_schema()
         self.capabilities: IRISCapabilities = IRISCapabilities()
+        self._arno_available: Optional[bool] = None
+        self._arno_capabilities: Dict[str, Any] = {}
 
     def embed_text(self, text: str) -> List[float]:
         """
@@ -1389,3 +1389,70 @@ class IRISGraphEngine:
             raise
         finally:
             cursor.close()
+
+    # --- Arno acceleration (optional) ---
+
+    def _detect_arno(self) -> bool:
+        if self._arno_available is not None:
+            return self._arno_available
+        try:
+            import intersystems_iris as _iris_pkg
+            iris_obj = _iris_pkg.createIRIS(self.conn)
+            cap_json = iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Capabilities")
+            self._arno_capabilities = json.loads(str(cap_json))
+            self._arno_available = True
+        except Exception:
+            self._arno_available = False
+            self._arno_capabilities = {}
+        return self._arno_available
+
+    def _arno_call(self, cls: str, method: str, *args) -> str:
+        import intersystems_iris as _iris_pkg
+        iris_obj = _iris_pkg.createIRIS(self.conn)
+        return str(iris_obj.classMethodValue(cls, method, *args))
+
+    def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
+        if self._detect_arno() and "khop" in self._arno_capabilities.get("algorithms", []):
+            result = self._arno_call("Graph.KG.NKGAccel", "KHopNeighbors", seed, str(hops), str(max_nodes))
+            parsed = json.loads(result)
+            if "error" not in parsed:
+                return parsed
+            logger.warning(f"Arno khop error: {parsed['error']}")
+        return self._khop_fallback(seed, hops, max_nodes)
+
+    def _khop_fallback(self, seed: str, hops: int, max_nodes: int) -> dict:
+        if self.capabilities.objectscript_deployed:
+            try:
+                import intersystems_iris as _iris_pkg
+                iris_obj = _iris_pkg.createIRIS(self.conn)
+                result = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "")
+                if result:
+                    edges = json.loads(str(result))
+                    nodes = set()
+                    for e in edges:
+                        nodes.add(e["s"])
+                        nodes.add(e["o"])
+                    return {"nodes": list(nodes)[:max_nodes], "edges": edges}
+            except Exception as e:
+                logger.debug(f"BFSFastJson fallback failed: {e}")
+        return {"nodes": [], "edges": []}
+
+    def ppr(self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20) -> dict:
+        if self._detect_arno() and "ppr" in self._arno_capabilities.get("algorithms", []):
+            result = self._arno_call("Graph.KG.NKGAccel", "PPRNative", seed, str(alpha), str(max_iter), str(top_k))
+            parsed = json.loads(result)
+            if "error" not in parsed:
+                return parsed
+            logger.warning(f"Arno ppr error: {parsed['error']}")
+        scores = self.kg_PERSONALIZED_PAGERANK([seed], damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k)
+        return {"scores": [{"id": k, "score": v} for k, v in sorted(scores.items(), key=lambda x: -x[1])]}
+
+    def random_walk(self, seed: str, length: int = 20, num_walks: int = 10) -> list:
+        if self._detect_arno() and "random_walk" in self._arno_capabilities.get("algorithms", []):
+            result = self._arno_call("Graph.KG.NKGAccel", "RandomWalkJson", seed, str(length), str(num_walks))
+            parsed = json.loads(result)
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, dict) and "error" in parsed:
+                logger.warning(f"Arno random_walk error: {parsed['error']}")
+        return []
