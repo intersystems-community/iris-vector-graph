@@ -1398,7 +1398,7 @@ class IRISGraphEngine:
         try:
             import intersystems_iris as _iris_pkg
             iris_obj = _iris_pkg.createIRIS(self.conn)
-            cap_json = iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Capabilities")
+            cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True
         except Exception:
