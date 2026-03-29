@@ -30,10 +30,6 @@ class IRISGraphEngine:
     - Reciprocal Rank Fusion for hybrid ranking
     """
 
-    # Class-level cache for backward compat (deprecated — use capabilities instead)
-    _ppr_sql_function_available = None
-    _PPR_SQL_FUNCTION_NAME = "kg_PPR"
-
     def __init__(
         self, 
         connection, 
@@ -920,12 +916,6 @@ class IRISGraphEngine:
             return 50
         return min(max(1, k), 1000)
 
-    @classmethod
-    def reset_sql_function_cache(cls):
-        """Reset the SQL function availability cache (useful for testing)."""
-        cls._ppr_sql_function_available = None
-
-    # Vector Search Operations
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
         K-Nearest Neighbors vector search using server-side SQL procedure.
