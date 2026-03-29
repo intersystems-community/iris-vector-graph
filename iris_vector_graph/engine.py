@@ -1541,12 +1541,19 @@ class IRISGraphEngine:
         centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
         iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json)
 
-        for doc in docs:
-            tokens_json = json.dumps([[float(v) for v in tok] for tok in doc["tokens"]])
-            iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreDocTokens", name, doc["id"], tokens_json)
+        BATCH_SIZE = 50
+        for i in range(0, len(docs), BATCH_SIZE):
+            batch = docs[i : i + BATCH_SIZE]
+            batch_json = json.dumps([
+                {"id": doc["id"], "tokens": [[float(v) for v in tok] for tok in doc["tokens"]]}
+                for doc in batch
+            ])
+            iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreDocTokensBatch", name, batch_json)
 
-        assignments_json = json.dumps(doc_token_map)
-        iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, assignments_json)
+        ASSIGN_CHUNK = 5000
+        for i in range(0, len(doc_token_map), ASSIGN_CHUNK):
+            chunk_json = json.dumps(doc_token_map[i : i + ASSIGN_CHUNK])
+            iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, chunk_json)
 
         return json.loads(str(iris_obj.classMethodValue("Graph.KG.PLAIDSearch", "Info", name)))
 
