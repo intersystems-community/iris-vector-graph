@@ -1460,9 +1460,6 @@ class IRISGraphEngine:
         import intersystems_iris as _iris_pkg
         return _iris_pkg.createIRIS(self.conn)
 
-    def _run_cos(self, code: str):
-        self._iris_obj().classMethodVoid("User.Exec", "Run", code)
-
     def vec_create_index(self, name: str, dim: int, metric: str = "cosine",
                          num_trees: int = 4, leaf_size: int = 50) -> dict:
         result = self._iris_obj().classMethodValue(
@@ -1471,18 +1468,16 @@ class IRISGraphEngine:
         return json.loads(str(result))
 
     def vec_insert(self, index_name: str, doc_id: str, embedding) -> None:
-        iris_obj = self._iris_obj()
-        for i, val in enumerate(embedding):
-            iris_obj.set(str(float(val)), "^tmpvec", str(i))
-        dim = len(embedding)
-        self._run_cos(
-            'set v="" for i=0:1:' + str(dim - 1) +
-            ' set $vector(v,i+1,"double")=+$get(^tmpvec(i)) kill ^tmpvec(i)'
-            ' do ##class(Graph.KG.VecIndex).Insert("' + index_name + '","' + doc_id + '",v)')
+        vec_json = json.dumps([float(v) for v in embedding])
+        self._iris_obj().classMethodVoid(
+            "Graph.KG.VecIndex", "InsertJSON", index_name, doc_id, vec_json)
 
     def vec_bulk_insert(self, index_name: str, items: list) -> int:
+        iris_obj = self._iris_obj()
         for item in items:
-            self.vec_insert(index_name, item["id"], item["embedding"])
+            vec_json = json.dumps([float(v) for v in item["embedding"]])
+            iris_obj.classMethodVoid(
+                "Graph.KG.VecIndex", "InsertJSON", index_name, item["id"], vec_json)
         return len(items)
 
     def vec_build(self, index_name: str) -> dict:
@@ -1490,17 +1485,10 @@ class IRISGraphEngine:
         return json.loads(str(result))
 
     def vec_search(self, index_name: str, query_embedding, k: int = 10, nprobe: int = 2) -> list:
-        iris_obj = self._iris_obj()
-        iris_obj.kill("^arnoVecResult")
-        for i, val in enumerate(query_embedding):
-            iris_obj.set(str(float(val)), "^tmpvec", str(i))
-        dim = len(query_embedding)
-        self._run_cos(
-            'set v="" for i=0:1:' + str(dim - 1) +
-            ' set $vector(v,i+1,"double")=+$get(^tmpvec(i)) kill ^tmpvec(i)'
-            ' set ^arnoVecResult=##class(Graph.KG.VecIndex).Search("' +
-            index_name + '",v,' + str(k) + ',' + str(nprobe) + ')')
-        return json.loads(str(iris_obj.get("^arnoVecResult")))
+        vec_json = json.dumps([float(v) for v in query_embedding])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe)
+        return json.loads(str(result))
 
     def vec_info(self, index_name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.VecIndex", "Info", index_name)
