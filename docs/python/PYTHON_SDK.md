@@ -234,6 +234,47 @@ engine.initialize_schema()
 ops = IRISGraphOperators(conn)
 ```
 
+### VecIndex — Lightweight ANN (RP-tree)
+
+VecIndex provides approximate nearest neighbor search using random projection trees. Pure ObjectScript + `$vectorop` SIMD. Works on all IRIS license tiers (2024.1+). Supports cosine, L2, L1, dot, chebyshev, and mahalanobis metrics.
+
+```python
+# Create an index
+engine.vec_create_index("drugs", 384, "cosine")
+
+# Insert embeddings
+engine.vec_insert("drugs", "metformin", embedding_vector)
+engine.vec_insert("drugs", "aspirin", another_vector)
+
+# Bulk insert
+items = [{"id": "ibuprofen", "embedding": vec1}, {"id": "warfarin", "embedding": vec2}]
+engine.vec_bulk_insert("drugs", items)
+
+# Build the RP-tree index (required after inserts, before search)
+engine.vec_build("drugs")
+
+# Search
+results = engine.vec_search("drugs", query_vector, k=5)
+# Returns: [{"id": "metformin", "score": 0.95}, ...]
+
+# Inspect index
+info = engine.vec_info("drugs")
+# Returns: {"name": "drugs", "dim": 384, "metric": "cosine", "count": 4, ...}
+
+# Drop index
+engine.vec_drop("drugs")
+```
+
+| Method | Description |
+|--------|-------------|
+| `vec_create_index(name, dim, metric)` | Create a new vector index |
+| `vec_insert(name, doc_id, embedding)` | Insert a single embedding |
+| `vec_bulk_insert(name, items)` | Insert multiple `[{"id", "embedding"}]` |
+| `vec_build(name)` | Build the RP-tree (required before search) |
+| `vec_search(name, query, k, nprobe)` | ANN search, returns ranked results |
+| `vec_info(name)` | Index metadata (count, dim, metric, trees) |
+| `vec_drop(name)` | Delete index and all data |
+
 ### Vector Search (HNSW)
 ```python
 import json, numpy as np
