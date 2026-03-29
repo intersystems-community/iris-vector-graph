@@ -8,7 +8,6 @@ that can be used across any domain.
 """
 
 import json
-import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 import logging
@@ -977,7 +976,7 @@ class IRISGraphEngine:
         """
         cursor = self.conn.cursor()
         try:
-            # Parse query vector from JSON string
+            import numpy as np
             query_array = np.array(json.loads(query_vector))
 
             # Get embeddings with optional label filter (optimized query)
