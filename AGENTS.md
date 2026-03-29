@@ -18,6 +18,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 - InterSystems IRIS — extends `Graph_KG` schema with one new table (`fhir_bridges`) (027-fhir-kg-bridge)
 - ObjectScript (IRIS 2025.1+) + None — pure ObjectScript over globals (028-nkg-integer-index)
 - `^NKG` global (new), `^KG` global (existing, maintained for backward compat) (028-nkg-integer-index)
+- Python 3.11 (build) + ObjectScript (query) + `iris_vector_graph` (engine), `sklearn` (K-means at build time), `numpy` (029-plaid-search)
+- InterSystems IRIS — new `^PLAID` global (independent of `^KG` and `^VecIdx`) (029-plaid-search)
 
 ## Project Structure
 ```text
@@ -37,9 +39,9 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 029-plaid-search: Added Python 3.11 (build) + ObjectScript (query) + `iris_vector_graph` (engine), `sklearn` (K-means at build time), `numpy`
 - 028-nkg-integer-index: Added ObjectScript (IRIS 2025.1+) + None — pure ObjectScript over globals
 - 027-fhir-kg-bridge: Added Python 3.11 + `iris_vector_graph` (engine, operators, schema), `intersystems-irispython`
-- 026-subquery-call: Added Python 3.11 + `iris_vector_graph.cypher` (ast, lexer, parser, translator) — no new deps
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

@@ -1510,3 +1510,60 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k)
         return json.loads(str(result))
+
+    # ── PLAID: multi-vector retrieval (ColBERT-style) ──
+
+    def plaid_build(self, name: str, docs: list, n_clusters: int = None, dim: int = 128) -> dict:
+        try:
+            import numpy as np
+            from sklearn.cluster import KMeans
+        except ImportError:
+            raise ImportError("plaid_build requires numpy and sklearn: pip install numpy scikit-learn")
+
+        all_tokens = []
+        doc_token_map = []
+        for doc in docs:
+            tokens = doc["tokens"]
+            for tok_pos, tok in enumerate(tokens):
+                all_tokens.append(tok)
+                doc_token_map.append({"docId": doc["id"], "tokPos": tok_pos, "centroid": 0})
+
+        all_tokens_np = np.array(all_tokens, dtype=np.float64)
+        K = n_clusters or max(1, int(np.sqrt(len(all_tokens_np))))
+        K = min(K, len(all_tokens_np))
+
+        kmeans = KMeans(n_clusters=K, n_init=1, max_iter=20, random_state=42).fit(all_tokens_np)
+        labels = kmeans.labels_.tolist()
+
+        for i, label in enumerate(labels):
+            doc_token_map[i]["centroid"] = int(label)
+
+        iris_obj = self._iris_obj()
+        centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
+        iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json)
+
+        for doc in docs:
+            tokens_json = json.dumps([[float(v) for v in tok] for tok in doc["tokens"]])
+            iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreDocTokens", name, doc["id"], tokens_json)
+
+        assignments_json = json.dumps(doc_token_map)
+        iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, assignments_json)
+
+        return json.loads(str(iris_obj.classMethodValue("Graph.KG.PLAIDSearch", "Info", name)))
+
+    def plaid_search(self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4) -> list:
+        tokens_json = json.dumps([[float(v) for v in tok] for tok in query_tokens])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.PLAIDSearch", "Search", name, tokens_json, k, nprobe)
+        return json.loads(str(result))
+
+    def plaid_insert(self, name: str, doc_id: str, token_embeddings: list) -> None:
+        tokens_json = json.dumps([[float(v) for v in tok] for tok in token_embeddings])
+        self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Insert", name, doc_id, tokens_json)
+
+    def plaid_info(self, name: str) -> dict:
+        result = self._iris_obj().classMethodValue("Graph.KG.PLAIDSearch", "Info", name)
+        return json.loads(str(result))
+
+    def plaid_drop(self, name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Drop", name)
