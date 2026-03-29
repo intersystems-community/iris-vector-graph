@@ -1541,7 +1541,7 @@ class IRISGraphEngine:
         centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
         iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json)
 
-        BATCH_SIZE = 50
+        BATCH_SIZE = 10
         for i in range(0, len(docs), BATCH_SIZE):
             batch = docs[i : i + BATCH_SIZE]
             batch_json = json.dumps([
