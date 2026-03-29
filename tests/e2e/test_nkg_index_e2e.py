@@ -16,11 +16,8 @@ class TestNkgIndex:
     def setup(self, iris_connection):
         self.conn = iris_connection
         self.cursor = iris_connection.cursor()
-        try:
-            from iris import createIRIS
-        except ImportError:
-            from intersystems_iris import createIRIS
-        self.irispy = createIRIS(iris_connection)
+        import iris
+        self.irispy = iris.createIRIS(iris_connection)
         self._cleanup()
         yield
         self._cleanup()
@@ -150,17 +147,14 @@ class TestNkgIndex:
 
     def test_concurrent_inserts_no_duplicate_indices(self):
         """T027a"""
-        from iris_devtester import IRISContainer
-        from iris_devtester.utils.dbapi_compat import get_connection
-        c = IRISContainer.attach('iris-vector-graph-main')
-        port = c.get_exposed_port(1972)
+        import iris as _iris
 
         errors = []
         indices = {}
 
         def insert_thread(thread_id):
             try:
-                conn = get_connection('localhost', port, 'USER', 'test', 'test')
+                conn = _iris.connect(hostname='localhost', port=1972, namespace='USER', username='test', password='test')
                 cur = conn.cursor()
                 s = f"{PREFIX}:T{thread_id}"
                 o = f"{PREFIX}:T{thread_id}_target"
@@ -172,11 +166,7 @@ class TestNkgIndex:
                 cur.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, 'CONCURRENT', ?)", [s, o])
                 conn.commit()
 
-                try:
-                    from iris import createIRIS
-                except ImportError:
-                    from intersystems_iris import createIRIS
-                ip = createIRIS(conn)
+                ip = _iris.createIRIS(conn)
                 idx = ip.get("^NKG", "$NI", s)
                 indices[s] = idx
                 conn.close()

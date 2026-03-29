@@ -1457,8 +1457,8 @@ class IRISGraphEngine:
     # ── VecIndex: lightweight ANN vector search in globals ──
 
     def _iris_obj(self):
-        import intersystems_iris as _iris_pkg
-        return _iris_pkg.createIRIS(self.conn)
+        import iris
+        return iris.createIRIS(self.conn)
 
     def vec_create_index(self, name: str, dim: int, metric: str = "cosine",
                          num_trees: int = 4, leaf_size: int = 50) -> dict:
