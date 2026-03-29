@@ -151,7 +151,7 @@ ClassMethod Build(name As %String) As %String
     Return "{""trees"":"_numTrees_",""vectors"":"_nIds_",""dim"":"_dim_",""metric"":"""_$Get(^VecIdx(name,"cfg","metric"),"cosine")_"""}"
 }
 
-ClassMethod Search(name As %String, queryVec As %Binary, k As %Integer = 10, nprobe As %Integer = 2) As %String
+ClassMethod Search(name As %String, queryVec As %Binary, k As %Integer = 10, nprobe As %Integer = 8) As %String
 {
     Set numTrees = +$Get(^VecIdx(name, "cfg", "numTrees"), 0)
     If numTrees = 0 Return ..BruteForceSearch(name, queryVec, k)
@@ -174,13 +174,13 @@ ClassMethod JsonToVector(jsonArray As %String) As %Binary
     Return vec
 }
 
-ClassMethod SearchJSON(name As %String, jsonArray As %String, k As %Integer = 10, nprobe As %Integer = 2) As %String
+ClassMethod SearchJSON(name As %String, jsonArray As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String
 {
     Set vec = ..JsonToVector(jsonArray)
     Return ..Search(name, vec, k, nprobe)
 }
 
-ClassMethod SearchMultiJSON(name As %String, queriesJson As %String, k As %Integer = 10, nprobe As %Integer = 2) As %String
+ClassMethod SearchMultiJSON(name As %String, queriesJson As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String
 {
     Set queries = ##class(%DynamicArray).%FromJSON(queriesJson)
     Set n = queries.%Size()
@@ -255,35 +255,44 @@ ClassMethod BuildTree(name As %String, treeId As %Integer, idList As %List, dim 
         }
         Return nodeId
     }
-    Set plane = ..RandomHyperplane(dim)
-    Set ^VecIdx(name, "tree", treeId, nodeId, "plane") = plane
-    Set leftIds = "", rightIds = ""
-    Set ptr = 0
-    While $ListNext(idList, ptr, docId) {
-        Set vec = ^VecIdx(name, "vec", docId)
-        Set proj = $vectorop("sum", $vectorop("v*", vec, plane))
-        If proj >= 0 {
-            Set rightIds = rightIds _ $ListBuild(docId)
-        } Else {
-            Set leftIds = leftIds _ $ListBuild(docId)
+    Set minSide = ($Number(n * 0.1) + 1)
+    Set bestPlane = "", bestLeft = "", bestRight = "", bestBalance = 0
+    For attempt = 1:1:10 {
+        Set plane = ..RandomHyperplane(dim)
+        Set leftIds = "", rightIds = ""
+        Set ptr = 0
+        While $ListNext(idList, ptr, docId) {
+            Set vec = ^VecIdx(name, "vec", docId)
+            Set proj = $vectorop("sum", $vectorop("v*", vec, plane))
+            If proj >= 0 {
+                Set rightIds = rightIds _ $ListBuild(docId)
+            } Else {
+                Set leftIds = leftIds _ $ListBuild(docId)
+            }
+        }
+        Set lLen = $ListLength(leftIds), rLen = $ListLength(rightIds)
+        If (lLen >= minSide) && (rLen >= minSide) {
+            Set balance = $Select(lLen < rLen : lLen, 1 : rLen)
+            If balance > bestBalance {
+                Set bestPlane = plane, bestLeft = leftIds, bestRight = rightIds, bestBalance = balance
+                If lLen >= (n \ 3) && rLen >= (n \ 3) Quit
+            }
         }
     }
-    If $ListLength(leftIds) = 0 Set leftIds = rightIds
-    If $ListLength(rightIds) = 0 Set rightIds = leftIds
-    ; Degenerate split — both sides are identical. Treat this node as a leaf to stop infinite recursion.
-    If $ListLength(leftIds) = n, $ListLength(rightIds) = n {
+    If bestBalance = 0 {
         Set ptr = 0
         While $ListNext(idList, ptr, docId) {
             Set ^VecIdx(name, "tree", treeId, nodeId, "leaf", docId) = ""
         }
         Return nodeId
     }
+    Set ^VecIdx(name, "tree", treeId, nodeId, "plane") = bestPlane
     Set leftNode = nodeId * 2
     Set rightNode = nodeId * 2 + 1
     Set ^VecIdx(name, "tree", treeId, nodeId, "L") = leftNode
     Set ^VecIdx(name, "tree", treeId, nodeId, "R") = rightNode
-    Do ..BuildTree(name, treeId, leftIds, dim, leafSize, leftNode)
-    Do ..BuildTree(name, treeId, rightIds, dim, leafSize, rightNode)
+    Do ..BuildTree(name, treeId, bestLeft, dim, leafSize, leftNode)
+    Do ..BuildTree(name, treeId, bestRight, dim, leafSize, rightNode)
     Return nodeId
 }
 
@@ -422,6 +431,13 @@ ClassMethod Info(name As %String) As %String
     Set trees = +$Get(^VecIdx(name, "cfg", "numTrees"), 0)
     Set leaf = +$Get(^VecIdx(name, "cfg", "leafSize"), 50)
     Return "{""name"":"""_name_""",""dim"":"_dim_",""metric"":"""_metric_""",""count"":"_count_",""trees"":"_trees_",""leafSize"":"_leaf_"}"
+}
+
+ClassMethod SeededVectorExpand(seed As %String, indexName As %String, k As %Integer = 5) As %String
+{
+    Set vec = $Get(^VecIdx(indexName, "vec", seed))
+    If vec = "" Return "[]"
+    Return ..Search(indexName, vec, k)
 }
 
 }

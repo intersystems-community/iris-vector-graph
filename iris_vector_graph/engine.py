@@ -1487,13 +1487,13 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue("Graph.KG.VecIndex", "Build", index_name)
         return json.loads(str(result))
 
-    def vec_search(self, index_name: str, query_embedding, k: int = 10, nprobe: int = 2) -> list:
+    def vec_search(self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8) -> list:
         vec_json = json.dumps([float(v) for v in query_embedding])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe)
         return json.loads(str(result))
 
-    def vec_search_multi(self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 2) -> list:
+    def vec_search_multi(self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 8) -> list:
         queries_json = json.dumps([[float(v) for v in q] for q in query_embeddings])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe)
@@ -1505,3 +1505,8 @@ class IRISGraphEngine:
 
     def vec_drop(self, index_name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.VecIndex", "Drop", index_name)
+
+    def vec_expand(self, index_name: str, seed_id: str, k: int = 5) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k)
+        return json.loads(str(result))
