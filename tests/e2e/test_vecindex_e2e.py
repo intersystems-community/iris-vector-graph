@@ -93,3 +93,26 @@ class TestVecIndex:
         self.engine.vec_build(INDEX_NAME)
         results = self.engine.vec_search(INDEX_NAME, v, k=3)
         assert len(results) >= 1
+
+    def test_search_multi(self):
+        self.engine.vec_create_index(INDEX_NAME, DIM, "cosine")
+        targets = [_rand_vec() for _ in range(3)]
+        for i, t in enumerate(targets):
+            self.engine.vec_insert(INDEX_NAME, f"target_{i}", t)
+        for i in range(20):
+            self.engine.vec_insert(INDEX_NAME, f"noise_{i}", _rand_vec())
+        self.engine.vec_build(INDEX_NAME)
+        results = self.engine.vec_search_multi(INDEX_NAME, targets, k=3)
+        assert isinstance(results, list)
+        assert len(results) == 3
+        for r in results:
+            assert isinstance(r, list)
+            assert len(r) >= 1
+
+    def test_bulk_insert_batch(self):
+        self.engine.vec_create_index(INDEX_NAME, DIM, "cosine")
+        items = [{"id": f"batch_{i}", "embedding": _rand_vec()} for i in range(50)]
+        count = self.engine.vec_bulk_insert(INDEX_NAME, items)
+        assert count == 50
+        info = self.engine.vec_info(INDEX_NAME)
+        assert int(info.get("count", 0)) >= 50

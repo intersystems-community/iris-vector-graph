@@ -1457,8 +1457,12 @@ class IRISGraphEngine:
     # ── VecIndex: lightweight ANN vector search in globals ──
 
     def _iris_obj(self):
-        import iris
-        return iris.createIRIS(self.conn)
+        try:
+            import iris
+            return iris.createIRIS(self.conn)
+        except (TypeError, AttributeError):
+            import intersystems_iris
+            return intersystems_iris.createIRIS(self.conn)
 
     def vec_create_index(self, name: str, dim: int, metric: str = "cosine",
                          num_trees: int = 4, leaf_size: int = 50) -> dict:
@@ -1473,12 +1477,11 @@ class IRISGraphEngine:
             "Graph.KG.VecIndex", "InsertJSON", index_name, doc_id, vec_json)
 
     def vec_bulk_insert(self, index_name: str, items: list) -> int:
-        iris_obj = self._iris_obj()
-        for item in items:
-            vec_json = json.dumps([float(v) for v in item["embedding"]])
-            iris_obj.classMethodVoid(
-                "Graph.KG.VecIndex", "InsertJSON", index_name, item["id"], vec_json)
-        return len(items)
+        batch = [{"id": item["id"], "vec": [float(v) for v in item["embedding"]]} for item in items]
+        batch_json = json.dumps(batch)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "InsertBatchJSON", index_name, batch_json)
+        return json.loads(str(result)).get("inserted", 0)
 
     def vec_build(self, index_name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.VecIndex", "Build", index_name)
@@ -1488,6 +1491,12 @@ class IRISGraphEngine:
         vec_json = json.dumps([float(v) for v in query_embedding])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe)
+        return json.loads(str(result))
+
+    def vec_search_multi(self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 2) -> list:
+        queries_json = json.dumps([[float(v) for v in q] for q in query_embeddings])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe)
         return json.loads(str(result))
 
     def vec_info(self, index_name: str) -> dict:
