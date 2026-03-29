@@ -17,7 +17,7 @@ from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql, _table, set_schema_prefix
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.capabilities import IRISCapabilities
-from iris_vector_graph.security import sanitize_identifier, validate_table_name
+from iris_vector_graph.security import validate_table_name
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,6 @@ class IRISGraphEngine:
 
         # 6. Deploy ObjectScript .cls layer (best-effort)
         if auto_deploy_objectscript:
-            import importlib.resources as pkg_resources
             # Locate iris_src/ relative to the installed package
             try:
                 pkg_dir = Path(__file__).parent.parent / "iris_src"
@@ -307,8 +306,6 @@ class IRISGraphEngine:
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
-        from iris_vector_graph.cypher.ast import CypherProcedureCall
-
         parsed = parse_query(cypher_query)
 
         # Mode 2 guard: if CALL uses a string query_input, verify EMBEDDING() is available
@@ -362,9 +359,9 @@ class IRISGraphEngine:
                     "params": all_params[-1] if all_params else [],
                     "metadata": metadata
                 }
-            except Exception as e:
+            except Exception:
                 cursor.execute("ROLLBACK")
-                raise e
+                raise
         else:
             sql_str = sql_query.sql if isinstance(sql_query.sql, str) else "\n".join(sql_query.sql)
             p = sql_query.parameters[0] if sql_query.parameters else []
@@ -446,7 +443,7 @@ class IRISGraphEngine:
                         try:
                             if (str(val).startswith('{') and str(val).endswith('}')) or (str(val).startswith('[') and str(val).endswith(']')):
                                 parsed_val = json.loads(val)
-                        except:
+                        except Exception:
                             pass
                         node_map[s][store_key] = parsed_val
                     else:
@@ -545,7 +542,7 @@ class IRISGraphEngine:
             
             # 2. Batch labels
             if labels:
-                label_data = [[node_id, l] for l in labels]
+                label_data = [[node_id, label] for label in labels]
                 cursor.executemany(f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)", label_data)
                 
             # 3. Batch properties
@@ -634,7 +631,8 @@ class IRISGraphEngine:
 
             for node in nodes:
                 node_id = node.get('id')
-                if not node_id: continue
+                if not node_id:
+                    continue
                 
                 created_ids.append(node_id)
                 # params: [node_id, node_id] for WHERE NOT EXISTS
@@ -646,10 +644,12 @@ class IRISGraphEngine:
                 
                 props = node.get('properties', {})
                 # Ensure ID is in properties for consistency with Cypher CREATE
-                if 'id' not in props: props['id'] = node_id
+                if 'id' not in props:
+                    props['id'] = node_id
                 
                 for k, v in props.items():
-                    if v is None: continue
+                    if v is None:
+                        continue
                     val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                     # params: [s, key, val, s, key]
                     all_props.append((node_id, k, val_str, node_id, k))
@@ -791,9 +791,9 @@ class IRISGraphEngine:
                 )
             cursor.execute("COMMIT")
             return True
-        except Exception as e:
+        except Exception:
             cursor.execute("ROLLBACK")
-            raise e
+            raise
 
     def get_embedding(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -1023,7 +1023,7 @@ class IRISGraphEngine:
                             cos_sim = dot_product / (query_norm * emb_norm)
                             similarities.append((entity_id, float(cos_sim)))
 
-                    except Exception as emb_error:
+                    except Exception:
                         # Skip problematic embeddings
                         continue
 
@@ -1256,9 +1256,8 @@ class IRISGraphEngine:
         # --- Fast path: Graph.KG.PageRank.RunJson() via .cls layer ---
         if self.capabilities.objectscript_deployed and self.capabilities.kg_built:
             try:
-                import intersystems_iris as _iris_pkg
                 seed_json = json.dumps(seed_entities)
-                iris_obj = _iris_pkg.createIRIS(self.conn)
+                iris_obj = self._iris_obj()
                 result_json = iris_obj.classMethodValue(
                     'Graph.KG.PageRank', 'RunJson',
                     seed_json, damping_factor, max_iterations,
@@ -1396,8 +1395,7 @@ class IRISGraphEngine:
         if self._arno_available is not None:
             return self._arno_available
         try:
-            import intersystems_iris as _iris_pkg
-            iris_obj = _iris_pkg.createIRIS(self.conn)
+            iris_obj = self._iris_obj()
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True
@@ -1409,9 +1407,7 @@ class IRISGraphEngine:
         return self._arno_available
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
-        import intersystems_iris as _iris_pkg
-        iris_obj = _iris_pkg.createIRIS(self.conn)
-        return str(iris_obj.classMethodValue(cls, method, *args))
+        return str(self._iris_obj().classMethodValue(cls, method, *args))
 
     def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
         if self._detect_arno() and "khop" in self._arno_capabilities.get("algorithms", []):
@@ -1425,8 +1421,7 @@ class IRISGraphEngine:
     def _khop_fallback(self, seed: str, hops: int, max_nodes: int) -> dict:
         if self.capabilities.objectscript_deployed:
             try:
-                import intersystems_iris as _iris_pkg
-                iris_obj = _iris_pkg.createIRIS(self.conn)
+                iris_obj = self._iris_obj()
                 result = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "")
                 if result:
                     edges = json.loads(str(result))
