@@ -1401,6 +1401,8 @@ class IRISGraphEngine:
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True
+            if not self._arno_capabilities.get("nkg_data", False):
+                logger.warning("Arno detected but ^NKG not populated — run BuildKG() to enable acceleration")
         except Exception:
             self._arno_available = False
             self._arno_capabilities = {}
