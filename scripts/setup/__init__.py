@@ -231,10 +231,9 @@ def load_sql_file(connection, sql_file_path):
 
 def load_sample_data(connection=None):
     """Load biomedical sample data."""
-    from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
-    from iris_devtester.connections import auto_detect_iris_host_and_port
-    
     if connection is None:
+        from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
+        from iris_devtester.connections import auto_detect_iris_host_and_port
         host, port = auto_detect_iris_host_and_port()
         connection = dbapi_connect(host or 'localhost', port or 1972, 'USER', '_SYSTEM', 'SYS')
     
@@ -245,10 +244,9 @@ def load_sample_data(connection=None):
 
 def load_fraud_data(connection=None):
     """Load fraud detection sample data."""
-    from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
-    from iris_devtester.connections import auto_detect_iris_host_and_port
-    
     if connection is None:
+        from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
+        from iris_devtester.connections import auto_detect_iris_host_and_port
         host, port = auto_detect_iris_host_and_port()
         connection = dbapi_connect(host or 'localhost', port or 1972, 'USER', '_SYSTEM', 'SYS')
     
@@ -262,10 +260,9 @@ def load_fraud_data(connection=None):
 
 def verify_data_loaded(connection=None) -> dict:
     """Verify sample data is loaded and return counts."""
-    from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
-    from iris_devtester.connections import auto_detect_iris_host_and_port
-    
     if connection is None:
+        from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
+        from iris_devtester.connections import auto_detect_iris_host_and_port
         host, port = auto_detect_iris_host_and_port()
         connection = dbapi_connect(host or 'localhost', port or 1972, 'USER', '_SYSTEM', 'SYS')
     

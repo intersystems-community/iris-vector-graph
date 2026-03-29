@@ -1001,7 +1001,7 @@ def translate_return_clause(ret, context):
                 edge_aliases = context.path_edge_aliases[var_name]
                 nodes_arr = ", ".join(f"{a}.node_id" for a in node_aliases)
                 rels_arr = ", ".join(f"{a}.p" for a in edge_aliases)
-                json_expr = f"JSON_OBJECT('nodes': JSON_ARRAY({nodes_arr}), 'rels': JSON_ARRAY({rels_arr}))"
+                json_expr = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || JSON_ARRAY({rels_arr}) || '}}'"
                 context.select_items.append(f"{json_expr} AS {alias}")
                 continue
             alias_name = context.variable_aliases.get(var_name)

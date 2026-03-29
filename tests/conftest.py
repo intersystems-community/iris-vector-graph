@@ -8,7 +8,15 @@ import subprocess
 import time
 
 import pytest
-from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
+
+try:
+    from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
+    _HAS_DEVTESTER = True
+except ImportError:
+    import iris
+    def iris_connect(host, port, namespace, user, password):
+        return iris.connect(hostname=host, port=port, namespace=namespace, username=user, password=password)
+    _HAS_DEVTESTER = False
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +159,13 @@ def iris_test_container():
     never race on a not-yet-ready container.
     """
     container_name = "iris-vector-graph-main"
+
+    if not _HAS_DEVTESTER:
+        yield type('Container', (), {
+            'get_exposed_port': lambda self, p: 1972,
+            'container_name': container_name,
+        })()
+        return
 
     from iris_devtester.containers.iris_container import IRISContainer
 

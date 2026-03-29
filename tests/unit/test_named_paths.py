@@ -63,11 +63,12 @@ class TestNamedPathTranslation:
         set_schema_prefix("")
 
     def test_return_p_emits_json_object(self):
-        """T011: RETURN p emits JSON_OBJECT with JSON_ARRAY for nodes and rels"""
+        """T011: RETURN p emits JSON path object with JSON_ARRAY for nodes and rels"""
         q = parse_query("MATCH p = (a)-[r]->(b) RETURN p")
         result = translate_to_sql(q)
         sql = result.sql
-        assert "JSON_OBJECT" in sql
+        assert "nodes" in sql
+        assert "rels" in sql
         assert "JSON_ARRAY" in sql
         assert "node_id" in sql
 

@@ -16,9 +16,8 @@ class TestNamedPathSQLTranslation:
         q = parse_query("MATCH p = (a)-[r]->(b) RETURN p")
         result = translate_to_sql(q)
         sql = result.sql
-        assert "JSON_OBJECT(" in sql
-        assert "'nodes'" in sql
-        assert "'rels'" in sql
+        assert "nodes" in sql
+        assert "rels" in sql
         assert "JSON_ARRAY(" in sql
         assert "Graph_KG.nodes" in sql
         assert "Graph_KG.rdf_edges" in sql
