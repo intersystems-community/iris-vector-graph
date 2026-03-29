@@ -157,6 +157,7 @@ ClassMethod Search(name As %String, queryVec As %Binary, k As %Integer = 10, npr
     If numTrees = 0 Return ..BruteForceSearch(name, queryVec, k)
     Kill ^||candidates
     For t = 1:1:numTrees {
+        Kill ^||leafCount
         Do ..SearchTree(name, t, queryVec, 1, nprobe)
     }
     Return ..RankCandidates(name, queryVec, k)
@@ -314,6 +315,7 @@ ClassMethod SearchTree(name As %String, treeId As %Integer, queryVec As %Binary,
             Quit:docId=""
             Set ^||candidates(docId) = ""
         }
+        Set ^||leafCount = $Get(^||leafCount, 0) + 1
         Quit
     }
     Set plane = $Get(^VecIdx(name, "tree", treeId, nodeId, "plane"))
@@ -327,7 +329,7 @@ ClassMethod SearchTree(name As %String, treeId As %Integer, queryVec As %Binary,
         Set secondary = +$Get(^VecIdx(name, "tree", treeId, nodeId, "R"))
     }
     If primary > 0 Do ..SearchTree(name, treeId, queryVec, primary, nprobe)
-    If (secondary > 0) && (nprobe > 1) Do ..SearchTree(name, treeId, queryVec, secondary, nprobe - 1)
+    If (secondary > 0) && ($Get(^||leafCount, 0) < nprobe) Do ..SearchTree(name, treeId, queryVec, secondary, nprobe)
 }
 
 ClassMethod RankCandidates(name As %String, queryVec As %Binary, k As %Integer) As %String [ Private ]
