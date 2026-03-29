@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="Cache" version="25">
+  <Document name="iris-vector-graph.ZPM">
+    <Module>
+      <Name>iris-vector-graph</Name>
+      <Description>Knowledge graph engine for InterSystems IRIS with vector search, Cypher, and graph analytics.</Description>
+      <Version>1.27.0</Version>
+      <Packaging>module</Packaging>
+      <SourcesRoot>iris_src/src</SourcesRoot>
+      <Dependencies>
+        <ModuleReference>
+          <Name>iris-vector-graph-core</Name>
+          <Version>1.27.0</Version>
+        </ModuleReference>
+      </Dependencies>
+      <Resource Name="Graph.KG.Edge.CLS"/>
+      <Resource Name="Graph.KG.Loader.CLS"/>
+      <Resource Name="Graph.KG.PyOps.CLS"/>
+      <Resource Name="Graph.KG.Service.CLS"/>
+      <Resource Name="Graph.KG.ArnoAccel.CLS"/>
+      <Resource Name="Graph.KG.BenchFormat.CLS"/>
+      <Resource Name="Graph.KG.Benchmark.CLS"/>
+      <Keywords>
+        <Keyword>vector</Keyword>
+        <Keyword>graph</Keyword>
+        <Keyword>knowledge-graph</Keyword>
+        <Keyword>cypher</Keyword>
+        <Keyword>graphql</Keyword>
+        <Keyword>FHIR</Keyword>
+        <Keyword>PLAID</Keyword>
+      </Keywords>
+    </Module>
+  </Document>
+</Export>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Export generator="Cache" version="25">
+  <Document name="iris-vector-graph-core.ZPM">
+    <Module>
+      <Name>iris-vector-graph-core</Name>
+      <Description>Pure ObjectScript graph + vector primitives for IRIS. No Python required.</Description>
+      <Version>1.27.0</Version>
+      <Packaging>module</Packaging>
+      <SourcesRoot>iris_src/src</SourcesRoot>
+      <Resource Name="Graph.KG.VecIndex.CLS"/>
+      <Resource Name="Graph.KG.PLAIDSearch.CLS"/>
+      <Resource Name="Graph.KG.GraphIndex.CLS"/>
+      <Resource Name="Graph.KG.Traversal.CLS"/>
+      <Resource Name="Graph.KG.PageRank.CLS"/>
+      <Resource Name="Graph.KG.Algorithms.CLS"/>
+      <Resource Name="Graph.KG.Subgraph.CLS"/>
+      <Resource Name="Graph.KG.BenchSeeder.CLS"/>
+      <Resource Name="Graph.KG.Meta.CLS"/>
+      <Keywords>
+        <Keyword>vector</Keyword>
+        <Keyword>graph</Keyword>
+        <Keyword>knowledge-graph</Keyword>
+        <Keyword>ANN</Keyword>
+        <Keyword>PLAID</Keyword>
+        <Keyword>PageRank</Keyword>
+        <Keyword>objectscript</Keyword>
+      </Keywords>
+    </Module>
+  </Document>
+</Export>
