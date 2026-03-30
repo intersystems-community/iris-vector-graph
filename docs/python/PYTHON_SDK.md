@@ -1,771 +1,282 @@
-# IRIS Graph Python SDK
+# IRIS Vector Graph Python SDK (v1.28.0)
 
-## Overview
+This guide documents the current Python API surface for `iris-vector-graph` v1.28.0.
 
-The **IRIS Graph Python SDK** provides direct, high-performance access to biomedical knowledge graphs stored in InterSystems IRIS. This is the **primary interface** for data scientists and researchers working with large-scale biomedical data.
+---
 
-## Why Python SDK?
+## 1) Install
 
-### **Performance Advantages**
-- **Direct IRIS connection** - No HTTP overhead
-- **Native SQL execution** - Full IRIS query power
-- **Batch processing** - Handle millions of entities efficiently
-- **Concurrent operations** - Multi-threaded data processing
-
-### **Research-Friendly**
-- **NetworkX integration** - Standard graph tools
-- **Pandas compatibility** - DataFrame workflows
-- **Jupyter notebooks** - Interactive analysis
-- **NumPy vectors** - Efficient embedding operations
-
-## Installation
-
-### Prerequisites
 ```bash
-# Install IRIS Python driver
-pip install intersystems_irispython
-
-# Install scientific computing stack
-pip install numpy pandas networkx python-dotenv
-
-# Optional: Visualization and ML
-pip install matplotlib seaborn scikit-learn
+pip install iris-vector-graph
+pip install iris-vector-graph[full]
+pip install iris-vector-graph[plaid]
 ```
 
-### IRIS Database Setup
-```bash
-# Start IRIS with ACORN-1 (recommended)
-docker-compose -f docker-compose.acorn.yml up -d
+- **Core** (`iris-vector-graph`): minimal install, includes `intersystems-irispython`.
+- **`[full]`**: adds FastAPI/GraphQL and common data tooling.
+- **`[plaid]`**: adds `numpy` + `scikit-learn` for `plaid_build()`.
 
-# Or start Community Edition
-docker-compose up -d
-```
+---
 
-## Quick Start
+## 2) Connection
 
-### 1. Basic Connection
+Canonical connection pattern:
+
 ```python
 import iris
-import os
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-
-# Connect to IRIS
 conn = iris.connect(
-    hostname='localhost',
-    port=1973,
-    namespace='USER',
-    username='_SYSTEM',
-    password='SYS'
+    hostname="localhost",
+    port=1972,
+    namespace="USER",
+    username="_SYSTEM",
+    password="SYS",
 )
-
-print("✓ Connected to IRIS Graph-AI")
 ```
 
-### 2. Simple Graph Query
+---
+
+## 3) `IRISGraphEngine`
+
 ```python
-# Find protein interactions
-cursor = conn.cursor()
-cursor.execute("""
-    SELECT s, p, o_id
-    FROM rdf_edges
-    WHERE s = ? AND p = 'interacts_with'
-    LIMIT 10
-""", ['PROTEIN:BRCA1'])
-
-interactions = cursor.fetchall()
-for subject, predicate, object_id in interactions:
-    print(f"{subject} → {predicate} → {object_id}")
-```
-
-### 3. Entity Discovery by Type
-```python
-# Find entities by label
-cursor.execute("""
-    SELECT s, label
-    FROM rdf_labels
-    WHERE label = ?
-    LIMIT 10
-""", ['protein'])
-
-entities = cursor.fetchall()
-for entity_id, label in entities:
-    print(f"{entity_id} ({label})")
-```
-
-## Advanced Usage
-
-### 1. Bulk Data Loading
-```python
-def bulk_insert_proteins(conn, protein_data):
-    """
-    Efficiently insert thousands of proteins with properties
-    """
-    cursor = conn.cursor()
-
-    # Prepare batch insert
-    insert_sql = """
-        INSERT INTO rdf_props (s, key, val)
-        VALUES (?, ?, ?)
-    """
-
-    # Process in batches for memory efficiency
-    batch_size = 5000
-    for i in range(0, len(protein_data), batch_size):
-        batch = protein_data[i:i + batch_size]
-
-        # Prepare batch data
-        batch_data = []
-        for protein in batch:
-            batch_data.extend([
-                (protein['id'], 'name', protein['name']),
-                (protein['id'], 'organism', protein['organism']),
-                (protein['id'], 'function', protein.get('function', ''))
-            ])
-
-        # Execute batch
-        cursor.executemany(insert_sql, batch_data)
-        print(f"Inserted batch {i//batch_size + 1}, proteins {i+1}-{min(i+batch_size, len(protein_data))}")
-
-    cursor.close()
-    print(f"✓ Loaded {len(protein_data)} proteins")
-
-# Example usage
-proteins = [
-    {'id': 'PROTEIN:P53', 'name': 'TP53', 'organism': 'Homo sapiens', 'function': 'tumor suppressor'},
-    {'id': 'PROTEIN:BRCA1', 'name': 'BRCA1', 'organism': 'Homo sapiens', 'function': 'DNA repair'},
-    # ... thousands more
-]
-
-bulk_insert_proteins(conn, proteins)
-```
-
-### 2. NetworkX Integration
-```python
-import networkx as nx
-
-def load_networkx_graph(conn, entity_type='protein'):
-    """
-    Load IRIS graph data into NetworkX for analysis
-    """
-    cursor = conn.cursor()
-
-    # Get edges
-    cursor.execute("""
-        SELECT DISTINCT s, o_id, p
-        FROM rdf_edges e
-        JOIN rdf_labels l1 ON e.s = l1.s
-        JOIN rdf_labels l2 ON e.o_id = l2.s
-        WHERE l1.label = ? AND l2.label = ?
-    """, [entity_type, entity_type])
-
-    # Build NetworkX graph
-    G = nx.DiGraph()
-    for source, target, relation in cursor.fetchall():
-        G.add_edge(source, target, relation=relation)
-
-    cursor.close()
-    return G
-
-# Load protein interaction network
-protein_graph = load_networkx_graph(conn, 'protein')
-print(f"Loaded graph: {protein_graph.number_of_nodes()} nodes, {protein_graph.number_of_edges()} edges")
-
-# NetworkX analysis
-centrality = nx.degree_centrality(protein_graph)
-top_proteins = sorted(centrality.items(), key=lambda x: x[1], reverse=True)[:10]
-
-for protein, score in top_proteins:
-    print(f"{protein}: {score:.3f}")
-```
-
-### 3. Multi-hop Graph Analysis
-```python
-def find_pathway_proteins(conn, pathway_id, max_hops=2):
-    """
-    Find proteins connected to a pathway through multiple relationship types
-    """
-    cursor = conn.cursor()
-
-    # Multi-hop graph traversal
-    cursor.execute("""
-        SELECT DISTINCT
-            e1.s as protein_id,
-            e1.p as direct_relation,
-            e2.p as indirect_relation,
-            e2.o_id as connected_entity
-        FROM rdf_edges e1
-        JOIN rdf_edges e2 ON e1.o_id = e2.s
-        WHERE e1.o_id = ?
-          AND e1.s LIKE 'PROTEIN:%'
-        ORDER BY e1.s
-        LIMIT 100
-    """, [pathway_id])
-
-    results = cursor.fetchall()
-    cursor.close()
-
-    return [(protein_id, direct_rel, indirect_rel, entity)
-            for protein_id, direct_rel, indirect_rel, entity in results]
-
-# Example usage
-pathway_proteins = find_pathway_proteins(conn, 'PATHWAY:apoptosis')
-
-for protein, direct, indirect, entity in pathway_proteins[:10]:
-    print(f"{protein} → {direct} → {indirect} → {entity}")
-```
-
-## IRISGraphOperators API (v1.10+)
-
-The `IRISGraphOperators` class provides high-level graph retrieval methods that automatically use the fastest available path (HNSW index, `^KG` global, or SQL fallback).
-
-### Setup
-```python
-from iris_vector_graph.operators import IRISGraphOperators
 from iris_vector_graph.engine import IRISGraphEngine
 
-# Initialize engine (creates schema, installs SQL functions, deploys ObjectScript)
-engine = IRISGraphEngine(conn, embedding_dimension=768)
-engine.initialize_schema()
+engine = IRISGraphEngine(
+    conn,
+    embedding_dimension=768,   # required before initialize_schema()
+    embedder=None,             # optional
+    embedding_config=None,     # optional IRIS EMBEDDING() config name
+)
+```
 
-# Create operators instance
+### Core methods
+
+```python
+engine.initialize_schema(auto_deploy_objectscript=True)
+
+engine.create_node(
+    node_id="node:1",
+    labels=["Entity"],
+    properties={"name": "Example"},
+)
+
+engine.create_edge(
+    source_id="node:1",
+    predicate="RELATED_TO",
+    target_id="node:2",
+    qualifiers={"confidence": 0.9},
+)
+
+node = engine.get_node("node:1")
+nodes = engine.get_nodes(["node:1", "node:2"])
+
+ok = engine.delete_node("node:2")
+
+anchors = engine.get_kg_anchors(["E11.9", "J18.0"], bridge_type="icd10_to_mesh")
+```
+
+### Notes
+
+- `initialize_schema()` is idempotent and installs SQL schema/procedures.
+- `create_node()`, `create_edge()`, `delete_node()` return `bool`.
+- `get_node()` returns `dict | None`; `get_nodes()` returns `list[dict]`.
+- `get_kg_anchors()` returns only bridge targets that exist in the KG.
+
+---
+
+## 4) VecIndex API
+
+Lightweight ANN index backed by ObjectScript globals (`Graph.KG.VecIndex`).
+
+```python
+engine.vec_create_index("my_idx", dim=384, metric="cosine", num_trees=4, leaf_size=50)
+
+engine.vec_insert("my_idx", "doc:1", [0.1, 0.2, 0.3])
+
+engine.vec_bulk_insert("my_idx", [
+    {"id": "doc:2", "embedding": [0.2, 0.3, 0.4]},
+    {"id": "doc:3", "embedding": [0.3, 0.4, 0.5]},
+])
+
+engine.vec_build("my_idx")
+
+hits = engine.vec_search("my_idx", [0.1, 0.2, 0.3], k=5, nprobe=8)
+multi_hits = engine.vec_search_multi("my_idx", [[0.1, 0.2, 0.3], [0.3, 0.2, 0.1]], k=5, nprobe=8)
+
+info = engine.vec_info("my_idx")
+
+engine.vec_expand("my_idx", seed_id="doc:1", k=5)
+
+engine.vec_drop("my_idx")
+```
+
+### API summary
+
+- `vec_create_index(name, dim, metric="cosine", num_trees=4, leaf_size=50) -> dict`
+- `vec_insert(index_name, doc_id, embedding) -> None`
+- `vec_bulk_insert(index_name, items) -> int`  (`items=[{"id","embedding"}, ...]`)
+- `vec_build(index_name) -> dict`
+- `vec_search(index_name, query_embedding, k=10, nprobe=8) -> list`
+- `vec_search_multi(index_name, query_embeddings, k=10, nprobe=8) -> list`
+- `vec_info(index_name) -> dict`
+- `vec_drop(index_name) -> None`
+- `vec_expand(index_name, seed_id, k=5) -> list`
+
+---
+
+## 5) PLAID API
+
+ColBERT-style multi-vector retrieval (`Graph.KG.PLAIDSearch`).
+
+```python
+docs = [
+    {"id": "doc:1", "tokens": [[0.1, 0.2], [0.3, 0.4]]},
+    {"id": "doc:2", "tokens": [[0.2, 0.1], [0.4, 0.3]]},
+]
+
+engine.plaid_build("plaid_idx", docs, n_clusters=None, dim=2)
+
+results = engine.plaid_search("plaid_idx", query_tokens=[[0.1, 0.2], [0.3, 0.4]], k=10, nprobe=4)
+
+engine.plaid_insert("plaid_idx", "doc:3", token_embeddings=[[0.5, 0.6], [0.7, 0.8]])
+
+info = engine.plaid_info("plaid_idx")
+
+engine.plaid_drop("plaid_idx")
+```
+
+### API summary
+
+- `plaid_build(name, docs, n_clusters=None, dim=128) -> dict`
+- `plaid_search(name, query_tokens, k=10, nprobe=4) -> list`
+- `plaid_insert(name, doc_id, token_embeddings) -> None`
+- `plaid_info(name) -> dict`
+- `plaid_drop(name) -> None`
+
+`plaid_build()` requires `[plaid]` dependencies (`numpy`, `scikit-learn`).
+
+---
+
+## 6) `IRISGraphOperators`
+
+```python
+from iris_vector_graph.operators import IRISGraphOperators
+
 ops = IRISGraphOperators(conn)
 ```
 
-### VecIndex — Lightweight ANN (RP-tree)
-
-VecIndex provides approximate nearest neighbor search using random projection trees. Pure ObjectScript + `$vectorop` SIMD. Works on all IRIS license tiers (2024.1+). Supports cosine, L2, L1, dot, chebyshev, and mahalanobis metrics.
+### Vector + neighborhood
 
 ```python
-# Create an index
-engine.vec_create_index("drugs", 384, "cosine")
-
-# Insert embeddings
-engine.vec_insert("drugs", "metformin", embedding_vector)
-engine.vec_insert("drugs", "aspirin", another_vector)
-
-# Bulk insert
-items = [{"id": "ibuprofen", "embedding": vec1}, {"id": "warfarin", "embedding": vec2}]
-engine.vec_bulk_insert("drugs", items)
-
-# Build the RP-tree index (required after inserts, before search)
-engine.vec_build("drugs")
-
-# Search
-results = engine.vec_search("drugs", query_vector, k=5)
-# Returns: [{"id": "metformin", "score": 0.95}, ...]
-
-# Inspect index
-info = engine.vec_info("drugs")
-# Returns: {"name": "drugs", "dim": 384, "metric": "cosine", "count": 4, ...}
-
-# Drop index
-engine.vec_drop("drugs")
+vec_hits = ops.kg_KNN_VEC('[0.1, 0.2, 0.3]', k=10, label_filter=None)
+neighbors = ops.kg_NEIGHBORS(["doc:1", "doc:2"], predicate="MENTIONS", direction="out")
+mentions = ops.kg_MENTIONS(["doc:1", "doc:2"])  # alias for MENTIONS neighbors
 ```
 
-| Method | Description |
-|--------|-------------|
-| `vec_create_index(name, dim, metric)` | Create a new vector index |
-| `vec_insert(name, doc_id, embedding)` | Insert a single embedding |
-| `vec_bulk_insert(name, items)` | Insert multiple `[{"id", "embedding"}]` |
-| `vec_build(name)` | Build the RP-tree (required before search) |
-| `vec_search(name, query, k, nprobe)` | ANN search, returns ranked results |
-| `vec_info(name)` | Index metadata (count, dim, metric, trees) |
-| `vec_drop(name)` | Delete index and all data |
+### PageRank (unified global + personalized)
 
-### Vector Search (HNSW)
 ```python
-import json, numpy as np
-
-query_vector = json.dumps(np.random.randn(768).tolist())
-results = ops.kg_KNN_VEC(query_vector, k=10)
-# Returns: List[Tuple[str, float]] — (node_id, cosine_similarity)
-for node_id, similarity in results:
-    print(f"{node_id}: {similarity:.3f}")
+global_pr = ops.kg_PAGERANK(damping=0.85, max_iterations=20)
+personalized_pr = ops.kg_PAGERANK(seed_entities=["doc:1"], damping=0.85, max_iterations=20)
 ```
 
-### Graph Traversal (BFS via ^KG)
-```python
-results = ops.kg_GRAPH_WALK("PROTEIN:TP53", max_depth=2, traversal_mode='BFS')
-# Returns: List[Tuple[str, str, str, int]] — (source, predicate, target, row_num)
-for source, predicate, target, _ in results:
-    print(f"{source} → {predicate} → {target}")
-```
+- `kg_PAGERANK(seed_entities=None, ...)`:
+  - `seed_entities=None` -> global PageRank
+  - `seed_entities=[...]` -> personalized PageRank
 
-### Personalized PageRank
-```python
-ppr_results = ops.kg_PPR(
-    seed_entities=["PROTEIN:TP53", "PROTEIN:BRCA1"],
-    damping=0.85,
-    max_iterations=20,
-)
-# Returns: List[Tuple[str, float]] — (node_id, score) sorted descending
-for node_id, score in ppr_results[:10]:
-    print(f"{node_id}: {score:.6f}")
-```
+### Graph analytics kernels
 
-**Execution paths** (tried in order):
-1. `Graph.KG.PageRank.RunJson` via native API — pure ObjectScript, ~20ms on 10K nodes
-2. `Graph_KG.kg_PPR` SQL function — same ObjectScript, called via SQL
-3. Empty result with warning if both fail
-
-### Vector → Graph Hybrid Search
 ```python
-results = ops.kg_VECTOR_GRAPH_SEARCH(
-    query_vector=query_vector,
-    k_vector=10,         # top-k vector seeds
-    k_final=20,          # final result count
-    expansion_depth=2,   # graph hops from seeds
-    min_confidence=0.5,
-)
-# Returns vector seeds + graph-expanded neighbors with combined scores
-```
+wcc = ops.kg_WCC(max_iterations=100)
+cdlp = ops.kg_CDLP(max_iterations=10)
 
-### RRF Fusion (Vector + Text)
-```python
-results = ops.kg_RRF_FUSE(
-    query_vector=query_vector,
-    query_text="cancer immunotherapy",
-    k=10,
+sub = ops.kg_SUBGRAPH(seed_ids=["doc:1"], k_hops=2)
+
+guided = ops.kg_PPR_GUIDED_SUBGRAPH(
+    seed_ids=["doc:1"],
+    alpha=0.15,
+    eps=1e-5,
+    top_k=50,
+    max_hops=5,
 )
 ```
 
-### Full MindWalk Pipeline Example
+---
+
+## 7) Cypher
+
+Use `execute_cypher()` from `IRISGraphEngine`:
+
 ```python
-# 1. Vector pivot — find seed articles
-seeds = ops.kg_KNN_VEC(query_vector, k=10)
-
-# 2. Graph walk — expand to entity neighbors
-for seed_id, _ in seeds[:5]:
-    neighbors = ops.kg_GRAPH_WALK(seed_id, max_depth=1)
-
-# 3. PPR — rank by graph proximity
-anchor_ids = [nid for nid, _ in seeds[:5]]
-ppr_scores = ops.kg_PPR(seed_entities=anchor_ids, damping=0.85)
-
-# 4. RRF fusion — combine vector + PPR rankings
-# (manual fusion or use kg_VECTOR_GRAPH_SEARCH for all-in-one)
-```
-
-## Cypher Procedures (v1.13+)
-
-The library's Cypher translator supports three graph-AI procedures via `CALL ... YIELD`:
-
-### `ivg.vector.search` — Vector Similarity
-```cypher
-// Mode 1: pre-computed vector
-CALL ivg.vector.search('Gene', 'emb', [0.1, 0.2, ...], 10) YIELD node, score
-
-// Mode 2: text via IRIS EMBEDDING()
-CALL ivg.vector.search('Gene', 'emb', 'cancer immunotherapy', 10,
-  {embedding_config: 'my-model'}) YIELD node, score
-
-// Mode 3: node ID (HNSW subquery activation, ~50ms)
-CALL ivg.vector.search('Article', 'emb', 'PMID:630', 10) YIELD node, score
-```
-
-### `ivg.neighbors` — 1-Hop Neighborhood
-```cypher
-// Outgoing edges with predicate filter
-CALL ivg.neighbors($article_ids, 'MENTIONS', 'out') YIELD neighbor
-RETURN neighbor
-
-// Incoming edges (reverse traversal)
-CALL ivg.neighbors($entity_ids, 'CITES', 'in') YIELD neighbor
-
-// All edges (no predicate filter)
-CALL ivg.neighbors('PMID:630') YIELD neighbor
-```
-
-### `ivg.ppr` — Personalized PageRank
-```cypher
-CALL ivg.ppr($seed_entities, 0.85, 20) YIELD node, score
-RETURN node, score ORDER BY score DESC LIMIT 20
-```
-
-### MindWalk Pipeline in Cypher
-```cypher
-// Each step is a standalone CALL — compose them in application code
-// Step 1: Vector pivot from seed article
-CALL ivg.vector.search('Article', 'emb', 'PMID:630', 10) YIELD node, score
-
-// Step 2: Expand MENTIONS edges to anchor entities
-CALL ivg.neighbors($vector_hit_ids, 'MENTIONS', 'out') YIELD neighbor
-
-// Step 3: PPR ranking from anchors
-CALL ivg.ppr($anchor_ids, 0.85, 20) YIELD node, score
-```
-
-## Data Format Support
-
-### 1. TSV/CSV Loading
-```python
-import pandas as pd
-
-def load_tsv_interactions(conn, file_path):
-    """
-    Load protein interactions from TSV file
-    """
-    # Read with pandas
-    df = pd.read_csv(file_path, sep='\t')
-
-    # Validate required columns
-    required_cols = ['source', 'target', 'confidence']
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(f"TSV must contain columns: {required_cols}")
-
-    # Prepare data for IRIS
-    cursor = conn.cursor()
-    insert_sql = """
-        INSERT INTO rdf_edges (s, p, o_id, qualifiers)
-        VALUES (?, 'interacts_with', ?, ?)
-    """
-
-    # Convert to IRIS format
-    interactions = []
-    for _, row in df.iterrows():
-        qualifiers = json.dumps({
-            'confidence': float(row['confidence']),
-            'source': row.get('source_db', 'unknown'),
-            'evidence': row.get('evidence_type', 'experimental')
-        })
-        interactions.append((row['source'], row['target'], qualifiers))
-
-    # Batch insert
-    cursor.executemany(insert_sql, interactions)
-    cursor.close()
-
-    print(f"✓ Loaded {len(interactions)} interactions from {file_path}")
-
-# Example usage
-load_tsv_interactions(conn, 'data/string_interactions.tsv')
-```
-
-### 2. NetworkX Graph Import
-```python
-def import_networkx_graph(conn, G, node_type='protein'):
-    """
-    Import NetworkX graph into IRIS
-    """
-    cursor = conn.cursor()
-
-    # Insert nodes
-    node_sql = "INSERT INTO rdf_labels (s, label) VALUES (?, ?)"
-    nodes = [(node, node_type) for node in G.nodes()]
-    cursor.executemany(node_sql, nodes)
-
-    # Insert edges
-    edge_sql = "INSERT INTO rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)"
-    edges = []
-    for source, target, data in G.edges(data=True):
-        relation = data.get('relation', 'interacts_with')
-        qualifiers = json.dumps({k: v for k, v in data.items() if k != 'relation'})
-        edges.append((source, relation, target, qualifiers))
-
-    cursor.executemany(edge_sql, edges)
-    cursor.close()
-
-    print(f"✓ Imported NetworkX graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-
-# Example: Load GraphML file via NetworkX
-G = nx.read_graphml('data/protein_network.graphml')
-import_networkx_graph(conn, G)
-```
-
-## Performance Optimization
-
-### 1. Connection Pooling
-```python
-from contextlib import contextmanager
-import threading
-
-class IRISConnectionPool:
-    def __init__(self, max_connections=10, **conn_params):
-        self.max_connections = max_connections
-        self.conn_params = conn_params
-        self.pool = []
-        self.lock = threading.Lock()
-
-    @contextmanager
-    def get_connection(self):
-        with self.lock:
-            if self.pool:
-                conn = self.pool.pop()
-            else:
-                conn = iris.connect(**self.conn_params)
-
-        try:
-            yield conn
-        finally:
-            with self.lock:
-                if len(self.pool) < self.max_connections:
-                    self.pool.append(conn)
-                else:
-                    conn.close()
-
-# Usage
-pool = IRISConnectionPool(
-    max_connections=5,
-    hostname='localhost',
-    port=1973,
-    namespace='USER',
-    username='_SYSTEM',
-    password='SYS'
-)
-
-with pool.get_connection() as conn:
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM rdf_edges")
-    count = cursor.fetchone()[0]
-    print(f"Total edges: {count}")
-```
-
-### 2. Parallel Processing
-```python
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-
-def process_protein_batch(batch_data, thread_id):
-    """
-    Process a batch of proteins in separate thread
-    """
-    local_conn = iris.connect(
-        hostname='localhost',
-        port=1973,
-        namespace='USER',
-        username='_SYSTEM',
-        password='SYS'
-    )
-
-    try:
-        cursor = local_conn.cursor()
-
-        # Process batch
-        for protein in batch_data:
-            # Insert protein properties
-            cursor.execute("""
-                INSERT INTO rdf_props (s, key, val)
-                VALUES (?, 'name', ?)
-            """, [protein['id'], protein['name']])
-
-        print(f"Thread {thread_id}: Processed {len(batch_data)} proteins")
-        return len(batch_data)
-
-    finally:
-        local_conn.close()
-
-def parallel_protein_loading(protein_list, max_workers=4):
-    """
-    Load proteins using multiple threads
-    """
-    batch_size = len(protein_list) // max_workers
-    batches = [protein_list[i:i + batch_size] for i in range(0, len(protein_list), batch_size)]
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all batches
-        futures = [
-            executor.submit(process_protein_batch, batch, i)
-            for i, batch in enumerate(batches)
-        ]
-
-        # Collect results
-        total_processed = 0
-        for future in as_completed(futures):
-            total_processed += future.result()
-
-    print(f"✓ Parallel loading complete: {total_processed} proteins")
-
-# Example usage
-large_protein_list = [{'id': f'PROTEIN:{i}', 'name': f'Protein_{i}'} for i in range(10000)]
-parallel_protein_loading(large_protein_list, max_workers=8)
-```
-
-## Error Handling & Best Practices
-
-### 1. Robust Connection Management
-```python
-import time
-import logging
-
-def robust_iris_connection(max_retries=3, retry_delay=5, **conn_params):
-    """
-    Create IRIS connection with retry logic
-    """
-    for attempt in range(max_retries):
-        try:
-            conn = iris.connect(**conn_params)
-
-            # Test connection
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-
-            logging.info("✓ IRIS connection established")
-            return conn
-
-        except Exception as e:
-            logging.warning(f"Connection attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-            else:
-                raise Exception(f"Failed to connect after {max_retries} attempts")
-
-# Usage with automatic retry
-conn = robust_iris_connection(
-    max_retries=3,
-    hostname='localhost',
-    port=1973,
-    namespace='USER',
-    username='_SYSTEM',
-    password='SYS'
+result = engine.execute_cypher(
+    "MATCH (n:Entity) RETURN n.id LIMIT 5",
+    parameters=None,
 )
 ```
 
-### 2. Data Validation
+### Named paths
+
 ```python
-import re
-
-def validate_entity_id(entity_id):
-    """
-    Validate entity ID format for biomedical data
-    """
-    # Common biomedical ID patterns
-    patterns = [
-        r'^GENE:[A-Z0-9_]+$',      # Gene IDs
-        r'^PROTEIN:[A-Z0-9_]+$',   # Protein IDs
-        r'^DRUG:[A-Z0-9_-]+$',     # Drug IDs
-        r'^DISEASE:[A-Z0-9_]+$',   # Disease IDs
-        r'^PATHWAY:[A-Z0-9_]+$',   # Pathway IDs
-    ]
-
-    return any(re.match(pattern, entity_id) for pattern in patterns)
-
-def safe_insert_edge(conn, source, predicate, target, qualifiers=None):
-    """
-    Safely insert edge with validation
-    """
-    # Validate IDs
-    if not validate_entity_id(source):
-        raise ValueError(f"Invalid source ID: {source}")
-    if not validate_entity_id(target):
-        raise ValueError(f"Invalid target ID: {target}")
-
-    # Validate qualifiers JSON
-    if qualifiers:
-        try:
-            json.loads(qualifiers)
-        except json.JSONDecodeError:
-            raise ValueError("Qualifiers must be valid JSON")
-
-    # Insert with error handling
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO rdf_edges (s, p, o_id, qualifiers)
-            VALUES (?, ?, ?, ?)
-        """, [source, predicate, target, qualifiers or '{}'])
-        cursor.close()
-        return True
-
-    except Exception as e:
-        logging.error(f"Failed to insert edge {source} → {target}: {e}")
-        return False
-
-# Example usage
-success = safe_insert_edge(
-    conn,
-    'PROTEIN:BRCA1',
-    'interacts_with',
-    'PROTEIN:TP53',
-    json.dumps({'confidence': 0.95, 'source': 'experimental'})
+result = engine.execute_cypher(
+    "MATCH p = (a)-[r]->(b) RETURN p, length(p), nodes(p), relationships(p)"
 )
 ```
 
-## Integration Examples
+### `CALL { ... }` subqueries
 
-### 1. Jupyter Notebook Workflow
 ```python
-# Cell 1: Setup
-import iris
-import pandas as pd
-import networkx as nx
-import matplotlib.pyplot as plt
-import numpy as np
-
-conn = iris.connect(hostname='localhost', port=1973, namespace='USER', username='_SYSTEM', password='SYS')
-
-# Cell 2: Data Exploration
-cursor = conn.cursor()
-cursor.execute("SELECT COUNT(DISTINCT s) as proteins FROM rdf_labels WHERE label = 'protein'")
-protein_count = cursor.fetchone()[0]
-print(f"Total proteins in database: {protein_count}")
-
-# Cell 3: Network Analysis
-G = load_networkx_graph(conn)
-plt.figure(figsize=(12, 8))
-pos = nx.spring_layout(G, k=1, iterations=50)
-nx.draw(G, pos, node_size=50, alpha=0.6)
-plt.title("Protein Interaction Network")
-plt.show()
-
-# Cell 4: Vector Analysis
-# ... continue with embeddings, clustering, etc.
+result = engine.execute_cypher(
+    "MATCH (p:Protein) "
+    "CALL { WITH p MATCH (p)-[:INTERACTS_WITH]->(q) RETURN count(q) AS deg } "
+    "RETURN p.id, deg"
+)
 ```
 
-### 2. Pandas Integration
+### `ivg` procedures
+
 ```python
-def query_to_dataframe(conn, query, params=None):
-    """
-    Execute IRIS query and return pandas DataFrame
-    """
-    cursor = conn.cursor()
-    cursor.execute(query, params or [])
+# vector search
+engine.execute_cypher(
+    "CALL ivg.vector.search('Gene', 'embedding', [0.1, 0.2], 5) "
+    "YIELD node, score RETURN node, score"
+)
 
-    # Get column names
-    columns = [desc[0] for desc in cursor.description]
+# 1-hop neighbors
+engine.execute_cypher(
+    "CALL ivg.neighbors(['A','B'], 'MENTIONS', 'out') "
+    "YIELD neighbor RETURN neighbor"
+)
 
-    # Fetch data
-    data = cursor.fetchall()
-    cursor.close()
-
-    return pd.DataFrame(data, columns=columns)
-
-# Example: Protein interaction analysis
-interactions_df = query_to_dataframe(conn, """
-    SELECT
-        e.s as source_protein,
-        e.o_id as target_protein,
-        e.qualifiers as qualifiers,
-        e.p as relationship_type
-    FROM rdf_edges e
-    JOIN rdf_labels l1 ON e.s = l1.s
-    JOIN rdf_labels l2 ON e.o_id = l2.s
-    WHERE l1.label = 'protein'
-      AND l2.label = 'protein'
-      AND e.p = 'interacts_with'
-    LIMIT 10000
-""")
-
-# Pandas analysis
-print("Protein interactions by relationship type:")
-print(interactions_df['relationship_type'].value_counts())
-
-print("\nQualifier data samples:")
-print(interactions_df['qualifiers'].head())
+# personalized PageRank
+engine.execute_cypher(
+    "CALL ivg.ppr(['A','B'], 0.85, 20) "
+    "YIELD node, score RETURN node, score"
+)
 ```
 
-## Conclusion
+`execute_cypher()` returns a dict with keys like `columns`, `rows`, `sql`, `params`, and `metadata`.
 
-The **IRIS Graph-AI Python SDK** provides the most powerful and flexible interface for biomedical research workflows. Key advantages:
+---
 
-- ✅ **Direct IRIS Performance** - No REST API overhead
-- ✅ **NetworkX Compatibility** - Standard graph analysis tools
-- ✅ **Pandas Integration** - Familiar data science workflows
-- ✅ **SQL Query Power** - Full IRIS query capabilities
-- ✅ **Scalable Processing** - Handle millions of entities
-- ✅ **Research-Optimized** - Built for biomedical use cases
+## 8) Arno Acceleration
 
-For web applications and simple queries, use the REST API. For serious data processing and analysis, use the Python SDK.
+The engine supports optional Arno/NKG acceleration with automatic detection and fallback:
+
+```python
+khop_result = engine.khop(seed="node:1", hops=2, max_nodes=500)
+ppr_result = engine.ppr(seed="node:1", alpha=0.85, max_iter=20, top_k=20)
+walks = engine.random_walk(seed="node:1", length=20, num_walks=10)
+```
+
+Behavior:
+
+- If `Graph.KG.NKGAccel` is available and supports the algorithm, accelerated path is used.
+- If unavailable or an accelerated call errors, engine falls back to non-Arno paths.
+
+---
+
+## Related docs
+
+- GraphQL support exists, but details are documented separately (see `README.md` and `iris_vector_graph/gql/`).
+- NetworkX and Pandas integrations exist in the project examples/tests.
+- Performance benchmark details: `docs/performance/BENCHMARKS.md` and `README.md`.
