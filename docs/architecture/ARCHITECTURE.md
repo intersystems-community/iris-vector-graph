@@ -1,210 +1,129 @@
-# IRIS Graph-AI Architecture
+# Architecture
 
 ## Overview
 
-The IRIS Graph-AI system is built entirely within InterSystems IRIS, leveraging ACORN-1 optimization for exceptional performance in biomedical knowledge graph applications.
+iris-vector-graph is a knowledge graph engine built on InterSystems IRIS. All data lives in IRIS globals and SQL tables. All graph analytics run as pure ObjectScript with `$vectorop` SIMD. Python provides the API layer and build-time tooling (K-means for PLAID).
 
-## Core Architecture
+## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Client Layer                         │
-├─────────────────────────────────────────────────────────┤
-│  REST API       │  GraphQL API    │  Python Scripts    │
-│  (%CSP.REST)    │  (Legacy)       │  (Performance)     │
-├─────────────────────────────────────────────────────────┤
-│                 Business Logic Layer                    │
-├─────────────────────────────────────────────────────────┤
-│  Embedded Python │  ObjectScript   │  SQL Procedures   │
-│  (PyOps.cls)     │  (Service.cls)  │  (operators.sql)  │
-├─────────────────────────────────────────────────────────┤
-│                   Data Layer                           │
-├─────────────────────────────────────────────────────────┤
-│  RDF Tables      │  Vector Store   │  Text Search      │
-│  (rdf_*)         │  (HNSW+ACORN-1) │  (iFind)          │
-├─────────────────────────────────────────────────────────┤
-│              InterSystems IRIS Database                 │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                      Client Layer                            │
+├──────────────────────────────────────────────────────────────┤
+│  Python SDK           │  ObjectScript Direct  │  Cypher      │
+│  (IRISGraphEngine)    │  (classMethodValue)   │  (translate) │
+├──────────────────────────────────────────────────────────────┤
+│                    Execution Layer                            │
+├──────────────────────────────────────────────────────────────┤
+│  VecIndex.cls    │  PLAIDSearch.cls  │  PageRank.cls         │
+│  (RP-tree ANN)   │  (multi-vector)   │  Algorithms.cls       │
+│                  │                    │  Subgraph.cls         │
+│  Traversal.cls   │  GraphIndex.cls   │  Cypher translator    │
+│  (BFS/^KG build) │  (^NKG int index) │  (parser → SQL)       │
+├──────────────────────────────────────────────────────────────┤
+│                     Storage Layer                             │
+├──────────────────────────────────────────────────────────────┤
+│  ^KG          │  ^VecIdx       │  ^PLAID       │  ^NKG       │
+│  (graph)      │  (RP-tree)     │  (centroids)  │  (int index)│
+│               │                │               │             │
+│  Graph_KG.*   │  HNSW VECTOR   │  fhir_bridges │             │
+│  (SQL tables) │  (SQL index)   │  (SQL table)  │             │
+├──────────────────────────────────────────────────────────────┤
+│                InterSystems IRIS 2024.1+                      │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Data Model
+## Global Structures
 
-### Graph Structure (RDF-Style)
+### ^KG — Knowledge Graph
+
+```
+^KG("out", source, predicate, target) = weight
+^KG("in", target, predicate, source) = weight
+^KG("deg", node) = degree_count
+^KG("degp", node, predicate) = predicate_degree
+^KG("label", label, node) = ""
+^KG("prop", node, key) = value
+```
+
+Used by: PageRank, WCC, CDLP, PPR, Subgraph, BFS. Built from SQL tables by `Traversal.BuildKG()`.
+
+### ^NKG — Integer-Encoded Graph (Arno Acceleration)
+
+```
+^NKG("$NI", stringId) = integerIdx       — node string→int
+^NKG("$ND", integerIdx) = stringId       — node int→string
+^NKG("$LI", label) = labelIdx            — label string→int
+^NKG("$LS", labelIdx) = label            — label int→string (0=out, 1=in, 2=deg)
+^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight — out-edges
+^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight — in-edges
+^NKG(-3, sIdx) = degree
+^NKG("$meta", "nodeCount"|"edgeCount"|"version") = value
+```
+
+Built by `Traversal.BuildNKG()`. Populated automatically by `GraphIndex.InsertIndex()` on edge writes.
+
+### ^VecIdx — VecIndex RP-Tree
+
+```
+^VecIdx(name, "cfg", "dim"|"metric"|"numTrees"|"leafSize") = config
+^VecIdx(name, "vec", docId) = $vector                        — stored vectors
+^VecIdx(name, "tree", treeId, nodeId, "plane") = $vector     — split hyperplane
+^VecIdx(name, "tree", treeId, nodeId, "leaf", docId) = ""    — leaf membership
+^VecIdx(name, "meta", "count") = N
+```
+
+Uses Annoy-style two-means splitting (data-adaptive, not random hyperplane).
+
+### ^PLAID — Multi-Vector Retrieval
+
+```
+^PLAID(name, "centroid", k) = $vector          — K-means cluster center
+^PLAID(name, "docPacked", docId) = $ListBuild  — packed token $vectors (1 node per doc)
+^PLAID(name, "docNTok", docId) = count
+^PLAID(name, "docCentroid", centroidId, docId) = ""  — inverted index
+^PLAID(name, "meta", "nCentroids"|"nDocs"|"dim"|"totalTokens") = value
+```
+
+Packed storage: all tokens for a document in one `$ListBuild` of `$vector` values. Stage 2 MaxSim reads 1 global node per candidate document instead of N.
+
+## ObjectScript Classes
+
+All classes in `Graph.KG` package. Pure ObjectScript + `$vectorop` — no `Language = python`, no `iris.gref`.
+
+| Class | Purpose | Key Methods |
+|-------|---------|-------------|
+| **VecIndex** | RP-tree ANN vector search | Create, Search, SearchJSON, SearchMultiJSON, InsertJSON, InsertBatchJSON, Build, Drop |
+| **PLAIDSearch** | PLAID multi-vector retrieval | StoreCentroids, StoreDocTokens, BuildInvertedIndex, Search, Insert, Info, Drop |
+| **PageRank** | Personalized + Global PageRank | RunJson (PPR), PageRankGlobalJson |
+| **Algorithms** | Graph analytics | WCCJson, CDLPJson |
+| **Subgraph** | Bounded subgraph extraction | SubgraphJson, PPRGuidedJson |
+| **Traversal** | Graph build + BFS | BuildKG, BuildNKG, BFSFastJson |
+| **GraphIndex** | Functional index for ^NKG | InternNode, InternLabel, InsertIndex, DeleteIndex |
+| **BenchSeeder** | Benchmark graph generation | SeedRandom, SeedFromStaging |
+
+### Call Context Rule
+
+Methods callable via `classMethodValue()` (native API bridge from Python) MUST be pure ObjectScript. `Language = python` methods using `iris.gref()` only work inside IRIS embedded Python contexts. All IVG ObjectScript classes follow this rule.
+
+## SQL Schema (Graph_KG)
+
 ```sql
--- Entity classification
-rdf_labels(s VARCHAR(256), label VARCHAR(128))
-
--- Entity properties
-rdf_props(s VARCHAR(256), key VARCHAR(128), val VARCHAR(4000))
-
--- Relationships
-rdf_edges(edge_id BIGINT, s VARCHAR(256), p VARCHAR(128),
-          o_id VARCHAR(256), qualifiers VARCHAR(4000))
+Graph_KG.nodes (node_id VARCHAR(256) PK)
+Graph_KG.rdf_labels (s, label — composite PK)
+Graph_KG.rdf_props (s, "key", val — composite PK)
+Graph_KG.rdf_edges (edge_id BIGINT IDENTITY PK, s, p, o_id)
+Graph_KG.kg_NodeEmbeddings (id, label, property_name, emb VECTOR(DOUBLE, 768))
+Graph_KG.fhir_bridges (fhir_code %EXACT, kg_node_id %EXACT — composite PK, bridge_type, confidence, source_cui)
 ```
 
-### Vector Storage
-```sql
--- High-performance vector embeddings
-kg_NodeEmbeddings(node_id INT, id VARCHAR(256),
-                  emb VECTOR(DOUBLE, 768))
+## Cypher Translation
 
--- HNSW index with ACORN-1 optimization
-CREATE INDEX kg_NodeEmbeddings_HNSW ON kg_NodeEmbeddings(emb)
-AS HNSW(M=16, efConstruction=200, Distance='COSINE')
-OPTIONS {"ACORN-1":1}
-```
+The Cypher parser is a hand-written recursive-descent parser that translates openCypher to IRIS SQL:
 
-### Text Search
-```sql
--- Document storage for hybrid search
-kg_Documents(doc_id INT, node_id INT, txt VARCHAR(1000000))
-```
+- Patterns → JOINs on `rdf_edges`/`rdf_labels`/`nodes`
+- Named paths → JSON concatenation (`'{"nodes":' || JSON_ARRAY(...) || ...`)
+- CALL subqueries → CTEs (independent) or scalar subqueries (correlated)
+- Procedures → `ivg.vector.search`, `ivg.neighbors`, `ivg.ppr`
 
-## Key Components
-
-### 1. IRIS-Native REST API (`%CSP.REST`)
-- **Path**: `/kg/*` endpoints
-- **Methods**: POST vectorSearch, hybridSearch, metaPath
-- **Format**: JSON request/response
-- **Performance**: Direct IRIS processing, no external app server
-
-### 2. ObjectScript Graph Operations (v1.10+)
-- **`Graph.KG.Traversal`**: Pure ObjectScript BFS/DFS over `^KG` global — `BuildKG()`, `BFS()`, `BFSFast()`, `BFSFastJson()`
-- **`Graph.KG.PageRank`**: Pure ObjectScript PPR — `RunJson()` walks `^KG` with `$ORDER`/`$GET`, returns JSON. No `Language = python` dependency — works from SQL functions, native API bridge, and embedded Python.
-- **`Graph.KG.PyOps`**: Embedded Python wrappers — `VectorSearch()`, `HybridSearch()`, `MetaPath()`
-- **`iris.vector.graph.GraphOperators`**: SqlProc methods exposing `kg_KNN_VEC`, `kg_TXT`, `kg_GRAPH_PATH`, `kg_RRF_FUSE` as SQL functions
-
-**Architecture rule**: Methods callable via `classMethodValue()` (native API bridge) MUST be pure ObjectScript. `Language = python` methods using `iris.gref()` only work inside IRIS embedded Python contexts (SQL functions, triggers). See `docs/architecture/embedded_python_architecture.md` for details.
-
-### 3. HNSW Vector Index with ACORN-1
-- **Dimensions**: 768 (OpenAI text-embedding-ada-002 compatible)
-- **Algorithm**: Hierarchical Navigable Small World
-- **Optimization**: ACORN-1 for 2,278x faster index building
-- **Distance**: Cosine similarity
-
-### 4. Performance Testing Framework
-- **STRING Database**: Real biomedical protein interaction data
-- **Scale**: 10,000+ proteins, 50,000+ interactions
-- **Benchmarks**: Latency, throughput, scalability analysis
-- **Comparison**: Community Edition vs ACORN-1
-
-### 5. Cypher-to-SQL Translator (v1.13+)
-- **Parser**: Hand-written recursive-descent parser for openCypher subset (MATCH, WHERE, RETURN, WITH, CREATE, SET, DELETE, CALL...YIELD)
-- **Procedures**: `ivg.vector.search` (3 modes: vector, text, node ID), `ivg.neighbors` (1-hop with direction/predicate), `ivg.ppr` (PageRank via `JSON_TABLE`)
-- **Translation**: Cypher patterns → SQL CTEs with JOINs on `rdf_edges`/`rdf_labels`/`nodes`
-- **Path algorithms**: BFS/DFS via iterative SQL (IRIS lacks recursive CTEs)
-
-## Data Flow
-
-### Vector Search Operation
-```
-1. Client Request (JSON) → REST Endpoint
-2. REST → Embedded Python → Vector Processing
-3. Python → SQL: VECTOR_COSINE(emb, TO_VECTOR(?))
-4. HNSW Index → ACORN-1 Optimized Search
-5. Results → JSON Response
-```
-
-### Graph Traversal Operation
-```
-1. Client Request → REST Endpoint
-2. REST → SQL Procedure → Graph Query
-3. SQL: SELECT FROM rdf_edges WHERE s = ? AND p = ?
-4. Index Lookup → Result Set
-5. Results → JSON Response
-```
-
-### Hybrid Search Operation
-```
-1. Vector Search → Top-K Results
-2. Text Search → Top-K Results
-3. RRF Fusion → Combined Ranking
-4. Graph Filters → Final Results
-```
-
-## Performance Characteristics
-
-### ACORN-1 Optimizations
-- **Index Building**: 2,278x faster than standard IRIS
-- **Vector Operations**: Optimized HNSW algorithm
-- **Memory Usage**: Efficient vector storage and retrieval
-- **Query Performance**: Sub-millisecond graph operations
-
-### Scalability Features
-- **Horizontal**: Multiple IRIS instances with sharding
-- **Vertical**: Large memory allocation for vector indexes
-- **Concurrent**: Multi-user support with connection pooling
-- **Data Volume**: Millions of entities and relationships
-
-## Security Architecture
-
-### Authentication & Authorization
-- **IRIS Security**: Built-in user management
-- **SSL/TLS**: Encrypted connections for production
-- **API Security**: Request validation and rate limiting
-
-### Data Protection
-- **Validated Inputs**: SQL injection prevention
-- **Vector Validation**: Format and dimension checking
-- **Access Control**: Database-level permissions
-
-## Deployment Architecture
-
-### Development Environment
-```yaml
-services:
-  iris-community:
-    image: intersystemsdc/iris-community:latest
-    ports: ["1973:1972", "52773:52773"]
-```
-
-### Production Environment (ACORN-1)
-```yaml
-services:
-  iris-acorn:
-    image: docker.iscinternal.com/intersystems/iris:2025.3.0EHAT.127.0
-    ports: ["1973:1972", "52774:52773"]
-    volumes: ["./iris.key:/usr/irissys/mgr/iris.key"]
-```
-
-## Integration Points
-
-### External Data Sources
-- **STRING Database**: Protein interaction networks
-- **PubMed Central**: Scientific literature
-- **UniProt**: Protein information
-- **Gene Ontology**: Biological classifications
-
-### Client Applications
-- **Research Tools**: Biomedical analysis software
-- **Web Applications**: Interactive knowledge exploration
-- **API Clients**: Programmatic access to graph data
-- **Analytics Platforms**: Data science environments
-
-## Monitoring & Observability
-
-### Performance Metrics
-- **Latency**: Query response times by operation type
-- **Throughput**: Requests per second, entities per second
-- **Resource Usage**: Memory, CPU, disk I/O
-- **Index Performance**: HNSW search efficiency
-
-### Health Checks
-- **Database**: IRIS instance status and connectivity
-- **Indexes**: HNSW index integrity and performance
-- **Data Quality**: Entity count and relationship consistency
-- **API Endpoints**: REST service availability
-
-## Future Architecture Considerations
-
-### Scaling Strategies
-- **Read Replicas**: Multiple IRIS instances for query distribution
-- **Sharding**: Horizontal partitioning by entity type or domain
-- **Caching**: Redis or similar for frequently accessed data
-- **CDN**: Static content delivery for documentation/assets
-
-### Advanced Features
-- **Real-time Updates**: Streaming data ingestion
-- **Graph Analytics**: PageRank, community detection
-- **ML Integration**: Model training and inference
-- **Multi-tenancy**: Isolated environments per organization
+Note: Uses string concatenation instead of `JSON_OBJECT()` due to IRIS `%QPAR` bug (DP-399447).

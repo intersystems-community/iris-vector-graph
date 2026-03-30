@@ -1,310 +1,260 @@
-# IRIS Vector Graph
+# iris-vector-graph
 
-**The ultimate Graph + Vector + Text Retrieval Engine for InterSystems IRIS.**
+**Knowledge graph engine for InterSystems IRIS** — vector search, openCypher, graph analytics, and PLAID multi-vector retrieval.
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![InterSystems IRIS](https://img.shields.io/badge/IRIS-2025.1+-purple.svg)](https://www.intersystems.com/products/intersystems-iris/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/intersystems-community/iris-vector-graph/blob/main/LICENSE)
-
-IRIS Vector Graph is a general-purpose graph utility built on InterSystems IRIS that supports and demonstrates knowledge graph construction and query techniques. It combines **graph traversal**, **HNSW vector similarity**, and **lexical search** in a single, unified database.
-
----
-
-## Why IRIS Vector Graph?
-
-- **Multi-Query Power**: Query your graph via **SQL**, **openCypher (v1.3 with DML)**, or **GraphQL** — all on the same data.
-- **Transactional Engine**: Beyond retrieval — support for `CREATE`, `DELETE`, and `MERGE` operations.
-- **Blazing Fast Vectors**: Native HNSW indexing delivering **~1.7ms** search latency (vs 5.8s standard).
-- **Zero-Dependency Integration**: Built with IRIS Embedded Python — no external vector DBs or graph engines required.
-- **Production-Ready**: The engine behind [iris-vector-rag](https://github.com/intersystems-community/iris-vector-rag) for advanced RAG pipelines.
+[![PyPI](https://img.shields.io/pypi/v/iris-vector-graph)](https://pypi.org/project/iris-vector-graph/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![IRIS 2024.1+](https://img.shields.io/badge/IRIS-2024.1+-purple.svg)](https://www.intersystems.com/products/intersystems-iris/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## Installation
+## Install
 
 ```bash
-pip install iris-vector-graph
+pip install iris-vector-graph              # Core: just intersystems-irispython
+pip install iris-vector-graph[full]        # Full: + FastAPI, GraphQL, numpy, networkx
+pip install iris-vector-graph[plaid]       # + sklearn for PLAID K-means build
 ```
 
-Note: Requires **InterSystems IRIS 2025.1+** with the `irispython` runtime enabled.
+### ObjectScript Only (IPM)
+
+```
+zpm "install iris-vector-graph-core"
+```
+
+Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex. No Python. Works on any IRIS 2024.1+, all license tiers.
+
+---
+
+## What It Does
+
+| Capability | Description |
+|-----------|-------------|
+| **VecIndex** | RP-tree ANN vector search — pure ObjectScript + `$vectorop` SIMD. Annoy-style two-means splitting. |
+| **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
+| **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
+| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, DELETE, WITH, named paths, CALL subqueries. |
+| **Graph Analytics** | PageRank, WCC, CDLP, PPR-guided subgraph — pure ObjectScript over `^KG` globals. |
+| **FHIR Bridge** | ICD-10→MeSH mapping via UMLS for clinical-to-KG integration. |
+| **GraphQL** | Auto-generated schema from knowledge graph labels. |
+
+---
 
 ## Quick Start
 
-```bash
-# 1. Clone & Sync
-git clone https://github.com/intersystems-community/iris-vector-graph.git && cd iris-vector-graph
-uv sync
+### Python
 
-# 2. Spin up IRIS
-docker-compose up -d
+```python
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
 
-# 3. Start API
-uvicorn api.main:app --reload
+conn = iris.connect(hostname='localhost', port=1972, namespace='USER', username='_SYSTEM', password='SYS')
+engine = IRISGraphEngine(conn)
+engine.initialize_schema()
 ```
 
-Visit:
-- **GraphQL Playground**: [http://localhost:8000/graphql](http://localhost:8000/graphql)
-- **API Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+### Vector Search (VecIndex)
 
----
+```python
+engine.vec_create_index("drugs", 384, "cosine")
+engine.vec_insert("drugs", "metformin", embedding_vector)
+engine.vec_build("drugs")
 
-## Unified Query Engines
+results = engine.vec_search("drugs", query_vector, k=5)
+# [{"id": "metformin", "score": 0.95}, ...]
+```
 
-### openCypher (Advanced RD Parser)
-IRIS Vector Graph features a custom recursive-descent Cypher parser supporting multi-stage queries and transactional updates:
+### PLAID Multi-Vector Search
+
+```python
+# Build: Python K-means + ObjectScript inverted index
+engine.plaid_build("colbert_idx", docs)  # docs = [{"id": "x", "tokens": [[f1,...], ...]}, ...]
+
+# Search: single server-side call, pure $vectorop
+results = engine.plaid_search("colbert_idx", query_tokens, k=10)
+# [{"id": "doc_3", "score": 0.94}, ...]
+```
+
+### Cypher
 
 ```cypher
-// Complex fraud analysis with WITH and Aggregations
-MATCH (a:Account)-[r]->(t:Transaction)
-WITH a, count(t) AS txn_count
-WHERE txn_count > 5
-MATCH (a)-[:OWNED_BY]->(p:Person)
-RETURN p.name, txn_count
-```
+-- Named paths
+MATCH p = (a:Protein)-[r:INTERACTS_WITH]->(b:Protein)
+WHERE a.id = 'TP53'
+RETURN p, length(p), nodes(p), relationships(p)
 
-**Supported Clauses:** `MATCH`, `OPTIONAL MATCH`, `WITH`, `WHERE`, `RETURN`, `UNWIND`, `CREATE`, `DELETE`, `DETACH DELETE`, `MERGE`, `SET`, `REMOVE`.
-
-### GraphQL
-```graphql
-query {
-  protein(id: "PROTEIN:TP53") {
-    name
-    interactsWith(first: 5) { id name }
-    similar(limit: 3) { protein { name } similarity }
-  }
+-- Subqueries
+MATCH (p:Protein)
+CALL {
+    WITH p
+    MATCH (p)-[:INTERACTS_WITH]->(partner)
+    RETURN count(partner) AS degree
 }
+RETURN p.id, degree
+
+-- Vector search in Cypher
+CALL ivg.vector.search('Gene', 'embedding', [0.1, 0.2, ...], 5) YIELD node, score
+RETURN node, score
 ```
 
-### SQL (Hybrid Search)
-```sql
-SELECT TOP 10 id, 
-       kg_RRF_FUSE(id, vector, 'cancer suppressor') as score
-FROM nodes
-ORDER BY score DESC
-```
-
-### Auto-Generating GraphQL
-IRIS Vector Graph includes a generic, zero-config GraphQL layer that automatically builds a schema by introspecting your graph data.
+### Graph Analytics
 
 ```python
-from iris_vector_graph import IRISGraphEngine, gql
+from iris_vector_graph.operators import IRISGraphOperators
 
-engine = IRISGraphEngine(conn)
-# Starts a FastAPI/Strawberry server with sampled properties and bi-directional traversal
-gql.serve(engine, port=8000)
+ops = IRISGraphOperators(conn)
+
+# Personalized PageRank
+scores = ops.kg_PAGERANK(seed_entities=["MeSH:D011014"], damping=0.85)
+
+# Subgraph extraction
+subgraph = ops.kg_SUBGRAPH(seed_ids=["TP53", "MDM2"], k_hops=3)
+
+# PPR-guided subgraph (prevents D^k blowup)
+guided = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["TP53"], top_k=50, max_hops=5)
+
+# Community detection
+communities = ops.kg_CDLP()
+components = ops.kg_WCC()
 ```
 
-**Features:**
-- **Dynamic Types**: Auto-generates types like `Protein` or `Account` based on discovered labels.
-- **Top-level Properties**: Maps sampled properties to schema fields with keyword collision handling.
-- **Bi-directional**: Follow both `incoming` and `outgoing` relationships.
-- **Connection Pooling**: Safely handles concurrency within IRIS Community connection limits.
-
----
-
-## Scaling & Performance
-
-The integration of a native **HNSW (Hierarchical Navigable Small World)** functional index directly into InterSystems IRIS provides massive scaling benefits for hybrid graph-vector workloads. 
-
-By keeping the vector index in-process with the graph data, we achieve **subsecond multi-modal queries** that would otherwise require complex application-side joins across multiple databases.
-
-### Performance Benchmarks (2026 Refactor)
-- **High-Speed Traversal**: **~1.84M TEPS** (Traversed Edges Per Second).
-- **Sub-millisecond Latency**: 2-hop BFS on 10k nodes in **<40ms**.
-- **RDF 1.2 Support**: Native support for **Quoted Triples** (Metadata on edges) via subject-referenced properties.
-- **Query Signatures**: O(1) hop-rejection using ASQ-inspired Master Label Sets.
-
-### Why fast vector search matters for graphs
-Consider a "Find-and-Follow" query common in fraud detection:
-1.  **Find** the top 10 accounts most semantically similar to a known fraudulent pattern (Vector Search).
-2.  **Follow** all outbound transactions from those 10 accounts to identify the next layer of the money laundering ring (Graph Hop).
-
-In a standard database without HNSW, the first step (vector search) can take several seconds as the dataset grows, blocking the subsequent graph traversals. With `iris-vector-graph`, the vector lookup is reduced to **~1.7ms**, enabling the entire hybrid traversal to complete in a fraction of a second.
-
----
-
-## Interactive Demos
-
-Experience the power of IRIS Vector Graph through our interactive demo applications.
-
-### Biomedical Research Demo
-Explore protein-protein interaction networks with vector similarity and D3.js visualization.
-
-### Fraud Detection Demo
-Real-time fraud scoring with transaction networks, Cypher-based pattern matching, and bitemporal audit trails.
-
-To run the CLI demos:
-```bash
-export PYTHONPATH=$PYTHONPATH:.
-# Cypher-powered fraud detection
-python3 examples/demo_fraud_detection.py
-
-# SQL-powered "drop down" example
-python3 examples/demo_fraud_detection_sql.py
-```
-
-To run the Web Visualization demos:
-```bash
-# Start the demo server
-uv run uvicorn src.iris_demo_server.app:app --port 8200 --host 0.0.0.0
-```
-Visit [http://localhost:8200](http://localhost:8200) to begin.
-
----
-
-## iris-vector-rag Integration
-
-IRIS Vector Graph is the core engine powering [iris-vector-rag](https://github.com/intersystems-community/iris-vector-rag). You can use it in your RAG pipelines like this:
+### FHIR Bridge
 
 ```python
-from iris_vector_rag import create_pipeline
+# Load ICD-10→MeSH mappings from UMLS MRCONSO
+# python scripts/ingest/load_umls_bridges.py --mrconso /path/to/MRCONSO.RRF
 
-# Create a GraphRAG pipeline powered by this engine
-pipeline = create_pipeline('graphrag')
-
-# Combined vector + text + graph retrieval
-result = pipeline.query(
-    "What are the latest cancer treatment approaches?",
-    top_k=5
-)
+# Query: ICD codes → KG anchors
+anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
+# → ["MeSH:D001996", "MeSH:D003924"]  (filtered to nodes in KG)
 ```
+
+### ObjectScript Direct (no Python)
+
+```objectscript
+// VecIndex
+Do ##class(Graph.KG.VecIndex).Create("myidx", 384, "cosine", 4, 50)
+Do ##class(Graph.KG.VecIndex).InsertJSON("myidx", "doc1", "[0.1, 0.2, ...]")
+Do ##class(Graph.KG.VecIndex).Build("myidx")
+Set results = ##class(Graph.KG.VecIndex).SearchJSON("myidx", "[0.3, ...]", 10, 8)
+
+// PLAID
+Set results = ##class(Graph.KG.PLAIDSearch).Search("myidx", queryTokensJSON, 10, 4)
+
+// Graph analytics
+Do ##class(Graph.KG.Traversal).BuildKG()
+Set ppr = ##class(Graph.KG.PageRank).RunJson(seedsJSON, 0.85, 50)
+Set sub = ##class(Graph.KG.Subgraph).SubgraphJson(seedsJSON, 3, "")
+```
+
+---
+
+## Architecture
+
+### Global Structure
+
+| Global | Purpose |
+|--------|---------|
+| `^KG` | Knowledge graph — `("out",s,p,o)`, `("in",o,p,s)`, `("deg",s)`, `("label",label,s)`, `("prop",s,key)` |
+| `^NKG` | Integer-encoded `^KG` for Arno acceleration — `(-1,sIdx,-(pIdx+1),oIdx)` |
+| `^VecIdx` | VecIndex RP-tree ANN — centroids, tree nodes, leaf vectors |
+| `^PLAID` | PLAID multi-vector — centroids, packed doc tokens, inverted index |
+
+### Schema (Graph_KG)
+
+| Table | Purpose |
+|-------|---------|
+| `nodes` | Node registry (node_id PK) |
+| `rdf_edges` | Edges (s, p, o_id) |
+| `rdf_labels` | Node labels (s, label) |
+| `rdf_props` | Node properties (s, key, val) |
+| `kg_NodeEmbeddings` | HNSW vector index (id, emb VECTOR) |
+| `fhir_bridges` | ICD-10→MeSH clinical code mappings |
+
+### ObjectScript Classes (iris-vector-graph-core)
+
+| Class | Methods |
+|-------|---------|
+| `Graph.KG.VecIndex` | Create, Insert, InsertJSON, Build, Search, SearchJSON, SearchMultiJSON, SeededVectorExpand, Drop, Info |
+| `Graph.KG.PLAIDSearch` | StoreCentroids, StoreDocTokens, BuildInvertedIndex, Search, Insert, Info, Drop |
+| `Graph.KG.PageRank` | RunJson (PPR), PageRankGlobalJson (global) |
+| `Graph.KG.Algorithms` | WCCJson, CDLPJson |
+| `Graph.KG.Subgraph` | SubgraphJson, PPRGuidedJson |
+| `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson |
+| `Graph.KG.GraphIndex` | InternNode, InternLabel, InsertIndex (dual ^KG+^NKG write) |
+
+---
+
+## Performance
+
+| Operation | Latency | Details |
+|-----------|---------|---------|
+| VecIndex search (1K vecs, 128-dim) | 4ms | RP-tree + `$vectorop` SIMD |
+| HNSW search (143K vecs, 768-dim) | 1.7ms | Native IRIS VECTOR index |
+| PLAID search (500 docs, 4 query tokens) | ~14ms | Centroid scoring + MaxSim |
+| PPR (10K nodes) | 62ms | Pure ObjectScript, early termination |
+| 1-hop neighbors | 0.3ms | `$Order` on `^KG` |
+| k=2 subgraph (10K nodes) | 1.8ms | BFS over `^KG` |
 
 ---
 
 ## Documentation
 
-- [Detailed Architecture](https://github.com/intersystems-community/iris-vector-graph/blob/main/docs/architecture/ARCHITECTURE.md)
-- [Biomedical Domain Examples](https://github.com/intersystems-community/iris-vector-graph/tree/main/examples/domains/biomedical/)
-- [Full Test Suite](https://github.com/intersystems-community/iris-vector-graph/tree/main/tests/)
-- [iris-vector-rag Integration](https://github.com/intersystems-community/iris-vector-rag)
-- [Verbose README](https://github.com/intersystems-community/iris-vector-graph/blob/main/docs/README_VERBOSE.md) (Legacy)
+- [Python SDK Reference](docs/python/PYTHON_SDK.md)
+- [Architecture](docs/architecture/ARCHITECTURE.md)
+- [Schema Reference](docs/architecture/ACTUAL_SCHEMA.md)
+- [Setup Guide](docs/setup/QUICKSTART.md)
+- [Testing Policy](docs/TESTING_POLICY.md)
+- [Enhancement Specs](docs/enhancements/)
 
 ---
 
 ## Changelog
 
-### v1.16.0 (2026-03-19)
-- **`kg_PAGERANK`**: Global PageRank — uniform teleport across all nodes, early termination on convergence. Pure ObjectScript over `^KG`. Returns `List[Tuple[str, float]]` sorted descending.
-- **`kg_WCC`**: Weakly Connected Components — bidirectional label propagation over `^KG("out")` + `^KG("in")`. Returns `Dict[str, str]` mapping node → component label (min node ID).
-- **`kg_CDLP`**: Community Detection via Label Propagation — most-frequent-neighbor-label with smallest-label tie-breaking. Returns `Dict[str, str]` mapping node → community label.
+### v1.28.0 (2026-03-29)
+- Lightweight default install — base requires only `intersystems-irispython`
+- Optional extras: `[full]`, `[plaid]`, `[dev]`, `[ml]`, `[visualization]`, `[biodata]`
+- IPM packages: `iris-vector-graph-core` (ObjectScript only) + `iris-vector-graph` (full)
 
-### v1.14.0 (2026-03-19)
-- **`kg_SUBGRAPH`**: New bounded k-hop subgraph extraction — single call returns all nodes, edges, properties, labels, and optionally embeddings within k hops of seed nodes. Server-side pure ObjectScript over `^KG` globals (<100ms on 10K-node graphs).
-- **`SubgraphData` model**: New dataclass with `nodes`, `edges`, `node_properties`, `node_labels`, `node_embeddings`, `seed_ids` fields. Returned by `kg_SUBGRAPH()`.
-- **Edge type filtering**: `edge_types=["MENTIONS"]` restricts BFS traversal to specified predicates only.
-- **Safety limits**: `max_nodes=10000` caps subgraph size, preventing memory exhaustion on dense graphs.
-- **Embedding inclusion**: `include_embeddings=True` bulk-fetches embedding vectors via SQL for nodes in the extracted subgraph.
-- **8 unit + 17 e2e tests**: Chain graph, edge filtering, safety limits, cyclic deduplication, embeddings, server-side JSON, empty input — all against live IRIS.
+### v1.27.0
+- PLAID packed token storage — `$ListBuild` of `$vector` per document (53 `$Order` → 1 `$Get`)
 
-### v1.13.0 (2026-03-18)
-- **Cypher `ivg.neighbors`**: New procedure — `CALL ivg.neighbors($sources, 'MENTIONS', 'out') YIELD neighbor`. Supports `out`/`in`/`both` direction with optional predicate filter. Generates efficient `IN (?,?,...)` CTE.
-- **Cypher `ivg.ppr`**: New procedure — `CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score`. Calls `Graph_KG.kg_PPR` server-side, wraps JSON result via `JSON_TABLE` for tabular output.
-- **Cypher `ivg.vector.search` Mode 3**: String query without `embedding_config` is now treated as a **node ID** — uses HNSW subquery activation (`SELECT e2.emb WHERE e2.id = ?`) with self-exclusion. String WITH `embedding_config` remains Mode 2 (EMBEDDING function).
+### v1.26.0
+- PLAID multi-vector retrieval — `PLAIDSearch.cls` pure ObjectScript + `$vectorop`
+- Python wrappers: `plaid_build`, `plaid_search`, `plaid_insert`, `plaid_info`, `plaid_drop`
 
-### v1.12.0 (2026-03-18)
-- **`kg_KNN_VEC` accepts node ID**: `ops.kg_KNN_VEC("PMID:630", k=10)` detects non-JSON input and uses server-side subquery `VECTOR_COSINE(emb, (SELECT emb WHERE id = ?))` — lets IRIS constant-fold and activate HNSW index. ~50ms vs ~400ms for literal-vector-through-bridge.
+### v1.25.1
+- VecIndex Annoy-style two-means tree splitting (fixes degenerate trees on clustered embeddings)
 
-### v1.11.0 (2026-03-18)
-- **`kg_NEIGHBORS`**: New 1-hop neighborhood primitive on `IRISGraphOperators`. Supports `out`/`in`/`both` direction, optional predicate filter, chunked `IN` queries for >500 source IDs. Follows NetworkX/APOC naming conventions.
-- **`kg_MENTIONS`**: Convenience alias — `ops.kg_MENTIONS(article_ids)` = `ops.kg_NEIGHBORS(article_ids, predicate="MENTIONS")`.
-- **Documentation overhaul**: v1.10.2 changelog, embedded Python bridge constraint matrix, `IRISGraphOperators` API reference in PYTHON_SDK, call-context architecture docs.
+### v1.24.0
+- VecIndex nprobe recall fix (counts leaf visits, not branch points)
+- `SearchMultiJSON`, `InsertBatchJSON` batch APIs
 
-### v1.10.2 (2026-03-18)
-- **Pure ObjectScript PageRank**: Rewrote `Graph.KG.PageRank.RunJson` as pure ObjectScript — eliminates all `iris.gref`/`iris.cls` dependencies. Works from every call context: SQL stored procedure, native API bridge, and embedded Python. Previous `Language = python` implementation only worked inside IRIS embedded Python, failing through the external `classMethodValue()` bridge.
-- **850x Vector Search Fix**: `kg_KNN_VEC` HNSW path now queries `Graph_KG.kg_NodeEmbeddings` (canonical table) with `TO_VECTOR(?, DOUBLE)`. Previously queried non-existent `kg_NodeEmbeddings_optimized` (FLOAT) causing -259 datatype mismatch → 42s brute-force fallback on 143K vectors vs 50ms with HNSW.
-- **Personalized PageRank API**: New `ops.kg_PPR(seed_entities, damping, max_iterations)` method on `IRISGraphOperators`. Primary path calls `Graph.KG.PageRank.RunJson` via native API; falls back to SQL function; returns `List[Tuple[str, float]]` sorted by score.
-- **kg_PPR SQL Function Auto-Install**: `GraphSchema.get_procedures_sql_list()` now includes `kg_PPR` calling `Graph.KG.PageRank.RunJson` (pure ObjectScript). Previously referenced non-existent `PageRankEmbedded.ComputePageRank`.
-- **^KG Subscript Fix**: `kg_GRAPH_WALK` now accesses `^KG("out", entity, predicate)` — previously used `^KG(entity, predicate)` (missing "out" prefix), causing the fast `^KG` global path to always return empty and fall back to SQL.
-- **GraphOperators.cls Schema Fix**: All SQL queries in `iris.vector.graph.GraphOperators` changed from `SQLUSER.*` to `Graph_KG.*` schema references.
-- **Comprehensive E2E Tests**: 10 unit tests + 11 e2e tests against live IRIS verify all operator wiring fixes. Star-graph PPR topology test, HNSW no-fallback test, vector-graph search expansion test, idempotent schema init test.
+### v1.22.0
+- VecIndex `SearchJSON`/`InsertJSON` — eliminated xecute path (250ms → 4ms)
 
-### v1.9.0 (2026-02-28)
-- **ObjectScript Fast Paths**: Deployed `.cls` layer for PPR and BFS graph traversal — native IRIS ObjectScript execution for maximum throughput
-- **Reliable Test Infrastructure**: Eliminated `MockContainer` — `iris_test_container` now uses `IRISContainer.attach()` to connect to existing containers; session fixture blocks until `test/test` credentials are verified before yielding
-- **Correct Vector Dimensions**: Schema setup now drops and recreates `kg_NodeEmbeddings` (768-dim) to prevent silent 384→768 mismatch failures
-- **iris-devtester 1.14.0**: All container references use `container_name="iris-vector-graph-main"` for deterministic multi-container environments
-- **Auto-Generating GraphQL**: Connection pooling, `DYNAMIC_TYPES.clear()` on rebuild, dot-notation column name fixes
-- **FastAPI `/health` endpoint**: Always available regardless of engine state; `api_client` test fixture injects live engine
-- **Test isolation**: Numeric-comparison Cypher tests scoped to prefix; atomic fixture cleanup prevents FK-order rollback races
+### v1.21.0
+- VecIndex RP-tree ANN — `vec_create_index`, `vec_insert`, `vec_build`, `vec_search`
 
-### v1.8.0 (2026-01-15)
-- **NodePK Feature**: Primary-key node table (`Graph_KG.nodes`) with FK constraints on all edge/label/prop tables
-- **Migration Utilities**: `discover_nodes`, `bulk_insert_nodes`, `validate_migration`, `execute_migration` in `scripts/migrations/`
-- **Cypher Vector Search**: Native `ivg.vector.search` procedure for Cypher-embedded HNSW queries
-- **Stored Procedure Install**: `kg_KNN_VEC` server-side path with Python fallback
+### v1.20.0
+- Arno acceleration wrappers: `khop()`, `ppr()`, `random_walk()` with auto-detection
 
-### v1.7.0 (2026-01-01)
-- **Schema Stored Procedures**: Initialized via `iris_vector_graph.schema.initialize_schema()`
-- **GraphQL Auto-Generation**: Zero-config schema introspection from live graph labels
+### v1.19.0
+- `^NKG` integer index for Arno acceleration
+- `GraphIndex.cls`, `BenchSeeder.SeedRandom()`
 
-### v1.6.0 (2025-01-31)
-- **High-Performance Batch API**: New `get_nodes(node_ids)` reduces database round-trips by 100x+ for large result sets
-- **Advanced Substring Search**: Integrated IRIS `iFind` indexing for sub-20ms `CONTAINS` queries on 10,000+ records
-- **GraphQL Acceleration**: Implemented `GenericNodeLoader` to eliminate N+1 query patterns in GQL traversals
-- **Transactional Batching**: Optimized `bulk_create_nodes/edges` with `executemany` and unified transactions
-- **Functional Indexing**: Native JSON-based edge confidence indexing for fast complex filtering
+### v1.18.0
+- FHIR-to-KG bridge: `fhir_bridges` table, `get_kg_anchors()`, UMLS MRCONSO ingest
 
-### v1.5.4 (2025-01-31)
-- **Schema Cleanup**: Removed invalid `VECTOR_DIMENSION` call from schema utilities
-- **Refinement**: Engine now relies solely on inference and explicit config for dimensions
+### v1.17.0
+- Cypher named path bindings (`MATCH p = ... RETURN p, length(p), nodes(p), relationships(p)`)
+- Cypher CALL subqueries (independent CTE + correlated scalar)
+- `kg_PPR_GUIDED_SUBGRAPH` with ObjectScript fast path
+- Repo cleanup: 80+ stale files removed
 
-### v1.5.3 (2025-01-31)
-- **Robust Embeddings**: Fixed embedding dimension detection for IRIS Community 2025.1
-- **API Improvements**: Added `embedding_dimension` param to `IRISGraphEngine` for manual override
-- **Auto-Inference**: Automatically infers dimension from input if detection fails
-- **Code Quality**: Major cleanup of `engine.py` to remove legacy duplicates
-
-### v1.5.2 (2025-01-31)
-- **Engine Acceleration**: Ported high-performance SQL paths for `get_node()` and `count_nodes()`
-- **Bulk Loading**: New `bulk_create_nodes()` and `bulk_create_edges()` methods with `%NOINDEX` support
-- **Performance**: Verified 80x speedup for single-node reads and 450x for counts vs standard Cypher
-
-### v1.5.1 (2025-01-31)
-- **Extreme Performance**: Verified 38ms latency for 5,000-node property queries (at 10k entity scale)
-- **Subquery Stability**: Optimized `REPLACE` string aggregation to avoid IRIS `%QPAR` optimizer bugs
-- **Scale Verified**: Robust E2E stress tests confirm industrial-grade performance for 10,000+ nodes
-
-### v1.4.9 (2025-01-31)
-- **Exact Collation**: Added `%EXACT` to VARCHAR columns for case-sensitive matching
-- **Performance**: Prevents default `UPPER` collation behavior in IRIS 2024.2+
-- **Case Sensitivity**: Ensures node IDs, labels, and property keys are case-sensitive
-
-### v1.4.8 (2025-01-31)
-- **Fix SUBSCRIPT error**: Removed `idx_props_key_val` which caused errors with large values
-- **Improved Performance**: Maintained composite indexes that don't include large VARCHAR columns
-
-### v1.4.7 (2025-01-31)
-- **Revert to VARCHAR(64000)**: LONGVARCHAR broke REPLACE; VARCHAR(64000) keeps compatibility
-- **Large Values**: 64KB property values, REPLACE works, no CAST needed
-
-### ~~v1.4.5/1.4.6~~ (deprecated - use 1.4.7)
-- v1.4.5 used LONGVARCHAR which broke REPLACE function
-- v1.4.6 used CAST which broke on old schemas
-
-### v1.4.4 (2025-01-31)
-- **Bulk Loading Support**: `%NOINDEX` INSERTs, `disable_indexes()`, `rebuild_indexes()`
-- **Fast Ingest**: Skip index maintenance during bulk loads, rebuild after
-
-### v1.4.3 (2025-01-31)
-- **Composite Indexes**: Added (s,key), (s,p), (p,o_id), (s,label) based on TrustGraph patterns
-- **12 indexes total**: Optimized for label filtering, property lookups, edge traversal
-
-### v1.4.2 (2025-01-31)
-- **Performance Indexes**: Added indexes on rdf_labels, rdf_props, rdf_edges for fast graph traversal
-- **ensure_indexes()**: New method to add indexes to existing databases
-- **Composite Index**: Added (key, val) index on rdf_props for property value lookups
-
-### v1.4.1 (2025-01-31)
-- **Embedding API**: Added `get_embedding()`, `get_embeddings()`, `delete_embedding()` methods
-- **Schema Prefix in Engine**: All engine SQL now uses configurable schema prefix
-
-### v1.4.0 (2025-01-31)
-- **Schema Prefix Support**: `set_schema_prefix('Graph_KG')` for qualified table names
-- **Pattern Operators Fixed**: `CONTAINS`, `STARTS WITH`, `ENDS WITH` now work correctly
-- **IRIS Compatibility**: Removed recursive CTEs and `NULLS LAST` (unsupported by IRIS)
-- **ORDER BY Fix**: Properties in ORDER BY now properly join rdf_props table
-- **type(r) Verified**: Relationship type function works in RETURN/WHERE clauses
+### [Earlier versions →](docs/CHANGELOG_ARCHIVE.md)
 
 ---
 
-**Author: Thomas Dyar** (thomas.dyar@intersystems.com)
+**License**: MIT | **Author**: Thomas Dyar (thomas.dyar@intersystems.com)

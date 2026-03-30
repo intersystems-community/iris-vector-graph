@@ -1,209 +1,88 @@
-# IRIS Graph-AI Actual Database Schema
+# Schema Reference
 
-## Overview
+## SQL Tables (Graph_KG)
 
-This document describes the **actual** database schema and capabilities as discovered through testing, versus what is documented in examples.
-
-## 🔍 Schema Validation Results
-
-### ✅ **Tables That Exist**
-
-| Table | Purpose | Structure | Status |
-|-------|---------|-----------|--------|
-| **`rdf_edges`** | Graph relationships | `(id, s, p, o_id, qualifiers)` | ✅ **Working** |
-| **`rdf_labels`** | Entity type labels | `(s, label)` | ✅ **Working** |
-| **`rdf_props`** | Entity properties | `(s, key, val)` | ✅ **Working** |
-| **`kg_NodeEmbeddings`** | Vector embeddings | Unknown structure | ✅ **Exists** |
-
-### ❌ **Missing Capabilities**
-
-| Feature | Documentation Claims | Reality | Impact |
-|---------|---------------------|---------|--------|
-| **Vector Functions** | `VECTOR_COSINE()`, `TO_VECTOR()` | ❌ **Don't exist** | Vector similarity examples are broken |
-| **JSON Functions** | `JSON_VALUE()`, `JSON_EXTRACT()` | ❌ **Don't exist** | Qualifier parsing examples are broken |
-| **Vector Procedures** | `kg_KNN_VEC()`, `kg_RRF_FUSE()` | ❌ **Don't exist** | Python SDK examples are broken |
-| **Custom Procedures** | `FindShortestPath()` | ❌ **Don't exist** | Advanced graph queries are broken |
-
-## 📊 **Actual Table Structures**
-
-### `rdf_edges` Table
+### nodes
 ```sql
--- Actual structure discovered
-CREATE TABLE rdf_edges (
-    id INTEGER,           -- Auto-increment ID
-    s VARCHAR,           -- Subject (source entity)
-    p VARCHAR,           -- Predicate (relationship type)
-    o_id VARCHAR,        -- Object (target entity)
-    qualifiers VARCHAR   -- JSON-formatted metadata
-);
-```
-
-**Sample Data:**
-```
-(1, 'protein:9606.ENSP00000000233', 'interacts_with', 'protein:9606.ENSP00000354878', '{"confidence": 513}')
-(2, 'protein:9606.ENSP00000000233', 'interacts_with', 'protein:9606.ENSP00000310226', '{"confidence": 648}')
-```
-
-### `rdf_labels` Table
-```sql
--- Entity type classifications
-CREATE TABLE rdf_labels (
-    s VARCHAR,           -- Subject (entity ID)
-    label VARCHAR        -- Entity type (protein, drug, disease, etc.)
-);
-```
-
-### `rdf_props` Table
-```sql
--- Entity properties and attributes
-CREATE TABLE rdf_props (
-    s VARCHAR,           -- Subject (entity ID)
-    key VARCHAR,         -- Property name
-    val VARCHAR          -- Property value
-);
-```
-
-### `kg_NodeEmbeddings` Table
-```sql
--- Vector embeddings (structure unknown)
--- EXISTS but structure not validated
-```
-
-## ✅ **SQL Patterns That Actually Work**
-
-### 1. **Basic Graph Traversal**
-```sql
--- Multi-hop joins work correctly
-SELECT e1.s as drug, e2.o_id as protein, e3.o_id as disease
-FROM rdf_edges e1
-JOIN rdf_edges e2 ON e1.o_id = e2.s
-JOIN rdf_edges e3 ON e2.o_id = e3.s
-WHERE e1.s = 'DRUG:aspirin'
-  AND e1.p = 'targets'
-  AND e2.p = 'interacts_with'
-  AND e3.p = 'associated_with';
-```
-
-### 2. **Entity Counting and Aggregation**
-```sql
--- Hub protein identification
-SELECT s as protein, COUNT(*) as connections
-FROM rdf_edges
-WHERE p = 'interacts_with'
-  AND s LIKE 'protein:%'
-GROUP BY s
-ORDER BY connections DESC
-LIMIT 20;
-```
-
-### 3. **Label-based Filtering**
-```sql
--- Find entities by type
-SELECT l.s, l.label
-FROM rdf_labels l
-WHERE l.label = 'protein'
-LIMIT 100;
-```
-
-## ❌ **SQL Patterns That DON'T Work**
-
-### 1. **Vector Similarity (Documentation is Wrong)**
-```sql
--- BROKEN: These functions don't exist
-SELECT TOP 10 id,
-       VECTOR_COSINE(embedding, ?) as similarity_score
-FROM kg_NodeEmbeddings
-WHERE label = 'protein'
-ORDER BY similarity_score DESC;
-```
-
-### 2. **JSON Qualifier Extraction (Documentation is Wrong)**
-```sql
--- BROKEN: JSON functions don't exist
-SELECT s, JSON_VALUE(qualifiers, '$.confidence') as confidence
-FROM rdf_edges
-WHERE JSON_VALUE(qualifiers, '$.confidence') > 0.7;
-```
-
-### 3. **Advanced Graph Functions (Documentation is Wrong)**
-```sql
--- BROKEN: Custom procedures don't exist
-CALL FindShortestPath('DRUG:aspirin', 'DISEASE:cancer', 'targets|interacts_with');
-```
-
-### 4. **Recursive CTEs (May Not Be Supported)**
-```sql
--- UNCERTAIN: May not work in IRIS
-WITH RECURSIVE pathway(...) AS (
-  -- Complex recursive queries
+CREATE TABLE Graph_KG.nodes (
+    node_id VARCHAR(256) PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
-SELECT * FROM pathway;
 ```
 
-## 🔧 **Working Alternatives**
-
-### 1. **Manual JSON Parsing**
-Since `JSON_VALUE()` doesn't exist, we need manual parsing:
+### rdf_labels
 ```sql
--- Alternative: Use IRIS string functions or application-level parsing
-SELECT s, qualifiers
-FROM rdf_edges
-WHERE qualifiers LIKE '%"confidence"%';
+CREATE TABLE Graph_KG.rdf_labels (
+    s VARCHAR(256) NOT NULL,
+    label VARCHAR(128) NOT NULL,
+    CONSTRAINT pk_labels PRIMARY KEY (s, label)
+)
 ```
 
-### 2. **Application-Level Vector Search**
-Since vector functions don't exist in SQL:
-```python
-# Use IRIS Python embedding or external vector libraries
-# Process vectors in application layer, not SQL
+### rdf_props
+```sql
+CREATE TABLE Graph_KG.rdf_props (
+    s VARCHAR(256) NOT NULL,
+    "key" VARCHAR(128) NOT NULL,
+    val VARCHAR(64000),
+    CONSTRAINT pk_props PRIMARY KEY (s, "key")
+)
 ```
 
-### 3. **Iterative Path Finding**
-Since recursive CTEs may not work:
-```python
-# Implement graph traversal in Python
-def find_paths(start, end, max_hops=3):
-    # Iterative breadth-first search
-    pass
+### rdf_edges
+```sql
+CREATE TABLE Graph_KG.rdf_edges (
+    edge_id BIGINT IDENTITY PRIMARY KEY,
+    s VARCHAR(256) NOT NULL,
+    p VARCHAR(128) NOT NULL,
+    o_id VARCHAR(256) NOT NULL,
+    qualifiers VARCHAR(4000)
+)
 ```
 
-## 📋 **Documentation Fix Requirements**
+### kg_NodeEmbeddings
+```sql
+CREATE TABLE Graph_KG.kg_NodeEmbeddings (
+    node_id INT IDENTITY,
+    id VARCHAR(256),
+    label VARCHAR(128),
+    property_name VARCHAR(128),
+    emb VECTOR(DOUBLE, 768)
+)
+-- HNSW index
+CREATE INDEX kg_emb_hnsw ON Graph_KG.kg_NodeEmbeddings(emb)
+    AS HNSW(M=16, efConstruction=200, Distance='COSINE')
+```
 
-### **Critical Issues to Fix:**
+### fhir_bridges
+```sql
+CREATE TABLE Graph_KG.fhir_bridges (
+    fhir_code VARCHAR(64) %EXACT NOT NULL,
+    kg_node_id VARCHAR(256) %EXACT NOT NULL,
+    fhir_code_system VARCHAR(128) NOT NULL DEFAULT 'ICD10CM',
+    bridge_type VARCHAR(64) NOT NULL DEFAULT 'icd10_to_mesh',
+    confidence FLOAT DEFAULT 1.0,
+    source_cui VARCHAR(16),
+    CONSTRAINT pk_bridge PRIMARY KEY (fhir_code, kg_node_id)
+)
+-- Indexes
+CREATE INDEX idx_bridges_code_type ON Graph_KG.fhir_bridges (fhir_code, bridge_type)
+CREATE INDEX idx_bridges_kg_node ON Graph_KG.fhir_bridges (kg_node_id)
+CREATE INDEX idx_bridges_type ON Graph_KG.fhir_bridges (bridge_type)
+```
 
-1. **Remove ALL vector similarity SQL examples** until functions are implemented
-2. **Remove ALL JSON extraction SQL examples** until functions are implemented
-3. **Remove ALL stored procedure calls** until procedures are implemented
-4. **Update Python SDK examples** to remove non-existent procedure calls
-5. **Replace broken examples** with working alternatives
+Note: `%EXACT` on `fhir_code` and `kg_node_id` preserves case (IRIS VARCHAR uppercases by default).
 
-### **Working Examples to Keep:**
+## SQL Functions (Stored Procedures)
 
-1. ✅ Basic graph joins and traversal
-2. ✅ Entity counting and aggregation
-3. ✅ Label-based filtering
-4. ✅ Property-based searches
-5. ✅ Basic IRIS connection patterns
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `kg_KNN_VEC` | `(query_vector, k, label, property)` | HNSW vector search, returns (id, score) |
+| `kg_PPR` | `(seeds_json, damping, max_iter)` | Personalized PageRank via ObjectScript |
+| `kg_NEIGHBORS` | `(sources, predicate, direction)` | 1-hop neighborhood expansion |
+| `kg_SUBGRAPH` | `(seeds_json, k_hops, edge_types)` | Bounded k-hop subgraph extraction |
+| `kg_RRF_FUSE` | `(k, k1, k2, c, vector, text)` | Reciprocal rank fusion (vector + text) |
 
-### **Examples That Need Alternative Implementations:**
+## Global Structures
 
-1. **Vector similarity** → External libraries or IRIS Python embedding
-2. **JSON parsing** → Application-level processing
-3. **Advanced graph algorithms** → NetworkX integration
-4. **Hybrid search** → Combine external tools
-
-## 🎯 **Recommendations**
-
-### **Immediate Actions:**
-1. **Remove broken examples** from all documentation
-2. **Replace with working patterns** that actually function
-3. **Implement missing procedures** if vector/JSON capabilities exist elsewhere
-4. **Add schema documentation** showing actual table structures
-
-### **Future Development:**
-1. **Implement vector functions** as IRIS stored procedures
-2. **Add JSON processing** capabilities to IRIS
-3. **Create custom graph algorithms** as procedures
-4. **Build hybrid search** combining IRIS + external tools
-
-This analysis reveals significant gaps between documented capabilities and actual implementation, requiring immediate documentation fixes to maintain credibility.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed `^KG`, `^NKG`, `^VecIdx`, and `^PLAID` global documentation.
