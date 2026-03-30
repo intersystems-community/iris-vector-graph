@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "1.27.0"
+version = "1.28.0"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -39,22 +39,28 @@ requires-python = ">=3.10"
 # Core dependencies
 dependencies = [
     "intersystems-irispython>=3.2.0",
-    "networkx>=3.0",
-    "pandas>=2.0.0",
+]
+
+[project.optional-dependencies]
+core = [
+    "intersystems-irispython>=3.2.0",
+]
+full = [
     "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "networkx>=3.0",
     "requests>=2.28.0",
     "python-dotenv>=1.0.0",
     "fastapi>=0.118.0",
     "uvicorn>=0.37.0",
     "pydantic>=2.11.9",
-    "pytest-asyncio>=1.2.0",
-    "py2neo>=2021.2.4",
     "httpx>=0.28.1",
     "strawberry-graphql[fastapi]>=0.280.0",
 ]
-
-# Optional dependencies for different use cases
-[project.optional-dependencies]
+plaid = [
+    "numpy>=1.24.0",
+    "scikit-learn>=1.3.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -63,7 +69,7 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.5.0",
     "iris-devtester>=1.14.0",
-    "pytest-playwright>=0.7.0"
+    "pytest-playwright>=0.7.0",
 ]
 performance = [
     "psutil>=5.9.0",
