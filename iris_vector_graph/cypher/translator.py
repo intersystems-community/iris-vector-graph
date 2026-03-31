@@ -90,6 +90,7 @@ class SQLQuery:
     parameters: List[List[Any]] = field(default_factory=list)
     query_metadata: QueryMetadata = field(default_factory=QueryMetadata)
     is_transactional: bool = False
+    var_length_paths: Optional[List[dict]] = None
 
 
 class TranslationContext:
@@ -107,6 +108,7 @@ class TranslationContext:
         self.named_paths: Dict[str, ast.NamedPath] = {} if parent is None else parent.named_paths.copy()
         self.path_node_aliases: Dict[str, List[str]] = {} if parent is None else parent.path_node_aliases.copy()
         self.path_edge_aliases: Dict[str, List[str]] = {} if parent is None else parent.path_edge_aliases.copy()
+        self.var_length_paths: List[dict] = [] if parent is None else parent.var_length_paths
 
         self.select_items: List[str] = []
         self.from_clauses: List[str] = []
@@ -494,10 +496,11 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
     else:
         sql, p = context.build_stage_sql(cypher_query.return_clause.distinct if cypher_query.return_clause else False)
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
+        vl = context.var_length_paths or None
         if context.stages:
             sql = "WITH " + ",\n".join(context.stages) + "\n" + sql
-            return SQLQuery(sql=sql, parameters=[context.all_stage_params + p], query_metadata=metadata)
-        return SQLQuery(sql=sql, parameters=[p], query_metadata=metadata)
+            return SQLQuery(sql=sql, parameters=[context.all_stage_params + p], query_metadata=metadata, var_length_paths=vl)
+        return SQLQuery(sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl)
 
 
 def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> list:
@@ -810,6 +813,24 @@ def translate_node_pattern(node, context, metadata, optional=False):
 
 
 def translate_relationship_pattern(rel, source_node, target_node, context, metadata, optional=False):
+    if rel.variable_length is not None:
+        source_alias = context.variable_aliases.get(source_node.variable, "")
+        target_alias = context.register_variable(target_node.variable)
+        context.var_length_paths.append({
+            "source_var": source_node.variable,
+            "source_alias": source_alias,
+            "target_var": target_node.variable,
+            "target_alias": target_alias,
+            "types": rel.types or [],
+            "direction": rel.direction.value if rel.direction else "out",
+            "min_hops": rel.variable_length.min_hops,
+            "max_hops": rel.variable_length.max_hops,
+        })
+        if not context.from_clauses:
+            context.from_clauses.append(f"{_table('nodes')} {target_alias}")
+        else:
+            context.join_clauses.append(f"JOIN {_table('nodes')} {target_alias} ON 1=1")
+        return
     source_alias = context.variable_aliases[source_node.variable]
     is_new_target = target_node.variable not in context.variable_aliases
     target_alias = context.register_variable(target_node.variable)

@@ -14,7 +14,7 @@ import logging
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql, _table, set_schema_prefix
-from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.security import validate_table_name
 
@@ -326,7 +326,10 @@ class IRISGraphEngine:
                         )
 
         sql_query = translate_to_sql(parsed, parameters)
-        
+
+        if sql_query.var_length_paths:
+            return self._execute_var_length_cypher(sql_query, parameters)
+
         cursor = self.conn.cursor()
         metadata = sql_query.query_metadata
         
@@ -376,6 +379,62 @@ class IRISGraphEngine:
                 "params": p,
                 "metadata": metadata
             }
+
+    def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
+        import json as _json
+        vl = sql_query.var_length_paths[0]
+        predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
+        max_hops = vl["max_hops"]
+        min_hops = vl["min_hops"]
+
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        source_id = None
+        for item in params:
+            if isinstance(item, str) and not item.startswith("Graph_KG"):
+                source_id = item
+                break
+        if source_id is None and parameters:
+            source_id = next(iter(parameters.values()), None)
+
+        if source_id is None:
+            return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+
+        try:
+            bfs_json = _call_classmethod(
+                self.conn, "Graph.KG.Traversal", "BFSFastJson",
+                source_id, predicates_json, max_hops, ""
+            )
+            bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
+        except Exception as e:
+            logger.warning(f"BFSFastJson failed: {e}")
+            return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+
+        if min_hops > 1:
+            bfs_results = [r for r in bfs_results if r.get("step", 1) >= min_hops]
+
+        seen = set()
+        target_ids = []
+        for r in bfs_results:
+            oid = r.get("o")
+            if oid and oid not in seen:
+                seen.add(oid)
+                target_ids.append(oid)
+
+        if not target_ids:
+            return {"columns": ["b_id", "b_labels", "b_props"], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+
+        nodes = self.get_nodes(target_ids)
+        rows = []
+        for node_id, data in nodes.items():
+            rows.append((node_id, data.get("labels", []), {k: v for k, v in data.items() if k not in ("labels",)}))
+
+        return {
+            "columns": ["b_id", "b_labels", "b_props"],
+            "rows": [list(r) for r in rows],
+            "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+            "params": [],
+            "metadata": sql_query.query_metadata,
+        }
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
