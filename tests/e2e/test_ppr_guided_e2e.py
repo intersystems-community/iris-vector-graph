@@ -29,12 +29,8 @@ def _build_chain(cursor, conn, n=100):
 
 
 def _build_kg(conn):
-    try:
-        from iris import createIRIS
-    except ImportError:
-        from intersystems_iris import createIRIS
-    irispy = createIRIS(conn)
-    irispy.classMethodVoid("Graph.KG.Traversal", "BuildKG")
+    from iris_vector_graph.schema import _call_classmethod
+    _call_classmethod(conn, "Graph.KG.Traversal", "BuildKG")
 
 
 def _cleanup(cursor, conn):
