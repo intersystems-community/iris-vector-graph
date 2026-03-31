@@ -295,6 +295,12 @@ class CypherProcedureCall:
 
 
 @dataclass(slots=True)
+class ExistsExpression:
+    pattern: 'GraphPattern'
+    negated: bool = False
+
+
+@dataclass(slots=True)
 class CypherQuery:
     """Root AST node for openCypher query"""
     query_parts: List[QueryPart] = field(default_factory=list)
@@ -303,6 +309,7 @@ class CypherQuery:
     skip: Optional[int] = None
     limit: Optional[int] = None
     procedure_call: Optional[CypherProcedureCall] = None
+    union_queries: List[dict] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.query_parts and not self.procedure_call:

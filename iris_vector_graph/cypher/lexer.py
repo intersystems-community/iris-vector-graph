@@ -34,6 +34,8 @@ class TokenType(enum.Enum):
     THEN = "THEN"
     ELSE = "ELSE"
     END = "END"
+    UNION = "UNION"
+    ALL = "ALL"
     CREATE = "CREATE"
     MERGE = "MERGE"
     DELETE = "DELETE"
