@@ -20,6 +20,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 - `^NKG` global (new), `^KG` global (existing, maintained for backward compat) (028-nkg-integer-index)
 - Python 3.11 (build) + ObjectScript (query) + `iris_vector_graph` (engine), `sklearn` (K-means at build time), `numpy` (029-plaid-search)
 - InterSystems IRIS — new `^PLAID` global (independent of `^KG` and `^VecIdx`) (029-plaid-search)
+- Python 3.11 + ObjectScrip + `iris_vector_graph` (engine, schema, security) (030-rdf-reification)
 
 ## Project Structure
 ```text
@@ -39,9 +40,9 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 030-rdf-reification: Added Python 3.11 + ObjectScrip + `iris_vector_graph` (engine, schema, security)
 - 029-plaid-search: Added Python 3.11 (build) + ObjectScript (query) + `iris_vector_graph` (engine), `sklearn` (K-means at build time), `numpy`
 - 028-nkg-integer-index: Added ObjectScript (IRIS 2025.1+) + None — pure ObjectScript over globals
-- 027-fhir-kg-bridge: Added Python 3.11 + `iris_vector_graph` (engine, operators, schema), `intersystems-irispython`
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

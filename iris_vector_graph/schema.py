@@ -127,6 +127,14 @@ CREATE INDEX idx_bridges_code_type ON Graph_KG.fhir_bridges (fhir_code, bridge_t
 CREATE INDEX idx_bridges_kg_node ON Graph_KG.fhir_bridges (kg_node_id);
 CREATE INDEX idx_bridges_type ON Graph_KG.fhir_bridges (bridge_type);
 
+CREATE TABLE IF NOT EXISTS Graph_KG.rdf_reifications (
+    reifier_id VARCHAR(256) %EXACT NOT NULL,
+    edge_id BIGINT NOT NULL,
+    CONSTRAINT pk_reifications PRIMARY KEY (reifier_id)
+);
+
+CREATE INDEX idx_reif_edge ON Graph_KG.rdf_reifications (edge_id);
+
 -- Indexes for graph traversal performance (based on TrustGraph patterns)
 -- Single-column indexes for basic lookups
 CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s);
