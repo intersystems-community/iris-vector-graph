@@ -21,6 +21,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 - Python 3.11 (build) + ObjectScript (query) + `iris_vector_graph` (engine), `sklearn` (K-means at build time), `numpy` (029-plaid-search)
 - InterSystems IRIS — new `^PLAID` global (independent of `^KG` and `^VecIdx`) (029-plaid-search)
 - Python 3.11 + ObjectScrip + `iris_vector_graph` (engine, schema, security) (030-rdf-reification)
+- ObjectScript (IRIS 2026.2.0AI) + embedded Python 3.12 + IRIS ai-core framework (`%AI.Tool`, `%AI.ToolSet`, `%AI.MCP.Service`), `iris-mcp-server` (Rust binary), `iris_vector_graph` Python package (embedded) (031-cypher-mcp-server)
+- Existing Graph_KG schema + ^KG/^NKG globals (031-cypher-mcp-server)
 
 ## Project Structure
 ```text
@@ -40,9 +42,9 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 031-cypher-mcp-server: Added ObjectScript (IRIS 2026.2.0AI) + embedded Python 3.12 + IRIS ai-core framework (`%AI.Tool`, `%AI.ToolSet`, `%AI.MCP.Service`), `iris-mcp-server` (Rust binary), `iris_vector_graph` Python package (embedded)
 - 030-rdf-reification: Added Python 3.11 + ObjectScrip + `iris_vector_graph` (engine, schema, security)
 - 029-plaid-search: Added Python 3.11 (build) + ObjectScript (query) + `iris_vector_graph` (engine), `sklearn` (K-means at build time), `numpy`
-- 028-nkg-integer-index: Added ObjectScript (IRIS 2025.1+) + None — pure ObjectScript over globals
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
