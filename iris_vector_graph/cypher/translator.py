@@ -426,6 +426,31 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
 
 
 def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None) -> SQLQuery:
+    if getattr(cypher_query, "union_queries", None):
+        branches = [cypher_query] + [uq["query"] for uq in cypher_query.union_queries]
+        all_flags = [False] + [uq["all"] for uq in cypher_query.union_queries]
+        sqls = []
+        all_params = []
+        for branch in branches:
+            branch_copy = ast.CypherQuery(
+                query_parts=branch.query_parts,
+                return_clause=branch.return_clause,
+                order_by_clause=branch.order_by_clause,
+                skip=branch.skip,
+                limit=branch.limit,
+                procedure_call=branch.procedure_call,
+            )
+            branch_copy.union_queries = []
+            r = translate_to_sql(branch_copy, params)
+            sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
+            all_params.extend(r.parameters)
+        sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
+        combined = sep.join(f"({s})" for s in sqls)
+        flat_params = []
+        for p_list in all_params:
+            flat_params.extend(p_list)
+        return SQLQuery(sql=combined, parameters=[flat_params])
+
     context = TranslationContext()
     context.input_params = params or {}
     metadata = QueryMetadata()
@@ -873,6 +898,43 @@ def translate_where_clause(where, context):
 
 
 def translate_boolean_expression(expr, context) -> str:
+    if isinstance(expr, ast.ExistsExpression):
+        child_ctx = TranslationContext(parent=context)
+        child_ctx.from_clauses = []
+        child_ctx.join_clauses = []
+        child_ctx.where_conditions = []
+        child_ctx.join_params = []
+        for i, node in enumerate(expr.pattern.nodes):
+            alias = child_ctx.register_variable(node.variable or f"_ex{i}")
+            if i == 0:
+                outer_var = node.variable
+                if outer_var and outer_var in context.variable_aliases:
+                    pass
+                else:
+                    child_ctx.from_clauses.append(f"{_table('nodes')} {alias}")
+            else:
+                child_ctx.from_clauses.append(f"{_table('nodes')} {alias}")
+        for i, rel in enumerate(expr.pattern.relationships):
+            src_var = expr.pattern.nodes[i].variable
+            tgt_var = expr.pattern.nodes[i+1].variable
+            edge_alias = child_ctx.next_alias("ex")
+            src_ref = context.variable_aliases.get(src_var, child_ctx.variable_aliases.get(src_var, src_var))
+            tgt_alias = child_ctx.variable_aliases.get(tgt_var, tgt_var)
+            cond = f"{edge_alias}.s = {src_ref}.node_id"
+            if rel.types:
+                cond += f" AND {edge_alias}.p = '{rel.types[0]}'"
+            child_ctx.join_clauses.append(f"JOIN {_table('rdf_edges')} {edge_alias} ON {cond}")
+            if i + 1 < len(expr.pattern.nodes) and tgt_var:
+                if tgt_var not in context.variable_aliases:
+                    tgt_label = expr.pattern.nodes[i+1].labels[0] if expr.pattern.nodes[i+1].labels else None
+                    if tgt_label:
+                        tgt_label_alias = child_ctx.next_alias("exl")
+                        child_ctx.join_clauses.append(f"JOIN {_table('rdf_labels')} {tgt_label_alias} ON {tgt_label_alias}.s = {edge_alias}.o_id AND {tgt_label_alias}.label = '{tgt_label}'")
+        frm = ", ".join(child_ctx.from_clauses) if child_ctx.from_clauses else _table("rdf_edges") + " _ex"
+        joins = " ".join(child_ctx.join_clauses)
+        sub = f"SELECT 1 FROM {frm} {joins}"
+        prefix = "NOT " if expr.negated else ""
+        return f"{prefix}EXISTS ({sub})"
     if not isinstance(expr, ast.BooleanExpression): return translate_expression(expr, context, segment="where")
     op = expr.operator
     if op == ast.BooleanOperator.AND: return "(" + " AND ".join(translate_boolean_expression(o, context) for o in expr.operands) + ")"

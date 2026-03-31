@@ -166,16 +166,25 @@ class Parser:
         order_by = self.parse_order_by_clause()
         skip = self.parse_skip()
         limit = self.parse_limit()
-        
+
+        union_queries = []
+        while self.peek().kind == TokenType.UNION:
+            self.eat()
+            union_all = self.matches(TokenType.ALL)
+            branch = self._parse_union_branch()
+            union_queries.append({"query": branch, "all": union_all})
+
         self.expect(TokenType.EOF)
-        
-        return ast.CypherQuery(
+
+        q = ast.CypherQuery(
             query_parts=query_parts,
             return_clause=return_clause,
             order_by_clause=order_by,
             skip=skip,
-            limit=limit
+            limit=limit,
         )
+        q.union_queries = union_queries
+        return q
 
     def parse_with_clause(self) -> ast.WithClause:
         """Parse WITH a, b.prop AS alias WHERE ..."""
@@ -346,6 +355,17 @@ class Parser:
             else_result=else_result,
             test_expression=test_expr,
         )
+
+    def _parse_union_branch(self) -> ast.CypherQuery:
+        parts = []
+        while self.peek().kind not in (TokenType.EOF, TokenType.UNION, TokenType.RETURN):
+            parts.append(self.parse_query_part())
+        ret = None
+        if self.peek().kind == TokenType.RETURN:
+            ret = self.parse_return_clause()
+        q = ast.CypherQuery(query_parts=parts, return_clause=ret)
+        q.union_queries = []
+        return q
 
     def parse_updating_clause(self) -> ast.UpdatingClause:
         """Parse CREATE, MERGE, DELETE, SET, REMOVE"""
@@ -593,6 +613,15 @@ class Parser:
 
     def parse_not_expression(self) -> Any:
         if self.matches(TokenType.NOT):
+            if (self.peek().kind == TokenType.IDENTIFIER
+                    and self.peek().value
+                    and self.peek().value.lower() == "exists"
+                    and self.lexer.peek_ahead(1).kind == TokenType.LBRACE):
+                self.eat()
+                self.eat()
+                pattern = self.parse_graph_pattern()
+                self.expect(TokenType.RBRACE)
+                return ast.ExistsExpression(pattern=pattern, negated=True)
             operand = self.parse_not_expression()
             return ast.BooleanExpression(ast.BooleanOperator.NOT, [operand])
         return self.parse_comparison_expression()
@@ -658,7 +687,12 @@ class Parser:
             name = self.eat().value
             if name is None:
                 raise CypherParseError("Expected identifier value", tok.line, tok.column)
-            
+
+            if name.lower() == "exists" and self.peek().kind == TokenType.LBRACE:
+                self.eat()
+                pattern = self.parse_graph_pattern()
+                self.expect(TokenType.RBRACE)
+                return ast.ExistsExpression(pattern=pattern, negated=False)
             if self.matches(TokenType.LPAREN):
                 # Function call or aggregation
                 distinct = self.matches(TokenType.DISTINCT)
