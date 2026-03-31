@@ -213,3 +213,28 @@ triples that can be queried, filtered, and traversed just like regular edges.
 This is what makes KBAC possible: an agent's access to edge `e1` is determined
 by traversing `(:e1, auth:readableBy, ?)` — a standard graph query, not a
 special-case permission check.
+
+---
+
+## 5. Cypher Gap Analysis: 10 Missing Features
+
+See **[`docs/cypher-gap-recommendations.md`](cypher-gap-recommendations.md)** for
+a detailed "Steve-and-Dan perspective" on implementing 10 missing Cypher features
+ranked by biomedical impact:
+
+| Priority | Feature | Effort | Status |
+|----------|---------|--------|--------|
+| P0 | COUNT(DISTINCT) | XS | Probably already works -- verify |
+| P0 | CAST/type coercion fixes | S | 10-line translator fix |
+| P1 | CASE WHEN expressions | S | 1:1 SQL mapping |
+| P1 | Variable-length paths `[*1..3]` | L | Hybrid BFSFast CTE bridge |
+| P2 | UNION / UNION ALL | M | Parser + SQL assembly |
+| P2 | EXISTS {} pattern predicate | M | Correlated subquery |
+| P2 | Pattern comprehension | M | Correlated JSON_ARRAYAGG |
+| P3 | Quantified paths `->+` | S | Desugar to var-length (needs P1) |
+| P3 | REDUCE() path scoring | M | Python post-processing |
+| P4 | FOREACH | S | Desugar to UNWIND |
+
+Key architectural decision: **IRIS does not support recursive CTEs**, so
+variable-length paths must use the existing `BFSFastJson` ObjectScript method
+over `^KG` globals, exposed as a SQL function and wrapped in `JSON_TABLE`.
