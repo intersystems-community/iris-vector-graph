@@ -351,6 +351,14 @@ class TestMigrationValidation:
                 DELETE FROM kg_NodeEmbeddings
                 WHERE id NOT IN (SELECT node_id FROM nodes)
             """)
+            cursor.execute("""
+                DELETE FROM rdf_props
+                WHERE s NOT IN (SELECT node_id FROM nodes)
+            """)
+            cursor.execute("""
+                DELETE FROM rdf_labels
+                WHERE s NOT IN (SELECT node_id FROM nodes)
+            """)
             iris_connection_with_sample_data.commit()
         except:
             iris_connection_with_sample_data.rollback()

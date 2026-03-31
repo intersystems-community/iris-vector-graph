@@ -16,12 +16,16 @@ import os
 import time
 
 try:
-    from iris import createIRIS as _createIRIS  # type: ignore[import]
+    from iris import createIRIS as _createIRIS
 except ImportError:
-    from intersystems_iris import createIRIS as _createIRIS  # type: ignore[import]
+    try:
+        from intersystems_iris import createIRIS as _createIRIS
+    except Exception:
+        _createIRIS = None
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.schema import _call_classmethod
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true",
@@ -79,8 +83,8 @@ def star_graph(iris_connection, engine):
     # Rebuild ^KG so the functional index covers these rows
     if engine.capabilities.objectscript_deployed:
         try:
-            irispy = _createIRIS(iris_connection)
-            irispy.classMethodVoid('Graph.KG.Traversal', 'BuildKG')
+            # _call_classmethod used instead of createIRIS
+            _call_classmethod(iris_connection, 'Graph.KG.Traversal', 'BuildKG')
             engine.capabilities.kg_built = True
         except Exception:
             pass
@@ -114,8 +118,8 @@ def chain_graph(iris_connection, engine):
 
     if engine.capabilities.objectscript_deployed:
         try:
-            irispy = _createIRIS(iris_connection)
-            irispy.classMethodVoid('Graph.KG.Traversal', 'BuildKG')
+            # _call_classmethod used instead of createIRIS
+            _call_classmethod(iris_connection, 'Graph.KG.Traversal', 'BuildKG')
         except Exception:
             pass
 
@@ -153,12 +157,12 @@ def test_kg_meta_class_available(iris_connection, engine):
     if not engine.capabilities.objectscript_deployed:
         pytest.skip("ObjectScript .cls deployment not supported on this IRIS instance")
 
-    irispy = _createIRIS(iris_connection)
-    irispy.classMethodVoid('Graph.KG.Meta', 'Set', 'e2e_test_key', 'e2e_test_val')
-    row = irispy.classMethodValue('Graph.KG.Meta', 'Get', 'e2e_test_key')
+    # _call_classmethod used instead of createIRIS
+    _call_classmethod(iris_connection, 'Graph.KG.Meta', 'Set', 'e2e_test_key', 'e2e_test_val')
+    row = _call_classmethod(iris_connection, 'Graph.KG.Meta', 'Get', 'e2e_test_key')
     assert row == 'e2e_test_val'
     try:
-        irispy.classMethodVoid('Graph.KG.Meta', 'Delete', 'e2e_test_key')
+        _call_classmethod(iris_connection, 'Graph.KG.Meta', 'Delete', 'e2e_test_key')
     except Exception:
         pass
 
@@ -181,9 +185,9 @@ def test_ppr_runjson_hub_ranks_highest(iris_connection, star_graph, engine):
     if not engine.capabilities.objectscript_deployed or not engine.capabilities.kg_built:
         pytest.skip("ObjectScript layer or ^KG not available")
 
-    irispy = _createIRIS(iris_connection)
+    # _call_classmethod used instead of createIRIS
     seed_json = json.dumps([f"{PREFIX}:A", f"{PREFIX}:C"])
-    result = irispy.classMethodValue(
+    result = _call_classmethod(iris_connection, 
         'Graph.KG.PageRank', 'RunJson', seed_json, 0.85, 20, 0, 1.0
     )
 
@@ -211,9 +215,9 @@ def test_ppr_runjson_chain_rank_order(iris_connection, chain_graph, engine):
         pytest.skip("ObjectScript layer or ^KG not available")
 
     prefix = f"{PREFIX}_CHAIN"
-    irispy = _createIRIS(iris_connection)
+    # _call_classmethod used instead of createIRIS
     seed_json = json.dumps([f"{prefix}:ROOT"])
-    result = irispy.classMethodValue(
+    result = _call_classmethod(iris_connection, 
         'Graph.KG.PageRank', 'RunJson', seed_json, 0.85, 20, 0, 1.0
     )
 
@@ -294,16 +298,16 @@ def test_ppr_runjson_under_50ms(iris_connection, star_graph, engine):
         pytest.skip("ObjectScript layer or ^KG not available")
 
     seed_json = json.dumps([f"{PREFIX}:A", f"{PREFIX}:C"])
-    irispy = _createIRIS(iris_connection)
+    # _call_classmethod used instead of createIRIS
 
     # Warm up
-    irispy.classMethodValue(
+    _call_classmethod(iris_connection, 
         'Graph.KG.PageRank', 'RunJson', seed_json, 0.85, 20, 0, 1.0
     )
 
     # Timed run
     t0 = time.monotonic()
-    irispy.classMethodValue(
+    _call_classmethod(iris_connection, 
         'Graph.KG.PageRank', 'RunJson', seed_json, 0.85, 20, 0, 1.0
     )
     elapsed_ms = (time.monotonic() - t0) * 1000
@@ -350,8 +354,8 @@ def test_bfs_fast_json_2hops(iris_connection, chain_graph, engine):
         pytest.skip("ObjectScript layer or ^KG not available")
 
     prefix = f"{PREFIX}_CHAIN"
-    irispy = _createIRIS(iris_connection)
-    result = irispy.classMethodValue(
+    # _call_classmethod used instead of createIRIS
+    result = _call_classmethod(iris_connection, 
         'Graph.KG.Traversal', 'BFSFastJson', f"{prefix}:ROOT", "", 2, ""
     )
 
@@ -369,8 +373,8 @@ def test_bfs_fast_json_1hop_only(iris_connection, chain_graph, engine):
         pytest.skip("ObjectScript layer or ^KG not available")
 
     prefix = f"{PREFIX}_CHAIN"
-    irispy = _createIRIS(iris_connection)
-    result = irispy.classMethodValue(
+    # _call_classmethod used instead of createIRIS
+    result = _call_classmethod(iris_connection, 
         'Graph.KG.Traversal', 'BFSFastJson', f"{prefix}:ROOT", "", 1, ""
     )
 
