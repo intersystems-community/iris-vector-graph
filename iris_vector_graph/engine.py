@@ -916,6 +916,20 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+            cursor.execute(
+                f"SELECT edge_id FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?",
+                [node_id, node_id]
+            )
+            edge_ids = [row[0] for row in cursor.fetchall()]
+            for eid in edge_ids:
+                cursor.execute(
+                    f"SELECT reifier_id FROM {_table('rdf_reifications')} WHERE edge_id = ?", [eid]
+                )
+                for (reif_id,) in cursor.fetchall():
+                    cursor.execute(f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?", [reif_id])
+                    cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reif_id])
+                    cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reif_id])
+                    cursor.execute(f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reif_id])
             cursor.execute(f"DELETE FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?", [node_id, node_id])
             cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id])
             cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [node_id])
@@ -949,7 +963,83 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
-    def delete_embedding(self, node_id: str) -> bool:
+    def reify_edge(self, edge_id: int, reifier_id: str = None,
+                   label: str = "Reification", props: Dict[str, str] = None) -> Optional[str]:
+        if reifier_id is None:
+            reifier_id = f"reif:{edge_id}"
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT edge_id FROM {_table('rdf_edges')} WHERE edge_id = ?", [edge_id])
+            if not cursor.fetchone():
+                logger.warning(f"reify_edge: edge_id={edge_id} not found")
+                return None
+            self.create_node(reifier_id)
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_labels')} (s, label) "
+                f"SELECT ?, ? WHERE NOT EXISTS "
+                f"(SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
+                [reifier_id, label, reifier_id, label],
+            )
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_reifications')} (reifier_id, edge_id) VALUES (?, ?)",
+                [reifier_id, edge_id],
+            )
+            if props:
+                for key, val in props.items():
+                    cursor.execute(
+                        f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) "
+                        f"SELECT ?, ?, ? WHERE NOT EXISTS "
+                        f"(SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)",
+                        [reifier_id, key, str(val), reifier_id, key],
+                    )
+            self.conn.commit()
+            return reifier_id
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"reify_edge({edge_id}) failed: {e}")
+            return None
+        finally:
+            cursor.close()
+
+    def get_reifications(self, edge_id: int) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT r.reifier_id, p.\"key\", p.val "
+                f"FROM {_table('rdf_reifications')} r "
+                f"LEFT JOIN {_table('rdf_props')} p ON p.s = r.reifier_id "
+                f"WHERE r.edge_id = ?",
+                [edge_id],
+            )
+            rows = cursor.fetchall()
+            result: Dict[str, dict] = {}
+            for reifier_id, key, val in rows:
+                if reifier_id not in result:
+                    result[reifier_id] = {"reifier_id": reifier_id, "properties": {}}
+                if key is not None:
+                    result[reifier_id]["properties"][key] = val
+            return list(result.values())
+        except Exception as e:
+            logger.warning(f"get_reifications({edge_id}) failed: {e}")
+            return []
+        finally:
+            cursor.close()
+
+    def delete_reification(self, reifier_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?", [reifier_id])
+            cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reifier_id])
+            cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reifier_id])
+            cursor.execute(f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reifier_id])
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"delete_reification({reifier_id}) failed: {e}")
+            return False
+        finally:
+            cursor.close()
         """
         Delete embedding for a node.
         

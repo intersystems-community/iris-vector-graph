@@ -10,7 +10,8 @@ VALID_GRAPH_TABLES = {
     "kg_NodeEmbeddings",
     "kg_NodeEmbeddings_optimized",
     "docs",
-    "fhir_bridges"
+    "fhir_bridges",
+    "rdf_reifications"
 }
 
 def sanitize_identifier(identifier: str) -> str:
