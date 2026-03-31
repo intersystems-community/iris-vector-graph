@@ -1,62 +1,51 @@
 import pytest
 import os
+import uuid
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
-
-# NOTE: iris_connection is provided by tests/conftest.py (top-level).
-# It manages a dedicated test container via iris-devtester.
-# Do NOT define iris_connection here — it would override the managed container
-# fixture and connect to a random host IRIS instance (e.g. opsreview-iris on
-# port 1972), breaking test isolation and schema assumptions.
 
 
 @pytest.fixture
 def fraud_test_data(iris_connection):
-    """Setup fraud dataset test data for cypher tests"""
     cursor = iris_connection.cursor()
+    pfx = f"CF_{uuid.uuid4().hex[:6]}"
 
-    # Clean up existing test data (order: dependents first, then parents)
-    try:
-        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TXN:%' OR s LIKE 'ACCOUNT:%'")
-        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'TXN:%' OR s LIKE 'ACCOUNT:%'")
-        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'TXN:%' OR s LIKE 'ACCOUNT:%'")
-        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TXN:%' OR node_id LIKE 'ACCOUNT:%'")
-        iris_connection.commit()
-    except Exception:
-        iris_connection.rollback()
-
-    # Create test nodes (include specific names expected by tests)
-    accounts = ["ACCOUNT:MULE1", "ACCOUNT:MULE2", "ACCOUNT:acc_0", "ACCOUNT:acc_1", "ACCOUNT:acc_2"]
-    transactions = ["TXN:MULE1_IN1", "TXN:MULE1_OUT1"] + [f"TXN:txn_{i}" for i in range(8)]
+    accounts = [f"{pfx}:ACCOUNT:MULE1", f"{pfx}:ACCOUNT:MULE2"] + [f"{pfx}:ACCOUNT:acc_{i}" for i in range(3)]
+    transactions = [f"{pfx}:TXN:MULE1_IN1", f"{pfx}:TXN:MULE1_OUT1"] + [f"{pfx}:TXN:txn_{i}" for i in range(8)]
 
     for node_id in accounts + transactions:
-        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id])
+        try:
+            cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id])
+        except Exception:
+            pass
 
-    # Create labels
     for acc in accounts:
         cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [acc, "Account"])
     for txn in transactions:
         cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [txn, "Transaction"])
 
-    # Create edges: transactions -> accounts (FROM_ACCOUNT, TO_ACCOUNT)
     for i, txn in enumerate(transactions):
         from_acc = accounts[i % len(accounts)]
         to_acc = accounts[(i + 1) % len(accounts)]
         cursor.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)", [txn, "FROM_ACCOUNT", from_acc])
         cursor.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)", [txn, "TO_ACCOUNT", to_acc])
-        # Add amount property to transactions
-        cursor.execute("INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)", [txn, "amount", str(100 + i * 50)])
+        cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, ?, ?)", [txn, "amount", str(100 + i * 50)])
+        cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, ?, ?)", [txn, "risk_score", str(0.01 + i * 0.02)])
+
+    for acc in accounts:
+        cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, ?, ?)", [acc, "risk_score", "0.05"])
+        cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, ?, ?)", [acc, "name", acc.split(":")[-1]])
 
     iris_connection.commit()
 
-    yield iris_connection
+    yield {"conn": iris_connection, "prefix": pfx, "accounts": accounts, "transactions": transactions}
 
-    # Cleanup
+    p = f"{pfx}%"
     try:
-        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TXN:%' OR s LIKE 'ACCOUNT:%'")
-        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'TXN:%' OR s LIKE 'ACCOUNT:%'")
-        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'TXN:%' OR s LIKE 'ACCOUNT:%'")
-        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TXN:%' OR node_id LIKE 'ACCOUNT:%'")
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [p, p])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [p])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [p])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
         iris_connection.commit()
     except Exception:
         iris_connection.rollback()
@@ -64,8 +53,7 @@ def fraud_test_data(iris_connection):
 
 @pytest.fixture
 def execute_cypher(fraud_test_data):
-    """Helper fixture to parse, translate, and execute Cypher queries"""
-    conn = fraud_test_data  # fraud_test_data yields the connection
+    conn = fraud_test_data["conn"]
 
     def _execute(query, params=None):
         from iris_vector_graph.cypher.parser import parse_query
