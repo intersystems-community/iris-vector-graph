@@ -27,6 +27,7 @@ ClassMethod BuildAdjacencyTSV() As %String
 ClassMethod Seed(n As %Integer = 5000, branching As %Integer = 4) As %Status
 {
 	Kill ^KG
+	Kill ^NKG
 	Kill ^ArnoKG
 	For i = 1:1:n {
 		Set s = "N" _ i
@@ -87,6 +88,7 @@ ClassMethod Compare(n As %Integer = 5000) As %String
 	Set tsvKB = $Length(tsv) \ 1024
 
 	Kill ^KG
+	Kill ^NKG
 	Kill ^ArnoKG
 	Return "n=" _ n _ " | $ORDER: " _ orderResult _ " | JSON: " _ jsonMs _ "ms (" _ jsonKB _ "KB) | TSV: " _ tsvMs _ "ms (" _ tsvKB _ "KB)"
 }

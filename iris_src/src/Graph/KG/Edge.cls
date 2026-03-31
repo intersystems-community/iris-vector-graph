@@ -24,4 +24,15 @@ Property qualifiers As %String(MAXLEN = "") [ SqlColumnNumber = 5 ];
 /// Functional index that populates ^KG graph global
 Index GraphIdx On (s, p, oId, qualifiers) As Graph.KG.GraphIndex;
 
+/// UNIQUE constraint on (s, p, o_id) to prevent duplicate edges
+Index uspo On (s, p, oId) [ Unique ];
+
+Index idxS On s;
+
+Index idxP On p;
+
+Index idxSP On (s, p);
+
+Index idxPOid On (p, oId);
+
 }

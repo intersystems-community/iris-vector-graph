@@ -54,6 +54,7 @@ ClassMethod CallFn(fn As %String, a1 As %String = "", a2 As %String = "", a3 As 
 ClassMethod BumpVersion()
 {
 	Set ^KG("__version") = $Get(^KG("__version"), 0) + 1
+	Set tmp = $Increment(^NKG("$meta", "version"))
 }
 
 ClassMethod CacheGraphJson(gname As %String = "KG") As %String [ Private ]

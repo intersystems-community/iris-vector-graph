@@ -1,5 +1,5 @@
 /// Bounded k-hop subgraph extraction over ^KG globals.
-/// Pure ObjectScript — no iris module dependency.
+/// Pure ObjectScript -- no iris module dependency.
 Class Graph.KG.Subgraph Extends %RegisteredObject
 {
 
@@ -158,7 +158,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 }
 
 /// PPR-guided subgraph extraction. Runs PPR then BFS within pruned node set.
-/// All server-side over ^KG globals — no Python bridge overhead.
+/// All server-side over ^KG globals -- no Python bridge overhead.
 /// alpha = teleport probability (NOT damping); damping = 1 - alpha.
 ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %Double = 0.00001, topK As %Integer = 50, maxHops As %Integer = 5, edgeTypesJson As %String = "") As %String
 {
@@ -356,7 +356,7 @@ ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %
 		Do edgesArr.%Push(eObj)
 	}
 	
-	// PPR scores — re-sort descending by score
+	// PPR scores -- re-sort descending by score
 	Kill ^||PPRG
 	Set n = ""
 	For {
