@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "1.28.0"
+version = "1.29.0"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -88,7 +88,8 @@ ml = [
 biodata = [
     "biopython>=1.81",
     "bioservices>=1.11.0",
-    "mygene>=3.2.0"
+    "mygene>=3.2.0",
+    "obonet>=1.0.0",
 ]
 demo = [
     "python-fasthtml>=0.12.0"
