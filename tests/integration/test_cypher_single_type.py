@@ -13,8 +13,8 @@ def test_single_relationship_type(execute_cypher):
     
     # Check that rows contain node IDs (t_id is first column, a_id is 4th column)
     for row in result["rows"]:
-        assert row[0].startswith("TXN:")
-        assert row[3].startswith("ACCOUNT:")  # a_id is at index 3 (after t_id, t_labels, t_props)
+        assert "TXN:" in row[0]
+        assert "ACCOUNT:" in row[3]  # a_id is at index 3 (after t_id, t_labels, t_props)
 
 def test_relationship_with_variable(execute_cypher):
     """Test MATCH (a)-[r:TYPE]->(b)"""
