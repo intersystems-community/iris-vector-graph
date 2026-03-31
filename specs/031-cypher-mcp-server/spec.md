@@ -99,9 +99,9 @@ A researcher wants to find "surprising" connections from a seed concept — node
 - **FR-004**: System MUST expose a `graph_stats` tool that returns node count, edge count, label distribution, and relationship type distribution.
 - **FR-005**: System MUST expose a `ppr_walk` tool that runs Personalized PageRank from seed nodes and returns ranked results.
 - **FR-006**: All tools MUST return errors as structured messages (not exceptions) that an LLM can interpret and act on.
-- **FR-007**: The MCP server MUST support both stdio transport (for Claude Desktop) and SSE transport (for remote access).
+- **FR-007**: Tools MUST be implemented as ObjectScript classes extending `%AI.Tool`, exposed via a `%AI.MCP.Service` subclass mounted as a CSP web application.
 - **FR-008**: The `load_graph` tool MUST call `BuildKG()` after loading to populate the ^KG adjacency index.
-- **FR-009**: The MCP server MUST accept IRIS connection parameters via environment variables or command-line arguments.
+- **FR-009**: The MCP service MUST be configurable via `iris-mcp-server` TOML config pointing at the CSP web application path.
 
 ### Key Entities
 
@@ -120,11 +120,13 @@ A researcher wants to find "surprising" connections from a seed concept — node
 
 ## Assumptions
 
-- The MCP server is a Python process using the `mcp` SDK (Model Context Protocol Python package).
-- IRIS connection is established at server startup and reused across tool calls.
-- GraphML loading uses `networkx.read_graphml()` + `IRISGraphEngine.create_node()`/`create_edge()`.
-- The server runs on the same machine as IRIS (localhost connection) or connects via SSH tunnel for remote IRIS.
-- Claude Desktop is the primary MCP client, but the server is protocol-compliant with any MCP client.
+- The MCP server is `iris-mcp-server`, a Rust binary shipped with IRIS 2026.2.0AI. We do NOT write a Python MCP server.
+- Tools are ObjectScript classes extending `%AI.Tool`, mounted via `%AI.MCP.Service` subclasses as CSP web applications.
+- `iris-mcp-server` handles MCP protocol, connection pooling, tool discovery, and transport (stdio/HTTP/HTTPS). We only implement the IRIS-side tools.
+- GraphML loading uses ObjectScript or calls Python via embedded Python to parse GraphML and insert via SQL.
+- The Cypher query tool calls `IRISGraphEngine.execute_cypher()` or translates and executes SQL directly in ObjectScript.
+- dpgenai1 (or AWS) hosts the IRIS instance. `iris-mcp-server` runs alongside it or on the client machine pointing at the remote instance.
+- Dirk's team connects Claude Desktop → `iris-mcp-server` → IRIS MCP endpoint.
 
 ## Scope Boundaries
 
@@ -138,6 +140,12 @@ A researcher wants to find "surprising" connections from a seed concept — node
 **Out of scope (future)**:
 - OBO format loading (separate enhancement when Saskia shares OBO files)
 - Web UI for the MCP server
-- Authentication/authorization on the MCP endpoint
+- Authentication/authorization on the MCP endpoint (handled by iris-mcp-server + IRIS CSP auth)
 - Multi-graph support (multiple named graphs in one IRIS instance)
 - Streaming results for large queries
+
+## Clarifications
+
+### Session 2026-03-31
+
+- Q: Should we build a custom Python MCP server or use the IRIS aicore MCP infrastructure? → A: Use iris-mcp-server (Rust binary, ships with IRIS 2026.2.0AI). Implement tools as ObjectScript %AI.Tool classes exposed via %AI.MCP.Service. Python ToolSets via iris_llm are also supported for agent-side use. For the MCP service endpoint, ObjectScript tools are the native path; Python tools can be called from ObjectScript via embedded Python (`Language = python`) if needed.
