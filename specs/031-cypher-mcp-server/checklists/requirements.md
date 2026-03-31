@@ -1,4 +1,4 @@
-# Specification Quality Checklist: Cypher MCP Server
+# Specification Quality Checklist: Graph Knowledge MCP Tools
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning
 **Created**: 2026-03-31
@@ -32,6 +32,7 @@
 ## Notes
 
 - All items pass. Spec is ready for `/speckit.plan`.
-- Dirk's #1 priority is Cypher query access. Evidence search and PPR are secondary.
-- Saskia's GraphML files (KG_7: 127 nodes, KG_8: 911 nodes) are available for testing in `data/mindwalk/`.
-- AWS deployment is out of scope for the spec — handled separately as infrastructure.
+- Architecture confirmed: ObjectScript %AI.Tool → %AI.MCP.Service → iris-mcp-server (Rust) → Claude Desktop
+- CypherQuery and LoadGraph use embedded Python to call IVG library; GraphStats and PPRWalk are pure ObjectScript
+- ReadyAI demo provides working docker-compose reference for iris-mcp-server integration
+- Saskia's KG_8.graphml (911 nodes, spondyloarthritis domain) is the primary test dataset
