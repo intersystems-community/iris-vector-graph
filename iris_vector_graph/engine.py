@@ -561,7 +561,10 @@ class IRISGraphEngine:
             return True
         except Exception as e:
             cursor.execute("ROLLBACK")
-            logger.error(f"create_node failed: {e}")
+            if "UNIQUE" in str(e) or "-119" in str(e) or "validation failed" in str(e).lower():
+                logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
+            else:
+                logger.error(f"create_node failed: {e}")
             return False
 
     def create_edge(self, source_id: str, predicate: str, target_id: str, qualifiers: Dict[str, Any] = None) -> bool:
@@ -579,7 +582,10 @@ class IRISGraphEngine:
             return True
         except Exception as e:
             self.conn.rollback()
-            logger.error(f"create_edge failed: {e}")
+            if "UNIQUE" in str(e) or "-119" in str(e):
+                logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
+            else:
+                logger.error(f"create_edge failed: {e}")
             return False
 
     def bulk_create_nodes(
@@ -724,6 +730,10 @@ class IRISGraphEngine:
     def load_networkx(self, G, label_attr: str = "type", skip_existing: bool = True) -> dict:
         added_nodes = 0
         added_edges = 0
+        skipped_nodes = 0
+        skipped_edges = 0
+        total_nodes = G.number_of_nodes()
+        total_edges = G.number_of_edges()
         for node_id, data in G.nodes(data=True):
             labels = []
             if label_attr and label_attr in data:
@@ -731,18 +741,33 @@ class IRISGraphEngine:
                 labels = [val] if isinstance(val, str) else list(val)
             elif "namespace" in data:
                 labels = [data["namespace"]]
-            props = {k: str(v) if not isinstance(v, str) else v
-                     for k, v in data.items()
-                     if k not in (label_attr, "namespace") and v is not None}
+            props = {}
+            for k, v in data.items():
+                if k in (label_attr, "namespace") or v is None:
+                    continue
+                s = str(v) if not isinstance(v, str) else v
+                if len(s) > 60000:
+                    s = s[:60000]
+                props[k] = s
             if self.create_node(node_id=str(node_id), labels=labels, properties=props):
                 added_nodes += 1
+            else:
+                skipped_nodes += 1
+            if (added_nodes + skipped_nodes) % 10000 == 0:
+                logger.info(f"Nodes: {added_nodes + skipped_nodes:,}/{total_nodes:,} ({added_nodes:,} added, {skipped_nodes:,} skipped)")
+        logger.info(f"Nodes complete: {added_nodes:,} added, {skipped_nodes:,} skipped")
         for src, dst, data in G.edges(data=True):
             predicate = data.get("predicate", data.get("label", data.get("key", "is_a")))
             qualifiers = {k: v for k, v in data.items() if k not in ("predicate", "label", "key")}
             if self.create_edge(source_id=str(src), predicate=str(predicate),
                                 target_id=str(dst), qualifiers=qualifiers or None):
                 added_edges += 1
-        return {"nodes": added_nodes, "edges": added_edges}
+            else:
+                skipped_edges += 1
+            if (added_edges + skipped_edges) % 10000 == 0:
+                logger.info(f"Edges: {added_edges + skipped_edges:,}/{total_edges:,} ({added_edges:,} added, {skipped_edges:,} skipped)")
+        logger.info(f"Edges complete: {added_edges:,} added, {skipped_edges:,} skipped")
+        return {"nodes": added_nodes, "edges": added_edges, "skipped_nodes": skipped_nodes, "skipped_edges": skipped_edges}
 
     def load_obo(self, path_or_url: str, prefix: str = None) -> dict:
         try:
