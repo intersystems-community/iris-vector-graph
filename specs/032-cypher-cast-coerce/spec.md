@@ -36,7 +36,13 @@ A developer wants `COUNT(DISTINCT g.name) AS unique_genes` to return deduplicate
 ### Edge Cases
 
 - `toInteger()` on non-numeric string: IRIS CAST raises error — document as expected behavior, not a bug.
-- `toBoolean()` on unexpected values: defaults to 0 (false).
+- `toBoolean()` on unexpected values: defaults to 0 (false). Comparison is case-insensitive.
+
+## Clarifications
+
+### Session 2026-03-31
+
+- Q: Should toBoolean() comparison be case-insensitive? → A: Yes (Option A). Use LOWER(expr) IN ('true','1','yes','y') to match Neo4j behavior and handle inconsistent property casing.
 
 ## Requirements *(mandatory)*
 
@@ -45,7 +51,7 @@ A developer wants `COUNT(DISTINCT g.name) AS unique_genes` to return deduplicate
 - **FR-001**: `toInteger(expr)` MUST emit `CAST(expr AS INTEGER)`.
 - **FR-002**: `toFloat(expr)` MUST emit `CAST(expr AS DOUBLE)`.
 - **FR-003**: `toString(expr)` MUST emit `CAST(expr AS VARCHAR(4096))`.
-- **FR-004**: `toBoolean(expr)` MUST emit `CASE WHEN expr IN ('true','1','yes') THEN 1 ELSE 0 END`.
+- **FR-004**: `toBoolean(expr)` MUST emit `CASE WHEN LOWER(expr) IN ('true','1','yes','y') THEN 1 ELSE 0 END` (case-insensitive, matches Neo4j behavior).
 - **FR-005**: `COUNT(DISTINCT expr)` MUST emit `COUNT(DISTINCT ...)` in SQL.
 
 ## Success Criteria *(mandatory)*
@@ -59,115 +65,3 @@ A developer wants `COUNT(DISTINCT g.name) AS unique_genes` to return deduplicate
 
 **In scope**: `toInteger`, `toFloat`, `toString`, `toBoolean` CAST fixes; `COUNT(DISTINCT)` verification + tests.
 **Out of scope**: `split()` → TVF mapping (deferred), new functions not in `_CYPHER_FN_MAP`.
-**Created**: [DATE]  
-**Status**: Draft  
-**Input**: User description: "$ARGUMENTS"
-
-## User Scenarios & Testing *(mandatory)*
-
-<!--
-  IMPORTANT: User stories should be PRIORITIZED as user journeys ordered by importance.
-  Each user story/journey must be INDEPENDENTLY TESTABLE - meaning if you implement just ONE of them,
-  you should still have a viable MVP (Minimum Viable Product) that delivers value.
-  
-  Assign priorities (P1, P2, P3, etc.) to each story, where P1 is the most critical.
-  Think of each story as a standalone slice of functionality that can be:
-  - Developed independently
-  - Tested independently
-  - Deployed independently
-  - Demonstrated to users independently
--->
-
-### User Story 1 - [Brief Title] (Priority: P1)
-
-[Describe this user journey in plain language]
-
-**Why this priority**: [Explain the value and why it has this priority level]
-
-**Independent Test**: [Describe how this can be tested independently - e.g., "Can be fully tested by [specific action] and delivers [specific value]"]
-
-**Acceptance Scenarios**:
-
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
-2. **Given** [initial state], **When** [action], **Then** [expected outcome]
-
----
-
-### User Story 2 - [Brief Title] (Priority: P2)
-
-[Describe this user journey in plain language]
-
-**Why this priority**: [Explain the value and why it has this priority level]
-
-**Independent Test**: [Describe how this can be tested independently]
-
-**Acceptance Scenarios**:
-
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
-
----
-
-### User Story 3 - [Brief Title] (Priority: P3)
-
-[Describe this user journey in plain language]
-
-**Why this priority**: [Explain the value and why it has this priority level]
-
-**Independent Test**: [Describe how this can be tested independently]
-
-**Acceptance Scenarios**:
-
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
-
----
-
-[Add more user stories as needed, each with an assigned priority]
-
-### Edge Cases
-
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right edge cases.
--->
-
-- What happens when [boundary condition]?
-- How does system handle [error scenario]?
-
-## Requirements *(mandatory)*
-
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right functional requirements.
--->
-
-### Functional Requirements
-
-- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
-- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
-- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
-- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
-- **FR-005**: System MUST [behavior, e.g., "log all security events"]
-
-*Example of marking unclear requirements:*
-
-- **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
-- **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
-
-### Key Entities *(include if feature involves data)*
-
-- **[Entity 1]**: [What it represents, key attributes without implementation]
-- **[Entity 2]**: [What it represents, relationships to other entities]
-
-## Success Criteria *(mandatory)*
-
-<!--
-  ACTION REQUIRED: Define measurable success criteria.
-  These must be technology-agnostic and measurable.
--->
-
-### Measurable Outcomes
-
-- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
-- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
-- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
-- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]

@@ -986,6 +986,10 @@ def translate_expression(expr, context, segment="select") -> str:
             "toboolean": "CASE WHEN",  # handled below
         }
         sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
+        if fn == "tointeger":  return f"CAST({args[0]} AS INTEGER)"
+        if fn == "tofloat":    return f"CAST({args[0]} AS DOUBLE)"
+        if fn == "tostring":   return f"CAST({args[0]} AS VARCHAR(4096))"
+        if fn == "toboolean":  return f"CASE WHEN LOWER({args[0]}) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
         return f"{sql_fn}({', '.join(args)})"
     return "NULL"
 

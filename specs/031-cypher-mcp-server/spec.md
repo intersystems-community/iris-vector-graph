@@ -106,6 +106,7 @@ A researcher finds an interesting triple and wants to find the original text pas
 - **FR-008**: The `CypherQuery` and `LoadGraph` tools MUST call Python via embedded Python (`Language = python` or `builtins.%Import`) to use the IVG Python library.
 - **FR-009**: Pure ObjectScript tools (`GraphStats`, `PPRWalk`) MUST operate directly on ^KG globals and/or SQL, with no Python dependency.
 - **FR-010**: A `config.toml` for iris-mcp-server MUST be provided that configures the `/mcp/graph` endpoint.
+- **FR-011**: System MUST expose a `RunSQL` tool that accepts a SQL query string and returns structured results (columns + rows as JSON), enabling direct graph queries when Cypher translation is not needed.
 
 ### Key Entities
 
