@@ -230,6 +230,9 @@ class Lexer:
         while self.cursor < len(self.source) and (self.source[self.cursor].isdigit() or self.source[self.cursor] == '.'):
             if self.source[self.cursor] == '.':
                 if is_float: break
+                # Don't consume '.' if it's part of '..' range syntax
+                if self.cursor + 1 < len(self.source) and self.source[self.cursor + 1] == '.':
+                    break
                 is_float = True
             value += self.source[self.cursor]
             self.cursor += 1
