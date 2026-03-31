@@ -233,6 +233,18 @@ class RemoveClause(UpdatingClause):
     """REMOVE clause"""
     items: List[RemoveItem]
 
+
+@dataclass(slots=True)
+class CaseWhenClause:
+    condition: Any
+    result: Any
+
+@dataclass(slots=True)
+class CaseExpression:
+    when_clauses: List['CaseWhenClause']
+    else_result: Optional[Any] = None
+    test_expression: Optional[Any] = None
+
 @dataclass(slots=True)
 class UnwindClause:
     """UNWIND clause for collection expansion"""

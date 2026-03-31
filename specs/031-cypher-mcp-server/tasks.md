@@ -13,8 +13,8 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify existing ObjectScript classes compile on the target IRIS container
-- [ ] T002 Verify `iris-mcp-server` binary is available (either in IRIS bin/ or downloaded separately)
+- [X] T001 Verify existing ObjectScript classes compile on the target IRIS container
+- [X] T002 Verify `iris-mcp-server` binary is available (either in IRIS bin/ or downloaded separately)
 
 **Checkpoint**: IRIS container running with ai-core framework available. iris-mcp-server binary accessible.
 
@@ -22,13 +22,13 @@
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-- [ ] T003 Create `iris_src/src/Graph/KG/MCPTools.cls` — empty `%AI.Tool` class with class definition and package structure
-- [ ] T004 Create `iris_src/src/Graph/KG/MCPToolSet.cls` — `%AI.ToolSet` with XML `<ToolSet>` definition including `Graph.KG.MCPTools` and `%AI.Policy.ConsoleAudit` in `iris_src/src/Graph/KG/MCPToolSet.cls`
-- [ ] T005 Create `iris_src/src/Graph/KG/MCPService.cls` — `%AI.MCP.Service` with `Parameter SPECIFICATION = "Graph.KG.MCPToolSet"` in `iris_src/src/Graph/KG/MCPService.cls`
-- [ ] T006 Create `config/mcp-graph.toml` — iris-mcp-server config pointing at `/mcp/graph` endpoint with stdio transport, localhost connection, pool min=2 max=5
-- [ ] T007 Create CSP web application `/mcp/graph` on the IRIS instance: dispatch class `Graph.KG.MCPService`, namespace USER, Unauthenticated for dev
-- [ ] T008 Deploy and compile MCPTools, MCPToolSet, MCPService on the IRIS container
-- [ ] T009 Verify iris-mcp-server connects and discovers 0 tools (empty ToolSet) via `iris-mcp-server --config=config/mcp-graph.toml --log-level=debug run`
+- [X] T003 Create `iris_src/src/Graph/KG/MCPTools.cls` — empty `%AI.Tool` class with class definition and package structure
+- [X] T004 Create `iris_src/src/Graph/KG/MCPToolSet.cls` — `%AI.ToolSet` with XML `<ToolSet>` definition including `Graph.KG.MCPTools` and `%AI.Policy.ConsoleAudit` in `iris_src/src/Graph/KG/MCPToolSet.cls`
+- [X] T005 Create `iris_src/src/Graph/KG/MCPService.cls` — `%AI.MCP.Service` with `Parameter SPECIFICATION = "Graph.KG.MCPToolSet"` in `iris_src/src/Graph/KG/MCPService.cls`
+- [X] T006 Create `config/mcp-graph.toml` — iris-mcp-server config pointing at `/mcp/graph` endpoint with stdio transport, localhost connection, pool min=2 max=5
+- [X] T007 Create CSP web application `/mcp/graph` on the IRIS instance: dispatch class `Graph.KG.MCPService`, namespace USER, Unauthenticated for dev
+- [X] T008 Deploy and compile MCPTools, MCPToolSet, MCPService on the IRIS container
+- [X] T009 Verify iris-mcp-server connects and discovers 0 tools (empty ToolSet) via `iris-mcp-server --config=config/mcp-graph.toml --log-level=debug run`
 
 **Checkpoint**: iris-mcp-server connects to IRIS, discovers the empty MCP service. Claude Desktop can connect (shows gear icon).
 
@@ -40,10 +40,10 @@
 
 **Independent Test**: Connect Claude Desktop, ask "run this cypher: MATCH (a)-[r]->(b) RETURN a.id, r, b.id LIMIT 5", verify results.
 
-- [ ] T010 [US1] Implement `RunSQL(query As %String) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: use `%SQL.Statement` to execute query, collect columns + rows into `%DynamicObject`, handle errors gracefully
-- [ ] T011 [US1] Implement `CypherQuery(query As %String) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: use embedded Python to call `iris_vector_graph.cypher.parser.parse_query()` and `iris_vector_graph.cypher.translator.translate_to_sql()`, then execute resulting SQL via `%SQL.Statement`, return columns + rows + generated SQL
-- [ ] T012 [US1] Redeploy MCPTools.cls, verify iris-mcp-server discovers CypherQuery and RunSQL tools
-- [ ] T013 [US1] Manual test: connect Claude Desktop, ask it to query the graph via CypherQuery and RunSQL, verify JSON results
+- [X] T010 [US1] Implement `RunSQL(query As %String) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: use `%SQL.Statement` to execute query, collect columns + rows into `%DynamicObject`, handle errors gracefully
+- [X] T011 [US1] Implement `CypherQuery(query As %String) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: use embedded Python to call `iris_vector_graph.cypher.parser.parse_query()` and `iris_vector_graph.cypher.translator.translate_to_sql()`, then execute resulting SQL via `%SQL.Statement`, return columns + rows + generated SQL
+- [X] T012 [US1] Redeploy MCPTools.cls, verify iris-mcp-server discovers CypherQuery and RunSQL tools
+- [X] T013 [US1] Manual test: connect Claude Desktop, ask it to query the graph via CypherQuery and RunSQL, verify JSON results
 
 **Checkpoint**: Cypher and SQL queries work via MCP. LLM receives structured results.
 
@@ -55,9 +55,9 @@
 
 **Independent Test**: Ask Claude to load KG_8.graphml, then query for hla-b27.
 
-- [ ] T014 [US2] Implement `LoadGraph(filePath As %String, format As %String = "graphml") As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: use embedded Python to call `IRISGraphEngine.load_networkx()` (graphml) or `IRISGraphEngine.load_obo()` (obo), then call `##class(Graph.KG.Traversal).BuildKG()`, return node/edge counts
-- [ ] T015 [US2] Copy Saskia's KG_8.graphml to a path accessible inside the IRIS container (e.g., `/data/KG_8.graphml`)
-- [ ] T016 [US2] Redeploy MCPTools.cls, manual test: ask Claude to load the graph and verify with GraphStats or RunSQL
+- [X] T014 [US2] Implement `LoadGraph(filePath As %String, format As %String = "graphml") As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: use embedded Python to call `IRISGraphEngine.load_networkx()` (graphml) or `IRISGraphEngine.load_obo()` (obo), then call `##class(Graph.KG.Traversal).BuildKG()`, return node/edge counts
+- [X] T015 [US2] Copy Saskia's KG_8.graphml to a path accessible inside the IRIS container (e.g., `/data/KG_8.graphml`)
+- [X] T016 [US2] Redeploy MCPTools.cls, manual test: ask Claude to load the graph and verify with GraphStats or RunSQL
 
 **Checkpoint**: Graph loading works via MCP. Loaded data is immediately queryable.
 
@@ -67,8 +67,8 @@
 
 **Goal**: LLM can get graph overview (node count, edge count, top predicates, top labels).
 
-- [ ] T017 [P] [US3] Implement `GraphStats() As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: execute 4 SQL queries (COUNT nodes, COUNT edges, GROUP BY p on rdf_edges, GROUP BY label on rdf_labels), assemble into JSON
-- [ ] T018 [US3] Redeploy and manual test: ask Claude "what's in the graph?", verify it calls GraphStats and reports counts
+- [X] T017 [P] [US3] Implement `GraphStats() As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: execute 4 SQL queries (COUNT nodes, COUNT edges, GROUP BY p on rdf_edges, GROUP BY label on rdf_labels), assemble into JSON
+- [X] T018 [US3] Redeploy and manual test: ask Claude "what's in the graph?", verify it calls GraphStats and reports counts
 
 **Checkpoint**: Graph overview available. LLM uses this context to formulate better queries.
 
@@ -78,8 +78,8 @@
 
 **Goal**: LLM can run Personalized PageRank from seed nodes for insight discovery.
 
-- [ ] T019 [P] [US4] Implement `PPRWalk(seeds As %DynamicArray, topK As %Integer = 10, damping As %Double = 0.85) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: serialize seeds to JSON, call `##class(Graph.KG.PageRank).RunJson(seedJson, damping, 50, topK)`, parse JSON result into `%DynamicObject`
-- [ ] T020 [US4] Redeploy and manual test: ask Claude "find surprising connections from hla-b27", verify PPR results with scores
+- [X] T019 [P] [US4] Implement `PPRWalk(seeds As %DynamicArray, topK As %Integer = 10, damping As %Double = 0.85) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: serialize seeds to JSON, call `##class(Graph.KG.PageRank).RunJson(seedJson, damping, 50, topK)`, parse JSON result into `%DynamicObject`
+- [X] T020 [US4] Redeploy and manual test: ask Claude "find surprising connections from hla-b27", verify PPR results with scores
 
 **Checkpoint**: PPR insight discovery works via MCP. LLM interprets ranked results.
 
@@ -89,8 +89,8 @@
 
 **Goal**: LLM can search for supporting literature via vector similarity.
 
-- [ ] T021 [P] [US5] Implement `EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: execute VECTOR_COSINE SQL against kg_NodeEmbeddings, return ranked results with scores; handle empty embeddings table gracefully
-- [ ] T022 [US5] Redeploy and manual test (requires embeddings loaded)
+- [X] T021 [P] [US5] Implement `EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject` method in `iris_src/src/Graph/KG/MCPTools.cls`: execute VECTOR_COSINE SQL against kg_NodeEmbeddings, return ranked results with scores; handle empty embeddings table gracefully
+- [X] T022 [US5] Redeploy and manual test (requires embeddings loaded)
 
 **Checkpoint**: Evidence retrieval works when embeddings are available. Graceful fallback when not.
 
@@ -98,10 +98,10 @@
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T023 Add method descriptions/comments visible to the LLM (the ai-core framework uses method descriptions for tool descriptions in the MCP catalog)
-- [ ] T024 [P] Create `scripts/setup/setup_mcp.sh` — automated CSP web application creation via ObjectScript `$System.Security` API
-- [ ] T025 [P] Update `docs/python/PYTHON_SDK.md` with MCP tools section and quickstart
-- [ ] T026 End-to-end demo: load KG_8.graphml → GraphStats → CypherQuery "what is hla-b27 associated with" → PPRWalk from hla-b27 → all via single Claude Desktop conversation
+- [X] T023 Add method descriptions/comments visible to the LLM (the ai-core framework uses method descriptions for tool descriptions in the MCP catalog)
+- [X] T024 [P] Create `scripts/setup/setup_mcp.sh` — automated CSP web application creation via ObjectScript `$System.Security` API
+- [X] T025 [P] Update `docs/python/PYTHON_SDK.md` with MCP tools section and quickstart
+- [X] T026 End-to-end demo: load KG_8.graphml → GraphStats → CypherQuery "what is hla-b27 associated with" → PPRWalk from hla-b27 → all via single Claude Desktop conversation
 
 ---
 
