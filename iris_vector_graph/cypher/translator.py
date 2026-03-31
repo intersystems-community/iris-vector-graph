@@ -899,42 +899,28 @@ def translate_where_clause(where, context):
 
 def translate_boolean_expression(expr, context) -> str:
     if isinstance(expr, ast.ExistsExpression):
-        child_ctx = TranslationContext(parent=context)
-        child_ctx.from_clauses = []
-        child_ctx.join_clauses = []
-        child_ctx.where_conditions = []
-        child_ctx.join_params = []
-        for i, node in enumerate(expr.pattern.nodes):
-            alias = child_ctx.register_variable(node.variable or f"_ex{i}")
-            if i == 0:
-                outer_var = node.variable
-                if outer_var and outer_var in context.variable_aliases:
-                    pass
-                else:
-                    child_ctx.from_clauses.append(f"{_table('nodes')} {alias}")
+        pat = expr.pattern
+        if pat.relationships:
+            rel = pat.relationships[0]
+            src_node = pat.nodes[0]
+            tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
+            src_bound = src_node.variable and src_node.variable in context.variable_aliases
+            tgt_bound = tgt_node and tgt_node.variable and tgt_node.variable in context.variable_aliases
+            edge_alias = f"_ex{len(context.variable_aliases) + 1}"
+            if tgt_bound:
+                tgt_ref = context.variable_aliases[tgt_node.variable]
+                cond = f"{edge_alias}.o_id = {tgt_ref}.node_id"
+            elif src_bound:
+                src_ref = context.variable_aliases[src_node.variable]
+                cond = f"{edge_alias}.s = {src_ref}.node_id"
             else:
-                child_ctx.from_clauses.append(f"{_table('nodes')} {alias}")
-        for i, rel in enumerate(expr.pattern.relationships):
-            src_var = expr.pattern.nodes[i].variable
-            tgt_var = expr.pattern.nodes[i+1].variable
-            edge_alias = child_ctx.next_alias("ex")
-            src_ref = context.variable_aliases.get(src_var, child_ctx.variable_aliases.get(src_var, src_var))
-            tgt_alias = child_ctx.variable_aliases.get(tgt_var, tgt_var)
-            cond = f"{edge_alias}.s = {src_ref}.node_id"
+                cond = "1=1"
             if rel.types:
                 cond += f" AND {edge_alias}.p = '{rel.types[0]}'"
-            child_ctx.join_clauses.append(f"JOIN {_table('rdf_edges')} {edge_alias} ON {cond}")
-            if i + 1 < len(expr.pattern.nodes) and tgt_var:
-                if tgt_var not in context.variable_aliases:
-                    tgt_label = expr.pattern.nodes[i+1].labels[0] if expr.pattern.nodes[i+1].labels else None
-                    if tgt_label:
-                        tgt_label_alias = child_ctx.next_alias("exl")
-                        child_ctx.join_clauses.append(f"JOIN {_table('rdf_labels')} {tgt_label_alias} ON {tgt_label_alias}.s = {edge_alias}.o_id AND {tgt_label_alias}.label = '{tgt_label}'")
-        frm = ", ".join(child_ctx.from_clauses) if child_ctx.from_clauses else _table("rdf_edges") + " _ex"
-        joins = " ".join(child_ctx.join_clauses)
-        sub = f"SELECT 1 FROM {frm} {joins}"
-        prefix = "NOT " if expr.negated else ""
-        return f"{prefix}EXISTS ({sub})"
+            sub = f"SELECT 1 FROM {_table('rdf_edges')} {edge_alias} WHERE {cond}"
+            prefix = "NOT " if expr.negated else ""
+            return f"{prefix}EXISTS ({sub})"
+        return "1=1"
     if not isinstance(expr, ast.BooleanExpression): return translate_expression(expr, context, segment="where")
     op = expr.operator
     if op == ast.BooleanOperator.AND: return "(" + " AND ".join(translate_boolean_expression(o, context) for o in expr.operands) + ")"
@@ -969,6 +955,21 @@ def translate_boolean_expression(expr, context) -> str:
     raise ValueError(f"Unsupported operator: {op}")
 
 
+def _inline_literal(expr) -> Optional[str]:
+    if expr is None:
+        return None
+    if isinstance(expr, ast.Literal):
+        v = expr.value
+        if v is None:
+            return "NULL"
+        if isinstance(v, bool):
+            return "1" if v else "0"
+        if isinstance(v, (int, float)):
+            return str(v)
+        return f"'{str(v)}'"
+    return None
+
+
 def translate_expression(expr, context, segment="select") -> str:
 
     if isinstance(expr, ast.CaseExpression):
@@ -980,10 +981,15 @@ def translate_expression(expr, context, segment="select") -> str:
                 cond = translate_boolean_expression(wc.condition, context)
             else:
                 cond = translate_expression(wc.condition, context, segment)
-            res = translate_expression(wc.result, context, segment)
+            res = _inline_literal(wc.result)
+            if res is None:
+                res = translate_expression(wc.result, context, segment)
             parts.append(f"WHEN {cond} THEN {res}")
-        if expr.else_result is not None:
-            parts.append(f"ELSE {translate_expression(expr.else_result, context, segment)}")
+        else_res = _inline_literal(expr.else_result) if expr.else_result is not None else None
+        if else_res is None and expr.else_result is not None:
+            else_res = translate_expression(expr.else_result, context, segment)
+        if else_res is not None:
+            parts.append(f"ELSE {else_res}")
         parts.append("END")
         return " ".join(parts)
     if isinstance(expr, ast.PropertyReference):
