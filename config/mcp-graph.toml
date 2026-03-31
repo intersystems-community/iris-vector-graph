@@ -1,0 +1,18 @@
+# iris-mcp-server configuration for Graph.KG knowledge graph tools
+# Usage: iris-mcp-server --config=config/mcp-graph.toml run
+
+[mcp]
+transport = "stdio"
+
+[[iris]]
+name = "local"
+server = { host = "localhost", port = 52773, username = "CSPSystem", password = "SYS" }
+pool = { min = 2, max = 5 }
+endpoints = [
+    { path = "/mcp/graph" }
+]
+
+[logging]
+level = "info"
+output = "file"
+file = "iris-mcp-graph.log"

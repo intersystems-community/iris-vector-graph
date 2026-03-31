@@ -324,6 +324,29 @@ class Parser:
             transactions_batch_size=batch_size,
         )
 
+    def parse_case_expression(self) -> ast.CaseExpression:
+        self.expect(TokenType.CASE)
+        test_expr = None
+        if self.peek().kind not in (TokenType.WHEN, TokenType.EOF):
+            test_expr = self.parse_expression()
+        when_clauses = []
+        while self.peek().kind == TokenType.WHEN:
+            self.eat()
+            condition = self.parse_expression()
+            self.expect(TokenType.THEN)
+            result = self.parse_expression()
+            when_clauses.append(ast.CaseWhenClause(condition=condition, result=result))
+        else_result = None
+        if self.peek().kind == TokenType.ELSE:
+            self.eat()
+            else_result = self.parse_expression()
+        self.expect(TokenType.END)
+        return ast.CaseExpression(
+            when_clauses=when_clauses,
+            else_result=else_result,
+            test_expression=test_expr,
+        )
+
     def parse_updating_clause(self) -> ast.UpdatingClause:
         """Parse CREATE, MERGE, DELETE, SET, REMOVE"""
         kind = self.peek().kind
@@ -621,7 +644,10 @@ class Parser:
     def parse_primary_expression(self) -> Any:
         """Parse atomic expression elements"""
         tok = self.peek()
-        
+
+        if tok.kind == TokenType.CASE:
+            return self.parse_case_expression()
+
         if tok.kind == TokenType.LPAREN:
             self.eat()
             expr = self.parse_expression()
@@ -721,12 +747,12 @@ class Parser:
         self.expect(TokenType.BY)
         items = []
         while True:
-            expr = self.parse_primary_expression()
+            expr = self.parse_expression()
             asc = True
             if self.matches(TokenType.DESC): asc = False
             else: self.matches(TokenType.ASC)
-            
-            if isinstance(expr, (ast.PropertyReference, ast.Variable)):
+
+            if expr is not None:
                 items.append(ast.OrderByItem(expr, asc))
             if not self.matches(TokenType.COMMA): break
         return ast.OrderByClause(items=items)

@@ -887,6 +887,22 @@ def translate_boolean_expression(expr, context) -> str:
 
 
 def translate_expression(expr, context, segment="select") -> str:
+
+    if isinstance(expr, ast.CaseExpression):
+        parts = ["CASE"]
+        if expr.test_expression is not None:
+            parts.append(translate_expression(expr.test_expression, context, segment))
+        for wc in expr.when_clauses:
+            if isinstance(wc.condition, ast.BooleanExpression):
+                cond = translate_boolean_expression(wc.condition, context)
+            else:
+                cond = translate_expression(wc.condition, context, segment)
+            res = translate_expression(wc.result, context, segment)
+            parts.append(f"WHEN {cond} THEN {res}")
+        if expr.else_result is not None:
+            parts.append(f"ELSE {translate_expression(expr.else_result, context, segment)}")
+        parts.append("END")
+        return " ".join(parts)
     if isinstance(expr, ast.PropertyReference):
         alias = context.variable_aliases.get(expr.variable)
         if not alias: raise ValueError(f"Undefined: {expr.variable}")
