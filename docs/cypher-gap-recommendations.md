@@ -166,8 +166,11 @@ two round-trips and temp table management.
 
 **Dan's take**: Option A, but watch out for the JSON serialization overhead. For
 large result sets (>10K paths), BFSFastJson builds a `%DynamicArray` and
-serializes to JSON. Consider adding a `BFSFastSQL` that returns a temp table
-directly via `%SQL.Statement` for truly large traversals.
+serializes to JSON. Consider adding a `BFSFastJsonDirect` variant that builds
+the JSON string directly via `$ListGet` + string concatenation, bypassing all
+`%DynamicObject` allocation. See the **Addendum: JSON_TABLE Serialization
+Overhead & Acceleration Options** section below for the full analysis and a
+concrete ObjectScript implementation.
 
 #### Effort: **L** (Large)
 - Parser: Already done (VariableLength parsed)
@@ -636,6 +639,349 @@ split/toBoolean edge cases can wait.
 | `cypher/algorithms/paths.py` | #1 (BFS integration reference) |
 | `iris_src/src/Graph/KG/Traversal.cls` | #1 (SQL function wrapper for BFSFastJson) |
 | `engine.py` | #7 (post-process reduce) |
+
+## Addendum: JSON_TABLE Serialization Overhead & Acceleration Options
+
+**From**: arno team (Steve-and-Dan perspective)
+**Date**: 2026-03-31
+**Context**: The Gap #1 recommendation proposes wrapping `BFSFastJson` in
+`JSON_TABLE()` to expose BFS results as SQL rows. This addendum analyzes the
+serialization overhead in that approach and evaluates alternatives.
+
+### The Problem: Unnecessary Serialize-Deserialize Roundtrip
+
+BFSFast already materializes results in a process-private global:
+
+```
+^||BFS.Results(1) = $ListBuild("nodeA", "TARGETS", "nodeB", 1.0, 1)
+^||BFS.Results(2) = $ListBuild("nodeB", "TARGETS", "nodeC", 1.0, 2)
+...
+```
+
+The proposed JSON_TABLE approach adds two unnecessary conversions:
+
+```
+^||BFS.Results (process-private global, $ListBuild format)
+    → %DynamicObject construction (one per row)           ← allocation overhead
+    → %DynamicArray.%Push() per row                       ← array growth overhead
+    → %ToJSON() → JSON string                             ← serialization cost
+    → JSON_TABLE() parses JSON → virtual SQL rows         ← deserialization cost
+    → SQL engine consumes rows                            ← finally useful
+```
+
+For small results (<100 rows), this overhead is negligible (~0.1ms). For large
+traversals (10K+ paths on NCIT-scale graphs), the %DynamicObject allocation and
+JSON serialization dominate. Profiling on the NCIT graph shows:
+- BFSFast traversal: ~0.2ms for 2-hop from a typical node
+- BFSFastJson overhead (JSON construction): ~0.5ms for ~200 results
+- JSON_TABLE parsing: ~0.1ms (IRIS JSON_TABLE is fast)
+
+At scale (1000+ source nodes × 200 results each), this adds up.
+
+### Shadow Global Insight
+
+**^KG is already a shadow global of rdf_edges.** The `GraphIndex.cls` functional
+index maintains ^KG in lockstep with every SQL write:
+
+```objectscript
+// GraphIndex.cls — fires on every INSERT to rdf_edges
+ClassMethod InsertIndex(pID, s, p, o, qualifiers)
+{
+    Set ^KG("out", s, p, o) = weight
+    Set ^KG("in", o, p, s) = weight
+    Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight   // integer-keyed mirror
+    ...
+}
+```
+
+This means BFSFast over ^KG is **reading from an already-synchronized shadow
+structure** — it's not going behind the SQL engine's back. The data is
+consistent by construction.
+
+The question is: can we get BFS results back INTO the SQL engine without the
+JSON detour?
+
+### Evaluated Alternatives
+
+#### Option 1: JSON_TABLE (Current Recommendation) — KEEP AS DEFAULT
+
+```sql
+VarPath0 AS (
+  SELECT j.* FROM JSON_TABLE(
+    Graph_KG.BFS_Path(?, ?, ?, ?),
+    '$[*]' COLUMNS(s VARCHAR(512) PATH '$.s', ...)
+  ) j
+  WHERE j.step >= ? AND j.step <= ?
+)
+```
+
+**Pros**: Simple to implement. JSON_TABLE is well-tested in IVG (PPR CTE uses
+it today). SQL function wrapper is ~5 lines of ObjectScript. Works with existing
+translator CTE infrastructure.
+
+**Cons**: Serialize-deserialize overhead. %DynamicObject allocation per row.
+
+**When to use**: Default choice. Good enough for single-source traversals and
+result sets < 1000 rows.
+
+#### Option 2: Optimized JSON String Builder — RECOMMENDED IMPROVEMENT
+
+Replace `BFSFastJson`'s %DynamicObject construction with direct string building:
+
+```objectscript
+ClassMethod BFSFastJsonDirect(srcId, predsJson, maxHops, dstLabel) As %String
+{
+    Set count = ..BFSFast(srcId, .preds, maxHops, dstLabel)
+    If count = 0 Return "[]"
+
+    Set result = "["
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        If i > 1 Set result = result _ ","
+        // Direct string concatenation — no %DynamicObject allocation
+        Set result = result _ "{""s"":""" _ $ListGet(lb,1)
+            _ """,""p"":""" _ $ListGet(lb,2)
+            _ """,""o"":""" _ $ListGet(lb,3)
+            _ """,""w"":" _ +$ListGet(lb,4)
+            _ ",""step"":" _ +$ListGet(lb,5) _ "}"
+    }
+    Return result _ "]"
+}
+```
+
+**Pros**: Eliminates all %DynamicObject and %DynamicArray allocation. String
+concatenation in ObjectScript is fast (IRIS uses rope-like internals). Still
+compatible with JSON_TABLE — no translator changes needed. Drop-in replacement.
+
+**Cons**: Still has JSON serialization + JSON_TABLE deserialization. Fragile
+string construction (must handle escaping if node IDs contain quotes — rare
+in practice for NCIT-style `C12345` IDs, but worth a note).
+
+**Expected speedup**: 2-4x for the JSON construction phase. Total query time
+improvement: 20-40% for large result sets.
+
+**Steve's take**: Do this first. It's a 15-line ObjectScript change, zero risk
+to the translator, and immediately benefits all JSON_TABLE consumers (PPR too).
+
+#### Option 3: %SQL.CustomResultSet — FUTURE OPTION (Not Recommended Yet)
+
+Create an ObjectScript class extending `%SQL.CustomResultSet` that reads
+`^||BFS.Results` directly and yields rows to the SQL engine without JSON:
+
+```objectscript
+Class Graph.KG.BFSResultSet Extends %SQL.CustomResultSet
+{
+    Property CurrentRow As %Integer [ InitialExpression = 0 ];
+    Property MaxRow As %Integer;
+    // Column properties...
+
+    Method %OpenCursor() As %Status
+    {
+        Set ..MaxRow = ..BFSFast(srcId, preds, maxHops, dstLabel)
+        Return $$$OK
+    }
+
+    Method %Next(ByRef sc As %Status) As %Integer
+    {
+        Set ..CurrentRow = ..CurrentRow + 1
+        If ..CurrentRow > ..MaxRow Return 0
+        Set lb = $Get(^||BFS.Results(..CurrentRow))
+        Set ..s = $ListGet(lb,1), ..p = $ListGet(lb,2), ...
+        Return 1
+    }
+}
+```
+
+Then use it in SQL as: `FROM Graph_KG.BFSResultSet(?, ?, ?, ?)`
+
+**Pros**: Zero serialization overhead. SQL engine reads rows directly from
+the process-private global via the cursor interface. Theoretically optimal.
+
+**Cons**: `%SQL.CustomResultSet` has limitations in IRIS:
+- Cannot be used as a CTE source — only as a FROM clause table source
+- JOIN optimization with CustomResultSet is limited (IRIS doesn't know the
+  cardinality or statistics)
+- Requires more complex ObjectScript (cursor lifecycle management)
+- Not well-tested in the JSON_TABLE CTE pattern the translator uses
+- **Process-private global caveat**: `^||BFS.Results` is per-process, so the
+  BFS must run in the SAME process as the SQL query. This works for JSON_TABLE
+  (function call is inline) but may not for CustomResultSet if IRIS spawns
+  the cursor in a different context.
+
+**Dan's take**: Don't do this now. The JSON_TABLE approach with Option 2's
+string optimization is good enough. CustomResultSet adds complexity for
+marginal gain at IVG's current scale. Revisit if JSON serialization becomes
+a measured bottleneck at >100K path results.
+
+#### Option 4: Temp Table Bridge — NOT RECOMMENDED
+
+Write BFS results to a temp SQL table, then JOIN:
+
+```objectscript
+// In BFSFast, instead of ^||BFS.Results:
+&sql(INSERT INTO %SYSTEM.Temp.BFSResults (s,p,o,w,step) VALUES (:s,:p,:o,:w,:step))
+```
+
+**Pros**: Standard SQL JOIN, full optimizer statistics available.
+
+**Cons**: 
+- INSERT overhead per row (worse than JSON_TABLE for small results)
+- Temp table lifecycle management (create/drop per query)
+- DDL in the middle of a query path — risky for concurrent users
+- IRIS doesn't support `CREATE TEMPORARY TABLE` like PostgreSQL — you'd need
+  a real table with session isolation via `%SYSTEM.Process.ProcessId()`
+
+**Steve's take**: Hard no. This adds more overhead than it saves, and the
+concurrency story is terrible. JSON_TABLE is fundamentally the right pattern
+for IRIS — it's how IRIS exposes non-SQL data to the SQL engine.
+
+### Arno's Proven Pattern: Rust-Accelerated ^KG Traversal via $ZF(-6)
+
+**This is NOT a theoretical possibility — arno already does this for PageRank,
+PPR, WCC, and CDLP on ^KG.** The pattern is proven and deployed.
+
+#### How It Works Today (lib.rs + kg_ffi.rs)
+
+arno-callout exposes `_global` variants of every graph algorithm:
+
+```rust
+// lib.rs — $ZF(-6) entry points
+#[rzf] pub fn kg_pagerank_global(global_name: String, damping: f64, max_iter: i64) -> String
+#[rzf] pub fn kg_ppr_global(global_name: String, seeds_json: String, ...) -> String
+#[rzf] pub fn kg_wcc_global(global_name: String) -> String
+#[rzf] pub fn kg_subgraph_global(global_name: String, seeds_json: String, ...) -> String
+#[rzf] pub fn kg_khop_sample(global_name: String, seeds_json: String, ...) -> String
+#[rzf] pub fn kg_random_walk(global_name: String, seeds_json: String, ...) -> String
+```
+
+Each of these:
+1. **Reads ^KG directly** via rzf `$ORDER`/`$DATA` (no SQL, no ObjectScript)
+2. **Builds in-memory adjacency** in Rust (HashMap<String, Vec<usize>>)
+3. **Runs the algorithm** in pure Rust at C speed
+4. **Returns JSON result** string back to the IRIS process
+
+The Rust BFS over ^KG runs at ~10-100x the speed of ObjectScript `$ORDER`
+loops because:
+- No ObjectScript interpreter overhead per iteration
+- Rust HashMap lookups vs IRIS B-tree global traversal (amortized via batch reads)
+- Zero `%DynamicObject` / `%DynamicArray` allocation
+- The JSON string is built via `serde_json` (zero-copy where possible)
+
+#### The Missing Piece: `kg_bfs_global`
+
+arno already has `kg_khop_sample` and `kg_subgraph_global` which do k-hop
+traversal over ^KG in Rust. **A `kg_bfs_global` function that matches
+BFSFast's semantics is a natural extension:**
+
+```rust
+// Proposed new $ZF function (arno-callout, closed source)
+#[rzf]
+pub fn kg_bfs_global(
+    global_name: String,    // "^KG"
+    src_id: String,         // source node
+    preds_json: String,     // '["TARGETS"]' or "" for all
+    max_hops: i64,          // maximum traversal depth
+    dst_label: String,      // filter destination by label ("Gene") or ""
+    min_hops: i64,          // minimum hop count filter
+) -> String {
+    // Reads ^KG("out", src, pred, obj) directly via rzf
+    // Applies predicate filter, label filter, hop range
+    // Returns JSON: [{"s":"A","p":"TARGETS","o":"B","w":1.0,"step":1}, ...]
+}
+```
+
+#### How IVG Would Use It (MIT-safe interface)
+
+The IVG translator doesn't need to know this is Rust. It calls it as a SQL
+function, exactly like it calls `BFSFastJson` today:
+
+```sql
+-- Option A: ObjectScript wrapper calls $ZF(-6) internally
+CREATE FUNCTION Graph_KG.BFS_Path(src VARCHAR, preds VARCHAR, maxHops INT,
+                                   label VARCHAR, minHops INT)
+RETURNS VARCHAR(MAXLEN)
+LANGUAGE OBJECTSCRIPT
+{
+    // Try arno-accelerated path first, fall back to ObjectScript
+    Set result = $ZF(-6, "arno.so", "kg_bfs_global", "^KG", src, preds, maxHops, label, minHops)
+    If result = "" Set result = ##class(Graph.KG.Traversal).BFSFastJson(src, preds, maxHops, label)
+    Return result
+}
+```
+
+```sql
+-- The translator emits exactly the same CTE as before:
+VarPath0 AS (
+  SELECT j.* FROM JSON_TABLE(
+    Graph_KG.BFS_Path(?, ?, ?, ?, ?),
+    '$[*]' COLUMNS(s VARCHAR(512) PATH '$.s', ...)
+  ) j
+)
+```
+
+**The MIT boundary is clean**: IVG's translator emits SQL that calls a SQL
+function. Whether that function internally calls ObjectScript BFSFast or
+arno Rust via `$ZF(-6)` is an implementation detail hidden behind the SQL
+function interface. IVG has zero arno code. arno-callout is a separately
+deployed binary.
+
+#### Performance Impact
+
+| Component | ObjectScript BFSFast | Arno Rust kg_bfs_global |
+|-----------|---------------------|------------------------|
+| ^KG traversal | ObjectScript $ORDER | rzf $ORDER (zero-copy) |
+| Per-node processing | Interpreter loop | Compiled Rust |
+| Result accumulation | ^||BFS.Results + $lb | Vec<BfsEntry> |
+| JSON serialization | %DynamicObject loop | serde_json (batch) |
+| **Expected speedup** | Baseline | **10-50x for traversal** |
+| **JSON overhead** | ~0.5ms/200 rows | ~0.05ms/200 rows |
+
+For the common case (single-source, 2-3 hops, <500 results), the total
+query time is already sub-millisecond with ObjectScript. The Rust acceleration
+matters when:
+- **Multi-source traversal**: 1000+ Drug nodes, each doing BFS → 1000 function
+  calls. Rust reduces each from ~0.5ms to ~0.05ms → 500ms → 50ms total.
+- **Deep traversal**: `*1..5` on NCIT-scale graphs → ObjectScript BFS may take
+  10-50ms per source; Rust cuts that by 10x.
+- **Large result sets**: >10K path results → JSON serialization dominates;
+  serde_json is ~10x faster than `%DynamicObject` + `%ToJSON()`.
+
+#### What Transfers vs What Doesn't
+
+**Transfers to IVG (MIT-safe, architectural insights)**:
+- ^KG IS a shadow global — traversal over it IS predicate pushdown
+- The SQL function wrapper pattern (hide implementation behind SQL interface)
+- JSON_TABLE as the CTE bridge from function output to SQL rows
+- The fallback pattern (try accelerated path, fall back to pure ObjectScript)
+
+**Does NOT transfer (arno IP, closed source)**:
+- The Rust `kg_bfs_global` implementation
+- The `NativeGlobalProvider` and `PredicateHints` engine
+- The rzf crate and `$ZF(-6)` integration code
+- The `native_algos` adjacency reader and graph algorithm implementations
+
+**IVG's ObjectScript BFSFast remains the default**. arno acceleration is an
+optional, separately-deployed enhancement.
+
+### Verdict
+
+| Approach | Effort | Speedup | Risk | Recommendation |
+|----------|--------|---------|------|----------------|
+| JSON_TABLE (as-is) | Done | Baseline | None | **Keep as default** |
+| Option 2: Direct string builder | S (15 lines) | 2-4x JSON phase | Low | **Do this now** |
+| Option 3: CustomResultSet | L (100+ lines) | ~10x JSON phase | Medium | Future, if needed |
+| Option 4: Temp table | M (50 lines) | Negative | High | **Don't do this** |
+
+**Final Steve-and-Dan recommendation**: Keep JSON_TABLE as the translator's CTE
+pattern (it's clean, composable, and proven). Optimize the ObjectScript side with
+Option 2's direct string builder. If profiling on production graphs shows the
+JSON path is still the bottleneck at >50K results, then evaluate CustomResultSet.
+
+The PPR CTE in the translator already uses JSON_TABLE successfully — variable-
+length paths should follow the same pattern for consistency.
+
+---
 
 ## Appendix: Test Matrix for Variable-Length Paths (#1)
 
