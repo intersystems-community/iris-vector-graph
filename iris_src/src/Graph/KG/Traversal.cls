@@ -279,7 +279,7 @@ ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Intege
 }
 
 /// Run BFSFast and return results as a JSON string.
-/// Primary entry point for Python callers — reads ^||BFS.Results in the same session.
+/// Primary entry point for Python callers -- reads ^||BFS.Results in the same session.
 /// 
 /// @param srcId    Source node ID
 /// @param predsJson JSON array of predicates per hop, e.g. '["rel1","rel2"]' or null/"" for all
@@ -298,7 +298,7 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
         }
     }
 
-    // Run BFSFast — writes to ^||BFS.Results(i) = $ListBuild(s,p,o,w,step)
+    // Run BFSFast -- writes to ^||BFS.Results(i) = $ListBuild(s,p,o,w,step)
     Set count = ..BFSFast(srcId, preds, maxHops, dstLabel)
 
     If count = 0 Return "[]"

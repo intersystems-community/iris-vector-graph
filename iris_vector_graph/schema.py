@@ -565,6 +565,12 @@ LANGUAGE OBJECTSCRIPT
         except Exception:
             caps.kg_built = False
 
+        try:
+            result = _call_classmethod(_native_target, 'Graph.KG.Meta', 'IsSet', 'nkg_built')
+            caps.nkg_built = bool(result)
+        except Exception:
+            caps.nkg_built = False
+
         return caps
 
     @staticmethod
@@ -656,8 +662,9 @@ LANGUAGE OBJECTSCRIPT
         # Record completion
         try:
             _call_classmethod(_native, 'Graph.KG.Meta', 'Set', 'kg_built', '1')
+            _call_classmethod(_native, 'Graph.KG.Meta', 'Set', 'nkg_built', '1')
         except Exception as exc:
             logger.warning("Could not record kg_built in Graph.KG.Meta: %s", exc)
 
-        logger.info("^KG global bootstrapped from existing rdf_edges rows")
+        logger.info("^KG and ^NKG globals bootstrapped from existing rdf_edges rows")
         return True

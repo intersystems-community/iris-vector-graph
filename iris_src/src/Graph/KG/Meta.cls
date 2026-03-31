@@ -42,4 +42,23 @@ ClassMethod PurgeAll() As %Status
     Quit $$$OK
 }
 
+ClassMethod GetNKG(s1 As %String = "", s2 As %String = "", s3 As %String = "", s4 As %String = "") As %String
+{
+	If s4 '= "" Return $Get(^NKG(s1, s2, s3, s4), "")
+	If s3 '= "" Return $Get(^NKG(s1, s2, s3), "")
+	If s2 '= "" Return $Get(^NKG(s1, s2), "")
+	If s1 '= "" Return $Get(^NKG(s1), "")
+	Return ""
+}
+
+ClassMethod GetKG(s1 As %String = "", s2 As %String = "", s3 As %String = "", s4 As %String = "", s5 As %String = "") As %String
+{
+	If s5 '= "" Return $Get(^KG(s1, s2, s3, s4, s5), "")
+	If s4 '= "" Return $Get(^KG(s1, s2, s3, s4), "")
+	If s3 '= "" Return $Get(^KG(s1, s2, s3), "")
+	If s2 '= "" Return $Get(^KG(s1, s2), "")
+	If s1 '= "" Return $Get(^KG(s1), "")
+	Return ""
+}
+
 }

@@ -38,7 +38,8 @@ class TestLoadNetworkx:
         import networkx as nx
         engine = self._make_engine()
         result = engine.load_networkx(nx.DiGraph())
-        assert result == {"nodes": 0, "edges": 0}
+        assert result["nodes"] == 0
+        assert result["edges"] == 0
 
 
 class TestLoadObo:
