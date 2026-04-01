@@ -1,0 +1,35 @@
+SuperUser
+SYS
+
+ set $NAMESPACE = "%SYS"
+
+ // Enable CallIn for embedded Python
+ do ##class(Security.Services).Get("%Service_CallIn",.prop)
+ set prop("Enabled") = 1
+ set sc = ##class(Security.Services).Modify("%Service_CallIn",.prop)
+ write "CallIn enabled sc: ",sc,!
+
+ set $NAMESPACE = "USER"
+
+ // Load Graph.KG ObjectScript classes
+ set sc = $System.OBJ.LoadDir("/tmp/cls/Graph/KG/", "ck")
+ write "ObjectScript classes loaded: ",sc,!
+
+ // Create CSP web application for MCP
+ set $NAMESPACE = "%SYS"
+ kill props
+ set props("NameSpace") = "USER"
+ set props("DispatchClass") = "Graph.KG.MCPService"
+ set props("Enabled") = 1
+ set props("AutheEnabled") = 96
+ set props("MatchRoles") = ":%All"
+ set props("IsNameSpaceDefault") = 0
+ set props("CSPZENEnabled") = 1
+ set sc = ##class(Security.Applications).Create("/mcp/graph", .props)
+ write "CSP app /mcp/graph created sc: ",sc,!
+
+ // Verify app was created
+ set sc2 = ##class(Security.Applications).Get("/mcp/graph", .verify)
+ write "CSP app verify sc: ",sc2," dispatch: ",verify("DispatchClass"),!
+
+ halt

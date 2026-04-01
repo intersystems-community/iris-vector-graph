@@ -1772,3 +1772,38 @@ class IRISGraphEngine:
 
     def plaid_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Drop", name)
+
+    # ── Temporal edges ──
+
+    def create_edge_temporal(self, source: str, predicate: str, target: str,
+                             timestamp: int = None, weight: float = 1.0) -> bool:
+        try:
+            ts = int(timestamp) if timestamp is not None else ""
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.TemporalIndex", "InsertEdge", source, predicate, target, str(ts), weight)
+            return True
+        except Exception as e:
+            logger.warning(f"create_edge_temporal failed: {e}")
+            return False
+
+    def bulk_create_edges_temporal(self, edges: list) -> int:
+        batch_json = json.dumps(edges)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "BulkInsert", batch_json)
+        return int(result)
+
+    def get_edges_in_window(self, source: str = "", predicate: str = "",
+                            start: int = 0, end: int = 0) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "QueryWindow", source, predicate, start, end)
+        return json.loads(str(result))
+
+    def get_edge_velocity(self, node_id: str, window_seconds: int = 300) -> int:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetVelocity", node_id, window_seconds)
+        return int(result)
+
+    def find_burst_nodes(self, predicate: str = "", window_seconds: int = 300, threshold: int = 50) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold)
+        return json.loads(str(result))

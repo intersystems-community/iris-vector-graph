@@ -1,0 +1,15 @@
+[[iris]]
+name = "local"
+server = { host = "localhost", port = 52773, username = "CSPSystem", password = "SYS" }
+pool = { min = 2, max = 5 }
+endpoints = [
+    { path = "/mcp/graph" }
+]
+
+[mcp]
+transport = "http"
+port = 8888
+host = "0.0.0.0"
+
+[logging]
+level = "debug"

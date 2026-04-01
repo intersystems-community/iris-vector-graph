@@ -115,3 +115,5 @@ dist/
 # Benchmark caches
 .benchmarks/
 .ruff_cache/
+*.crt
+deploy/certs/
