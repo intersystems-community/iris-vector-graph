@@ -21,7 +21,7 @@ SYS
  set props("NameSpace") = "USER"
  set props("DispatchClass") = "Graph.KG.MCPService"
  set props("Enabled") = 1
- set props("AutheEnabled") = 96
+ set props("AutheEnabled") = 64
  set props("MatchRoles") = ":%All"
  set props("IsNameSpaceDefault") = 0
  set props("CSPZENEnabled") = 1

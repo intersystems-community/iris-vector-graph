@@ -32,23 +32,11 @@ RUN mkdir -p /tmp/extract && \
     cd / && \
     rm -rf /tmp/iris_install /tmp/extract /tmp/iris.key
 
-RUN sed -i 's/^WebServer=0/WebServer=1/' /usr/irissys/iris.cpf && \
-    sed -i 's/^WebServerPort=80/WebServerPort=52773/' /usr/irissys/iris.cpf
+RUN /usr/irissys/bin/cspagent_install.sh --instancename IRIS --host 127.0.0.1 --port 1972 --apachebin /usr/sbin/apache2 --apachectl /usr/sbin/apachectl || true
 
-RUN mkdir -p /tmp/wg && \
-    tar -xzf /usr/irissys/dev/odbc/redist/WebGateway-2026.2.0AI.142.0-dockerubuntuarm64.tar.gz \
-        -C /tmp/wg && \
-    cd /tmp/wg/WebGateway-2026.2.0AI.142.0-dockerubuntuarm64/install && \
-    ./GatewayInstall \
-        --silent \
-        --instance IRIS \
-        --apache /usr/sbin/apache2 \
-        --apachectl /usr/sbin/apachectl \
-        --gwdir /opt/webgateway \
-        --irishost 127.0.0.1 \
-        --irisport 1972 \
-        2>&1 || true && \
-    rm -rf /tmp/wg
+RUN sed -i 's|#### END-ApacheCSP-SECTION ####|<Location "/mcp/">\n\tCSP On\n</Location>\n#### END-ApacheCSP-SECTION ####|' /etc/apache2/apache2.conf && \
+    sed -i 's|/iris=Enabled|/iris=Enabled\n/mcp=Enabled|' /opt/webgateway/conf/CSP.ini && \
+    printf '\n[APP_PATH:/mcp]\nDefault_Server=IRIS\nAlternative_Server_0=1~~~~~~IRIS\n' >> /opt/webgateway/conf/CSP.ini
 
 RUN pip3 install --break-system-packages iris-vector-graph networkx lark numpy
 
