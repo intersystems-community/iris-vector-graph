@@ -1776,11 +1776,12 @@ class IRISGraphEngine:
     # ── Temporal edges ──
 
     def create_edge_temporal(self, source: str, predicate: str, target: str,
-                             timestamp: int = None, weight: float = 1.0) -> bool:
+                             timestamp: int = None, weight: float = 1.0, attrs: dict = None) -> bool:
         try:
             ts = int(timestamp) if timestamp is not None else ""
+            attrs_json = json.dumps(attrs) if attrs else ""
             self._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndex", "InsertEdge", source, predicate, target, str(ts), weight)
+                "Graph.KG.TemporalIndex", "InsertEdge", source, predicate, target, str(ts), weight, attrs_json)
             return True
         except Exception as e:
             logger.warning(f"create_edge_temporal failed: {e}")
@@ -1807,3 +1808,112 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold)
         return json.loads(str(result))
+
+    def get_edge_attrs(self, ts: int, source: str, predicate: str, target: str) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target)
+        return json.loads(str(result))
+
+    def import_graph_ndjson(self, path: str, upsert_nodes: bool = True, batch_size: int = 10000) -> dict:
+        nodes = 0
+        edges = 0
+        temporal_edges = 0
+        temporal_batch = []
+
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(f"Skipping malformed NDJSON line")
+                    continue
+
+                kind = event.get("kind", "")
+
+                if kind == "node":
+                    node_id = event.get("id", "")
+                    labels = event.get("labels", [])
+                    props = event.get("properties", {})
+                    if node_id:
+                        self.create_node(node_id, labels=labels, properties=props)
+                        nodes += 1
+
+                elif kind == "edge":
+                    src = event.get("source", "")
+                    pred = event.get("predicate", "")
+                    tgt = event.get("target", "")
+                    if src and pred and tgt:
+                        self.create_edge(src, pred, tgt)
+                        edges += 1
+
+                elif kind == "temporal_edge":
+                    src = event.get("source", "")
+                    pred = event.get("predicate", "")
+                    tgt = event.get("target", "")
+                    ts = event.get("timestamp", 0)
+                    w = event.get("weight", 1.0)
+                    attrs = event.get("attrs", {})
+                    src_labels = event.get("source_labels", [])
+                    tgt_labels = event.get("target_labels", [])
+                    if upsert_nodes:
+                        if src:
+                            self.create_node(src, labels=src_labels)
+                        if tgt:
+                            self.create_node(tgt, labels=tgt_labels)
+                    item = {"s": src, "p": pred, "o": tgt, "ts": ts, "w": w}
+                    if attrs:
+                        item["attrs"] = {k: str(v) for k, v in attrs.items()}
+                    temporal_batch.append(item)
+                    if len(temporal_batch) >= batch_size:
+                        self.bulk_create_edges_temporal(temporal_batch)
+                        temporal_edges += len(temporal_batch)
+                        temporal_batch = []
+                else:
+                    logger.warning(f"Skipping unknown NDJSON kind: {kind}")
+
+        if temporal_batch:
+            self.bulk_create_edges_temporal(temporal_batch)
+            temporal_edges += len(temporal_batch)
+
+        return {"nodes": nodes, "edges": edges, "temporal_edges": temporal_edges}
+
+    def export_graph_ndjson(self, path: str) -> dict:
+        nodes_written = 0
+        edges_written = 0
+
+        cursor = self.conn.cursor()
+        with open(path, 'w') as f:
+            cursor.execute(f"SELECT node_id FROM {_table('nodes')}")
+            for (node_id,) in cursor.fetchall():
+                node_data = self.get_node(node_id)
+                if node_data:
+                    event = {"kind": "node", "id": node_id, "labels": node_data.get("labels", []),
+                             "properties": {k: v for k, v in node_data.items() if k not in ("id", "labels")}}
+                    f.write(json.dumps(event) + "\n")
+                    nodes_written += 1
+
+        cursor.close()
+        return {"nodes": nodes_written, "edges": edges_written}
+
+    def export_temporal_edges_ndjson(self, path: str, start: int = None, end: int = None,
+                                     predicate: str = None) -> dict:
+        s_filter = ""
+        p_filter = predicate or ""
+        ts_start = start or 0
+        ts_end = end or 9999999999
+        result_json = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "QueryWindow", s_filter, p_filter, ts_start, ts_end)
+        edges = json.loads(str(result_json))
+
+        with open(path, 'w') as f:
+            for edge in edges:
+                attrs = self.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
+                event = {"kind": "temporal_edge", "source": edge["s"], "predicate": edge["p"],
+                         "target": edge["o"], "timestamp": edge["ts"], "weight": edge.get("w", 1.0),
+                         "attrs": attrs}
+                f.write(json.dumps(event) + "\n")
+
+        return {"temporal_edges": len(edges)}

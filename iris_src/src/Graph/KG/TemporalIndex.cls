@@ -3,7 +3,7 @@ Class Graph.KG.TemporalIndex Extends %RegisteredObject
 
 Parameter BUCKET = 300;
 
-ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0)
+ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "")
 {
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
 	Set ^KG("tout", timestamp, source, predicate, target) = weight
@@ -13,6 +13,13 @@ ClassMethod InsertEdge(source As %String, predicate As %String, target As %Strin
 	Set ^KG("out", source, predicate, target) = weight
 	Set ^KG("in", target, predicate, source) = weight
 	Set tmp = $Increment(^KG("deg", source))
+	If attrsJSON '= "" {
+		Set attrs = ##class(%DynamicObject).%FromJSON(attrsJSON)
+		Set iter = attrs.%GetIterator()
+		While iter.%GetNext(.key, .val) {
+			Set ^KG("edgeprop", timestamp, source, predicate, target, key) = val
+		}
+	}
 }
 
 ClassMethod BulkInsert(batchJSON As %String) As %Integer
@@ -36,6 +43,13 @@ ClassMethod BulkInsert(batchJSON As %String) As %Integer
 		Set ^KG("out", source, predicate, target) = weight
 		Set ^KG("in", target, predicate, source) = weight
 		Set tmp = $Increment(^KG("deg", source))
+		Set attrs = item.%Get("attrs")
+		If attrs '= "" && ($IsObject(attrs)) {
+			Set iter = attrs.%GetIterator()
+			While iter.%GetNext(.key, .val) {
+				Set ^KG("edgeprop", ts, source, predicate, target, key) = val
+			}
+		}
 		Set count = count + 1
 	}
 	Return count
@@ -127,6 +141,20 @@ ClassMethod Purge()
 	Kill ^KG("tout")
 	Kill ^KG("tin")
 	Kill ^KG("bucket")
+	Kill ^KG("edgeprop")
+}
+
+ClassMethod GetEdgeAttrs(ts As %Integer, source As %String, predicate As %String, target As %String) As %String
+{
+	Set ts = +ts
+	Set result = ##class(%DynamicObject).%New()
+	Set key = ""
+	While 1 {
+		Set key = $Order(^KG("edgeprop", ts, source, predicate, target, key), 1, val)
+		If key = "" Quit
+		Do result.%Set(key, val)
+	}
+	Return result.%ToJSON()
 }
 
 }

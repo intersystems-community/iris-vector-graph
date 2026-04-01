@@ -25,6 +25,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 - Existing Graph_KG schema + ^KG/^NKG globals (031-cypher-mcp-server)
 - Python 3.11 (build) + ObjectScript (write/query) + `iris_vector_graph` (engine, schema), `intersystems-irispython` (036-temporal-edges)
 - InterSystems IRIS — new `^KG("tout",...)` + `^KG("tin",...)` + `^KG("bucket",...)` subscripts (additive, zero schema changes) (036-temporal-edges)
+- `^KG("edgeprop", ts, s, p, o, key) = value` — new subscript key in existing `^KG` (037-edgeprop-ndjson-ingest)
 
 ## Project Structure
 ```text
@@ -44,9 +45,9 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 037-edgeprop-ndjson-ingest: Added Python 3.11 (build) + ObjectScript (write/query) + `iris_vector_graph` (engine, schema), `intersystems-irispython`
 - 036-temporal-edges: Added Python 3.11 (build) + ObjectScript (write/query) + `iris_vector_graph` (engine, schema), `intersystems-irispython`
 - 032-cypher-cast-coerce: Added Python 3.11
-- 031-cypher-mcp-server: Added ObjectScript (IRIS 2026.2.0AI) + embedded Python 3.12 + IRIS ai-core framework (`%AI.Tool`, `%AI.ToolSet`, `%AI.MCP.Service`), `iris-mcp-server` (Rust binary), `iris_vector_graph` Python package (embedded)
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->
