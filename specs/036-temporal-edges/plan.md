@@ -1,0 +1,161 @@
+# Implementation Plan: Temporal Edge Indexing
+
+**Branch**: `036-temporal-edges` | **Date**: 2026-04-01 | **Spec**: [spec.md](./spec.md)
+
+## Summary
+
+Add temporal edge indexing to `^KG` using new subscript keys `("tout", ts, s, p, o)` and `("tin", ts, o, p, s)`. A new `Graph.KG.TemporalIndex.cls` ObjectScript class handles all writes. Ingest target: ≥50K edges/sec via bulk ObjectScript call. Enables time-window queries, velocity/burst detection for fraud, security, and anomaly detection.
+
+## Technical Context
+
+**Language/Version**: Python 3.11 (build) + ObjectScript (write/query)
+**Primary Dependencies**: `iris_vector_graph` (engine, schema), `intersystems-irispython`
+**Storage**: InterSystems IRIS — new `^KG("tout",...)` + `^KG("tin",...)` + `^KG("bucket",...)` subscripts (additive, zero schema changes)
+**Testing**: pytest — unit + integration + e2e against live IRIS
+**Target Platform**: IRIS 2024.1+
+**Performance target**: ≥50K edges/sec via `Graph.KG.TemporalIndex.BulkInsert`
+**Constraints**: `^KG("out",...)` read path unchanged — zero regressions
+
+## Constitution Check
+
+- [x] Container `iris-vector-graph-main` managed by `iris-devtester` (conftest.py:153/348)
+- [x] Explicit e2e test phase (non-optional)
+- [x] `SKIP_IRIS_TESTS` defaults `"false"`
+- [x] No hardcoded IRIS ports
+- [x] Integration tests for global structure validation (Principle IV)
+- [x] No schema changes — purely additive global writes
+
+**Gate status**: PASS
+
+## Project Structure
+
+```text
+iris_src/src/Graph/KG/
+├── TemporalIndex.cls          # NEW: InsertEdge, BulkInsert, QueryWindow, GetVelocity, FindBursts, Purge
+
+iris_vector_graph/
+├── engine.py                  # MODIFY: create_edge_temporal, bulk_create_edges_temporal,
+                               #   get_edges_in_window, get_edge_velocity, find_burst_nodes
+
+tests/
+├── unit/test_temporal_edges.py
+├── integration/test_temporal_integration.py
+└── e2e/test_temporal_edges_e2e.py
+```
+
+## Complexity Tracking
+
+No constitution violations. Additive global writes — no existing code modified except engine.py additions.
+**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
+
+**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/commands/plan.md` for the execution workflow.
+
+## Summary
+
+[Extract from feature spec: primary requirement + technical approach from research]
+
+## Technical Context
+
+<!--
+  ACTION REQUIRED: Replace the content in this section with the technical details
+  for the project. The structure here is presented in advisory capacity to guide
+  the iteration process.
+-->
+
+**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]  
+**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]  
+**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]  
+**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]  
+**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
+**Project Type**: [single/web/mobile - determines source structure]  
+**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]  
+**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]  
+**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
+
+## Constitution Check
+
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+
+[Gates determined based on constitution file]
+
+**Principle IV gate (IRIS-backend features)**: If this feature has IRIS as a backend
+component, confirm the plan includes:
+- [ ] A dedicated, named IRIS container (`iris_vector_graph`) managed by `iris-devtester`
+- [ ] An explicit e2e test phase (non-optional, not in "polish") covering all user stories
+- [ ] `SKIP_IRIS_TESTS` defaulting to `"false"` in all new test files
+- [ ] No hardcoded IRIS ports; all resolved via `IRISContainer.attach("iris_vector_graph").get_exposed_port(1972)`
+
+> **Principle VI reminder**: The container name `iris_vector_graph` above was verified from
+> `docker-compose.yml`. If you are using this template for a different project, re-verify
+> ALL infrastructure details (container name, port, schema) against that project's
+> authoritative sources before proceeding. NEVER assume or copy from another project.
+
+## Project Structure
+
+### Documentation (this feature)
+
+```text
+specs/[###-feature]/
+├── plan.md              # This file (/speckit.plan command output)
+├── research.md          # Phase 0 output (/speckit.plan command)
+├── data-model.md        # Phase 1 output (/speckit.plan command)
+├── quickstart.md        # Phase 1 output (/speckit.plan command)
+├── contracts/           # Phase 1 output (/speckit.plan command)
+└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
+```
+
+### Source Code (repository root)
+<!--
+  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
+  for this feature. Delete unused options and expand the chosen structure with
+  real paths (e.g., apps/admin, packages/something). The delivered plan must
+  not include Option labels.
+-->
+
+```text
+# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
+src/
+├── models/
+├── services/
+├── cli/
+└── lib/
+
+tests/
+├── contract/
+├── integration/
+└── unit/
+
+# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
+backend/
+├── src/
+│   ├── models/
+│   ├── services/
+│   └── api/
+└── tests/
+
+frontend/
+├── src/
+│   ├── components/
+│   ├── pages/
+│   └── services/
+└── tests/
+
+# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
+api/
+└── [same as backend above]
+
+ios/ or android/
+└── [platform-specific structure: feature modules, UI flows, platform tests]
+```
+
+**Structure Decision**: [Document the selected structure and reference the real
+directories captured above]
+
+## Complexity Tracking
+
+> **Fill ONLY if Constitution Check has violations that must be justified**
+
+| Violation | Why Needed | Simpler Alternative Rejected Because |
+|-----------|------------|-------------------------------------|
+| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
+| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |

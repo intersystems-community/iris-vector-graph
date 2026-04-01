@@ -1,0 +1,35 @@
+services:
+  iris:
+    build:
+      context: ./deploy
+      dockerfile: Dockerfile
+    ports:
+      - "1977:1972"
+      - "52777:52773"
+      - "8082:80"
+      - "8889:8888"
+      - "8443:8443"
+    volumes:
+      - ./deploy/projects:/home/irisowner/dev
+      - ./data/mindwalk:/home/irisowner/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "iris qlist IRIS 2>/dev/null | grep -q running"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
+  mcp-server:
+    image: ivg-iris-base
+    entrypoint: ["bash", "-c"]
+    command: ["cd /home/irisowner/dev && iris-mcp-server --config=config.toml run"]
+    depends_on:
+      iris:
+        condition: service_healthy
+    volumes:
+      - ./deploy/projects:/home/irisowner/dev
+      - ./deploy/certs/server.crt:/tmp/server.crt:ro
+      - ./deploy/certs/server.key:/tmp/server.key:ro
+    network_mode: "service:iris"
+    restart: unless-stopped
