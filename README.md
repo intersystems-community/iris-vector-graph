@@ -212,6 +212,13 @@ Set sub = ##class(Graph.KG.Subgraph).SubgraphJson(seedsJSON, 3, "")
 
 ## Changelog
 
+### v1.40.0 (2026-04-02)
+- `iris_vector_graph.embedded.EmbeddedConnection` — dbapi2 adapter for IRIS Language=python methods
+- Zero-boilerplate usage: `IRISGraphEngine(EmbeddedConnection())` works identically inside IRIS as with external `iris.connect()`
+- `commit()`/`rollback()` are intentional no-ops (IRIS manages transactions in embedded context)
+- `START TRANSACTION`/`COMMIT`/`ROLLBACK` via `cursor.execute()` are silent no-ops (avoids `<COMMAND>` in wgproto jobs)
+- `fetchmany()`, `rowcount`, `description` fully implemented
+
 ### v1.39.0 (2026-04-01)
 - Pre-aggregated temporal analytics: `^KG("tagg", bucket, source, predicate, key)` for O(1) COUNT/AVG/MIN/MAX
 - New ObjectScript methods: `GetAggregate`, `GetBucketGroups`, `GetDistinctCount` (16-register HLL)
