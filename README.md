@@ -372,7 +372,6 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 - [Architecture](docs/architecture/ARCHITECTURE.md)
 - [Schema Reference](docs/architecture/ACTUAL_SCHEMA.md)
 - [Temporal Graph Full Spec](docs/enhancements/006-temporal-property-graph-full-spec.md)
-- [For OpsReview / Chad's team](docs/for-opsreview/IVG-OPSREVIEW-BRIEF.md)
 - [Setup Guide](docs/setup/QUICKSTART.md)
 - [Testing Policy](docs/TESTING_POLICY.md)
 
