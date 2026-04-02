@@ -1814,6 +1814,45 @@ class IRISGraphEngine:
             "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target)
         return json.loads(str(result))
 
+    def get_temporal_aggregate(
+        self,
+        source: str,
+        predicate: str,
+        metric: str,
+        ts_start: int,
+        ts_end: int,
+    ):
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetAggregate",
+            source, predicate, metric, ts_start, ts_end)
+        s = str(result)
+        if s == "":
+            return 0 if metric == "count" else None
+        return int(s) if metric == "count" else float(s)
+
+    def get_bucket_groups(
+        self,
+        predicate: str = "",
+        ts_start: int = 0,
+        ts_end: int = 0,
+    ) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetBucketGroups",
+            predicate, ts_start, ts_end)
+        return json.loads(str(result))
+
+    def get_distinct_count(
+        self,
+        source: str,
+        predicate: str,
+        ts_start: int,
+        ts_end: int,
+    ) -> int:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetDistinctCount",
+            source, predicate, ts_start, ts_end)
+        return int(str(result))
+
     def import_graph_ndjson(self, path: str, upsert_nodes: bool = True, batch_size: int = 10000) -> dict:
         nodes = 0
         edges = 0

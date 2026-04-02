@@ -1,4 +1,5 @@
 """Unit and e2e tests for temporal edge indexing."""
+import json
 import os
 import time
 import uuid
@@ -134,3 +135,190 @@ class TestTemporalEdgeE2E:
             assert val is not None
         except (TypeError, ImportError):
             pytest.skip("iris.createIRIS not available on this Python version")
+
+
+class TestTemporalPreAggUnit:
+    """Unit tests for pre-aggregation Python wrappers (mock IRIS, no container).
+    Tests written FIRST per TDD — will fail until engine.py wrappers are added.
+    """
+
+    def _make_engine(self):
+        from iris_vector_graph.engine import IRISGraphEngine
+        e = IRISGraphEngine.__new__(IRISGraphEngine)
+        e.conn = MagicMock()
+        iris_mock = MagicMock()
+        e._iris_obj = lambda: iris_mock
+        return e, iris_mock
+
+    def test_get_temporal_aggregate_calls_classmethod(self):
+        """get_temporal_aggregate must call GetAggregate classmethod on TemporalIndex."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = "42"
+        engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "count", 0, 9999)
+        mock.classMethodValue.assert_called_once()
+        call_args = mock.classMethodValue.call_args[0]
+        assert "Graph.KG.TemporalIndex" in call_args
+        assert "GetAggregate" in call_args
+
+    def test_get_temporal_aggregate_count_returns_int(self):
+        """count metric must return a Python int."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = "100"
+        result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "count", 0, 9999)
+        assert isinstance(result, int)
+        assert result == 100
+
+    def test_get_temporal_aggregate_avg_returns_float(self):
+        """avg metric must return a Python float."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = "3.141593"
+        result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "avg", 0, 9999)
+        assert isinstance(result, float)
+        assert abs(result - 3.141593) < 1e-4
+
+    def test_get_temporal_aggregate_empty_avg_returns_none(self):
+        """Empty string result for avg/min/max must return None (empty window)."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = ""
+        result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "avg", 0, 9999)
+        assert result is None
+
+    def test_get_temporal_aggregate_empty_count_returns_zero(self):
+        """Empty string result for count must return 0 (not None)."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = ""
+        result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "count", 0, 9999)
+        assert result == 0
+        assert isinstance(result, int)
+
+    def test_get_bucket_groups_returns_list(self):
+        """get_bucket_groups must parse JSON and return a list of dicts."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = (
+            '[{"source":"svc:auth","predicate":"CALLS_AT",'
+            '"count":10,"sum":100.0,"avg":10.0,"min":5.0,"max":20.0}]'
+        )
+        result = engine.get_bucket_groups("CALLS_AT", 0, 9999)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["source"] == "svc:auth"
+        assert result[0]["count"] == 10
+
+    def test_get_distinct_count_calls_classmethod_returns_int(self):
+        """get_distinct_count must call GetDistinctCount and return an int."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = "7"
+        result = engine.get_distinct_count("svc:auth", "CALLS_AT", 0, 9999)
+        mock.classMethodValue.assert_called_once()
+        call_args = mock.classMethodValue.call_args[0]
+        assert "GetDistinctCount" in call_args
+        assert isinstance(result, int)
+        assert result == 7
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestTemporalPreAggE2E:
+
+    PREFIX = f"PA_{uuid.uuid4().hex[:6]}"
+
+    @pytest.fixture(autouse=True)
+    def setup(self, iris_connection):
+        self.conn = iris_connection
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
+        yield
+        try:
+            self.engine._iris_obj().classMethodVoid("Graph.KG.TemporalIndex", "Purge")
+        except Exception:
+            pass
+
+    def test_aggregate_avg_correct(self):
+        now = int(time.time())
+        weights = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
+        edges = [
+            {"s": f"{self.PREFIX}:src", "p": "CALLS_AT", "o": f"{self.PREFIX}:dst{i}",
+             "ts": now + i, "w": w}
+            for i, w in enumerate(weights)
+        ]
+        self.engine.bulk_create_edges_temporal(edges)
+        expected_avg = sum(weights) / len(weights)
+        result = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:src", "CALLS_AT", "avg", now - 10, now + 100)
+        assert result is not None
+        assert abs(result - expected_avg) < 0.001
+
+    def test_aggregate_count_correct(self):
+        now = int(time.time())
+        edges = [
+            {"s": f"{self.PREFIX}:csrc", "p": "CALLS_AT",
+             "o": f"{self.PREFIX}:cdst{i}", "ts": now + i}
+            for i in range(10)
+        ]
+        self.engine.bulk_create_edges_temporal(edges)
+        count = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:csrc", "CALLS_AT", "count", now - 10, now + 100)
+        assert count == 10
+        assert isinstance(count, int)
+
+    def test_bucket_groups_all_sources(self):
+        now = int(time.time())
+        for src in ["alpha", "beta", "gamma"]:
+            edges = [
+                {"s": f"{self.PREFIX}:{src}", "p": "SENDS",
+                 "o": f"{self.PREFIX}:dst{i}", "ts": now + i}
+                for i in range(5)
+            ]
+            self.engine.bulk_create_edges_temporal(edges)
+        groups = self.engine.get_bucket_groups("SENDS", now - 10, now + 100)
+        sources = {g["source"] for g in groups}
+        assert f"{self.PREFIX}:alpha" in sources
+        assert f"{self.PREFIX}:beta" in sources
+        assert f"{self.PREFIX}:gamma" in sources
+        for g in groups:
+            if g["source"].startswith(self.PREFIX):
+                assert g["count"] == 5
+
+    def test_multi_bucket_aggregate(self):
+        bucket_sec = 300
+        now = int(time.time())
+        t1 = now - (now % bucket_sec) - bucket_sec
+        t2 = t1 + bucket_sec
+        edges = (
+            [{"s": f"{self.PREFIX}:mb", "p": "HIT", "o": f"{self.PREFIX}:x{i}",
+              "ts": t1 + i, "w": 1.0} for i in range(5)] +
+            [{"s": f"{self.PREFIX}:mb", "p": "HIT", "o": f"{self.PREFIX}:y{i}",
+              "ts": t2 + i, "w": 3.0} for i in range(5)]
+        )
+        self.engine.bulk_create_edges_temporal(edges)
+        count = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:mb", "HIT", "count", t1, t2 + 100)
+        assert count == 10
+        total_sum = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:mb", "HIT", "sum", t1, t2 + 100)
+        assert abs(total_sum - 20.0) < 0.01
+
+    def test_distinct_count_nonzero(self):
+        now = int(time.time())
+        edges = [
+            {"s": f"{self.PREFIX}:dc", "p": "CALLS_AT",
+             "o": f"{self.PREFIX}:target{i}", "ts": now + i}
+            for i in range(20)
+        ]
+        self.engine.bulk_create_edges_temporal(edges)
+        estimate = self.engine.get_distinct_count(
+            f"{self.PREFIX}:dc", "CALLS_AT", now - 10, now + 100)
+        assert estimate > 0
+        assert isinstance(estimate, int)
+
+    def test_purge_clears_tagg(self):
+        now = int(time.time())
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:pur", "p": "X", "o": f"{self.PREFIX}:y", "ts": now}
+        ])
+        before = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:pur", "X", "count", now - 10, now + 10)
+        assert before > 0
+        self.engine._iris_obj().classMethodVoid("Graph.KG.TemporalIndex", "Purge")
+        after = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:pur", "X", "count", now - 10, now + 10)
+        assert after == 0

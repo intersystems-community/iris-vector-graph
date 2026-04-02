@@ -1,5 +1,8 @@
 # iris-vector-graph Development Guidelines
 
+**Owner:** Thomas Dyar (Tom) — Sr. Manager, AI Platform and Ecosystems, InterSystems Corporation  
+> NEVER use "Tim" — that is Tim Leavitt, a colleague. Always use "Tom" in conversation.
+
 Auto-generated from all feature plans. Last updated: 2026-02-24
 
 ## Active Technologies

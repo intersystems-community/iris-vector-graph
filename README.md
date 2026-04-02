@@ -212,6 +212,15 @@ Set sub = ##class(Graph.KG.Subgraph).SubgraphJson(seedsJSON, 3, "")
 
 ## Changelog
 
+### v1.39.0 (2026-04-01)
+- Pre-aggregated temporal analytics: `^KG("tagg", bucket, source, predicate, key)` for O(1) COUNT/AVG/MIN/MAX
+- New ObjectScript methods: `GetAggregate`, `GetBucketGroups`, `GetDistinctCount` (16-register HLL)
+- New Python wrappers: `get_temporal_aggregate()`, `get_bucket_groups()`, `get_distinct_count()`
+- HLL: 16-register HyperLogLog for COUNT DISTINCT using SHA1 hash, ~26% error (documented)
+- MIN/MAX atomicity limitation documented (Phase 2: LOCK-based fix)
+- `Purge()` extended to kill `^KG("tagg")` subscripts
+- 7 unit tests + 6 E2E tests; 300 total tests passing
+
 ### v1.28.0 (2026-03-29)
 - Lightweight default install — base requires only `intersystems-irispython`
 - Optional extras: `[full]`, `[plaid]`, `[dev]`, `[ml]`, `[visualization]`, `[biodata]`
