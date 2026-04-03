@@ -141,6 +141,7 @@ class TranslationContext:
         self.stages: List[str] = [] if parent is None else parent.stages
         self.input_params: Dict[str, Any] = {} if parent is None else parent.input_params
         self.temporal_rel_ctes: Dict[str, str] = {} if parent is None else parent.temporal_rel_ctes.copy()
+        self.temporal_derived: Dict[str, str] = {} if parent is None else parent.temporal_derived.copy()
         self.pending_where = None
 
     def next_alias(self, prefix: str = "t") -> str:
@@ -163,19 +164,28 @@ class TranslationContext:
         self.where_params.append(value); return "?"
 
     def build_stage_sql(self, distinct: bool = False, select_override: Optional[str] = None) -> tuple[str, List[Any]]:
-        """Build SQL for a single stage and return (sql, combined_params)"""
         select = select_override if select_override else f"SELECT {'DISTINCT ' if distinct else ''}{', '.join(self.select_items)}"
         parts = [select]
-        if self.from_clauses: parts.append(f"FROM {', '.join(self.from_clauses)}")
-        if self.join_clauses: parts.extend(self.join_clauses)
+        if self.from_clauses:
+            expanded = []
+            for fc in self.from_clauses:
+                if fc in self.temporal_derived:
+                    expanded.append(f"({self.temporal_derived[fc]}) {fc}")
+                else:
+                    expanded.append(fc)
+            parts.append(f"FROM {', '.join(expanded)}")
+        expanded_joins = []
+        for jc in self.join_clauses:
+            for tname, tsql in self.temporal_derived.items():
+                if f"JOIN {tname} " in jc or f"JOIN {tname}\n" in jc:
+                    jc = jc.replace(f"JOIN {tname} ", f"JOIN ({tsql}) {tname} ")
+                    jc = jc.replace(f"JOIN {tname}\n", f"JOIN ({tsql}) {tname}\n")
+            expanded_joins.append(jc)
+        if expanded_joins: parts.extend(expanded_joins)
         if self.where_conditions: parts.append(f"WHERE {' AND '.join(self.where_conditions)}")
         if self.group_by_items: parts.append(f"GROUP BY {', '.join(self.group_by_items)}")
-        
         sql = "\n".join(parts)
         params = (self.select_params if not select_override else []) + self.join_params + self.where_params
-        
-        # NOTE: We don't clear params here because they might be needed for the next stage or final assembly.
-        # But for DML subqueries, we must be careful not to double-count.
         return sql, params
 
 
@@ -539,7 +549,6 @@ def _build_temporal_cte(edges: list, cte_name: str, metadata) -> str:
         rows.append(f"SELECT '{s}' AS s, '{p}' AS p, '{o}' AS o, {ts} AS ts, {w} AS weight")
     return " UNION ALL ".join(rows)
 
-
 def _remove_ts_conditions_from_where(context, rel_var: str):
     kept = []
     for cond in context.where_conditions:
@@ -641,18 +650,18 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         if cypher_query.return_clause:
             sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
             sql = apply_pagination(sql, cypher_query, context, order_by_items)
-            all_ctes = getattr(context, "cte_clauses", []) + context.stages
-            if all_ctes:
-                sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
-                all_params.append(context.all_stage_params + p)
-            else: all_params.append(p)
-            stmts.append(sql)
+        all_ctes = [c for c in getattr(context, "cte_clauses", []) if not any(td in c for td in context.temporal_derived)] + context.stages
+        if all_ctes:
+            sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
+            all_params.append(context.all_stage_params + p)
+        else: all_params.append(p)
+        stmts.append(sql)
         return SQLQuery(sql=stmts, parameters=all_params, query_metadata=metadata, is_transactional=True)
     else:
         sql, p = context.build_stage_sql(cypher_query.return_clause.distinct if cypher_query.return_clause else False)
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
         vl = context.var_length_paths or None
-        all_ctes = getattr(context, "cte_clauses", []) + context.stages
+        all_ctes = [c for c in getattr(context, "cte_clauses", []) if not any(td in c for td in context.temporal_derived)] + context.stages
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
             return SQLQuery(sql=sql, parameters=[context.all_stage_params + p], query_metadata=metadata, var_length_paths=vl)
@@ -992,6 +1001,11 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
     target_alias = context.register_variable(target_node.variable)
     edge_alias = context.register_variable(rel.variable, prefix="e") if rel.variable else context.next_alias("e")
 
+    def _node_col(variable, alias):
+        if alias.startswith('Stage') or alias == 'VecSearch':
+            return variable
+        return "node_id"
+
     direction = "in" if rel.direction == ast.Direction.INCOMING else "out"
 
     if rel.variable and context.pending_where is not None:
@@ -1022,28 +1036,44 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
             cte_sql = _build_temporal_cte(edges, cte_name, metadata)
             if not hasattr(context, "cte_clauses"):
                 context.cte_clauses = []
-            context.cte_clauses.append(f"{cte_name}({cte_name}.s, {cte_name}.p, {cte_name}.o, {cte_name}.ts, {cte_name}.weight) AS ({cte_sql})")
+            context.cte_clauses.append(f"{cte_name}(s, p, o, ts, weight) AS ({cte_sql})")
             context.temporal_rel_ctes[rel.variable] = cte_name
-            jt = "LEFT OUTER JOIN" if optional else "JOIN"
-            s_col_cte = "node_id"
+            context.temporal_derived[cte_name] = cte_sql
+            context.temporal_rel_ctes[rel.variable] = cte_name
+
+            if not hasattr(context, "temporal_node_col"):
+                context.temporal_node_col = {}
+
             if direction == "out":
-                edge_cond_cte = f"{cte_name}.s = {source_alias}.{s_col_cte}"
-                target_on_cte = f"{target_alias}.node_id = {cte_name}.o"
+                src_col_in_cte, tgt_col_in_cte = "s", "o"
             else:
-                edge_cond_cte = f"{cte_name}.o = {source_alias}.{s_col_cte}"
-                target_on_cte = f"{target_alias}.node_id = {cte_name}.s"
-            context.join_clauses.append(f"{jt} {cte_name} ON {edge_cond_cte}")
-            if is_new_target and not target_alias.startswith("Stage"):
-                context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on_cte}")
-            else:
-                context.where_conditions.append(target_on_cte)
+                src_col_in_cte, tgt_col_in_cte = "o", "s"
+
+            context.temporal_node_col[source_node.variable] = src_col_in_cte
+            context.temporal_node_col[target_node.variable] = tgt_col_in_cte
+            context.variable_aliases[source_node.variable] = cte_name
+            context.variable_aliases[target_node.variable] = cte_name
+
+            new_from = []
+            for fc in context.from_clauses:
+                if source_alias in fc and _table("nodes") in fc:
+                    new_from.append(cte_name)
+                else:
+                    new_from.append(fc)
+            if not new_from or cte_name not in new_from:
+                new_from = [cte_name] + [f for f in new_from if f != cte_name]
+            context.from_clauses = new_from
+
+            new_joins = []
+            for jc in context.join_clauses:
+                if f"{source_alias}.node_id" in jc or f"{_table('nodes')} {source_alias}" in jc:
+                    continue
+                new_joins.append(jc)
+            context.join_clauses = new_joins
+
             _remove_ts_conditions_from_where(context, rel.variable)
             return
 
-    def _node_col(variable, alias):
-        if alias.startswith('Stage') or alias == 'VecSearch':
-            return variable
-        return "node_id"
     s_col = _node_col(source_node.variable, source_alias)
     t_col = _node_col(target_node.variable, target_alias)
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
@@ -1195,6 +1225,12 @@ def translate_expression(expr, context, segment="select") -> str:
                 return f"{cte_alias}.ts"
             if expr.property_name in ("weight", "w"):
                 return f"{cte_alias}.weight"
+        temporal_node_col = getattr(context, "temporal_node_col", {})
+        if expr.variable in temporal_node_col:
+            col = temporal_node_col[expr.variable]
+            cte_name = context.variable_aliases[expr.variable]
+            if expr.property_name in ("id", "node_id"):
+                return f"{cte_name}.{col}"
         if expr.property_name in ("ts", "weight", "w") and expr.variable not in context.temporal_rel_ctes:
             if alias and alias.startswith("e"):
                 m = getattr(context, "_metadata", None)
