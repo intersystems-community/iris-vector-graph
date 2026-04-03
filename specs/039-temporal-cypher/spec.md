@@ -110,7 +110,7 @@ RETURN a.id, b.id, r.ts
 | FR-009 | Missing upper bound (`r.ts >= $start` only) MUST be accepted — treated as open-ended (r.ts <= MAX_INT) |
 | FR-010 | Empty temporal result set MUST return zero rows, not an error |
 | FR-011 | When `r.ts` or `r.weight` appears in RETURN but no `r.ts` range filter is present in WHERE, the translator MUST NOT route to the temporal index; it MUST route to rdf_edges (r.ts and r.weight will be NULL), and SHOULD emit a query-level warning advising the user to add a WHERE r.ts filter |
-| FR-012 | When a temporal window query returns more than 10,000 edges, the translator MUST truncate the VALUES CTE to 10,000 rows and MUST emit a query-level warning: "temporal result truncated to 10,000 edges — narrow the time window or use get_edges_in_window()" |
+| FR-012 | When a temporal window query returns more than 10,000 edges, the translator MUST truncate the `UNION ALL SELECT` CTE to 10,000 rows and MUST emit a query-level warning: "temporal result truncated to 10,000 edges — narrow the time window or use get_edges_in_window()" |
 
 ### Non-Functional Requirements
 
@@ -132,9 +132,10 @@ A MATCH pattern is temporal when: (1) a relationship variable is bound (any name
 ```
 MATCH (a)-[r:CALLS_AT]->(b) WHERE r.ts >= $start AND r.ts <= $end
 →
-WITH temporal_edges AS (
-    SELECT * FROM TABLE(Graph_KG.QueryWindow_TV(?, ?, ?, ?))
-    -- OR: call QueryWindow classmethod, inject result as CTE
+WITH temporal_edges(s, p, o, ts, w) AS (
+    SELECT 'svc:a','CALLS_AT','svc:b',1705000000,42.0
+    UNION ALL SELECT 'svc:c','CALLS_AT','svc:d',1705000001,10.0
+    -- one SELECT per edge returned by QueryWindow
 )
 SELECT a.node_id, b.node_id, te.ts, te.weight
 FROM Graph_KG.nodes a
@@ -143,11 +144,9 @@ JOIN Graph_KG.nodes b ON b.node_id = te.o
 WHERE ...
 ```
 
-The alternative (call `QueryWindow` in Python, inject results as literal SQL) is simpler and avoids table-valued function complexity. The translator detects temporal pattern, calls `QueryWindow` via the engine, gets the edge list, and either:
-- (A) Injects as a `VALUES (...)` CTE — avoids stored procedure complexity
-- (B) Creates a temp table — heavier but supports large result sets
+The translator calls `QueryWindow` via the engine (Python), gets the edge list, builds a `SELECT ... UNION ALL SELECT ...` CTE, and JOINs that CTE into the SQL query. IRIS SQL does not support `VALUES` inside a CTE (`WITH x AS (VALUES ...)`) — verified on `iris-vector-graph-main`. `UNION ALL SELECT` literals are used instead.
 
-Decision for implementation: inject as `VALUES (...)` CTE. Maximum 10,000 edges injected; if QueryWindow returns more, truncate to 10,000 and emit a query-level warning: "temporal result truncated to 10,000 edges — narrow the time window or use get_edges_in_window()". No temp-table fallback.
+Decision for implementation: inject as `UNION ALL SELECT` CTE. Maximum 10,000 edges injected; if QueryWindow returns more, truncate to 10,000 and emit a query-level warning: "temporal result truncated to 10,000 edges — narrow the time window or use get_edges_in_window()". No temp-table fallback.
 
 ### Relationship Properties on Temporal Edges
 

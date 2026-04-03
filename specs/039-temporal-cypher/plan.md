@@ -29,7 +29,7 @@ Add temporal awareness to the IVG Cypher translator so `WHERE r.ts >= $start AND
 | I. Library-First | ✅ | All changes in `iris_vector_graph/` |
 | II. Compatibility-First | ✅ | Non-temporal MATCH unchanged (FR-006); `execute_cypher` signature unchanged |
 | III. Test-First | ✅ | Tests written before implementation in each phase |
-| IV. E2E Testing | ✅ | Live IRIS tests required (translator touches SQL layer); container: `iris-vector-graph-main` per conftest.py:161 |
+| IV. E2E Testing | ✅ | Live IRIS tests required (translator touches SQL layer); container: `iris-vector-graph-main` — verified as `container_name` in `tests/conftest.py:161` and `:363`. Note: `docker-compose.yml` uses service container_name `iris_vector_graph` for the compose-managed instance; the devtester attach name `iris-vector-graph-main` is the authoritative name for test infrastructure per conftest.py |
 | V. Simplicity | ✅ | Two functions added to translator; no new classes; no new ObjectScript |
 | VI. Grounding | ✅ | Container name verified from `tests/conftest.py:161` (`iris-vector-graph-main`); IRIS SQL `VALUES` in CTE rejected — verified live; UNION ALL CTE confirmed working |
 
@@ -130,7 +130,7 @@ Internal change: `translate_to_sql(query, params, engine=None)` gains optional `
 
 ## Phase 3: Implementation Plan
 
-### Step 1: `_extract_temporal_bounds(where_expr, rel_var)` in `translator.py`
+### Step 1: `_extract_temporal_bounds(where_expr, rel_var, params)` in `translator.py`
 
 Walk a WHERE expression tree, return `TemporalBound` if `<rel_var>.ts` appears with `>=`/`<=`/`>`/`<`/`=` operators, else `None`. Also extract `r.weight` post-filter conditions if present.
 
@@ -138,7 +138,7 @@ Walk a WHERE expression tree, return `TemporalBound` if `<rel_var>.ts` appears w
 - Walk `BooleanExpression(AND, ...)` recursively
 - Detect `BooleanExpression(>=, PropertyReference(rel_var, 'ts'), Literal/Parameter)`
 - Detect `BooleanExpression(<=, PropertyReference(rel_var, 'ts'), Literal/Parameter)`
-- Resolve parameter values from `context.input_params`
+- Resolve parameter values from `params` dict (e.g., `params.get(param_name)` for `$start`)
 - Return `TemporalBound(ts_start, ts_end, rel_variable, predicate, direction)`
 
 ### Step 2: `_build_temporal_cte(edges, cte_name)` in `translator.py`
@@ -154,7 +154,7 @@ Truncate to 10,000 rows; append warning to metadata if truncated.
 ### Step 3: Modify `translate_match_pattern()` temporal branch
 
 After determining `edge_alias` and `rel.variable`, before the `rdf_edges` JOIN:
-1. Call `_extract_temporal_bounds(context.where_clause, rel.variable)`
+1. Call `_extract_temporal_bounds(context.pending_where, rel.variable, context.input_params)`
 2. If `TemporalBound` found:
    a. Require `engine` (raise `TemporalQueryRequiresEngine` if None)
    b. Resolve `ts_start`/`ts_end` from params
