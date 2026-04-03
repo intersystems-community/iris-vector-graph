@@ -92,11 +92,11 @@ A user wants to add vector search over an existing SQL table's rows. They call o
 
 **Acceptance Scenarios**:
 
-1. **Given** `HealthShare.Patient` is mapped with `PatientID` as ID, **When** `engine.attach_embeddings_to_table("HealthShare.Patient", id_column="PatientID", text_columns=["Name", "Diagnosis"], batch_size=500)` is called, **Then** embeddings are stored in `kg_NodeEmbeddings` with IDs of the form `Patient:{PatientID_value}`.
+1. **Given** `HealthShare.Patient` is mapped (via prior `map_sql_table` call with `PatientID` as id_column), **When** `engine.attach_embeddings_to_table("Patient", text_columns=["Name", "Diagnosis"], batch_size=500)` is called, **Then** embeddings are stored in `kg_NodeEmbeddings` with IDs of the form `Patient:{PatientID_value}`.
 2. **Given** embeddings are stored, **When** `CALL ivg.vector.search('Patient', 'embedding', $vec, 10) YIELD node, score RETURN node.Name, score` is executed, **Then** results reference existing rows in `HealthShare.Patient`.
 3. **Given** the source table is updated (new rows added), **When** `attach_embeddings_to_table` is called again, **Then** only rows whose ID is absent from `kg_NodeEmbeddings` are embedded; existing rows are skipped.
 4. **Given** `force=True` is passed, **When** `attach_embeddings_to_table` is called, **Then** all rows are re-embedded regardless of existing entries.
-4. **Given** `batch_size=500`, **When** the table has 50,000 rows, **Then** the method processes all rows in batches of 500 with progress logging.
+5. **Given** `batch_size=500`, **When** the table has 50,000 rows, **Then** the method processes all rows in batches of 500 with progress logging.
 
 ---
 
@@ -120,7 +120,7 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 
 | ID | Requirement |
 |----|-------------|
-| FR-001 | `map_sql_table(table, id_column, label, property_columns=None, schema=None)` MUST register a mapping from a graph label to an existing SQL table |
+| FR-001 | `map_sql_table(table, id_column, label, property_columns=None)` MUST register a mapping from a graph label to an existing SQL table. `table` is fully-qualified (e.g., `HealthShare.Patient`); schema is encoded in the table name, not a separate parameter. |
 | FR-002 | Registered node mappings MUST be persisted (survive engine restart) in a dedicated metadata table |
 | FR-003 | Cypher `MATCH (n:Label)` MUST route to the registered SQL table when a mapping exists for `Label` |
 | FR-004 | `map_sql_relationship(source_label, predicate, target_label, target_fk=None, via_table=None, via_source=None, via_target=None)` MUST register a traversable edge mapping. `target_fk` is the FK column on the **target** table that references the source table's PK (the standard 1:many pattern). Use `via_table` for many-to-many. |
@@ -129,7 +129,7 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 | FR-007 | Queries over mapped tables MUST NOT write any data to `Graph_KG.nodes` or `Graph_KG.rdf_edges` |
 | FR-008 | Queries spanning mapped and native IVG nodes in a single MATCH MUST execute correctly |
 | FR-009 | WHERE filters on mapped node properties MUST be pushed down to the underlying SQL table |
-| FR-010 | `attach_embeddings_to_table(table, id_column, text_columns, batch_size=1000)` MUST generate and store embeddings for all rows, addressable by `Label:{id_value}` |
+| FR-010 | `attach_embeddings_to_table(label, text_columns, batch_size=1000, force=False)` MUST generate and store embeddings for all rows in the table registered under `label`. The `id_column` is taken from the existing `map_sql_table` registration. Embeddings are stored in `kg_NodeEmbeddings` addressable by `Label:{id_value}`. Raises `TableNotMappedError` if `label` is not registered. |
 | FR-011 | `attach_embeddings_to_table` MUST be idempotent — rows whose ID already exists in `kg_NodeEmbeddings` are skipped; a `force=True` parameter MUST be supported to re-embed all rows regardless |
 | FR-012 | `list_table_mappings()` MUST return all registered node and relationship mappings |
 | FR-013 | `remove_table_mapping(label)` MUST remove a node mapping and its associated relationship mappings |
@@ -186,7 +186,7 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 | SC-004 | Zero rows written to Graph_KG.nodes during mapped queries | FR-007 — verify with row count before/after |
 | SC-005 | Multi-hop query spanning 3 mapped tables executes correctly | US2 AC4 |
 | SC-006 | Mixed mapped + native query works | US3 AC1 |
-| SC-007 | Existing 349 unit tests pass unchanged | `pytest tests/unit/ -q` |
+| SC-007 | Existing 353 unit tests pass unchanged | `pytest tests/unit/ -q` |
 | SC-008 | `attach_embeddings_to_table` idempotent: second run skips existing rows | US4 AC3 |
 
 ---

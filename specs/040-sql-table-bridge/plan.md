@@ -197,7 +197,7 @@ def reload_table_mappings(self) -> None:
 
 ```python
 # Added to TranslationContext.__init__:
-self.mapped_node_aliases: Dict[str, str] = {}  # alias → sql_table_name
+self.mapped_node_aliases: Dict[str, dict] = {}  # alias → full mapping dict (sql_table, id_column, etc.)
 ```
 
 ### Translator intercept in `translate_node_pattern`

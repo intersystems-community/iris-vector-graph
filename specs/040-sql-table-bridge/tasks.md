@@ -48,6 +48,8 @@
 - [ ] T012 [US1] Write unit test `test_cypher_mapped_label_uses_mapped_table_not_nodes` in `TestSQLTableBridgeUnit`: seed cache with `Patient → {sql_table: "T.Pat", id_column: "PID", ...}`; translate `MATCH (n:Patient) RETURN n.Name`; assert SQL does NOT contain `Graph_KG.nodes` and DOES contain `T.Pat` — must FAIL before T015
 - [ ] T013 [US1] Write unit test `test_cypher_unmapped_label_unchanged` in `TestSQLTableBridgeUnit`: empty cache; translate `MATCH (n:Service) RETURN n.id`; assert SQL contains `Graph_KG.nodes` (regression guard) — must FAIL before T015
 - [ ] T014 [US1] Write unit test `test_map_sql_table_upsert_updates_existing` in `TestSQLTableBridgeUnit`: mock conn; call `map_sql_table` twice for same label with different table names; assert second call updates, not duplicates — must FAIL before T016
+- [ ] T014b [US1] Write unit test `test_sql_mapping_wins_over_native_nodes` in `TestSQLTableBridgeUnit`: seed `_table_mapping_cache` with Patient mapping AND mock `Graph_KG.nodes` as if it has Patient rows; translate `MATCH (n:Patient) RETURN n.id`; assert generated SQL queries mapped table, NOT `Graph_KG.nodes` (FR-016) — must FAIL before T015
+- [ ] T014c [US1] Write unit test `test_where_filter_routes_to_mapped_column` in `TestSQLTableBridgeUnit`: seed cache with Patient mapping; translate `MATCH (n:Patient) WHERE n.MRN = $mrn RETURN n.Name`; assert SQL WHERE contains `alias.MRN = ?` and does NOT contain `rdf_props` (FR-009 WHERE pushdown) — must FAIL before T017
 
 ### Implementation
 
@@ -103,7 +105,7 @@
 
 ### Implementation
 
-- [ ] T033 [US3] Verify `translate_node_pattern` intercept in `iris_vector_graph/cypher/translator.py` correctly handles the second node in a MATCH pattern: if label is unmapped, falls through to existing `Graph_KG.nodes` path; if mapped, uses mapped table. The intercept already does this per T015 — confirm by running T032 after T015.
+- [ ] T033 [US3] Confirm T032 passes after T015 is implemented: if T032 fails after T015, add explicit handling in `translate_node_pattern` for the second (unmapped) node in a multi-node MATCH pattern in `iris_vector_graph/cypher/translator.py`
 
 ### E2E tests
 
@@ -120,14 +122,14 @@
 
 ### Tests first
 
-- [ ] T036 [US4] Write unit test `test_attach_embeddings_skips_existing_by_id` in `TestSQLTableBridgeUnit`: mock `kg_NodeEmbeddings` with one existing `Patient:P001` entry; call `attach_embeddings_to_table(label="Patient", text_columns=["Name"], force=False)`; assert `Patient:P001` is NOT re-embedded but `Patient:P002` is — must FAIL before T038
-- [ ] T037 [US4] Write unit test `test_attach_embeddings_force_reembeds_all` in `TestSQLTableBridgeUnit`: same setup; call with `force=True`; assert both P001 and P002 are embedded — must FAIL before T038
-- [ ] T038 [US4] Write unit test `test_attach_embeddings_raises_for_unmapped_label` in `TestSQLTableBridgeUnit`: call `attach_embeddings_to_table("Provider", ...)` with empty cache; assert raises `TableNotMappedError` — must FAIL before T039
+- [ ] T036 [US4] Write unit test `test_attach_embeddings_skips_existing_by_id` in `TestSQLTableBridgeUnit`: mock `kg_NodeEmbeddings` with one existing `Patient:P001` entry; call `attach_embeddings_to_table(label="Patient", text_columns=["Name"], force=False)` (no id_column — uses registered mapping); assert `Patient:P001` is NOT re-embedded but `Patient:P002` is — must FAIL before T040
+- [ ] T037 [US4] Write unit test `test_attach_embeddings_force_reembeds_all` in `TestSQLTableBridgeUnit`: same setup; call `attach_embeddings_to_table(label="Patient", text_columns=["Name"], force=True)`; assert both P001 and P002 are embedded — must FAIL before T040
+- [ ] T038 [US4] Write unit test `test_attach_embeddings_raises_for_unmapped_label` in `TestSQLTableBridgeUnit`: call `attach_embeddings_to_table("Provider", text_columns=["Name"])` with empty cache; assert raises `TableNotMappedError` — must FAIL before T039
 
 ### Implementation
 
 - [ ] T039 [US4] Add `class TableNotMappedError(ValueError)` to `iris_vector_graph/engine.py`
-- [ ] T040 [US4] Implement `IRISGraphEngine.attach_embeddings_to_table(label, text_columns, batch_size=1000, force=False, progress_callback=None)` in `iris_vector_graph/engine.py`: raise `TableNotMappedError` if label not in mappings; query all rows from mapped SQL table; for each batch: check `kg_NodeEmbeddings` for existing IDs (skip if `force=False`); generate embeddings via `embed_text(concat(text_columns))`; bulk-insert into `kg_NodeEmbeddings` with ID `{label}:{id_value}`; call `progress_callback(n_done, n_total)` every batch if provided; return `{"embedded": int, "skipped": int, "total": int}`
+- [ ] T040 [US4] Implement `IRISGraphEngine.attach_embeddings_to_table(label, text_columns, batch_size=1000, force=False, progress_callback=None)` in `iris_vector_graph/engine.py`: raise `TableNotMappedError` if label not in mappings; retrieve `id_column` from the registered mapping (not a separate parameter); query all rows from mapped SQL table; for each batch: check `kg_NodeEmbeddings` for existing IDs (skip if `force=False`); generate embeddings via `embed_text(concat(text_columns))`; bulk-insert into `kg_NodeEmbeddings` with ID `{label}:{id_value}`; call `progress_callback(n_done, n_total)` every batch if provided; return `{"embedded": int, "skipped": int, "total": int}`
 - [ ] T041 [US4] Run unit tests: `pytest tests/unit/test_sql_table_bridge.py -v -k "attach_embeddings"` — T036, T037, T038 must pass
 
 ### E2E tests
@@ -165,7 +167,9 @@
 ## Phase 8: Polish & Cross-Cutting
 
 - [ ] T054 [P] Run full unit + E2E regression: `pytest tests/unit/ -q --timeout=30` — all 353 + new tests must pass (SC-007, NFR-004)
+- [ ] T054b [P] [US1] Write E2E test `test_map_sql_table_on_missing_table_raises_clear_error` in `TestSQLTableBridgeE2E`: call `map_sql_table("NonExistent.Table", ...)` on a table that does not exist; assert raises `ValueError` with message naming the missing table (FR-015, plan E9)
 - [ ] T055 [P] Run SC-001 benchmark from `specs/040-sql-table-bridge/quickstart.md`: Cypher result == direct SQL result on test table
+- [ ] T055b [P] Run SC-002 benchmark: call `map_sql_table` on `Bridge_Test.Patient` (rows irrelevant — metadata-only); assert completes in under 5 seconds; document measured time in spec.md §Clarifications (NFR-002, SC-002)
 - [ ] T056 [P] Run SC-003 benchmark from `specs/040-sql-table-bridge/quickstart.md`: Cypher latency ≤ 2× direct SQL on mapped table; document measured values in spec.md §Clarifications
 - [ ] T057 Bump version in `pyproject.toml` to `1.44.0`
 - [ ] T058 Update `README.md` — add SQL Table Bridge section with `map_sql_table` + `map_sql_relationship` examples
