@@ -322,3 +322,94 @@ class TestTemporalPreAggE2E:
         after = self.engine.get_temporal_aggregate(
             f"{self.PREFIX}:pur", "X", "count", now - 10, now + 10)
         assert after == 0
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestTemporalAPIGapsE2E:
+
+    PREFIX = f"GAP_{uuid.uuid4().hex[:6]}"
+
+    @pytest.fixture(autouse=True)
+    def setup(self, iris_connection):
+        self.conn = iris_connection
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
+        yield
+        try:
+            self.engine._iris_obj().classMethodVoid("Graph.KG.TemporalIndex", "Purge")
+        except Exception:
+            pass
+
+    def test_get_edges_in_window_returns_long_key_aliases(self):
+        now = int(time.time())
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:src", "p": "CALLS_AT",
+             "o": f"{self.PREFIX}:dst", "ts": now, "w": 42.0}
+        ])
+        edges = self.engine.get_edges_in_window(
+            f"{self.PREFIX}:src", "CALLS_AT", now - 10, now + 10)
+        assert len(edges) == 1
+        e = edges[0]
+        assert e["source"]    == f"{self.PREFIX}:src"
+        assert e["target"]    == f"{self.PREFIX}:dst"
+        assert e["predicate"] == "CALLS_AT"
+        assert e["timestamp"] == now
+        assert e["weight"]    == 42.0
+        assert e["s"] == e["source"]
+        assert e["o"] == e["target"]
+        assert e["p"] == e["predicate"]
+        assert e["ts"] == e["timestamp"]
+        assert e["w"] == e["weight"]
+
+    def test_get_edges_in_window_inbound_direction(self):
+        now = int(time.time())
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:a", "p": "CALLS_AT",
+             "o": f"{self.PREFIX}:target", "ts": now, "w": 1.0},
+            {"s": f"{self.PREFIX}:b", "p": "CALLS_AT",
+             "o": f"{self.PREFIX}:target", "ts": now + 1, "w": 2.0},
+        ])
+        edges = self.engine.get_edges_in_window(
+            f"{self.PREFIX}:target", "CALLS_AT",
+            now - 10, now + 10, direction="in")
+        assert len(edges) == 2
+        sources = {e["source"] for e in edges}
+        assert f"{self.PREFIX}:a" in sources
+        assert f"{self.PREFIX}:b" in sources
+
+    def test_upsert_temporal_edge_no_duplicate(self):
+        now = int(time.time())
+        for _ in range(3):
+            self.engine.create_edge_temporal(
+                f"{self.PREFIX}:src", "COST_ON", f"Date:2026-03-18",
+                now, 27.7, upsert=True)
+        count = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:src", "COST_ON", "count", now - 10, now + 10)
+        assert count == 1
+
+    def test_upsert_false_allows_duplicates(self):
+        now = int(time.time())
+        for _ in range(3):
+            self.engine.create_edge_temporal(
+                f"{self.PREFIX}:dup", "COST_ON", f"Date:2026-03-19",
+                now, 10.0, upsert=False)
+        count = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:dup", "COST_ON", "count", now - 10, now + 10)
+        assert count == 3
+
+    def test_purge_before_removes_old_edges(self):
+        now = int(time.time())
+        old_ts = now - 7200
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:pb", "p": "COST_ON",
+             "o": "Date:old", "ts": old_ts, "w": 1.0},
+            {"s": f"{self.PREFIX}:pb", "p": "COST_ON",
+             "o": "Date:new", "ts": now, "w": 2.0},
+        ])
+        self.engine.purge_before(now - 3600)
+        count = self.engine.get_temporal_aggregate(
+            f"{self.PREFIX}:pb", "COST_ON", "count", 0, now + 10)
+        assert count == 1
+        edges = self.engine.get_edges_in_window(
+            f"{self.PREFIX}:pb", "COST_ON", 0, now + 10)
+        assert edges[0]["target"] == "Date:new"

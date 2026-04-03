@@ -1776,28 +1776,46 @@ class IRISGraphEngine:
     # ── Temporal edges ──
 
     def create_edge_temporal(self, source: str, predicate: str, target: str,
-                             timestamp: int = None, weight: float = 1.0, attrs: dict = None) -> bool:
+                             timestamp: int = None, weight: float = 1.0,
+                             attrs: dict = None, upsert: bool = False) -> bool:
         try:
             ts = int(timestamp) if timestamp is not None else ""
             attrs_json = json.dumps(attrs) if attrs else ""
             self._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndex", "InsertEdge", source, predicate, target, str(ts), weight, attrs_json)
+                "Graph.KG.TemporalIndex", "InsertEdge",
+                source, predicate, target, str(ts), weight, attrs_json, 1 if upsert else 0)
             return True
         except Exception as e:
             logger.warning(f"create_edge_temporal failed: {e}")
             return False
 
-    def bulk_create_edges_temporal(self, edges: list) -> int:
+    def bulk_create_edges_temporal(self, edges: list, upsert: bool = False) -> int:
         batch_json = json.dumps(edges)
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "BulkInsert", batch_json)
+            "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0)
         return int(result)
 
     def get_edges_in_window(self, source: str = "", predicate: str = "",
-                            start: int = 0, end: int = 0) -> list:
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "QueryWindow", source, predicate, start, end)
-        return json.loads(str(result))
+                            start: int = 0, end: int = 0,
+                            direction: str = "out") -> list:
+        if direction == "in":
+            result = self._iris_obj().classMethodValue(
+                "Graph.KG.TemporalIndex", "QueryWindowInbound", source, predicate, start, end)
+        else:
+            result = self._iris_obj().classMethodValue(
+                "Graph.KG.TemporalIndex", "QueryWindow", source, predicate, start, end)
+        edges = json.loads(str(result))
+        for edge in edges:
+            edge["source"]    = edge["s"]
+            edge["predicate"] = edge["p"]
+            edge["target"]    = edge["o"]
+            edge["timestamp"] = edge["ts"]
+            edge["weight"]    = edge["w"]
+        return edges
+
+    def purge_before(self, ts: int) -> None:
+        self._iris_obj().classMethodVoid(
+            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts))
 
     def get_edge_velocity(self, node_id: str, window_seconds: int = 300) -> int:
         result = self._iris_obj().classMethodValue(

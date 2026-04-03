@@ -3,9 +3,10 @@ Class Graph.KG.TemporalIndex Extends %RegisteredObject
 
 Parameter BUCKET = 300;
 
-ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "")
+ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0)
 {
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
+	If upsert && $Data(^KG("tout", timestamp, source, predicate, target)) { Return }
 	Set ^KG("tout", timestamp, source, predicate, target) = weight
 	Set ^KG("tin", timestamp, target, predicate, source) = weight
 	Set bucket = timestamp \ ..#BUCKET
@@ -39,7 +40,7 @@ ClassMethod InsertEdge(source As %String, predicate As %String, target As %Strin
 	}
 }
 
-ClassMethod BulkInsert(batchJSON As %String) As %Integer
+ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 {
 	Set arr = ##class(%DynamicArray).%FromJSON(batchJSON)
 	Set n = arr.%Size()
@@ -53,6 +54,7 @@ ClassMethod BulkInsert(batchJSON As %String) As %Integer
 		Set weight = item.%Get("w")
 		If weight = "" Set weight = 1
 		If ts = 0 Set ts = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
+		If upsert && $Data(^KG("tout", ts, source, predicate, target)) { Continue }
 		Set ^KG("tout", ts, source, predicate, target) = weight
 		Set ^KG("tin", ts, target, predicate, source) = weight
 		Set bucket = ts \ ..#BUCKET
@@ -214,6 +216,74 @@ ClassMethod Purge()
 	Kill ^KG("bucket")
 	Kill ^KG("edgeprop")
 	Kill ^KG("tagg")
+}
+
+ClassMethod PurgeBefore(tsEnd As %Integer)
+{
+	Set tsEnd = +tsEnd
+	Set ts = ""
+	For {
+		Set ts = $Order(^KG("tout", ts))
+		Quit:(ts = "")!(ts > tsEnd)
+		Set s = ""
+		For {
+			Set s = $Order(^KG("tout", ts, s))
+			Quit:s=""
+			Set p = ""
+			For {
+				Set p = $Order(^KG("tout", ts, s, p))
+				Quit:p=""
+				Set o = ""
+				For {
+					Set o = $Order(^KG("tout", ts, s, p, o))
+					Quit:o=""
+					Kill ^KG("tout", ts, s, p, o)
+					Kill ^KG("tin",  ts, o, p, s)
+					Kill ^KG("edgeprop", ts, s, p, o)
+				}
+			}
+		}
+		// Remove tagg entries for buckets that are fully before tsEnd
+		Set bucket = ts \ ..#BUCKET
+		Kill ^KG("tagg", bucket)
+		Kill ^KG("bucket", bucket)
+		Kill ^KG("tout", ts)
+	}
+}
+
+ClassMethod QueryWindowInbound(target As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+{
+	Set tsStart = +tsStart
+	Set tsEnd = +tsEnd
+	Set result = "["
+	Set first = 1
+	Set ts = tsStart - 1
+	While 1 {
+		Set ts = $Order(^KG("tin", ts))
+		If ts = "" Quit
+		If ts > tsEnd Quit
+		Set o = ""
+		While 1 {
+			Set o = $Order(^KG("tin", ts, o))
+			If o = "" Quit
+			If target '= "" { If o '= target { Continue } }
+			Set p = ""
+			While 1 {
+				Set p = $Order(^KG("tin", ts, o, p))
+				If p = "" Quit
+				If predicate '= "" { If p '= predicate { Continue } }
+				Set s = ""
+				While 1 {
+					Set s = $Order(^KG("tin", ts, o, p, s), 1, w)
+					If s = "" Quit
+					If 'first Set result = result _ ","
+					Set first = 0
+					Set result = result _ "{""s"":""" _ s _ """,""p"":""" _ p _ """,""o"":""" _ o _ """,""ts"":" _ ts _ ",""w"":" _ w _ "}"
+				}
+			}
+		}
+	}
+	Return result _ "]"
 }
 
 ClassMethod GetAggregate(source As %String, predicate As %String, metric As %String, tsStart As %Integer, tsEnd As %Integer) As %String

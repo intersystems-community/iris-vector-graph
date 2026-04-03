@@ -379,6 +379,13 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.41.0 (2026-04-03)
+- `get_edges_in_window()` now returns `source`/`target`/`predicate`/`timestamp`/`weight` aliases alongside `s`/`o`/`p`/`ts`/`w` — backward compatible
+- `get_edges_in_window(direction="in")` — query inbound edges by target node (uses `^KG("tin")`)
+- `create_edge_temporal(..., upsert=True)` and `bulk_create_edges_temporal(..., upsert=True)` — skip write if edge already exists at that timestamp
+- `purge_before(ts)` — delete all temporal edges older than `ts`, with `^KG("tagg")` and `^KG("bucket")` cleanup
+- `Graph.KG.TemporalIndex.PurgeBefore(ts)` and `QueryWindowInbound(target, predicate, ts_start, ts_end)` ObjectScript methods
+
 ### v1.40.0 (2026-04-02)
 - `iris_vector_graph.embedded.EmbeddedConnection` — dbapi2 adapter for IRIS Language=python methods
 - Zero-boilerplate: `IRISGraphEngine(EmbeddedConnection())` works inside IRIS identically to external `iris.connect()`

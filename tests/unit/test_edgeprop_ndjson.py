@@ -24,7 +24,8 @@ class TestEdgePropUnit:
         engine, mock = self._make_engine()
         engine.create_edge_temporal("A", "REL", "B", 1000, attrs={"latency_ms": "237"})
         call_args = mock.classMethodVoid.call_args[0]
-        assert "latency_ms" in call_args[-1]
+        attrs_arg = next(a for a in call_args if isinstance(a, str) and "latency_ms" in a)
+        assert "latency_ms" in attrs_arg
 
     def test_get_edge_attrs_returns_dict(self):
         engine, mock = self._make_engine()
