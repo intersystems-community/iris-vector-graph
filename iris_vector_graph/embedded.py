@@ -11,14 +11,60 @@ Language=python method with zero boilerplate:
 
 Only available when running inside IRIS (the embedded iris module must be
 importable). Raises ImportError with a clear message otherwise.
+
+## Known constraints for Language=python (wgproto) context
+
+### sys.path shadowing after pip install
+When iris-vector-graph is pip-installed inside an IRIS container, the pip
+package puts an external `iris` (intersystems_irispython) on sys.path. This
+external `iris` lacks `iris.execute`, `iris.gref`, `iris.cls`, and
+`iris.sql` — so Language=python methods that call EmbeddedConnection break.
+
+Fix: ensure `/usr/irissys/lib/python` is first in sys.path so the embedded
+`iris` module takes priority. This module does that automatically in
+`_require_iris_sql()`.
+
+### Long-running operations (model loading, bulk embed) and XD timeout
+Language=python methods run inside a wgproto job with a configurable XD
+timeout (default ~30s). Loading a SentenceTransformer model takes ~8-10s,
+which may exceed the timeout.
+
+Pattern for long-running ML operations:
+1. Run as a persistent `irispython` process outside the wgproto lifecycle
+2. Communicate via IRIS globals (e.g. `^EmbedQueue(reqId, "text") = text`)
+3. Language=python method submits to queue and polls for result
+
+See iris_vector_graph/docs/embedded-ml-pattern.md for a reference
+implementation (the "embed_daemon" pattern).
 """
 
 __all__ = ["EmbeddedConnection", "EmbeddedCursor"]
 
+import sys as _sys
+
+
+def _ensure_embedded_iris_first():
+    embedded_path = '/usr/irissys/lib/python'
+    mgr_path = '/usr/irissys/mgr/python'
+    if embedded_path not in _sys.path:
+        _sys.path.insert(0, embedded_path)
+    elif _sys.path[0] != embedded_path:
+        _sys.path.remove(embedded_path)
+        _sys.path.insert(0, embedded_path)
+    if mgr_path not in _sys.path:
+        _sys.path.insert(1, mgr_path)
+
 
 def _require_iris_sql():
+    _ensure_embedded_iris_first()
     try:
         import iris  # noqa: F401
+        if not hasattr(iris, 'sql'):
+            raise ImportError(
+                "iris module found but has no iris.sql attribute — "
+                "the pip intersystems_irispython package is shadowing the embedded iris module. "
+                "Ensure /usr/irissys/lib/python is first in sys.path."
+            )
         return iris.sql
     except ImportError as exc:
         raise ImportError(

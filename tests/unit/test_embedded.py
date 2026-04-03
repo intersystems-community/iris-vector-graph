@@ -168,6 +168,42 @@ class TestEmbeddedConnectionUnit:
             with pytest.raises(ImportError, match="embedded iris module"):
                 _require_iris_sql()
 
+    def test_shadowed_iris_error_message_contains_guidance(self):
+        from iris_vector_graph import embedded
+        import importlib, inspect
+        src = inspect.getsource(embedded._require_iris_sql)
+        assert "iris.sql attribute" in src
+        assert "intersystems_irispython" in src
+        assert "lib/python" in src or "/usr/irissys" in src
+
+    def test_ensure_embedded_iris_first_inserts_path(self):
+        from iris_vector_graph.embedded import _ensure_embedded_iris_first
+        import sys
+        embedded_path = '/usr/irissys/lib/python'
+        original = sys.path.copy()
+        try:
+            if embedded_path in sys.path:
+                sys.path.remove(embedded_path)
+            _ensure_embedded_iris_first()
+            assert sys.path[0] == embedded_path
+        finally:
+            sys.path[:] = original
+
+    def test_ensure_embedded_iris_first_moves_to_front_if_not_first(self):
+        from iris_vector_graph.embedded import _ensure_embedded_iris_first
+        import sys
+        embedded_path = '/usr/irissys/lib/python'
+        original = sys.path.copy()
+        try:
+            if embedded_path in sys.path:
+                sys.path.remove(embedded_path)
+            sys.path.append(embedded_path)
+            assert sys.path[0] != embedded_path
+            _ensure_embedded_iris_first()
+            assert sys.path[0] == embedded_path
+        finally:
+            sys.path[:] = original
+
 
 class TestTopLevelImports:
 

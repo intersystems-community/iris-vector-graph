@@ -403,6 +403,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.45.2 (2026-04-03)
+- `embedded.py`: auto-fixes `sys.path` shadowing — ensures `/usr/irissys/lib/python` is first so the embedded `iris` module takes priority over pip-installed `intersystems_irispython`
+- `embedded.py`: clear error message when shadowed iris (no `iris.sql`) is detected, naming the root cause
+- Documented the XD timeout constraint and embed_daemon pattern for long-running ML operations in embedded context
+- 3 new tests covering path-fix and shadowing detection
+
 ### v1.45.1 (2026-04-03)
 - `embed_nodes`: FK-safe delete — DELETE failure on `kg_NodeEmbeddings` (spurious FK error in embedded Python context) is silently ignored; INSERT proceeds correctly
 - `vector_search`: uses `VECTOR_COSINE(TO_VECTOR(col), ...)` so it works on both native VECTOR columns AND VARCHAR-stored vectors (e.g. DocChunk.VectorChunk from fhir-017)
