@@ -169,6 +169,65 @@ class TestEmbeddedConnectionUnit:
                 _require_iris_sql()
 
 
+class TestTopLevelImports:
+
+    def test_embedded_connection_importable_from_top_level(self):
+        from iris_vector_graph import EmbeddedConnection
+        assert EmbeddedConnection is not None
+
+    def test_embedded_cursor_importable_from_top_level(self):
+        from iris_vector_graph import EmbeddedCursor
+        assert EmbeddedCursor is not None
+
+
+class TestIrisSqlAutoWrap:
+
+    def test_engine_accepts_iris_sql_module_directly(self):
+        from iris_vector_graph.engine import IRISGraphEngine
+        from iris_vector_graph.embedded import EmbeddedConnection
+        mock_iris_sql = MagicMock(spec=["prepare"])
+        assert hasattr(mock_iris_sql, 'prepare')
+        assert not hasattr(mock_iris_sql, 'cursor')
+        engine = IRISGraphEngine(mock_iris_sql)
+        assert isinstance(engine.conn, EmbeddedConnection)
+
+    def test_engine_with_normal_connection_unchanged(self):
+        from iris_vector_graph.engine import IRISGraphEngine
+        from iris_vector_graph.embedded import EmbeddedConnection
+        mock_conn = MagicMock()
+        mock_conn.cursor = MagicMock()
+        engine = IRISGraphEngine(mock_conn)
+        assert engine.conn is mock_conn
+        assert not isinstance(engine.conn, EmbeddedConnection)
+
+
+class TestTemporalCypherViaEmbedded:
+
+    def test_temporal_translation_works_with_embedded_connection(self):
+        from iris_vector_graph.cypher.translator import translate_to_sql, TemporalQueryRequiresEngine
+        from iris_vector_graph.cypher.parser import parse_query
+        from iris_vector_graph.embedded import EmbeddedConnection
+        from iris_vector_graph.engine import IRISGraphEngine
+        mock_engine = MagicMock()
+        mock_engine.get_edges_in_window.return_value = [
+            {"s": "svc:a", "p": "CALLS_AT", "o": "svc:b", "ts": 1000, "w": 42.0},
+        ]
+        tree = parse_query(
+            "MATCH (a)-[r:CALLS_AT]->(b) WHERE r.ts >= $start AND r.ts <= $end RETURN r.ts, r.weight"
+        )
+        result = translate_to_sql(tree, {"start": 900, "end": 1100}, engine=mock_engine)
+        sql = result.sql if isinstance(result.sql, str) else "\n".join(result.sql)
+        assert "weight" in sql
+        assert "1000" in sql
+
+    def test_iris_sql_auto_wrap_creates_functional_engine(self):
+        from iris_vector_graph.engine import IRISGraphEngine
+        from iris_vector_graph.embedded import EmbeddedConnection
+        mock_iris_sql = MagicMock(spec=["prepare"])
+        engine = IRISGraphEngine(mock_iris_sql)
+        assert isinstance(engine.conn, EmbeddedConnection)
+
+
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 class TestEmbeddedConnectionE2E:
 

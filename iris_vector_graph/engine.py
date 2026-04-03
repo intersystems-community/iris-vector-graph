@@ -50,6 +50,9 @@ class IRISGraphEngine:
                               (for native IRIS 2024.3+ embedding).
         """
         self.conn = connection
+        if hasattr(connection, 'prepare') and not hasattr(connection, 'cursor'):
+            from .embedded import EmbeddedConnection
+            self.conn = EmbeddedConnection()
         self.embedding_dimension = embedding_dimension
         self.embedder = embedder
         self.embedding_config = embedding_config
@@ -786,7 +789,8 @@ class IRISGraphEngine:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
 
-    def load_networkx(self, G, label_attr: str = "type", skip_existing: bool = True) -> dict:
+    def load_networkx(self, G, label_attr: str = "type", skip_existing: bool = True,
+                      progress_callback=None) -> dict:
         added_nodes = 0
         added_edges = 0
         skipped_nodes = 0
@@ -812,9 +816,14 @@ class IRISGraphEngine:
                 added_nodes += 1
             else:
                 skipped_nodes += 1
-            if (added_nodes + skipped_nodes) % 10000 == 0:
-                logger.info(f"Nodes: {added_nodes + skipped_nodes:,}/{total_nodes:,} ({added_nodes:,} added, {skipped_nodes:,} skipped)")
+            n_done = added_nodes + skipped_nodes
+            if n_done % 10000 == 0:
+                logger.info(f"Nodes: {n_done:,}/{total_nodes:,} ({added_nodes:,} added, {skipped_nodes:,} skipped)")
+                if progress_callback:
+                    progress_callback(n_done, added_edges + skipped_edges)
         logger.info(f"Nodes complete: {added_nodes:,} added, {skipped_nodes:,} skipped")
+        if progress_callback:
+            progress_callback(added_nodes + skipped_nodes, 0)
         for src, dst, data in G.edges(data=True):
             predicate = data.get("predicate", data.get("label", data.get("key", "is_a")))
             qualifiers = {k: v for k, v in data.items() if k not in ("predicate", "label", "key")}
@@ -823,22 +832,35 @@ class IRISGraphEngine:
                 added_edges += 1
             else:
                 skipped_edges += 1
-            if (added_edges + skipped_edges) % 10000 == 0:
-                logger.info(f"Edges: {added_edges + skipped_edges:,}/{total_edges:,} ({added_edges:,} added, {skipped_edges:,} skipped)")
+            e_done = added_edges + skipped_edges
+            if e_done % 10000 == 0:
+                logger.info(f"Edges: {e_done:,}/{total_edges:,} ({added_edges:,} added, {skipped_edges:,} skipped)")
+                if progress_callback:
+                    progress_callback(added_nodes + skipped_nodes, e_done)
         logger.info(f"Edges complete: {added_edges:,} added, {skipped_edges:,} skipped")
+        if progress_callback:
+            progress_callback(added_nodes + skipped_nodes, added_edges + skipped_edges)
         return {"nodes": added_nodes, "edges": added_edges, "skipped_nodes": skipped_nodes, "skipped_edges": skipped_edges}
 
-    def load_obo(self, path_or_url: str, prefix: str = None) -> dict:
+    def load_obo(self, path_or_url: str, prefix: str = None,
+                 encoding: str = "utf-8", encoding_errors: str = "replace",
+                 progress_callback=None) -> dict:
         try:
             import obonet
         except ImportError:
             raise ImportError("load_obo requires obonet: pip install obonet")
-        G = obonet.read_obo(path_or_url)
+        import io
+        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+            G = obonet.read_obo(path_or_url)
+        else:
+            with open(path_or_url, "rb") as raw:
+                content = raw.read().decode(encoding, errors=encoding_errors)
+            G = obonet.read_obo(io.StringIO(content))
         if prefix:
             import networkx as nx
             mapping = {n: f"{prefix}:{n}" for n in G.nodes()}
             G = nx.relabel_nodes(G, mapping)
-        return self.load_networkx(G, label_attr="namespace")
+        return self.load_networkx(G, label_attr="namespace", progress_callback=progress_callback)
 
     def store_embedding(
         self, node_id: str, embedding: List[float], metadata: Optional[Dict[str, Any]] = None

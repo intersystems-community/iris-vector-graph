@@ -403,6 +403,13 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.43.0 (2026-04-03)
+- `EmbeddedConnection` and `EmbeddedCursor` now importable directly from `iris_vector_graph` (top-level)
+- `IRISGraphEngine(iris.sql)` — accepts `iris.sql` module directly; auto-wraps in `EmbeddedConnection` (no manual wrapper needed inside IRIS Language=python methods)
+- `load_obo(encoding=, encoding_errors='replace')` — handles UTF-8 BOM and Latin-1 bytes from IRIS-written files; fixes NCIT.obo loading edge case
+- `load_obo` / `load_networkx` accept `progress_callback=lambda n_nodes, n_edges: ...` — called every 10K items; enables progress reporting for large ontologies (NCIT.obo: 200K+ concepts)
+- Verified: temporal Cypher (`WHERE r.ts >= $start AND r.ts <= $end`) works end-to-end via `EmbeddedConnection` path
+
 ### v1.42.0 (2026-04-03)
 - Cypher temporal edge filtering: `WHERE r.ts >= $start AND r.ts <= $end` routes MATCH patterns to `^KG("tout")` B-tree — O(results), not O(total edges)
 - `r.ts` and `r.weight` accessible in RETURN and ORDER BY on temporal edges
