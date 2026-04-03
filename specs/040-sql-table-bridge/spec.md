@@ -17,6 +17,18 @@ This is the foundational "I already have data" primitive. Everything else in the
 
 ---
 
+## Clarifications
+
+### Session 2026-04-03
+
+- Q: In `map_sql_relationship`, which table holds the FK column? → A: The **target** table holds the FK referencing the source's PK (standard 1:many). Parameter renamed `target_fk`. FR-004, relationship_mappings schema, and US2 AC1 updated accordingly.
+- Q: When a label has both a SQL mapping and native rows in `Graph_KG.nodes`, which takes precedence? → A: SQL mapping always wins; native nodes are ignored. Edge cases section updated with migration guidance.
+- Q: Does the bridge execute SQL under the mapping creator's credentials or the current query user's credentials? → A: Current connection user — IRIS SQL permissions apply natively. IVG neither grants nor restricts access beyond what IRIS enforces. NFR-005 added.
+- Q: Are table mappings re-read from the database on every Cypher query, or cached? → A: Cached in engine instance; invalidated only when mappings are modified via that engine. External changes not reflected until engine restart. NFR-006 added.
+- Q: How does `attach_embeddings_to_table` detect already-embedded rows to skip them? → A: ID presence in `kg_NodeEmbeddings` (`Patient:{id}` already exists → skip). `force=True` param overrides. FR-011 and US4 AC3-4 updated.
+
+---
+
 ## User Scenarios & Testing
 
 ### User Story 1 — Register an existing table as a node set (Priority: P1)
@@ -48,7 +60,7 @@ A developer has two existing tables with a foreign-key relationship (or a join t
 
 **Acceptance Scenarios**:
 
-1. **Given** `HealthShare.Patient` (PatientID) and `HealthShare.Encounter` (EncounterID, PatientID FK) are mapped, **When** `engine.map_sql_relationship("Patient", "HAS_ENCOUNTER", "Encounter", source_fk="PatientID")` is called, **Then** subsequent `MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e:Encounter)` queries traverse the foreign key.
+1. **Given** `HealthShare.Patient` (PatientID PK) and `HealthShare.Encounter` (EncounterID PK, PatientID FK referencing Patient), **When** `engine.map_sql_relationship("Patient", "HAS_ENCOUNTER", "Encounter", target_fk="PatientID")` is called, **Then** subsequent `MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e:Encounter)` queries traverse the foreign key via `Encounter.PatientID = Patient.PatientID`.
 2. **Given** a join table `HealthShare.PatientMedication(PatientID, MedicationID)`, **When** `engine.map_sql_relationship("Patient", "PRESCRIBED", "Medication", via_table="HealthShare.PatientMedication", via_source="PatientID", via_target="MedicationID")` is called, **Then** `MATCH (p:Patient)-[:PRESCRIBED]->(m:Medication)` correctly joins through the intermediary table.
 3. **Given** a registered relationship, **When** the relationship is traversed with a WHERE filter on both ends, **Then** the SQL query pushes both filters down to the underlying tables.
 4. **Given** a registered relationship, **When** `MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e:Encounter)-[:PRODUCED]->(r:Result)` (three hops, all mapped), **Then** the multi-hop query executes correctly as nested JOINs.
@@ -82,7 +94,8 @@ A user wants to add vector search over an existing SQL table's rows. They call o
 
 1. **Given** `HealthShare.Patient` is mapped with `PatientID` as ID, **When** `engine.attach_embeddings_to_table("HealthShare.Patient", id_column="PatientID", text_columns=["Name", "Diagnosis"], batch_size=500)` is called, **Then** embeddings are stored in `kg_NodeEmbeddings` with IDs of the form `Patient:{PatientID_value}`.
 2. **Given** embeddings are stored, **When** `CALL ivg.vector.search('Patient', 'embedding', $vec, 10) YIELD node, score RETURN node.Name, score` is executed, **Then** results reference existing rows in `HealthShare.Patient`.
-3. **Given** the source table is updated (new rows added), **When** `attach_embeddings_to_table` is called again, **Then** only new/changed rows are re-embedded (idempotent).
+3. **Given** the source table is updated (new rows added), **When** `attach_embeddings_to_table` is called again, **Then** only rows whose ID is absent from `kg_NodeEmbeddings` are embedded; existing rows are skipped.
+4. **Given** `force=True` is passed, **When** `attach_embeddings_to_table` is called, **Then** all rows are re-embedded regardless of existing entries.
 4. **Given** `batch_size=500`, **When** the table has 50,000 rows, **Then** the method processes all rows in batches of 500 with progress logging.
 
 ---
@@ -110,18 +123,19 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 | FR-001 | `map_sql_table(table, id_column, label, property_columns=None, schema=None)` MUST register a mapping from a graph label to an existing SQL table |
 | FR-002 | Registered node mappings MUST be persisted (survive engine restart) in a dedicated metadata table |
 | FR-003 | Cypher `MATCH (n:Label)` MUST route to the registered SQL table when a mapping exists for `Label` |
-| FR-004 | `map_sql_relationship(source_label, predicate, target_label, source_fk=None, via_table=None, via_source=None, via_target=None)` MUST register a traversable edge mapping |
+| FR-004 | `map_sql_relationship(source_label, predicate, target_label, target_fk=None, via_table=None, via_source=None, via_target=None)` MUST register a traversable edge mapping. `target_fk` is the FK column on the **target** table that references the source table's PK (the standard 1:many pattern). Use `via_table` for many-to-many. |
 | FR-005 | Relationship mappings MUST be persisted alongside node mappings |
 | FR-006 | Cypher `MATCH (a:L1)-[:PRED]->(b:L2)` MUST route to the registered join/FK when a relationship mapping exists |
 | FR-007 | Queries over mapped tables MUST NOT write any data to `Graph_KG.nodes` or `Graph_KG.rdf_edges` |
 | FR-008 | Queries spanning mapped and native IVG nodes in a single MATCH MUST execute correctly |
 | FR-009 | WHERE filters on mapped node properties MUST be pushed down to the underlying SQL table |
 | FR-010 | `attach_embeddings_to_table(table, id_column, text_columns, batch_size=1000)` MUST generate and store embeddings for all rows, addressable by `Label:{id_value}` |
-| FR-011 | `attach_embeddings_to_table` MUST be idempotent — re-running skips rows already embedded |
+| FR-011 | `attach_embeddings_to_table` MUST be idempotent — rows whose ID already exists in `kg_NodeEmbeddings` are skipped; a `force=True` parameter MUST be supported to re-embed all rows regardless |
 | FR-012 | `list_table_mappings()` MUST return all registered node and relationship mappings |
 | FR-013 | `remove_table_mapping(label)` MUST remove a node mapping and its associated relationship mappings |
 | FR-014 | When no mapping exists for a label, Cypher MUST fall back to `Graph_KG.nodes` unchanged (no regression) |
 | FR-015 | `map_sql_table` MUST validate that the specified table and id_column exist before registering |
+| FR-016 | When a SQL mapping exists for a label, Cypher MUST query the mapped SQL table exclusively — native rows in `Graph_KG.nodes` for that label are not included in results |
 
 ### Non-Functional Requirements
 
@@ -131,6 +145,8 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 | NFR-002 | `map_sql_table` MUST complete in under 5 seconds regardless of table size (metadata-only operation) |
 | NFR-003 | `attach_embeddings_to_table` MUST process at minimum 1,000 rows per minute |
 | NFR-004 | Existing Cypher tests (unmapped labels) MUST continue to pass unchanged |
+| NFR-005 | SQL queries generated by the bridge MUST execute under the security context of the current IRIS connection — IVG does not grant or expand SQL permissions beyond what IRIS enforces natively |
+| NFR-006 | Table mappings MUST be cached in the engine instance after first load; cache is invalidated and refreshed only when `map_sql_table` or `remove_table_mapping` is called on that engine instance. External changes to `Graph_KG.table_mappings` (from another process) are not reflected until the engine is restarted or mappings are explicitly reloaded. |
 
 ---
 
@@ -153,7 +169,7 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 | `predicate` | VARCHAR | Edge predicate (e.g., `HAS_ENCOUNTER`) |
 | `source_label` | VARCHAR | Source node label |
 | `target_label` | VARCHAR | Target node label |
-| `source_fk` | VARCHAR | FK column in source/target table; NULL if via_table used |
+| `target_fk` | VARCHAR | FK column on the **target** table referencing the source table's PK (1:many). NULL when via_table is used. |
 | `via_table` | VARCHAR | Join table for many-to-many; NULL if FK-based |
 | `via_source` | VARCHAR | Column in via_table referencing source |
 | `via_target` | VARCHAR | Column in via_table referencing target |
@@ -182,10 +198,12 @@ A developer needs to inspect, update, or remove table mappings — for debugging
 - Source table has NULL values in property columns → return as NULL in Cypher results
 - `id_column` value contains special characters → ID is formed as `Label:{id_value}` with the raw value; escaping is the caller's responsibility
 - Two tables mapped to the same label → raise a clear error (ambiguous)
+- Label has both a SQL mapping AND rows in `Graph_KG.nodes` → SQL mapping wins; native nodes for that label are ignored during Cypher queries. Users migrating incrementally should call `engine.delete_nodes_by_label("Patient")` after registering the mapping to avoid stale native rows.
 - Mapped table is dropped from the database → Cypher query fails with a clear error naming the missing table, not a cryptic SQL error
 - `MATCH (n:Patient)-[:HAS_ENCOUNTER]->(e:Encounter)` where `Patient` is mapped but `Encounter` is not → fail with a clear error: "Encounter is not mapped and has no native IVG nodes"
 - `attach_embeddings_to_table` called on an unmapped table → raise `TableNotMappedError` with helpful message
 - `map_sql_table` on an IRIS table in a different namespace → support via fully-qualified name `Namespace.Schema.Table` syntax
+- Two engine instances share the same IRIS instance; one adds a mapping while the other is running → the second engine's cache is stale until it calls `map_sql_table` / `remove_table_mapping` or is restarted. This is documented behavior, not a bug.
 
 ---
 
