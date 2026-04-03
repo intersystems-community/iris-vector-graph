@@ -14,11 +14,11 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Add `table_mappings` and `relationship_mappings` DDL to `GraphSchema._DDL_STATEMENTS` in `iris_vector_graph/schema.py` — exact SQL from data-model.md
-- [ ] T002 Add `Graph_KG.table_mappings` and `Graph_KG.relationship_mappings` to `GraphSchema._EXISTING_TABLES_CHECK` set in `iris_vector_graph/schema.py`
-- [ ] T003 Add `_table_mapping_cache: Optional[Dict[str, dict]] = None` and `_rel_mapping_cache: Optional[Dict[tuple, dict]] = None` fields to `IRISGraphEngine.__init__` in `iris_vector_graph/engine.py`
-- [ ] T004 Add `mapped_node_aliases: Dict[str, dict]` field to `TranslationContext.__init__` in `iris_vector_graph/cypher/translator.py` (initialise to `{}`)
-- [ ] T005 Create empty test file `tests/unit/test_sql_table_bridge.py` with `SKIP_IRIS_TESTS` guard, `PREFIX` fixture, and two empty classes: `TestSQLTableBridgeUnit` and `TestSQLTableBridgeE2E`
+- [X] T001 Add `table_mappings` and `relationship_mappings` DDL to `GraphSchema._DDL_STATEMENTS` in `iris_vector_graph/schema.py` — exact SQL from data-model.md
+- [X] T002 Add `Graph_KG.table_mappings` and `Graph_KG.relationship_mappings` to `GraphSchema._EXISTING_TABLES_CHECK` set in `iris_vector_graph/schema.py`
+- [X] T003 Add `_table_mapping_cache: Optional[Dict[str, dict]] = None` and `_rel_mapping_cache: Optional[Dict[tuple, dict]] = None` fields to `IRISGraphEngine.__init__` in `iris_vector_graph/engine.py`
+- [X] T004 Add `mapped_node_aliases: Dict[str, dict]` field to `TranslationContext.__init__` in `iris_vector_graph/cypher/translator.py` (initialise to `{}`)
+- [X] T005 Create empty test file `tests/unit/test_sql_table_bridge.py` with `SKIP_IRIS_TESTS` guard, `PREFIX` fixture, and two empty classes: `TestSQLTableBridgeUnit` and `TestSQLTableBridgeE2E`
 
 **Checkpoint**: `pytest tests/unit/ -q --timeout=20` — 353 tests pass, new file imports cleanly.
 
@@ -28,12 +28,12 @@
 
 **Purpose**: Internal cache helpers + `get_table_mapping` / `get_rel_mapping` accessors used by all translator interceptions. Tests written first.
 
-- [ ] T006 Write unit test `test_get_table_mapping_returns_none_for_unmapped` in `tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeUnit`: mock engine with empty cache, assert `engine.get_table_mapping("Patient")` returns `None` — must FAIL before T008
-- [ ] T007 Write unit test `test_get_table_mapping_returns_cached_entry` in `tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeUnit`: seed `_table_mapping_cache` with a dict entry, assert `engine.get_table_mapping("Patient")` returns the dict — must FAIL before T008
-- [ ] T008 Implement `IRISGraphEngine.get_table_mapping(label: str) -> Optional[dict]` in `iris_vector_graph/engine.py`: lazy-load cache from `Graph_KG.table_mappings` on first call; return `_table_mapping_cache.get(label)`
-- [ ] T009 Implement `IRISGraphEngine.get_rel_mapping(source_label: str, predicate: str, target_label: str) -> Optional[dict]` in `iris_vector_graph/engine.py`: same lazy-load pattern from `Graph_KG.relationship_mappings`; key is `(source_label, predicate, target_label)`
-- [ ] T010 Implement `IRISGraphEngine._invalidate_mapping_cache()` in `iris_vector_graph/engine.py`: set both `_table_mapping_cache = None` and `_rel_mapping_cache = None`
-- [ ] T011 Run `pytest tests/unit/test_sql_table_bridge.py -v -k "Unit"` — T006, T007 must pass
+- [X] T006 Write unit test `test_get_table_mapping_returns_none_for_unmapped` in `tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeUnit`: mock engine with empty cache, assert `engine.get_table_mapping("Patient")` returns `None` — must FAIL before T008
+- [X] T007 Write unit test `test_get_table_mapping_returns_cached_entry` in `tests/unit/test_sql_table_bridge.py::TestSQLTableBridgeUnit`: seed `_table_mapping_cache` with a dict entry, assert `engine.get_table_mapping("Patient")` returns the dict — must FAIL before T008
+- [X] T008 Implement `IRISGraphEngine.get_table_mapping(label: str) -> Optional[dict]` in `iris_vector_graph/engine.py`: lazy-load cache from `Graph_KG.table_mappings` on first call; return `_table_mapping_cache.get(label)`
+- [X] T009 Implement `IRISGraphEngine.get_rel_mapping(source_label: str, predicate: str, target_label: str) -> Optional[dict]` in `iris_vector_graph/engine.py`: same lazy-load pattern from `Graph_KG.relationship_mappings`; key is `(source_label, predicate, target_label)`
+- [X] T010 Implement `IRISGraphEngine._invalidate_mapping_cache()` in `iris_vector_graph/engine.py`: set both `_table_mapping_cache = None` and `_rel_mapping_cache = None`
+- [X] T011 Run `pytest tests/unit/test_sql_table_bridge.py -v -k "Unit"` — T006, T007 must pass
 
 ---
 

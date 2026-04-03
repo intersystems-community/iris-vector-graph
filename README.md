@@ -403,6 +403,17 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.44.0 (2026-04-03)
+- **SQL Table Bridge** — map existing IRIS SQL tables as virtual graph nodes/edges with zero data copy
+- `engine.map_sql_table(table, id_column, label)` — register any IRIS table as a Cypher-queryable node set; no ETL, no data movement
+- `engine.map_sql_relationship(source, predicate, target, target_fk=None, via_table=None)` — FK and M:M join relationships traversable via Cypher
+- `engine.attach_embeddings_to_table(label, text_columns, force=False)` — overlay HNSW vector search on existing table rows
+- `engine.list_table_mappings()`, `remove_table_mapping()`, `reload_table_mappings()` — mapping lifecycle management
+- Cypher `MATCH (n:MappedLabel)` routes to registered SQL table with WHERE pushdown — O(SQL query), not O(copy)
+- Mixed queries: `MATCH (p:MappedPatient)-[:HAS_DOC]->(d:NativeDocument)` spans both mapped and native nodes seamlessly
+- SQL mapping wins over native `Graph_KG.nodes` rows for the same label (FR-016)
+- `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
+
 ### v1.43.0 (2026-04-03)
 - `EmbeddedConnection` and `EmbeddedCursor` now importable directly from `iris_vector_graph` (top-level)
 - `IRISGraphEngine(iris.sql)` — accepts `iris.sql` module directly; auto-wraps in `EmbeddedConnection` (no manual wrapper needed inside IRIS Language=python methods)

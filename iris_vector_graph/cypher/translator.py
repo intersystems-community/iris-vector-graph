@@ -10,7 +10,7 @@ from typing import List, Any, Dict, Optional, Union
 import logging
 import json
 from . import ast
-from iris_vector_graph.security import validate_table_name, VALID_GRAPH_TABLES
+from iris_vector_graph.security import validate_table_name, VALID_GRAPH_TABLES, sanitize_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,7 @@ class TranslationContext:
         self.temporal_rel_ctes: Dict[str, str] = {} if parent is None else parent.temporal_rel_ctes.copy()
         self.temporal_derived: Dict[str, str] = {} if parent is None else parent.temporal_derived.copy()
         self.pending_where = None
+        self.mapped_node_aliases: Dict[str, dict] = {} if parent is None else parent.mapped_node_aliases.copy()
 
     def next_alias(self, prefix: str = "t") -> str:
         alias = f"{prefix}{self._alias_counter}"
@@ -950,10 +951,26 @@ def translate_subquery_call(subquery: ast.SubqueryCall, context: TranslationCont
 
 def translate_node_pattern(node, context, metadata, optional=False):
     if node.variable and node.variable in context.variable_aliases:
-        # If variable is already bound, we don't need to join nodes or labels again
         return
     alias = context.register_variable(node.variable) if node.variable else context.next_alias("n")
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
+
+    engine = getattr(context, "_engine", None)
+    if engine and node.labels:
+        for label in node.labels:
+            mapping = engine.get_table_mapping(label)
+            if mapping:
+                sql_table = sanitize_identifier(mapping["sql_table"])
+                context.mapped_node_aliases[alias] = mapping
+                if not context.from_clauses:
+                    context.from_clauses.append(f"{sql_table} {alias}")
+                elif not any(alias in fc for fc in context.from_clauses):
+                    context.join_clauses.append(f"{jt} {sql_table} {alias} ON 1=1")
+                for k, v in node.properties.items():
+                    val_sql = translate_expression(v, context, segment="where")
+                    context.where_conditions.append(f"{alias}.{sanitize_identifier(k)} = {val_sql}")
+                return
+
     nodes_tbl = _table('nodes')
     if not context.from_clauses: context.from_clauses.append(f"{nodes_tbl} {alias}")
     elif f"{nodes_tbl} {alias}" not in context.from_clauses and not any(alias in j for j in context.join_clauses): context.join_clauses.append(f"CROSS JOIN {nodes_tbl} {alias}")
@@ -1073,6 +1090,39 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
 
             _remove_ts_conditions_from_where(context, rel.variable)
             return
+
+    if rel.types and len(rel.types) == 1:
+        engine = getattr(context, "_engine", None)
+        src_label = next((lbl for lbl in source_node.labels), None) if source_node.labels else None
+        tgt_label = next((lbl for lbl in target_node.labels), None) if target_node.labels else None
+        if engine and src_label and tgt_label:
+            rel_map = engine.get_rel_mapping(src_label, rel.types[0], tgt_label)
+            if rel_map:
+                src_mapping = engine.get_table_mapping(src_label)
+                tgt_mapping = engine.get_table_mapping(tgt_label)
+                if src_mapping and tgt_mapping:
+                    jt = "LEFT OUTER JOIN" if optional else "JOIN"
+                    tgt_tbl = sanitize_identifier(tgt_mapping["sql_table"])
+                    tgt_id_col = tgt_mapping["id_column"]
+                    src_id_col = src_mapping["id_column"]
+                    if rel_map.get("target_fk"):
+                        tfk = sanitize_identifier(rel_map["target_fk"])
+                        context.join_clauses.append(
+                            f"{jt} {tgt_tbl} {target_alias} ON {target_alias}.{tfk} = {source_alias}.{src_id_col}"
+                        )
+                    elif rel_map.get("via_table"):
+                        via_tbl = sanitize_identifier(rel_map["via_table"])
+                        vs = sanitize_identifier(rel_map["via_source"])
+                        vt = sanitize_identifier(rel_map["via_target"])
+                        via_alias = context.next_alias("vj")
+                        context.join_clauses.append(
+                            f"{jt} {via_tbl} {via_alias} ON {via_alias}.{vs} = {source_alias}.{src_id_col}"
+                        )
+                        context.join_clauses.append(
+                            f"{jt} {tgt_tbl} {target_alias} ON {target_alias}.{tgt_id_col} = {via_alias}.{vt}"
+                        )
+                    context.mapped_node_aliases[target_alias] = tgt_mapping
+                    return
 
     s_col = _node_col(source_node.variable, source_alias)
     t_col = _node_col(target_node.variable, target_alias)
@@ -1241,6 +1291,11 @@ def translate_expression(expr, context, segment="select") -> str:
                         f"{expr.variable}.ts <= $end for temporal routing."
                     )
                 return "NULL"
+        if alias in context.mapped_node_aliases:
+            mapping = context.mapped_node_aliases[alias]
+            if expr.property_name in ("id", "node_id"):
+                return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
+            return f"{alias}.{sanitize_identifier(expr.property_name)}"
         if alias.startswith('Stage'):
             if expr.property_name in ("node_id", "id"): return f"{alias}.{expr.variable}"
             return f"{alias}.{expr.variable}_{expr.property_name}"
@@ -1263,6 +1318,9 @@ def translate_expression(expr, context, segment="select") -> str:
             if alias == "scalar":
                 return expr.name
             return f"{alias}.{expr.name}"
+        if alias in context.mapped_node_aliases:
+            mapping = context.mapped_node_aliases[alias]
+            return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
         return f"{alias}.node_id"
     if isinstance(expr, ast.Literal):
         v = expr.value
