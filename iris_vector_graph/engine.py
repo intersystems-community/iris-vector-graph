@@ -1119,6 +1119,117 @@ class IRISGraphEngine:
             cursor.execute("ROLLBACK")
             raise
 
+    def embed_nodes(
+        self,
+        model=None,
+        where: str = None,
+        text_fn=None,
+        batch_size: int = 500,
+        force: bool = False,
+        progress_callback=None,
+    ) -> dict:
+        """Incrementally embed nodes from Graph_KG.nodes into kg_NodeEmbeddings.
+
+        Args:
+            model: Embedder to use (overrides engine's configured embedder for this call).
+                   Must have .encode(text) or .embed(text) method, or be callable.
+                   If None, uses the engine's configured embedder/embedding_config.
+            where: SQL WHERE fragment applied to node_id. Examples:
+                   "node_id NOT LIKE 'NCIT:%'"
+                   "node_id NOT IN (SELECT id FROM Graph_KG.kg_NodeEmbeddings)"
+                   None means all nodes.
+            text_fn: callable(node_id, props_dict) -> str. Builds the text to embed.
+                     props_dict is the merged rdf_props for the node (key → val).
+                     If None, uses node_id as the embedding text.
+                     If returns None or "", the node is skipped.
+            batch_size: nodes processed per batch (controls memory usage).
+            force: if True, re-embeds nodes already in kg_NodeEmbeddings.
+            progress_callback: callable(n_done, n_total) called after each batch.
+
+        Returns:
+            {"embedded": int, "skipped": int, "errors": int, "total": int}
+        """
+        from iris_vector_graph.security import sanitize_identifier
+
+        if where is not None:
+            if any(x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")):
+                raise ValueError(f"Unsafe WHERE clause rejected: {where!r}")
+
+        orig_embedder = self.embedder
+        if model is not None:
+            self.embedder = model
+
+        try:
+            cursor = self.conn.cursor()
+
+            where_clause = f"WHERE {where}" if where else ""
+            cursor.execute(f"SELECT node_id FROM {_table('nodes')} {where_clause}")
+            all_node_ids = [row[0] for row in cursor.fetchall()]
+            n_total = len(all_node_ids)
+
+            if not force:
+                cursor.execute(f"SELECT id FROM {_table('kg_NodeEmbeddings')}")
+                already_embedded = {row[0] for row in cursor.fetchall()}
+                to_embed = [nid for nid in all_node_ids if nid not in already_embedded]
+            else:
+                to_embed = all_node_ids
+
+            n_to_embed = len(to_embed)
+            embedded = skipped = errors = 0
+
+            for batch_start in range(0, n_to_embed, batch_size):
+                batch_ids = to_embed[batch_start:batch_start + batch_size]
+
+                placeholders = ", ".join("?" * len(batch_ids))
+                cursor.execute(
+                    f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
+                    batch_ids,
+                )
+                props_by_node: Dict[str, Dict[str, Any]] = {}
+                for row in cursor.fetchall():
+                    node_id, key, val = row[0], row[1], row[2]
+                    props_by_node.setdefault(node_id, {})[key] = val
+
+                for node_id in batch_ids:
+                    props = props_by_node.get(node_id, {})
+                    if text_fn is not None:
+                        try:
+                            text = text_fn(node_id, props)
+                        except Exception as ex:
+                            logger.warning(f"embed_nodes: text_fn raised for {node_id}: {ex}")
+                            errors += 1
+                            continue
+                    else:
+                        text = node_id
+
+                    if not text:
+                        skipped += 1
+                        continue
+
+                    try:
+                        emb = self.embed_text(text)
+                        emb_str = ",".join(str(x) for x in emb)
+                        cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+                        cursor.execute(
+                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
+                            [node_id, emb_str],
+                        )
+                        embedded += 1
+                    except Exception as ex:
+                        logger.warning(f"embed_nodes: failed to embed {node_id}: {ex}")
+                        errors += 1
+
+                self.conn.commit()
+                n_done = batch_start + len(batch_ids)
+                logger.info(f"embed_nodes: {n_done}/{n_to_embed} processed ({embedded} embedded)")
+                if progress_callback:
+                    progress_callback(n_done, n_to_embed)
+
+            skipped += (n_total - n_to_embed)
+            return {"embedded": embedded, "skipped": skipped, "errors": errors, "total": n_total}
+        finally:
+            self.embedder = orig_embedder
+
     def get_embedding(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve embedding for a node.
@@ -1521,7 +1632,166 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
-    # Hybrid Fusion Operations
+    def validate_vector_table(self, table: str, vector_col: str) -> dict:
+        from iris_vector_graph.security import sanitize_identifier
+        sanitize_identifier(table)
+        sanitize_identifier(vector_col)
+        schema, tbl = (table.split(".", 1) + [""])[:2] if "." in table else ("", table)
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                [schema or "USER", tbl or table, vector_col],
+            )
+            row = cursor.fetchone()
+            if not row or int(row[0]) == 0:
+                raise ValueError(f"Column '{vector_col}' not found in table '{table}'")
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            row_count = int(cursor.fetchone()[0])
+            cursor.execute(f"SELECT {vector_col} FROM {table} WHERE ROWNUM = 1")
+            sample = cursor.fetchone()
+            dimension = None
+            if sample and sample[0]:
+                try:
+                    import json
+                    v = json.loads(sample[0]) if isinstance(sample[0], str) else sample[0]
+                    dimension = len(v)
+                except Exception:
+                    pass
+            return {"table": table, "vector_col": vector_col, "dimension": dimension, "row_count": row_count}
+        finally:
+            cursor.close()
+
+    def vector_search(
+        self,
+        table: str,
+        vector_col: str,
+        query_embedding,
+        top_k: int = 10,
+        id_col: str = "id",
+        return_cols: List[str] = None,
+        score_threshold: float = None,
+    ) -> List[dict]:
+        from iris_vector_graph.security import sanitize_identifier
+        sanitize_identifier(table)
+        sanitize_identifier(vector_col)
+        sanitize_identifier(id_col)
+        if return_cols:
+            for col in return_cols:
+                sanitize_identifier(col)
+
+        if isinstance(query_embedding, list):
+            import json
+            query_vec_str = json.dumps(query_embedding)
+        else:
+            query_vec_str = query_embedding
+
+        extra = ", ".join(sanitize_identifier(c) for c in (return_cols or []) if c != id_col)
+        select_cols = f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, TO_VECTOR(?, DOUBLE)) AS score"
+        if extra:
+            select_cols += f", {extra}"
+
+        having = f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
+        sql = (
+            f"SELECT TOP {int(top_k)} {select_cols} "
+            f"FROM {table} t "
+            f"ORDER BY score DESC "
+            f"{having}"
+        )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql, [query_vec_str])
+            cols = [d[0].lower() for d in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                r = dict(zip(cols, row))
+                r["id"] = r.pop(id_col.lower(), r.get("id"))
+                results.append(r)
+            return results
+        except Exception as ex:
+            raise ValueError(
+                f"vector_search failed on {table}.{vector_col}: {ex}. "
+                f"Ensure the column is a VECTOR type and query_embedding has the correct dimension."
+            ) from ex
+        finally:
+            cursor.close()
+
+    def multi_vector_search(
+        self,
+        sources: List[dict],
+        query_embedding,
+        top_k: int = 10,
+        fusion: str = "rrf",
+        rrf_k: int = 60,
+    ) -> List[dict]:
+        if isinstance(query_embedding, list):
+            import json
+            query_vec_str = json.dumps(query_embedding)
+        else:
+            query_vec_str = query_embedding
+
+        per_source_k = top_k * 2
+
+        all_results: List[dict] = []
+        for source in sources:
+            tbl = source["table"]
+            col = source.get("col") or source.get("vector_col", "emb")
+            id_c = source.get("id_col", "id")
+            weight = float(source.get("weight", 1.0))
+            return_c = source.get("return_cols")
+            try:
+                rows = self.vector_search(
+                    table=tbl, vector_col=col,
+                    query_embedding=query_vec_str,
+                    top_k=per_source_k,
+                    id_col=id_c,
+                    return_cols=return_c,
+                )
+                for i, r in enumerate(rows):
+                    r["source_table"] = tbl
+                    r["_rank"] = i + 1
+                    r["_weight"] = weight
+                all_results.extend(rows)
+            except Exception as ex:
+                logger.warning(f"multi_vector_search: skipping {tbl}: {ex}")
+
+        if not all_results:
+            return []
+
+        if fusion == "rrf":
+            scores: Dict[str, float] = {}
+            meta: Dict[str, dict] = {}
+            for r in all_results:
+                node_id = str(r["id"])
+                weight = r["_weight"]
+                rank = r["_rank"]
+                rrf_score = weight * (1.0 / (rrf_k + rank))
+                scores[node_id] = scores.get(node_id, 0.0) + rrf_score
+                if node_id not in meta:
+                    meta[node_id] = {k: v for k, v in r.items() if not k.startswith("_")}
+            ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            results = []
+            for rank_i, (node_id, score) in enumerate(ranked, 1):
+                row = meta[node_id].copy()
+                row["score"] = round(score, 6)
+                row["rank"] = rank_i
+                results.append(row)
+            return results
+        else:
+            seen: set = set()
+            merged = []
+            for r in sorted(all_results, key=lambda x: x.get("score", 0), reverse=True):
+                nid = str(r["id"])
+                if nid not in seen:
+                    seen.add(nid)
+                    clean = {k: v for k, v in r.items() if not k.startswith("_")}
+                    merged.append(clean)
+                    if len(merged) >= top_k:
+                        break
+            return merged
+
     def kg_RRF_FUSE(self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str) -> List[Tuple[str, float, float, float]]:
         """
         Reciprocal Rank Fusion using server-side SQL procedure
