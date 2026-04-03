@@ -532,7 +532,7 @@ def _walk_for_temporal(expr, rel_var: str, params: dict):
 def _build_temporal_cte(edges: list, cte_name: str, metadata) -> str:
     _LIMIT = 10_000
     if not edges:
-        return "SELECT NULL AS s, NULL AS p, NULL AS o, NULL AS ts, NULL AS weight WHERE 1=0"
+        return "SELECT NULL AS s, NULL AS p, NULL AS o, NULL AS ts, NULL AS weight FROM (SELECT 1) __empty WHERE 1=0"
     if len(edges) > _LIMIT:
         metadata.warnings.append(
             f"temporal result truncated to {_LIMIT:,} edges — "

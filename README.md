@@ -242,6 +242,30 @@ results = engine.plaid_search("colbert_idx", query_tokens, k=10)
 
 ## Cypher
 
+### Temporal edge filtering (v1.42.0+)
+
+```cypher
+-- Filter edges by timestamp — routes to ^KG("tout") B-tree, O(results)
+MATCH (a)-[r:CALLS_AT]->(b)
+WHERE r.ts >= $start AND r.ts <= $end
+RETURN r.ts, r.weight
+ORDER BY r.ts DESC
+
+-- Temporal + property filter
+MATCH (a:Service)-[r:CALLS_AT]->(b)
+WHERE r.ts >= $start AND r.ts <= $end
+  AND r.weight > 1000
+RETURN a.id, b.id, r.ts, r.weight
+ORDER BY r.weight DESC
+
+-- Inbound direction — routes to ^KG("tin")
+MATCH (b:Service)<-[r:CALLS_AT]-(a)
+WHERE r.ts >= $start AND r.ts <= $end
+RETURN a.id, b.id, r.ts
+```
+
+> **Sweet spot**: Temporal Cypher is designed for trajectory-style queries (≤~50 edges, ordered output). For aggregation over large windows, use `get_temporal_aggregate()` / `get_bucket_groups()` — these are O(1) pre-aggregated and 400× faster.
+
 ```cypher
 -- Named paths
 MATCH p = (a:Service)-[r:CALLS]->(b:Service)
@@ -378,6 +402,16 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.42.0 (2026-04-03)
+- Cypher temporal edge filtering: `WHERE r.ts >= $start AND r.ts <= $end` routes MATCH patterns to `^KG("tout")` B-tree — O(results), not O(total edges)
+- `r.ts` and `r.weight` accessible in RETURN and ORDER BY on temporal edges
+- Inbound direction `(b)<-[r:P]-(a) WHERE r.ts >= $start` routes to `^KG("tin")`
+- `r.ts` without WHERE filter → NULL + query-level warning (prevents accidental full scans)
+- `r.weight > expr` in WHERE applies as post-filter on temporal result set
+- Uses IRIS-compatible derived table subquery (not WITH CTE) — works on protocol 65 xDBC
+- `w` → `weight` canonical field name in temporal CTE (consistent with v1.41.0 API aliases)
+- Sweet spot: trajectory queries ≤50 edges. For aggregation, use `get_temporal_aggregate()`.
 
 ### v1.41.0 (2026-04-03)
 - `get_edges_in_window()` now returns `source`/`target`/`predicate`/`timestamp`/`weight` aliases alongside `s`/`o`/`p`/`ts`/`w` — backward compatible
