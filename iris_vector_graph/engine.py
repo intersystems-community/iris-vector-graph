@@ -1209,7 +1209,10 @@ class IRISGraphEngine:
                     try:
                         emb = self.embed_text(text)
                         emb_str = ",".join(str(x) for x in emb)
-                        cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+                        try:
+                            cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+                        except Exception:
+                            pass
                         cursor.execute(
                             f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
                             [node_id, emb_str],
@@ -1688,7 +1691,7 @@ class IRISGraphEngine:
             query_vec_str = query_embedding
 
         extra = ", ".join(sanitize_identifier(c) for c in (return_cols or []) if c != id_col)
-        select_cols = f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, TO_VECTOR(?, DOUBLE)) AS score"
+        select_cols = f"t.{id_col}, VECTOR_COSINE(TO_VECTOR(t.{vector_col}), TO_VECTOR(?, DOUBLE)) AS score"
         if extra:
             select_cols += f", {extra}"
 
