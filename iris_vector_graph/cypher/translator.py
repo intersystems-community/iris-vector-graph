@@ -81,6 +81,20 @@ class QueryMetadata:
     index_usage: List[str] = field(default_factory=list)
     optimization_applied: List[str] = field(default_factory=list)
     complexity_score: Optional[float] = None
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class TemporalBound:
+    ts_start: Any
+    ts_end: Any
+    rel_variable: str
+    predicate: Optional[str]
+    direction: str
+
+
+class TemporalQueryRequiresEngine(ValueError):
+    pass
 
 
 @dataclass
@@ -126,6 +140,8 @@ class TranslationContext:
         self._alias_counter: int = 0 if parent is None else parent._alias_counter
         self.stages: List[str] = [] if parent is None else parent.stages
         self.input_params: Dict[str, Any] = {} if parent is None else parent.input_params
+        self.temporal_rel_ctes: Dict[str, str] = {} if parent is None else parent.temporal_rel_ctes.copy()
+        self.pending_where = None
 
     def next_alias(self, prefix: str = "t") -> str:
         alias = f"{prefix}{self._alias_counter}"
@@ -425,7 +441,114 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
         context.scalar_variables.add("score")
 
 
-def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None) -> SQLQuery:
+_TEMPORAL_TS_OPS = {
+    ast.BooleanOperator.GREATER_THAN_OR_EQUAL,
+    ast.BooleanOperator.LESS_THAN_OR_EQUAL,
+    ast.BooleanOperator.GREATER_THAN,
+    ast.BooleanOperator.LESS_THAN,
+    ast.BooleanOperator.EQUALS,
+}
+
+
+def _extract_temporal_bounds(where_expr, rel_var: str, params: dict):
+    if where_expr is None:
+        return None
+    return _walk_for_temporal(where_expr, rel_var, params)
+
+
+def _resolve_ts_value(expr, params: dict):
+    if isinstance(expr, ast.Literal):
+        return expr.value
+    if hasattr(ast, 'Parameter') and isinstance(expr, ast.Parameter):
+        return params.get(expr.name)
+    if isinstance(expr, ast.Variable):
+        return params.get(expr.name)
+    return None
+
+
+def _walk_for_temporal(expr, rel_var: str, params: dict):
+    if not isinstance(expr, ast.BooleanExpression):
+        return None
+
+    op = expr.operator
+
+    if op == ast.BooleanOperator.OR:
+        for operand in expr.operands:
+            if isinstance(operand, ast.BooleanExpression) and operand.operands:
+                left = operand.operands[0]
+                if isinstance(left, ast.PropertyReference) and left.variable == rel_var and left.property_name == "ts":
+                    raise ValueError(
+                        f"Temporal r.ts OR conditions are not supported. "
+                        f"Use AND to combine timestamp bounds."
+                    )
+        return None
+
+    if op == ast.BooleanOperator.AND:
+        ts_start = None
+        ts_end = None
+        found = False
+        for operand in expr.operands:
+            result = _walk_for_temporal(operand, rel_var, params)
+            if result is not None:
+                found = True
+                if result.ts_start is not None and ts_start is None:
+                    ts_start = result.ts_start
+                if result.ts_end is not None and ts_end is None:
+                    ts_end = result.ts_end
+        if found:
+            return TemporalBound(
+                ts_start=ts_start,
+                ts_end=ts_end,
+                rel_variable=rel_var,
+                predicate=None,
+                direction="out",
+            )
+        return None
+
+    if op in _TEMPORAL_TS_OPS and len(expr.operands) >= 2:
+        left, right = expr.operands[0], expr.operands[1]
+        if isinstance(left, ast.PropertyReference) and left.variable == rel_var and left.property_name == "ts":
+            val = _resolve_ts_value(right, params)
+            if op in (ast.BooleanOperator.GREATER_THAN_OR_EQUAL, ast.BooleanOperator.GREATER_THAN):
+                return TemporalBound(ts_start=val, ts_end=None, rel_variable=rel_var, predicate=None, direction="out")
+            if op in (ast.BooleanOperator.LESS_THAN_OR_EQUAL, ast.BooleanOperator.LESS_THAN):
+                return TemporalBound(ts_start=None, ts_end=val, rel_variable=rel_var, predicate=None, direction="out")
+            if op == ast.BooleanOperator.EQUALS:
+                return TemporalBound(ts_start=val, ts_end=val, rel_variable=rel_var, predicate=None, direction="out")
+
+    return None
+
+
+def _build_temporal_cte(edges: list, cte_name: str, metadata) -> str:
+    _LIMIT = 10_000
+    if not edges:
+        return "SELECT NULL AS s, NULL AS p, NULL AS o, NULL AS ts, NULL AS weight WHERE 1=0"
+    if len(edges) > _LIMIT:
+        metadata.warnings.append(
+            f"temporal result truncated to {_LIMIT:,} edges — "
+            f"narrow the time window or use get_edges_in_window()"
+        )
+        edges = edges[:_LIMIT]
+    rows = []
+    for e in edges:
+        s = str(e.get("s", e.get("source", ""))).replace("'", "''")
+        p = str(e.get("p", e.get("predicate", ""))).replace("'", "''")
+        o = str(e.get("o", e.get("target", ""))).replace("'", "''")
+        ts = int(e.get("ts", e.get("timestamp", 0)))
+        w = float(e.get("w", e.get("weight", 1.0)))
+        rows.append(f"SELECT '{s}' AS s, '{p}' AS p, '{o}' AS o, {ts} AS ts, {w} AS weight")
+    return " UNION ALL ".join(rows)
+
+
+def _remove_ts_conditions_from_where(context, rel_var: str):
+    kept = []
+    for cond in context.where_conditions:
+        if f".ts" in cond and rel_var in cond:
+            continue
+        kept.append(cond)
+    context.where_conditions = kept
+
+def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None, engine=None) -> SQLQuery:
     if getattr(cypher_query, "union_queries", None):
         branches = [cypher_query] + [uq["query"] for uq in cypher_query.union_queries]
         all_flags = [False] + [uq["all"] for uq in cypher_query.union_queries]
@@ -453,7 +576,9 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
 
     context = TranslationContext()
     context.input_params = params or {}
+    context._engine = engine
     metadata = QueryMetadata()
+    context._metadata = metadata
     is_transactional = False
 
     # Handle CALL procedure — emits a CTE before any MATCH stages
@@ -472,6 +597,10 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         elif cypher_query.procedure_call is not None:
             cte_name = context.stages[0].split(" AS ")[0].strip() if context.stages else "VecSearch"
             context.from_clauses.append(cte_name)
+        for clause in part.clauses:
+            if isinstance(clause, ast.WhereClause):
+                context.pending_where = clause.expression
+                break
         for clause in part.clauses:
             if isinstance(clause, ast.MatchClause): translate_match_clause(clause, context, metadata)
             elif isinstance(clause, ast.UnwindClause): translate_unwind_clause(clause, context)
@@ -512,8 +641,9 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         if cypher_query.return_clause:
             sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
             sql = apply_pagination(sql, cypher_query, context, order_by_items)
-            if context.stages:
-                sql = "WITH " + ",\n".join(context.stages) + "\n" + sql
+            all_ctes = getattr(context, "cte_clauses", []) + context.stages
+            if all_ctes:
+                sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
                 all_params.append(context.all_stage_params + p)
             else: all_params.append(p)
             stmts.append(sql)
@@ -522,8 +652,9 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         sql, p = context.build_stage_sql(cypher_query.return_clause.distinct if cypher_query.return_clause else False)
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
         vl = context.var_length_paths or None
-        if context.stages:
-            sql = "WITH " + ",\n".join(context.stages) + "\n" + sql
+        all_ctes = getattr(context, "cte_clauses", []) + context.stages
+        if all_ctes:
+            sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
             return SQLQuery(sql=sql, parameters=[context.all_stage_params + p], query_metadata=metadata, var_length_paths=vl)
         return SQLQuery(sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl)
 
@@ -860,10 +991,55 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
     is_new_target = target_node.variable not in context.variable_aliases
     target_alias = context.register_variable(target_node.variable)
     edge_alias = context.register_variable(rel.variable, prefix="e") if rel.variable else context.next_alias("e")
-    
-    # Stage CTEs expose the variable name as the column; VecSearch exposes 'node' as the column.
-    # Regular node tables expose 'node_id'. CTE aliases that start with 'Stage' or equal 'VecSearch'
-    # use the variable name directly.
+
+    direction = "in" if rel.direction == ast.Direction.INCOMING else "out"
+
+    if rel.variable and context.pending_where is not None:
+        tb = _extract_temporal_bounds(context.pending_where, rel.variable, context.input_params)
+        if tb is not None:
+            engine = getattr(context, "_engine", None)
+            if engine is None:
+                raise TemporalQueryRequiresEngine(
+                    f"Temporal WHERE {rel.variable}.ts filter detected but no engine was provided. "
+                    f"Pass engine=self when calling translate_to_sql() from execute_cypher()."
+                )
+            tb.direction = direction
+            predicate_filter = rel.types[0] if rel.types and len(rel.types) == 1 else ""
+            src_node_id = None
+            if source_alias and not source_alias.startswith("Stage"):
+                bound_src = source_node.variable
+                if bound_src:
+                    src_val = context.input_params.get(bound_src)
+                    if src_val:
+                        src_node_id = src_val
+            source_filter = src_node_id or ""
+            ts_start = tb.ts_start if tb.ts_start is not None else 0
+            ts_end = tb.ts_end if tb.ts_end is not None else 9_999_999_999
+            edges = engine.get_edges_in_window(
+                source_filter, predicate_filter, ts_start, ts_end, direction=tb.direction
+            )
+            cte_name = f"tc{edge_alias}"
+            cte_sql = _build_temporal_cte(edges, cte_name, metadata)
+            if not hasattr(context, "cte_clauses"):
+                context.cte_clauses = []
+            context.cte_clauses.append(f"{cte_name}({cte_name}.s, {cte_name}.p, {cte_name}.o, {cte_name}.ts, {cte_name}.weight) AS ({cte_sql})")
+            context.temporal_rel_ctes[rel.variable] = cte_name
+            jt = "LEFT OUTER JOIN" if optional else "JOIN"
+            s_col_cte = "node_id"
+            if direction == "out":
+                edge_cond_cte = f"{cte_name}.s = {source_alias}.{s_col_cte}"
+                target_on_cte = f"{target_alias}.node_id = {cte_name}.o"
+            else:
+                edge_cond_cte = f"{cte_name}.o = {source_alias}.{s_col_cte}"
+                target_on_cte = f"{target_alias}.node_id = {cte_name}.s"
+            context.join_clauses.append(f"{jt} {cte_name} ON {edge_cond_cte}")
+            if is_new_target and not target_alias.startswith("Stage"):
+                context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on_cte}")
+            else:
+                context.where_conditions.append(target_on_cte)
+            _remove_ts_conditions_from_where(context, rel.variable)
+            return
+
     def _node_col(variable, alias):
         if alias.startswith('Stage') or alias == 'VecSearch':
             return variable
@@ -897,6 +1073,18 @@ def translate_where_clause(where, context):
     context.where_conditions.append(translate_boolean_expression(where.expression, context))
 
 
+def _is_temporal_ts_condition(expr, context) -> bool:
+    if not isinstance(expr, ast.BooleanExpression): return False
+    if expr.operator not in _TEMPORAL_TS_OPS: return False
+    if not expr.operands: return False
+    left = expr.operands[0]
+    return (
+        isinstance(left, ast.PropertyReference)
+        and left.property_name == "ts"
+        and left.variable in context.temporal_rel_ctes
+    )
+
+
 def translate_boolean_expression(expr, context) -> str:
     if isinstance(expr, ast.ExistsExpression):
         pat = expr.pattern
@@ -923,7 +1111,13 @@ def translate_boolean_expression(expr, context) -> str:
         return "1=1"
     if not isinstance(expr, ast.BooleanExpression): return translate_expression(expr, context, segment="where")
     op = expr.operator
-    if op == ast.BooleanOperator.AND: return "(" + " AND ".join(translate_boolean_expression(o, context) for o in expr.operands) + ")"
+    if op == ast.BooleanOperator.AND:
+        parts = []
+        for o in expr.operands:
+            if _is_temporal_ts_condition(o, context):
+                continue
+            parts.append(translate_boolean_expression(o, context))
+        return "(" + " AND ".join(parts) + ")" if parts else "1=1"
     if op == ast.BooleanOperator.OR: return "(" + " OR ".join(translate_boolean_expression(o, context) for o in expr.operands) + ")"
     if op == ast.BooleanOperator.NOT: return f"NOT ({translate_boolean_expression(expr.operands[0], context)})"
     left_expr = expr.operands[0]
@@ -995,6 +1189,22 @@ def translate_expression(expr, context, segment="select") -> str:
     if isinstance(expr, ast.PropertyReference):
         alias = context.variable_aliases.get(expr.variable)
         if not alias: raise ValueError(f"Undefined: {expr.variable}")
+        cte_alias = context.temporal_rel_ctes.get(expr.variable)
+        if cte_alias is not None:
+            if expr.property_name == "ts":
+                return f"{cte_alias}.ts"
+            if expr.property_name in ("weight", "w"):
+                return f"{cte_alias}.weight"
+        if expr.property_name in ("ts", "weight", "w") and expr.variable not in context.temporal_rel_ctes:
+            if alias and alias.startswith("e"):
+                m = getattr(context, "_metadata", None)
+                if m is not None:
+                    m.warnings.append(
+                        f"{expr.variable}.{expr.property_name} in RETURN without WHERE {expr.variable}.ts filter "
+                        f"— {expr.property_name} will be NULL. Add WHERE {expr.variable}.ts >= $start AND "
+                        f"{expr.variable}.ts <= $end for temporal routing."
+                    )
+                return "NULL"
         if alias.startswith('Stage'):
             if expr.property_name in ("node_id", "id"): return f"{alias}.{expr.variable}"
             return f"{alias}.{expr.variable}_{expr.property_name}"

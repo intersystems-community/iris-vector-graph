@@ -325,7 +325,7 @@ class IRISGraphEngine:
                             "Pass a pre-computed list[float] vector instead."
                         )
 
-        sql_query = translate_to_sql(parsed, parameters)
+        sql_query = translate_to_sql(parsed, parameters, engine=self)
 
         if sql_query.var_length_paths:
             return self._execute_var_length_cypher(sql_query, parameters)

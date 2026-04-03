@@ -148,7 +148,15 @@ The translator calls `QueryWindow` via the engine (Python), gets the edge list, 
 
 Decision for implementation: inject as `UNION ALL SELECT` CTE. Maximum 10,000 edges injected; if QueryWindow returns more, truncate to 10,000 and emit a query-level warning: "temporal result truncated to 10,000 edges — narrow the time window or use get_edges_in_window()". No temp-table fallback.
 
-### Relationship Properties on Temporal Edges
+### CTE Performance Sweet Spot (Steve & Dan, 2026-04-03)
+
+Temporal Cypher (CTE injection) is the right tool for **trajectory-style queries** — row-by-row retrieval, ordered output, ≤1,500 edges. Examples: `TimelineStore.get_trajectory()` (≤50 groups × ≤30 days), timeline lookups, incident investigations.
+
+It is **not** the right tool for **aggregation over large windows**. For GROUP BY / COUNT / AVG / SUM over temporal edges, use `get_bucket_groups()` / `get_temporal_aggregate()` — these are O(buckets) pre-aggregated. Migrating `RankShiftAnalyzer.compute()` (opsreview spec 004) to Temporal Cypher would be a regression until IVG delivers native Cypher aggregation over temporal edges.
+
+**FR-012 truncation at 10,000 edges is a safety limit, not a performance guarantee.** A UNION ALL CTE with 10K rows is ~800KB of SQL text. The actual degradation curve at 5K/10K/15K edges has not been measured — NFR-001 (≤2× latency vs `get_edges_in_window()`) must be verified against the actual benchmark (KGBENCH, warm cache, median 10 runs) before v1.42.0 ships. SC-003 documents this requirement.
+
+**The `w` → `weight` field name**: temporal Cypher exposes `r.weight` (human-readable). `get_edges_in_window()` returns both `"w"` and `"weight"` aliases (since v1.41.0). `_build_temporal_cte` uses `weight` as the CTE column name. `GetBucketGroups` returns `"sum"` / `"avg"` / `"min"` / `"max"` — not `"w"` — and is unaffected. These names are now consistent.
 
 | Property | Maps to | Type |
 |----------|---------|------|
