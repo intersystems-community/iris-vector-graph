@@ -1652,7 +1652,7 @@ class IRISGraphEngine:
                 raise ValueError(f"Column '{vector_col}' not found in table '{table}'")
             cursor.execute(f"SELECT COUNT(*) FROM {table}")
             row_count = int(cursor.fetchone()[0])
-            cursor.execute(f"SELECT {vector_col} FROM {table} WHERE ROWNUM = 1")
+            cursor.execute(f"SELECT TOP 1 {vector_col} FROM {table}")
             sample = cursor.fetchone()
             dimension = None
             if sample and sample[0]:
@@ -1691,7 +1691,19 @@ class IRISGraphEngine:
             query_vec_str = query_embedding
 
         extra = ", ".join(sanitize_identifier(c) for c in (return_cols or []) if c != id_col)
-        select_cols = f"t.{id_col}, VECTOR_COSINE(TO_VECTOR(t.{vector_col}), TO_VECTOR(?, DOUBLE)) AS score"
+
+        dim = None
+        if isinstance(query_embedding, list):
+            dim = len(query_embedding)
+        elif isinstance(query_embedding, str):
+            dim = query_embedding.count(",") + 1
+
+        if dim:
+            query_cast = f"TO_VECTOR(?, DOUBLE, {dim})"
+        else:
+            query_cast = "TO_VECTOR(?, DOUBLE)"
+
+        select_cols = f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, {query_cast}) AS score"
         if extra:
             select_cols += f", {extra}"
 
