@@ -1987,11 +1987,10 @@ class IRISGraphEngine:
         Used when IRIS SQL function kg_PPR is unavailable.
         Performance: ~25ms for 1K nodes (vs 2-5ms with embedded Python).
         """
-        from iris_vector_graph.cypher.translator import _table as _t
         cursor = self.conn.cursor()
         try:
             # Step 1: Get all nodes
-            cursor.execute(f"SELECT node_id FROM {_t('nodes')}")
+            cursor.execute("SELECT node_id FROM nodes")
             nodes = [row[0] for row in cursor.fetchall()]
             num_nodes = len(nodes)
 
@@ -2006,7 +2005,7 @@ class IRISGraphEngine:
                 return {}
 
             # Step 2: Build adjacency lists
-            cursor.execute(f"SELECT s, o_id FROM {_t('rdf_edges')}")
+            cursor.execute("SELECT s, o_id FROM rdf_edges")
 
             in_edges = {}  # target -> [(source, weight)]
             out_degree = {}
@@ -2020,7 +2019,7 @@ class IRISGraphEngine:
 
             # Step 2b: Build reverse edges if bidirectional mode enabled
             if bidirectional and reverse_edge_weight > 0:
-                cursor.execute(f"SELECT o_id, s FROM {_t('rdf_edges')}")
+                cursor.execute("SELECT o_id, s FROM rdf_edges")
                 for o_id, s in cursor.fetchall():
                     # Reverse edge: o_id -> s with weighted contribution
                     if s not in in_edges:
