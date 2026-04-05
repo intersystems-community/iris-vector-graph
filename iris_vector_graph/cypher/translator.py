@@ -1141,12 +1141,30 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
         else: edge_cond += f" AND {edge_alias}.p IN ({', '.join([context.add_join_param(t) for t in rel.types])})"
         
     context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
-    
+
     if is_new_target and not target_alias.startswith('Stage'):
         context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
     else:
         # If target node is already joined, add the connection as a WHERE condition
         context.where_conditions.append(target_on)
+
+    # Apply inline property filters from source and target nodes.
+    # These are silently dropped without this block — e.g. MATCH (t)-[:R]->(c {id: 'x'})
+    # returns all nodes instead of filtering, because the relationship path never applies them.
+    for prop_node, prop_alias in ((source_node, source_alias), (target_node, target_alias)):
+        if not prop_node.properties:
+            continue
+        for k, v in prop_node.properties.items():
+            val_sql = translate_expression(v, context, segment="where")
+            if k in ("node_id", "id"):
+                context.where_conditions.append(f"{prop_alias}.node_id = {val_sql}")
+            else:
+                p_alias = context.next_alias("p")
+                context.join_clauses.append(
+                    f"{jt} {_table('rdf_props')} {p_alias} "
+                    f"ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
+                )
+                context.where_conditions.append(f"{p_alias}.val = {val_sql}")
 
 
 def translate_where_clause(where, context):

@@ -101,3 +101,34 @@ def test_translate_pattern_operators():
     sql3 = translate_to_sql(parsed3)
     sql_str3 = "\n".join(sql3.sql) if isinstance(sql3.sql, list) else sql3.sql
     assert "LIKE" in sql_str3
+
+
+def test_inline_property_filter_on_relationship_target():
+    """Inline props on relationship target must generate WHERE conditions, not be silently dropped.
+
+    Bug: MATCH (t)-[:R]->(c:Label {id: 'x'}) returned all nodes instead of filtering,
+    because translate_relationship_pattern did not apply target_node.properties after joining.
+    """
+    query = "MATCH (t:IServiceTicket)-[:TICKET_FOR]->(c:Customer {id: 'Customer:Northwell'}) RETURN t.id as id"
+    parsed = parse_query(query)
+    sql_result = translate_to_sql(parsed)
+    sql_str = "\n".join(sql_result.sql) if isinstance(sql_result.sql, list) else sql_result.sql
+    # SQLQuery.parameters is a list of param-lists (one per statement); flatten to check
+    params = [p for plist in sql_result.parameters for p in plist]
+
+    # The literal is passed as a bind param — check the params list, not the SQL string
+    assert "Customer:Northwell" in params, \
+        f"Inline property filter on relationship target was dropped — literal not in params: {params}"
+    # Must use node_id equality for id/node_id keys (not rdf_props join)
+    assert "node_id" in sql_str
+
+
+def test_inline_property_filter_on_relationship_source():
+    """Inline props on relationship source must also generate WHERE conditions."""
+    query = "MATCH (t:IServiceTicket {status: 'Open'})-[:TICKET_FOR]->(c:Customer) RETURN c.id as cid"
+    parsed = parse_query(query)
+    sql_result = translate_to_sql(parsed)
+    params = [p for plist in sql_result.parameters for p in plist]
+
+    assert "Open" in params, \
+        f"Inline property filter on relationship source was dropped — literal not in params: {params}"
