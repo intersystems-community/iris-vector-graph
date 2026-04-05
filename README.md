@@ -403,6 +403,11 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.45.3 (2026-04-04)
+- `translate_relationship_pattern`: inline property filters on relationship nodes were silently dropped — `MATCH (t)-[:R]->(c {id: 'x'})` returned all nodes instead of filtering. Fixed by applying `source_node.properties` and `target_node.properties` after JOIN construction.
+- `vector_search`: `TO_VECTOR(?, DOUBLE, {dim})` now includes explicit dimension in query cast, resolving type mismatch on IRIS 2025.1 when column dimension is known
+- 2 regression tests added (375 unit tests total)
+
 ### v1.45.2 (2026-04-03)
 - `embedded.py`: auto-fixes `sys.path` shadowing — ensures `/usr/irissys/lib/python` is first so the embedded `iris` module takes priority over pip-installed `intersystems_irispython`
 - `embedded.py`: clear error message when shadowed iris (no `iris.sql`) is detected, naming the root cause
