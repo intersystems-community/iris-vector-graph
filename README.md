@@ -74,6 +74,23 @@ engine.initialize_schema()
 
 Store and query time-stamped edges — service calls, events, metrics, log entries — with sub-millisecond window queries and O(1) aggregation.
 
+### Two edge APIs: structural vs. temporal
+
+IVG has two distinct edge APIs that write to different storage and support different query patterns:
+
+| | `create_edge` / `bulk_create_edges` | `create_edge_temporal` / `bulk_create_edges_temporal` |
+|--|-------------------------------------|-------------------------------------------------------|
+| **Writes to** | `Graph_KG.rdf_edges` (SQL table) | `^KG("tout"/"tin")` globals (IRIS B-tree) |
+| **Query via** | `MATCH (a)-[:R]->(b)` Cypher | `get_edges_in_window()`, `get_temporal_aggregate()`, temporal Cypher `WHERE r.ts >= $start` |
+| **Models** | Structural relationship — "A is connected to B" | Event log — "A called B at time T with weight W" |
+| **Example** | `(service:auth)-[:DEPENDS_ON]->(service:payment)` | `(service:auth)-[:CALLS_AT {ts: 1705000042, weight: 38ms}]->(service:payment)` |
+
+**Use `create_edge` when** the relationship is a permanent structural fact: schema dependencies, ontology hierarchies, entity co-occurrences, foreign key relationships.
+
+**Use `create_edge_temporal` when** the relationship is a time-series event: service calls, metric emissions, log events, cost observations, anything you'll query by time window or aggregate over time.
+
+The same node pair can have both: a structural `DEPENDS_ON` edge (created once) and thousands of temporal `CALLS_AT` events (one per call). They coexist and are queried through separate APIs.
+
 ### Ingest
 
 ```python
