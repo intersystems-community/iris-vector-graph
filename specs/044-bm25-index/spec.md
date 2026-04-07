@@ -16,6 +16,18 @@ When `kg_TXT` is called and iFind is unavailable, it falls back to BM25Index if 
 
 ---
 
+## Clarifications
+
+### Session 2026-04-04
+
+- Q: Which subscript order should `^BM25Idx` use for the TF posting list? → A: `^BM25Idx(name,"tf",term,docId) = count` — term-first (standard inverted index). Enables O(postings) sparse iteration per query term. FR-007 and Key Entities updated.
+- Q: How should `Insert` handle IDF updates? → A: Update IDF only for terms present in the new document — O(doc_length) per insert, NFR-004 achievable. IDF for unaffected terms is slightly stale but bounded. FR-008 updated.
+- Q: How does `kg_TXT` detect that a BM25 "default" index is available? → A: Check `$Data(^BM25Idx("default","cfg","N")) > 0` at query time — zero-config. FR-012 updated.
+- Q: What should `Build` return? → A: JSON string `{"indexed":N,"avgdl":F,"vocab_size":N}` — richer and consistent with Info/Search. FR-001, class interface, and US1 example updated.
+- Q: What should the YIELD column name be for `CALL ivg.bm25.search`? → A: `YIELD node, score` — consistent with `ivg.vector.search` and `ivg.ppr`. FR-013 and US6 updated.
+
+---
+
 ## User Scenarios & Testing
 
 ### User Story 1 — Build a BM25 index over graph nodes (P1)
@@ -24,8 +36,8 @@ A developer loads NCIT (200K concepts) into the graph and wants term-frequency s
 
 ```objectscript
 // Build index over all nodes using rdf_props["name"] + rdf_props["definition"]
-Set sc = ##class(Graph.KG.BM25Index).Build("ncit", $ListBuild("name","definition"))
-Write sc, !  // 1 = success
+Set result = ##class(Graph.KG.BM25Index).Build("ncit", $ListBuild("name","definition"))
+Write result, !  // {"indexed":204000,"avgdl":12.4,"vocab_size":87000}
 ```
 
 ```python
@@ -107,14 +119,13 @@ When `kg_TXT` is called and iFind is unavailable but a BM25 index named `"defaul
 ### User Story 6 — Cypher procedure (P3)
 
 ```cypher
-CALL ivg.bm25.search('ncit', 'ankylosing spondylitis', 10) YIELD node_id, score
-MATCH (n {id: node_id})
-RETURN n, score ORDER BY score DESC
+CALL ivg.bm25.search('ncit', 'ankylosing spondylitis', 10) YIELD node, score
+RETURN node, score ORDER BY score DESC
 ```
 
 **Acceptance Scenarios**:
-1. `CALL ivg.bm25.search(name, query, k)` executes BM25 search and yields `(node_id, score)` rows.
-2. Results can be joined to graph nodes via subsequent MATCH.
+1. `CALL ivg.bm25.search(name, query, k)` executes BM25 search and yields `(node, score)` rows — consistent with `ivg.vector.search` and `ivg.ppr` conventions.
+2. Results can be used directly without a secondary MATCH.
 3. Unknown index name returns empty result, not an error.
 
 ---
@@ -125,19 +136,19 @@ RETURN n, score ORDER BY score DESC
 
 | ID | Requirement |
 |----|-------------|
-| FR-001 | `Graph.KG.BM25Index.Build(name, propsList, k1, b)` MUST tokenize all `rdf_props.val` for the given property keys and build `^BM25Idx` globals |
+| FR-001 | `Graph.KG.BM25Index.Build(name, propsList, k1, b)` MUST tokenize all `rdf_props.val` for the given property keys, build `^BM25Idx` globals, and return a JSON string `{"indexed":N,"avgdl":F,"vocab_size":N}` |
 | FR-002 | `Build` MUST store: `^BM25Idx(name,"cfg","N")`, `^BM25Idx(name,"cfg","avgdl")`, `^BM25Idx(name,"idf",term)`, `^BM25Idx(name,"tf",docId,term)`, `^BM25Idx(name,"len",docId)` |
 | FR-003 | BM25 scoring formula MUST be: `score = Σ IDF(t) * TF(t,d) * (k1+1) / (TF(t,d) + k1*(1-b+b*dl/avgdl))` with defaults `k1=1.5, b=0.75` |
 | FR-004 | IDF MUST be: `log((N - df + 0.5) / (df + 0.5) + 1)` (smoothed Robertson IDF) |
 | FR-005 | Tokenizer MUST split on whitespace and punctuation; MUST normalize to lowercase; MUST use `%iFind.Utils.Analyze` if available, otherwise simple split |
 | FR-006 | `Graph.KG.BM25Index.Search(name, queryText, k)` MUST return a JSON array `[{"id":..., "score":...}, ...]` sorted by score descending |
-| FR-007 | `Search` MUST iterate only terms present in the query (sparse traversal via `$Order` on `^BM25Idx(name,"tf",docId,term)`) |
-| FR-008 | `Graph.KG.BM25Index.Insert(name, docId, text)` MUST add/replace a single document and update IDF and avgdl |
+| FR-007 | `Search` MUST iterate only terms present in the query (sparse posting-list traversal via `$Order(^BM25Idx(name,"tf",queryTerm,docId))`) — O(postings per query term), never O(corpus) |
+| FR-008 | `Graph.KG.BM25Index.Insert(name, docId, text)` MUST add/replace a single document, increment N, update avgdl, and update IDF for terms present in the new document only — O(doc_length), not O(vocab_size). IDF for terms not in the new document may be slightly stale; this is acceptable and bounded. |
 | FR-009 | `Graph.KG.BM25Index.Drop(name)` MUST kill all `^BM25Idx(name,...)` subscripts |
 | FR-010 | `Graph.KG.BM25Index.Info(name)` MUST return `{"N":int, "avgdl":float, "vocab_size":int}` |
 | FR-011 | Python wrappers `bm25_build`, `bm25_search`, `bm25_insert`, `bm25_drop`, `bm25_info` MUST exist on `IRISGraphEngine` |
-| FR-012 | When `kg_TXT` falls back to LIKE and a BM25 index named `"default"` exists, it MUST use BM25 instead |
-| FR-013 | Cypher `CALL ivg.bm25.search(name, query, k)` MUST be supported by the translator |
+| FR-012 | When `kg_TXT` falls back to LIKE, it MUST first check `$Data(^BM25Idx("default","cfg","N")) > 0`; if true, it MUST call `BM25Index.Search("default", query, k)` instead — zero-config, no registration required |
+| FR-013 | Cypher `CALL ivg.bm25.search(name, query, k) YIELD node, score` MUST be supported by the translator — consistent with `ivg.vector.search` and `ivg.ppr` YIELD conventions |
 | FR-014 | All ObjectScript code MUST run on IRIS Community Edition — no iFind, no Enterprise-only classes required |
 
 ### Non-Functional Requirements
@@ -161,11 +172,11 @@ RETURN n, score ORDER BY score DESC
 ^BM25Idx(name, "cfg", "k1")         = BM25 k1 parameter (default 1.5)
 ^BM25Idx(name, "cfg", "b")          = BM25 b parameter (default 0.75)
 ^BM25Idx(name, "idf", term)         = smoothed Robertson IDF value (float)
-^BM25Idx(name, "tf", docId, term)   = raw term frequency count (integer)
+^BM25Idx(name, "tf", term, docId)   = raw term frequency count (integer)  ← term-first for posting-list iteration
 ^BM25Idx(name, "len", docId)        = document token count (integer)
 ```
 
-The inverted index is implicit: to find all documents containing `term`, iterate `$Order(^BM25Idx(name,"tf","",term))`. To score a query, iterate over query terms and for each term iterate posting list.
+The inverted index is term-first: to find all documents containing `term`, iterate `$Order(^BM25Idx(name,"tf",term,""))`. To score a query, for each query term walk the posting list `$Order(^BM25Idx(name,"tf",queryTerm,docId))` — O(postings), never O(corpus).
 
 ### ObjectScript Class Interface
 
@@ -173,7 +184,7 @@ The inverted index is implicit: to find all documents containing `term`, iterate
 Class Graph.KG.BM25Index Extends %RegisteredObject
 {
     ClassMethod Build(name As %String, propsList As %List,
-                      k1 As %Double = 1.5, b As %Double = 0.75) As %Integer
+                      k1 As %Double = 1.5, b As %Double = 0.75) As %String  // JSON: {"indexed":N,"avgdl":F,"vocab_size":N}
     ClassMethod Search(name As %String, queryText As %String,
                        k As %Integer = 10) As %String  // JSON
     ClassMethod Insert(name As %String, docId As %String,
@@ -210,6 +221,7 @@ Class Graph.KG.BM25Index Extends %RegisteredObject
 - Non-ASCII text → lowercased via `$ZCONVERT(token, "L")`; Unicode handled correctly
 - Concurrent `Insert` calls — each updates `N` and `avgdl` via `$Increment` (atomic for integers); `avgdl` update is not atomic (racy), documented as acceptable for Phase 1
 - Index name containing special characters → validated with `sanitize_identifier` before use as global subscript
+- IDF staleness after many Inserts — after N incremental inserts, IDF values for terms not present in any inserted document reflect the Build-time N. The scoring error is bounded by `log((N_current - df + 0.5)/(N_build - df + 0.5))`. Rebuild via `Build()` to restore exact IDF values.
 
 ---
 
