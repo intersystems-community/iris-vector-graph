@@ -33,6 +33,7 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 |-----------|-------------|
 | **Temporal Graph** | Bidirectional time-indexed edges — `^KG("tout"/"tin"/"bucket")`. O(results) window queries via B-tree traversal. 134K+ edges/sec ingest (RE2-TT benchmark). |
 | **Pre-aggregated Analytics** | `^KG("tagg")` per-bucket COUNT/SUM/AVG/MIN/MAX and HLL COUNT DISTINCT. O(1) aggregation queries — 0.085ms for 1-bucket, 0.24ms for 24-hour window. |
+| **BM25Index** | Pure ObjectScript Okapi BM25 lexical search — `^BM25Idx` globals, zero SQL tables. Automatic `kg_TXT` upgrade when `"default"` index exists. Cypher `CALL ivg.bm25.search(name, query, k)`. 0.3ms median search. |
 | **VecIndex** | RP-tree ANN vector search — pure ObjectScript + `$vectorop` SIMD. Annoy-style two-means splitting. |
 | **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
 | **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
@@ -362,6 +363,7 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 | `^NKG` | Integer-encoded `^KG` for Arno acceleration |
 | `^VecIdx` | VecIndex RP-tree ANN |
 | `^PLAID` | PLAID multi-vector |
+| `^BM25Idx` | BM25 lexical search index |
 
 ### Schema (Graph_KG)
 
@@ -386,6 +388,7 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 | `Graph.KG.Subgraph` | SubgraphJson, PPRGuidedJson |
 | `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson |
 | `Graph.KG.BulkLoader` | BulkLoad (`INSERT %NOINDEX %NOCHECK` + `%BuildIndices`) |
+| `Graph.KG.BM25Index` | Build, Search, Insert, Drop, Info, SearchProc (`kg_BM25` stored procedure) |
 
 ---
 
@@ -402,6 +405,7 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 | VecIndex search (1K vecs, 128-dim) | 4ms | RP-tree + `$vectorop` SIMD |
 | HNSW search (143K vecs, 768-dim) | 1.7ms | Native IRIS VECTOR index |
 | PLAID search (500 docs, 4 tokens) | ~14ms | Centroid scoring + MaxSim |
+| BM25Index search (174 nodes, 3-term) | 0.3ms | Pure ObjectScript `$Order` posting-list |
 | PPR (10K nodes) | 62ms | Pure ObjectScript |
 | 1-hop neighbors | 0.3ms | `$Order` on `^KG` |
 
@@ -419,6 +423,19 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.46.0 (2026-04-07)
+- **BM25Index** — pure ObjectScript Okapi BM25 lexical search over `^BM25Idx` globals. Zero SQL tables, no Enterprise license required.
+- `Graph.KG.BM25Index.Build(name, propsCSV)` — indexes all graph nodes by specified text properties; returns `{"indexed":N,"avgdl":F,"vocab_size":V}`
+- `Graph.KG.BM25Index.Search(name, query, k)` — Robertson BM25 scoring via `$Order` posting-list traversal; returns JSON `[{"id":nodeId,"score":S},...]`
+- `Graph.KG.BM25Index.Insert(name, docId, text)` — incremental document add/replace; updates IDF only for new document's terms (O(doc_length))
+- `Graph.KG.BM25Index.Drop(name)` — O(1) Kill of full index
+- `Graph.KG.BM25Index.Info(name)` — returns `{"N":N,"avgdl":F,"vocab_size":V}` or `{}` if not found
+- Python wrappers: `engine.bm25_build()`, `bm25_search()`, `bm25_insert()`, `bm25_drop()`, `bm25_info()`
+- `kg_TXT` automatic upgrade: `_kg_TXT_fallback` detects a `"default"` BM25 index and routes through BM25 instead of LIKE-based fallback
+- Cypher `CALL ivg.bm25.search(name, $query, k) YIELD node, score` — Stage CTE using `Graph_KG.kg_BM25` SQL stored procedure
+- Translator fix: `BM25` and `PPR` CTEs now use own column names in RETURN clause (`BM25.node` not `BM25.node_id`)
+- SC-002 benchmark: 0.3ms median search on 174-node community IRIS instance
 
 ### v1.45.3 (2026-04-04)
 - `translate_relationship_pattern`: inline property filters on relationship nodes were silently dropped — `MATCH (t)-[:R]->(c {id: 'x'})` returned all nodes instead of filtering. Fixed by applying `source_node.properties` and `target_node.properties` after JOIN construction.

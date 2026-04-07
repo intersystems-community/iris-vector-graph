@@ -34,6 +34,7 @@ class IRISGraphOperators:
     def __init__(self, connection):
         """Initialize with IRIS database connection"""
         self.conn = connection
+        self._bm25_default_cached = None
 
     def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
@@ -270,6 +271,21 @@ class IRISGraphOperators:
         """
         Fallback text search using original LIKE filters for compatibility
         """
+        if self._bm25_default_cached is None:
+            engine = getattr(self, "graph_engine", None)
+            if engine is not None:
+                try:
+                    info = engine.bm25_info("default")
+                    self._bm25_default_cached = info.get("N", 0) > 0
+                except Exception:
+                    self._bm25_default_cached = False
+            else:
+                self._bm25_default_cached = False
+
+        if self._bm25_default_cached:
+            engine = getattr(self, "graph_engine", None)
+            return engine.bm25_search("default", query_text, k)
+
         cursor = self.conn.cursor()
         try:
             sql = f"""

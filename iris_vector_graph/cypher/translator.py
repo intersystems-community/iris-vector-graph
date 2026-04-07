@@ -201,6 +201,7 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     - ivg.vector.search(label, property, query_input, limit [, options])
     - ivg.neighbors(source_node_or_list, predicate, direction)
     - ivg.ppr(seed_node_or_list, alpha, max_iterations)
+    - ivg.bm25.search(name, query, k)
     """
     name = proc.procedure_name
     if name == "ivg.vector.search":
@@ -209,8 +210,10 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
         _translate_neighbors(proc, context)
     elif name == "ivg.ppr":
         _translate_ppr(proc, context)
+    elif name == "ivg.bm25.search":
+        _translate_bm25_search(proc, context)
     else:
-        raise ValueError(f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr")
+        raise ValueError(f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search")
 
 
 def _resolve_arg(arg, context: TranslationContext, name: str, expected_type=None):
@@ -448,6 +451,42 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
 
     for item in proc.yield_items:
         context.variable_aliases[item] = "PPR"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
+def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    args = proc.arguments
+    if len(args) < 3:
+        raise ValueError("ivg.bm25.search requires 3 arguments: name, query, k")
+
+    idx_name = _resolve_arg(args[0], context, "ivg.bm25.search")
+    if not isinstance(idx_name, str):
+        raise ValueError("ivg.bm25.search: first argument (name) must be a string literal")
+
+    query = _resolve_arg(args[1], context, "ivg.bm25.search")
+    k_val = _resolve_arg(args[2], context, "ivg.bm25.search")
+    try:
+        k_int = int(k_val)
+    except (TypeError, ValueError):
+        raise ValueError(f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}")
+
+    bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "kg_BM25"
+    cte_sql = (
+        f"SELECT j.node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {bm25_fn}(?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([idx_name, query, k_int])
+    context.stages.insert(0, f"BM25 AS (\n{cte_sql}\n)")
+
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "BM25"
     if "score" in proc.yield_items:
         context.scalar_variables.add("score")
 
@@ -1441,8 +1480,7 @@ def translate_return_clause(ret, context):
                 continue
             if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
-                # VecSearch CTE columns are named by their alias (e.g. 'node'), not 'node_id'
-                node_expr = f"{alias_name}.{var_name}" if alias_name.startswith("Stage") or alias_name == "VecSearch" else f"{alias_name}.node_id"
+                node_expr = f"{alias_name}.{var_name}" if alias_name.startswith("Stage") or alias_name in ("VecSearch", "BM25", "PPR") else f"{alias_name}.node_id"
                 context.select_items.append(f"{node_expr} AS {prefix}_id")
                 context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
                 context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")

@@ -2470,3 +2470,30 @@ class IRISGraphEngine:
                 f.write(json.dumps(event) + "\n")
 
         return {"temporal_edges": len(edges)}
+
+    # ── BM25Index: pure ObjectScript lexical search ──
+
+    def bm25_build(self, name: str, text_props: list, k1: float = 1.5, b: float = 0.75) -> dict:
+        props_csv = ",".join(text_props)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Build", name, props_csv, k1, b)
+        return json.loads(str(result))
+
+    def bm25_search(self, name: str, query: str, k: int = 10) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Search", name, query, k)
+        rows = json.loads(str(result))
+        return [(r["id"], float(r["score"])) for r in rows]
+
+    def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Insert", name, doc_id, text)
+        return bool(int(str(result)))
+
+    def bm25_drop(self, name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)
+
+    def bm25_info(self, name: str) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Info", name)
+        return json.loads(str(result))
