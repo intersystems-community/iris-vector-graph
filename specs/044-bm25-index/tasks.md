@@ -27,8 +27,8 @@
 
 **Purpose**: Tokenizer and `^BM25Idx` global write/read primitives used by Build, Search, Insert.
 
-- [ ] T005 [US1] Write unit test `test_tokenize_lowercases_and_splits` in `tests/unit/test_bm25_index.py::TestBM25IndexUnit`: mock `Graph.KG.BM25Index.Tokenize("Ankylosing Spondylitis HLA-B27")` response as `["ankylosing","spondylitis","hla","b27"]`; assert tokens are lowercase, punctuation-split — must FAIL before T006
-- [ ] T006 [US1] Implement `Graph.KG.BM25Index.Tokenize(text As %String) As %List` in `iris_src/src/Graph/KG/BM25Index.cls`: lowercase via `$ZCONVERT(text,"L")`; try `##class(%iFind.Utils).Analyze(lower,"en",1)` in Try/Catch; fallback: iterate chars, accumulate alphanumeric runs, build `$ListBuild(tok1,tok2,...)`; compile and verify T005 passes
+- [ ] T005 Write unit test `test_tokenize_lowercases_and_splits` in `tests/unit/test_bm25_index.py::TestBM25IndexUnit`: mock `Graph.KG.BM25Index.Tokenize("Ankylosing Spondylitis HLA-B27")` response as `["ankylosing","spondylitis","hla","b27"]`; assert tokens are lowercase, punctuation-split — must FAIL before T006
+- [ ] T006 Implement `Graph.KG.BM25Index.Tokenize(text As %String) As %List` in `iris_src/src/Graph/KG/BM25Index.cls`: lowercase via `$ZCONVERT(text,"L")`; try `##class(%iFind.Utils).Analyze(lower,"en",1)` in Try/Catch; fallback: iterate chars, accumulate alphanumeric runs, build `$ListBuild(tok1,tok2,...)`; compile and verify T005 passes
 
 **Checkpoint**: `pytest tests/unit/test_bm25_index.py -v -k "tokenize"` — T005 passes.
 
@@ -86,8 +86,10 @@
 
 **Goal**: `bm25_drop("ncit")` removes all `^BM25Idx("ncit",...)` data.
 
-- [ ] T028 [US4] Implement `IRISGraphEngine.bm25_drop(name) -> None` in `iris_vector_graph/engine.py`: call `classMethodVoid("Graph.KG.BM25Index","Drop",name)`
-- [ ] T029 [US4] Implement `IRISGraphEngine.bm25_info(name) -> dict` in `iris_vector_graph/engine.py`: call `classMethodValue("Graph.KG.BM25Index","Info",name)`; parse JSON; return dict (empty dict `{}` if index not found)
+- [ ] T028 [US4] Write unit test `test_bm25_drop_calls_classmethod` in `TestBM25IndexUnit`: mock engine; assert `bm25_drop("idx")` calls `classMethodVoid("Graph.KG.BM25Index","Drop","idx")` — must FAIL before implementation below
+- [ ] T028b [US4] Implement `IRISGraphEngine.bm25_drop(name) -> None` in `iris_vector_graph/engine.py`: call `classMethodVoid("Graph.KG.BM25Index","Drop",name)`
+- [ ] T029 [US4] Write unit test `test_bm25_info_returns_dict` in `TestBM25IndexUnit`: mock returns `'{"N":5,"avgdl":4.0,"vocab_size":20}'`; assert `bm25_info("idx")` returns dict with keys `N`, `avgdl`, `vocab_size` — must FAIL before implementation below
+- [ ] T029b [US4] Implement `IRISGraphEngine.bm25_info(name) -> dict` in `iris_vector_graph/engine.py`: call `classMethodValue("Graph.KG.BM25Index","Info",name)`; parse JSON; return dict (empty dict `{}` if index not found)
 - [ ] T030 [P] [US4] Write E2E test `test_drop_removes_all_data` in `TestBM25IndexE2E`: build "test44g"; `bm25_drop("test44g")`; assert `bm25_info("test44g")` returns `{}`; assert `bm25_search("test44g","query",3)` returns `[]`
 - [ ] T031 [US4] Run: `pytest tests/unit/test_bm25_index.py::TestBM25IndexE2E -v -k "drop"` — T030 passes
 
@@ -99,9 +101,9 @@
 
 **Independent test**: Scores from BM25 path are non-trivial floats; LIKE path returns only 0.0 and 1.0.
 
-- [ ] T032 [US5] Write unit test `test_kgtxt_uses_bm25_when_default_exists` in `TestBM25IndexUnit`: mock `Graph.KG.BM25Index.Info("default")` returning `'{"N":5,"avgdl":4.0,"vocab_size":20}'`; assert `_kg_TXT_fallback("diabetes",5)` calls BM25 path — must FAIL before T033
+- [ ] T032 [US5] Write unit test `test_kgtxt_uses_bm25_when_default_exists` in `TestBM25IndexUnit`: mock `Graph.KG.BM25Index.Info("default")` returning `'{"N":5,"avgdl":4.0,"vocab_size":20}'`; assert `_kg_TXT_fallback("diabetes",5)` calls BM25 path — must FAIL before T034
 - [ ] T033 [US5] Write unit test `test_kgtxt_uses_like_when_no_default` in `TestBM25IndexUnit`: mock `Info("default")` returning `'{}'`; assert `_kg_TXT_fallback("diabetes",5)` calls LIKE fallback — must FAIL before T034
-- [ ] T034 [US5] Update `_kg_TXT_fallback` in `iris_vector_graph/operators.py`: add check at top of method — call `self.graph_engine.bm25_info("default")`; if result dict has N > 0: call `self.graph_engine.bm25_search("default", query_text, k)` and return results; else: continue with LIKE fallback. Cache the "default index exists" check as `self._bm25_default_n` (set to None to force re-check after `bm25_build` or `bm25_drop` is called)
+- [ ] T034 [US5] Update `_kg_TXT_fallback` in `iris_vector_graph/operators.py`: add check at top of method — call `self.graph_engine.bm25_info("default")`; if result dict has N > 0: call `self.graph_engine.bm25_search("default", query_text, k)` and return results; else: continue with LIKE fallback. Cache result as `self._bm25_default_cached` on the `IRISGraphOperators` instance (set to None to force re-check when `bm25_build` or `bm25_drop` is called through operators)
 - [ ] T035 [P] [US5] Write E2E test `test_kgtxt_returns_bm25_scores_not_like_scores` in `TestBM25IndexE2E`: build "default" with graph nodes having "name" property; call `engine.kg_TXT("diabetes",5)`; assert scores are floats not equal to 0.0 or 1.0; `bm25_drop("default")`
 - [ ] T036 [US5] Run: `pytest tests/unit/test_bm25_index.py -v -k "kgtxt"` — T032, T033, T035 pass
 
@@ -126,6 +128,8 @@
 
 - [ ] T043 [P] Run full unit regression: `pytest tests/unit/ -q --timeout=30` — all 375 + new tests pass (SC-006)
 - [ ] T044 [P] Run SC-002 latency benchmark from `specs/044-bm25-index/quickstart.md`: build index over NCIT-scale data; assert `bm25_search` median < 50ms on 3-term query; document measured value in spec.md §Clarifications
+- [ ] T044b [P] Run NFR-002 benchmark: measure `bm25_build` wall-clock time on NCIT 200K nodes; assert < 5 minutes; document measured value in spec.md §Clarifications (SC-003)
+- [ ] T044c [P] Run NFR-003 benchmark: after `bm25_build` on NCIT data, check `^BM25Idx` global size via `$STORAGE` or container disk usage; assert < 500MB; document measured value in spec.md §Clarifications
 - [ ] T045 [P] Run SC-005 Community Edition check: confirm `BM25Index.cls` compiles and `bm25_search` returns results on `iris_vector_graph` (Community container, no iFind available) — verify no `%iFind.Index.*` calls in compiled .INT
 - [ ] T046 Bump version in `pyproject.toml` to `1.46.0`
 - [ ] T047 Update `README.md`: add BM25Index section under "What It Does" table and under Vector Search section, alongside VecIndex

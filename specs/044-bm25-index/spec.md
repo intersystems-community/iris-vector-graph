@@ -43,7 +43,7 @@ Write result, !  // {"indexed":204000,"avgdl":12.4,"vocab_size":87000}
 ```python
 # Python equivalent
 result = engine.bm25_build("ncit", text_props=["name", "definition"])
-# {"indexed": 204000, "avg_doc_length": 12.4, "vocab_size": 87000}
+# {"indexed": 204000, "avgdl": 12.4, "vocab_size": 87000}
 ```
 
 **Acceptance Scenarios**:
@@ -100,7 +100,7 @@ Set sc = ##class(Graph.KG.BM25Index).Drop("ncit")
 
 **Acceptance Scenarios**:
 1. After `Drop`, all `^BM25Idx("ncit", ...)` subscripts are killed.
-2. `Search` on a dropped index returns empty list with a clear warning.
+2. `Search` on a dropped index returns empty list; `logger.warning` is emitted with the index name (no exception raised).
 3. `Drop` on a non-existent index returns success (idempotent).
 
 ---
@@ -137,7 +137,7 @@ RETURN node, score ORDER BY score DESC
 | ID | Requirement |
 |----|-------------|
 | FR-001 | `Graph.KG.BM25Index.Build(name, propsList, k1, b)` MUST tokenize all `rdf_props.val` for the given property keys, build `^BM25Idx` globals, and return a JSON string `{"indexed":N,"avgdl":F,"vocab_size":N}` |
-| FR-002 | `Build` MUST store: `^BM25Idx(name,"cfg","N")`, `^BM25Idx(name,"cfg","avgdl")`, `^BM25Idx(name,"idf",term)`, `^BM25Idx(name,"tf",docId,term)`, `^BM25Idx(name,"len",docId)` |
+| FR-002 | `Build` MUST store: `^BM25Idx(name,"cfg","N")`, `^BM25Idx(name,"cfg","avgdl")`, `^BM25Idx(name,"idf",term)`, `^BM25Idx(name,"tf",term,docId)`, `^BM25Idx(name,"len",docId)` — note tf is term-first (consistent with FR-007 and Key Entities) |
 | FR-003 | BM25 scoring formula MUST be: `score = Σ IDF(t) * TF(t,d) * (k1+1) / (TF(t,d) + k1*(1-b+b*dl/avgdl))` with defaults `k1=1.5, b=0.75` |
 | FR-004 | IDF MUST be: `log((N - df + 0.5) / (df + 0.5) + 1)` (smoothed Robertson IDF) |
 | FR-005 | Tokenizer MUST split on whitespace and punctuation; MUST normalize to lowercase; MUST use `%iFind.Utils.Analyze` if available, otherwise simple split |
