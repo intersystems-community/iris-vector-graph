@@ -1,185 +1,136 @@
-# IRIS Vector Graph Quickstart Guide
+# IRIS Vector Graph Quickstart
 
 ## Prerequisites
 
-- **Docker** and **Docker Compose**
-- **Python 3.8+** with pip or uv
-- **Git** for version control
+- Docker + Docker Compose
+- Python 3.10+
 
-## Quick Start (Community Edition)
+---
 
-1. **Clone and Setup**
+## 1. Start the IRIS container
+
 ```bash
-git clone <repository-url>
+git clone https://github.com/intersystems-community/iris-vector-graph
 cd iris-vector-graph
-cp .env.sample .env
-# Edit .env with your IRIS connection details
+docker compose up -d
 ```
 
-2. **Start IRIS Database**
-```bash
-# Start IRIS Community Edition
-docker-compose up -d
+The container `iris-vector-graph-iris-1` starts on port 1972 (mapped dynamically by docker-compose).
 
-# Wait for IRIS to be ready
-docker-compose logs -f iris_db
-```
+---
 
-3. **Setup Python Environment**
-```bash
-# Using uv (recommended)
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
-
-# Or using pip
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-4. **Initialize Database Schema**
-```bash
-# Run schema setup
-python scripts/setup_schema.py
-```
-
-5. **Load Sample Data**
-```bash
-# Load biomedical sample data
-python scripts/sample_data.py
-```
-
-## Production Setup (ACORN-1)
-
-1. **Setup ACORN-1 Environment**
-```bash
-# Requires iris.key license file in project root
-cp docker-compose.acorn.yml docker-compose.yml
-docker-compose up -d
-```
-
-2. **Run Performance Tests**
-```bash
-# Test vector search performance
-python scripts/performance/test_vector_performance.py
-
-# Test full system performance
-python scripts/performance/benchmark_suite.py
-```
-
-## Environment Management
+## 2. Install the package
 
 ```bash
-# Start environment
-docker-compose up -d
-
-# Stop environment (keep data)
-docker-compose down
-
-# Stop and remove all data
-docker-compose down -v
-
-# View logs
-docker-compose logs -f
+pip install iris-vector-graph              # core only
+pip install iris-vector-graph[full]        # + FastAPI/GraphQL
+pip install iris-vector-graph[plaid]       # + numpy/sklearn for PLAID
 ```
 
-## API Endpoints
+---
 
-### Vector Search
+## 3. Connect and initialize
+
+```python
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
+
+conn = iris.connect(hostname="localhost", port=1972, namespace="USER",
+                    username="_SYSTEM", password="SYS")
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+engine.initialize_schema()   # idempotent — installs SQL schema + ObjectScript classes
+```
+
+---
+
+## 4. Load data
+
+```python
+engine.create_node("gene:BRCA1", labels=["Gene"], properties={"name": "BRCA1"})
+engine.create_node("drug:Olaparib", labels=["Drug"], properties={"name": "Olaparib"})
+engine.create_edge("gene:BRCA1", "TARGETS", "drug:Olaparib")
+
+# OBO ontology (e.g. NCI Thesaurus)
+engine.load_obo("path/to/Thesaurus.obo")
+```
+
+---
+
+## 5. Query
+
+### Cypher
+
+```python
+result = engine.execute_cypher(
+    "MATCH (g:Gene)-[:TARGETS]->(d:Drug) RETURN g.id, d.id LIMIT 10"
+)
+print(result["rows"])
+```
+
+### BM25 lexical search
+
+```python
+engine.bm25_build("ncit", text_props=["name", "definition"])
+hits = engine.bm25_search("ncit", "ankylosing spondylitis HLA-B27", k=10)
+# [("NCIT:C34718", 8.4), ...]
+```
+
+### Vector search
+
+```python
+engine.vec_create_index("genes", dim=384, metric="cosine")
+engine.vec_insert("genes", "gene:BRCA1", embedding_vector)
+engine.vec_build("genes")
+hits = engine.vec_search("genes", query_vector, k=5)
+```
+
+### `ivg` Cypher procedures
+
+```python
+# BM25 in Cypher
+engine.execute_cypher(
+    "CALL ivg.bm25.search('ncit', $q, 5) YIELD node, score RETURN node, score",
+    {"q": "diabetes"}
+)
+
+# Personalized PageRank
+engine.execute_cypher(
+    "CALL ivg.ppr(['gene:BRCA1'], 0.85, 20) YIELD node, score RETURN node, score"
+)
+```
+
+---
+
+## 6. Run tests
+
 ```bash
-POST http://localhost:52773/kg/vectorSearch
-{
-  "vector": [0.1, 0.2, ...], // 768 dimensions
-  "k": 10
-}
+pytest tests/unit/ -q
 ```
 
-### Text Search
-```bash
-GET http://localhost:52773/kg/search?q=cancer&n=5
-```
+E2E tests require the container to be running. They attach to `iris-vector-graph-main` via `IRISContainer.attach()`.
 
-### Graph Traversal
-```bash
-POST http://localhost:52773/kg/metaPath
-{
-  "startNode": "protein_1",
-  "path": ["interacts_with", "participates_in"]
-}
-```
+---
 
-## Performance Benchmarks
-
-| Operation | Community Edition | ACORN-1 | Improvement |
-|-----------|------------------|---------|-------------|
-| Data Ingestion | 29 proteins/sec | 476 proteins/sec | **21.7x** |
-| Graph Query | 1.2ms avg | 0.25ms avg | **4.8x** |
-| Index Build | 120s | 0.054s | **2,278x** |
-
-## Directory Structure
+## Directory structure
 
 ```
 iris-vector-graph/
-├── iris_src/src/          # IRIS ObjectScript classes
-├── scripts/
-│   ├── setup/         # Environment setup
-│   ├── performance/   # Performance testing
-│   └── testing/       # Test scripts
-├── docs/
-│   ├── architecture/  # System architecture
-│   ├── setup/         # Setup guides
-│   └── performance/   # Performance analysis
-└── docker-compose.*   # Docker configurations
+├── iris_src/src/Graph/KG/    # ObjectScript classes
+├── iris_vector_graph/         # Python package
+│   ├── engine.py              # IRISGraphEngine (all Python wrappers)
+│   ├── operators.py           # IRISGraphOperators (kg_TXT, PPR, etc.)
+│   ├── cypher/                # Cypher parser + translator
+│   └── embedded.py            # EmbeddedConnection for in-IRIS Python
+├── tests/unit/                # All tests (unit + E2E)
+├── specs/                     # Feature specifications
+└── docs/                      # Documentation
 ```
 
-## Troubleshooting
+---
 
-### Connection Issues
-```bash
-# Check IRIS status
-docker ps
-docker logs iris_test_graph_ai
+## Further reading
 
-# Test Python connectivity
-python -c "import iris; print('IRIS module available')"
-
-# Test database connection
-python -c "
-import iris
-conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
-print('✅ IRIS connection successful')
-conn.close()
-"
-```
-
-### Performance Issues
-```bash
-# Run performance diagnostics
-python scripts/performance/test_vector_performance.py
-
-# Check resource usage
-docker stats iris_test_graph_ai
-
-# Test iris_vector_graph functionality
-python -c "
-from iris_vector_graph.engine import IRISGraphEngine
-import iris
-conn = iris.connect('localhost', 1973, 'USER', '_SYSTEM', 'SYS')
-engine = IRISGraphEngine(conn)
-print('✅ iris_vector_graph working')
-conn.close()
-"
-```
-
-### License Issues (ACORN-1)
-- Ensure `iris.key` is in project root
-- Verify ACORN-1 features in license
-- Check IRIS logs for licensing errors
-
-## Next Steps
-
-1. **Explore Architecture**: Read `docs/architecture/ARCHITECTURE.md`
-2. **Performance Analysis**: Review `docs/performance/`
-3. **API Documentation**: See REST endpoint details
-4. **Custom Data**: Modify data loading scripts for your domain
+- [Python SDK Reference](../python/PYTHON_SDK.md)
+- [Architecture](../architecture/ARCHITECTURE.md)
+- [Schema Reference](../architecture/ACTUAL_SCHEMA.md)
+- [Testing Policy](../TESTING_POLICY.md)
