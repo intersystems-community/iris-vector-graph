@@ -193,3 +193,9 @@ def _log(method: str, path: str, status: int, duration_ms: int, trace_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+try:
+    from a2wsgi import ASGIMiddleware as _ASGIMiddleware
+    wsgi_app = _ASGIMiddleware(app)
+except ImportError:
+    wsgi_app = None
