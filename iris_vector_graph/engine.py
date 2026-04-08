@@ -601,7 +601,14 @@ class IRISGraphEngine:
             return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
 
         if min_hops > 1:
-            bfs_results = [r for r in bfs_results if r.get("step", 1) >= min_hops]
+            min_step_per_node: dict = {}
+            for r in bfs_results:
+                oid = r.get("o")
+                if oid:
+                    s = r.get("step", 1)
+                    if oid not in min_step_per_node or s < min_step_per_node[oid]:
+                        min_step_per_node[oid] = s
+            bfs_results = [r for r in bfs_results if min_step_per_node.get(r.get("o"), 0) >= min_hops]
 
         seen = set()
         target_ids = []
@@ -616,8 +623,9 @@ class IRISGraphEngine:
 
         nodes = self.get_nodes(target_ids)
         rows = []
-        for node_id, data in nodes.items():
-            rows.append((node_id, data.get("labels", []), {k: v for k, v in data.items() if k not in ("labels",)}))
+        for data in nodes:
+            node_id = data.get("id", "")
+            rows.append((node_id, data.get("labels", []), {k: v for k, v in data.items() if k not in ("labels", "id")}))
 
         return {
             "columns": ["b_id", "b_labels", "b_props"],

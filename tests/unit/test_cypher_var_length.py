@@ -91,8 +91,12 @@ class TestVarLengthE2E:
         iris_connection.commit()
 
     def _irispy(self):
-        import iris
-        return iris.createIRIS(self.conn)
+        try:
+            import iris
+            return iris.createIRIS(self.conn)
+        except TypeError:
+            import intersystems_iris
+            return intersystems_iris.createIRIS(self.conn)
 
     def test_var_length_returns_reachable_nodes(self):
         result = self.engine.execute_cypher(

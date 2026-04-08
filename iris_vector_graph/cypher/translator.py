@@ -1052,7 +1052,16 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
         else:
             context.join_clauses.append(f"JOIN {_table('nodes')} {target_alias} ON 1=1")
         return
-    source_alias = context.variable_aliases[source_node.variable]
+    if source_node.variable is None:
+        source_alias = context.next_alias("n")
+        joined = any(source_alias in fc for fc in context.from_clauses + context.join_clauses)
+        if not joined:
+            if not context.from_clauses:
+                context.from_clauses.append(f"{_table('nodes')} {source_alias}")
+            else:
+                context.join_clauses.append(f"JOIN {_table('nodes')} {source_alias} ON 1=1")
+    else:
+        source_alias = context.variable_aliases.get(source_node.variable)
     is_new_target = target_node.variable not in context.variable_aliases
     target_alias = context.register_variable(target_node.variable)
     edge_alias = context.register_variable(rel.variable, prefix="e") if rel.variable else context.next_alias("e")

@@ -130,10 +130,14 @@ class TestTemporalEdgeE2E:
         ])
         try:
             import iris
-            irispy = iris.createIRIS(self.conn)
+            try:
+                irispy = iris.createIRIS(self.conn)
+            except TypeError:
+                import intersystems_iris
+                irispy = intersystems_iris.createIRIS(self.conn)
             val = irispy.get("^KG", "out", f"{self.PREFIX}:BC", "COMPAT", f"{self.PREFIX}:BC2")
             assert val is not None
-        except (TypeError, ImportError):
+        except ImportError:
             pytest.skip("iris.createIRIS not available on this Python version")
 
 

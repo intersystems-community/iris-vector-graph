@@ -64,7 +64,14 @@ class Neo4jTxRequest(BaseModel):
     statements: list[Neo4jStatement]
 
 
+_engine_cache: IRISGraphEngine | None = None
+
+
 def _get_engine() -> IRISGraphEngine:
+    global _engine_cache
+    if _engine_cache is not None:
+        return _engine_cache
+
     host = os.environ.get("IRIS_HOST")
     if host:
         port = int(os.environ.get("IRIS_PORT", "1972"))
@@ -73,10 +80,12 @@ def _get_engine() -> IRISGraphEngine:
         password = os.environ.get("IRIS_PASSWORD", "SYS")
         conn = iris.connect(hostname=host, port=port, namespace=namespace,
                             username=username, password=password)
-        return IRISGraphEngine(conn)
+        _engine_cache = IRISGraphEngine(conn)
+        return _engine_cache
     if _EMBEDDED:
         from iris_vector_graph.embedded import EmbeddedConnection
-        return IRISGraphEngine(EmbeddedConnection())
+        _engine_cache = IRISGraphEngine(EmbeddedConnection())
+        return _engine_cache
     raise RuntimeError("IRIS_HOST not set and embedded iris not available")
 
 

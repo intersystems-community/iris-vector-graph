@@ -132,3 +132,22 @@ def test_inline_property_filter_on_relationship_source():
 
     assert "Open" in params, \
         f"Inline property filter on relationship source was dropped — literal not in params: {params}"
+
+
+def test_anonymous_source_node_pattern():
+    """MATCH ()-[r]->() must not raise KeyError for anonymous source node."""
+    sql = translate_to_sql(parse_query("MATCH ()-[r]->() RETURN count(r) AS c"))
+    assert "rdf_edges" in sql.sql
+    assert "COUNT" in sql.sql.upper()
+
+
+def test_anonymous_target_node_pattern():
+    """MATCH (a:Gene)-[]->() must not raise KeyError for anonymous target."""
+    sql = translate_to_sql(parse_query("MATCH (a:Gene)-[]->() RETURN a.id LIMIT 3"))
+    assert "rdf_edges" in sql.sql
+
+
+def test_anonymous_both_nodes_pattern():
+    """MATCH ()-[r]->(b) works without crashing."""
+    sql = translate_to_sql(parse_query("MATCH ()-[r]->(b) RETURN b.id LIMIT 3"))
+    assert "rdf_edges" in sql.sql
