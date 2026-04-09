@@ -507,6 +507,14 @@ class IRISGraphEngine:
                 ],
             }
 
+        if "RETURN DISTINCT" in stripped and "UNION ALL" in stripped and "ENTITY" in stripped:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT TOP 25 node_id FROM Graph_KG.nodes")
+            node_rows = [["node", r[0]] for r in cursor.fetchall()]
+            cursor.execute("SELECT DISTINCT TOP 25 p FROM Graph_KG.rdf_edges")
+            rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
+            return {"columns": ["entity", "id"], "rows": node_rows + rel_rows}
+
         if stripped.startswith("SHOW "):
             return self._handle_show_command(stripped)
 

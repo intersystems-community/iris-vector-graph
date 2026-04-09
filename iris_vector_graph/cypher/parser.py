@@ -361,10 +361,16 @@ class Parser:
         while self.peek().kind not in (TokenType.EOF, TokenType.UNION, TokenType.RETURN):
             parts.append(self.parse_query_part())
         ret = None
+        skip_val = None
+        limit_val = None
         if self.peek().kind == TokenType.RETURN:
             ret = self.parse_return_clause()
+            skip_val = self.parse_skip()
+            limit_val = self.parse_limit()
         q = ast.CypherQuery(query_parts=parts, return_clause=ret)
         q.union_queries = []
+        q.skip = skip_val
+        q.limit = limit_val
         return q
 
     def parse_updating_clause(self) -> ast.UpdatingClause:
