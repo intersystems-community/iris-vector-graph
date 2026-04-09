@@ -472,17 +472,18 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
         raise ValueError(f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}")
 
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "kg_BM25"
+    safe_idx = idx_name.replace("'", "''")
+    safe_query = str(query).replace("'", "''")
     cte_sql = (
         f"SELECT j.node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {bm25_fn}(?, ?, ?),\n"
+        f"  {bm25_fn}('{safe_idx}', '{safe_query}', {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([idx_name, query, k_int])
     context.stages.insert(0, f"BM25 AS (\n{cte_sql}\n)")
 
     for item in proc.yield_items:
