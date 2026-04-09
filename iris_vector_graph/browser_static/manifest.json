@@ -1,0 +1,22 @@
+{
+  "name": "Neo4j Browser",
+  "short_name": "Neo4j Browser",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#fff",
+  "icons": [
+    {
+      "src": "./assets/images/device-icons/neo4j-browser.svg",
+      "type": "svg"
+    }
+  ],
+  "description": "Neo4j Browser is the general purpose user interface for working with Neo4j. Query, visualize, administer and monitor the database.",
+  "homepage": "https://neo4j.com/developer/guide-neo4j-browser/",
+  "neo4jDesktop": {
+    "apiVersion": "^1.4.0"
+  },
+  "version": "5.26.2",
+  "builtAt": "2025-01-20T14:37:32.326Z",
+  "buildNumber": "185",
+  "gitHash": "bb66f50dd51ff082fd7bdf38316950ca26875b74"
+}

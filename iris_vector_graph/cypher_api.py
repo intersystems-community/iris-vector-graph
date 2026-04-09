@@ -10,7 +10,9 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
 from pydantic import BaseModel, Field
 
 try:
@@ -33,6 +35,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_BROWSER_DIR = Path(__file__).parent / "browser_static"
+if _BROWSER_DIR.exists():
+    app.mount("/browser", StaticFiles(directory=str(_BROWSER_DIR), html=True), name="browser")
+
+
+@app.get("/browser")
+def browser_redirect():
+    return RedirectResponse("/browser/")
 
 
 @app.middleware("http")
