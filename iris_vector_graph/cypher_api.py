@@ -76,7 +76,7 @@ async def api_key_middleware(request: Request, call_next):
     if path.startswith("/api/") or path.startswith("/db/"):
         expected = os.environ.get("IVG_API_KEY", "")
         provided = request.headers.get("X-API-Key", "")
-        if not expected or provided != expected:
+        if expected and provided != expected:
             return JSONResponse(
                 status_code=401,
                 content={"error": "unauthorized", "message": "X-API-Key required"},

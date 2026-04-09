@@ -481,55 +481,6 @@ class BoltSession:
         })
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
-        stripped = query.strip().lower()
-
-        if "db.schema.visualization" in stripped:
-            try:
-                engine = self._get_engine()
-                schema = engine.get_schema_visualization()
-                nodes = schema.get("nodes", [])
-                rels = schema.get("relationships", [])
-                bolt_nodes = [
-                    pack_node(str(n["id"]), n.get("labels", []), {
-                        "name": n.get("name", ""),
-                        "properties": [p["name"] for p in n.get("properties", [])],
-                    })
-                    for n in nodes
-                ]
-                bolt_rels = [
-                    pack_relationship(
-                        r["id"], r["startNode"], r["endNode"],
-                        r["type"], {"name": r.get("name", "")},
-                    )
-                    for r in rels
-                ]
-                self._pending_columns = ["nodes", "relationships"]
-                self._pending_result = [[bolt_nodes, bolt_rels]]
-                self._pending_col_types = ["scalar", "scalar"]
-                self.state = BoltState.STREAMING
-                await self._send_message(TAG_SUCCESS, {
-                    "fields": ["nodes", "relationships"], "qid": 0, "t_first": 0,
-                })
-                return
-            except Exception as e:
-                log.debug("schema.visualization failed: %s", e)
-                self._pending_columns = ["nodes", "relationships"]
-                self._pending_result = [[[], []]]
-                self._pending_col_types = ["scalar", "scalar"]
-                self.state = BoltState.STREAMING
-                await self._send_message(TAG_SUCCESS, {
-                    "fields": ["nodes", "relationships"], "qid": 0, "t_first": 0,
-                })
-                return
-
-        if "dbms.components" in stripped or "dbms.cluster" in stripped:
-            self._pending_columns = ["output"]
-            self._pending_result = []
-            self._pending_col_types = ["scalar"]
-            self.state = BoltState.STREAMING
-            await self._send_message(TAG_SUCCESS, {"fields": ["output"], "qid": 0, "t_first": 0})
-            return
-
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})

@@ -494,6 +494,11 @@ class IRISGraphEngine:
         """
         parsed = parse_query(cypher_query)
 
+        if parsed.procedure_call is not None:
+            result = self._try_system_procedure(parsed.procedure_call)
+            if result is not None:
+                return result
+
         # Mode 2 guard: if CALL uses a string query_input, verify EMBEDDING() is available
         if parsed.procedure_call is not None:
             proc = parsed.procedure_call
@@ -634,6 +639,91 @@ class IRISGraphEngine:
             "params": [],
             "metadata": sql_query.query_metadata,
         }
+
+    def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
+        name = proc.procedure_name.lower()
+
+        if name == "db.labels":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+            labels = [row[0] for row in cursor.fetchall()]
+            return {"columns": ["label"], "rows": [[l] for l in labels]}
+
+        if name == "db.relationshiptypes":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+            types = [row[0] for row in cursor.fetchall()]
+            return {"columns": ["relationshipType"], "rows": [[t] for t in types]}
+
+        if name == "db.schema.visualization":
+            schema = self.get_schema_visualization()
+            nodes = schema.get("nodes", [])
+            rels = schema.get("relationships", [])
+            return {"columns": ["nodes", "relationships"], "rows": [[nodes, rels]]}
+
+        if name == "db.schema.nodetypeproperties":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+            labels = [row[0] for row in cursor.fetchall()]
+            rows = []
+            for label in labels:
+                cursor.execute(
+                    "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                    [label],
+                )
+                sample = cursor.fetchone()
+                if sample:
+                    cursor.execute(
+                        "SELECT DISTINCT TOP 20 \"key\" FROM Graph_KG.rdf_props "
+                        "WHERE s = ? ORDER BY \"key\"",
+                        [sample[0]],
+                    )
+                    for (prop_name,) in cursor.fetchall():
+                        rows.append([
+                            f":`{label}`", [label], prop_name, ["String"], False,
+                        ])
+            return {
+                "columns": ["nodeType", "nodeLabels", "propertyName", "propertyTypes", "mandatory"],
+                "rows": rows,
+            }
+
+        if name == "db.schema.reltypeproperties":
+            return {
+                "columns": ["relType", "propertyName", "propertyTypes", "mandatory"],
+                "rows": [],
+            }
+
+        if name == "dbms.components":
+            return {
+                "columns": ["name", "versions", "edition"],
+                "rows": [["iris-vector-graph", ["1.47.0"], "community"]],
+            }
+
+        if name == "dbms.procedures":
+            procs = [
+                ["db.labels", "Returns all labels", "READ", True],
+                ["db.relationshipTypes", "Returns all relationship types", "READ", True],
+                ["db.schema.visualization", "Returns graph schema visualization", "READ", True],
+                ["db.schema.nodeTypeProperties", "Returns node type properties", "READ", True],
+                ["db.schema.relTypeProperties", "Returns rel type properties", "READ", True],
+                ["dbms.components", "Returns server components", "DBMS", True],
+                ["ivg.vector.search", "Vector similarity search", "READ", True],
+                ["ivg.bm25.search", "BM25 lexical search", "READ", True],
+                ["ivg.ppr", "Personalized PageRank", "READ", True],
+                ["ivg.neighbors", "1-hop neighborhood", "READ", True],
+            ]
+            return {
+                "columns": ["name", "description", "mode", "worksOnSystem"],
+                "rows": procs,
+            }
+
+        if name.startswith("apoc."):
+            return {"columns": ["value"], "rows": []}
+
+        if name.startswith("dbms.") or name.startswith("db."):
+            return {"columns": ["value"], "rows": []}
+
+        return None
 
     def get_schema_visualization(self) -> dict:
         cursor = self.conn.cursor()
