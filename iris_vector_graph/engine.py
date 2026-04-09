@@ -778,6 +778,35 @@ class IRISGraphEngine:
                                 "returnDescription", "category"],
                     "rows": []}
 
+        if name == "dbms.queryjmx":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            node_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            edge_count = cursor.fetchone()[0]
+            return {
+                "columns": ["name", "description", "attributes"],
+                "rows": [
+                    ["org.neo4j:instance=kernel#0,name=Store file sizes",
+                     "Information about the sizes of the different parts of the Neo4j graph store",
+                     {"TotalStoreSize": {"value": node_count * 200},
+                      "NodeStoreSize": {"value": node_count * 100},
+                      "RelationshipStoreSize": {"value": edge_count * 100},
+                      "PropertyStoreSize": {"value": node_count * 50},
+                      "StringStoreSize": {"value": node_count * 30},
+                      "ArrayStoreSize": {"value": 0}}],
+                    ["org.neo4j:instance=kernel#0,name=Primitive count",
+                     "Estimates of the numbers of different kinds of graph primitives",
+                     {"NumberOfNodeIdsInUse": {"value": node_count},
+                      "NumberOfRelationshipIdsInUse": {"value": edge_count},
+                      "NumberOfPropertyIdsInUse": {"value": node_count * 3},
+                      "NumberOfRelationshipTypeIdsInUse": {"value": 10}}],
+                    ["org.neo4j:instance=kernel#0,name=Configuration",
+                     "Neo4j configuration",
+                     {}],
+                ],
+            }
+
         if name.startswith("apoc."):
             return {"columns": ["value"], "rows": []}
 
