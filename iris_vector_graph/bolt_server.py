@@ -513,7 +513,7 @@ class BoltSession:
         })
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
-        print(f"[BOLT-WS] RUN query={repr(query)[:500]}")
+        print(f"[BOLT-WS] RUN query={query[:500]}")
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})
@@ -537,7 +537,6 @@ class BoltSession:
                 "fields": bolt_fields,
                 "qid": 0,
                 "t_first": 1,
-                "db": "neo4j",
             })
             print(f"[BOLT-WS] RUN SUCCESS sent, fields={bolt_fields}")
         except Exception as e:
