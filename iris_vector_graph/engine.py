@@ -514,6 +514,21 @@ class IRISGraphEngine:
             rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
             return {"columns": ["entity", "id"], "rows": node_rows + rel_rows}
 
+        if ";" in cypher_query and "CALL " in cypher_query.upper():
+            parts = [p.strip() for p in cypher_query.split(";") if p.strip()]
+            if len(parts) > 1:
+                all_rows = []
+                all_cols = None
+                for part in parts:
+                    try:
+                        sub = self.execute_cypher(part, parameters=parameters)
+                        if all_cols is None:
+                            all_cols = sub.get("columns", [])
+                        all_rows.extend(sub.get("rows", []))
+                    except Exception:
+                        pass
+                return {"columns": all_cols or ["result"], "rows": all_rows}
+
         if stripped.startswith("EXPLAIN "):
             return {"columns": ["Plan"], "rows": [["No execution plan available (IRIS backend)"]]}
 
