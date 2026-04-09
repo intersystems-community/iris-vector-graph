@@ -496,13 +496,15 @@ class IRISGraphEngine:
         if "CALL DB.LABELS() YIELD" in stripped and "UNION" in stripped:
             labels = self._try_system_procedure(type("P", (), {"procedure_name": "db.labels"})()).get("rows", [])
             rels = self._try_system_procedure(type("P", (), {"procedure_name": "db.relationshipTypes"})()).get("rows", [])
-            props = self._try_system_procedure(type("P", (), {"procedure_name": "db.schema.nodeTypeProperties"})()).get("rows", [])
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT TOP 1000 \"key\" FROM Graph_KG.rdf_props ORDER BY \"key\"")
+            prop_keys = [r[0] for r in cursor.fetchall()]
             return {
                 "columns": ["result"],
                 "rows": [
                     [{"name": "labels", "data": [r[0] for r in labels]}],
                     [{"name": "relationshipTypes", "data": [r[0] for r in rels]}],
-                    [{"name": "propertyKeys", "data": list({r[2] for r in props})}],
+                    [{"name": "propertyKeys", "data": prop_keys}],
                 ],
             }
 
@@ -513,6 +515,20 @@ class IRISGraphEngine:
             cursor.execute("SELECT DISTINCT TOP 25 p FROM Graph_KG.rdf_edges")
             rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
             return {"columns": ["entity", "id"], "rows": node_rows + rel_rows}
+
+        if "MATCH ()" in stripped and "COUNT(*)" in stripped and "UNION ALL" in stripped:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            node_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            edge_count = cursor.fetchone()[0]
+            return {
+                "columns": ["result"],
+                "rows": [
+                    [{"name": "nodes", "data": node_count}],
+                    [{"name": "relationships", "data": edge_count}],
+                ],
+            }
 
         if ";" in cypher_query and "CALL " in cypher_query.upper():
             parts = [p.strip() for p in cypher_query.split(";") if p.strip()]
@@ -784,8 +800,21 @@ class IRISGraphEngine:
                 "rows": procs,
             }
 
+        if name == "db.propertykeys":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT TOP 1000 \"key\" FROM Graph_KG.rdf_props ORDER BY \"key\"")
+            keys = [row[0] for row in cursor.fetchall()]
+            return {"columns": ["propertyKey"], "rows": [[k] for k in keys]}
+
         if name == "dbms.clientconfig":
-            return {"columns": ["key", "value"], "rows": []}
+            return {"columns": ["key", "value"], "rows": [
+                ["browser.allow_outgoing_connections", "false"],
+                ["browser.credential_timeout", "0"],
+                ["browser.retain_connection_credentials", "true"],
+                ["browser.retain_editor_history", "true"],
+                ["browser.post_connect_cmd", ""],
+                ["dbms.security.auth_enabled", "false"],
+            ]}
 
         if name == "dbms.security.showcurrentuser":
             return {"columns": ["username", "roles", "flags"], "rows": [["neo4j", [], []]]}
