@@ -225,6 +225,7 @@ class TestBoltSessionHello:
         ws.send_bytes = AsyncMock()
         ws.accept = AsyncMock()
         ws.close = AsyncMock()
+        ws.scope = {"subprotocols": ["graphql-ws"]}
         return ws
 
     def test_hello_success_no_api_key(self, monkeypatch):

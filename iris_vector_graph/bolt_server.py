@@ -383,7 +383,9 @@ class BoltSession:
         return self._engine
 
     async def run(self) -> None:
-        await self.ws.accept()
+        requested = self.ws.scope.get("subprotocols", [])
+        subproto = "graphql-ws" if "graphql-ws" in requested else None
+        await self.ws.accept(subprotocol=subproto)
         print("[BOLT-WS] connection accepted")
         try:
             chosen = await self._do_handshake()
@@ -413,11 +415,12 @@ class BoltSession:
     async def _do_handshake(self) -> int:
         print("[BOLT-WS] waiting for handshake bytes...")
         data = await self.ws.receive_bytes()
-        print(f"[BOLT-WS] handshake received: {len(data)} bytes, magic={data[:4].hex() if len(data)>=4 else 'short'}")
+        print(f"[BOLT-WS] handshake received: {len(data)} bytes, magic={data[:4].hex() if len(data)>=4 else 'short'}, proposals={data[4:20].hex() if len(data)>=20 else 'short'}")
         if len(data) < 20 or data[:4] != BOLT_MAGIC:
             await self.ws.send_bytes(struct.pack('>I', 0))
             return 0
         chosen = negotiate_version(data[4:20])
+        print(f"[BOLT-WS] negotiated version: {hex(chosen)}")
         await self.ws.send_bytes(struct.pack('>I', chosen))
         return chosen
 
