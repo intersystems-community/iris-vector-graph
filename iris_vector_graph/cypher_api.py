@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import time
 import uuid
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -64,6 +65,12 @@ class CypherRequest(BaseModel):
     query: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     limitRows: int = 1000
+
+
+@app.websocket("/")
+@app.websocket("")
+async def bolt_rejection(ws: WebSocket):
+    await ws.close(code=1001, reason="Bolt not supported — use HTTP API at /db/neo4j/tx/commit")
 
 
 class Neo4jStatement(BaseModel):
