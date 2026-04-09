@@ -179,6 +179,11 @@ def neo4j_tx_commit(req: Neo4jTxRequest):
     return JSONResponse(status_code=status, content={"results": results, "errors": errors})
 
 
+class QueryV2Request(BaseModel):
+    statement: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
 @app.get("/db/neo4j")
 @app.get("/")
 def neo4j_discovery():
@@ -187,6 +192,8 @@ def neo4j_discovery():
         "bolt_direct": None,
         "neo4j_version": "5.0.0-compat",
         "neo4j_edition": "community",
+        "query": "/db/neo4j/query/v2",
+        "transaction": "/db/neo4j/tx",
         "db/cluster": None,
         "db/data": "/db/neo4j/tx/commit",
         "db/management": None,
@@ -196,6 +203,31 @@ def neo4j_discovery():
 @app.get("/db/neo4j/tx")
 def neo4j_tx_endpoint():
     return {"commit": "/db/neo4j/tx/commit"}
+
+
+@app.post("/db/{db_name}/query/v2")
+def neo4j_query_v2(db_name: str, req: QueryV2Request):
+    trace_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    try:
+        r = _run_cypher(req.statement, req.parameters)
+        duration = int((time.time() - t0) * 1000)
+        _log("POST", f"/db/{db_name}/query/v2", 200, duration, trace_id)
+        return {
+            "data": {
+                "fields": r["columns"],
+                "values": r["rows"],
+            },
+            "bookmarks": [],
+        }
+    except Exception as e:
+        duration = int((time.time() - t0) * 1000)
+        _log("POST", f"/db/{db_name}/query/v2", 400, duration, trace_id)
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "error": str(e),
+            "trace_id": trace_id,
+        })
 
 
 def _neo4j_meta(value: Any) -> dict | None:
