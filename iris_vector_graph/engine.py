@@ -2714,10 +2714,43 @@ class IRISGraphEngine:
         predicate: str = "",
         ts_start: int = 0,
         ts_end: int = 0,
+        source_prefix: str = "",
     ) -> list:
+        """Return pre-aggregated statistics per (source, predicate) pair over a time window.
+
+        Args:
+            predicate: Edge type to filter on. Empty string matches all predicates.
+            ts_start: Window start as Unix timestamp (inclusive).
+            ts_end: Window end as Unix timestamp (inclusive).
+            source_prefix: If non-empty, only include entries whose source node ID
+                starts with this prefix. Use for tenant-scoped queries. Default "".
+
+        Returns:
+            list[dict]: Each dict has keys:
+                source    (str)   — source node ID
+                predicate (str)   — edge type
+                count     (int)   — number of edges in window
+                sum       (float) — total weight across all edges
+                avg       (float) — mean weight (None if count == 0)
+                min       (float) — minimum weight (None if no edges)
+                max       (float) — maximum weight (None if no edges)
+        """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "GetBucketGroups",
-            predicate, ts_start, ts_end)
+            predicate, ts_start, ts_end, source_prefix)
+        return json.loads(str(result))
+
+    def get_bucket_group_targets(
+        self,
+        source: str,
+        predicate: str,
+        ts_start: int,
+        ts_end: int,
+    ) -> list[str]:
+        """Return distinct target node IDs for a source+predicate over a time window."""
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetBucketGroupTargets",
+            source, predicate, ts_start, ts_end)
         return json.loads(str(result))
 
     def get_distinct_count(

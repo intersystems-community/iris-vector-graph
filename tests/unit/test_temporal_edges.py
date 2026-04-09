@@ -208,6 +208,47 @@ class TestTemporalPreAggUnit:
         assert result[0]["source"] == "svc:auth"
         assert result[0]["count"] == 10
 
+    # ── ENH-1: sourcePrefix unit tests ──────────────────────────────
+    def test_get_bucket_groups_passes_source_prefix(self):
+        """source_prefix kwarg is forwarded as 4th positional arg."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = '[]'
+        engine.get_bucket_groups("COST_ON", 0, 9999, source_prefix="QG:Acme:")
+        args = mock.classMethodValue.call_args[0]
+        assert args[-1] == "QG:Acme:"
+
+    def test_get_bucket_groups_default_prefix_is_empty(self):
+        """Omitting source_prefix passes empty string (backward compat)."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = '[]'
+        engine.get_bucket_groups("COST_ON", 0, 9999)
+        args = mock.classMethodValue.call_args[0]
+        assert args[-1] == ""
+
+    # ── ENH-2: GetBucketGroupTargets unit tests ──────────────────────
+    def test_get_bucket_group_targets_returns_list(self):
+        """get_bucket_group_targets parses JSON array of strings."""
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = '["QG:A:P:g1","QG:A:P:g2"]'
+        result = engine.get_bucket_group_targets("Rtn:A:P:proc", "CALLED_BY", 0, 9999)
+        assert isinstance(result, list)
+        assert set(result) == {"QG:A:P:g1", "QG:A:P:g2"}
+
+    def test_get_bucket_group_targets_empty(self):
+        engine, mock = self._make_engine()
+        mock.classMethodValue.return_value = '[]'
+        result = engine.get_bucket_group_targets("Rtn:A:P:proc", "CALLED_BY", 0, 9999)
+        assert result == []
+
+    # ── ENH-3: docstring test ────────────────────────────────────────
+    def test_get_bucket_groups_docstring(self):
+        """get_bucket_groups has a docstring documenting all return keys."""
+        from iris_vector_graph.engine import IRISGraphEngine
+        doc = IRISGraphEngine.get_bucket_groups.__doc__
+        assert doc is not None
+        for key in ("source", "predicate", "count", "sum", "avg", "min", "max"):
+            assert key in doc, f"missing key '{key}' in docstring"
+
     def test_get_distinct_count_calls_classmethod_returns_int(self):
         """get_distinct_count must call GetDistinctCount and return an int."""
         engine, mock = self._make_engine()
@@ -400,6 +441,80 @@ class TestTemporalAPIGapsE2E:
         count = self.engine.get_temporal_aggregate(
             f"{self.PREFIX}:dup", "COST_ON", "count", now - 10, now + 10)
         assert count == 3
+
+    # ── ENH-1: sourcePrefix filter on GetBucketGroups ──────────────────
+    def test_bucket_groups_source_prefix_filters(self):
+        """get_bucket_groups(source_prefix=...) returns only matching sources."""
+        now = int(time.time())
+        for tenant in ["AcmeCorp", "OtherCo"]:
+            edges = [
+                {"s": f"Routine:{tenant}:PROD:r{i}", "p": "CALLED_BY",
+                 "o": f"QueryGroup:{tenant}:PROD:g1", "ts": now + i, "w": 1.0}
+                for i in range(3)
+            ]
+            self.engine.bulk_create_edges_temporal(edges)
+        filtered = self.engine.get_bucket_groups(
+            "CALLED_BY", now - 10, now + 100, source_prefix="Routine:AcmeCorp:")
+        sources = {g["source"] for g in filtered}
+        assert all(s.startswith("Routine:AcmeCorp:") for s in sources), sources
+        assert not any(s.startswith("Routine:OtherCo:") for s in sources), sources
+
+    def test_bucket_groups_empty_prefix_returns_all(self):
+        """Empty source_prefix preserves backward-compat (all sources returned)."""
+        now = int(time.time())
+        for tenant in ["TenA", "TenB"]:
+            self.engine.bulk_create_edges_temporal([
+                {"s": f"Rtn:{tenant}:x", "p": "CALLED_BY",
+                 "o": f"QG:{tenant}:g", "ts": now, "w": 1.0}
+            ])
+        all_groups = self.engine.get_bucket_groups("CALLED_BY", now - 10, now + 10)
+        sources = {g["source"] for g in all_groups}
+        assert any("TenA" in s for s in sources)
+        assert any("TenB" in s for s in sources)
+
+    # ── ENH-2: GetBucketGroupTargets ──────────────────────────────────
+    def test_bucket_group_targets_returns_correct_targets(self):
+        """get_bucket_group_targets returns distinct targets for a source."""
+        now = int(time.time())
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:ProcessHL7", "p": "CALLED_BY",
+             "o": f"{self.PREFIX}:G1", "ts": now, "w": 1.0},
+            {"s": f"{self.PREFIX}:ProcessHL7", "p": "CALLED_BY",
+             "o": f"{self.PREFIX}:G2", "ts": now + 1, "w": 2.0},
+            {"s": f"{self.PREFIX}:OtherRtn", "p": "CALLED_BY",
+             "o": f"{self.PREFIX}:G3", "ts": now + 2, "w": 1.0},
+        ])
+        targets = self.engine.get_bucket_group_targets(
+            f"{self.PREFIX}:ProcessHL7", "CALLED_BY", now - 10, now + 100)
+        assert isinstance(targets, list)
+        assert set(targets) == {f"{self.PREFIX}:G1", f"{self.PREFIX}:G2"}
+
+    def test_bucket_group_targets_deduplicates_across_buckets(self):
+        """Targets appearing in multiple buckets are returned only once."""
+        bucket_sec = 300
+        now = int(time.time())
+        t1 = now - (now % bucket_sec) - bucket_sec
+        t2 = t1 + bucket_sec
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:dup", "p": "CALLED_BY",
+             "o": f"{self.PREFIX}:same_target", "ts": t1, "w": 1.0},
+            {"s": f"{self.PREFIX}:dup", "p": "CALLED_BY",
+             "o": f"{self.PREFIX}:same_target", "ts": t2, "w": 2.0},
+        ])
+        targets = self.engine.get_bucket_group_targets(
+            f"{self.PREFIX}:dup", "CALLED_BY", t1 - 10, t2 + 100)
+        assert targets.count(f"{self.PREFIX}:same_target") == 1
+
+    def test_bucket_group_targets_empty_when_outside_window(self):
+        """No targets returned when edges are outside the time window."""
+        now = int(time.time())
+        self.engine.bulk_create_edges_temporal([
+            {"s": f"{self.PREFIX}:ow", "p": "CALLED_BY",
+             "o": f"{self.PREFIX}:t1", "ts": now + 10000, "w": 1.0},
+        ])
+        targets = self.engine.get_bucket_group_targets(
+            f"{self.PREFIX}:ow", "CALLED_BY", now - 100, now + 100)
+        assert targets == []
 
     def test_purge_before_removes_old_edges(self):
         now = int(time.time())

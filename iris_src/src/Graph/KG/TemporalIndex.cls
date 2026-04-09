@@ -312,12 +312,13 @@ ClassMethod GetAggregate(source As %String, predicate As %String, metric As %Str
 	Return ""
 }
 
-ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As %Integer, sourcePrefix As %String = "") As %String
 {
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set startBucket = tsStart \ ..#BUCKET
 	Set endBucket = tsEnd \ ..#BUCKET
+	Set prefixLen = $Length(sourcePrefix)
 	Kill totals
 	Set b = startBucket - 1
 	For {
@@ -327,6 +328,7 @@ ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As 
 		For {
 			Set src = $Order(^KG("tagg", b, src))
 			Quit:(src = "")
+			If prefixLen > 0 && ($Extract(src, 1, prefixLen) '= sourcePrefix) { Continue }
 			Set p = ""
 			For {
 				Set p = $Order(^KG("tagg", b, src, p))
@@ -362,6 +364,42 @@ ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As 
 			Set first = 0
 			Set result = result _ "{""source"":""" _ src _ """,""predicate"":""" _ p _ """,""count"":" _ cnt _ ",""sum"":" _ sm _ ",""avg"":" _ avg _ ",""min"":" _ mn _ ",""max"":" _ mx _ "}"
 		}
+	}
+	Return result _ "]"
+}
+
+ClassMethod GetBucketGroupTargets(source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+{
+	Set tsStart = +tsStart
+	Set tsEnd = +tsEnd
+	Set ts = tsStart - 1
+	Kill dedup
+	For {
+		Set ts = $Order(^KG("tout", ts))
+		Quit:(ts = "")
+		If ts > tsEnd Quit
+		If $Data(^KG("tout", ts, source)) {
+			Set p = ""
+			For {
+				Set p = $Order(^KG("tout", ts, source, p))
+				Quit:(p = "")
+				If predicate '= "" && (p '= predicate) { Continue }
+				Set o = ""
+				For {
+					Set o = $Order(^KG("tout", ts, source, p, o))
+					Quit:(o = "")
+					Set dedup(o) = 1
+				}
+			}
+		}
+	}
+	Set result = "[", first = 1, tgt = ""
+	For {
+		Set tgt = $Order(dedup(tgt))
+		Quit:(tgt = "")
+		If 'first { Set result = result _ "," }
+		Set first = 0
+		Set result = result _ """" _ tgt _ """"
 	}
 	Return result _ "]"
 }
