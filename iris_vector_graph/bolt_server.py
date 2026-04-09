@@ -510,6 +510,7 @@ class BoltSession:
             "server": "iris-vector-graph/1.47.0",
             "connection_id": conn_id,
             "hints": {"connection.recv_timeout_seconds": 300},
+            "db": "neo4j",
         })
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
@@ -537,6 +538,7 @@ class BoltSession:
                 "fields": bolt_fields,
                 "qid": 0,
                 "t_first": 1,
+                "db": "neo4j",
             })
             print(f"[BOLT-WS] RUN SUCCESS sent, fields={bolt_fields}")
         except Exception as e:
