@@ -25,6 +25,12 @@ BOLT_MAGIC = b'\x60\x60\xb0\x17'
 BOLT_44 = 0x00000404
 MAX_CHUNK = 0xFFFF
 
+
+class RawPackedBytes:
+    __slots__ = ("data",)
+    def __init__(self, data: bytes):
+        self.data = data
+
 # Message tags
 TAG_HELLO = 0x01
 TAG_GOODBYE = 0x02
@@ -50,6 +56,8 @@ TAG_RELATIONSHIP = 0x52
 class PackStream:
     @staticmethod
     def pack(value: Any) -> bytes:
+        if isinstance(value, RawPackedBytes):
+            return value.data
         if value is None:
             return b'\xc0'
         if value is True:
@@ -512,16 +520,25 @@ class BoltSession:
             columns = result.get("columns", [])
             rows = result.get("rows", [])
             col_types = result.get("_bolt_column_types", ["scalar"] * len(columns))
-            self._pending_columns = columns
+
+            graph_cols = self._detect_graph_columns(columns)
+            if graph_cols:
+                self._pending_columns = columns
+                self._pending_graph_cols = graph_cols
+                bolt_fields = [g["name"] for g in graph_cols]
+            else:
+                self._pending_graph_cols = None
+                bolt_fields = columns
+
             self._pending_result = rows
             self._pending_col_types = col_types
             self.state = BoltState.STREAMING
             await self._send_message(TAG_SUCCESS, {
-                "fields": columns,
+                "fields": bolt_fields,
                 "qid": 0,
                 "t_first": 1,
             })
-            print(f"[BOLT-WS] RUN SUCCESS sent, fields={columns}")
+            print(f"[BOLT-WS] RUN SUCCESS sent, fields={bolt_fields}")
         except Exception as e:
             self._pending_result = None
             self.state = BoltState.FAILED
@@ -531,29 +548,24 @@ class BoltSession:
             })
 
     async def _handle_pull(self, extra: dict) -> None:
-        print(f"[BOLT-WS] PULL extra={extra}")
         if self._pending_result is None:
             await self._send_message(TAG_SUCCESS, {"type": "r"})
             self.state = BoltState.READY
             return
 
-        engine = None
-        col_types = self._pending_col_types or []
-        needs_graph = any(t in ("node", "rel") for t in col_types)
-        if needs_graph:
-            try:
-                engine = self._get_engine()
-            except Exception:
-                engine = None
-
         n = extra.get("n", -1) if isinstance(extra, dict) else -1
         rows = self._pending_result
         if n > 0:
             rows = rows[:n]
+        columns = self._pending_columns or []
+        graph_cols = getattr(self, "_pending_graph_cols", None)
 
         for row in rows:
-            encoded_row = self._encode_row(row, col_types, engine)
-            await self._send_message(TAG_RECORD, encoded_row)
+            if graph_cols:
+                _, encoded = self._recompose_graph_row(columns, row)
+                await self._send_message(TAG_RECORD, encoded)
+            else:
+                await self._send_message(TAG_RECORD, list(row) if not isinstance(row, list) else row)
 
         bookmark = f"ivg:{uuid.uuid4().hex[:8]}"
         await self._send_message(TAG_SUCCESS, {
@@ -574,6 +586,28 @@ class BoltSession:
         self.state = BoltState.READY
         await self._send_message(TAG_SUCCESS, {})
 
+    def _detect_graph_columns(self, columns: list) -> list | None:
+        groups = []
+        i = 0
+        has_node_triplet = False
+        while i < len(columns):
+            c = columns[i]
+            if (i + 2 < len(columns) and
+                    c.endswith("_id") and
+                    columns[i+1].endswith("_labels") and
+                    columns[i+2].endswith("_props") and
+                    c[:-3] == columns[i+1][:-7] == columns[i+2][:-6]):
+                groups.append({"type": "node", "name": c[:-3], "start": i, "span": 3})
+                has_node_triplet = True
+                i += 3
+            elif not c.endswith("_id") and not c.endswith("_labels") and not c.endswith("_props") and "_" not in c:
+                groups.append({"type": "rel", "name": c, "start": i, "span": 1})
+                i += 1
+            else:
+                groups.append({"type": "scalar", "name": c, "start": i, "span": 1})
+                i += 1
+        return groups if has_node_triplet else None
+
     def _encode_row(self, row: list, col_types: list, engine) -> list:
         result = []
         for i, val in enumerate(row):
@@ -585,6 +619,112 @@ class BoltSession:
             else:
                 result.append(val)
         return result
+
+    def _recompose_graph_row(self, columns: list, row) -> tuple[list, list]:
+        """Detect _id/_labels/_props triplets and recompose into Bolt graph objects.
+
+        Returns (new_columns, new_row) where nodes become single PackStream Node
+        structures and relationships become PackStream Relationship structures.
+        """
+        row = list(row) if not isinstance(row, list) else row
+        new_cols = []
+        new_row = []
+        i = 0
+        prev_node_id = None
+
+        while i < len(columns):
+            col = columns[i]
+
+            if (i + 2 < len(columns) and
+                    col.endswith("_id") and
+                    columns[i+1].endswith("_labels") and
+                    columns[i+2].endswith("_props") and
+                    col[:-3] == columns[i+1][:-7] == columns[i+2][:-6]):
+                var_name = col[:-3]
+                node_id = str(row[i]) if row[i] is not None else ""
+                labels_raw = row[i+1]
+                props_raw = row[i+2]
+
+                labels = self._parse_json_field(labels_raw, [])
+                props = self._parse_props_field(props_raw)
+                props["id"] = node_id
+
+                int_id = _node_int_id(node_id)
+                node_struct = RawPackedBytes(PackStream._pack_struct(TAG_NODE, [int_id, labels, props]))
+
+                new_cols.append(var_name)
+                new_row.append(node_struct)
+                prev_node_id = node_id
+                i += 3
+
+            elif (i + 1 < len(columns) and
+                  not col.endswith("_id") and
+                  not col.endswith("_labels") and
+                  not col.endswith("_props") and
+                  "_" not in col and
+                  i + 1 < len(columns) and
+                  columns[i+1].endswith("_id")):
+                rel_type = str(row[i]) if row[i] is not None else "RELATED_TO"
+                start_id = _node_int_id(prev_node_id) if prev_node_id else 0
+                end_node_id_str = str(row[i+1]) if i+1 < len(row) else ""
+                end_id = _node_int_id(end_node_id_str)
+                rel_int_id = hash(f"{prev_node_id}-{rel_type}-{end_node_id_str}") & 0x7FFFFFFF
+
+                rel_struct = RawPackedBytes(PackStream._pack_struct(TAG_RELATIONSHIP,
+                    [rel_int_id, start_id, end_id, rel_type, {}]))
+
+                new_cols.append(col)
+                new_row.append(rel_struct)
+                i += 1
+
+            else:
+                new_cols.append(col)
+                new_row.append(row[i] if i < len(row) else None)
+                i += 1
+
+        return new_cols, new_row
+
+    def _parse_json_field(self, raw, default):
+        if raw is None:
+            return default
+        if isinstance(raw, list):
+            return raw
+        try:
+            import json
+            return json.loads(str(raw))
+        except Exception:
+            return default
+
+    def _parse_props_field(self, raw) -> dict:
+        if raw is None:
+            return {}
+        try:
+            import json
+            items = json.loads(str(raw)) if isinstance(raw, str) else raw
+            if isinstance(items, list):
+                props = {}
+                for item in items:
+                    if isinstance(item, str):
+                        try:
+                            kv = json.loads(item)
+                            if isinstance(kv, dict) and "key" in kv:
+                                val = kv.get("value", "")
+                                if len(str(val)) > 200:
+                                    val = str(val)[:200] + "..."
+                                props[kv["key"]] = val
+                        except Exception:
+                            pass
+                    elif isinstance(item, dict) and "key" in item:
+                        val = item.get("value", "")
+                        if len(str(val)) > 200:
+                            val = str(val)[:200] + "..."
+                        props[item["key"]] = val
+                return props
+            if isinstance(items, dict):
+                return items
+        except Exception:
+            pass
+        return {}
 
     def _encode_node_value(self, node_id: str, engine) -> bytes:
         try:
