@@ -505,7 +505,7 @@ class BoltSession:
         })
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
-        print(f"[BOLT-WS] RUN query={query[:200]}")
+        print(f"[BOLT-WS] RUN query={query[:500]}")
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})

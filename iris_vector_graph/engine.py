@@ -515,6 +515,9 @@ class IRISGraphEngine:
             rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
             return {"columns": ["entity", "id"], "rows": node_rows + rel_rows}
 
+        if stripped.startswith("EXPLAIN "):
+            return {"columns": ["Plan"], "rows": [["No execution plan available (IRIS backend)"]]}
+
         if stripped.startswith("SHOW "):
             return self._handle_show_command(stripped)
 
@@ -758,6 +761,7 @@ class IRISGraphEngine:
                 _proc("dbms.functions", "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)", "List functions", "DBMS"),
                 _proc("dbms.clientConfig", "dbms.clientConfig() :: (key :: STRING, value :: STRING)", "Client config", "DBMS"),
                 _proc("dbms.security.showCurrentUser", "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)", "Current user", "DBMS"),
+                _proc("dbms.queryJmx", "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)", "Query JMX management data", "DBMS"),
             ]
             return {
                 "columns": ["name", "signature", "description", "mode", "admin",
