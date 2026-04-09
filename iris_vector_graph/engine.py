@@ -460,10 +460,9 @@ class IRISGraphEngine:
             self._embedding_function_available = True
         except Exception as e:
             err = str(e).lower()
-            if "not found" in err or "does not exist" in err or "unknown function" in err:
+            if "unknown function" in err or "not a recognized" in err:
                 self._embedding_function_available = False
             else:
-                # Function exists but config is missing — that's expected for the probe
                 self._embedding_function_available = True
         finally:
             try:
@@ -1425,7 +1424,11 @@ class IRISGraphEngine:
 
         orig_embedder = self.embedder
         if model is not None:
-            self.embedder = model
+            if isinstance(model, str):
+                from sentence_transformers import SentenceTransformer
+                self.embedder = SentenceTransformer(model)
+            else:
+                self.embedder = model
 
         try:
             cursor = self.conn.cursor()
