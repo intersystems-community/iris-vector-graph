@@ -492,6 +492,24 @@ class IRISGraphEngine:
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
+        stripped = cypher_query.strip().upper()
+
+        if "CALL DB.LABELS() YIELD" in stripped and "UNION" in stripped:
+            labels = self._try_system_procedure(type("P", (), {"procedure_name": "db.labels"})()).get("rows", [])
+            rels = self._try_system_procedure(type("P", (), {"procedure_name": "db.relationshipTypes"})()).get("rows", [])
+            props = self._try_system_procedure(type("P", (), {"procedure_name": "db.schema.nodeTypeProperties"})()).get("rows", [])
+            return {
+                "columns": ["result"],
+                "rows": [
+                    [{"name": "labels", "data": [r[0] for r in labels]}],
+                    [{"name": "relationshipTypes", "data": [r[0] for r in rels]}],
+                    [{"name": "propertyKeys", "data": list({r[2] for r in props})}],
+                ],
+            }
+
+        if stripped.startswith("SHOW "):
+            return self._handle_show_command(stripped)
+
         parsed = parse_query(cypher_query)
 
         if parsed.procedure_call is not None:
@@ -640,6 +658,25 @@ class IRISGraphEngine:
             "metadata": sql_query.query_metadata,
         }
 
+    def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
+        if "DATABASES" in cmd:
+            return {
+                "columns": ["name", "type", "aliases", "access", "address",
+                            "role", "writer", "requestedStatus", "currentStatus",
+                            "statusMessage", "default", "home", "constituents"],
+                "rows": [["neo4j", "standard", [], "read-write", "localhost:7687",
+                           "primary", True, "online", "online", "", True, True, []]],
+            }
+        if "FUNCTIONS" in cmd or "PROCEDURES" in cmd:
+            return {"columns": ["name", "description"], "rows": []}
+        if "INDEXES" in cmd:
+            return {"columns": ["name", "type", "entityType", "labelsOrTypes", "properties"],
+                    "rows": []}
+        if "CONSTRAINTS" in cmd:
+            return {"columns": ["name", "type", "entityType", "labelsOrTypes", "properties"],
+                    "rows": []}
+        return {"columns": ["value"], "rows": []}
+
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
@@ -700,22 +737,38 @@ class IRISGraphEngine:
             }
 
         if name == "dbms.procedures":
+            def _proc(n, sig, desc, mode="READ"):
+                return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
             procs = [
-                ["db.labels", "Returns all labels", "READ", True],
-                ["db.relationshipTypes", "Returns all relationship types", "READ", True],
-                ["db.schema.visualization", "Returns graph schema visualization", "READ", True],
-                ["db.schema.nodeTypeProperties", "Returns node type properties", "READ", True],
-                ["db.schema.relTypeProperties", "Returns rel type properties", "READ", True],
-                ["dbms.components", "Returns server components", "DBMS", True],
-                ["ivg.vector.search", "Vector similarity search", "READ", True],
-                ["ivg.bm25.search", "BM25 lexical search", "READ", True],
-                ["ivg.ppr", "Personalized PageRank", "READ", True],
-                ["ivg.neighbors", "1-hop neighborhood", "READ", True],
+                _proc("db.labels", "db.labels() :: (label :: STRING)", "List all labels"),
+                _proc("db.relationshipTypes", "db.relationshipTypes() :: (relationshipType :: STRING)", "List all rel types"),
+                _proc("db.schema.visualization", "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)", "Schema visualization"),
+                _proc("db.schema.nodeTypeProperties", "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)", "Node type props"),
+                _proc("db.schema.relTypeProperties", "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)", "Rel type props"),
+                _proc("dbms.components", "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)", "Server components", "DBMS"),
+                _proc("dbms.procedures", "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)", "List procedures", "DBMS"),
+                _proc("dbms.functions", "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)", "List functions", "DBMS"),
+                _proc("dbms.clientConfig", "dbms.clientConfig() :: (key :: STRING, value :: STRING)", "Client config", "DBMS"),
+                _proc("dbms.security.showCurrentUser", "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)", "Current user", "DBMS"),
             ]
             return {
-                "columns": ["name", "description", "mode", "worksOnSystem"],
+                "columns": ["name", "signature", "description", "mode", "admin",
+                            "option", "defaultBuiltInRoles", "isDeprecated",
+                            "worksOnSystem", "argumentDescription"],
                 "rows": procs,
             }
+
+        if name == "dbms.clientconfig":
+            return {"columns": ["key", "value"], "rows": []}
+
+        if name == "dbms.security.showcurrentuser":
+            return {"columns": ["username", "roles", "flags"], "rows": [["neo4j", [], []]]}
+
+        if name == "dbms.functions":
+            return {"columns": ["name", "signature", "description", "aggregating",
+                                "defaultBuiltInRoles", "isDeprecated", "argumentDescription",
+                                "returnDescription", "category"],
+                    "rows": []}
 
         if name.startswith("apoc."):
             return {"columns": ["value"], "rows": []}

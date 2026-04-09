@@ -30,6 +30,9 @@ TAG_HELLO = 0x01
 TAG_GOODBYE = 0x02
 TAG_RESET = 0x0F
 TAG_RUN = 0x10
+TAG_BEGIN = 0x11
+TAG_COMMIT = 0x12
+TAG_ROLLBACK = 0x13
 TAG_DISCARD = 0x2F
 TAG_PULL = 0x3F
 TAG_SUCCESS = 0x70
@@ -361,6 +364,7 @@ class BoltSession:
         self._engine = None
         self.state = BoltState.CONNECTED
         self._buf = bytearray()
+        self._msg_queue: list[bytes] = []
         self._pending_result: list | None = None
         self._pending_columns: list | None = None
         self._pending_col_types: list | None = None
@@ -372,6 +376,7 @@ class BoltSession:
 
     async def run(self) -> None:
         await self.ws.accept()
+        print("[BOLT-WS] connection accepted")
         try:
             chosen = await self._do_handshake()
             if chosen == 0:
@@ -398,7 +403,9 @@ class BoltSession:
                 pass
 
     async def _do_handshake(self) -> int:
+        print("[BOLT-WS] waiting for handshake bytes...")
         data = await self.ws.receive_bytes()
+        print(f"[BOLT-WS] handshake received: {len(data)} bytes, magic={data[:4].hex() if len(data)>=4 else 'short'}")
         if len(data) < 20 or data[:4] != BOLT_MAGIC:
             await self.ws.send_bytes(struct.pack('>I', 0))
             return 0
@@ -408,21 +415,26 @@ class BoltSession:
 
     async def _recv_message(self) -> bytes:
         while True:
+            if self._msg_queue:
+                return self._msg_queue.pop(0)
             chunk = await self.ws.receive_bytes()
             self._buf.extend(chunk)
             msgs = decode_messages(bytes(self._buf))
             if msgs:
                 consumed = 0
                 for msg in msgs:
-                    encoded = encode_message(msg)
-                    consumed += len(encoded)
+                    consumed += len(encode_message(msg))
                 self._buf = self._buf[consumed:]
+                if len(msgs) == 1:
+                    return msgs[0]
+                self._msg_queue.extend(msgs[1:])
                 return msgs[0]
 
     async def _send_message(self, tag: int, *fields) -> None:
         await self.ws.send_bytes(encode_bolt_message(tag, *fields))
 
     async def _dispatch(self, msg: bytes) -> None:
+        print(f"[BOLT-WS] dispatch tag=0x{msg[1]:02x} len={len(msg)}" if len(msg)>=2 else f"[BOLT-WS] dispatch short msg len={len(msg)}")
         if len(msg) < 2:
             return
         tag = msg[1]
@@ -449,6 +461,17 @@ class BoltSession:
         elif tag == TAG_PULL:
             extra, _ = PackStream.unpack(msg, 2)
             await self._handle_pull(extra)
+        elif tag == TAG_BEGIN:
+            await self._send_message(TAG_SUCCESS, {})
+        elif tag == TAG_COMMIT:
+            await self._send_message(TAG_SUCCESS, {})
+            self.state = BoltState.READY
+        elif tag == TAG_ROLLBACK:
+            self._pending_result = None
+            self._pending_columns = None
+            self._pending_col_types = None
+            await self._send_message(TAG_SUCCESS, {})
+            self.state = BoltState.READY
         elif tag == TAG_DISCARD:
             self._pending_result = None
             self._pending_columns = None
@@ -459,6 +482,7 @@ class BoltSession:
         elif tag == TAG_GOODBYE:
             self.state = BoltState.DEFUNCT
         else:
+            print(f"[BOLT-WS] UNKNOWN tag=0x{tag:02x}")
             log.debug("Unknown Bolt tag: 0x%02X", tag)
 
     async def _handle_hello(self, extra: dict) -> None:
@@ -481,6 +505,7 @@ class BoltSession:
         })
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
+        print(f"[BOLT-WS] RUN query={query[:200]}")
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})
@@ -496,6 +521,7 @@ class BoltSession:
                 "qid": 0,
                 "t_first": 1,
             })
+            print(f"[BOLT-WS] RUN SUCCESS sent, fields={columns}")
         except Exception as e:
             self._pending_result = None
             self.state = BoltState.FAILED
@@ -505,6 +531,7 @@ class BoltSession:
             })
 
     async def _handle_pull(self, extra: dict) -> None:
+        print(f"[BOLT-WS] PULL extra={extra}")
         if self._pending_result is None:
             await self._send_message(TAG_SUCCESS, {"type": "r"})
             self.state = BoltState.READY
