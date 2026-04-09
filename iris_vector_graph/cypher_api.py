@@ -67,11 +67,7 @@ class Neo4jTxRequest(BaseModel):
 _engine_cache: IRISGraphEngine | None = None
 
 
-def _get_engine() -> IRISGraphEngine:
-    global _engine_cache
-    if _engine_cache is not None:
-        return _engine_cache
-
+def _make_engine() -> IRISGraphEngine:
     host = os.environ.get("IRIS_HOST")
     if host:
         port = int(os.environ.get("IRIS_PORT", "1972"))
@@ -80,18 +76,41 @@ def _get_engine() -> IRISGraphEngine:
         password = os.environ.get("IRIS_PASSWORD", "SYS")
         conn = iris.connect(hostname=host, port=port, namespace=namespace,
                             username=username, password=password)
-        _engine_cache = IRISGraphEngine(conn)
-        return _engine_cache
+        return IRISGraphEngine(conn)
     if _EMBEDDED:
         from iris_vector_graph.embedded import EmbeddedConnection
-        _engine_cache = IRISGraphEngine(EmbeddedConnection())
-        return _engine_cache
+        return IRISGraphEngine(EmbeddedConnection())
     raise RuntimeError("IRIS_HOST not set and embedded iris not available")
 
 
+def _get_engine() -> IRISGraphEngine:
+    global _engine_cache
+    if _engine_cache is None:
+        _engine_cache = _make_engine()
+    return _engine_cache
+
+
+def _reset_engine():
+    global _engine_cache
+    try:
+        if _engine_cache is not None:
+            _engine_cache.conn.close()
+    except Exception:
+        pass
+    _engine_cache = None
+
+
 def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -> dict:
-    engine = _get_engine()
-    result = engine.execute_cypher(query, parameters=parameters or {})
+    for attempt in range(2):
+        try:
+            engine = _get_engine()
+            result = engine.execute_cypher(query, parameters=parameters or {})
+            break
+        except Exception as e:
+            if attempt == 0 and ("COMMUNICATION" in str(e).upper() or "LICENSE" in str(e).upper()):
+                _reset_engine()
+                continue
+            raise
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     if len(rows) > limit:
