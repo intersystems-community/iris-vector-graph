@@ -31,6 +31,7 @@ Auto-generated from all feature plans. Last updated: 2026-02-24
 - `^KG("edgeprop", ts, s, p, o, key) = value` — new subscript key in existing `^KG` (037-edgeprop-ndjson-ingest)
 - Python 3.11 (translator), ObjectScript (TemporalIndex — already complete in v1.41.0) + `iris_vector_graph.cypher.{ast,lexer,parser,translator}`, `iris_vector_graph.engine` (039-temporal-cypher)
 - IRIS `^KG("tout"/"tin")` globals via `Graph.KG.TemporalIndex.QueryWindow/QueryWindowInbound` (039-temporal-cypher)
+- ObjectScript (IRIS 2024.1+), Python 3.11 (044-bm25-index)
 
 ## Project Structure
 ```text
@@ -50,9 +51,9 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 044-bm25-index: Added ObjectScript (IRIS 2024.1+), Python 3.11
 - 040-sql-table-bridge: Added Python 3.11
 - 039-temporal-cypher: Added Python 3.11 (translator), ObjectScript (TemporalIndex — already complete in v1.41.0) + `iris_vector_graph.cypher.{ast,lexer,parser,translator}`, `iris_vector_graph.engine`
-- 037-edgeprop-ndjson-ingest: Added Python 3.11 (build) + ObjectScript (write/query) + `iris_vector_graph` (engine, schema), `intersystems-irispython`
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

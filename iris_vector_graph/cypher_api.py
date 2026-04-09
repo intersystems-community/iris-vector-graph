@@ -22,12 +22,35 @@ try:
 except ImportError:
     _EMBEDDED = False
 
+from contextlib import asynccontextmanager
+
 from iris_vector_graph.engine import IRISGraphEngine
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    from iris_vector_graph.bolt_server import start_tcp_bolt_server
+    bolt_port = int(os.environ.get("BOLT_TCP_PORT", "7687"))
+    srv = None
+    if os.environ.get("IRIS_HOST"):
+        try:
+            srv = await start_tcp_bolt_server(_get_engine, port=bolt_port)
+            import logging
+            logging.getLogger(__name__).info("Bolt TCP server on port %d", bolt_port)
+        except OSError as e:
+            import logging
+            logging.getLogger(__name__).warning("Bolt TCP port %d unavailable: %s", bolt_port, e)
+    yield
+    if srv:
+        srv.close()
+        await srv.wait_closed()
+
 
 app = FastAPI(
     title="Mindwalk Cypher API",
     version="1.0.0",
     openapi_url="/openapi",
+    lifespan=_lifespan,
 )
 
 app.add_middleware(
@@ -61,6 +84,9 @@ async def api_key_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+from iris_vector_graph.bolt_server import BoltSession
+
+
 class CypherRequest(BaseModel):
     query: str
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -69,8 +95,9 @@ class CypherRequest(BaseModel):
 
 @app.websocket("/")
 @app.websocket("")
-async def bolt_rejection(ws: WebSocket):
-    await ws.close(code=1001, reason="Bolt not supported — use HTTP API at /db/neo4j/tx/commit")
+async def bolt_ws(ws: WebSocket):
+    session = BoltSession(ws, _get_engine)
+    await session.run()
 
 
 class Neo4jStatement(BaseModel):
@@ -204,10 +231,12 @@ class QueryV2Request(BaseModel):
 
 @app.get("/db/neo4j")
 @app.get("/")
-def neo4j_discovery():
+def neo4j_discovery(request: Request):
+    host = request.headers.get("host", "localhost:8000")
+    bolt_url = f"bolt://{host}"
     return {
-        "bolt_routing": None,
-        "bolt_direct": None,
+        "bolt_routing": bolt_url,
+        "bolt_direct": bolt_url,
         "neo4j_version": "5.0.0-compat",
         "neo4j_edition": "community",
         "query": "/db/neo4j/query/v2",

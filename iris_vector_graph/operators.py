@@ -489,24 +489,22 @@ class IRISGraphOperators:
                     # Fallback to existing SQL-based approach if iris is not available or fails
                     if predicate_filter:
                         neighbor_sql = """
-                            SELECT e.s, e.p, e.o_id,
+                            SELECT TOP ? e.s, e.p, e.o_id,
                                    ROW_NUMBER() OVER (ORDER BY e.s) as rn
                             FROM Graph_KG.rdf_edges e
                             WHERE e.s = ? AND e.p LIKE ?
                             ORDER BY e.s
-                            LIMIT ?
                         """
-                        params = [current_entity, f"%{predicate_filter}%", max_degree]
+                        params = [max_degree, current_entity, f"%{predicate_filter}%"]
                     else:
                         neighbor_sql = """
-                            SELECT e.s, e.p, e.o_id,
+                            SELECT TOP ? e.s, e.p, e.o_id,
                                    ROW_NUMBER() OVER (ORDER BY e.s) as rn
                             FROM Graph_KG.rdf_edges e
                             WHERE e.s = ?
                             ORDER BY e.s
-                            LIMIT ?
                         """
-                        params = [current_entity, max_degree]
+                        params = [max_degree, current_entity]
 
                     cursor.execute(neighbor_sql, params)
                     neighbors = cursor.fetchall()

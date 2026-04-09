@@ -635,6 +635,80 @@ class IRISGraphEngine:
             "metadata": sql_query.query_metadata,
         }
 
+    def get_schema_visualization(self) -> dict:
+        cursor = self.conn.cursor()
+
+        cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+        labels = [r[0] for r in cursor.fetchall()]
+
+        cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+        rel_types = [r[0] for r in cursor.fetchall()]
+
+        nodes = []
+        for i, label in enumerate(labels):
+            cursor.execute(
+                "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl "
+                "WHERE rl.label = ?",
+                [label]
+            )
+            row = cursor.fetchone()
+            sample_id = row[0] if row else None
+
+            prop_names = []
+            if sample_id:
+                cursor.execute(
+                    "SELECT DISTINCT TOP 20 \"key\" FROM Graph_KG.rdf_props WHERE s = ? "
+                    "ORDER BY \"key\"",
+                    [sample_id]
+                )
+                prop_names = [r[0] for r in cursor.fetchall()]
+
+            nodes.append({
+                "id": i,
+                "name": label,
+                "labels": [label],
+                "properties": [{"name": p, "type": "String"} for p in prop_names],
+            })
+
+        label_to_id = {n["name"]: n["id"] for n in nodes}
+
+        rels = []
+        for i, rel_type in enumerate(rel_types):
+            cursor.execute(
+                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ?",
+                [rel_type]
+            )
+            row = cursor.fetchone()
+            start_label_id = 0
+            end_label_id = 0
+            if row:
+                src_id, tgt_id = row
+                cursor.execute(
+                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?",
+                    [src_id]
+                )
+                src_row = cursor.fetchone()
+                if src_row:
+                    start_label_id = label_to_id.get(src_row[0], 0)
+                cursor.execute(
+                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?",
+                    [tgt_id]
+                )
+                tgt_row = cursor.fetchone()
+                if tgt_row:
+                    end_label_id = label_to_id.get(tgt_row[0], 0)
+
+            rels.append({
+                "id": i,
+                "name": rel_type,
+                "type": rel_type,
+                "properties": [],
+                "startNode": start_label_id,
+                "endNode": end_label_id,
+            })
+
+        return {"nodes": nodes, "relationships": rels}
+
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve a node by ID using optimized direct SQL.
@@ -666,51 +740,53 @@ class IRISGraphEngine:
         if not node_ids:
             return []
 
+        _IN_CHUNK = 499
+
         try:
             cursor = self.conn.cursor()
-            placeholders = ",".join(["?"] * len(node_ids))
-            
-            # 1. Initialize node map
             node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
 
-            # 2. Get all labels in one query
-            cursor.execute(
-                f"SELECT s, label FROM {_table('rdf_labels')} WHERE s IN ({placeholders})",
-                node_ids
-            )
-            for s, label in cursor.fetchall():
-                if s in node_map:
-                    node_map[s]["labels"].append(label)
+            for i in range(0, len(node_ids), _IN_CHUNK):
+                chunk = node_ids[i:i + _IN_CHUNK]
+                placeholders = ",".join(["?"] * len(chunk))
 
-            # 3. Get all properties in one query
-            cursor.execute(
-                f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
-                node_ids
-            )
-            _STRUCTURAL_KEYS = ("id", "labels")
-            for s, key, val in cursor.fetchall():
-                if s in node_map:
-                    store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
-                    if val is not None:
-                        parsed_val = val
-                        try:
-                            if (str(val).startswith('{') and str(val).endswith('}')) or (str(val).startswith('[') and str(val).endswith(']')):
-                                parsed_val = json.loads(val)
-                        except Exception:
-                            pass
-                        node_map[s][store_key] = parsed_val
-                    else:
-                        node_map[s][store_key] = val
+                cursor.execute(
+                    f"SELECT s, label FROM {_table('rdf_labels')} WHERE s IN ({placeholders})",
+                    chunk
+                )
+                for s, label in cursor.fetchall():
+                    if s in node_map:
+                        node_map[s]["labels"].append(label)
 
-            # 4. Filter out nodes that don't exist (if they had no labels and no props)
-            # We verify existence via the nodes table for any remaining empty ones
+                cursor.execute(
+                    f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
+                    chunk
+                )
+                _STRUCTURAL_KEYS = ("id", "labels")
+                for s, key, val in cursor.fetchall():
+                    if s in node_map:
+                        store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
+                        if val is not None:
+                            parsed_val = val
+                            try:
+                                if (str(val).startswith('{') and str(val).endswith('}')) or (str(val).startswith('[') and str(val).endswith(']')):
+                                    parsed_val = json.loads(val)
+                            except Exception:
+                                pass
+                            node_map[s][store_key] = parsed_val
+                        else:
+                            node_map[s][store_key] = val
+
             empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2]
             if empty_nids:
-                e_placeholders = ",".join(["?"] * len(empty_nids))
-                cursor.execute(f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})", empty_nids)
-                existing_empty = {row[0] for row in cursor.fetchall()}
+                existing_empty: set = set()
+                for i in range(0, len(empty_nids), _IN_CHUNK):
+                    chunk = empty_nids[i:i + _IN_CHUNK]
+                    e_placeholders = ",".join(["?"] * len(chunk))
+                    cursor.execute(f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})", chunk)
+                    existing_empty.update(row[0] for row in cursor.fetchall())
                 return [node_map[nid] for nid in node_ids if nid in existing_empty or nid not in empty_nids]
-            
+
             return [node_map[nid] for nid in node_ids if nid in node_map]
 
         except Exception as e:
@@ -1336,18 +1412,23 @@ class IRISGraphEngine:
     def get_kg_anchors(self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh") -> List[str]:
         if not icd_codes:
             return []
+        _IN_CHUNK = 499
+        results: list = []
         cursor = self.conn.cursor()
         try:
-            placeholders = ", ".join(["?"] * len(icd_codes))
-            sql = (
-                f"SELECT DISTINCT b.kg_node_id "
-                f"FROM {_table('fhir_bridges')} b "
-                f"JOIN {_table('nodes')} n ON n.node_id = b.kg_node_id "
-                f"WHERE b.fhir_code IN ({placeholders}) "
-                f"AND b.bridge_type = ?"
-            )
-            cursor.execute(sql, icd_codes + [bridge_type])
-            return [row[0] for row in cursor.fetchall()]
+            for i in range(0, len(icd_codes), _IN_CHUNK):
+                chunk = icd_codes[i:i + _IN_CHUNK]
+                placeholders = ", ".join(["?"] * len(chunk))
+                sql = (
+                    f"SELECT DISTINCT b.kg_node_id "
+                    f"FROM {_table('fhir_bridges')} b "
+                    f"JOIN {_table('nodes')} n ON n.node_id = b.kg_node_id "
+                    f"WHERE b.fhir_code IN ({placeholders}) "
+                    f"AND b.bridge_type = ?"
+                )
+                cursor.execute(sql, chunk + [bridge_type])
+                results.extend(row[0] for row in cursor.fetchall())
+            return results
         except Exception as e:
             logger.warning(f"get_kg_anchors failed: {e}")
             return []
