@@ -1,0 +1,138 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e6]:
+      - generic [ref=e8]:
+        - list [ref=e9]:
+          - listitem "Database Information" [ref=e11]:
+            - button "Database" [ref=e12] [cursor=pointer]:
+              - img "Database" [ref=e188]
+          - listitem "Favorites" [ref=e22]:
+            - button "Favorites" [ref=e23] [cursor=pointer]:
+              - img "Favorites" [ref=e194]
+          - listitem "Guides" [ref=e29]:
+            - button "Guides" [ref=e30] [cursor=pointer]:
+              - img "Guides" [ref=e196]
+        - list [ref=e38]:
+          - listitem "Help &amp; Resources" [ref=e40]:
+            - button "Help & Resources" [ref=e41] [cursor=pointer]:
+              - img "Help & Resources" [ref=e201]
+          - listitem "Browser Sync" [ref=e49]:
+            - button "Browser Sync" [ref=e50] [cursor=pointer]:
+              - img "Browser Sync" [ref=e205]
+          - listitem "Settings" [ref=e59]:
+            - button "Browser Settings" [ref=e60] [cursor=pointer]:
+              - img "Browser Settings" [ref=e210]
+          - listitem "About Neo4j" [ref=e67]:
+            - button "About Neo4j" [ref=e68] [cursor=pointer]:
+              - img "About Neo4j" [ref=e213]
+      - generic [ref=e78]:
+        - generic [ref=e80]:
+          - generic [ref=e81]:
+            - code [ref=e84]:
+              - generic [ref=e85]:
+                - generic [ref=e90]: $
+                - textbox "Editor content;Press Alt+F1 for Accessibility Options." [active] [ref=e96]
+            - button "Run (⌘↩)" [ref=e97] [cursor=pointer]:
+              - img "Run (⌘↩)" [ref=e219]
+          - generic [ref=e103]:
+            - button "Fullscreen (⌘⌥F)" [ref=e104] [cursor=pointer]:
+              - img [ref=e107]
+            - button "Clear" [ref=e112] [cursor=pointer]:
+              - img [ref=e115]
+        - generic [ref=e222]:
+          - generic [ref=e223]: To help make Neo4j Browser better we collect information on product usage. Review your settings at any time.
+          - generic [ref=e224]: ×
+        - generic [ref=e118]:
+          - article [ref=e226]:
+            - generic [ref=e227]:
+              - button "Pin at top" [ref=e228] [cursor=pointer]:
+                - img [ref=e231]
+              - button "Collapse" [ref=e234] [cursor=pointer]:
+                - img [ref=e237]
+              - button "Fullscreen" [ref=e239] [cursor=pointer]:
+                - img [ref=e242]
+              - button "Close" [ref=e247] [cursor=pointer]:
+                - img [ref=e250]
+            - generic [ref=e253]:
+              - generic [ref=e254]:
+                - generic [ref=e255]:
+                  - generic "Cmd+click to copy to main editor" [ref=e256]: $ :play start
+                  - button "Rerun" [ref=e257] [cursor=pointer]:
+                    - img "Rerun" [ref=e260]
+                - list [ref=e263]:
+                  - button "Save as Favorite" [ref=e264] [cursor=pointer]:
+                    - img [ref=e267]
+              - generic [ref=e269]:
+                - heading "Neo4j" [level=3] [ref=e271]:
+                  - img "Neo4j" [ref=e272]
+                - generic [ref=e276]:
+                  - generic [ref=e277]:
+                    - generic [ref=e278]:
+                      - img
+                      - heading "🚀 Try the new Browser preview!" [level=3] [ref=e279]
+                      - paragraph [ref=e280]: Switch to the preview experience to access all the latest features.
+                      - button "Let's go" [ref=e281] [cursor=pointer]
+                    - generic [ref=e282]:
+                      - heading "Try Neo4j with live data" [level=3] [ref=e283]
+                      - paragraph [ref=e284]: A complete example graph that demonstrates common query patterns.
+                      - paragraph [ref=e286]: Actors & movies in cross-referenced pop culture.
+                      - button " Open guide" [ref=e287] [cursor=pointer]:
+                        - generic [ref=e288]: 
+                        - text: Open guide
+                    - generic [ref=e289]:
+                      - heading "Cypher basics" [level=3] [ref=e290]
+                      - paragraph [ref=e291]: Intro to Graphs with Cypher
+                      - list [ref=e292]:
+                        - listitem [ref=e293]: What is a graph database?
+                        - listitem [ref=e294]: How can I query a graph?
+                      - button " Start querying" [ref=e296] [cursor=pointer]:
+                        - generic [ref=e297]: 
+                        - text: Start querying
+                  - paragraph [ref=e299]:
+                    - text: Copyright ©
+                    - link "Neo4j, Inc" [ref=e300] [cursor=pointer]:
+                      - /url: http://neo4j.com/
+                    - generic [ref=e301]: 2002–2026
+                  - generic [ref=e302]:
+                    - link "Sign up" [ref=e303] [cursor=pointer]:
+                      - /url: https://neo4j.com/cloud/aura/pricing/?utm_medium=browser&utm_source=ce&utm_campaign=wl_v1
+                    - text: for a free Neo4j cloud instance with
+                    - img "Neo4j" [ref=e304]
+          - article [ref=e119]:
+            - generic [ref=e120]:
+              - button "Pin at top" [ref=e121] [cursor=pointer]:
+                - img [ref=e124]
+              - button "Collapse" [ref=e127] [cursor=pointer]:
+                - img [ref=e130]
+              - button "Fullscreen" [ref=e132] [cursor=pointer]:
+                - img [ref=e135]
+              - button "Close" [ref=e140] [cursor=pointer]:
+                - img [ref=e143]
+            - generic [ref=e146]:
+              - generic [ref=e147]:
+                - generic [ref=e148]:
+                  - generic "Cmd+click to copy to main editor" [ref=e149]: $ :server connect
+                  - button "Rerun" [ref=e150] [cursor=pointer]:
+                    - img "Rerun" [ref=e306]
+                - list [ref=e156]:
+                  - button "Save as Favorite" [ref=e157] [cursor=pointer]:
+                    - img [ref=e160]
+              - generic [ref=e164]:
+                - generic [ref=e165]:
+                  - heading "Connected to Neo4j" [level=3] [ref=e309]
+                  - paragraph [ref=e167]: Nice to meet you.
+                - generic [ref=e310]:
+                  - text: You are connected
+                  - generic [ref=e311]:
+                    - text: to
+                    - code [ref=e312]: bolt://localhost:8000
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - img "Import"
+  - generic [ref=e187]:
+    - alert
+    - alert
+    - complementary
+    - complementary

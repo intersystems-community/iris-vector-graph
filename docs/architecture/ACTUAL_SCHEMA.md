@@ -43,13 +43,11 @@ CREATE TABLE Graph_KG.rdf_edges (
 ### kg_NodeEmbeddings
 ```sql
 CREATE TABLE Graph_KG.kg_NodeEmbeddings (
-    node_id INT IDENTITY,
-    id VARCHAR(256),
-    label VARCHAR(128),
-    property_name VARCHAR(128),
-    emb VECTOR(DOUBLE, 768)
+    id VARCHAR(256) PRIMARY KEY,
+    emb VECTOR(DOUBLE, 768),
+    metadata %Library.DynamicObject,
+    CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)
 )
--- HNSW index
 CREATE INDEX kg_emb_hnsw ON Graph_KG.kg_NodeEmbeddings(emb)
     AS HNSW(M=16, efConstruction=200, Distance='COSINE')
 ```
@@ -65,24 +63,55 @@ CREATE TABLE Graph_KG.fhir_bridges (
     source_cui VARCHAR(16),
     CONSTRAINT pk_bridge PRIMARY KEY (fhir_code, kg_node_id)
 )
--- Indexes
-CREATE INDEX idx_bridges_code_type ON Graph_KG.fhir_bridges (fhir_code, bridge_type)
-CREATE INDEX idx_bridges_kg_node ON Graph_KG.fhir_bridges (kg_node_id)
-CREATE INDEX idx_bridges_type ON Graph_KG.fhir_bridges (bridge_type)
 ```
 
-Note: `%EXACT` on `fhir_code` and `kg_node_id` preserves case (IRIS VARCHAR uppercases by default).
+Note: `%EXACT` preserves case (IRIS VARCHAR uppercases by default).
 
-## SQL Functions (Stored Procedures)
+---
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `kg_KNN_VEC` | `(query_vector, k, label, property)` | HNSW vector search, returns (id, score) |
-| `kg_PPR` | `(seeds_json, damping, max_iter)` | Personalized PageRank via ObjectScript |
-| `kg_NEIGHBORS` | `(sources, predicate, direction)` | 1-hop neighborhood expansion |
-| `kg_SUBGRAPH` | `(seeds_json, k_hops, edge_types)` | Bounded k-hop subgraph extraction |
+## SQL Stored Procedures (Graph_KG)
+
+| Procedure | Signature | Description |
+|-----------|-----------|-------------|
+| `kg_KNN_VEC` | `(query_vector, k, label, property)` | HNSW vector search, returns JSON `[{"id","score"},...]` |
+| `kg_PPR` | `(seeds_json, damping, max_iter, ...)` | Personalized PageRank, returns JSON `[{"id","score"},...]` |
+| `kg_NEIGHBORS` | `(sources, predicate, direction)` | 1-hop neighborhood, returns JSON array |
+| `kg_BM25` | `(name, query, k)` | BM25 lexical search, returns JSON `[{"id","score"},...]` |
 | `kg_RRF_FUSE` | `(k, k1, k2, c, vector, text)` | Reciprocal rank fusion (vector + text) |
+
+`kg_BM25` is a thin wrapper over `Graph.KG.BM25Index.Search()` exposed as an SQL stored procedure for Cypher translator Stage CTEs.
+
+---
 
 ## Global Structures
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed `^KG`, `^NKG`, `^VecIdx`, and `^PLAID` global documentation.
+### ^KG — Temporal + Structural Graph
+
+```
+^KG("out", s, p, o) = weight              — structural outbound edges
+^KG("in",  o, p, s) = weight              — structural inbound edges
+^KG("tout", ts, s, p, o) = weight         — temporal outbound (time-ordered)
+^KG("tin",  ts, o, p, s) = weight         — temporal inbound
+^KG("bucket", bucket, s) = count          — 5-min pre-aggregated edge count
+^KG("tagg", bucket, s, p, key) = value    — COUNT/SUM/AVG/MIN/MAX/HLL per bucket
+^KG("edgeprop", ts, s, p, o, key) = value — rich edge attributes
+```
+
+### ^BM25Idx — BM25 Lexical Search
+
+```
+^BM25Idx(name, "cfg", "N")           — document count
+^BM25Idx(name, "cfg", "avgdl")       — average document length
+^BM25Idx(name, "cfg", "k1")          — BM25 k1 parameter
+^BM25Idx(name, "cfg", "b")           — BM25 b parameter
+^BM25Idx(name, "cfg", "vocab_size")  — distinct token count
+^BM25Idx(name, "idf",  term)         — Robertson IDF value
+^BM25Idx(name, "tf",   term, docId)  — term frequency (term-first subscript order)
+^BM25Idx(name, "len",  docId)        — document token count
+```
+
+Term-first `"tf"` subscript enables O(postings) iteration: `$Order(^BM25Idx(name,"tf",queryTerm,""))`.
+
+### ^VecIdx, ^PLAID, ^NKG
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full global documentation.

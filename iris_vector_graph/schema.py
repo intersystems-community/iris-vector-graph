@@ -135,6 +135,25 @@ CREATE TABLE IF NOT EXISTS Graph_KG.rdf_reifications (
 
 CREATE INDEX idx_reif_edge ON Graph_KG.rdf_reifications (edge_id);
 
+CREATE TABLE IF NOT EXISTS Graph_KG.table_mappings (
+    label         VARCHAR(255) NOT NULL PRIMARY KEY,
+    sql_table     VARCHAR(500) NOT NULL,
+    id_column     VARCHAR(255) NOT NULL,
+    prop_columns  VARCHAR(4000),
+    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS Graph_KG.relationship_mappings (
+    predicate    VARCHAR(255) NOT NULL,
+    source_label VARCHAR(255) NOT NULL,
+    target_label VARCHAR(255) NOT NULL,
+    target_fk    VARCHAR(255),
+    via_table    VARCHAR(500),
+    via_source   VARCHAR(255),
+    via_target   VARCHAR(255),
+    CONSTRAINT pk_rel_mappings PRIMARY KEY (source_label, predicate, target_label)
+);
+
 -- Indexes for graph traversal performance (based on TrustGraph patterns)
 -- Single-column indexes for basic lookups
 CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s);
