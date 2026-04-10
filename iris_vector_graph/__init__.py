@@ -1,15 +1,5 @@
 """
 IRIS Graph Core - Domain-Agnostic Graph Engine
-
-A high-performance, domain-agnostic graph engine for InterSystems IRIS with:
-- HNSW-optimized vector search (50ms performance)
-- Native IRIS iFind text search integration
-- Reciprocal Rank Fusion (RRF) for hybrid ranking
-- JSON_TABLE confidence filtering
-- Multi-modal graph-vector-text fusion
-
-This core module can be integrated into any RAG system requiring advanced
-graph and hybrid search capabilities.
 """
 
 from .engine import IRISGraphEngine
@@ -20,15 +10,23 @@ from .text_search import TextSearchEngine
 from .fusion import RRFFusion
 
 try:
+    from .embedded import EmbeddedConnection, EmbeddedCursor
+except ImportError:
+    pass
+
+try:
     from importlib.metadata import version
     __version__ = version("iris-vector-graph")
 except Exception:
     __version__ = "unknown"
+
 __all__ = [
     "IRISGraphEngine",
     "GraphSchema",
     "IRISCapabilities",
     "VectorOptimizer",
     "TextSearchEngine",
-    "RRFFusion"
+    "RRFFusion",
+    "EmbeddedConnection",
+    "EmbeddedCursor",
 ]

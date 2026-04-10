@@ -1,0 +1,316 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e6]:
+      - generic [ref=e8]:
+        - list [ref=e9]:
+          - listitem "Database Information" [ref=e11]:
+            - button "Database" [ref=e12] [cursor=pointer]:
+              - img "Database" [ref=e188]
+          - listitem "Favorites" [ref=e22]:
+            - button "Favorites" [ref=e23] [cursor=pointer]:
+              - img "Favorites" [ref=e194]
+          - listitem "Guides" [ref=e29]:
+            - button "Guides" [ref=e30] [cursor=pointer]:
+              - img "Guides" [ref=e196]
+        - list [ref=e38]:
+          - listitem "Help &amp; Resources" [ref=e40]:
+            - button "Help & Resources" [ref=e41] [cursor=pointer]:
+              - img "Help & Resources" [ref=e201]
+          - listitem "Browser Sync" [ref=e49]:
+            - button "Browser Sync" [ref=e50] [cursor=pointer]:
+              - img "Browser Sync" [ref=e205]
+          - listitem "Settings" [ref=e59]:
+            - button "Browser Settings" [ref=e60] [cursor=pointer]:
+              - img "Browser Settings" [ref=e210]
+          - listitem "About Neo4j" [ref=e67]:
+            - button "About Neo4j" [ref=e68] [cursor=pointer]:
+              - img "About Neo4j" [ref=e213]
+      - generic [ref=e78]:
+        - generic [ref=e80]:
+          - generic [ref=e81]:
+            - code [ref=e84]:
+              - generic [ref=e85]:
+                - generic [ref=e321]: $
+                - textbox "Editor content;Press Alt+F1 for Accessibility Options." [active] [ref=e96]
+            - button "Run (⌘↩)" [ref=e97] [cursor=pointer]:
+              - img "Run (⌘↩)" [ref=e324]
+          - generic [ref=e103]:
+            - button "Fullscreen (⌘⌥F)" [ref=e104] [cursor=pointer]:
+              - img [ref=e107]
+            - button "Clear" [ref=e112] [cursor=pointer]:
+              - img [ref=e115]
+        - generic [ref=e118]:
+          - article [ref=e328]:
+            - generic [ref=e329]:
+              - button "Pin at top" [ref=e330] [cursor=pointer]:
+                - img [ref=e333]
+              - button "Collapse" [ref=e336] [cursor=pointer]:
+                - img [ref=e339]
+              - button "Fullscreen" [ref=e341] [cursor=pointer]:
+                - img [ref=e344]
+              - button "Close" [ref=e349] [cursor=pointer]:
+                - img [ref=e352]
+            - generic [ref=e355]:
+              - generic [ref=e356]:
+                - generic [ref=e357]:
+                  - generic "Cmd+click to copy to main editor" [ref=e358]: $ MATCH (n)-[r]->(m) RETURN n, r, m LIMIT 25
+                  - button "Rerun" [ref=e399] [cursor=pointer]:
+                    - img "Rerun" [ref=e402]
+                - list [ref=e364]:
+                  - button "Save as Favorite" [ref=e365] [cursor=pointer]:
+                    - img [ref=e368]
+                  - button "Exports" [ref=e405] [cursor=pointer]:
+                    - img [ref=e408]
+                    - list
+              - generic [ref=e370]:
+                - list [ref=e371]:
+                  - listitem [ref=e411] [cursor=pointer]:
+                    - generic [ref=e412]:
+                      - img [ref=e415]
+                      - generic [ref=e426]: Graph
+                  - listitem [ref=e372] [cursor=pointer]:
+                    - generic [ref=e373]:
+                      - img [ref=e376]
+                      - generic [ref=e378]: Table
+                  - listitem [ref=e427] [cursor=pointer]:
+                    - generic [ref=e428]:
+                      - img [ref=e431]
+                      - generic [ref=e433]: Text
+                  - listitem [ref=e379] [cursor=pointer]:
+                    - generic [ref=e380]:
+                      - img [ref=e383]
+                      - generic [ref=e386]: Code
+                - generic [ref=e437]:
+                  - generic [ref=e438]:
+                    - img [ref=e439]:
+                      - generic [ref=e442]:
+                        - generic [ref=e443]:
+                          - generic [ref=e444]:
+                            - generic: is_a
+                          - generic [ref=e447]:
+                            - generic: is_a
+                          - generic [ref=e450]:
+                            - generic: is_a
+                          - generic [ref=e453]:
+                            - generic: is_a
+                          - generic [ref=e456]:
+                            - generic: is_a
+                          - generic [ref=e459]:
+                            - generic: is_a
+                          - generic [ref=e462]:
+                            - generic: is_a
+                          - generic [ref=e465]:
+                            - generic: is_a
+                          - generic [ref=e468]:
+                            - generic: is_a
+                          - generic [ref=e471]:
+                            - generic: is_a
+                          - generic [ref=e474]:
+                            - generic: is_a
+                          - generic [ref=e477]:
+                            - generic: is_a
+                          - generic [ref=e480]:
+                            - generic: is_a
+                          - generic [ref=e483]:
+                            - generic: is_a
+                          - generic [ref=e486]:
+                            - generic: is_a
+                          - generic [ref=e489]:
+                            - generic: is_a
+                          - generic [ref=e492]:
+                            - generic: is_a
+                          - generic [ref=e495]:
+                            - generic: is_a
+                          - generic [ref=e498]:
+                            - generic: is_a
+                          - generic [ref=e501]:
+                            - generic: is_a
+                          - generic [ref=e504]:
+                            - generic: is_a
+                          - generic [ref=e507]:
+                            - generic: is_a
+                          - generic [ref=e510]:
+                            - generic: is_a
+                          - generic [ref=e513]:
+                            - generic: is_a
+                          - generic [ref=e516]:
+                            - generic: is_a
+                        - generic [ref=e519]:
+                          - generic "graph-node33357836" [ref=e520] [cursor=pointer]:
+                            - generic: Recombi…
+                          - generic "graph-node2003849946" [ref=e523] [cursor=pointer]
+                          - generic "graph-node1090129898" [ref=e526] [cursor=pointer]:
+                            - generic: Cycloph…
+                          - generic "graph-node996105768" [ref=e529] [cursor=pointer]
+                          - generic "graph-node449997651" [ref=e532] [cursor=pointer]
+                          - generic "graph-node1994227686" [ref=e535] [cursor=pointer]
+                          - generic "graph-node345182838" [ref=e538] [cursor=pointer]
+                          - generic "graph-node30170921" [ref=e541] [cursor=pointer]
+                          - generic "graph-node1719024733" [ref=e544] [cursor=pointer]
+                          - generic "graph-node1112116552" [ref=e547] [cursor=pointer]:
+                            - generic: Percuta…
+                          - generic "graph-node529454866" [ref=e550] [cursor=pointer]
+                          - generic "graph-node544829748" [ref=e553] [cursor=pointer]:
+                            - generic: Percuta…
+                          - generic "graph-node2093053801" [ref=e556] [cursor=pointer]:
+                            - generic: Percuta…
+                          - generic "graph-node985264576" [ref=e559] [cursor=pointer]:
+                            - generic: Percuta…
+                          - generic "graph-node937484023" [ref=e562] [cursor=pointer]
+                          - generic "graph-node1982816745" [ref=e565] [cursor=pointer]:
+                            - generic: Pericardi…
+                          - generic "graph-node327136319" [ref=e568] [cursor=pointer]
+                          - generic "graph-node1698181290" [ref=e571] [cursor=pointer]:
+                            - generic: Post-Car…
+                          - generic "graph-node277929303" [ref=e574] [cursor=pointer]
+                          - generic "graph-node472495591" [ref=e577] [cursor=pointer]:
+                            - generic: Pre-Ope…
+                          - generic "graph-node1626716499" [ref=e580] [cursor=pointer]
+                          - generic "graph-node1047834793" [ref=e583] [cursor=pointer]:
+                            - generic: Previously
+                            - generic: Impla…
+                          - generic "graph-node668640298" [ref=e586] [cursor=pointer]
+                          - generic "graph-node2086724121" [ref=e589] [cursor=pointer]:
+                            - generic: Rescue
+                            - generic: Percut…
+                          - generic "graph-node992895783" [ref=e592] [cursor=pointer]:
+                            - generic: Reused
+                            - generic: Cardiac
+                            - generic: Lead
+                          - generic "graph-node2043292738" [ref=e595] [cursor=pointer]:
+                            - generic: CONPA…
+                          - generic "graph-node324665722" [ref=e598] [cursor=pointer]
+                          - generic "graph-node820091130" [ref=e601] [cursor=pointer]
+                          - generic "graph-node328763413" [ref=e604] [cursor=pointer]
+                          - generic "graph-node190258190" [ref=e607] [cursor=pointer]
+                          - generic "graph-node1557969937" [ref=e610] [cursor=pointer]:
+                            - generic: Right
+                            - generic: Cardiac
+                            - generic: Ventr
+                          - generic "graph-node1075503147" [ref=e613] [cursor=pointer]
+                          - generic "graph-node42948601" [ref=e616] [cursor=pointer]:
+                            - generic: Right
+                            - generic: Cardiac
+                            - generic: Ventr
+                          - generic "graph-node2074289908" [ref=e619] [cursor=pointer]
+                          - generic "graph-node1925114366" [ref=e622] [cursor=pointer]:
+                            - generic: Severe
+                            - generic: Cardiac
+                            - generic: Valv
+                          - generic "graph-node663890614" [ref=e625] [cursor=pointer]
+                    - generic [ref=e628]:
+                      - button "zoom-in" [ref=e629] [cursor=pointer]:
+                        - img [ref=e630]
+                      - button "zoom-out" [ref=e632] [cursor=pointer]:
+                        - img [ref=e633]
+                      - button "zoom-to-fit" [ref=e635] [cursor=pointer]:
+                        - img [ref=e636]
+                  - button "Collapse the node properties display" [ref=e638] [cursor=pointer]:
+                    - img [ref=e639]
+                  - generic [ref=e644]:
+                    - generic [ref=e645]: Overview
+                    - generic [ref=e646]:
+                      - generic [ref=e647]:
+                        - generic [ref=e649]: Node labels
+                        - list [ref=e650]:
+                          - generic [ref=e651] [cursor=pointer]: "* (36)"
+                          - generic [ref=e652] [cursor=pointer]: NCIT (36)
+                      - generic [ref=e653]:
+                        - generic [ref=e655]: Relationship types
+                        - list [ref=e656]:
+                          - generic [ref=e657] [cursor=pointer]: "* (25)"
+                          - generic [ref=e658] [cursor=pointer]: is_a (25)
+                      - generic [ref=e659]: Displaying 36 nodes, 25 relationships.
+          - article [ref=e223]:
+            - generic [ref=e224]:
+              - button "Pin at top" [ref=e225] [cursor=pointer]:
+                - img [ref=e228]
+              - button "Collapse" [ref=e231] [cursor=pointer]:
+                - img [ref=e234]
+              - button "Fullscreen" [ref=e236] [cursor=pointer]:
+                - img [ref=e239]
+              - button "Close" [ref=e244] [cursor=pointer]:
+                - img [ref=e247]
+            - generic [ref=e250]:
+              - generic [ref=e251]:
+                - generic [ref=e252]:
+                  - generic "Cmd+click to copy to main editor" [ref=e253]: $ :play start
+                  - button "Rerun" [ref=e254] [cursor=pointer]:
+                    - img "Rerun" [ref=e668]
+                - list [ref=e260]:
+                  - button "Save as Favorite" [ref=e261] [cursor=pointer]:
+                    - img [ref=e264]
+              - generic [ref=e266]:
+                - heading "Neo4j" [level=3] [ref=e268]:
+                  - img "Neo4j" [ref=e269]
+                - generic [ref=e273]:
+                  - generic [ref=e274]:
+                    - generic [ref=e275]:
+                      - img
+                      - heading "🚀 Try the new Browser preview!" [level=3] [ref=e276]
+                      - paragraph [ref=e277]: Switch to the preview experience to access all the latest features.
+                      - button "Let's go" [ref=e278] [cursor=pointer]
+                    - generic [ref=e279]:
+                      - heading "Try Neo4j with live data" [level=3] [ref=e280]
+                      - paragraph [ref=e281]: A complete example graph that demonstrates common query patterns.
+                      - paragraph [ref=e283]: Actors & movies in cross-referenced pop culture.
+                      - button " Open guide" [ref=e284] [cursor=pointer]:
+                        - generic [ref=e285]: 
+                        - text: Open guide
+                    - generic [ref=e286]:
+                      - heading "Cypher basics" [level=3] [ref=e287]
+                      - paragraph [ref=e288]: Intro to Graphs with Cypher
+                      - list [ref=e289]:
+                        - listitem [ref=e290]: What is a graph database?
+                        - listitem [ref=e291]: How can I query a graph?
+                      - button " Start querying" [ref=e293] [cursor=pointer]:
+                        - generic [ref=e294]: 
+                        - text: Start querying
+                  - paragraph [ref=e296]:
+                    - text: Copyright ©
+                    - link "Neo4j, Inc" [ref=e297] [cursor=pointer]:
+                      - /url: http://neo4j.com/
+                    - generic [ref=e298]: 2002–2026
+                  - generic [ref=e299]:
+                    - link "Sign up" [ref=e300] [cursor=pointer]:
+                      - /url: https://neo4j.com/cloud/aura/pricing/?utm_medium=browser&utm_source=ce&utm_campaign=wl_v1
+                    - text: for a free Neo4j cloud instance with
+                    - img "Neo4j" [ref=e301]
+          - article [ref=e119]:
+            - generic [ref=e120]:
+              - button "Pin at top" [ref=e121] [cursor=pointer]:
+                - img [ref=e124]
+              - button "Collapse" [ref=e127] [cursor=pointer]:
+                - img [ref=e130]
+              - button "Fullscreen" [ref=e132] [cursor=pointer]:
+                - img [ref=e135]
+              - button "Close" [ref=e140] [cursor=pointer]:
+                - img [ref=e143]
+            - generic [ref=e146]:
+              - generic [ref=e147]:
+                - generic [ref=e148]:
+                  - generic "Cmd+click to copy to main editor" [ref=e149]: $ :server connect
+                  - button "Rerun" [ref=e150] [cursor=pointer]:
+                    - img "Rerun" [ref=e671]
+                - list [ref=e156]:
+                  - button "Save as Favorite" [ref=e157] [cursor=pointer]:
+                    - img [ref=e160]
+              - generic [ref=e164]:
+                - generic [ref=e165]:
+                  - heading "Connected to Neo4j" [level=3] [ref=e306]
+                  - paragraph [ref=e167]: Nice to meet you.
+                - generic [ref=e307]:
+                  - text: You are connected
+                  - generic [ref=e308]:
+                    - text: to
+                    - code [ref=e309]: bolt://localhost:8000
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - img "Import"
+  - generic [ref=e187]:
+    - alert
+    - alert
+    - complementary
+    - complementary

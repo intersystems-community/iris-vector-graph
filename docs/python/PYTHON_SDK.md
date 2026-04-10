@@ -1,6 +1,6 @@
-# IRIS Vector Graph Python SDK (v1.28.0)
+# IRIS Vector Graph Python SDK (v1.47.0)
 
-This guide documents the current Python API surface for `iris-vector-graph` v1.28.0.
+This guide documents the Python API surface for `iris-vector-graph` v1.47.0.
 
 ---
 
@@ -20,11 +20,10 @@ pip install iris-vector-graph[plaid]
 
 ## 2) Connection
 
-Canonical connection pattern:
-
 ```python
 import iris
 
+# External (host process)
 conn = iris.connect(
     hostname="localhost",
     port=1972,
@@ -32,6 +31,10 @@ conn = iris.connect(
     username="_SYSTEM",
     password="SYS",
 )
+
+# Embedded (inside IRIS Language=python method)
+from iris_vector_graph.embedded import EmbeddedConnection
+conn = EmbeddedConnection()
 ```
 
 ---
@@ -44,69 +47,117 @@ from iris_vector_graph.engine import IRISGraphEngine
 engine = IRISGraphEngine(
     conn,
     embedding_dimension=768,   # required before initialize_schema()
-    embedder=None,             # optional
-    embedding_config=None,     # optional IRIS EMBEDDING() config name
 )
+engine.initialize_schema()     # idempotent — safe to call on every startup
 ```
 
-### Core methods
+### Core graph methods
 
 ```python
-engine.initialize_schema(auto_deploy_objectscript=True)
+engine.create_node("node:1", labels=["Entity"], properties={"name": "Example"})
+engine.create_edge("node:1", "RELATED_TO", "node:2", qualifiers={"confidence": 0.9})
 
-engine.create_node(
-    node_id="node:1",
-    labels=["Entity"],
-    properties={"name": "Example"},
-)
-
-engine.create_edge(
-    source_id="node:1",
-    predicate="RELATED_TO",
-    target_id="node:2",
-    qualifiers={"confidence": 0.9},
-)
-
-node = engine.get_node("node:1")
-nodes = engine.get_nodes(["node:1", "node:2"])
-
-ok = engine.delete_node("node:2")
-
-anchors = engine.get_kg_anchors(["E11.9", "J18.0"], bridge_type="icd10_to_mesh")
+node  = engine.get_node("node:1")       # dict | None
+nodes = engine.get_nodes(["node:1"])    # list[dict]
+ok    = engine.delete_node("node:2")    # bool
 ```
 
-### Notes
+### Bulk ingest
 
-- `initialize_schema()` is idempotent and installs SQL schema/procedures.
-- `create_node()`, `create_edge()`, `delete_node()` return `bool`.
-- `get_node()` returns `dict | None`; `get_nodes()` returns `list[dict]`.
-- `get_kg_anchors()` returns only bridge targets that exist in the KG.
+```python
+engine.bulk_create_nodes([
+    {"id": "n:1", "labels": ["Gene"], "properties": {"name": "BRCA1"}},
+    {"id": "n:2", "labels": ["Drug"], "properties": {"name": "Olaparib"}},
+])
+engine.bulk_create_edges([
+    {"source": "n:1", "predicate": "TARGETS", "target": "n:2"},
+])
+```
+
+### Cypher
+
+```python
+result = engine.execute_cypher(
+    "MATCH (n:Gene)-[:TARGETS]->(d:Drug) RETURN n.id, d.id LIMIT 10"
+)
+# result = {"columns": [...], "rows": [...], "sql": "...", "params": [...]}
+```
 
 ---
 
-## 4) VecIndex API
+## 4) BM25Index API
+
+Pure ObjectScript Okapi BM25 lexical search over `^BM25Idx` globals. No SQL tables, no Enterprise license required.
+
+```python
+# Build index over all nodes using their 'name' and 'definition' properties
+result = engine.bm25_build("ncit", text_props=["name", "definition"], k1=1.5, b=0.75)
+# {"indexed": 200000, "avgdl": 8.4, "vocab_size": 45000}
+
+# Search — returns list of (node_id, score) tuples, sorted by score DESC
+hits = engine.bm25_search("ncit", "ankylosing spondylitis HLA-B27", k=10)
+# [("NCIT:C34718", 8.4), ("NCIT:C2890", 6.1), ...]
+
+# Incremental add / update
+engine.bm25_insert("ncit", "NCIT:C99999", "new concept text here")
+
+# Metadata
+info = engine.bm25_info("ncit")
+# {"N": 200001, "avgdl": 8.4, "vocab_size": 45001}  |  {} if not found
+
+# Remove
+engine.bm25_drop("ncit")
+```
+
+### kg_TXT automatic upgrade
+
+If a `"default"` BM25 index exists, `IRISGraphOperators.kg_TXT()` routes through it automatically instead of using the LIKE fallback:
+
+```python
+engine.bm25_build("default", text_props=["name"])   # one-time setup
+
+from iris_vector_graph.operators import IRISGraphOperators
+ops = IRISGraphOperators(conn)
+ops.graph_engine = engine
+hits = ops.kg_TXT("diabetes", k=20)   # uses BM25 automatically
+```
+
+### Cypher procedure
+
+```python
+engine.execute_cypher(
+    "CALL ivg.bm25.search('ncit', $q, 10) YIELD node, score RETURN node, score",
+    {"q": "ankylosing spondylitis"}
+)
+```
+
+### API summary
+
+- `bm25_build(name, text_props, k1=1.5, b=0.75) -> dict`  — `{"indexed", "avgdl", "vocab_size"}`
+- `bm25_search(name, query, k=10) -> list[tuple[str, float]]`
+- `bm25_insert(name, doc_id, text) -> bool`
+- `bm25_drop(name) -> None`
+- `bm25_info(name) -> dict`  — `{}` if index not found
+
+---
+
+## 5) VecIndex API
 
 Lightweight ANN index backed by ObjectScript globals (`Graph.KG.VecIndex`).
 
 ```python
 engine.vec_create_index("my_idx", dim=384, metric="cosine", num_trees=4, leaf_size=50)
-
 engine.vec_insert("my_idx", "doc:1", [0.1, 0.2, 0.3])
-
 engine.vec_bulk_insert("my_idx", [
     {"id": "doc:2", "embedding": [0.2, 0.3, 0.4]},
-    {"id": "doc:3", "embedding": [0.3, 0.4, 0.5]},
 ])
-
 engine.vec_build("my_idx")
 
 hits = engine.vec_search("my_idx", [0.1, 0.2, 0.3], k=5, nprobe=8)
-multi_hits = engine.vec_search_multi("my_idx", [[0.1, 0.2, 0.3], [0.3, 0.2, 0.1]], k=5, nprobe=8)
+multi_hits = engine.vec_search_multi("my_idx", [[0.1, 0.2, 0.3]], k=5)
 
 info = engine.vec_info("my_idx")
-
 engine.vec_expand("my_idx", seed_id="doc:1", k=5)
-
 engine.vec_drop("my_idx")
 ```
 
@@ -114,7 +165,7 @@ engine.vec_drop("my_idx")
 
 - `vec_create_index(name, dim, metric="cosine", num_trees=4, leaf_size=50) -> dict`
 - `vec_insert(index_name, doc_id, embedding) -> None`
-- `vec_bulk_insert(index_name, items) -> int`  (`items=[{"id","embedding"}, ...]`)
+- `vec_bulk_insert(index_name, items) -> int`
 - `vec_build(index_name) -> dict`
 - `vec_search(index_name, query_embedding, k=10, nprobe=8) -> list`
 - `vec_search_multi(index_name, query_embeddings, k=10, nprobe=8) -> list`
@@ -124,7 +175,42 @@ engine.vec_drop("my_idx")
 
 ---
 
-## 5) PLAID API
+## 6) Generic Vector Search (v1.45.0+)
+
+Search any IRIS VECTOR column, not just `kg_NodeEmbeddings`:
+
+```python
+# Search a specific table/column
+hits = engine.vector_search(
+    table="MySchema.DocChunk",
+    vector_col="VectorChunk",
+    query_embedding=[0.1, 0.2, ...],
+    top_k=10,
+)
+
+# Fused search across multiple vector tables
+hits = engine.multi_vector_search(
+    sources=[
+        {"table": "Graph_KG.kg_NodeEmbeddings", "vector_col": "emb"},
+        {"table": "RAG.SourceDocuments",        "vector_col": "embedding"},
+    ],
+    query_embedding=[0.1, 0.2, ...],
+    top_k=10,
+    fusion="rrf",
+)
+
+# Node embedding
+engine.embed_nodes(
+    model="sentence-transformers/all-MiniLM-L6-v2",
+    text_fn=lambda node: node.get("name", ""),
+    where="label = 'Gene'",
+    batch_size=64,
+)
+```
+
+---
+
+## 7) PLAID API
 
 ColBERT-style multi-vector retrieval (`Graph.KG.PLAIDSearch`).
 
@@ -133,31 +219,59 @@ docs = [
     {"id": "doc:1", "tokens": [[0.1, 0.2], [0.3, 0.4]]},
     {"id": "doc:2", "tokens": [[0.2, 0.1], [0.4, 0.3]]},
 ]
-
 engine.plaid_build("plaid_idx", docs, n_clusters=None, dim=2)
-
-results = engine.plaid_search("plaid_idx", query_tokens=[[0.1, 0.2], [0.3, 0.4]], k=10, nprobe=4)
-
-engine.plaid_insert("plaid_idx", "doc:3", token_embeddings=[[0.5, 0.6], [0.7, 0.8]])
-
+results = engine.plaid_search("plaid_idx", query_tokens=[[0.1, 0.2]], k=10, nprobe=4)
+engine.plaid_insert("plaid_idx", "doc:3", token_embeddings=[[0.5, 0.6]])
 info = engine.plaid_info("plaid_idx")
-
 engine.plaid_drop("plaid_idx")
 ```
 
-### API summary
-
-- `plaid_build(name, docs, n_clusters=None, dim=128) -> dict`
-- `plaid_search(name, query_tokens, k=10, nprobe=4) -> list`
-- `plaid_insert(name, doc_id, token_embeddings) -> None`
-- `plaid_info(name) -> dict`
-- `plaid_drop(name) -> None`
-
-`plaid_build()` requires `[plaid]` dependencies (`numpy`, `scikit-learn`).
+`plaid_build()` requires `[plaid]` install extras (`numpy`, `scikit-learn`).
 
 ---
 
-## 6) `IRISGraphOperators`
+## 8) Temporal Graph API
+
+```python
+import time
+
+# Single edge
+engine.create_edge_temporal(
+    source="svc:auth", predicate="CALLS_AT", target="svc:payment",
+    timestamp=int(time.time()), weight=42.7,
+    attrs={"trace_id": "abc123"},
+)
+
+# Bulk ingest (~134K edges/sec)
+engine.bulk_create_edges_temporal([
+    {"s": "svc:auth", "p": "CALLS_AT", "o": "svc:pay", "ts": 1712000000, "w": 38.1},
+])
+
+# Window query
+edges = engine.get_edges_in_window("svc:auth", "CALLS_AT", ts_start, ts_end)
+
+# Pre-aggregated analytics (O(1))
+avg  = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "avg", ts_start, ts_end)
+groups = engine.get_bucket_groups("CALLS_AT", ts_start, ts_end)
+```
+
+---
+
+## 9) SQL Table Bridge (v1.44.0+)
+
+Map existing IRIS SQL tables as virtual graph nodes — zero data copy:
+
+```python
+engine.map_sql_table("MySchema.Patient", id_column="PatientID", label="Patient")
+engine.map_sql_relationship("Patient", "HAS_ENCOUNTER", "Encounter", target_fk="PatientID")
+
+# Now queryable via Cypher
+engine.execute_cypher("MATCH (p:Patient)-[:HAS_ENCOUNTER]->(e:Encounter) RETURN p.id LIMIT 5")
+```
+
+---
+
+## 10) `IRISGraphOperators`
 
 ```python
 from iris_vector_graph.operators import IRISGraphOperators
@@ -165,118 +279,132 @@ from iris_vector_graph.operators import IRISGraphOperators
 ops = IRISGraphOperators(conn)
 ```
 
-### Vector + neighborhood
-
 ```python
-vec_hits = ops.kg_KNN_VEC('[0.1, 0.2, 0.3]', k=10, label_filter=None)
-neighbors = ops.kg_NEIGHBORS(["doc:1", "doc:2"], predicate="MENTIONS", direction="out")
-mentions = ops.kg_MENTIONS(["doc:1", "doc:2"])  # alias for MENTIONS neighbors
-```
+# Text search — uses BM25 if 'default' index exists, LIKE fallback otherwise
+hits = ops.kg_TXT("ankylosing spondylitis", k=20)
 
-### PageRank (unified global + personalized)
+# Vector + neighborhood
+vec_hits  = ops.kg_KNN_VEC('[0.1, 0.2, 0.3]', k=10)
+neighbors = ops.kg_NEIGHBORS(["doc:1"], predicate="MENTIONS", direction="out")
 
-```python
+# PageRank
 global_pr = ops.kg_PAGERANK(damping=0.85, max_iterations=20)
-personalized_pr = ops.kg_PAGERANK(seed_entities=["doc:1"], damping=0.85, max_iterations=20)
-```
+ppr       = ops.kg_PAGERANK(seed_entities=["doc:1"], damping=0.85)
 
-- `kg_PAGERANK(seed_entities=None, ...)`:
-  - `seed_entities=None` -> global PageRank
-  - `seed_entities=[...]` -> personalized PageRank
-
-### Graph analytics kernels
-
-```python
-wcc = ops.kg_WCC(max_iterations=100)
-cdlp = ops.kg_CDLP(max_iterations=10)
-
-sub = ops.kg_SUBGRAPH(seed_ids=["doc:1"], k_hops=2)
-
-guided = ops.kg_PPR_GUIDED_SUBGRAPH(
-    seed_ids=["doc:1"],
-    alpha=0.15,
-    eps=1e-5,
-    top_k=50,
-    max_hops=5,
-)
+# Graph kernels
+wcc     = ops.kg_WCC(max_iterations=100)
+cdlp    = ops.kg_CDLP(max_iterations=10)
+sub     = ops.kg_SUBGRAPH(seed_ids=["doc:1"], k_hops=2)
+guided  = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["doc:1"], top_k=50, max_hops=5)
 ```
 
 ---
 
-## 7) Cypher
+## 11) Cypher `ivg` Procedures
 
-Use `execute_cypher()` from `IRISGraphEngine`:
+| Procedure | Signature | YIELD |
+|-----------|-----------|-------|
+| `ivg.vector.search` | `(label, property, query_input, limit)` | `node, score` |
+| `ivg.neighbors` | `(sources, predicate, direction)` | `neighbor` |
+| `ivg.ppr` | `(seeds, alpha, max_iter)` | `node, score` |
+| `ivg.bm25.search` | `(name, query, k)` | `node, score` |
 
 ```python
-result = engine.execute_cypher(
-    "MATCH (n:Entity) RETURN n.id LIMIT 5",
-    parameters=None,
+# BM25 lexical search in Cypher
+engine.execute_cypher(
+    "CALL ivg.bm25.search('ncit', $q, 10) YIELD node, score "
+    "RETURN node, score ORDER BY score DESC",
+    {"q": "HLA-B27 spondylitis"}
 )
-```
 
-### Named paths
-
-```python
-result = engine.execute_cypher(
-    "MATCH p = (a)-[r]->(b) RETURN p, length(p), nodes(p), relationships(p)"
-)
-```
-
-### `CALL { ... }` subqueries
-
-```python
-result = engine.execute_cypher(
-    "MATCH (p:Protein) "
-    "CALL { WITH p MATCH (p)-[:INTERACTS_WITH]->(q) RETURN count(q) AS deg } "
-    "RETURN p.id, deg"
-)
-```
-
-### `ivg` procedures
-
-```python
-# vector search
+# Vector search in Cypher
 engine.execute_cypher(
     "CALL ivg.vector.search('Gene', 'embedding', [0.1, 0.2], 5) "
     "YIELD node, score RETURN node, score"
 )
 
-# 1-hop neighbors
+# PPR in Cypher
 engine.execute_cypher(
-    "CALL ivg.neighbors(['A','B'], 'MENTIONS', 'out') "
-    "YIELD neighbor RETURN neighbor"
-)
-
-# personalized PageRank
-engine.execute_cypher(
-    "CALL ivg.ppr(['A','B'], 0.85, 20) "
-    "YIELD node, score RETURN node, score"
+    "CALL ivg.ppr(['svc:auth'], 0.85, 20) YIELD node, score RETURN node, score"
 )
 ```
-
-`execute_cypher()` returns a dict with keys like `columns`, `rows`, `sql`, `params`, and `metadata`.
 
 ---
 
-## 8) Arno Acceleration
-
-The engine supports optional Arno/NKG acceleration with automatic detection and fallback:
+## 12) Arno Acceleration
 
 ```python
 khop_result = engine.khop(seed="node:1", hops=2, max_nodes=500)
-ppr_result = engine.ppr(seed="node:1", alpha=0.85, max_iter=20, top_k=20)
-walks = engine.random_walk(seed="node:1", length=20, num_walks=10)
+ppr_result  = engine.ppr(seed="node:1", alpha=0.85, max_iter=20, top_k=20)
+walks       = engine.random_walk(seed="node:1", length=20, num_walks=10)
 ```
 
-Behavior:
+Falls back transparently if `Graph.KG.NKGAccel` is unavailable.
 
-- If `Graph.KG.NKGAccel` is available and supports the algorithm, accelerated path is used.
-- If unavailable or an accelerated call errors, engine falls back to non-Arno paths.
+---
+
+## 13) Bolt Server + Neo4j Browser
+
+Start the combined HTTP + Bolt server:
+
+```bash
+IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER \
+IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
+python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
+```
+
+This starts:
+- HTTP API on port 8000 (`/api/cypher`, `/db/neo4j/tx/commit`)
+- Neo4j Browser at `http://localhost:8000/browser/`
+- Bolt WebSocket on port 8000 (Neo4j Browser connects via `bolt://localhost:8000`)
+- Bolt TCP on port 7687 (Python driver, LangChain)
+
+### Neo4j Python Driver
+
+```python
+from neo4j import GraphDatabase
+driver = GraphDatabase.driver("bolt://localhost:7687", auth=("", ""))
+with driver.session() as s:
+    result = s.run("MATCH (n) RETURN count(n) AS c")
+    print(result.single()["c"])
+driver.close()
+```
+
+### LangChain Neo4jGraph
+
+```python
+from langchain_community.graphs import Neo4jGraph
+graph = Neo4jGraph(url="bolt://localhost:7687", username="", password="")
+graph.query("MATCH (n) RETURN count(n) AS c")
+```
+
+### System Procedures (via Bolt or HTTP)
+
+```python
+with driver.session() as s:
+    s.run("CALL db.labels()").data()
+    s.run("CALL db.relationshipTypes()").data()
+    s.run("CALL db.schema.visualization()").data()
+    s.run("CALL dbms.queryJmx('org.neo4j:*')").data()
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IRIS_HOST` | (required) | IRIS hostname |
+| `IRIS_PORT` | `1972` | IRIS SuperServer port |
+| `IRIS_NAMESPACE` | `USER` | IRIS namespace |
+| `IRIS_USERNAME` | `_SYSTEM` | IRIS username |
+| `IRIS_PASSWORD` | `SYS` | IRIS password |
+| `IVG_API_KEY` | (empty=no auth) | API key for `/api/*` and `/db/*` HTTP routes |
+| `BOLT_TCP_PORT` | `7687` | TCP Bolt listener port |
 
 ---
 
 ## Related docs
 
-- GraphQL support exists, but details are documented separately (see `README.md` and `iris_vector_graph/gql/`).
-- NetworkX and Pandas integrations exist in the project examples/tests.
-- Performance benchmark details: `docs/performance/BENCHMARKS.md` and `README.md`.
+- Architecture: `docs/architecture/ARCHITECTURE.md`
+- Schema reference: `docs/architecture/ACTUAL_SCHEMA.md`
+- Performance benchmarks: `docs/performance/BENCHMARKS.md`
+- Testing policy: `docs/TESTING_POLICY.md`
