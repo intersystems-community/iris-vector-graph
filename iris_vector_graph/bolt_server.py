@@ -23,17 +23,14 @@ log = logging.getLogger(__name__)
 
 BOLT_MAGIC = b'\x60\x60\xb0\x17'
 BOLT_44 = 0x00000404
+BOLT_54 = 0x00000405
 MAX_CHUNK = 0xFFFF
-
-
-class RawPackedBytes:
-    __slots__ = ("data",)
-    def __init__(self, data: bytes):
-        self.data = data
 
 # Message tags
 TAG_HELLO = 0x01
 TAG_GOODBYE = 0x02
+TAG_LOGON = 0x6A
+TAG_LOGOFF = 0x6B
 TAG_RESET = 0x0F
 TAG_RUN = 0x10
 TAG_BEGIN = 0x11
@@ -49,6 +46,13 @@ TAG_FAILURE = 0x7F
 # Structure tags
 TAG_NODE = 0x4E
 TAG_RELATIONSHIP = 0x52
+
+
+class RawPackedBytes:
+    __slots__ = ("data",)
+    def __init__(self, data: bytes):
+        self.data = data
+
 
 # ── PackStream ────────────────────────────────────────────────────────────────
 
@@ -318,21 +322,19 @@ def encode_bolt_message(tag: int, *fields) -> bytes:
 
 
 def negotiate_version(proposals_bytes: bytes) -> int:
-    supported = {BOLT_44}
     for i in range(4):
         raw = struct.unpack('>I', proposals_bytes[i*4:(i+1)*4])[0]
         if raw == 0:
             continue
-
         major = raw & 0xFF
         minor = (raw >> 8) & 0xFF
         rng = (raw >> 16) & 0xFF
 
-        if major == 4:
-            for m in range(minor, max(-1, minor - rng - 1), -1):
-                candidate = (m << 8) | major
-                if candidate == (BOLT_44 & 0xFFFF):
-                    return BOLT_44
+        if major == 5:
+            for m in range(min(minor, 4), max(-1, minor - rng - 1), -1):
+                return (m << 8) | major
+        if major == 4 and minor >= 4:
+            return BOLT_44
     return 0x00000000
 
 
@@ -370,6 +372,7 @@ class BoltSession:
         self.ws = websocket
         self._get_engine_fn = get_engine_fn
         self._engine = None
+        self._bolt_version = 4
         self.state = BoltState.CONNECTED
         self._buf = bytearray()
         self._msg_queue: list[bytes] = []
@@ -392,6 +395,7 @@ class BoltSession:
             if chosen == 0:
                 await self.ws.close()
                 return
+            self._bolt_version = chosen & 0xFF
             self.state = BoltState.READY
 
             while self.state != BoltState.DEFUNCT:
@@ -462,6 +466,11 @@ class BoltSession:
         if tag == TAG_HELLO:
             fields_data, _ = PackStream.unpack(msg, 2)
             await self._handle_hello(fields_data)
+        elif tag == TAG_LOGON:
+            fields_data, _ = PackStream.unpack(msg, 2)
+            await self._handle_logon(fields_data)
+        elif tag == TAG_LOGOFF:
+            await self._send_message(TAG_SUCCESS, {})
         elif tag == TAG_RUN:
             query, off = PackStream.unpack(msg, 2)
             params, off = PackStream.unpack(msg, off)
@@ -497,6 +506,26 @@ class BoltSession:
             log.debug("Unknown Bolt tag: 0x%02X", tag)
 
     async def _handle_hello(self, extra: dict) -> None:
+        if self._bolt_version < 5:
+            api_key = os.environ.get("IVG_API_KEY", "")
+            if api_key:
+                provided = extra.get("credentials", "")
+                if provided != api_key:
+                    await self._send_message(TAG_FAILURE, {
+                        "code": "Neo.ClientError.Security.Unauthorized",
+                        "message": "Unauthorized: invalid API key",
+                    })
+                    self.state = BoltState.FAILED
+                    return
+
+        conn_id = str(uuid.uuid4())[:8]
+        await self._send_message(TAG_SUCCESS, {
+            "server": "iris-vector-graph/5.0.0",
+            "connection_id": conn_id,
+            "hints": {"connection.recv_timeout_seconds": 300},
+        })
+
+    async def _handle_logon(self, extra: dict) -> None:
         api_key = os.environ.get("IVG_API_KEY", "")
         if api_key:
             provided = extra.get("credentials", "")
@@ -507,13 +536,7 @@ class BoltSession:
                 })
                 self.state = BoltState.FAILED
                 return
-
-        conn_id = str(uuid.uuid4())[:8]
-        await self._send_message(TAG_SUCCESS, {
-            "server": "iris-vector-graph/1.47.0",
-            "connection_id": conn_id,
-            "hints": {"connection.recv_timeout_seconds": 300},
-        })
+        await self._send_message(TAG_SUCCESS, {})
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
         print(f"[BOLT-WS] RUN query={query[:500]}")
@@ -763,6 +786,7 @@ class TcpBoltSession(BoltSession):
             if chosen == 0:
                 self._writer.close()
                 return
+            self._bolt_version = chosen & 0xFF
             self.state = BoltState.READY
             while self.state != BoltState.DEFUNCT:
                 try:

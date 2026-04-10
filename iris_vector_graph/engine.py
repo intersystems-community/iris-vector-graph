@@ -708,8 +708,22 @@ class IRISGraphEngine:
                 "rows": [["neo4j", "standard", [], "read-write", "localhost:7687",
                            "primary", True, "online", "online", "", True, True, []]],
             }
-        if "FUNCTIONS" in cmd or "PROCEDURES" in cmd:
-            return {"columns": ["name", "description"], "rows": []}
+        if "PROCEDURES" in cmd:
+            procs = self._try_system_procedure(type("P", (), {"procedure_name": "dbms.procedures"})())
+            if procs:
+                return {
+                    "columns": ["name", "description", "signature"],
+                    "rows": [[r[0], r[2], r[1]] for r in procs.get("rows", [])],
+                }
+            return {"columns": ["name", "description", "signature"], "rows": []}
+        if "FUNCTIONS" in cmd:
+            fns = self._try_system_procedure(type("P", (), {"procedure_name": "dbms.functions"})())
+            if fns:
+                return {
+                    "columns": ["name", "description", "signature"],
+                    "rows": [[r[0], r[2], r[1]] for r in fns.get("rows", [])],
+                }
+            return {"columns": ["name", "description", "signature"], "rows": []}
         if "INDEXES" in cmd:
             return {"columns": ["name", "type", "entityType", "labelsOrTypes", "properties"],
                     "rows": []}
@@ -816,7 +830,7 @@ class IRISGraphEngine:
                 ["dbms.security.auth_enabled", "false"],
             ]}
 
-        if name == "dbms.security.showcurrentuser":
+        if name == "dbms.security.showcurrentuser" or name == "dbms.showcurrentuser":
             return {"columns": ["username", "roles", "flags"], "rows": [["neo4j", [], []]]}
 
         if name == "dbms.functions":

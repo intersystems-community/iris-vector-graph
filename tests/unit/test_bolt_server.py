@@ -201,7 +201,7 @@ class TestHandshake:
 
     def test_no_shared_version(self):
         from iris_vector_graph.bolt_server import negotiate_version
-        hs = self._make_handshake_bytes([0x00000005, 0x00000000, 0x00000000, 0x00000000])
+        hs = self._make_handshake_bytes([0x00000006, 0x00000000, 0x00000000, 0x00000000])
         chosen = negotiate_version(hs[4:])
         assert chosen == 0x00000000
 
