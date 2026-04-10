@@ -774,7 +774,7 @@ class IRISGraphEngine:
         if name == "dbms.components":
             return {
                 "columns": ["name", "versions", "edition"],
-                "rows": [["iris-vector-graph", ["1.47.0"], "community"]],
+                "rows": [["iris-vector-graph", ["5.0.0"], "community"]],
             }
 
         if name == "dbms.procedures":
