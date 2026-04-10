@@ -1,6 +1,6 @@
-# IRIS Vector Graph Python SDK (v1.46.0)
+# IRIS Vector Graph Python SDK (v1.47.0)
 
-This guide documents the Python API surface for `iris-vector-graph` v1.46.0.
+This guide documents the Python API surface for `iris-vector-graph` v1.47.0.
 
 ---
 
@@ -340,6 +340,65 @@ walks       = engine.random_walk(seed="node:1", length=20, num_walks=10)
 ```
 
 Falls back transparently if `Graph.KG.NKGAccel` is unavailable.
+
+---
+
+## 13) Bolt Server + Neo4j Browser
+
+Start the combined HTTP + Bolt server:
+
+```bash
+IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER \
+IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
+python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
+```
+
+This starts:
+- HTTP API on port 8000 (`/api/cypher`, `/db/neo4j/tx/commit`)
+- Neo4j Browser at `http://localhost:8000/browser/`
+- Bolt WebSocket on port 8000 (Neo4j Browser connects via `bolt://localhost:8000`)
+- Bolt TCP on port 7687 (Python driver, LangChain)
+
+### Neo4j Python Driver
+
+```python
+from neo4j import GraphDatabase
+driver = GraphDatabase.driver("bolt://localhost:7687", auth=("", ""))
+with driver.session() as s:
+    result = s.run("MATCH (n) RETURN count(n) AS c")
+    print(result.single()["c"])
+driver.close()
+```
+
+### LangChain Neo4jGraph
+
+```python
+from langchain_community.graphs import Neo4jGraph
+graph = Neo4jGraph(url="bolt://localhost:7687", username="", password="")
+graph.query("MATCH (n) RETURN count(n) AS c")
+```
+
+### System Procedures (via Bolt or HTTP)
+
+```python
+with driver.session() as s:
+    s.run("CALL db.labels()").data()
+    s.run("CALL db.relationshipTypes()").data()
+    s.run("CALL db.schema.visualization()").data()
+    s.run("CALL dbms.queryJmx('org.neo4j:*')").data()
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IRIS_HOST` | (required) | IRIS hostname |
+| `IRIS_PORT` | `1972` | IRIS SuperServer port |
+| `IRIS_NAMESPACE` | `USER` | IRIS namespace |
+| `IRIS_USERNAME` | `_SYSTEM` | IRIS username |
+| `IRIS_PASSWORD` | `SYS` | IRIS password |
+| `IVG_API_KEY` | (empty=no auth) | API key for `/api/*` and `/db/*` HTTP routes |
+| `BOLT_TCP_PORT` | `7687` | TCP Bolt listener port |
 
 ---
 

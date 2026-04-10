@@ -10,8 +10,14 @@ iris-vector-graph is a knowledge graph engine built on InterSystems IRIS. All da
 ┌──────────────────────────────────────────────────────────────────┐
 │                        Client Layer                              │
 ├──────────────────────────────────────────────────────────────────┤
-│  Python SDK            │  ObjectScript Direct  │  Cypher         │
-│  (IRISGraphEngine)     │  (classMethodValue)   │  (translator)   │
+│  Neo4j Browser   │  neo4j Python    │  LangChain   │  curl/HTTP │
+│  (/browser/)     │  Driver (bolt)   │  Neo4jGraph   │  /api/*    │
+├──────────────────────────────────────────────────────────────────┤
+│                      Protocol Layer                              │
+├──────────────────────────────────────────────────────────────────┤
+│  Bolt 5.4 WS     │  Bolt 5.4 TCP    │  HTTP API                 │
+│  (port 8000)     │  (port 7687)     │  (port 8000)              │
+│  bolt_server.py  │  bolt_server.py  │  cypher_api.py            │
 ├──────────────────────────────────────────────────────────────────┤
 │                      Execution Layer                             │
 ├──────────────────────────────────────────────────────────────────┤

@@ -101,7 +101,27 @@ engine.execute_cypher(
 
 ---
 
-## 6. Run tests
+## 6. Neo4j Browser + Bolt Server
+
+```bash
+IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER \
+IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
+python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
+```
+
+Open **http://localhost:8000/browser/** → select "No authentication" → Connect.
+
+Bolt TCP on port 7687:
+```python
+from neo4j import GraphDatabase
+driver = GraphDatabase.driver("bolt://localhost:7687", auth=("", ""))
+with driver.session() as s:
+    print(s.run("MATCH (n) RETURN count(n) AS c").single()["c"])
+```
+
+---
+
+## 7. Run tests
 
 ```bash
 pytest tests/unit/ -q
@@ -120,6 +140,9 @@ iris-vector-graph/
 │   ├── engine.py              # IRISGraphEngine (all Python wrappers)
 │   ├── operators.py           # IRISGraphOperators (kg_TXT, PPR, etc.)
 │   ├── cypher/                # Cypher parser + translator
+│   ├── cypher_api.py          # HTTP + Bolt server (uvicorn)
+│   ├── bolt_server.py         # Bolt 5.4 protocol (PackStream, sessions)
+│   ├── browser_static/        # Bundled Neo4j Browser
 │   └── embedded.py            # EmbeddedConnection for in-IRIS Python
 ├── tests/unit/                # All tests (unit + E2E)
 ├── specs/                     # Feature specifications
