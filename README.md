@@ -37,10 +37,7 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 | **VecIndex** | RP-tree ANN vector search — pure ObjectScript + `$vectorop` SIMD. Annoy-style two-means splitting. |
 | **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
 | **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
-| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, CALL subqueries. |
-| **Bolt Protocol** | Bolt 5.4 server (TCP + WebSocket) — Neo4j Browser, `neo4j` Python driver, LangChain `Neo4jGraph` connect natively via `bolt://`. PackStream v1 codec, HELLO/LOGON/RUN/PULL/BEGIN/COMMIT. |
-| **Neo4j Browser** | Bundled at `/browser/` — force-directed graph visualization, `:sysinfo`, schema sidebar, `db.labels()`, `db.schema.visualization()`. |
-| **Cypher HTTP API** | `/api/cypher` (native), `/db/neo4j/tx/commit` (Neo4j transactional), `/db/{db}/query/v2` (Neo4j Query API). API key auth via `X-API-Key` header. |
+| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
 | **Graph Analytics** | PageRank, WCC, CDLP, PPR-guided subgraph — pure ObjectScript over `^KG` globals. |
 | **FHIR Bridge** | ICD-10→MeSH mapping via UMLS for clinical-to-KG integration. |
 | **GraphQL** | Auto-generated schema from knowledge graph labels. |
@@ -69,10 +66,11 @@ from iris_vector_graph.engine import IRISGraphEngine
 
 engine = IRISGraphEngine(EmbeddedConnection())
 engine.initialize_schema()
-# Same API as external callers — use from any ObjectScript Language=python method
 ```
 
-### Neo4j Browser + Bolt Server
+### Graph Browser + Bolt Connectivity
+
+A built-in Cypher server speaks the Bolt protocol, so standard graph tooling (drivers, visualization, LangChain) works out of the box:
 
 ```bash
 IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER \
@@ -80,15 +78,9 @@ IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
 python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
 ```
 
-Open **http://localhost:8000/browser/** — select "No authentication" → Connect.
-
-Bolt TCP on port 7687 (Python driver, LangChain):
-```python
-from neo4j import GraphDatabase
-driver = GraphDatabase.driver("bolt://localhost:7687", auth=("", ""))
-with driver.session() as s:
-    print(s.run("MATCH (n) RETURN count(n) AS c").single()["c"])
-```
+- **Browser** — `http://localhost:8000/browser/` (force-directed graph visualization)
+- **Bolt TCP** — `bolt://localhost:7687` (Python/Java/Go/.NET drivers, LangChain, cypher-shell)
+- **HTTP API** — `http://localhost:8000/api/cypher` (curl, httpie, REST clients)
 
 ---
 
@@ -446,19 +438,16 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ## Changelog
 
 ### v1.47.0 (2026-04-10)
-- **Bolt 5.4 Protocol Server** — TCP (port 7687) + WebSocket (port 8000). Neo4j Browser, `neo4j` Python driver v6, and LangChain `Neo4jGraph` connect natively via `bolt://`
-- **Neo4j Browser** — bundled at `/browser/` with force-directed graph visualization, schema sidebar, `:sysinfo`
-- **Cypher HTTP API** — `cypher_api.py` with `/api/cypher`, `/db/neo4j/tx/commit`, `/db/{db}/query/v2` endpoints. API key auth via `X-API-Key` middleware
-- **PackStream v1 codec** — pure Python encoder/decoder for all Bolt message types
-- **Graph object encoding** — `RETURN n, r, m` produces Bolt Node (0x4E) and Relationship (0x52) structures for graph visualization
-- **System procedures** — `db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()`, `db.schema.visualization()`, `db.schema.nodeTypeProperties()`, `dbms.components()`, `dbms.procedures()`, `dbms.functions()`, `dbms.queryJmx()`, `dbms.clientConfig()`, `dbms.showCurrentUser()`
-- **SHOW commands** — `SHOW DATABASES`, `SHOW PROCEDURES`, `SHOW FUNCTIONS`, `SHOW INDEXES`, `SHOW CONSTRAINTS`
-- **Compound query handling** — semicolon-separated multi-statement queries, UNION ALL with LIMIT in branches
-- **SQL audit** — all `FETCH FIRST` replaced with `TOP`, `DISTINCT TOP` order fixed, IN clause chunking at 499
-- **Translator fixes** — anonymous nodes `()-[r]->()`, BM25 CTE uses literal values (IRIS xDBC CTE param limitation), `_execute_var_length_cypher` min-hop filter corrected
-- **Embedding fixes** — `_probe_embedding_support` false negative for "config does not exist", `embed_nodes(model="string")` loads SentenceTransformer correctly
-- `scripts/load_demo_data.py` — canonical 34K-node dataset (20K NCIT + 10K HLA immunology + 768-dim embeddings + BM25 index)
-- 456 tests (up from 405), 0 skipped
+- **Bolt 5.4 protocol server** — TCP (port 7687) + WebSocket (port 8000). Standard graph drivers (Python, Java, Go, .NET), LangChain, and visualization tools connect via `bolt://`
+- **Graph browser** — bundled at `/browser/` with force-directed visualization, schema sidebar, `:sysinfo`
+- **Cypher HTTP API** — `/api/cypher` + Bolt-compatible transactional endpoints. API key auth via `X-API-Key`
+- **System procedures** — `db.labels()`, `db.relationshipTypes()`, `db.schema.visualization()`, `dbms.queryJmx()`, `SHOW DATABASES/PROCEDURES/FUNCTIONS`
+- **Graph object encoding** — `RETURN n, r, m` produces typed Node/Relationship structures for visualization
+- **SQL audit** — `FETCH FIRST` → `TOP`, `DISTINCT TOP` order, IN clause chunking at 499
+- **Translator fixes** — anonymous nodes, BM25 CTE literals, var-length min-hop, UNION ALL with LIMIT
+- **Embedding fixes** — probe false negative, string model loading
+- `scripts/load_demo_data.py` — canonical dataset loader (NCIT + HLA immunology + embeddings + BM25)
+- 456 tests, 0 skipped
 
 ### v1.46.0 (2026-04-07)
 - **BM25Index** — pure ObjectScript Okapi BM25 lexical search over `^BM25Idx` globals. Zero SQL tables, no Enterprise license required.
