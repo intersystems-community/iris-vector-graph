@@ -473,7 +473,7 @@ class BoltSession:
             extra, _ = PackStream.unpack(msg, 2)
             await self._handle_pull(extra)
         elif tag == TAG_BEGIN:
-            await self._send_message(TAG_SUCCESS, {})
+            await self._send_message(TAG_SUCCESS, {"db": "neo4j"})
         elif tag == TAG_COMMIT:
             await self._send_message(TAG_SUCCESS, {})
             self.state = BoltState.READY
