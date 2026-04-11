@@ -83,3 +83,21 @@ RETURN node, score ORDER BY score DESC
 - IVF-PQ (product quantization)
 - Online insert without rebuild
 - Multi-vector queries (use PLAID)
+
+## Clarifications (answered)
+
+**Q1: Vector source at build time**
+A: `kg_NodeEmbeddings` only for v1. Arbitrary list input deferred.
+
+**Q2: Inverted list storage**
+A: Store full `$vector` binary per entry: `^IVF(name,"list",k,node_id) = $vector`.
+Memory-intensive but enables pure ObjectScript search without re-fetch from SQL.
+
+**Q3: ObjectScript at query time**
+A: Hard requirement. All query-time code (centroid scoring + cell scan + top-k) is pure ObjectScript using `$vectorop`. Python only at build time (k-means via sklearn, same pattern as PLAIDSearch).
+
+**Q4: Cypher CTE literal vector**
+A: Embed query vector as SQL literal in the Stage CTE (same fix as BM25). A 768-dim float32 vector is ~4-5KB of SQL text — acceptable one-time translation cost per query.
+
+**Q5: Recall benchmark dataset**
+A: HLA 10K dataset (768-dim, `expanded_mindwalk_KG_10000.vectors.npy`). Ground truth = exact results from `nprobe=nlist` run. Target: recall@10 ≥ 0.90 at nprobe=32, nlist=256.
