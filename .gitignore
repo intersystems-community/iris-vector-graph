@@ -117,3 +117,13 @@ dist/
 .ruff_cache/
 *.crt
 deploy/certs/
+
+# Playwright MCP session artifacts
+.playwright-mcp/
+
+# Screenshot artifacts from development
+browser-*.png
+playwright-*.png
+
+# Browser static assets (distributed separately, not in git)
+iris_vector_graph/browser_static/

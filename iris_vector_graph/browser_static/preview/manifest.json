@@ -1,7 +1,0 @@
-{
-  "name": "@nx/query",
-  "layout": "standalone-tool",
-  "version": "apps/query/2025.01.20+0",
-  "gitSha": "17e606eca150434a79b676d765056bb882c78871",
-  "builtAt": "2025-01-20T10:11:21.956Z"
-}
