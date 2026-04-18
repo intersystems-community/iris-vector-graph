@@ -484,6 +484,11 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.50.1 (2026-04-18)
+- Fix: `bulk_create_edges` now calls `BuildKG()` after batch SQL — bulk-inserted static edges immediately visible to MATCH/BFS
+- Fix: `BuildKG()` already uses shard-0 `^KG("out",0,...)` layout (confirmed, no code change needed)
+
+
 ### v1.50.0 (2026-04-18)
 - **Unified edge store PR-A** — `MATCH (a)-[r]->(b)` now returns both static and temporal edges (spec 048)
 - `Graph.KG.EdgeScan` — `MatchEdges(sourceId, predicate, shard)` SqlProc scans `^KG("out",0,...)` globals
