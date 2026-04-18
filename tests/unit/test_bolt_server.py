@@ -236,7 +236,7 @@ class TestBoltSessionHello:
         mock_engine.execute_cypher.return_value = {"columns": ["c"], "rows": [[0]]}
         session = BoltSession(ws, lambda: mock_engine)
         try:
-            asyncio.get_event_loop().run_until_complete(session.run())
+            asyncio.run(session.run())
         except Exception:
             pass
         sent = ws.send_bytes.call_args_list
@@ -254,7 +254,7 @@ class TestBoltSessionHello:
         mock_engine = MagicMock()
         session = BoltSession(ws, lambda: mock_engine)
         try:
-            asyncio.get_event_loop().run_until_complete(session.run())
+            asyncio.run(session.run())
         except Exception:
             pass
         sent = ws.send_bytes.call_args_list

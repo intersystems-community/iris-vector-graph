@@ -35,6 +35,7 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 | **Pre-aggregated Analytics** | `^KG("tagg")` per-bucket COUNT/SUM/AVG/MIN/MAX and HLL COUNT DISTINCT. O(1) aggregation queries — 0.085ms for 1-bucket, 0.24ms for 24-hour window. |
 | **BM25Index** | Pure ObjectScript Okapi BM25 lexical search — `^BM25Idx` globals, zero SQL tables. Automatic `kg_TXT` upgrade when `"default"` index exists. Cypher `CALL ivg.bm25.search(name, query, k)`. 0.3ms median search. |
 | **VecIndex** | RP-tree ANN vector search — pure ObjectScript + `$vectorop` SIMD. Annoy-style two-means splitting. |
+| **IVFFlat** | Inverted File flat vector index — Python k-means build (sklearn), pure ObjectScript query. Tunable `nprobe` recall/speed tradeoff. `nprobe=nlist` → exact search. Cypher `CALL ivg.ivf.search(name, vec, k, nprobe)`. |
 | **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
 | **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
 | **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
@@ -258,6 +259,34 @@ results = engine.vec_search("drugs", query_vector, k=5)
 
 ---
 
+## IVFFlat Vector Index
+
+Inverted File with Flat quantization — Python k-means build, pure ObjectScript query. Tunable `nprobe` recall/speed tradeoff; `nprobe=nlist` gives exact results.
+
+```python
+# Build: reads kg_NodeEmbeddings, runs MiniBatchKMeans, stores ^IVF globals
+result = engine.ivf_build("kg_idx", nlist=256, metric="cosine")
+# {"nlist": 256, "indexed": 10000, "dim": 768}
+
+# Search: finds nprobe nearest centroids, scores their cells
+results = engine.ivf_search("kg_idx", query_vector, k=10, nprobe=32)
+# [("NCIT:C12345", 0.97), ("NCIT:C67890", 0.94), ...]
+
+# Lifecycle
+info = engine.ivf_info("kg_idx")   # {"nlist":256,"dim":768,"indexed":10000,...}
+engine.ivf_drop("kg_idx")
+```
+
+Cypher:
+```cypher
+CALL ivg.ivf.search('kg_idx', $query_vec, 10, 32) YIELD node, score
+RETURN node, score ORDER BY score DESC
+```
+
+Global storage: `^IVF(name, "cfg"|"centroid"|"list")` — independent of `^KG`, `^VecIdx`, `^PLAID`, `^BM25Idx`.
+
+---
+
 ## PLAID Multi-Vector Search
 
 ```python
@@ -436,6 +465,17 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.48.0 (2026-04-18)
+- **IVFFlat vector index** — `Graph.KG.IVFIndex` ObjectScript class + `^IVF` globals (spec 046)
+- `ivf_build(name, nlist, metric, batch_size)` — Python MiniBatchKMeans build from `kg_NodeEmbeddings`; stores centroids + inverted lists as `$vector` in `^IVF` globals
+- `ivf_search(name, query, k, nprobe)` — pure ObjectScript centroid scoring → cell scan → top-k; `nprobe=nlist` gives exact search
+- `ivf_drop(name)` / `ivf_info(name)` — lifecycle management
+- `Graph_KG.kg_IVF` SQL stored procedure — enables `JSON_TABLE` CTE pattern
+- Cypher `CALL ivg.ivf.search(name, query_vec, k, nprobe) YIELD node, score`
+- Translator fix: `ORDER BY <alias> DESC` now resolves SELECT-level aliases (e.g. `count(r) AS deg`) without `Undefined` error
+- `cypher_api.py`: Bolt TCP/WS sessions use dedicated IRIS connections (`_make_engine`) to prevent connection contention with HTTP handlers; `threading.Lock` on shared engine cache
+- `test_bolt_server.py`: fixed 2 `TestBoltSessionHello` tests using deprecated `asyncio.get_event_loop().run_until_complete()` → `asyncio.run()`
 
 ### v1.47.0 (2026-04-10)
 - **Bolt 5.4 protocol server** — TCP (port 7687) + WebSocket (port 8000). Standard graph drivers (Python, Java, Go, .NET), LangChain, and visualization tools connect via `bolt://`

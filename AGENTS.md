@@ -3,11 +3,12 @@
 **Owner:** Thomas Dyar (Tom) — Sr. Manager, AI Platform and Ecosystems, InterSystems Corporation  
 > NEVER use "Tim" — that is Tim Leavitt, a colleague. Always use "Tom" in conversation.
 
-Auto-generated from all feature plans. Last updated: 2026-02-24
+Auto-generated from all feature plans. Last updated: 2026-04-18
 
 ## Active Technologies
 - Python 3.11 + `intersystems-irispython`, `fastapi`, `strawberry-graphql`, `lark`. (Cypher/GraphQL Core)
 - InterSystems IRIS (RDF Schema: nodes, rdf_labels, rdf_props, rdf_edges, kg_NodeEmbeddings)
+- Python 3.11 (build) + ObjectScript (query) + `sklearn.cluster.MiniBatchKMeans`, `numpy` (046-ivfflat-index)
 - Release Tools: `hatchling` (backend), `build`, `twine`
 - Python 3.11 + `fastapi`, `strawberry-graphql[fastapi]`, `intersystems-irispython`, `iris-devtester` (019-ivg-gql-autogen)
 - Python 3.11 + `intersystems-irispython>=3.2.0`, `iris-devtester>=1.8.1` (018-cypher-vector-search)
@@ -51,6 +52,7 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 046-ivfflat-index: Added IVFFlat vector index — `ivf_build/search/drop/info` on `IRISGraphEngine`, `Graph.KG.IVFIndex` ObjectScript class, `CALL ivg.ivf.search(...)` Cypher procedure
 - 044-bm25-index: Added ObjectScript (IRIS 2024.1+), Python 3.11
 - 040-sql-table-bridge: Added Python 3.11
 - 039-temporal-cypher: Added Python 3.11 (translator), ObjectScript (TemporalIndex — already complete in v1.41.0) + `iris_vector_graph.cypher.{ast,lexer,parser,translator}`, `iris_vector_graph.engine`

@@ -2895,3 +2895,81 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Info", name)
         return json.loads(str(result))
+
+    def ivf_build(self, name: str, nlist: int = 256, metric: str = "cosine",
+                  batch_size: int = 10000) -> dict:
+        try:
+            import numpy as np
+            from sklearn.cluster import MiniBatchKMeans
+        except ImportError:
+            raise ImportError("ivf_build requires numpy and sklearn: pip install numpy scikit-learn")
+
+        import base64
+        import json as _json
+        import struct
+
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT id, embedding FROM Graph_KG.kg_NodeEmbeddings")
+        rows = cursor.fetchall()
+        if not rows:
+            raise ValueError("ivf_build: no vectors found in kg_NodeEmbeddings")
+
+        node_ids = []
+        vecs = []
+        for row in rows:
+            nid, emb_b64 = row[0], row[1]
+            raw = base64.b64decode(emb_b64)
+            dim = len(raw) // 4
+            vec = list(struct.unpack(f"{dim}f", raw))
+            node_ids.append(nid)
+            vecs.append(vec)
+
+        X = np.array(vecs, dtype=np.float32)
+        n_nodes, dim = X.shape
+        effective_nlist = min(nlist, n_nodes)
+
+        km = MiniBatchKMeans(
+            n_clusters=effective_nlist,
+            batch_size=batch_size,
+            random_state=42,
+            n_init=3,
+        ).fit(X)
+
+        centroids = km.cluster_centers_.tolist()
+        labels = km.labels_.tolist()
+
+        assignments = []
+        for i, (nid, label) in enumerate(zip(node_ids, labels)):
+            raw_vec = struct.pack(f"{dim}f", *vecs[i])
+            b64_vec = base64.b64encode(raw_vec).decode()
+            assignments.append({"nodeId": nid, "cellIdx": int(label), "vec": b64_vec})
+
+        nlist_json = _json.dumps(effective_nlist)
+        metric_json = _json.dumps(metric)
+        centroids_json = _json.dumps(centroids)
+        assignments_json = _json.dumps(assignments)
+
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Build",
+            name, nlist_json, metric_json, centroids_json, assignments_json)
+        return _json.loads(str(result))
+
+    def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
+        import base64
+        import struct
+
+        dim = len(query)
+        raw = struct.pack(f"{dim}f", *[float(v) for v in query])
+        query_b64 = base64.b64encode(raw).decode()
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Search", name, query_b64, k, nprobe)
+        rows = json.loads(str(result))
+        return [(r["id"], float(r["score"])) for r in rows]
+
+    def ivf_drop(self, name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.IVFIndex", "Drop", name)
+
+    def ivf_info(self, name: str) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Info", name)
+        return json.loads(str(result))
