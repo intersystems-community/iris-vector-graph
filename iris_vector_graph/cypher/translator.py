@@ -202,6 +202,7 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     - ivg.neighbors(source_node_or_list, predicate, direction)
     - ivg.ppr(seed_node_or_list, alpha, max_iterations)
     - ivg.bm25.search(name, query, k)
+    - ivg.ivf.search(name, query_vec, k, nprobe)
     """
     name = proc.procedure_name
     if name == "ivg.vector.search":
@@ -212,8 +213,10 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
         _translate_ppr(proc, context)
     elif name == "ivg.bm25.search":
         _translate_bm25_search(proc, context)
+    elif name == "ivg.ivf.search":
+        _translate_ivf_search(proc, context)
     else:
-        raise ValueError(f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search")
+        raise ValueError(f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search")
 
 
 def _resolve_arg(arg, context: TranslationContext, name: str, expected_type=None):
@@ -492,6 +495,58 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
         context.scalar_variables.add("score")
 
 
+def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    import base64
+    import struct
+
+    args = proc.arguments
+    if len(args) < 4:
+        raise ValueError("ivg.ivf.search requires 4 arguments: name, query_vec, k, nprobe")
+
+    idx_name = _resolve_arg(args[0], context, "ivg.ivf.search")
+    if not isinstance(idx_name, str):
+        raise ValueError("ivg.ivf.search: first argument (name) must be a string literal")
+
+    query_vec = _resolve_arg(args[1], context, "ivg.ivf.search")
+    if not isinstance(query_vec, list):
+        raise ValueError("ivg.ivf.search: second argument (query_vec) must be a list of floats")
+    floats = [float(v) for v in query_vec]
+    raw = struct.pack(f"{len(floats)}f", *floats)
+    query_b64 = base64.b64encode(raw).decode()
+
+    k_val = _resolve_arg(args[2], context, "ivg.ivf.search")
+    try:
+        k_int = int(k_val)
+    except (TypeError, ValueError):
+        raise ValueError(f"ivg.ivf.search: third argument (k) must be an integer, got {k_val!r}")
+
+    nprobe_val = _resolve_arg(args[3], context, "ivg.ivf.search")
+    try:
+        nprobe_int = int(nprobe_val)
+    except (TypeError, ValueError):
+        raise ValueError(f"ivg.ivf.search: fourth argument (nprobe) must be an integer, got {nprobe_val!r}")
+
+    ivf_fn = f"{_schema_prefix}.kg_IVF" if _schema_prefix else "kg_IVF"
+    safe_idx = idx_name.replace("'", "''")
+    safe_b64 = query_b64.replace("'", "''")
+    cte_sql = (
+        f"SELECT j.node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {ivf_fn}('{safe_idx}', '{safe_b64}', {k_int}, {nprobe_int}),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.stages.insert(0, f"IVF AS (\n{cte_sql}\n)")
+
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "IVF"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
 _TEMPORAL_TS_OPS = {
     ast.BooleanOperator.GREATER_THAN_OR_EQUAL,
     ast.BooleanOperator.LESS_THAN_OR_EQUAL,
@@ -710,13 +765,22 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
 
 
 def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> list:
-    """Process ORDER BY expressions BEFORE building SQL to ensure JOINs are added."""
     if not query.order_by_clause:
         return []
     items = []
+    select_aliases = set()
+    if query.return_clause:
+        for item in query.return_clause.items:
+            if item.alias:
+                select_aliases.add(item.alias)
     for item in query.order_by_clause.items:
-        expr = translate_expression(item.expression, context, segment="where")
-        # IRIS doesn't support NULLS LAST, so we omit it
+        try:
+            expr = translate_expression(item.expression, context, segment="where")
+        except ValueError:
+            if isinstance(item.expression, ast.Variable) and item.expression.name in select_aliases:
+                expr = sanitize_identifier(item.expression.name)
+            else:
+                raise
         items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
     return items
 
@@ -1368,7 +1432,7 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"{alias}.{expr.variable}_{expr.property_name}"
         if expr.property_name in ("node_id", "id"): return f"{alias}.node_id"
         p_alias = context.next_alias("p")
-        context.join_clauses.append(f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(expr.property_name)}")
+        context.join_clauses.append(f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(expr.property_name)}")
         return f"{p_alias}.val"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)

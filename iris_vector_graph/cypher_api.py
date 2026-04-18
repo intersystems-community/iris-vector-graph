@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+import threading
 import time
 import uuid
 from typing import Any
@@ -31,10 +32,11 @@ from iris_vector_graph.engine import IRISGraphEngine
 async def _lifespan(app):
     from iris_vector_graph.bolt_server import start_tcp_bolt_server
     bolt_port = int(os.environ.get("BOLT_TCP_PORT", "7687"))
+    bolt_enabled = os.environ.get("BOLT_ENABLED", "1") not in ("0", "false", "no")
     srv = None
-    if os.environ.get("IRIS_HOST"):
+    if bolt_enabled:
         try:
-            srv = await start_tcp_bolt_server(_get_engine, port=bolt_port)
+            srv = await start_tcp_bolt_server(lambda: _make_engine(), port=bolt_port)
             import logging
             logging.getLogger(__name__).info("Bolt TCP server on port %d", bolt_port)
         except OSError as e:
@@ -96,7 +98,7 @@ class CypherRequest(BaseModel):
 @app.websocket("/")
 @app.websocket("")
 async def bolt_ws(ws: WebSocket):
-    session = BoltSession(ws, _get_engine)
+    session = BoltSession(ws, _make_engine)
     await session.run()
 
 
@@ -110,6 +112,7 @@ class Neo4jTxRequest(BaseModel):
 
 
 _engine_cache: IRISGraphEngine | None = None
+_engine_lock = threading.Lock()
 
 
 def _make_engine() -> IRISGraphEngine:
@@ -146,16 +149,17 @@ def _reset_engine():
 
 
 def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -> dict:
-    for attempt in range(2):
-        try:
-            engine = _get_engine()
-            result = engine.execute_cypher(query, parameters=parameters or {})
-            break
-        except Exception as e:
-            if attempt == 0 and ("COMMUNICATION" in str(e).upper() or "LICENSE" in str(e).upper()):
-                _reset_engine()
-                continue
-            raise
+    with _engine_lock:
+        for attempt in range(2):
+            try:
+                engine = _get_engine()
+                result = engine.execute_cypher(query, parameters=parameters or {})
+                break
+            except Exception as e:
+                if attempt == 0:
+                    _reset_engine()
+                    continue
+                raise
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     if len(rows) > limit:
