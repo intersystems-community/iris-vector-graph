@@ -1446,6 +1446,10 @@ class IRISGraphEngine:
             if disable_indexes:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
+            try:
+                self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
+            except Exception as e:
+                logger.warning(f"bulk_create_edges BuildKG failed (^KG may be stale): {e}")
 
     def load_networkx(self, G, label_attr: str = "type", skip_existing: bool = True,
                       progress_callback=None) -> dict:
