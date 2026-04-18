@@ -38,6 +38,7 @@ The fix is a **unified write path**: every edge write — static or temporal —
 - Q: Merged-graph invariant? → A: Shard = routing key, NOT graph partition. All shards compose a single logical graph. A query against shard=0 sees the entire graph in single-node mode. Added to Architecture Notes.
 - Q: BenchSeeder.cls writes old layout? → A: Added to task list (low priority, update ^KG subscript in BenchSeeder to include shard=0).
 - Q: Does `MatchEdges` handle unbound-source MATCH patterns? → A: Yes. When `sourceId` is empty, the proc iterates `$Order(^KG("out", 0, s))` across all source nodes (full scan). No conditional fallback to SQL — query path is fully unified.
+- Q: Does `bulk_create_edges` also write globals synchronously per-edge? → A: No. Single writes (`create_edge`) go synchronous to globals. Bulk ingest (`bulk_create_edges`) continues to use batch SQL + `BuildKG()` for performance at 535M-edge scale. This preserves load throughput while fixing the stale-after-single-write problem.
 
 ## User Scenarios & Testing
 
@@ -100,7 +101,7 @@ Simple `MATCH (a)-[r]->(b)` Cypher generates `$Order(^KG("out", 0, a, p, o))` it
 
 ### Functional Requirements
 
-- **FR-001**: `create_edge(s, p, o)` MUST write `^KG("out", 0, s, p, o)` and `^KG("in", 0, o, p, s)` synchronously on every call
+- **FR-001**: `create_edge(s, p, o)` MUST write `^KG("out", 0, s, p, o)` and `^KG("in", 0, o, p, s)` synchronously on every call. `bulk_create_edges` is exempt — it continues to use batch SQL + `BuildKG()` for performance at scale.
 - **FR-002**: `create_edge_temporal(s, p, o, ts)` MUST continue writing `^KG("out", 0, s, p, o)` synchronously (already does — verify preserved)
 - **FR-003**: `delete_edge` MUST Kill `^KG("out", 0, s, p, o)` and `^KG("in", 0, o, p, s)` synchronously
 - **FR-004**: `BuildKG` MUST write new shard-keyed layout `^KG("out", 0, s, p, o)` and migrate any old `^KG("out", s, p, o)` entries
