@@ -95,8 +95,8 @@ IVG has two distinct edge APIs that write to different storage and support diffe
 
 | | `create_edge` / `bulk_create_edges` | `create_edge_temporal` / `bulk_create_edges_temporal` |
 |--|-------------------------------------|-------------------------------------------------------|
-| **Writes to** | `Graph_KG.rdf_edges` (SQL table) | `^KG("tout"/"tin")` globals (IRIS B-tree) |
-| **Query via** | `MATCH (a)-[:R]->(b)` Cypher | `get_edges_in_window()`, `get_temporal_aggregate()`, temporal Cypher `WHERE r.ts >= $start` |
+| **Writes to** | `Graph_KG.rdf_edges` SQL (durability) + `^KG("out",0,...)` globals (query, synchronous) | `^KG("tout"/"tin")` (time-ordered) + `^KG("out",0,...)` (adjacency) |
+| **Query via** | `MATCH (a)-[:R]->(b)` — immediately visible, no `BuildKG()` needed | `get_edges_in_window()`, `get_temporal_aggregate()`, temporal Cypher `WHERE r.ts >= $start`; also visible in `MATCH (a)-[:R]->(b)` |
 | **Models** | Structural relationship — "A is connected to B" | Event log — "A called B at time T with weight W" |
 | **Example** | `(service:auth)-[:DEPENDS_ON]->(service:payment)` | `(service:auth)-[:CALLS_AT {ts: 1705000042, weight: 38ms}]->(service:payment)` |
 
@@ -104,7 +104,13 @@ IVG has two distinct edge APIs that write to different storage and support diffe
 
 **Use `create_edge_temporal` when** the relationship is a time-series event: service calls, metric emissions, log events, cost observations, anything you'll query by time window or aggregate over time.
 
-The same node pair can have both: a structural `DEPENDS_ON` edge (created once) and thousands of temporal `CALLS_AT` events (one per call). They coexist and are queried through separate APIs.
+The same node pair can have both: a structural `DEPENDS_ON` edge (created once) and thousands of temporal `CALLS_AT` events (one per call). Both are immediately visible in `MATCH (a)-[r]->(b)` — no rebuild required.
+
+**Deleting an edge:**
+```python
+engine.delete_edge("service:auth", "DEPENDS_ON", "service:payment")
+# removes from rdf_edges SQL and kills ^KG("out",0,...) immediately
+```
 
 ### Ingest
 
@@ -337,6 +343,14 @@ MATCH (a:Service)-[:CALLS*1..3]->(b:Service)
 WHERE a.id = 'auth'
 RETURN b.id
 
+-- Shortest path between two nodes (v1.49.0+)
+MATCH p = shortestPath((a {id: $from})-[*..8]-(b {id: $to}))
+RETURN p, length(p), nodes(p), relationships(p)
+
+-- All shortest paths — returns every minimum-length path
+MATCH p = allShortestPaths((a {id: $from})-[*..8]-(b {id: $to}))
+RETURN p
+
 -- CASE WHEN
 MATCH (n:Service)
 RETURN n.id,
@@ -428,9 +442,11 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 | `Graph.KG.PageRank` | RunJson, PageRankGlobalJson |
 | `Graph.KG.Algorithms` | WCCJson, CDLPJson |
 | `Graph.KG.Subgraph` | SubgraphJson, PPRGuidedJson |
-| `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson |
+| `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson, ShortestPathJson |
 | `Graph.KG.BulkLoader` | BulkLoad (`INSERT %NOINDEX %NOCHECK` + `%BuildIndices`) |
 | `Graph.KG.BM25Index` | Build, Search, Insert, Drop, Info, SearchProc (`kg_BM25` stored procedure) |
+| `Graph.KG.IVFIndex` | Build, Search, Drop, Info, SearchProc (`kg_IVF` stored procedure) |
+| `Graph.KG.EdgeScan` | MatchEdges (`Graph_KG.MatchEdges` stored procedure), WriteAdjacency, DeleteAdjacency |
 
 ---
 
