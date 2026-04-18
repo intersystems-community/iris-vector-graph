@@ -33,6 +33,9 @@ Auto-generated from all feature plans. Last updated: 2026-04-18
 - Python 3.11 (translator), ObjectScript (TemporalIndex — already complete in v1.41.0) + `iris_vector_graph.cypher.{ast,lexer,parser,translator}`, `iris_vector_graph.engine` (039-temporal-cypher)
 - IRIS `^KG("tout"/"tin")` globals via `Graph.KG.TemporalIndex.QueryWindow/QueryWindowInbound` (039-temporal-cypher)
 - ObjectScript (IRIS 2024.1+), Python 3.11 (044-bm25-index)
+- Python 3.11 (wiring/tests) + ObjectScript (IRIS 2024.1+, BFS engine) + `intersystems-irispython`, `iris-devtester` (test only) (047-shortest-path)
+- `^KG("out")` / `^KG("in")` globals — no new schema, no new globals (047-shortest-path)
+- Python 3.11 + ObjectScript (IRIS 2024.1+) + `intersystems-irispython`, `iris-devtester` (test only) (048-unified-edge-store)
 
 ## Project Structure
 ```text
@@ -52,10 +55,10 @@ specs/              # Feature Specifications
 Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 
 ## Recent Changes
+- 048-unified-edge-store PR-A: Graph.KG.EdgeScan (MatchEdges/WriteAdjacency/DeleteAdjacency), create_edge syncs to ^KG("out",0,...), translator EdgeScan CTE for MATCH, TemporalIndex + BFS/shortestPath updated to shard-0
+- 048-unified-edge-store: Added Python 3.11 + ObjectScript (IRIS 2024.1+) + `intersystems-irispython`, `iris-devtester` (test only)
+- 047-shortest-path: Added Python 3.11 (wiring/tests) + ObjectScript (IRIS 2024.1+, BFS engine) + `intersystems-irispython`, `iris-devtester` (test only)
 - 046-ivfflat-index: Added IVFFlat vector index — `ivf_build/search/drop/info` on `IRISGraphEngine`, `Graph.KG.IVFIndex` ObjectScript class, `CALL ivg.ivf.search(...)` Cypher procedure
-- 044-bm25-index: Added ObjectScript (IRIS 2024.1+), Python 3.11
-- 040-sql-table-bridge: Added Python 3.11
-- 039-temporal-cypher: Added Python 3.11 (translator), ObjectScript (TemporalIndex — already complete in v1.41.0) + `iris_vector_graph.cypher.{ast,lexer,parser,translator}`, `iris_vector_graph.engine`
 
 <!-- MANUAL ADDITIONS START -->
 <!-- MANUAL ADDITIONS END -->

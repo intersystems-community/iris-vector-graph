@@ -19,7 +19,7 @@ ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, 
 		If dim = 0 Set dim = cDim
 		Set vec = ""
 		For i = 0:1:(cDim-1) {
-			Set $vector(vec, i+1, "float") = +cArr.%Get(i)
+			Set $vector(vec, i+1, "double") = +cArr.%Get(i)
 		}
 		Set ^IVF(name, "centroid", k) = vec
 	}
@@ -30,7 +30,12 @@ ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, 
 		Set nodeId = item.%Get("nodeId")
 		Set cellIdx = +item.%Get("cellIdx")
 		Set b64 = item.%Get("vec")
-		Set vec = $System.Encryption.Base64Decode(b64)
+		Set floatList = ##class(%DynamicArray).%FromJSON(b64)
+		Set fDim = floatList.%Size()
+		Set vec = ""
+		For j = 0:1:(fDim-1) {
+			Set $vector(vec, j+1, "double") = +floatList.%Get(j)
+		}
 		Set ^IVF(name, "list", cellIdx, nodeId) = vec
 	}
 
@@ -52,7 +57,12 @@ ClassMethod Search(name As %String, queryVecB64 As %String, k As %Integer = 10, 
 
 	If nprobe > nlist Set nprobe = nlist
 
-	Set qVec = $System.Encryption.Base64Decode(queryVecB64)
+	Set qArr = ##class(%DynamicArray).%FromJSON(queryVecB64)
+	Set qDim = qArr.%Size()
+	Set qVec = ""
+	For qi = 0:1:(qDim-1) {
+		Set $vector(qVec, qi+1, "double") = +qArr.%Get(qi)
+	}
 
 	Kill ^||ivfCentScore
 	For c = 0:1:(nlist-1) {
@@ -119,23 +129,28 @@ ScanCells
 		Set ^||ivfRanked(-^||ivfScores(nodeId), nodeId) = ""
 	}
 
-	Set results = "["
+	Set results = ##class(%DynamicArray).%New()
 	Set count = 0, negSim = ""
 	For {
 		Set negSim = $Order(^||ivfRanked(negSim))
-		Quit:negSim=""  Quit:count>=k
+		Quit:negSim=""
+		Quit:count>=k
 		Set nodeId = ""
 		For {
 			Set nodeId = $Order(^||ivfRanked(negSim, nodeId))
-			Quit:nodeId=""  Quit:count>=k
-			If count > 0 Set results = results_","
+			Quit:nodeId=""
+			Quit:count>=k
 			Set sim = -negSim
-			Set results = results_"{""id"":"""_nodeId_""",""score"":"_sim_"}"
+			Set entry = ##class(%DynamicObject).%New()
+			Do entry.%Set("id", nodeId)
+			Do entry.%Set("score", sim)
+			Do results.%Push(entry)
 			Set count = count + 1
 		}
 	}
-	Set results = results_"]"
-	Quit results
+
+	Kill ^||ivfCentScore, ^||ivfSelected, ^||ivfScores, ^||ivfRanked
+	Quit results.%ToJSON()
 }
 
 ClassMethod Drop(name As %String)
@@ -153,7 +168,7 @@ ClassMethod Info(name As %String) As %String
 	Quit "{""nlist"":"_nlist_",""dim"":"_dim_",""metric"":"""_metric_""",""indexed"":"_indexed_"}"
 }
 
-ClassMethod SearchProc(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String [ SqlProc ]
+ClassMethod SearchProc(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String [ SqlProc, SqlName = kg_IVF ]
 {
 	Quit ..Search(name, queryVecB64, k, nprobe)
 }

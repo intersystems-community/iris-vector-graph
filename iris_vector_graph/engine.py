@@ -1263,9 +1263,6 @@ class IRISGraphEngine:
             return False
 
     def create_edge(self, source_id: str, predicate: str, target_id: str, qualifiers: Dict[str, Any] = None) -> bool:
-        """
-        Create a directed edge between nodes with optional qualifiers.
-        """
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
@@ -1274,7 +1271,6 @@ class IRISGraphEngine:
                 [source_id, predicate, target_id, qual_json]
             )
             self.conn.commit()
-            return True
         except Exception as e:
             self.conn.rollback()
             if "UNIQUE" in str(e) or "-119" in str(e):
@@ -1282,6 +1278,35 @@ class IRISGraphEngine:
             else:
                 logger.error(f"create_edge failed: {e}")
             return False
+        try:
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.EdgeScan", "WriteAdjacency",
+                source_id, predicate, target_id, "1.0"
+            )
+        except Exception as e:
+            logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
+        return True
+
+    def delete_edge(self, source_id: str, predicate: str, target_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
+                [source_id, predicate, target_id]
+            )
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"delete_edge failed: {e}")
+            return False
+        try:
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.EdgeScan", "DeleteAdjacency",
+                source_id, predicate, target_id
+            )
+        except Exception as e:
+            logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
+        return True
 
     def bulk_create_nodes(
         self,
@@ -2998,7 +3023,7 @@ class IRISGraphEngine:
         import struct
 
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, embedding FROM Graph_KG.kg_NodeEmbeddings")
+        cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings")
         rows = cursor.fetchall()
         if not rows:
             raise ValueError("ivf_build: no vectors found in kg_NodeEmbeddings")
@@ -3006,10 +3031,16 @@ class IRISGraphEngine:
         node_ids = []
         vecs = []
         for row in rows:
-            nid, emb_b64 = row[0], row[1]
-            raw = base64.b64decode(emb_b64)
-            dim = len(raw) // 4
-            vec = list(struct.unpack(f"{dim}f", raw))
+            nid, emb_val = row[0], row[1]
+            if emb_val is None:
+                continue
+            emb_str = str(emb_val)
+            if ',' in emb_str:
+                vec = [float(v) for v in emb_str.split(',')]
+            else:
+                raw = base64.b64decode(emb_str)
+                dim = len(raw) // 4
+                vec = list(struct.unpack(f"{dim}f", raw))
             node_ids.append(nid)
             vecs.append(vec)
 
@@ -3029,9 +3060,7 @@ class IRISGraphEngine:
 
         assignments = []
         for i, (nid, label) in enumerate(zip(node_ids, labels)):
-            raw_vec = struct.pack(f"{dim}f", *vecs[i])
-            b64_vec = base64.b64encode(raw_vec).decode()
-            assignments.append({"nodeId": nid, "cellIdx": int(label), "vec": b64_vec})
+            assignments.append({"nodeId": nid, "cellIdx": int(label), "vec": _json.dumps(vecs[i])})
 
         nlist_json = _json.dumps(effective_nlist)
         metric_json = _json.dumps(metric)
@@ -3044,14 +3073,9 @@ class IRISGraphEngine:
         return _json.loads(str(result))
 
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
-        import base64
-        import struct
-
-        dim = len(query)
-        raw = struct.pack(f"{dim}f", *[float(v) for v in query])
-        query_b64 = base64.b64encode(raw).decode()
+        query_json = json.dumps([float(v) for v in query])
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.IVFIndex", "Search", name, query_b64, k, nprobe)
+            "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe)
         rows = json.loads(str(result))
         return [(r["id"], float(r["score"])) for r in rows]
 

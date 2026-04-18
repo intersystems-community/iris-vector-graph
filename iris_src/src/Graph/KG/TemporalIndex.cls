@@ -11,8 +11,8 @@ ClassMethod InsertEdge(source As %String, predicate As %String, target As %Strin
 	Set ^KG("tin", timestamp, target, predicate, source) = weight
 	Set bucket = timestamp \ ..#BUCKET
 	Set tmp = $Increment(^KG("bucket", bucket, source))
-	Set ^KG("out", source, predicate, target) = weight
-	Set ^KG("in", target, predicate, source) = weight
+	Set ^KG("out", 0, source, predicate, target) = weight
+	Set ^KG("in", 0, target, predicate, source) = weight
 	Set tmp = $Increment(^KG("deg", source))
 	// count and sum are atomic via $Increment
 	Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "count"))
@@ -59,8 +59,8 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 		Set ^KG("tin", ts, target, predicate, source) = weight
 		Set bucket = ts \ ..#BUCKET
 		Set tmp = $Increment(^KG("bucket", bucket, source))
-		Set ^KG("out", source, predicate, target) = weight
-		Set ^KG("in", target, predicate, source) = weight
+		Set ^KG("out", 0, source, predicate, target) = weight
+		Set ^KG("in", 0, target, predicate, source) = weight
 		Set tmp = $Increment(^KG("deg", source))
 		Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "count"))
 		Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "sum"), weight)
