@@ -37,6 +37,7 @@ The fix is a **unified write path**: every edge write — static or temporal —
 - Q: SQL retention policy for BuildKG recovery? → A: `rdf_edges` rows are never deleted by this spec. `BuildKG` can always reconstruct `^KG("out",...)` from `rdf_edges` + `^KG("tout",...)` combined. Statement added to Architecture Notes.
 - Q: Merged-graph invariant? → A: Shard = routing key, NOT graph partition. All shards compose a single logical graph. A query against shard=0 sees the entire graph in single-node mode. Added to Architecture Notes.
 - Q: BenchSeeder.cls writes old layout? → A: Added to task list (low priority, update ^KG subscript in BenchSeeder to include shard=0).
+- Q: Does `MatchEdges` handle unbound-source MATCH patterns? → A: Yes. When `sourceId` is empty, the proc iterates `$Order(^KG("out", 0, s))` across all source nodes (full scan). No conditional fallback to SQL — query path is fully unified.
 
 ## User Scenarios & Testing
 
@@ -104,7 +105,7 @@ Simple `MATCH (a)-[r]->(b)` Cypher generates `$Order(^KG("out", 0, a, p, o))` it
 - **FR-003**: `delete_edge` MUST Kill `^KG("out", 0, s, p, o)` and `^KG("in", 0, o, p, s)` synchronously
 - **FR-004**: `BuildKG` MUST write new shard-keyed layout `^KG("out", 0, s, p, o)` and migrate any old `^KG("out", s, p, o)` entries
 - **FR-005**: All ObjectScript BFS/traversal code (`BFSFast`, `ShortestPathJson`, `PPR`, etc.) MUST be updated to read `^KG("out", 0, s, p, o)`
-- **FR-006**: Cypher simple MATCH `(a)-[r]->(b)` MUST route to `Graph.KG.EdgeScan.MatchEdges(sourceId, predicate, shard)` stored proc via `JSON_TABLE(...)` CTE — same pattern as `kg_BM25` / `kg_IVF`. The translator emits SQL with a proc-backed CTE, not a direct table join on rdf_edges.
+- **FR-006**: Cypher simple MATCH `(a)-[r]->(b)` MUST route to `Graph.KG.EdgeScan.MatchEdges(sourceId, predicate, shard)` stored proc via `JSON_TABLE(...)` CTE — same pattern as `kg_BM25` / `kg_IVF`. The translator emits SQL with a proc-backed CTE, not a direct table join on rdf_edges. When `sourceId` is empty (unbound source), the proc performs a full `$Order(^KG("out", 0, s))` scan — no fallback to SQL.
 - **FR-007**: `MATCH (a)-[r]->(b) WHERE type(r) = 'X'` MUST pass predicate `'X'` as a parameter to `MatchEdges`, which uses `$Order(^KG("out", 0, a, "X", o))` directly. No full scan. Not a separate codepath — same proc, one parameter.
 - **FR-008**: `rdf_edges` SQL table continues to receive every edge insert (durability preserved). Rows are never deleted by this spec.
 - **FR-009**: Single-node shard key defaults to 0; shard assignment is a pluggable function with signature `shard(node_id) -> int`
