@@ -13,7 +13,11 @@ from typing import List, Tuple, Optional, Dict, Any
 import logging
 
 from iris_vector_graph.cypher.parser import parse_query
-from iris_vector_graph.cypher.translator import translate_to_sql, _table, set_schema_prefix
+from iris_vector_graph.cypher.translator import (
+    translate_to_sql,
+    _table,
+    set_schema_prefix,
+)
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.security import validate_table_name
@@ -31,27 +35,28 @@ class IRISGraphEngine:
     """
 
     def __init__(
-        self, 
-        connection, 
-        embedding_dimension: Optional[int] = None, 
+        self,
+        connection,
+        embedding_dimension: Optional[int] = None,
         embedder: Optional[Any] = None,
-        embedding_config: Optional[str] = None
+        embedding_config: Optional[str] = None,
     ):
         """
         Initialize with IRIS database connection.
-        
+
         Args:
             connection: IRIS database connection object
             embedding_dimension: Optional fixed dimension for vector embeddings.
                                  If not provided, it will be auto-detected from the schema.
-            embedder: Optional callable or object with .encode() or .embed() method 
+            embedder: Optional callable or object with .encode() or .embed() method
                       for text-to-vector conversion.
-            embedding_config: Optional name of the IRIS embedding configuration 
+            embedding_config: Optional name of the IRIS embedding configuration
                               (for native IRIS 2024.3+ embedding).
         """
         self.conn = connection
-        if hasattr(connection, 'prepare') and not hasattr(connection, 'cursor'):
+        if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
             from .embedded import EmbeddedConnection
+
             self.conn = EmbeddedConnection()
         self.embedding_dimension = embedding_dimension
         self.embedder = embedder
@@ -71,7 +76,9 @@ class IRISGraphEngine:
     def get_table_mapping(self, label: str) -> Optional[dict]:
         if self._table_mapping_cache is None:
             self._load_table_mapping_cache()
-        return self._table_mapping_cache.get(label) if self._table_mapping_cache else None
+        return (
+            self._table_mapping_cache.get(label) if self._table_mapping_cache else None
+        )
 
     def _load_table_mapping_cache(self) -> None:
         self._table_mapping_cache = {}
@@ -82,13 +89,17 @@ class IRISGraphEngine:
             )
             for row in cur.fetchall():
                 self._table_mapping_cache[row[0]] = {
-                    "label": row[0], "sql_table": row[1],
-                    "id_column": row[2], "prop_columns": row[3],
+                    "label": row[0],
+                    "sql_table": row[1],
+                    "id_column": row[2],
+                    "prop_columns": row[3],
                 }
         except Exception:
             self._table_mapping_cache = {}
 
-    def get_rel_mapping(self, source_label: str, predicate: str, target_label: str) -> Optional[dict]:
+    def get_rel_mapping(
+        self, source_label: str, predicate: str, target_label: str
+    ) -> Optional[dict]:
         if self._rel_mapping_cache is None:
             self._load_rel_mapping_cache()
         key = (source_label, predicate, target_label)
@@ -105,9 +116,13 @@ class IRISGraphEngine:
             for row in cur.fetchall():
                 key = (row[0], row[1], row[2])
                 self._rel_mapping_cache[key] = {
-                    "source_label": row[0], "predicate": row[1], "target_label": row[2],
-                    "target_fk": row[3], "via_table": row[4],
-                    "via_source": row[5], "via_target": row[6],
+                    "source_label": row[0],
+                    "predicate": row[1],
+                    "target_label": row[2],
+                    "target_fk": row[3],
+                    "via_table": row[4],
+                    "via_source": row[5],
+                    "via_target": row[6],
                 }
         except Exception:
             self._rel_mapping_cache = {}
@@ -119,6 +134,7 @@ class IRISGraphEngine:
         self, table: str, id_column: str, label: str, property_columns=None
     ) -> dict:
         from iris_vector_graph.security import sanitize_identifier
+
         sanitize_identifier(table)
         sanitize_identifier(id_column)
         sanitize_identifier(label)
@@ -126,8 +142,11 @@ class IRISGraphEngine:
         cur.execute(
             "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
             "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
-            [table.split(".")[0] if "." in table else "USER",
-             table.split(".")[-1], id_column]
+            [
+                table.split(".")[0] if "." in table else "USER",
+                table.split(".")[-1],
+                id_column,
+            ],
         )
         row = cur.fetchone()
         if not row or int(row[0]) == 0:
@@ -136,65 +155,128 @@ class IRISGraphEngine:
                 f"Verify the table exists and id_column is correct."
             )
         prop_json = json.dumps(property_columns) if property_columns else None
-        cur.execute("UPDATE Graph_KG.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
-                    [table, id_column, prop_json, label])
+        cur.execute(
+            "UPDATE Graph_KG.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
+            [table, id_column, prop_json, label],
+        )
         if cur.rowcount == 0:
             cur.execute(
                 "INSERT INTO Graph_KG.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
-                [label, table, id_column, prop_json]
+                [label, table, id_column, prop_json],
             )
         self.conn.commit()
         self._invalidate_mapping_cache()
-        return {"label": label, "sql_table": table, "id_column": id_column, "prop_columns": property_columns}
+        return {
+            "label": label,
+            "sql_table": table,
+            "id_column": id_column,
+            "prop_columns": property_columns,
+        }
 
     def map_sql_relationship(
-        self, source_label: str, predicate: str, target_label: str,
-        target_fk: str = None, via_table: str = None,
-        via_source: str = None, via_target: str = None
+        self,
+        source_label: str,
+        predicate: str,
+        target_label: str,
+        target_fk: str = None,
+        via_table: str = None,
+        via_source: str = None,
+        via_target: str = None,
     ) -> dict:
         if not target_fk and not via_table:
             raise ValueError("Either target_fk or via_table must be provided.")
         if not self.get_table_mapping(source_label):
-            raise ValueError(f"Source label '{source_label}' is not registered. Call map_sql_table first.")
+            raise ValueError(
+                f"Source label '{source_label}' is not registered. Call map_sql_table first."
+            )
         if not self.get_table_mapping(target_label):
-            raise ValueError(f"Target label '{target_label}' is not registered. Call map_sql_table first.")
+            raise ValueError(
+                f"Target label '{target_label}' is not registered. Call map_sql_table first."
+            )
         cur = self.conn.cursor()
         cur.execute(
             "UPDATE Graph_KG.relationship_mappings SET target_fk=?, via_table=?, via_source=?, via_target=? "
             "WHERE source_label=? AND predicate=? AND target_label=?",
-            [target_fk, via_table, via_source, via_target, source_label, predicate, target_label]
+            [
+                target_fk,
+                via_table,
+                via_source,
+                via_target,
+                source_label,
+                predicate,
+                target_label,
+            ],
         )
         if cur.rowcount == 0:
             cur.execute(
                 "INSERT INTO Graph_KG.relationship_mappings "
                 "(source_label, predicate, target_label, target_fk, via_table, via_source, via_target) "
                 "VALUES (?,?,?,?,?,?,?)",
-                [source_label, predicate, target_label, target_fk, via_table, via_source, via_target]
+                [
+                    source_label,
+                    predicate,
+                    target_label,
+                    target_fk,
+                    via_table,
+                    via_source,
+                    via_target,
+                ],
             )
         self.conn.commit()
         self._invalidate_mapping_cache()
-        return {"source_label": source_label, "predicate": predicate, "target_label": target_label,
-                "target_fk": target_fk, "via_table": via_table}
+        return {
+            "source_label": source_label,
+            "predicate": predicate,
+            "target_label": target_label,
+            "target_fk": target_fk,
+            "via_table": via_table,
+        }
 
     def list_table_mappings(self) -> dict:
         cur = self.conn.cursor()
-        cur.execute("SELECT label, sql_table, id_column, prop_columns, registered_at FROM Graph_KG.table_mappings")
-        nodes = [{"label": r[0], "sql_table": r[1], "id_column": r[2], "prop_columns": r[3], "registered_at": str(r[4])}
-                 for r in cur.fetchall()]
-        cur.execute("SELECT source_label, predicate, target_label, target_fk, via_table, via_source, via_target "
-                    "FROM Graph_KG.relationship_mappings")
-        rels = [{"source_label": r[0], "predicate": r[1], "target_label": r[2],
-                 "target_fk": r[3], "via_table": r[4], "via_source": r[5], "via_target": r[6]}
-                for r in cur.fetchall()]
+        cur.execute(
+            "SELECT label, sql_table, id_column, prop_columns, registered_at FROM Graph_KG.table_mappings"
+        )
+        nodes = [
+            {
+                "label": r[0],
+                "sql_table": r[1],
+                "id_column": r[2],
+                "prop_columns": r[3],
+                "registered_at": str(r[4]),
+            }
+            for r in cur.fetchall()
+        ]
+        cur.execute(
+            "SELECT source_label, predicate, target_label, target_fk, via_table, via_source, via_target "
+            "FROM Graph_KG.relationship_mappings"
+        )
+        rels = [
+            {
+                "source_label": r[0],
+                "predicate": r[1],
+                "target_label": r[2],
+                "target_fk": r[3],
+                "via_table": r[4],
+                "via_source": r[5],
+                "via_target": r[6],
+            }
+            for r in cur.fetchall()
+        ]
         return {"nodes": nodes, "relationships": rels}
 
     def remove_table_mapping(self, label: str) -> None:
         cur = self.conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.table_mappings WHERE label=?", [label])
+        cur.execute(
+            "SELECT COUNT(*) FROM Graph_KG.table_mappings WHERE label=?", [label]
+        )
         if int(cur.fetchone()[0]) == 0:
             raise ValueError(f"Label '{label}' not found in table_mappings.")
         cur.execute("DELETE FROM Graph_KG.table_mappings WHERE label=?", [label])
-        cur.execute("DELETE FROM Graph_KG.relationship_mappings WHERE source_label=? OR target_label=?", [label, label])
+        cur.execute(
+            "DELETE FROM Graph_KG.relationship_mappings WHERE source_label=? OR target_label=?",
+            [label, label],
+        )
         self.conn.commit()
         self._invalidate_mapping_cache()
 
@@ -204,9 +286,12 @@ class IRISGraphEngine:
         self._load_rel_mapping_cache()
 
     def attach_embeddings_to_table(
-        self, label: str, text_columns: list,
-        batch_size: int = 1000, force: bool = False,
-        progress_callback=None
+        self,
+        label: str,
+        text_columns: list,
+        batch_size: int = 1000,
+        force: bool = False,
+        progress_callback=None,
     ) -> dict:
         mapping = self.get_table_mapping(label)
         if not mapping:
@@ -222,30 +307,43 @@ class IRISGraphEngine:
         embedded = 0
         skipped = 0
         for batch_start in range(0, n_total, batch_size):
-            batch = all_rows[batch_start:batch_start + batch_size]
+            batch = all_rows[batch_start : batch_start + batch_size]
             for row in batch:
                 row_id = row[0]
                 node_id = f"{label}:{row_id}"
                 if not force:
-                    cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id])
+                    cur.execute(
+                        "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id=?",
+                        [node_id],
+                    )
                     if int(cur.fetchone()[0]) > 0:
                         skipped += 1
                         continue
-                text = " ".join(str(row[i+1]) for i in range(len(text_columns)) if row[i+1] is not None)
+                text = " ".join(
+                    str(row[i + 1])
+                    for i in range(len(text_columns))
+                    if row[i + 1] is not None
+                )
                 try:
                     emb = self.embed_text(text)
                     emb_str = ",".join(str(x) for x in emb)
-                    cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id])
+                    cur.execute(
+                        "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id]
+                    )
                     cur.execute(
                         "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
-                        [node_id, emb_str]
+                        [node_id, emb_str],
                     )
                     embedded += 1
                 except Exception as ex:
-                    logger.warning(f"attach_embeddings_to_table: failed to embed {node_id}: {ex}")
+                    logger.warning(
+                        f"attach_embeddings_to_table: failed to embed {node_id}: {ex}"
+                    )
             self.conn.commit()
             n_done = batch_start + len(batch)
-            logger.info(f"attach_embeddings_to_table: {n_done}/{n_total} rows processed")
+            logger.info(
+                f"attach_embeddings_to_table: {n_done}/{n_total} rows processed"
+            )
             if progress_callback:
                 progress_callback(n_done, n_total)
         return {"embedded": embedded, "skipped": skipped, "total": n_total}
@@ -269,10 +367,12 @@ class IRISGraphEngine:
                     # IRIS returns vector as string or list depending on driver version
                     val = result[0]
                     if isinstance(val, str):
-                        return [float(x) for x in val.strip('[]').split(',')]
+                        return [float(x) for x in val.strip("[]").split(",")]
                     return list(val)
             except Exception as e:
-                logger.warning(f"Native IRIS EMBEDDING failed for config '{self.embedding_config}': {e}. Falling back to Python.")
+                logger.warning(
+                    f"Native IRIS EMBEDDING failed for config '{self.embedding_config}': {e}. Falling back to Python."
+                )
             finally:
                 cursor.close()
 
@@ -281,7 +381,8 @@ class IRISGraphEngine:
             # Try to auto-load a default model if sentence-transformers is available
             try:
                 from sentence_transformers import SentenceTransformer
-                self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
+
+                self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
                 logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
             except ImportError:
                 raise RuntimeError(
@@ -289,15 +390,16 @@ class IRISGraphEngine:
                     "Pass an embedder/embedding_config to IRISGraphEngine or install sentence-transformers."
                 )
 
-        if hasattr(self.embedder, 'encode'):
+        if hasattr(self.embedder, "encode"):
             return self.embedder.encode(text).tolist()
-        if hasattr(self.embedder, 'embed'):
+        if hasattr(self.embedder, "embed"):
             return self.embedder.embed(text)
         if callable(self.embedder):
             return self.embedder(text)
-            
-        raise TypeError(f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)")
 
+        raise TypeError(
+            f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)"
+        )
 
     def initialize_schema(self, auto_deploy_objectscript: bool = True) -> None:
         """
@@ -343,7 +445,9 @@ class IRISGraphEngine:
             except Exception as e:
                 err = str(e).lower()
                 if "already exists" not in err and "already has a" not in err:
-                    logger.warning("Schema setup warning: %s | Statement: %.100s", e, stmt)
+                    logger.warning(
+                        "Schema setup warning: %s | Statement: %.100s", e, stmt
+                    )
 
         # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
         GraphSchema.ensure_indexes(cursor)
@@ -355,7 +459,8 @@ class IRISGraphEngine:
                 logger.error(
                     "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
                     "Vector operations will fail. You must drop and recreate kg_NodeEmbeddings to change dimension.",
-                    db_dim, dim
+                    db_dim,
+                    dim,
                 )
         except Exception as e:
             logger.warning("Could not verify embedding dimension: %s", e)
@@ -400,20 +505,47 @@ class IRISGraphEngine:
 
         self.conn.commit()
 
+        # 5b. Create SQLUser views so IVG's Python PPR fallback can use unqualified table names
+        for view_sql in [
+            "CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes",
+            "CREATE VIEW SQLUser.rdf_edges AS SELECT * FROM Graph_KG.rdf_edges",
+            "CREATE VIEW SQLUser.rdf_labels AS SELECT * FROM Graph_KG.rdf_labels",
+            "CREATE VIEW SQLUser.rdf_props AS SELECT * FROM Graph_KG.rdf_props",
+        ]:
+            try:
+                cursor.execute(view_sql)
+            except Exception:
+                pass
+
         # 6. Deploy ObjectScript .cls layer (best-effort)
         if auto_deploy_objectscript:
-            # Locate iris_src/ relative to the installed package
             try:
                 pkg_dir = Path(__file__).parent.parent / "iris_src"
                 if not pkg_dir.exists():
-                    # Installed wheel: iris_src shipped as package data alongside iris_vector_graph
                     pkg_dir = Path(__file__).parent / ".." / "iris_src"
-                self.capabilities = GraphSchema.deploy_objectscript_classes(cursor, pkg_dir.resolve(), conn=self.conn)
+                self.capabilities = GraphSchema.deploy_objectscript_classes(
+                    cursor, pkg_dir.resolve(), conn=self.conn
+                )
             except Exception as exc:
                 logger.warning("ObjectScript deploy step failed: %s", exc)
                 self.capabilities = IRISCapabilities()
         else:
             self.capabilities = IRISCapabilities()
+
+        # 6b. Always detect capabilities from %Dictionary (deployment may have failed
+        # but classes could already be compiled from a prior docker cp + LoadDir)
+        if not self.capabilities.objectscript_deployed:
+            try:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
+                    "WHERE Name='Graph.KG.PageRank'"
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    self.capabilities.objectscript_deployed = True
+                    logger.info("ObjectScript classes detected (pre-compiled)")
+            except Exception:
+                pass
 
         # 7. Bootstrap ^KG global if ObjectScript is deployed and edges exist
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
@@ -431,7 +563,7 @@ class IRISGraphEngine:
         Prioritizes database detection if the schema exists.
         """
         cursor = self.conn.cursor()
-        
+
         # 1. Try to detect from DB first
         dim = GraphSchema.get_embedding_dimension(cursor)
         if dim:
@@ -441,7 +573,9 @@ class IRISGraphEngine:
         if self.embedding_dimension is not None:
             return self.embedding_dimension
 
-        raise ValueError("Embedding dimension could not be determined. Please provide it during IRISGraphEngine initialization.")
+        raise ValueError(
+            "Embedding dimension could not be determined. Please provide it during IRISGraphEngine initialization."
+        )
 
     def _probe_embedding_support(self) -> bool:
         """Probe whether the IRIS EMBEDDING() SQL function is available (IRIS 2024.3+).
@@ -456,7 +590,9 @@ class IRISGraphEngine:
             return self._embedding_function_available
         cursor = self.conn.cursor()
         try:
-            cursor.execute("SELECT EMBEDDING('__ivg_probe__', '__nonexistent_config__')")
+            cursor.execute(
+                "SELECT EMBEDDING('__ivg_probe__', '__nonexistent_config__')"
+            )
             self._embedding_function_available = True
         except Exception as e:
             err = str(e).lower()
@@ -475,29 +611,39 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         # Use constant table names or sanitized identifiers
         table = validate_table_name("nodes")
-        cursor.execute(f"SELECT COUNT(*) FROM Graph_KG.{table} WHERE node_id = ?", [node_id])
+        cursor.execute(
+            f"SELECT COUNT(*) FROM Graph_KG.{table} WHERE node_id = ?", [node_id]
+        )
         result = cursor.fetchone()
         if not result or result[0] == 0:
             raise ValueError(f"Node does not exist: {node_id}")
 
-    def execute_cypher(self, cypher_query: str, parameters: Dict[str, Any] = None) -> Dict[str, Any]:
+    def execute_cypher(
+        self, cypher_query: str, parameters: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
         """
         Execute a Cypher query by translating it to IRIS SQL.
-        
+
         Args:
             cypher_query: Cypher query string
             parameters: Optional query parameters
-            
+
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
         stripped = cypher_query.strip().upper()
 
         if "CALL DB.LABELS() YIELD" in stripped and "UNION" in stripped:
-            labels = self._try_system_procedure(type("P", (), {"procedure_name": "db.labels"})()).get("rows", [])
-            rels = self._try_system_procedure(type("P", (), {"procedure_name": "db.relationshipTypes"})()).get("rows", [])
+            labels = self._try_system_procedure(
+                type("P", (), {"procedure_name": "db.labels"})()
+            ).get("rows", [])
+            rels = self._try_system_procedure(
+                type("P", (), {"procedure_name": "db.relationshipTypes"})()
+            ).get("rows", [])
             cursor = self.conn.cursor()
-            cursor.execute("SELECT DISTINCT TOP 1000 \"key\" FROM Graph_KG.rdf_props ORDER BY \"key\"")
+            cursor.execute(
+                'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
+            )
             prop_keys = [r[0] for r in cursor.fetchall()]
             return {
                 "columns": ["result"],
@@ -508,7 +654,11 @@ class IRISGraphEngine:
                 ],
             }
 
-        if "RETURN DISTINCT" in stripped and "UNION ALL" in stripped and "ENTITY" in stripped:
+        if (
+            "RETURN DISTINCT" in stripped
+            and "UNION ALL" in stripped
+            and "ENTITY" in stripped
+        ):
             cursor = self.conn.cursor()
             cursor.execute("SELECT TOP 25 node_id FROM Graph_KG.nodes")
             node_rows = [["node", r[0]] for r in cursor.fetchall()]
@@ -516,7 +666,11 @@ class IRISGraphEngine:
             rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
             return {"columns": ["entity", "id"], "rows": node_rows + rel_rows}
 
-        if "MATCH ()" in stripped and "COUNT(*)" in stripped and "UNION ALL" in stripped:
+        if (
+            "MATCH ()" in stripped
+            and "COUNT(*)" in stripped
+            and "UNION ALL" in stripped
+        ):
             cursor = self.conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
             node_count = cursor.fetchone()[0]
@@ -546,7 +700,10 @@ class IRISGraphEngine:
                 return {"columns": all_cols or ["result"], "rows": all_rows}
 
         if stripped.startswith("EXPLAIN "):
-            return {"columns": ["Plan"], "rows": [["No execution plan available (IRIS backend)"]]}
+            return {
+                "columns": ["Plan"],
+                "rows": [["No execution plan available (IRIS backend)"]],
+            }
 
         if stripped.startswith("SHOW "):
             return self._handle_show_command(stripped)
@@ -563,8 +720,14 @@ class IRISGraphEngine:
             proc = parsed.procedure_call
             if proc.procedure_name == "ivg.vector.search" and len(proc.arguments) >= 3:
                 query_input_arg = proc.arguments[2]
-                from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
-                if isinstance(query_input_arg, CypherLiteral) and isinstance(query_input_arg.value, str):
+                from iris_vector_graph.cypher.ast import (
+                    Literal as CypherLiteral,
+                    Variable as CypherVariable,
+                )
+
+                if isinstance(query_input_arg, CypherLiteral) and isinstance(
+                    query_input_arg.value, str
+                ):
                     if not self._probe_embedding_support():
                         raise RuntimeError(
                             "ivg.vector.search Mode 2 (text input) requires the IRIS EMBEDDING() SQL function "
@@ -573,7 +736,10 @@ class IRISGraphEngine:
                         )
                 elif isinstance(query_input_arg, CypherVariable):
                     param_val = (parameters or {}).get(query_input_arg.name)
-                    if isinstance(param_val, str) and not self._probe_embedding_support():
+                    if (
+                        isinstance(param_val, str)
+                        and not self._probe_embedding_support()
+                    ):
                         raise RuntimeError(
                             "ivg.vector.search Mode 2 (text input) requires the IRIS EMBEDDING() SQL function "
                             "(available in IRIS 2024.3+). This IRIS instance does not support it. "
@@ -590,11 +756,11 @@ class IRISGraphEngine:
 
         cursor = self.conn.cursor()
         metadata = sql_query.query_metadata
-        
+
         if sql_query.is_transactional:
             stmts = sql_query.sql
             all_params = sql_query.parameters
-            
+
             cursor.execute("START TRANSACTION")
             try:
                 rows = []
@@ -606,29 +772,39 @@ class IRISGraphEngine:
                         cursor.execute(stmt)
                     if cursor.description:
                         rows = cursor.fetchall()
-                
+
                 cursor.execute("COMMIT")
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+                columns = (
+                    [desc[0] for desc in cursor.description]
+                    if cursor.description
+                    else []
+                )
                 return {
                     "columns": columns,
                     "rows": rows,
                     "sql": stmts[-1] if stmts else "",
                     "params": all_params[-1] if all_params else [],
-                    "metadata": metadata
+                    "metadata": metadata,
                 }
             except Exception:
                 cursor.execute("ROLLBACK")
                 raise
         else:
-            sql_str = sql_query.sql if isinstance(sql_query.sql, str) else "\n".join(sql_query.sql)
+            sql_str = (
+                sql_query.sql
+                if isinstance(sql_query.sql, str)
+                else "\n".join(sql_query.sql)
+            )
             p = sql_query.parameters[0] if sql_query.parameters else []
-            
+
             if p:
                 cursor.execute(sql_str, p)
             else:
                 cursor.execute(sql_str)
 
-            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            columns = (
+                [desc[0] for desc in cursor.description] if cursor.description else []
+            )
             rows = cursor.fetchall()
 
             return {
@@ -636,10 +812,12 @@ class IRISGraphEngine:
                 "rows": rows,
                 "sql": sql_str,
                 "params": p,
-                "metadata": metadata
+                "metadata": metadata,
             }
 
-    def _execute_shortest_path_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
+    def _execute_shortest_path_cypher(
+        self, sql_query, parameters=None
+    ) -> Dict[str, Any]:
         import json as _json
 
         vl = sql_query.var_length_paths[0]
@@ -669,27 +847,50 @@ class IRISGraphEngine:
 
         try:
             path_json = _call_classmethod(
-                self.conn, "Graph.KG.Traversal", "ShortestPathJson",
-                source_id, target_id, max_hops, preds_json, direction, find_all
+                self.conn,
+                "Graph.KG.Traversal",
+                "ShortestPathJson",
+                source_id,
+                target_id,
+                max_hops,
+                preds_json,
+                direction,
+                find_all,
             )
             paths = _json.loads(str(path_json)) if path_json else []
         except Exception as e:
             logger.warning(f"ShortestPathJson failed: {e}")
-            return {"columns": ["p"], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+            return {
+                "columns": ["p"],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
 
         if not paths:
-            return {"columns": ["p"], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+            return {
+                "columns": ["p"],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
 
         return_funcs = vl.get("return_path_funcs", [])
         rows = []
         for path in paths:
             row = []
             if not return_funcs or "path" in return_funcs:
-                row.append(_json.dumps({
-                    "nodes": path.get("nodes", []),
-                    "rels": path.get("rels", []),
-                    "length": path.get("length", 0),
-                }))
+                row.append(
+                    _json.dumps(
+                        {
+                            "nodes": path.get("nodes", []),
+                            "rels": path.get("rels", []),
+                            "length": path.get("length", 0),
+                        }
+                    )
+                )
             if "length" in return_funcs:
                 row.append(path.get("length", 0))
             if "nodes" in return_funcs:
@@ -697,11 +898,15 @@ class IRISGraphEngine:
             if "relationships" in return_funcs:
                 row.append(path.get("rels", []))
             if not row:
-                row.append(_json.dumps({
-                    "nodes": path.get("nodes", []),
-                    "rels": path.get("rels", []),
-                    "length": path.get("length", 0),
-                }))
+                row.append(
+                    _json.dumps(
+                        {
+                            "nodes": path.get("nodes", []),
+                            "rels": path.get("rels", []),
+                            "length": path.get("length", 0),
+                        }
+                    )
+                )
             rows.append(row)
 
         columns = []
@@ -726,6 +931,7 @@ class IRISGraphEngine:
 
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
+
         vl = sql_query.var_length_paths[0]
         predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
         max_hops = vl["max_hops"]
@@ -741,17 +947,34 @@ class IRISGraphEngine:
             source_id = next(iter(parameters.values()), None)
 
         if source_id is None:
-            return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+            return {
+                "columns": [],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
 
         try:
             bfs_json = _call_classmethod(
-                self.conn, "Graph.KG.Traversal", "BFSFastJson",
-                source_id, predicates_json, max_hops, ""
+                self.conn,
+                "Graph.KG.Traversal",
+                "BFSFastJson",
+                source_id,
+                predicates_json,
+                max_hops,
+                "",
             )
             bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
         except Exception as e:
             logger.warning(f"BFSFastJson failed: {e}")
-            return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+            return {
+                "columns": [],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
 
         if min_hops > 1:
             min_step_per_node: dict = {}
@@ -761,7 +984,11 @@ class IRISGraphEngine:
                     s = r.get("step", 1)
                     if oid not in min_step_per_node or s < min_step_per_node[oid]:
                         min_step_per_node[oid] = s
-            bfs_results = [r for r in bfs_results if min_step_per_node.get(r.get("o"), 0) >= min_hops]
+            bfs_results = [
+                r
+                for r in bfs_results
+                if min_step_per_node.get(r.get("o"), 0) >= min_hops
+            ]
 
         seen = set()
         target_ids = []
@@ -772,13 +999,25 @@ class IRISGraphEngine:
                 target_ids.append(oid)
 
         if not target_ids:
-            return {"columns": ["b_id", "b_labels", "b_props"], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+            return {
+                "columns": ["b_id", "b_labels", "b_props"],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
 
         nodes = self.get_nodes(target_ids)
         rows = []
         for data in nodes:
             node_id = data.get("id", "")
-            rows.append((node_id, data.get("labels", []), {k: v for k, v in data.items() if k not in ("labels", "id")}))
+            rows.append(
+                (
+                    node_id,
+                    data.get("labels", []),
+                    {k: v for k, v in data.items() if k not in ("labels", "id")},
+                )
+            )
 
         return {
             "columns": ["b_id", "b_labels", "b_props"],
@@ -791,14 +1030,43 @@ class IRISGraphEngine:
     def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
         if "DATABASES" in cmd:
             return {
-                "columns": ["name", "type", "aliases", "access", "address",
-                            "role", "writer", "requestedStatus", "currentStatus",
-                            "statusMessage", "default", "home", "constituents"],
-                "rows": [["neo4j", "standard", [], "read-write", "localhost:7687",
-                           "primary", True, "online", "online", "", True, True, []]],
+                "columns": [
+                    "name",
+                    "type",
+                    "aliases",
+                    "access",
+                    "address",
+                    "role",
+                    "writer",
+                    "requestedStatus",
+                    "currentStatus",
+                    "statusMessage",
+                    "default",
+                    "home",
+                    "constituents",
+                ],
+                "rows": [
+                    [
+                        "neo4j",
+                        "standard",
+                        [],
+                        "read-write",
+                        "localhost:7687",
+                        "primary",
+                        True,
+                        "online",
+                        "online",
+                        "",
+                        True,
+                        True,
+                        [],
+                    ]
+                ],
             }
         if "PROCEDURES" in cmd:
-            procs = self._try_system_procedure(type("P", (), {"procedure_name": "dbms.procedures"})())
+            procs = self._try_system_procedure(
+                type("P", (), {"procedure_name": "dbms.procedures"})()
+            )
             if procs:
                 return {
                     "columns": ["name", "description", "signature"],
@@ -806,7 +1074,9 @@ class IRISGraphEngine:
                 }
             return {"columns": ["name", "description", "signature"], "rows": []}
         if "FUNCTIONS" in cmd:
-            fns = self._try_system_procedure(type("P", (), {"procedure_name": "dbms.functions"})())
+            fns = self._try_system_procedure(
+                type("P", (), {"procedure_name": "dbms.functions"})()
+            )
             if fns:
                 return {
                     "columns": ["name", "description", "signature"],
@@ -814,11 +1084,27 @@ class IRISGraphEngine:
                 }
             return {"columns": ["name", "description", "signature"], "rows": []}
         if "INDEXES" in cmd:
-            return {"columns": ["name", "type", "entityType", "labelsOrTypes", "properties"],
-                    "rows": []}
+            return {
+                "columns": [
+                    "name",
+                    "type",
+                    "entityType",
+                    "labelsOrTypes",
+                    "properties",
+                ],
+                "rows": [],
+            }
         if "CONSTRAINTS" in cmd:
-            return {"columns": ["name", "type", "entityType", "labelsOrTypes", "properties"],
-                    "rows": []}
+            return {
+                "columns": [
+                    "name",
+                    "type",
+                    "entityType",
+                    "labelsOrTypes",
+                    "properties",
+                ],
+                "rows": [],
+            }
         return {"columns": ["value"], "rows": []}
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
@@ -826,7 +1112,9 @@ class IRISGraphEngine:
 
         if name == "db.labels":
             cursor = self.conn.cursor()
-            cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
             labels = [row[0] for row in cursor.fetchall()]
             return {"columns": ["label"], "rows": [[l] for l in labels]}
 
@@ -844,7 +1132,9 @@ class IRISGraphEngine:
 
         if name == "db.schema.nodetypeproperties":
             cursor = self.conn.cursor()
-            cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
             labels = [row[0] for row in cursor.fetchall()]
             rows = []
             for label in labels:
@@ -855,16 +1145,28 @@ class IRISGraphEngine:
                 sample = cursor.fetchone()
                 if sample:
                     cursor.execute(
-                        "SELECT DISTINCT TOP 20 \"key\" FROM Graph_KG.rdf_props "
-                        "WHERE s = ? ORDER BY \"key\"",
+                        'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props '
+                        'WHERE s = ? ORDER BY "key"',
                         [sample[0]],
                     )
                     for (prop_name,) in cursor.fetchall():
-                        rows.append([
-                            f":`{label}`", [label], prop_name, ["String"], False,
-                        ])
+                        rows.append(
+                            [
+                                f":`{label}`",
+                                [label],
+                                prop_name,
+                                ["String"],
+                                False,
+                            ]
+                        )
             return {
-                "columns": ["nodeType", "nodeLabels", "propertyName", "propertyTypes", "mandatory"],
+                "columns": [
+                    "nodeType",
+                    "nodeLabels",
+                    "propertyName",
+                    "propertyTypes",
+                    "mandatory",
+                ],
                 "rows": rows,
             }
 
@@ -881,52 +1183,129 @@ class IRISGraphEngine:
             }
 
         if name == "dbms.procedures":
+
             def _proc(n, sig, desc, mode="READ"):
                 return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
+
             procs = [
-                _proc("db.labels", "db.labels() :: (label :: STRING)", "List all labels"),
-                _proc("db.relationshipTypes", "db.relationshipTypes() :: (relationshipType :: STRING)", "List all rel types"),
-                _proc("db.schema.visualization", "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)", "Schema visualization"),
-                _proc("db.schema.nodeTypeProperties", "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)", "Node type props"),
-                _proc("db.schema.relTypeProperties", "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)", "Rel type props"),
-                _proc("dbms.components", "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)", "Server components", "DBMS"),
-                _proc("dbms.procedures", "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)", "List procedures", "DBMS"),
-                _proc("dbms.functions", "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)", "List functions", "DBMS"),
-                _proc("dbms.clientConfig", "dbms.clientConfig() :: (key :: STRING, value :: STRING)", "Client config", "DBMS"),
-                _proc("dbms.security.showCurrentUser", "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)", "Current user", "DBMS"),
-                _proc("dbms.queryJmx", "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)", "Query JMX management data", "DBMS"),
+                _proc(
+                    "db.labels", "db.labels() :: (label :: STRING)", "List all labels"
+                ),
+                _proc(
+                    "db.relationshipTypes",
+                    "db.relationshipTypes() :: (relationshipType :: STRING)",
+                    "List all rel types",
+                ),
+                _proc(
+                    "db.schema.visualization",
+                    "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)",
+                    "Schema visualization",
+                ),
+                _proc(
+                    "db.schema.nodeTypeProperties",
+                    "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
+                    "Node type props",
+                ),
+                _proc(
+                    "db.schema.relTypeProperties",
+                    "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
+                    "Rel type props",
+                ),
+                _proc(
+                    "dbms.components",
+                    "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)",
+                    "Server components",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.procedures",
+                    "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                    "List procedures",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.functions",
+                    "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                    "List functions",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.clientConfig",
+                    "dbms.clientConfig() :: (key :: STRING, value :: STRING)",
+                    "Client config",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.security.showCurrentUser",
+                    "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)",
+                    "Current user",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.queryJmx",
+                    "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)",
+                    "Query JMX management data",
+                    "DBMS",
+                ),
             ]
             return {
-                "columns": ["name", "signature", "description", "mode", "admin",
-                            "option", "defaultBuiltInRoles", "isDeprecated",
-                            "worksOnSystem", "argumentDescription"],
+                "columns": [
+                    "name",
+                    "signature",
+                    "description",
+                    "mode",
+                    "admin",
+                    "option",
+                    "defaultBuiltInRoles",
+                    "isDeprecated",
+                    "worksOnSystem",
+                    "argumentDescription",
+                ],
                 "rows": procs,
             }
 
         if name == "db.propertykeys":
             cursor = self.conn.cursor()
-            cursor.execute("SELECT DISTINCT TOP 1000 \"key\" FROM Graph_KG.rdf_props ORDER BY \"key\"")
+            cursor.execute(
+                'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
+            )
             keys = [row[0] for row in cursor.fetchall()]
             return {"columns": ["propertyKey"], "rows": [[k] for k in keys]}
 
         if name == "dbms.clientconfig":
-            return {"columns": ["key", "value"], "rows": [
-                ["browser.allow_outgoing_connections", "false"],
-                ["browser.credential_timeout", "0"],
-                ["browser.retain_connection_credentials", "true"],
-                ["browser.retain_editor_history", "true"],
-                ["browser.post_connect_cmd", ""],
-                ["dbms.security.auth_enabled", "false"],
-            ]}
+            return {
+                "columns": ["key", "value"],
+                "rows": [
+                    ["browser.allow_outgoing_connections", "false"],
+                    ["browser.credential_timeout", "0"],
+                    ["browser.retain_connection_credentials", "true"],
+                    ["browser.retain_editor_history", "true"],
+                    ["browser.post_connect_cmd", ""],
+                    ["dbms.security.auth_enabled", "false"],
+                ],
+            }
 
         if name == "dbms.security.showcurrentuser" or name == "dbms.showcurrentuser":
-            return {"columns": ["username", "roles", "flags"], "rows": [["neo4j", [], []]]}
+            return {
+                "columns": ["username", "roles", "flags"],
+                "rows": [["neo4j", [], []]],
+            }
 
         if name == "dbms.functions":
-            return {"columns": ["name", "signature", "description", "aggregating",
-                                "defaultBuiltInRoles", "isDeprecated", "argumentDescription",
-                                "returnDescription", "category"],
-                    "rows": []}
+            return {
+                "columns": [
+                    "name",
+                    "signature",
+                    "description",
+                    "aggregating",
+                    "defaultBuiltInRoles",
+                    "isDeprecated",
+                    "argumentDescription",
+                    "returnDescription",
+                    "category",
+                ],
+                "rows": [],
+            }
 
         if name == "dbms.queryjmx":
             cursor = self.conn.cursor()
@@ -938,53 +1317,83 @@ class IRISGraphEngine:
             return {
                 "columns": ["name", "description", "attributes"],
                 "rows": [
-                    [f"{pfx},name=Store file sizes", "Store file sizes",
-                     {"TotalStoreSize": {"value": node_count * 200},
-                      "NodeStoreSize": {"value": node_count * 100},
-                      "RelationshipStoreSize": {"value": edge_count * 100},
-                      "PropertyStoreSize": {"value": node_count * 50},
-                      "StringStoreSize": {"value": node_count * 30},
-                      "ArrayStoreSize": {"value": 0},
-                      "IndexStoreSize": {"value": 0},
-                      "LabelStoreSize": {"value": node_count * 10},
-                      "SchemaStoreSize": {"value": 4096}}],
-                    [f"{pfx},name=Primitive count", "Primitive count",
-                     {"NumberOfNodeIdsInUse": {"value": node_count},
-                      "NumberOfRelationshipIdsInUse": {"value": edge_count},
-                      "NumberOfPropertyIdsInUse": {"value": node_count * 3},
-                      "NumberOfRelationshipTypeIdsInUse": {"value": 20},
-                      "NumberOfLabelIdsInUse": {"value": 5}}],
-                    [f"{pfx},name=Page cache", "Page cache statistics",
-                     {"Hits": {"value": 1000},
-                      "Faults": {"value": 10},
-                      "HitRatio": {"value": 0.99},
-                      "UsageRatio": {"value": 0.5},
-                      "FileMappings": {"value": 5},
-                      "FileUnmappings": {"value": 0},
-                      "BytesRead": {"value": 1024 * 1024},
-                      "BytesWritten": {"value": 1024},
-                      "FlushEvents": {"value": 0},
-                      "EvictionExceptions": {"value": 0}}],
-                    [f"{pfx},name=Transactions", "Transaction statistics",
-                     {"LastCommittedTxId": {"value": 1},
-                      "CurrentCommittedTxId": {"value": 1},
-                      "LastClosedTxId": {"value": 1},
-                      "NumberOfOpenTransactions": {"value": 0},
-                      "PeakNumberOfConcurrentTransactions": {"value": 1},
-                      "NumberOfOpenedTransactions": {"value": 1},
-                      "NumberOfCommittedTransactions": {"value": 1},
-                      "NumberOfRolledBackTransactions": {"value": 0},
-                      "NumberOfTerminatedTransactions": {"value": 0}}],
-                    [f"{pfx},name=Kernel", "Kernel information",
-                     {"KernelVersion": {"value": "iris-vector-graph-1.47.0"},
-                      "StoreId": {"value": "store-001"},
-                      "DatabaseName": {"value": "neo4j"},
-                      "ReadOnly": {"value": False},
-                      "MBeanQuery": {"value": pfx}}],
-                    [f"{pfx},name=Configuration", "Configuration",
-                     {"dbms.jvm.heap.initial_size": {"value": "256m"},
-                      "dbms.jvm.heap.max_size": {"value": "512m"},
-                      "dbms.logs.native.size": {"value": "20m"}}],
+                    [
+                        f"{pfx},name=Store file sizes",
+                        "Store file sizes",
+                        {
+                            "TotalStoreSize": {"value": node_count * 200},
+                            "NodeStoreSize": {"value": node_count * 100},
+                            "RelationshipStoreSize": {"value": edge_count * 100},
+                            "PropertyStoreSize": {"value": node_count * 50},
+                            "StringStoreSize": {"value": node_count * 30},
+                            "ArrayStoreSize": {"value": 0},
+                            "IndexStoreSize": {"value": 0},
+                            "LabelStoreSize": {"value": node_count * 10},
+                            "SchemaStoreSize": {"value": 4096},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Primitive count",
+                        "Primitive count",
+                        {
+                            "NumberOfNodeIdsInUse": {"value": node_count},
+                            "NumberOfRelationshipIdsInUse": {"value": edge_count},
+                            "NumberOfPropertyIdsInUse": {"value": node_count * 3},
+                            "NumberOfRelationshipTypeIdsInUse": {"value": 20},
+                            "NumberOfLabelIdsInUse": {"value": 5},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Page cache",
+                        "Page cache statistics",
+                        {
+                            "Hits": {"value": 1000},
+                            "Faults": {"value": 10},
+                            "HitRatio": {"value": 0.99},
+                            "UsageRatio": {"value": 0.5},
+                            "FileMappings": {"value": 5},
+                            "FileUnmappings": {"value": 0},
+                            "BytesRead": {"value": 1024 * 1024},
+                            "BytesWritten": {"value": 1024},
+                            "FlushEvents": {"value": 0},
+                            "EvictionExceptions": {"value": 0},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Transactions",
+                        "Transaction statistics",
+                        {
+                            "LastCommittedTxId": {"value": 1},
+                            "CurrentCommittedTxId": {"value": 1},
+                            "LastClosedTxId": {"value": 1},
+                            "NumberOfOpenTransactions": {"value": 0},
+                            "PeakNumberOfConcurrentTransactions": {"value": 1},
+                            "NumberOfOpenedTransactions": {"value": 1},
+                            "NumberOfCommittedTransactions": {"value": 1},
+                            "NumberOfRolledBackTransactions": {"value": 0},
+                            "NumberOfTerminatedTransactions": {"value": 0},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Kernel",
+                        "Kernel information",
+                        {
+                            "KernelVersion": {"value": "iris-vector-graph-1.47.0"},
+                            "StoreId": {"value": "store-001"},
+                            "DatabaseName": {"value": "neo4j"},
+                            "ReadOnly": {"value": False},
+                            "MBeanQuery": {"value": pfx},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Configuration",
+                        "Configuration",
+                        {
+                            "dbms.jvm.heap.initial_size": {"value": "256m"},
+                            "dbms.jvm.heap.max_size": {"value": "512m"},
+                            "dbms.logs.native.size": {"value": "20m"},
+                        },
+                    ],
                 ],
             }
 
@@ -1008,9 +1417,8 @@ class IRISGraphEngine:
         nodes = []
         for i, label in enumerate(labels):
             cursor.execute(
-                "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl "
-                "WHERE rl.label = ?",
-                [label]
+                "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                [label],
             )
             row = cursor.fetchone()
             sample_id = row[0] if row else None
@@ -1018,26 +1426,27 @@ class IRISGraphEngine:
             prop_names = []
             if sample_id:
                 cursor.execute(
-                    "SELECT DISTINCT TOP 20 \"key\" FROM Graph_KG.rdf_props WHERE s = ? "
-                    "ORDER BY \"key\"",
-                    [sample_id]
+                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props WHERE s = ? '
+                    'ORDER BY "key"',
+                    [sample_id],
                 )
                 prop_names = [r[0] for r in cursor.fetchall()]
 
-            nodes.append({
-                "id": i,
-                "name": label,
-                "labels": [label],
-                "properties": [{"name": p, "type": "String"} for p in prop_names],
-            })
+            nodes.append(
+                {
+                    "id": i,
+                    "name": label,
+                    "labels": [label],
+                    "properties": [{"name": p, "type": "String"} for p in prop_names],
+                }
+            )
 
         label_to_id = {n["name"]: n["id"] for n in nodes}
 
         rels = []
         for i, rel_type in enumerate(rel_types):
             cursor.execute(
-                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ?",
-                [rel_type]
+                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ?", [rel_type]
             )
             row = cursor.fetchone()
             start_label_id = 0
@@ -1045,40 +1454,40 @@ class IRISGraphEngine:
             if row:
                 src_id, tgt_id = row
                 cursor.execute(
-                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?",
-                    [src_id]
+                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?", [src_id]
                 )
                 src_row = cursor.fetchone()
                 if src_row:
                     start_label_id = label_to_id.get(src_row[0], 0)
                 cursor.execute(
-                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?",
-                    [tgt_id]
+                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?", [tgt_id]
                 )
                 tgt_row = cursor.fetchone()
                 if tgt_row:
                     end_label_id = label_to_id.get(tgt_row[0], 0)
 
-            rels.append({
-                "id": i,
-                "name": rel_type,
-                "type": rel_type,
-                "properties": [],
-                "startNode": start_label_id,
-                "endNode": end_label_id,
-            })
+            rels.append(
+                {
+                    "id": i,
+                    "name": rel_type,
+                    "type": rel_type,
+                    "properties": [],
+                    "startNode": start_label_id,
+                    "endNode": end_label_id,
+                }
+            )
 
         return {"nodes": nodes, "relationships": rels}
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve a node by ID using optimized direct SQL.
-        
+
         Bypasses Cypher translation for 80x+ faster single-node lookups.
-        
+
         Args:
             node_id: Node identifier
-            
+
         Returns:
             Dict with 'id', 'labels', and properties, or None if not found
         """
@@ -1088,13 +1497,13 @@ class IRISGraphEngine:
     def get_nodes(self, node_ids: List[str]) -> List[Dict[str, Any]]:
         """
         Retrieve multiple nodes by ID using optimized batch SQL.
-        
+
         Eliminates N+1 query patterns by fetching all labels and properties
         for a set of nodes in two efficient queries.
-        
+
         Args:
             node_ids: List of node identifiers
-            
+
         Returns:
             List of node dicts with 'id', 'labels', and properties
         """
@@ -1108,20 +1517,20 @@ class IRISGraphEngine:
             node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
 
             for i in range(0, len(node_ids), _IN_CHUNK):
-                chunk = node_ids[i:i + _IN_CHUNK]
+                chunk = node_ids[i : i + _IN_CHUNK]
                 placeholders = ",".join(["?"] * len(chunk))
 
                 cursor.execute(
                     f"SELECT s, label FROM {_table('rdf_labels')} WHERE s IN ({placeholders})",
-                    chunk
+                    chunk,
                 )
                 for s, label in cursor.fetchall():
                     if s in node_map:
                         node_map[s]["labels"].append(label)
 
                 cursor.execute(
-                    f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
-                    chunk
+                    f'SELECT s, "key", val FROM {_table("rdf_props")} WHERE s IN ({placeholders})',
+                    chunk,
                 )
                 _STRUCTURAL_KEYS = ("id", "labels")
                 for s, key, val in cursor.fetchall():
@@ -1130,7 +1539,11 @@ class IRISGraphEngine:
                         if val is not None:
                             parsed_val = val
                             try:
-                                if (str(val).startswith('{') and str(val).endswith('}')) or (str(val).startswith('[') and str(val).endswith(']')):
+                                if (
+                                    str(val).startswith("{") and str(val).endswith("}")
+                                ) or (
+                                    str(val).startswith("[") and str(val).endswith("]")
+                                ):
                                     parsed_val = json.loads(val)
                             except Exception:
                                 pass
@@ -1138,15 +1551,26 @@ class IRISGraphEngine:
                         else:
                             node_map[s][store_key] = val
 
-            empty_nids = [nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2]
+            empty_nids = [
+                nid
+                for nid, data in node_map.items()
+                if not data["labels"] and len(data) <= 2
+            ]
             if empty_nids:
                 existing_empty: set = set()
                 for i in range(0, len(empty_nids), _IN_CHUNK):
-                    chunk = empty_nids[i:i + _IN_CHUNK]
+                    chunk = empty_nids[i : i + _IN_CHUNK]
                     e_placeholders = ",".join(["?"] * len(chunk))
-                    cursor.execute(f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})", chunk)
+                    cursor.execute(
+                        f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})",
+                        chunk,
+                    )
                     existing_empty.update(row[0] for row in cursor.fetchall())
-                return [node_map[nid] for nid in node_ids if nid in existing_empty or nid not in empty_nids]
+                return [
+                    node_map[nid]
+                    for nid in node_ids
+                    if nid in existing_empty or nid not in empty_nids
+                ]
 
             return [node_map[nid] for nid in node_ids if nid in node_map]
 
@@ -1184,23 +1608,31 @@ class IRISGraphEngine:
         labels_raw = row_map.get(labels_key)
         props_raw = row_map.get(props_key)
 
-        labels = json.loads(labels_raw) if isinstance(labels_raw, str) else (labels_raw or [])
-        props_items = json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or [])
-        
+        labels = (
+            json.loads(labels_raw)
+            if isinstance(labels_raw, str)
+            else (labels_raw or [])
+        )
+        props_items = (
+            json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or [])
+        )
+
         if props_items and isinstance(props_items[0], str):
             props_items = [json.loads(item) for item in props_items]
-        
-        props = {item["key"]: item["value"] for item in props_items if isinstance(item, dict)}
+
+        props = {
+            item["key"]: item["value"] for item in props_items if isinstance(item, dict)
+        }
 
         return {"id": row_map[id_key], "labels": labels, "properties": props}
 
     def count_nodes(self, label: Optional[str] = None) -> int:
         """
         Count nodes in the graph using optimized SQL.
-        
+
         Args:
             label: Optional label filter
-            
+
         Returns:
             Total node count (filtered by label if provided)
         """
@@ -1208,17 +1640,21 @@ class IRISGraphEngine:
         try:
             if label:
                 # Use constant table names
-                cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
+                )
             else:
                 cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
-            
+
             result = cursor.fetchone()
             return result[0] if result else 0
         except Exception as e:
             logger.error(f"Count nodes failed: {e}")
             return 0
 
-    def create_node(self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None) -> bool:
+    def create_node(
+        self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None
+    ) -> bool:
         """
         Create a single node with labels and properties in a single transaction.
         Optimized for individual creations with proper batching of internal inserts.
@@ -1226,62 +1662,83 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
-            
+
             # 1. Create node
-            cursor.execute(f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id])
-            
+            cursor.execute(
+                f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
+            )
+
             # 2. Batch labels
             if labels:
                 label_data = [[node_id, label] for label in labels]
-                cursor.executemany(f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)", label_data)
-                
+                cursor.executemany(
+                    f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
+                    label_data,
+                )
+
             # 3. Batch properties
             # Always include 'id' in rdf_props so Cypher queries like
             # MATCH (n {id: $value}) or WHERE n.id = $value can find the node.
             props = dict(properties) if properties else {}
             if "id" not in props:
                 props["id"] = node_id
-            
+
             prop_data = []
             for k, v in props.items():
                 val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                 # Use safe INSERT pattern to prevent duplicate property violations
                 # params: [s, key, val, s, key]
                 prop_data.append([node_id, k, val_str, node_id, k])
-            
-            prop_sql = f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)"
+
+            prop_sql = f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)'
             cursor.executemany(prop_sql, prop_data)
-                
+
             cursor.execute("COMMIT")
             return True
         except Exception as e:
             cursor.execute("ROLLBACK")
-            if "UNIQUE" in str(e) or "-119" in str(e) or "validation failed" in str(e).lower():
+            if (
+                "UNIQUE" in str(e)
+                or "-119" in str(e)
+                or "validation failed" in str(e).lower()
+            ):
                 logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
             else:
                 logger.error(f"create_node failed: {e}")
             return False
 
-    def create_edge(self, source_id: str, predicate: str, target_id: str, qualifiers: Dict[str, Any] = None) -> bool:
+    def create_edge(
+        self,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        qualifiers: Dict[str, Any] = None,
+    ) -> bool:
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
             cursor.execute(
                 f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                [source_id, predicate, target_id, qual_json]
+                [source_id, predicate, target_id, qual_json],
             )
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
             if "UNIQUE" in str(e) or "-119" in str(e):
-                logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
+                logger.debug(
+                    f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}"
+                )
             else:
                 logger.error(f"create_edge failed: {e}")
             return False
         try:
             self._iris_obj().classMethodVoid(
-                "Graph.KG.EdgeScan", "WriteAdjacency",
-                source_id, predicate, target_id, "1.0"
+                "Graph.KG.EdgeScan",
+                "WriteAdjacency",
+                source_id,
+                predicate,
+                target_id,
+                "1.0",
             )
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
@@ -1292,7 +1749,7 @@ class IRISGraphEngine:
         try:
             cursor.execute(
                 f"DELETE FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
-                [source_id, predicate, target_id]
+                [source_id, predicate, target_id],
             )
             self.conn.commit()
         except Exception as e:
@@ -1301,8 +1758,7 @@ class IRISGraphEngine:
             return False
         try:
             self._iris_obj().classMethodVoid(
-                "Graph.KG.EdgeScan", "DeleteAdjacency",
-                source_id, predicate, target_id
+                "Graph.KG.EdgeScan", "DeleteAdjacency", source_id, predicate, target_id
             )
         except Exception as e:
             logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
@@ -1315,17 +1771,17 @@ class IRISGraphEngine:
     ) -> List[str]:
         """
         Bulk create nodes using high-performance batch SQL.
-        
+
         Uses %NOINDEX hints and batch parameter binding for 5,000+ entities/sec.
         Best for initial data loads or large syncs (10k+ entities).
-        
+
         Args:
             nodes: List of node dicts, each with:
                 - id: Node ID (required)
                 - labels: List of labels (optional)
                 - properties: Dict of properties (optional)
             disable_indexes: Drop indexes before load, rebuild after (default True)
-            
+
         Returns:
             List of successfully created node IDs
         """
@@ -1339,11 +1795,11 @@ class IRISGraphEngine:
             # 1. Pre-load setup
             if disable_indexes:
                 GraphSchema.disable_indexes(cursor)
-            
+
             # 2. SQL templates (using %NOINDEX for speed)
-            node_sql = GraphSchema.get_bulk_insert_sql('nodes')
-            label_sql = GraphSchema.get_bulk_insert_sql('rdf_labels')
-            prop_sql = GraphSchema.get_bulk_insert_sql('rdf_props')
+            node_sql = GraphSchema.get_bulk_insert_sql("nodes")
+            label_sql = GraphSchema.get_bulk_insert_sql("rdf_labels")
+            prop_sql = GraphSchema.get_bulk_insert_sql("rdf_props")
 
             # 3. Collect and prepare data
             all_labels = []
@@ -1351,23 +1807,23 @@ class IRISGraphEngine:
             valid_nodes = []
 
             for node in nodes:
-                node_id = node.get('id')
+                node_id = node.get("id")
                 if not node_id:
                     continue
-                
+
                 created_ids.append(node_id)
                 # params: [node_id, node_id] for WHERE NOT EXISTS
                 valid_nodes.append([node_id, node_id])
-                
-                for label in node.get('labels', []):
+
+                for label in node.get("labels", []):
                     # params: [s, label, s, label]
                     all_labels.append((node_id, label, node_id, label))
-                
-                props = node.get('properties', {})
+
+                props = node.get("properties", {})
                 # Ensure ID is in properties for consistency with Cypher CREATE
-                if 'id' not in props:
-                    props['id'] = node_id
-                
+                if "id" not in props:
+                    props["id"] = node_id
+
                 for k, v in props.items():
                     if v is None:
                         continue
@@ -1379,11 +1835,11 @@ class IRISGraphEngine:
             # Phase 1: Nodes
             cursor.executemany(node_sql, valid_nodes)
             self.conn.commit()
-            
+
             # Phase 2: Labels
             if all_labels:
                 cursor.executemany(label_sql, all_labels)
-                
+
             # Phase 3: Properties
             if all_props:
                 cursor.executemany(prop_sql, all_props)
@@ -1407,14 +1863,14 @@ class IRISGraphEngine:
     ) -> int:
         """
         Bulk create edges using high-performance batch SQL.
-        
+
         Args:
             edges: List of edge dicts:
                 - source_id: Source node ID
                 - predicate: Relationship type
                 - target_id: Target node ID
             disable_indexes: Drops indexes before load (default True)
-            
+
         Returns:
             Number of edges created
         """
@@ -1425,17 +1881,17 @@ class IRISGraphEngine:
         try:
             if disable_indexes:
                 GraphSchema.disable_indexes(cursor)
-            
-            edge_sql = GraphSchema.get_bulk_insert_sql('rdf_edges')
+
+            edge_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
             edge_params = []
             for e in edges:
-                if all(k in e for k in ('source_id', 'predicate', 'target_id')):
+                if all(k in e for k in ("source_id", "predicate", "target_id")):
                     # params: [s, p, o_id, s, p, o_id] for WHERE NOT EXISTS
-                    s, p, o = e['source_id'], e['predicate'], e['target_id']
+                    s, p, o = e["source_id"], e["predicate"], e["target_id"]
                     edge_params.append([s, p, o, s, p, o])
 
             cursor.executemany(edge_sql, edge_params)
-            
+
             self.conn.commit()
             return len(edge_params)
         except Exception as e:
@@ -1449,10 +1905,17 @@ class IRISGraphEngine:
             try:
                 self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
             except Exception as e:
-                logger.warning(f"bulk_create_edges BuildKG failed (^KG may be stale): {e}")
+                logger.warning(
+                    f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
+                )
 
-    def load_networkx(self, G, label_attr: str = "type", skip_existing: bool = True,
-                      progress_callback=None) -> dict:
+    def load_networkx(
+        self,
+        G,
+        label_attr: str = "type",
+        skip_existing: bool = True,
+        progress_callback=None,
+    ) -> dict:
         added_nodes = 0
         added_edges = 0
         skipped_nodes = 0
@@ -1480,38 +1943,61 @@ class IRISGraphEngine:
                 skipped_nodes += 1
             n_done = added_nodes + skipped_nodes
             if n_done % 10000 == 0:
-                logger.info(f"Nodes: {n_done:,}/{total_nodes:,} ({added_nodes:,} added, {skipped_nodes:,} skipped)")
+                logger.info(
+                    f"Nodes: {n_done:,}/{total_nodes:,} ({added_nodes:,} added, {skipped_nodes:,} skipped)"
+                )
                 if progress_callback:
                     progress_callback(n_done, added_edges + skipped_edges)
         logger.info(f"Nodes complete: {added_nodes:,} added, {skipped_nodes:,} skipped")
         if progress_callback:
             progress_callback(added_nodes + skipped_nodes, 0)
         for src, dst, data in G.edges(data=True):
-            predicate = data.get("predicate", data.get("label", data.get("key", "is_a")))
-            qualifiers = {k: v for k, v in data.items() if k not in ("predicate", "label", "key")}
-            if self.create_edge(source_id=str(src), predicate=str(predicate),
-                                target_id=str(dst), qualifiers=qualifiers or None):
+            predicate = data.get(
+                "predicate", data.get("label", data.get("key", "is_a"))
+            )
+            qualifiers = {
+                k: v for k, v in data.items() if k not in ("predicate", "label", "key")
+            }
+            if self.create_edge(
+                source_id=str(src),
+                predicate=str(predicate),
+                target_id=str(dst),
+                qualifiers=qualifiers or None,
+            ):
                 added_edges += 1
             else:
                 skipped_edges += 1
             e_done = added_edges + skipped_edges
             if e_done % 10000 == 0:
-                logger.info(f"Edges: {e_done:,}/{total_edges:,} ({added_edges:,} added, {skipped_edges:,} skipped)")
+                logger.info(
+                    f"Edges: {e_done:,}/{total_edges:,} ({added_edges:,} added, {skipped_edges:,} skipped)"
+                )
                 if progress_callback:
                     progress_callback(added_nodes + skipped_nodes, e_done)
         logger.info(f"Edges complete: {added_edges:,} added, {skipped_edges:,} skipped")
         if progress_callback:
             progress_callback(added_nodes + skipped_nodes, added_edges + skipped_edges)
-        return {"nodes": added_nodes, "edges": added_edges, "skipped_nodes": skipped_nodes, "skipped_edges": skipped_edges}
+        return {
+            "nodes": added_nodes,
+            "edges": added_edges,
+            "skipped_nodes": skipped_nodes,
+            "skipped_edges": skipped_edges,
+        }
 
-    def load_obo(self, path_or_url: str, prefix: str = None,
-                 encoding: str = "utf-8", encoding_errors: str = "replace",
-                 progress_callback=None) -> dict:
+    def load_obo(
+        self,
+        path_or_url: str,
+        prefix: str = None,
+        encoding: str = "utf-8",
+        encoding_errors: str = "replace",
+        progress_callback=None,
+    ) -> dict:
         try:
             import obonet
         except ImportError:
             raise ImportError("load_obo requires obonet: pip install obonet")
         import io
+
         if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
             G = obonet.read_obo(path_or_url)
         else:
@@ -1520,31 +2006,43 @@ class IRISGraphEngine:
             G = obonet.read_obo(io.StringIO(content))
         if prefix:
             import networkx as nx
+
             mapping = {n: f"{prefix}:{n}" for n in G.nodes()}
             G = nx.relabel_nodes(G, mapping)
-        return self.load_networkx(G, label_attr="namespace", progress_callback=progress_callback)
+        return self.load_networkx(
+            G, label_attr="namespace", progress_callback=progress_callback
+        )
 
     def store_embedding(
-        self, node_id: str, embedding: List[float], metadata: Optional[Dict[str, Any]] = None
+        self,
+        node_id: str,
+        embedding: List[float],
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         self._assert_node_exists(node_id)
-        
+
         try:
             dim = self._get_embedding_dimension()
         except ValueError:
             # Infer dimension from input if auto-detection fails
             dim = len(embedding)
             self.embedding_dimension = dim
-            logger.warning(f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input.")
+            logger.warning(
+                f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input."
+            )
 
         if len(embedding) != dim:
-            raise ValueError(f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}")
+            raise ValueError(
+                f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}"
+            )
 
         cursor = self.conn.cursor()
         emb_str = ",".join(str(x) for x in embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
-        cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+        cursor.execute(
+            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+        )
         cursor.execute(
             f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
             [node_id, emb_str, meta_json],
@@ -1562,13 +2060,17 @@ class IRISGraphEngine:
             # Infer dimension from first item if auto-detection fails
             dim = len(items[0]["embedding"])
             self.embedding_dimension = dim
-            logger.warning(f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input.")
+            logger.warning(
+                f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input."
+            )
 
         for item in items:
             node_id = item["node_id"]
             embedding = item["embedding"]
             if len(embedding) != dim:
-                raise ValueError(f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}")
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}"
+                )
             self._assert_node_exists(node_id)
 
         cursor = self.conn.cursor()
@@ -1582,7 +2084,9 @@ class IRISGraphEngine:
                 emb_str = ",".join(str(x) for x in embedding)
                 meta_json = json.dumps(metadata) if metadata else None
 
-                cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+                cursor.execute(
+                    f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+                )
                 cursor.execute(
                     f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
                     [node_id, emb_str, meta_json],
@@ -1626,13 +2130,16 @@ class IRISGraphEngine:
         from iris_vector_graph.security import sanitize_identifier
 
         if where is not None:
-            if any(x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")):
+            if any(
+                x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")
+            ):
                 raise ValueError(f"Unsafe WHERE clause rejected: {where!r}")
 
         orig_embedder = self.embedder
         if model is not None:
             if isinstance(model, str):
                 from sentence_transformers import SentenceTransformer
+
                 self.embedder = SentenceTransformer(model)
             else:
                 self.embedder = model
@@ -1656,11 +2163,11 @@ class IRISGraphEngine:
             embedded = skipped = errors = 0
 
             for batch_start in range(0, n_to_embed, batch_size):
-                batch_ids = to_embed[batch_start:batch_start + batch_size]
+                batch_ids = to_embed[batch_start : batch_start + batch_size]
 
                 placeholders = ", ".join("?" * len(batch_ids))
                 cursor.execute(
-                    f"SELECT s, \"key\", val FROM {_table('rdf_props')} WHERE s IN ({placeholders})",
+                    f'SELECT s, "key", val FROM {_table("rdf_props")} WHERE s IN ({placeholders})',
                     batch_ids,
                 )
                 props_by_node: Dict[str, Dict[str, Any]] = {}
@@ -1674,7 +2181,9 @@ class IRISGraphEngine:
                         try:
                             text = text_fn(node_id, props)
                         except Exception as ex:
-                            logger.warning(f"embed_nodes: text_fn raised for {node_id}: {ex}")
+                            logger.warning(
+                                f"embed_nodes: text_fn raised for {node_id}: {ex}"
+                            )
                             errors += 1
                             continue
                     else:
@@ -1688,7 +2197,10 @@ class IRISGraphEngine:
                         emb = self.embed_text(text)
                         emb_str = ",".join(str(x) for x in emb)
                         try:
-                            cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+                            cursor.execute(
+                                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?",
+                                [node_id],
+                            )
                         except Exception:
                             pass
                         cursor.execute(
@@ -1702,22 +2214,29 @@ class IRISGraphEngine:
 
                 self.conn.commit()
                 n_done = batch_start + len(batch_ids)
-                logger.info(f"embed_nodes: {n_done}/{n_to_embed} processed ({embedded} embedded)")
+                logger.info(
+                    f"embed_nodes: {n_done}/{n_to_embed} processed ({embedded} embedded)"
+                )
                 if progress_callback:
                     progress_callback(n_done, n_to_embed)
 
-            skipped += (n_total - n_to_embed)
-            return {"embedded": embedded, "skipped": skipped, "errors": errors, "total": n_total}
+            skipped += n_total - n_to_embed
+            return {
+                "embedded": embedded,
+                "skipped": skipped,
+                "errors": errors,
+                "total": n_total,
+            }
         finally:
             self.embedder = orig_embedder
 
     def get_embedding(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve embedding for a node.
-        
+
         Args:
             node_id: The node ID to get embedding for
-            
+
         Returns:
             Dict with 'id', 'embedding' (as list of floats), and 'metadata' (if present)
             None if node has no embedding
@@ -1725,76 +2244,93 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         cursor.execute(
             f"SELECT id, emb, metadata FROM {_table('kg_NodeEmbeddings')} WHERE id = ?",
-            [node_id]
+            [node_id],
         )
         row = cursor.fetchone()
         if not row:
             return None
-        
+
         node_id, emb_csv, metadata_json = row
-        embedding = [float(x) for x in emb_csv.split(',')] if emb_csv else []
+        embedding = [float(x) for x in emb_csv.split(",")] if emb_csv else []
         metadata = json.loads(metadata_json) if metadata_json else None
-        
-        result = {'id': node_id, 'embedding': embedding}
+
+        result = {"id": node_id, "embedding": embedding}
         if metadata:
-            result['metadata'] = metadata
+            result["metadata"] = metadata
         return result
 
     def get_embeddings(self, node_ids: List[str]) -> List[Dict[str, Any]]:
         """
         Retrieve embeddings for multiple nodes.
-        
+
         Args:
             node_ids: List of node IDs
-            
+
         Returns:
             List of dicts with 'id', 'embedding', and 'metadata' for nodes that have embeddings
         """
         if not node_ids:
             return []
-        
+
         cursor = self.conn.cursor()
-        placeholders = ','.join(['?'] * len(node_ids))
+        placeholders = ",".join(["?"] * len(node_ids))
         cursor.execute(
             f"SELECT id, emb, metadata FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({placeholders})",
-            node_ids
+            node_ids,
         )
-        
+
         results = []
         for row in cursor.fetchall():
             node_id, emb_csv, metadata_json = row
-            embedding = [float(x) for x in emb_csv.split(',')] if emb_csv else []
+            embedding = [float(x) for x in emb_csv.split(",")] if emb_csv else []
             metadata = json.loads(metadata_json) if metadata_json else None
-            
-            result = {'id': node_id, 'embedding': embedding}
+
+            result = {"id": node_id, "embedding": embedding}
             if metadata:
-                result['metadata'] = metadata
+                result["metadata"] = metadata
             results.append(result)
-        
+
         return results
 
     def delete_node(self, node_id: str) -> bool:
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+            cursor.execute(
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+            )
             cursor.execute(
                 f"SELECT edge_id FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?",
-                [node_id, node_id]
+                [node_id, node_id],
             )
             edge_ids = [row[0] for row in cursor.fetchall()]
             for eid in edge_ids:
                 cursor.execute(
-                    f"SELECT reifier_id FROM {_table('rdf_reifications')} WHERE edge_id = ?", [eid]
+                    f"SELECT reifier_id FROM {_table('rdf_reifications')} WHERE edge_id = ?",
+                    [eid],
                 )
                 for (reif_id,) in cursor.fetchall():
-                    cursor.execute(f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?", [reif_id])
-                    cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reif_id])
-                    cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reif_id])
-                    cursor.execute(f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reif_id])
-            cursor.execute(f"DELETE FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?", [node_id, node_id])
+                    cursor.execute(
+                        f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?",
+                        [reif_id],
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reif_id]
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reif_id]
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reif_id]
+                    )
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?",
+                [node_id, node_id],
+            )
             cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id])
             cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [node_id])
-            cursor.execute(f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [node_id])
+            cursor.execute(
+                f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [node_id]
+            )
             self.conn.commit()
             return True
         except Exception as e:
@@ -1803,7 +2339,9 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
-    def get_kg_anchors(self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh") -> List[str]:
+    def get_kg_anchors(
+        self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
+    ) -> List[str]:
         if not icd_codes:
             return []
         _IN_CHUNK = 499
@@ -1811,7 +2349,7 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             for i in range(0, len(icd_codes), _IN_CHUNK):
-                chunk = icd_codes[i:i + _IN_CHUNK]
+                chunk = icd_codes[i : i + _IN_CHUNK]
                 placeholders = ", ".join(["?"] * len(chunk))
                 sql = (
                     f"SELECT DISTINCT b.kg_node_id "
@@ -1829,13 +2367,21 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
-    def reify_edge(self, edge_id: int, reifier_id: str = None,
-                   label: str = "Reification", props: Dict[str, str] = None) -> Optional[str]:
+    def reify_edge(
+        self,
+        edge_id: int,
+        reifier_id: str = None,
+        label: str = "Reification",
+        props: Dict[str, str] = None,
+    ) -> Optional[str]:
         if reifier_id is None:
             reifier_id = f"reif:{edge_id}"
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"SELECT edge_id FROM {_table('rdf_edges')} WHERE edge_id = ?", [edge_id])
+            cursor.execute(
+                f"SELECT edge_id FROM {_table('rdf_edges')} WHERE edge_id = ?",
+                [edge_id],
+            )
             if not cursor.fetchone():
                 logger.warning(f"reify_edge: edge_id={edge_id} not found")
                 return None
@@ -1853,9 +2399,9 @@ class IRISGraphEngine:
             if props:
                 for key, val in props.items():
                     cursor.execute(
-                        f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) "
+                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
                         f"SELECT ?, ?, ? WHERE NOT EXISTS "
-                        f"(SELECT 1 FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?)",
+                        f'(SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
                         [reifier_id, key, str(val), reifier_id, key],
                     )
             self.conn.commit()
@@ -1871,7 +2417,7 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             cursor.execute(
-                f"SELECT r.reifier_id, p.\"key\", p.val "
+                f'SELECT r.reifier_id, p."key", p.val '
                 f"FROM {_table('rdf_reifications')} r "
                 f"LEFT JOIN {_table('rdf_props')} p ON p.s = r.reifier_id "
                 f"WHERE r.edge_id = ?",
@@ -1894,10 +2440,19 @@ class IRISGraphEngine:
     def delete_reification(self, reifier_id: str) -> bool:
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?", [reifier_id])
-            cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reifier_id])
-            cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reifier_id])
-            cursor.execute(f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reifier_id])
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?",
+                [reifier_id],
+            )
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reifier_id]
+            )
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reifier_id]
+            )
+            cursor.execute(
+                f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reifier_id]
+            )
             self.conn.commit()
             return True
         except Exception as e:
@@ -1916,7 +2471,9 @@ class IRISGraphEngine:
             True if deleted, False if not found
         """
         cursor = self.conn.cursor()
-        cursor.execute(f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+        cursor.execute(
+            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+        )
         self.conn.commit()
         return cursor.rowcount > 0
 
@@ -1932,7 +2489,9 @@ class IRISGraphEngine:
             return 50
         return min(max(1, k), 1000)
 
-    def kg_KNN_VEC(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
+    def kg_KNN_VEC(
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
+    ) -> List[Tuple[str, float]]:
         """
         K-Nearest Neighbors vector search using server-side SQL procedure.
         Leverages native IRIS EMBEDDING() if embedding_config is set.
@@ -1950,8 +2509,8 @@ class IRISGraphEngine:
             # Direct SQL vector search — IRIS HNSW index is used automatically
             # via TOP k + ORDER BY VECTOR_COSINE DESC pattern.
             # (CALL proc(?, ...) is broken in IRIS Python dbapi for result-set procedures)
-            emb_table = _table('kg_NodeEmbeddings')
-            labels_table = _table('rdf_labels')
+            emb_table = _table("kg_NodeEmbeddings")
+            labels_table = _table("rdf_labels")
             if label_filter:
                 cursor.execute(
                     f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
@@ -1971,11 +2530,15 @@ class IRISGraphEngine:
             results = cursor.fetchall()
             return [(entity_id, float(similarity)) for entity_id, similarity in results]
         except Exception as e:
-            logger.warning(f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic.")
+            logger.warning(
+                f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic."
+            )
             # Fallback to Python implementation
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
 
-    def _kg_KNN_VEC_python_optimized(self, query_vector: str, k: int = 50, label_filter: Optional[str] = None) -> List[Tuple[str, float]]:
+    def _kg_KNN_VEC_python_optimized(
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
+    ) -> List[Tuple[str, float]]:
         """
         Fallback Python implementation using CSV parsing
         Performance: ~5.8s for 20K vectors (when HNSW not available)
@@ -1983,11 +2546,12 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             import numpy as np
+
             query_array = np.array(json.loads(query_vector))
 
             # Get embeddings with optional label filter (optimized query)
-            emb_table = _table('kg_NodeEmbeddings')
-            labels_table = _table('rdf_labels')
+            emb_table = _table("kg_NodeEmbeddings")
+            labels_table = _table("rdf_labels")
             if label_filter is None:
                 sql = f"""
                     SELECT n.id, n.emb
@@ -2017,7 +2581,7 @@ class IRISGraphEngine:
                 for entity_id, emb_csv in batch:
                     try:
                         # Fast CSV parsing to numpy array
-                        emb_array = np.fromstring(emb_csv, dtype=float, sep=',')
+                        emb_array = np.fromstring(emb_csv, dtype=float, sep=",")
 
                         # Compute cosine similarity efficiently
                         dot_product = np.dot(query_array, emb_array)
@@ -2043,7 +2607,9 @@ class IRISGraphEngine:
             cursor.close()
 
     # Text Search Operations
-    def kg_TXT(self, query_text: str, k: int = 50, min_confidence: int = 0) -> List[Tuple[str, float]]:
+    def kg_TXT(
+        self, query_text: str, k: int = 50, min_confidence: int = 0
+    ) -> List[Tuple[str, float]]:
         """
         Enhanced text search using server-side SQL procedure
 
@@ -2059,7 +2625,10 @@ class IRISGraphEngine:
         try:
             # Call server-side procedure for unified logic
             # Signature: (queryText, k, minConfidence)
-            cursor.execute("CALL iris_vector_graph.kg_TXT(?, ?, ?)", [query_text, k, min_confidence])
+            cursor.execute(
+                "CALL iris_vector_graph.kg_TXT(?, ?, ?)",
+                [query_text, k, min_confidence],
+            )
             results = cursor.fetchall()
             return [(entity_id, float(score)) for entity_id, score in results]
 
@@ -2070,7 +2639,12 @@ class IRISGraphEngine:
             cursor.close()
 
     # Graph Traversal Operations
-    def kg_NEIGHBORHOOD_EXPANSION(self, entity_list: List[str], expansion_depth: int = 1, confidence_threshold: int = 500) -> List[Dict[str, Any]]:
+    def kg_NEIGHBORHOOD_EXPANSION(
+        self,
+        entity_list: List[str],
+        expansion_depth: int = 1,
+        confidence_threshold: int = 500,
+    ) -> List[Dict[str, Any]]:
         """
         Efficient neighborhood expansion for multiple entities using JSON_TABLE filtering
 
@@ -2088,7 +2662,7 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             # Build parameterized query for multiple entities
-            entity_placeholders = ','.join(['?' for _ in entity_list])
+            entity_placeholders = ",".join(["?" for _ in entity_list])
 
             sql = f"""
                 SELECT DISTINCT e.s, e.p, e.o_id, jt.confidence
@@ -2103,12 +2677,14 @@ class IRISGraphEngine:
 
             results = []
             for row in cursor.fetchall():
-                results.append({
-                    'source': row[0],
-                    'predicate': row[1],
-                    'target': row[2],
-                    'confidence': row[3]
-                })
+                results.append(
+                    {
+                        "source": row[0],
+                        "predicate": row[1],
+                        "target": row[2],
+                        "confidence": row[3],
+                    }
+                )
 
             return results
 
@@ -2120,6 +2696,7 @@ class IRISGraphEngine:
 
     def validate_vector_table(self, table: str, vector_col: str) -> dict:
         from iris_vector_graph.security import sanitize_identifier
+
         sanitize_identifier(table)
         sanitize_identifier(vector_col)
         schema, tbl = (table.split(".", 1) + [""])[:2] if "." in table else ("", table)
@@ -2141,11 +2718,21 @@ class IRISGraphEngine:
             if sample and sample[0]:
                 try:
                     import json
-                    v = json.loads(sample[0]) if isinstance(sample[0], str) else sample[0]
+
+                    v = (
+                        json.loads(sample[0])
+                        if isinstance(sample[0], str)
+                        else sample[0]
+                    )
                     dimension = len(v)
                 except Exception:
                     pass
-            return {"table": table, "vector_col": vector_col, "dimension": dimension, "row_count": row_count}
+            return {
+                "table": table,
+                "vector_col": vector_col,
+                "dimension": dimension,
+                "row_count": row_count,
+            }
         finally:
             cursor.close()
 
@@ -2160,6 +2747,7 @@ class IRISGraphEngine:
         score_threshold: float = None,
     ) -> List[dict]:
         from iris_vector_graph.security import sanitize_identifier
+
         sanitize_identifier(table)
         sanitize_identifier(vector_col)
         sanitize_identifier(id_col)
@@ -2169,11 +2757,14 @@ class IRISGraphEngine:
 
         if isinstance(query_embedding, list):
             import json
+
             query_vec_str = json.dumps(query_embedding)
         else:
             query_vec_str = query_embedding
 
-        extra = ", ".join(sanitize_identifier(c) for c in (return_cols or []) if c != id_col)
+        extra = ", ".join(
+            sanitize_identifier(c) for c in (return_cols or []) if c != id_col
+        )
 
         dim = None
         if isinstance(query_embedding, list):
@@ -2186,11 +2777,15 @@ class IRISGraphEngine:
         else:
             query_cast = "TO_VECTOR(?, DOUBLE)"
 
-        select_cols = f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, {query_cast}) AS score"
+        select_cols = (
+            f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, {query_cast}) AS score"
+        )
         if extra:
             select_cols += f", {extra}"
 
-        having = f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
+        having = (
+            f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
+        )
         sql = (
             f"SELECT TOP {int(top_k)} {select_cols} "
             f"FROM {table} t "
@@ -2226,6 +2821,7 @@ class IRISGraphEngine:
     ) -> List[dict]:
         if isinstance(query_embedding, list):
             import json
+
             query_vec_str = json.dumps(query_embedding)
         else:
             query_vec_str = query_embedding
@@ -2241,7 +2837,8 @@ class IRISGraphEngine:
             return_c = source.get("return_cols")
             try:
                 rows = self.vector_search(
-                    table=tbl, vector_col=col,
+                    table=tbl,
+                    vector_col=col,
                     query_embedding=query_vec_str,
                     top_k=per_source_k,
                     id_col=id_c,
@@ -2268,7 +2865,9 @@ class IRISGraphEngine:
                 rrf_score = weight * (1.0 / (rrf_k + rank))
                 scores[node_id] = scores.get(node_id, 0.0) + rrf_score
                 if node_id not in meta:
-                    meta[node_id] = {k: v for k, v in r.items() if not k.startswith("_")}
+                    meta[node_id] = {
+                        k: v for k, v in r.items() if not k.startswith("_")
+                    }
             ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
             results = []
             for rank_i, (node_id, score) in enumerate(ranked, 1):
@@ -2290,7 +2889,9 @@ class IRISGraphEngine:
                         break
             return merged
 
-    def kg_RRF_FUSE(self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str) -> List[Tuple[str, float, float, float]]:
+    def kg_RRF_FUSE(
+        self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str
+    ) -> List[Tuple[str, float, float, float]]:
         """
         Reciprocal Rank Fusion using server-side SQL procedure
 
@@ -2309,9 +2910,15 @@ class IRISGraphEngine:
         try:
             # Call server-side procedure for unified logic
             # Signature: (k, k1, k2, c, queryVector, queryText)
-            cursor.execute("CALL iris_vector_graph.kg_RRF_FUSE(?, ?, ?, ?, ?, ?)", [k, k1, k2, c, query_vector, query_text])
+            cursor.execute(
+                "CALL iris_vector_graph.kg_RRF_FUSE(?, ?, ?, ?, ?, ?)",
+                [k, k1, k2, c, query_vector, query_text],
+            )
             results = cursor.fetchall()
-            return [(entity_id, float(rrf), float(v), float(t)) for entity_id, rrf, v, t in results]
+            return [
+                (entity_id, float(rrf), float(v), float(t))
+                for entity_id, rrf, v, t in results
+            ]
 
         except Exception as e:
             logger.error(f"kg_RRF_FUSE failed: {e}")
@@ -2319,8 +2926,14 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
-    def kg_VECTOR_GRAPH_SEARCH(self, query_vector: str, query_text: str = None, k: int = 15,
-                             expansion_depth: int = 1, min_confidence: float = 0.5) -> List[Dict[str, Any]]:
+    def kg_VECTOR_GRAPH_SEARCH(
+        self,
+        query_vector: str,
+        query_text: str = None,
+        k: int = 15,
+        expansion_depth: int = 1,
+        min_confidence: float = 0.5,
+    ) -> List[Dict[str, Any]]:
         """
         Multi-modal search combining vector similarity, graph expansion, and text relevance
 
@@ -2343,19 +2956,25 @@ class IRISGraphEngine:
             # Step 2: Graph expansion around vector results
             if vector_entities:
                 graph_expansion = self.kg_NEIGHBORHOOD_EXPANSION(
-                    vector_entities,
-                    expansion_depth,
-                    int(min_confidence * 1000)
+                    vector_entities, expansion_depth, int(min_confidence * 1000)
                 )
-                expanded_entities = list(set([item['target'] for item in graph_expansion]))
+                expanded_entities = list(
+                    set([item["target"] for item in graph_expansion])
+                )
             else:
                 expanded_entities = []
 
             # Step 3: Combine with text search if provided
             if query_text:
-                text_results = self.kg_TXT(query_text, k=k_vector * 2, min_confidence=int(min_confidence * 1000))
+                text_results = self.kg_TXT(
+                    query_text,
+                    k=k_vector * 2,
+                    min_confidence=int(min_confidence * 1000),
+                )
                 text_entities = [entity_id for entity_id, _ in text_results]
-                all_entities = list(set(vector_entities + expanded_entities + text_entities))
+                all_entities = list(
+                    set(vector_entities + expanded_entities + text_entities)
+                )
             else:
                 all_entities = list(set(vector_entities + expanded_entities))
 
@@ -2363,20 +2982,26 @@ class IRISGraphEngine:
             combined_results = []
             for entity_id in all_entities[:k]:
                 # Get scores from different sources
-                vector_sim = next((score for eid, score in vector_results if eid == entity_id), 0.0)
+                vector_sim = next(
+                    (score for eid, score in vector_results if eid == entity_id), 0.0
+                )
 
                 # Simple weighted combination
-                combined_score = vector_sim  # Can be enhanced with graph centrality, text relevance
+                combined_score = (
+                    vector_sim  # Can be enhanced with graph centrality, text relevance
+                )
 
-                combined_results.append({
-                    'entity_id': entity_id,
-                    'combined_score': combined_score,
-                    'vector_similarity': vector_sim,
-                    'in_graph_expansion': entity_id in expanded_entities
-                })
+                combined_results.append(
+                    {
+                        "entity_id": entity_id,
+                        "combined_score": combined_score,
+                        "vector_similarity": vector_sim,
+                        "in_graph_expansion": entity_id in expanded_entities,
+                    }
+                )
 
             # Sort by combined score
-            combined_results.sort(key=lambda x: x['combined_score'], reverse=True)
+            combined_results.sort(key=lambda x: x["combined_score"], reverse=True)
             return combined_results[:k]
 
         except Exception as e:
@@ -2425,7 +3050,9 @@ class IRISGraphEngine:
         """
         # Input validation
         if reverse_edge_weight < 0:
-            raise ValueError(f"reverse_edge_weight must be non-negative, got: {reverse_edge_weight}")
+            raise ValueError(
+                f"reverse_edge_weight must be non-negative, got: {reverse_edge_weight}"
+            )
         if not seed_entities:
             raise ValueError("seed_entities must contain at least one entity")
 
@@ -2435,23 +3062,45 @@ class IRISGraphEngine:
                 seed_json = json.dumps(seed_entities)
                 iris_obj = self._iris_obj()
                 result_json = iris_obj.classMethodValue(
-                    'Graph.KG.PageRank', 'RunJson',
-                    seed_json, damping_factor, max_iterations,
-                    1 if bidirectional else 0, reverse_edge_weight,
+                    "Graph.KG.PageRank",
+                    "RunJson",
+                    seed_json,
+                    damping_factor,
+                    max_iterations,
+                    1 if bidirectional else 0,
+                    reverse_edge_weight,
                 )
                 if result_json:
                     items = json.loads(str(result_json))
-                    scores = {item["id"]: item["score"] for item in items if item.get("score", 0) > 0}
+                    scores = {
+                        item["id"]: item["score"]
+                        for item in items
+                        if item.get("score", 0) > 0
+                    }
                     if return_top_k is not None and return_top_k > 0:
-                        scores = dict(sorted(scores.items(), key=lambda x: x[1], reverse=True)[:return_top_k])
-                    logger.debug("PageRank via Graph.KG.PageRank.RunJson(): %d results", len(scores))
+                        scores = dict(
+                            sorted(scores.items(), key=lambda x: x[1], reverse=True)[
+                                :return_top_k
+                            ]
+                        )
+                    logger.debug(
+                        "PageRank via Graph.KG.PageRank.RunJson(): %d results",
+                        len(scores),
+                    )
                     return scores
             except Exception as exc:
-                logger.warning("Graph.KG.PageRank.RunJson() failed, falling back: %s", exc)
+                logger.warning(
+                    "Graph.KG.PageRank.RunJson() failed, falling back: %s", exc
+                )
 
         return self._kg_PERSONALIZED_PAGERANK_python_fallback(
-            seed_entities, damping_factor, max_iterations, tolerance,
-            return_top_k, bidirectional, reverse_edge_weight
+            seed_entities,
+            damping_factor,
+            max_iterations,
+            tolerance,
+            return_top_k,
+            bidirectional,
+            reverse_edge_weight,
         )
 
     def _kg_PERSONALIZED_PAGERANK_python_fallback(
@@ -2471,6 +3120,7 @@ class IRISGraphEngine:
         Performance: ~25ms for 1K nodes (vs 2-5ms with embedded Python).
         """
         from iris_vector_graph.cypher.translator import _table as _t
+
         cursor = self.conn.cursor()
         try:
             # Step 1: Get all nodes
@@ -2519,7 +3169,9 @@ class IRISGraphEngine:
             # Step 3: Initialize PageRank scores (Personalized)
             seed_count = len(valid_seeds)
             seed_set = set(valid_seeds)
-            ranks = {node: (1.0 / seed_count if node in seed_set else 0.0) for node in nodes}
+            ranks = {
+                node: (1.0 / seed_count if node in seed_set else 0.0) for node in nodes
+            }
 
             # Step 4: Iterative computation with personalization
             teleport_prob = (1.0 - damping_factor) / seed_count
@@ -2539,7 +3191,11 @@ class IRISGraphEngine:
                     if node in in_edges:
                         for src, weight in in_edges[node]:
                             if out_degree.get(src, 0) > 0:
-                                rank += damping_factor * weight * (ranks.get(src, 0) / out_degree[src])
+                                rank += (
+                                    damping_factor
+                                    * weight
+                                    * (ranks.get(src, 0) / out_degree[src])
+                                )
 
                     new_ranks[node] = rank
                     max_diff = max(max_diff, abs(rank - ranks.get(node, 0)))
@@ -2548,7 +3204,9 @@ class IRISGraphEngine:
 
                 # Check convergence
                 if max_diff < tolerance:
-                    logger.debug(f"PageRank converged after {iteration + 1} iterations (Python fallback)")
+                    logger.debug(
+                        f"PageRank converged after {iteration + 1} iterations (Python fallback)"
+                    )
                     break
 
             # Filter out zero scores and apply top_k limit
@@ -2577,7 +3235,9 @@ class IRISGraphEngine:
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True
             if not self._arno_capabilities.get("nkg_data", False):
-                logger.warning("Arno detected but ^NKG not populated — run BuildKG() to enable acceleration")
+                logger.warning(
+                    "Arno detected but ^NKG not populated — run BuildKG() to enable acceleration"
+                )
         except Exception:
             self._arno_available = False
             self._arno_capabilities = {}
@@ -2587,8 +3247,12 @@ class IRISGraphEngine:
         return str(self._iris_obj().classMethodValue(cls, method, *args))
 
     def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
-        if self._detect_arno() and "khop" in self._arno_capabilities.get("algorithms", []):
-            result = self._arno_call("Graph.KG.NKGAccel", "KHopNeighbors", seed, str(hops), str(max_nodes))
+        if self._detect_arno() and "khop" in self._arno_capabilities.get(
+            "algorithms", []
+        ):
+            result = self._arno_call(
+                "Graph.KG.NKGAccel", "KHopNeighbors", seed, str(hops), str(max_nodes)
+            )
             parsed = json.loads(result)
             if "error" not in parsed:
                 return parsed
@@ -2599,7 +3263,9 @@ class IRISGraphEngine:
         if self.capabilities.objectscript_deployed:
             try:
                 iris_obj = self._iris_obj()
-                result = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "")
+                result = iris_obj.classMethodValue(
+                    "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, ""
+                )
                 if result:
                     edges = json.loads(str(result))
                     nodes = set()
@@ -2611,19 +3277,41 @@ class IRISGraphEngine:
                 logger.debug(f"BFSFastJson fallback failed: {e}")
         return {"nodes": [], "edges": []}
 
-    def ppr(self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20) -> dict:
-        if self._detect_arno() and "ppr" in self._arno_capabilities.get("algorithms", []):
-            result = self._arno_call("Graph.KG.NKGAccel", "PPRNative", seed, str(alpha), str(max_iter), str(top_k))
+    def ppr(
+        self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
+    ) -> dict:
+        if self._detect_arno() and "ppr" in self._arno_capabilities.get(
+            "algorithms", []
+        ):
+            result = self._arno_call(
+                "Graph.KG.NKGAccel",
+                "PPRNative",
+                seed,
+                str(alpha),
+                str(max_iter),
+                str(top_k),
+            )
             parsed = json.loads(result)
             if "error" not in parsed:
                 return parsed
             logger.warning(f"Arno ppr error: {parsed['error']}")
-        scores = self.kg_PERSONALIZED_PAGERANK([seed], damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k)
-        return {"scores": [{"id": k, "score": v} for k, v in sorted(scores.items(), key=lambda x: -x[1])]}
+        scores = self.kg_PERSONALIZED_PAGERANK(
+            [seed], damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k
+        )
+        return {
+            "scores": [
+                {"id": k, "score": v}
+                for k, v in sorted(scores.items(), key=lambda x: -x[1])
+            ]
+        }
 
     def random_walk(self, seed: str, length: int = 20, num_walks: int = 10) -> list:
-        if self._detect_arno() and "random_walk" in self._arno_capabilities.get("algorithms", []):
-            result = self._arno_call("Graph.KG.NKGAccel", "RandomWalkJson", seed, str(length), str(num_walks))
+        if self._detect_arno() and "random_walk" in self._arno_capabilities.get(
+            "algorithms", []
+        ):
+            result = self._arno_call(
+                "Graph.KG.NKGAccel", "RandomWalkJson", seed, str(length), str(num_walks)
+            )
             parsed = json.loads(result)
             if isinstance(parsed, list):
                 return parsed
@@ -2636,48 +3324,77 @@ class IRISGraphEngine:
     def _iris_obj(self):
         try:
             import iris
+
             return iris.createIRIS(self.conn)
         except (TypeError, AttributeError):
             import intersystems_iris
+
             return intersystems_iris.createIRIS(self.conn)
 
-    def vec_create_index(self, name: str, dim: int, metric: str = "cosine",
-                         num_trees: int = 4, leaf_size: int = 50) -> dict:
+    def vec_create_index(
+        self,
+        name: str,
+        dim: int,
+        metric: str = "cosine",
+        num_trees: int = 4,
+        leaf_size: int = 50,
+    ) -> dict:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.VecIndex", "Create",
-            name, str(dim), metric, str(num_trees), str(leaf_size))
+            "Graph.KG.VecIndex",
+            "Create",
+            name,
+            str(dim),
+            metric,
+            str(num_trees),
+            str(leaf_size),
+        )
         return json.loads(str(result))
 
     def vec_insert(self, index_name: str, doc_id: str, embedding) -> None:
         vec_json = json.dumps([float(v) for v in embedding])
         self._iris_obj().classMethodVoid(
-            "Graph.KG.VecIndex", "InsertJSON", index_name, doc_id, vec_json)
+            "Graph.KG.VecIndex", "InsertJSON", index_name, doc_id, vec_json
+        )
 
     def vec_bulk_insert(self, index_name: str, items: list) -> int:
-        batch = [{"id": item["id"], "vec": [float(v) for v in item["embedding"]]} for item in items]
+        batch = [
+            {"id": item["id"], "vec": [float(v) for v in item["embedding"]]}
+            for item in items
+        ]
         batch_json = json.dumps(batch)
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.VecIndex", "InsertBatchJSON", index_name, batch_json)
+            "Graph.KG.VecIndex", "InsertBatchJSON", index_name, batch_json
+        )
         return json.loads(str(result)).get("inserted", 0)
 
     def vec_build(self, index_name: str) -> dict:
-        result = self._iris_obj().classMethodValue("Graph.KG.VecIndex", "Build", index_name)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "Build", index_name
+        )
         return json.loads(str(result))
 
-    def vec_search(self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8) -> list:
+    def vec_search(
+        self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8
+    ) -> list:
         vec_json = json.dumps([float(v) for v in query_embedding])
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe)
+            "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe
+        )
         return json.loads(str(result))
 
-    def vec_search_multi(self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 8) -> list:
+    def vec_search_multi(
+        self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 8
+    ) -> list:
         queries_json = json.dumps([[float(v) for v in q] for q in query_embeddings])
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe)
+            "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe
+        )
         return json.loads(str(result))
 
     def vec_info(self, index_name: str) -> dict:
-        result = self._iris_obj().classMethodValue("Graph.KG.VecIndex", "Info", index_name)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "Info", index_name
+        )
         return json.loads(str(result))
 
     def vec_drop(self, index_name: str) -> None:
@@ -2685,17 +3402,22 @@ class IRISGraphEngine:
 
     def vec_expand(self, index_name: str, seed_id: str, k: int = 5) -> list:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k)
+            "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k
+        )
         return json.loads(str(result))
 
     # ── PLAID: multi-vector retrieval (ColBERT-style) ──
 
-    def plaid_build(self, name: str, docs: list, n_clusters: int = None, dim: int = 128) -> dict:
+    def plaid_build(
+        self, name: str, docs: list, n_clusters: int = None, dim: int = 128
+    ) -> dict:
         try:
             import numpy as np
             from sklearn.cluster import KMeans
         except ImportError:
-            raise ImportError("plaid_build requires numpy and sklearn: pip install numpy scikit-learn")
+            raise ImportError(
+                "plaid_build requires numpy and sklearn: pip install numpy scikit-learn"
+            )
 
         all_tokens = []
         doc_token_map = []
@@ -2703,13 +3425,17 @@ class IRISGraphEngine:
             tokens = doc["tokens"]
             for tok_pos, tok in enumerate(tokens):
                 all_tokens.append(tok)
-                doc_token_map.append({"docId": doc["id"], "tokPos": tok_pos, "centroid": 0})
+                doc_token_map.append(
+                    {"docId": doc["id"], "tokPos": tok_pos, "centroid": 0}
+                )
 
         all_tokens_np = np.array(all_tokens, dtype=np.float64)
         K = n_clusters or max(1, int(np.sqrt(len(all_tokens_np))))
         K = min(K, len(all_tokens_np))
 
-        kmeans = KMeans(n_clusters=K, n_init=1, max_iter=20, random_state=42).fit(all_tokens_np)
+        kmeans = KMeans(n_clusters=K, n_init=1, max_iter=20, random_state=42).fit(
+            all_tokens_np
+        )
         labels = kmeans.labels_.tolist()
 
         for i, label in enumerate(labels):
@@ -2717,33 +3443,51 @@ class IRISGraphEngine:
 
         iris_obj = self._iris_obj()
         centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
-        iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json)
+        iris_obj.classMethodVoid(
+            "Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json
+        )
 
         BATCH_SIZE = 10
         for i in range(0, len(docs), BATCH_SIZE):
             batch = docs[i : i + BATCH_SIZE]
-            batch_json = json.dumps([
-                {"id": doc["id"], "tokens": [[float(v) for v in tok] for tok in doc["tokens"]]}
-                for doc in batch
-            ])
-            iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "StoreDocTokensBatch", name, batch_json)
+            batch_json = json.dumps(
+                [
+                    {
+                        "id": doc["id"],
+                        "tokens": [[float(v) for v in tok] for tok in doc["tokens"]],
+                    }
+                    for doc in batch
+                ]
+            )
+            iris_obj.classMethodVoid(
+                "Graph.KG.PLAIDSearch", "StoreDocTokensBatch", name, batch_json
+            )
 
         ASSIGN_CHUNK = 5000
         for i in range(0, len(doc_token_map), ASSIGN_CHUNK):
             chunk_json = json.dumps(doc_token_map[i : i + ASSIGN_CHUNK])
-            iris_obj.classMethodVoid("Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, chunk_json)
+            iris_obj.classMethodVoid(
+                "Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, chunk_json
+            )
 
-        return json.loads(str(iris_obj.classMethodValue("Graph.KG.PLAIDSearch", "Info", name)))
+        return json.loads(
+            str(iris_obj.classMethodValue("Graph.KG.PLAIDSearch", "Info", name))
+        )
 
-    def plaid_search(self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4) -> list:
+    def plaid_search(
+        self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4
+    ) -> list:
         tokens_json = json.dumps([[float(v) for v in tok] for tok in query_tokens])
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.PLAIDSearch", "Search", name, tokens_json, k, nprobe)
+            "Graph.KG.PLAIDSearch", "Search", name, tokens_json, k, nprobe
+        )
         return json.loads(str(result))
 
     def plaid_insert(self, name: str, doc_id: str, token_embeddings: list) -> None:
         tokens_json = json.dumps([[float(v) for v in tok] for tok in token_embeddings])
-        self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Insert", name, doc_id, tokens_json)
+        self._iris_obj().classMethodVoid(
+            "Graph.KG.PLAIDSearch", "Insert", name, doc_id, tokens_json
+        )
 
     def plaid_info(self, name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.PLAIDSearch", "Info", name)
@@ -2754,15 +3498,30 @@ class IRISGraphEngine:
 
     # ── Temporal edges ──
 
-    def create_edge_temporal(self, source: str, predicate: str, target: str,
-                             timestamp: int = None, weight: float = 1.0,
-                             attrs: dict = None, upsert: bool = False) -> bool:
+    def create_edge_temporal(
+        self,
+        source: str,
+        predicate: str,
+        target: str,
+        timestamp: int = None,
+        weight: float = 1.0,
+        attrs: dict = None,
+        upsert: bool = False,
+    ) -> bool:
         try:
             ts = int(timestamp) if timestamp is not None else ""
             attrs_json = json.dumps(attrs) if attrs else ""
             self._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndex", "InsertEdge",
-                source, predicate, target, str(ts), weight, attrs_json, 1 if upsert else 0)
+                "Graph.KG.TemporalIndex",
+                "InsertEdge",
+                source,
+                predicate,
+                target,
+                str(ts),
+                weight,
+                attrs_json,
+                1 if upsert else 0,
+            )
             return True
         except Exception as e:
             logger.warning(f"create_edge_temporal failed: {e}")
@@ -2771,44 +3530,63 @@ class IRISGraphEngine:
     def bulk_create_edges_temporal(self, edges: list, upsert: bool = False) -> int:
         batch_json = json.dumps(edges)
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0)
+            "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0
+        )
         return int(result)
 
-    def get_edges_in_window(self, source: str = "", predicate: str = "",
-                            start: int = 0, end: int = 0,
-                            direction: str = "out") -> list:
+    def get_edges_in_window(
+        self,
+        source: str = "",
+        predicate: str = "",
+        start: int = 0,
+        end: int = 0,
+        direction: str = "out",
+    ) -> list:
         if direction == "in":
             result = self._iris_obj().classMethodValue(
-                "Graph.KG.TemporalIndex", "QueryWindowInbound", source, predicate, start, end)
+                "Graph.KG.TemporalIndex",
+                "QueryWindowInbound",
+                source,
+                predicate,
+                start,
+                end,
+            )
         else:
             result = self._iris_obj().classMethodValue(
-                "Graph.KG.TemporalIndex", "QueryWindow", source, predicate, start, end)
+                "Graph.KG.TemporalIndex", "QueryWindow", source, predicate, start, end
+            )
         edges = json.loads(str(result))
         for edge in edges:
-            edge["source"]    = edge["s"]
+            edge["source"] = edge["s"]
             edge["predicate"] = edge["p"]
-            edge["target"]    = edge["o"]
+            edge["target"] = edge["o"]
             edge["timestamp"] = edge["ts"]
-            edge["weight"]    = edge["w"]
+            edge["weight"] = edge["w"]
         return edges
 
     def purge_before(self, ts: int) -> None:
         self._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts))
+            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
+        )
 
     def get_edge_velocity(self, node_id: str, window_seconds: int = 300) -> int:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetVelocity", node_id, window_seconds)
+            "Graph.KG.TemporalIndex", "GetVelocity", node_id, window_seconds
+        )
         return int(result)
 
-    def find_burst_nodes(self, predicate: str = "", window_seconds: int = 300, threshold: int = 50) -> list:
+    def find_burst_nodes(
+        self, predicate: str = "", window_seconds: int = 300, threshold: int = 50
+    ) -> list:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold)
+            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold
+        )
         return json.loads(str(result))
 
     def get_edge_attrs(self, ts: int, source: str, predicate: str, target: str) -> dict:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target)
+            "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target
+        )
         return json.loads(str(result))
 
     def get_temporal_aggregate(
@@ -2820,8 +3598,14 @@ class IRISGraphEngine:
         ts_end: int,
     ):
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetAggregate",
-            source, predicate, metric, ts_start, ts_end)
+            "Graph.KG.TemporalIndex",
+            "GetAggregate",
+            source,
+            predicate,
+            metric,
+            ts_start,
+            ts_end,
+        )
         s = str(result)
         if s == "":
             return 0 if metric == "count" else None
@@ -2854,8 +3638,13 @@ class IRISGraphEngine:
                 max       (float) — maximum weight (None if no edges)
         """
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetBucketGroups",
-            predicate, ts_start, ts_end, source_prefix)
+            "Graph.KG.TemporalIndex",
+            "GetBucketGroups",
+            predicate,
+            ts_start,
+            ts_end,
+            source_prefix,
+        )
         return json.loads(str(result))
 
     def get_bucket_group_targets(
@@ -2867,8 +3656,13 @@ class IRISGraphEngine:
     ) -> list[str]:
         """Return distinct target node IDs for a source+predicate over a time window."""
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetBucketGroupTargets",
-            source, predicate, ts_start, ts_end)
+            "Graph.KG.TemporalIndex",
+            "GetBucketGroupTargets",
+            source,
+            predicate,
+            ts_start,
+            ts_end,
+        )
         return json.loads(str(result))
 
     def get_distinct_count(
@@ -2879,17 +3673,24 @@ class IRISGraphEngine:
         ts_end: int,
     ) -> int:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetDistinctCount",
-            source, predicate, ts_start, ts_end)
+            "Graph.KG.TemporalIndex",
+            "GetDistinctCount",
+            source,
+            predicate,
+            ts_start,
+            ts_end,
+        )
         return int(str(result))
 
-    def import_graph_ndjson(self, path: str, upsert_nodes: bool = True, batch_size: int = 10000) -> dict:
+    def import_graph_ndjson(
+        self, path: str, upsert_nodes: bool = True, batch_size: int = 10000
+    ) -> dict:
         nodes = 0
         edges = 0
         temporal_edges = 0
         temporal_batch = []
 
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -2954,73 +3755,105 @@ class IRISGraphEngine:
         edges_written = 0
 
         cursor = self.conn.cursor()
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             cursor.execute(f"SELECT node_id FROM {_table('nodes')}")
             for (node_id,) in cursor.fetchall():
                 node_data = self.get_node(node_id)
                 if node_data:
-                    event = {"kind": "node", "id": node_id, "labels": node_data.get("labels", []),
-                             "properties": {k: v for k, v in node_data.items() if k not in ("id", "labels")}}
+                    event = {
+                        "kind": "node",
+                        "id": node_id,
+                        "labels": node_data.get("labels", []),
+                        "properties": {
+                            k: v
+                            for k, v in node_data.items()
+                            if k not in ("id", "labels")
+                        },
+                    }
                     f.write(json.dumps(event) + "\n")
                     nodes_written += 1
 
         cursor.close()
         return {"nodes": nodes_written, "edges": edges_written}
 
-    def export_temporal_edges_ndjson(self, path: str, start: int = None, end: int = None,
-                                     predicate: str = None) -> dict:
+    def export_temporal_edges_ndjson(
+        self, path: str, start: int = None, end: int = None, predicate: str = None
+    ) -> dict:
         s_filter = ""
         p_filter = predicate or ""
         ts_start = start or 0
         ts_end = end or 9999999999
         result_json = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "QueryWindow", s_filter, p_filter, ts_start, ts_end)
+            "Graph.KG.TemporalIndex",
+            "QueryWindow",
+            s_filter,
+            p_filter,
+            ts_start,
+            ts_end,
+        )
         edges = json.loads(str(result_json))
 
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             for edge in edges:
                 attrs = self.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
-                event = {"kind": "temporal_edge", "source": edge["s"], "predicate": edge["p"],
-                         "target": edge["o"], "timestamp": edge["ts"], "weight": edge.get("w", 1.0),
-                         "attrs": attrs}
+                event = {
+                    "kind": "temporal_edge",
+                    "source": edge["s"],
+                    "predicate": edge["p"],
+                    "target": edge["o"],
+                    "timestamp": edge["ts"],
+                    "weight": edge.get("w", 1.0),
+                    "attrs": attrs,
+                }
                 f.write(json.dumps(event) + "\n")
 
         return {"temporal_edges": len(edges)}
 
     # ── BM25Index: pure ObjectScript lexical search ──
 
-    def bm25_build(self, name: str, text_props: list, k1: float = 1.5, b: float = 0.75) -> dict:
+    def bm25_build(
+        self, name: str, text_props: list, k1: float = 1.5, b: float = 0.75
+    ) -> dict:
         props_csv = ",".join(text_props)
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.BM25Index", "Build", name, props_csv, k1, b)
+            "Graph.KG.BM25Index", "Build", name, props_csv, k1, b
+        )
         return json.loads(str(result))
 
     def bm25_search(self, name: str, query: str, k: int = 10) -> list:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.BM25Index", "Search", name, query, k)
+            "Graph.KG.BM25Index", "Search", name, query, k
+        )
         rows = json.loads(str(result))
         return [(r["id"], float(r["score"])) for r in rows]
 
     def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.BM25Index", "Insert", name, doc_id, text)
+            "Graph.KG.BM25Index", "Insert", name, doc_id, text
+        )
         return bool(int(str(result)))
 
     def bm25_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)
 
     def bm25_info(self, name: str) -> dict:
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.BM25Index", "Info", name)
+        result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Info", name)
         return json.loads(str(result))
 
-    def ivf_build(self, name: str, nlist: int = 256, metric: str = "cosine",
-                  batch_size: int = 10000) -> dict:
+    def ivf_build(
+        self,
+        name: str,
+        nlist: int = 256,
+        metric: str = "cosine",
+        batch_size: int = 10000,
+    ) -> dict:
         try:
             import numpy as np
             from sklearn.cluster import MiniBatchKMeans
         except ImportError:
-            raise ImportError("ivf_build requires numpy and sklearn: pip install numpy scikit-learn")
+            raise ImportError(
+                "ivf_build requires numpy and sklearn: pip install numpy scikit-learn"
+            )
 
         import base64
         import json as _json
@@ -3039,8 +3872,8 @@ class IRISGraphEngine:
             if emb_val is None:
                 continue
             emb_str = str(emb_val)
-            if ',' in emb_str:
-                vec = [float(v) for v in emb_str.split(',')]
+            if "," in emb_str:
+                vec = [float(v) for v in emb_str.split(",")]
             else:
                 raw = base64.b64decode(emb_str)
                 dim = len(raw) // 4
@@ -3064,7 +3897,9 @@ class IRISGraphEngine:
 
         assignments = []
         for i, (nid, label) in enumerate(zip(node_ids, labels)):
-            assignments.append({"nodeId": nid, "cellIdx": int(label), "vec": _json.dumps(vecs[i])})
+            assignments.append(
+                {"nodeId": nid, "cellIdx": int(label), "vec": _json.dumps(vecs[i])}
+            )
 
         nlist_json = _json.dumps(effective_nlist)
         metric_json = _json.dumps(metric)
@@ -3072,14 +3907,21 @@ class IRISGraphEngine:
         assignments_json = _json.dumps(assignments)
 
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.IVFIndex", "Build",
-            name, nlist_json, metric_json, centroids_json, assignments_json)
+            "Graph.KG.IVFIndex",
+            "Build",
+            name,
+            nlist_json,
+            metric_json,
+            centroids_json,
+            assignments_json,
+        )
         return _json.loads(str(result))
 
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
         query_json = json.dumps([float(v) for v in query])
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe)
+            "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe
+        )
         rows = json.loads(str(result))
         return [(r["id"], float(r["score"])) for r in rows]
 
@@ -3087,6 +3929,5 @@ class IRISGraphEngine:
         self._iris_obj().classMethodVoid("Graph.KG.IVFIndex", "Drop", name)
 
     def ivf_info(self, name: str) -> dict:
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.IVFIndex", "Info", name)
+        result = self._iris_obj().classMethodValue("Graph.KG.IVFIndex", "Info", name)
         return json.loads(str(result))
