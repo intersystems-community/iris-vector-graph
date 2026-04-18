@@ -39,6 +39,7 @@ The fix is a **unified write path**: every edge write — static or temporal —
 - Q: BenchSeeder.cls writes old layout? → A: Added to task list (low priority, update ^KG subscript in BenchSeeder to include shard=0).
 - Q: Does `MatchEdges` handle unbound-source MATCH patterns? → A: Yes. When `sourceId` is empty, the proc iterates `$Order(^KG("out", 0, s))` across all source nodes (full scan). No conditional fallback to SQL — query path is fully unified.
 - Q: Does `bulk_create_edges` also write globals synchronously per-edge? → A: No. Single writes (`create_edge`) go synchronous to globals. Bulk ingest (`bulk_create_edges`) continues to use batch SQL + `BuildKG()` for performance at 535M-edge scale. This preserves load throughput while fixing the stale-after-single-write problem.
+- Q: Does `MatchEdges` return node metadata or edges only? → A: Edges only (`{s,p,o,w}`). Node labels/props are fetched by the outer SQL JOINing the CTE output against `rdf_labels`/`rdf_props` tables — same as today but with the FROM source swapped from `rdf_edges` table to the `MatchEdges` CTE. Keeps the proc simple and composable.
 
 ## User Scenarios & Testing
 
@@ -235,4 +236,4 @@ WITH EdgeScan AS (
 SELECT ... FROM EdgeScan e ...
 ```
 
-This is the same pattern used for `kg_BM25`, `kg_IVF`, and `kg_PPR` stored procs. The translator already knows how to emit these CTEs. The only new work is: (1) the `MatchEdges` ObjectScript proc, and (2) teaching the translator when to emit this CTE instead of a table join.
+This is the same pattern used for `kg_BM25`, `kg_IVF`, and `kg_PPR` stored procs. The translator already knows how to emit these CTEs. The only new work is: (1) the `MatchEdges` ObjectScript proc (edge-only: returns `{s,p,o,w}` tuples, no node metadata), and (2) teaching the translator when to emit this CTE instead of a table join. Node labels, properties, and other metadata are resolved by the outer SQL JOINing the CTE's `o` column against `rdf_labels`/`rdf_props` — the same JOINs used today, just with the FROM source swapped.
