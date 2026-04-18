@@ -184,15 +184,24 @@ class TestIVFIndexE2E:
         import random
         rng = random.Random(42)
         nodes = []
+        cursor = self.engine.conn.cursor()
         for i in range(n):
             nid = f"ivf_n{i}_{self._run}"
             vec = [rng.gauss(0, 1) for _ in range(dim)]
             norm = math.sqrt(sum(x * x for x in vec)) or 1.0
             vec = [x / norm for x in vec]
-            self.engine.conn.cursor().execute(
-                "INSERT OR IGNORE INTO Graph_KG.kg_NodeEmbeddings (id, embedding) VALUES (?, ?)",
-                [nid, _encode_vec(vec)]
-            )
+            vec_str = ",".join(str(v) for v in vec)
+            try:
+                cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
+                    [nid, vec_str]
+                )
+            except Exception:
+                pass
             nodes.append((nid, vec))
         try:
             self.engine.conn.commit()
@@ -203,16 +212,23 @@ class TestIVFIndexE2E:
     def _insert_embeddings(self, nodes):
         cursor = self.engine.conn.cursor()
         for nid, vec in nodes:
+            vec_str = ",".join(str(v) for v in vec)
             try:
                 cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, embedding) VALUES (?, ?)",
-                    [nid, _encode_vec(vec)]
+                    "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid]
+                )
+            except Exception:
+                pass
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
+                    [nid, vec_str]
                 )
             except Exception:
                 try:
                     cursor.execute(
-                        "UPDATE Graph_KG.kg_NodeEmbeddings SET embedding = ? WHERE id = ?",
-                        [_encode_vec(vec), nid]
+                        "UPDATE Graph_KG.kg_NodeEmbeddings SET emb = TO_VECTOR(?, DOUBLE) WHERE id = ?",
+                        [vec_str, nid]
                     )
                 except Exception:
                     pass

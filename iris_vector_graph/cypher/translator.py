@@ -440,11 +440,11 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     ppr_fn = f"{_schema_prefix}.kg_PPR" if _schema_prefix else "kg_PPR"
 
     cte_sql = (
-        f"SELECT j.node, j.score\n"
+        f"SELECT j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {ppr_fn}(?, ?, ?, 0, 1.0),\n"
         f"  '$[*]' COLUMNS(\n"
-        f"    node VARCHAR(256) PATH '$.id',\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
@@ -478,11 +478,11 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
     safe_idx = idx_name.replace("'", "''")
     safe_query = str(query).replace("'", "''")
     cte_sql = (
-        f"SELECT j.node, j.score\n"
+        f"SELECT j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {bm25_fn}('{safe_idx}', '{safe_query}', {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
-        f"    node VARCHAR(256) PATH '$.id',\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
@@ -511,8 +511,8 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
     if not isinstance(query_vec, list):
         raise ValueError("ivg.ivf.search: second argument (query_vec) must be a list of floats")
     floats = [float(v) for v in query_vec]
-    raw = struct.pack(f"{len(floats)}f", *floats)
-    query_b64 = base64.b64encode(raw).decode()
+    import json as _json
+    query_json = _json.dumps(floats).replace("'", "''")
 
     k_val = _resolve_arg(args[2], context, "ivg.ivf.search")
     try:
@@ -528,13 +528,12 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
 
     ivf_fn = f"{_schema_prefix}.kg_IVF" if _schema_prefix else "kg_IVF"
     safe_idx = idx_name.replace("'", "''")
-    safe_b64 = query_b64.replace("'", "''")
     cte_sql = (
-        f"SELECT j.node, j.score\n"
+        f"SELECT j.node_id, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {ivf_fn}('{safe_idx}', '{safe_b64}', {k_int}, {nprobe_int}),\n"
+        f"  {ivf_fn}('{safe_idx}', '{query_json}', {k_int}, {nprobe_int}),\n"
         f"  '$[*]' COLUMNS(\n"
-        f"    node VARCHAR(256) PATH '$.id',\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
@@ -1295,8 +1294,47 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
     if rel.types:
         if len(rel.types) == 1: edge_cond += f" AND {edge_alias}.p = {context.add_join_param(rel.types[0])}"
         else: edge_cond += f" AND {edge_alias}.p IN ({', '.join([context.add_join_param(t) for t in rel.types])})"
-        
-    context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
+
+    use_edgescan = (
+        source_alias is not None
+        and not source_alias.startswith("tc")
+        and not source_alias.startswith("Stage")
+        and not source_alias.startswith("BM25")
+        and not source_alias.startswith("IVF")
+        and not source_alias.startswith("VecSearch")
+    )
+
+    if use_edgescan:
+        pred_sql = f"'{rel.types[0]}'" if len(rel.types) == 1 else "NULL"
+        src_id_val = source_node.properties.get("id") if source_node else None
+        if src_id_val is not None:
+            if isinstance(src_id_val, ast.Literal):
+                src_id_sql = f"'{str(src_id_val.value)}'"
+            elif isinstance(src_id_val, ast.Variable):
+                p_name = src_id_val.name
+                resolved = context.input_params.get(p_name) if context.input_params else None
+                src_id_sql = f"'{resolved}'" if resolved else f"''"
+            else:
+                src_id_sql = "''"
+        else:
+            src_id_sql = "''"
+        derived = (
+            f"(\n"
+            f"SELECT j.s, j.p, j.o_id, j.w\n"
+            f"FROM JSON_TABLE(\n"
+            f"  Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0),\n"
+            f"  '$[*]' COLUMNS(\n"
+            f"    s VARCHAR(256) PATH '$.s',\n"
+            f"    p VARCHAR(256) PATH '$.p',\n"
+            f"    o_id VARCHAR(256) PATH '$.o',\n"
+            f"    w DOUBLE PATH '$.w'\n"
+            f"  )\n"
+            f") j\n"
+            f") {edge_alias}"
+        )
+        context.join_clauses.append(f"{jt} {derived} ON {edge_cond}")
+    else:
+        context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
 
     if is_new_target and not target_alias.startswith('Stage'):
         context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")

@@ -50,8 +50,8 @@ ClassMethod BuildKG() As %Status
 				} Catch {}
 			}
 			
-			Set ^KG("out", s, p, o) = weight
-			Set ^KG("in", o, p, s) = weight
+			Set ^KG("out", 0, s, p, o) = weight
+			Set ^KG("in", 0, o, p, s) = weight
 			Set tmp = $Increment(^KG("deg", s))
 			Set tmp = $Increment(^KG("degp", s, p))
 			
@@ -83,17 +83,17 @@ ClassMethod BuildNKG() As %Status
 	Set edgeCount = 0
 	Set src = ""
 	For {
-		Set src = $Order(^KG("out", src))
+		Set src = $Order(^KG("out", 0, src))
 		Quit:src=""
 		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(src)
 		Set pred = ""
 		For {
-			Set pred = $Order(^KG("out", src, pred))
+			Set pred = $Order(^KG("out", 0, src, pred))
 			Quit:pred=""
 			Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(pred)
 			Set dst = ""
 			For {
-				Set dst = $Order(^KG("out", src, pred, dst), 1, weight)
+				Set dst = $Order(^KG("out", 0, src, pred, dst), 1, weight)
 				Quit:dst=""
 				Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(dst)
 				If '$Data(^NKG(-1, sIdx, -(pIdx+1), oIdx)) {
@@ -115,7 +115,7 @@ ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, m
 {
     Set o = ""
     For {
-        Set o = $Order(^KG("out", s, p, o))
+        Set o = $Order(^KG("out", 0, s, p, o))
         If o = "" Quit
         
         // Filter by label if requested
@@ -131,7 +131,7 @@ ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, m
         Set obj.s = s
         Set obj.p = p
         Set obj.o = o
-        Set obj.w = $Get(^KG("out", s, p, o), 1.0)
+        Set obj.w = $Get(^KG("out", 0, s, p, o), 1.0)
         Do results.%Push(obj)
         
         If '$Data(seen(o)) Set nextFrontier(o) = ""
@@ -143,7 +143,7 @@ ClassMethod TraverseAllPredicates(s As %String, hop As %Integer, maxHops As %Int
 {
     Set p = ""
     For {
-        Set p = $Order(^KG("out", s, p))
+        Set p = $Order(^KG("out", 0, s, p))
         If p = "" Quit
         Do ..TraverseWithPredicate(s, p, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
     }
@@ -193,13 +193,13 @@ ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Intege
 {
     Set o = ""
     For {
-        Set o = $Order(^KG("out", s, p, o))
+        Set o = $Order(^KG("out", 0, s, p, o))
         If o = "" Quit
         If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
         If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) Continue
         
         Set count = count + 1
-        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", s, p, o), 1.0), hop)
+        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", 0, s, p, o), 1.0), hop)
         
         If '$Data(seen(o)) Set nextFrontier(o) = ""
     }
@@ -209,7 +209,7 @@ ClassMethod TraverseAllPredicatesFast(s As %String, hop As %Integer, maxHops As 
 {
     Set p = ""
     For {
-        Set p = $Order(^KG("out", s, p))
+        Set p = $Order(^KG("out", 0, s, p))
         If p = "" Quit
         Do ..TraverseWithPredicateFast(s, p, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
     }
@@ -362,7 +362,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 			If direction = "both" || (direction = "out") {
 				Set p = ""
 				For {
-					Set p = $Order(^KG("out", s, p))
+					Set p = $Order(^KG("out", 0, s, p))
 					Quit:p=""
 					If $IsObject(preds) {
 						Set allowed = 0
@@ -371,7 +371,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 					}
 					Set o = ""
 					For {
-						Set o = $Order(^KG("out", s, p, o))
+						Set o = $Order(^KG("out", 0, s, p, o))
 						Quit:o=""
 						Set ^||SP.parents(o, s, p) = ""
 						If o = dstId {
@@ -387,7 +387,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 			If direction = "both" {
 				Set p = ""
 				For {
-					Set p = $Order(^KG("in", s, p))
+					Set p = $Order(^KG("in", 0, s, p))
 					Quit:p=""
 					If $IsObject(preds) {
 						Set allowed = 0
@@ -396,7 +396,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 					}
 					Set o = ""
 					For {
-						Set o = $Order(^KG("in", s, p, o))
+						Set o = $Order(^KG("in", 0, s, p, o))
 						Quit:o=""
 						Set ^||SP.parents(o, s, p) = ""
 						If o = dstId {

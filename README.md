@@ -466,6 +466,16 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.50.0 (2026-04-18)
+- **Unified edge store PR-A** — `MATCH (a)-[r]->(b)` now returns both static and temporal edges (spec 048)
+- `Graph.KG.EdgeScan` — `MatchEdges(sourceId, predicate, shard)` SqlProc scans `^KG("out",0,...)` globals
+- `create_edge` writes `^KG` synchronously; `delete_edge` (new) kills `^KG` entry synchronously
+- Cypher `MATCH (a)-[r]->(b)` routes to `MatchEdges` CTE — no SQL JOIN on rdf_edges
+- `TemporalIndex` and all traversal code updated to shard-0 layout
+- IVF index fixes: `$vector("double")`, JSON float arrays, leading-zero scores, `VECTOR(DOUBLE)` schema
+- Parser: negative float literals in list expressions now work
+
+
 ### v1.49.0 (2026-04-18)
 - **`shortestPath()` / `allShortestPaths()` openCypher syntax** — fixes parse error reported by mindwalk (spec 047)
 - `MATCH p = shortestPath((a {id:$from})-[*..8]-(b {id:$to})) RETURN p` now works end-to-end

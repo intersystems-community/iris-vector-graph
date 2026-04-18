@@ -765,6 +765,13 @@ class Parser:
                 self.expect(TokenType.RBRACKET)
             return ast.Literal(items)
             
+        if tok.kind == TokenType.MINUS:
+            self.eat()
+            inner = self.parse_primary_expression()
+            if isinstance(inner, ast.Literal) and isinstance(inner.value, (int, float)):
+                return ast.Literal(-inner.value)
+            return ast.UnaryOp(op="-", operand=inner) if hasattr(ast, "UnaryOp") else inner
+
         if tok.kind == TokenType.INTEGER_LITERAL:
             val = self.eat().value
             return ast.Literal(int(val) if val is not None else 0)
