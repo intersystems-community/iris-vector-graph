@@ -583,6 +583,9 @@ class IRISGraphEngine:
         sql_query = translate_to_sql(parsed, parameters, engine=self)
 
         if sql_query.var_length_paths:
+            vl0 = sql_query.var_length_paths[0]
+            if vl0.get("shortest") or vl0.get("all_shortest"):
+                return self._execute_shortest_path_cypher(sql_query, parameters)
             return self._execute_var_length_cypher(sql_query, parameters)
 
         cursor = self.conn.cursor()
@@ -594,6 +597,7 @@ class IRISGraphEngine:
             
             cursor.execute("START TRANSACTION")
             try:
+                rows = []
                 for i, stmt in enumerate(stmts):
                     p = all_params[i] if i < len(all_params) else []
                     if p:
@@ -608,7 +612,7 @@ class IRISGraphEngine:
                 return {
                     "columns": columns,
                     "rows": rows,
-                    "sql": stmts[-1],
+                    "sql": stmts[-1] if stmts else "",
                     "params": all_params[-1] if all_params else [],
                     "metadata": metadata
                 }
@@ -634,6 +638,91 @@ class IRISGraphEngine:
                 "params": p,
                 "metadata": metadata
             }
+
+    def _execute_shortest_path_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
+        import json as _json
+
+        vl = sql_query.var_length_paths[0]
+        preds_json = _json.dumps(vl["types"]) if vl.get("types") else "[]"
+        max_hops = vl.get("max_hops", 5)
+        direction = vl.get("direction", "both")
+        find_all = 1 if vl.get("all_shortest") else 0
+
+        def _resolve(param_ref):
+            if param_ref is None:
+                return None
+            if isinstance(param_ref, str) and param_ref.startswith("$"):
+                name = param_ref[1:]
+                if parameters and name in parameters:
+                    return str(parameters[name])
+                return None
+            return str(param_ref)
+
+        source_id = _resolve(vl.get("src_id_param"))
+        target_id = _resolve(vl.get("dst_id_param"))
+
+        if source_id is None or target_id is None:
+            raise ValueError(
+                "shortestPath requires both source and target node IDs to be bound. "
+                "Use {id: $from} / {id: $to} or {id: 'literal'} on both endpoints."
+            )
+
+        try:
+            path_json = _call_classmethod(
+                self.conn, "Graph.KG.Traversal", "ShortestPathJson",
+                source_id, target_id, max_hops, preds_json, direction, find_all
+            )
+            paths = _json.loads(str(path_json)) if path_json else []
+        except Exception as e:
+            logger.warning(f"ShortestPathJson failed: {e}")
+            return {"columns": ["p"], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+
+        if not paths:
+            return {"columns": ["p"], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+
+        return_funcs = vl.get("return_path_funcs", [])
+        rows = []
+        for path in paths:
+            row = []
+            if not return_funcs or "path" in return_funcs:
+                row.append(_json.dumps({
+                    "nodes": path.get("nodes", []),
+                    "rels": path.get("rels", []),
+                    "length": path.get("length", 0),
+                }))
+            if "length" in return_funcs:
+                row.append(path.get("length", 0))
+            if "nodes" in return_funcs:
+                row.append(path.get("nodes", []))
+            if "relationships" in return_funcs:
+                row.append(path.get("rels", []))
+            if not row:
+                row.append(_json.dumps({
+                    "nodes": path.get("nodes", []),
+                    "rels": path.get("rels", []),
+                    "length": path.get("length", 0),
+                }))
+            rows.append(row)
+
+        columns = []
+        if not return_funcs or "path" in return_funcs:
+            columns.append("p")
+        if "length" in return_funcs:
+            columns.append("length")
+        if "nodes" in return_funcs:
+            columns.append("nodes")
+        if "relationships" in return_funcs:
+            columns.append("relationships")
+        if not columns:
+            columns = ["p"]
+
+        return {
+            "columns": columns,
+            "rows": rows,
+            "sql": f"ShortestPathJson({source_id}, {target_id}, {max_hops})",
+            "params": [],
+            "metadata": sql_query.query_metadata,
+        }
 
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json

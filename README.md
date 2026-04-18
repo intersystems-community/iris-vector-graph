@@ -38,7 +38,7 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 | **IVFFlat** | Inverted File flat vector index — Python k-means build (sklearn), pure ObjectScript query. Tunable `nprobe` recall/speed tradeoff. `nprobe=nlist` → exact search. Cypher `CALL ivg.ivf.search(name, vec, k, nprobe)`. |
 | **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
 | **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
-| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
+| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, `shortestPath()` / `allShortestPaths()`, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
 | **Graph Analytics** | PageRank, WCC, CDLP, PPR-guided subgraph — pure ObjectScript over `^KG` globals. |
 | **FHIR Bridge** | ICD-10→MeSH mapping via UMLS for clinical-to-KG integration. |
 | **GraphQL** | Auto-generated schema from knowledge graph labels. |
@@ -465,6 +465,16 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.49.0 (2026-04-18)
+- **`shortestPath()` / `allShortestPaths()` openCypher syntax** — fixes parse error reported by mindwalk (spec 047)
+- `MATCH p = shortestPath((a {id:$from})-[*..8]-(b {id:$to})) RETURN p` now works end-to-end
+- `RETURN p` → JSON `{"nodes":[...],"rels":[...],"length":N}`; `RETURN length(p)`, `nodes(p)`, `relationships(p)` all supported
+- `allShortestPaths(...)` returns all minimum-length paths (diamond graphs return both paths)
+- `Graph.KG.Traversal.ShortestPathJson` — pure ObjectScript BFS with multi-parent backtracking for all-paths support
+- Parser fix: `[*..N]` (dot-dot without leading integer) now parses correctly
+- Parser fix: bare `--` undirected relationship pattern now parses correctly
+- Translator/engine fix: `CREATE` without RETURN clause no longer throws `UnboundLocalError`
 
 ### v1.48.0 (2026-04-18)
 - **IVFFlat vector index** — `Graph.KG.IVFIndex` ObjectScript class + `^IVF` globals (spec 046)

@@ -58,17 +58,19 @@ class NodePattern:
 
 @dataclass(slots=True)
 class VariableLength:
-    """Variable-length path specification: *min..max"""
     min_hops: int = 1
     max_hops: int = 1
+    shortest: bool = False
+    all_shortest: bool = False
 
     def __post_init__(self):
         if self.min_hops < 1:
             raise ValueError("min_hops must be >= 1")
         if self.max_hops < self.min_hops:
             raise ValueError("max_hops must be >= min_hops")
-        if self.max_hops > 10:
-            raise ValueError("max_hops must be <= 10 (complexity limit)")
+        limit = 15 if (self.shortest or self.all_shortest) else 10
+        if self.max_hops > limit:
+            raise ValueError(f"max_hops must be <= {limit} (complexity limit)")
 
 
 @dataclass(slots=True)

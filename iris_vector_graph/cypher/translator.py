@@ -743,20 +743,40 @@ def translate_to_sql(cypher_query: ast.CypherQuery, params: Optional[Dict[str, A
         stmts, all_params = [], []
         for s, p in context.dml_statements:
             stmts.append(s); all_params.append(p)
+        sql = None
         if cypher_query.return_clause:
             sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
             sql = apply_pagination(sql, cypher_query, context, order_by_items)
         all_ctes = [c for c in getattr(context, "cte_clauses", []) if not any(td in c for td in context.temporal_derived)] + context.stages
-        if all_ctes:
+        if all_ctes and sql is not None:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
             all_params.append(context.all_stage_params + p)
-        else: all_params.append(p)
-        stmts.append(sql)
+        elif sql is not None:
+            all_params.append(p)
+        if sql is not None:
+            stmts.append(sql)
         return SQLQuery(sql=stmts, parameters=all_params, query_metadata=metadata, is_transactional=True)
     else:
         sql, p = context.build_stage_sql(cypher_query.return_clause.distinct if cypher_query.return_clause else False)
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
         vl = context.var_length_paths or None
+
+        if vl and (vl[0].get("shortest") or vl[0].get("all_shortest")) and cypher_query.return_clause:
+            path_funcs = []
+            path_var = vl[0].get("target_var") or vl[0].get("source_var")
+            named_path_vars = {np.variable for np in (cypher_query.query_parts[0].clauses[0].named_paths
+                                                       if cypher_query.query_parts else [])}
+            for item in cypher_query.return_clause.items:
+                expr = item.expression
+                if isinstance(expr, ast.Variable) and expr.name in named_path_vars:
+                    path_funcs.append("path")
+                elif isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in ("length", "nodes", "relationships"):
+                    if expr.arguments and isinstance(expr.arguments[0], ast.Variable):
+                        if expr.arguments[0].name in named_path_vars:
+                            path_funcs.append(expr.function_name.lower())
+            if path_funcs:
+                vl[0]["return_path_funcs"] = path_funcs
+
         all_ctes = [c for c in getattr(context, "cte_clauses", []) if not any(td in c for td in context.temporal_derived)] + context.stages
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
@@ -1102,15 +1122,38 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
     if rel.variable_length is not None:
         source_alias = context.variable_aliases.get(source_node.variable, "")
         target_alias = context.register_variable(target_node.variable)
+
+        def _resolve_id_param(node):
+            id_val = node.properties.get("id")
+            if id_val is None:
+                return None
+            if isinstance(id_val, ast.Variable):
+                return f"${id_val.name}"
+            if isinstance(id_val, ast.Literal):
+                return str(id_val.value)
+            if isinstance(id_val, str):
+                return id_val
+            return str(id_val)
+
+        src_id_param = _resolve_id_param(source_node)
+        dst_id_param = _resolve_id_param(target_node)
+
+        direction_str = "both" if rel.direction == ast.Direction.BOTH else "out"
+
         context.var_length_paths.append({
             "source_var": source_node.variable,
             "source_alias": source_alias,
             "target_var": target_node.variable,
             "target_alias": target_alias,
             "types": rel.types or [],
-            "direction": rel.direction.value if rel.direction else "out",
+            "direction": direction_str,
             "min_hops": rel.variable_length.min_hops,
             "max_hops": rel.variable_length.max_hops,
+            "shortest": rel.variable_length.shortest,
+            "all_shortest": rel.variable_length.all_shortest,
+            "src_id_param": src_id_param,
+            "dst_id_param": dst_id_param,
+            "return_path_funcs": [],
         })
         if not context.from_clauses:
             context.from_clauses.append(f"{_table('nodes')} {target_alias}")
@@ -1485,12 +1528,6 @@ def translate_expression(expr, context, segment="select") -> str:
                 if fn in ("nodes", "relationships"):
                     raise ValueError(f"'{arg.name}' is not a named path variable")
 
-        if fn in ("shortestpath", "allshortestpaths"):
-            from .algorithms.paths import generate_shortest_path_sql
-            args = [translate_expression(arg, context, segment=segment) for arg in expr.arguments]
-            s_id, t_id = (args[0] if len(args) > 0 else "NULL"), (args[1] if len(args) > 1 else "NULL")
-            inner = generate_shortest_path_sql("?", "?", 10, fn == "allshortestpaths")
-            return f"(SELECT TOP 1 path FROM ({inner}) WHERE 1=1)"
         fn, args = expr.function_name.lower(), [translate_expression(arg, context, segment=segment) for arg in expr.arguments]
         if fn in ("id", "type"): return args[0] if args else "NULL"
         if fn == "labels": return labels_subquery(args[0] if args else "NULL")

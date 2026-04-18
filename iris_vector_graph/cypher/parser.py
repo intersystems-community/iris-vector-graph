@@ -236,21 +236,37 @@ class Parser:
         return ast.QueryPart(clauses=clauses)
 
     def parse_match_clause(self, optional: bool = False) -> ast.MatchClause:
-        """Parse [OPTIONAL] MATCH p = (n:Label)-[r:TYPE]->(m), (x:Other)"""
         if not optional:
             self.expect(TokenType.MATCH)
         
         patterns = []
         named_paths = []
         while True:
-            # 2-token lookahead: IDENTIFIER EQUALS before LPAREN means named path
             path_var = None
             if (self.peek().kind == TokenType.IDENTIFIER
                     and self.lexer.peek_ahead(1).kind == TokenType.EQUALS):
                 path_var = self.eat().value
                 self.eat()
 
-            pattern = self.parse_graph_pattern()
+            if (self.peek().kind == TokenType.IDENTIFIER
+                    and self.peek().value in ("shortestPath", "allShortestPaths")):
+                fn_name = self.eat().value
+                self.expect(TokenType.LPAREN)
+                pattern = self.parse_graph_pattern()
+                self.expect(TokenType.RPAREN)
+                is_all = fn_name == "allShortestPaths"
+                for rel in pattern.relationships:
+                    if rel.variable_length is None:
+                        rel.variable_length = ast.VariableLength(
+                            min_hops=1, max_hops=5,
+                            shortest=not is_all, all_shortest=is_all
+                        )
+                    else:
+                        rel.variable_length.shortest = not is_all
+                        rel.variable_length.all_shortest = is_all
+            else:
+                pattern = self.parse_graph_pattern()
+
             patterns.append(pattern)
 
             if path_var:
@@ -518,7 +534,12 @@ class Parser:
                 # -[...]
                 pass
             else:
-                # Malformed
+                if self.peek().kind == TokenType.MINUS:
+                    self.eat()
+                    return ast.RelationshipPattern(
+                        variable=None, types=[], direction=ast.Direction.BOTH,
+                        properties={}, variable_length=None
+                    )
                 tok = self.peek()
                 raise CypherParseError("Expected '[' after '-'", tok.line, tok.column)
         
@@ -551,6 +572,12 @@ class Parser:
                     max_tok = self.expect(TokenType.INTEGER_LITERAL)
                     if max_tok.value:
                         max_h = int(max_tok.value)
+            elif self.peek().kind == TokenType.DOT:
+                self.eat()
+                self.expect(TokenType.DOT)
+                max_tok = self.expect(TokenType.INTEGER_LITERAL)
+                if max_tok.value:
+                    max_h = int(max_tok.value)
             var_len = ast.VariableLength(min_h, max_h)
             
         self.expect(TokenType.RBRACKET)
