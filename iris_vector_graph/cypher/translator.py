@@ -1313,28 +1313,30 @@ def translate_relationship_pattern(rel, source_node, target_node, context, metad
             elif isinstance(src_id_val, ast.Variable):
                 p_name = src_id_val.name
                 resolved = context.input_params.get(p_name) if context.input_params else None
-                src_id_sql = f"'{resolved}'" if resolved else f"''"
+                src_id_sql = f"'{resolved}'" if resolved else None
             else:
-                src_id_sql = "''"
+                src_id_sql = None
         else:
-            src_id_sql = "''"
-        derived = (
-            f"(\n"
-            f"SELECT j.s, j.p, j.o_id, j.w\n"
-            f"FROM JSON_TABLE(\n"
-            f"  Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0),\n"
-            f"  '$[*]' COLUMNS(\n"
-            f"    s VARCHAR(256) PATH '$.s',\n"
-            f"    p VARCHAR(256) PATH '$.p',\n"
-            f"    o_id VARCHAR(256) PATH '$.o',\n"
-            f"    w DOUBLE PATH '$.w'\n"
-            f"  )\n"
-            f") j\n"
-            f") {edge_alias}"
-        )
-        context.join_clauses.append(f"{jt} {derived} ON {edge_cond}")
-    else:
-        context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
+            src_id_sql = None
+
+        if src_id_sql is not None:
+            derived = (
+                f"(\n"
+                f"SELECT j.s, j.p, j.o_id, j.w\n"
+                f"FROM JSON_TABLE(\n"
+                f"  Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0),\n"
+                f"  '$[*]' COLUMNS(\n"
+                f"    s VARCHAR(256) PATH '$.s',\n"
+                f"    p VARCHAR(256) PATH '$.p',\n"
+                f"    o_id VARCHAR(256) PATH '$.o',\n"
+                f"    w DOUBLE PATH '$.w'\n"
+                f"  )\n"
+                f") j\n"
+                f") {edge_alias}"
+            )
+            context.join_clauses.append(f"{jt} {derived} ON {edge_cond}")
+        else:
+            context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
 
     if is_new_target and not target_alias.startswith('Stage'):
         context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
