@@ -65,9 +65,10 @@ ClassMethod BuildKG() As %Status
 		&sql(CLOSE c3)
 		
 		TCommit
-		
-		Do ..BuildNKG()
-		
+
+		// BuildNKG requires Graph.KG.GraphIndex — optional, non-fatal if missing
+		Try { Do ..BuildNKG() } Catch {}
+
 		Return $$$OK
 	} Catch ex {
 		TRollback

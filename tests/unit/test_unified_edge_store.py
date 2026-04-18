@@ -110,7 +110,7 @@ class TestUnifiedEdgeStoreUnit:
         assert "MatchEdges" in sql
         assert "'TREATS'" in sql or "TREATS" in sql
 
-    def test_unbound_source_match_passes_empty_sourceid(self):
+    def test_unbound_source_match_uses_rdf_edges_not_matchedges(self):
         from iris_vector_graph.cypher.translator import translate_to_sql
         from iris_vector_graph.cypher.parser import parse_query
 
@@ -118,7 +118,8 @@ class TestUnifiedEdgeStoreUnit:
         parsed = parse_query(q)
         sql_obj = translate_to_sql(parsed, {})
         sql = sql_obj.sql if isinstance(sql_obj.sql, str) else " ".join(sql_obj.sql if isinstance(sql_obj.sql, list) else [sql_obj.sql])
-        assert "MatchEdges" in sql
+        assert "rdf_edges" in sql, "Unbound-source MATCH must use rdf_edges SQL (MatchEdges has 32KB SqlProc limit)"
+        assert "MatchEdges" not in sql
 
 
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
