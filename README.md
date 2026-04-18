@@ -112,6 +112,8 @@ engine.delete_edge("service:auth", "DEPENDS_ON", "service:payment")
 # removes from rdf_edges SQL and kills ^KG("out",0,...) immediately
 ```
 
+> **Note — bulk ingest**: `bulk_create_edges` is optimized for high-volume ingest (535M edges validated) and intentionally skips the per-edge `^KG` write for performance. Edges inserted in bulk are visible to `MATCH`/BFS only after calling `BuildKG()` at the end of the ingest session. `bulk_create_edges_temporal` does write `^KG` immediately. `create_edge` (single) always writes immediately.
+
 ### Ingest
 
 ```python
