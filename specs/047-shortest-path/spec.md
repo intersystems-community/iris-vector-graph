@@ -4,6 +4,14 @@
 **Created**: 2026-04-18
 **Status**: Draft
 
+## Clarifications
+
+### Session 2026-04-18
+
+- Q: What path decomposition functions must be supported alongside `RETURN p`? → A: Full decomposition — `RETURN p`, `nodes(p)`, `relationships(p)`, `length(p)` all supported (same as Neo4j standard)
+- Q: Must the target node be a bound ID, or can it be a label filter in v1? → A: Both source and target must be bound node IDs in v1; label-only target is out of scope
+- Q: Does `nodes(p)` return node ID strings or full node objects? → A: Node ID strings only; consistent with existing named path return format
+
 ## Overview
 
 Add native `shortestPath()` and `allShortestPaths()` support to the iris-vector-graph openCypher
@@ -60,7 +68,8 @@ Returns all paths of minimum length (not just one).
 - Cyclic graph → BFS still terminates (visited set)
 - Directed `(a)-[*..N]->(b)` → only follow out-edges
 - Undirected `(a)-[*..N]-(b)` → follow both in and out edges
-- `shortestPath` with no endpoint node ID bound → raise clear error
+- `shortestPath` with no endpoint node ID bound → raise clear error: "shortestPath requires both source and target node IDs to be bound"
+- Label-only target (e.g. `(b:Disease)`) without `{id: ...}` → out of scope in v1, raise clear error
 
 ## Requirements
 
@@ -70,7 +79,7 @@ Returns all paths of minimum length (not just one).
 - **FR-002**: Both directed (`-->`) and undirected (`--`) relationship directions MUST be supported
 - **FR-003**: Optional relationship type filter (`[:TYPE*..N]`) MUST be forwarded to BFS predicate filter
 - **FR-004**: `length(p)` MUST return integer hop count when `p` is a shortestPath result
-- **FR-005**: `nodes(p)` MUST return ordered list of node IDs along path
+- **FR-005**: `nodes(p)` MUST return ordered list of node ID strings along path (not full node objects)
 - **FR-006**: `relationships(p)` / `rels(p)` MUST return ordered list of relationship types along path
 - **FR-007**: `allShortestPaths` MUST return all paths of minimum length as multiple rows
 - **FR-008**: No path found MUST return empty result (not an error)
@@ -92,6 +101,7 @@ Returns all paths of minimum length (not just one).
 
 - Weighted shortest path / Dijkstra (future spec)
 - `shortestPath` to multiple targets in one call
+- Target specified as label filter only (e.g. `(b:Disease)`) — both endpoints must be bound node IDs
 - Named path variable used in WHERE predicates (`WHERE ALL(n IN nodes(p) WHERE ...)`)
 - `shortestPath` inside `WITH` subquery pipelines
 
