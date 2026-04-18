@@ -27,6 +27,17 @@ The fix is a **unified write path**: every edge write — static or temporal —
 - Q: Does the Cypher MATCH change affect CREATE/DELETE/MERGE write path? → A: No — write path is a separate concern; this spec only changes READ (MATCH) and WRITE-TO-GLOBALS synchronization
 - Q: Partitioning approach? → A: Shard key as first subscript: `^KG("out", shard, s, p, o)` where shard = hash(s) % N. Default shard=0 for single-node deployments (backward compatible). Multi-shard routing is a follow-on feature; the subscript layout change is the prerequisite.
 
+### Council Review 2026-04-18
+
+- Q: Translator strategy for MATCH→globals? → A: **Strategy B (stored proc).** A new `Graph.KG.EdgeScan.MatchEdges(sourceId, predicate, shard)` ClassMethod returns JSON `[{s,p,o,w},...]`. The Cypher translator emits a `CALL` to this proc wrapped in `JSON_TABLE(...)` CTE, same pattern as `kg_BM25` / `kg_IVF`. This avoids rewriting the SQL assembly pipeline — the translator still emits SQL, but the FROM source is a proc-backed CTE instead of a table join. Predicate pushdown (FR-007) is handled by passing the predicate string to the proc, which uses `$Order(^KG("out", 0, s, predicate, o))` directly — no separate codepath, just a parameter.
+- Q: FR-007 predicate pushdown complexity? → A: Not complex under Strategy B. `MatchEdges(sourceId, predicate, shard)` receives predicate as a parameter. If predicate is non-empty, the proc does `$Order(^KG("out", 0, s, predicate, o))` (single predicate scan). If empty, it scans all predicates via nested `$Order`. Both paths are in the same 20-line method. No separate spec needed.
+- Q: `^NKG` consistency with new subscript layout? → A: `^NKG` is explicitly **out of scope** for this spec. `BuildNKG()` is called by `BuildKG()` and reads `^KG("out",...)` — after this spec, it reads the new layout. `BuildNKG()` MUST be updated to read `^KG("out", 0, s, p, o)` and tested. Added as FR-010.
+- Q: P1/P2 as single branch? → A: **Split to two PRs.** PR-A (P1): synchronous writes + EdgeScan proc + translator CTE routing. PR-B (P2): shard subscript migration + BuildKG layout change + ^NKG update. PR-A is merge-ready independently.
+- Q: NFR-001 benchmark methodology? → A: Benchmark at 4 tiers: 1K, 100K, 1M, 535M edges (mindwalk production). Compare `MATCH (a)-[r]->(b)` latency (p50/p99) between SQL JOIN and EdgeScan proc. Pass criterion: proc ≤ SQL at all tiers.
+- Q: SQL retention policy for BuildKG recovery? → A: `rdf_edges` rows are never deleted by this spec. `BuildKG` can always reconstruct `^KG("out",...)` from `rdf_edges` + `^KG("tout",...)` combined. Statement added to Architecture Notes.
+- Q: Merged-graph invariant? → A: Shard = routing key, NOT graph partition. All shards compose a single logical graph. A query against shard=0 sees the entire graph in single-node mode. Added to Architecture Notes.
+- Q: BenchSeeder.cls writes old layout? → A: Added to task list (low priority, update ^KG subscript in BenchSeeder to include shard=0).
+
 ## User Scenarios & Testing
 
 ### User Story 1 — Temporal edges visible in MATCH (P1)
@@ -93,18 +104,20 @@ Simple `MATCH (a)-[r]->(b)` Cypher generates `$Order(^KG("out", 0, a, p, o))` it
 - **FR-003**: `delete_edge` MUST Kill `^KG("out", 0, s, p, o)` and `^KG("in", 0, o, p, s)` synchronously
 - **FR-004**: `BuildKG` MUST write new shard-keyed layout `^KG("out", 0, s, p, o)` and migrate any old `^KG("out", s, p, o)` entries
 - **FR-005**: All ObjectScript BFS/traversal code (`BFSFast`, `ShortestPathJson`, `PPR`, etc.) MUST be updated to read `^KG("out", 0, s, p, o)`
-- **FR-006**: Cypher simple MATCH `(a)-[r]->(b)` MUST route to a global-scan stored procedure rather than SQL JOIN on rdf_edges
-- **FR-007**: `MATCH (a)-[r]->(b) WHERE type(r) = 'X'` MUST use the predicate subscript `^KG("out", 0, a, "X", o)` directly (no full scan)
-- **FR-008**: `rdf_edges` SQL table continues to receive every edge insert (durability preserved)
+- **FR-006**: Cypher simple MATCH `(a)-[r]->(b)` MUST route to `Graph.KG.EdgeScan.MatchEdges(sourceId, predicate, shard)` stored proc via `JSON_TABLE(...)` CTE — same pattern as `kg_BM25` / `kg_IVF`. The translator emits SQL with a proc-backed CTE, not a direct table join on rdf_edges.
+- **FR-007**: `MATCH (a)-[r]->(b) WHERE type(r) = 'X'` MUST pass predicate `'X'` as a parameter to `MatchEdges`, which uses `$Order(^KG("out", 0, a, "X", o))` directly. No full scan. Not a separate codepath — same proc, one parameter.
+- **FR-008**: `rdf_edges` SQL table continues to receive every edge insert (durability preserved). Rows are never deleted by this spec.
 - **FR-009**: Single-node shard key defaults to 0; shard assignment is a pluggable function with signature `shard(node_id) -> int`
+- **FR-010**: `BuildNKG()` MUST be updated to read `^KG("out", 0, s, p, o)` instead of `^KG("out", s, p, o)` and tested for consistency with the new layout (PR-B scope)
 
 ### Non-Functional Requirements
 
-- **NFR-001**: `MATCH (a)-[r]->(b)` query latency MUST be ≤ existing SQL JOIN latency for graphs up to 1M edges (globals are typically faster)
+- **NFR-001**: `MATCH (a)-[r]->(b)` via EdgeScan proc MUST be ≤ SQL JOIN latency at all benchmark tiers: 1K, 100K, 1M, 535M edges (p50 and p99). Methodology: BenchSeeder creates graph at each tier, run 100 random MATCH queries, compare mean latency.
 - **NFR-002**: `create_edge` write overhead MUST be < 2x current (one extra global Set per direction)
 - **NFR-003**: `BuildKG` migration MUST be idempotent — safe to run multiple times
 - **NFR-004**: All existing tests MUST pass after migration (zero regression)
 - **NFR-005**: Shard layout MUST support future horizontal partitioning without further global key restructuring
+- **NFR-006**: `^NKG` index MUST be consistent with `^KG("out", 0, ...)` layout after `BuildNKG()` runs (PR-B scope)
 
 ## Success Criteria
 
@@ -116,10 +129,29 @@ Simple `MATCH (a)-[r]->(b)` Cypher generates `$Order(^KG("out", 0, a, p, o))` it
 ## Out of Scope
 
 - Multi-shard routing (assigning different nodes to different shards, cross-shard BFS) — this spec only establishes the subscript layout
-- Migrating `rdf_edges` SQL to a different schema
+- Migrating `rdf_edges` SQL to a different schema or deleting rows
 - Changing `^KG("tout"/"tin")` temporal index structure
 - Changing `^KG("tagg")` aggregate structure
-- Changing `^NKG` integer-key acceleration layout (separate refactor)
+- `^NKG` integer-key acceleration: `BuildNKG()` subscript update is IN scope (FR-010, PR-B); full NKG redesign is OUT of scope
+
+## Implementation Scope Split
+
+**PR-A (P1 — merge independently):**
+- FR-001: synchronous `^KG("out"/"in")` writes in `create_edge`
+- FR-002: verify temporal path preserved
+- FR-003: synchronous `delete_edge` kills
+- FR-006: `Graph.KG.EdgeScan.MatchEdges` stored proc
+- FR-007: predicate pushdown via proc parameter
+- FR-008: rdf_edges retention
+- US1, US2 acceptance tests
+
+**PR-B (P2 — after PR-A merged):**
+- FR-004: `BuildKG` shard layout migration
+- FR-005: all traversal code updated to `^KG("out", 0, ...)`
+- FR-009: shard function
+- FR-010: `BuildNKG()` subscript update
+- US3, US4 acceptance tests
+- BenchSeeder.cls update (low)
 
 ## Architecture Notes
 
@@ -176,3 +208,29 @@ shard(node_id) = hash(node_id) % num_shards
 
 Cross-shard BFS: each hop may change shard → routed to correct IRIS namespace
 ```
+
+### Merged-Graph Invariant
+
+Shard is a **routing key**, not a graph partition. All shards compose a single logical graph. In single-node mode (shard=0), a query against shard=0 sees the entire graph — there is no data on other shards. In multi-shard mode (future), a query MUST fan out to all shards to produce a complete result. No shard is an island.
+
+### SQL Retention Policy
+
+`rdf_edges` rows are never deleted by any operation in this spec. `BuildKG()` can always reconstruct `^KG("out", 0, ...)` from the union of `rdf_edges` (static edges) and `^KG("tout", ...)` (temporal edges). This is the crash recovery path: if `^KG` globals are lost (database restore from backup without journal), `BuildKG()` + temporal data in `^KG("tout")` fully reconstructs the adjacency index.
+
+### Translator Strategy: Stored Proc CTE (Strategy B)
+
+The Cypher translator does NOT rewrite its SQL assembly pipeline. Instead, for `MATCH (a)-[r]->(b)`, it replaces the `FROM rdf_edges` table reference with a proc-backed CTE:
+
+```sql
+WITH EdgeScan AS (
+  SELECT j.s, j.p, j.o, j.w
+  FROM JSON_TABLE(
+    Graph_KG.MatchEdges(:sourceId, :predicate, 0),
+    '$[*]' COLUMNS(s VARCHAR(256) PATH '$.s', p VARCHAR(256) PATH '$.p',
+                    o VARCHAR(256) PATH '$.o', w DOUBLE PATH '$.w')
+  ) j
+)
+SELECT ... FROM EdgeScan e ...
+```
+
+This is the same pattern used for `kg_BM25`, `kg_IVF`, and `kg_PPR` stored procs. The translator already knows how to emit these CTEs. The only new work is: (1) the `MatchEdges` ObjectScript proc, and (2) teaching the translator when to emit this CTE instead of a table join.
