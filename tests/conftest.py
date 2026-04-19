@@ -11,16 +11,26 @@ import pytest
 
 try:
     from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
+
     _HAS_DEVTESTER = True
 except ImportError:
     import iris
+
     def iris_connect(host, port, namespace, user, password):
-        return iris.connect(hostname=host, port=port, namespace=namespace, username=user, password=password)
+        return iris.connect(
+            hostname=host,
+            port=port,
+            namespace=namespace,
+            username=user,
+            password=password,
+        )
+
     _HAS_DEVTESTER = False
 
 logger = logging.getLogger(__name__)
 
 TEST_CONTAINER_IMAGE = "intersystemsdc/iris-community:latest-em"
+
 
 def _apply_aggressive_password_reset(container_name: str) -> bool:
     """Create/reset the test user using single-line ObjectScript commands.
@@ -29,7 +39,9 @@ def _apply_aggressive_password_reset(container_name: str) -> bool:
     multi-line If/For blocks cause <SYNTAX> errors.  All statements here are
     intentionally written as single-line routines to avoid that.
     """
-    logger.info(f"Applying password reset and creating test user in {container_name}...")
+    logger.info(
+        f"Applying password reset and creating test user in {container_name}..."
+    )
 
     # Each line is a self-contained single-line ObjectScript statement.
     # We use $ZCVT and a single Do with a chained method sequence.
@@ -41,13 +53,27 @@ def _apply_aggressive_password_reset(container_name: str) -> bool:
     ]
     script = "\n".join(single_line_commands) + "\nH\n"
 
-    exec_cmd = ['docker', 'exec', '-i', container_name, 'iris', 'session', 'iris', '-U', '%SYS']
+    exec_cmd = [
+        "docker",
+        "exec",
+        "-i",
+        container_name,
+        "iris",
+        "session",
+        "iris",
+        "-U",
+        "%SYS",
+    ]
 
     for i in range(5):
         try:
             result = subprocess.run(
-                exec_cmd, input=script, capture_output=True, text=True,
-                errors='replace', timeout=30,
+                exec_cmd,
+                input=script,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=30,
             )
             # returncode 0 = clean exit; ignore <SYNTAX> noise in stderr
             logger.debug(f"Password reset stdout: {result.stdout[-500:]}")
@@ -66,16 +92,34 @@ def _setup_iris_container(container_name: str) -> bool:
     """
     try:
         logger.info(f"Starting Robust IRIS setup for container: {container_name}")
-        
+
         # 0. Aggressive password reset
         _apply_aggressive_password_reset(container_name)
 
         # 1. Prepare directory in container
-        subprocess.run(['docker', 'exec', container_name, 'mkdir', '-p', '/tmp/src'], capture_output=True)
-        
+        subprocess.run(
+            ["docker", "exec", container_name, "mkdir", "-p", "/tmp/src"],
+            capture_output=True,
+        )
+
         logger.info("Copying source files to container...")
-        subprocess.run(['docker', 'cp', 'iris_src/src/.', f"{container_name}:/tmp/src/"], check=True)
-        
+        subprocess.run(
+            ["docker", "cp", "iris_src/src/.", f"{container_name}:/tmp/src/"],
+            check=True,
+        )
+        for conflicting_cls in ["Edge.cls", "TestEdge.cls"]:
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container_name,
+                    "rm",
+                    "-f",
+                    f"/tmp/src/{conflicting_cls}",
+                ],
+                capture_output=True,
+            )
+
         # 2. Schema and Views via SQL
         # We use ExecDirect from ObjectScript to avoid shell transition issues
         sql_script = """
@@ -134,12 +178,26 @@ Do stmt.%Execute()
 H
 """
         logger.info("Executing robust schema setup via ObjectScript ExecDirect...")
-        os_cmd = ['docker', 'exec', '-i', container_name, 'iris', 'session', 'IRIS', '-U', 'USER']
-        subprocess.run(os_cmd, input=sql_script, capture_output=True, text=True, errors='replace')
+        os_cmd = [
+            "docker",
+            "exec",
+            "-i",
+            container_name,
+            "iris",
+            "session",
+            "IRIS",
+            "-U",
+            "USER",
+        ]
+        subprocess.run(
+            os_cmd, input=sql_script, capture_output=True, text=True, errors="replace"
+        )
 
         # 3. Load Classes
         load_cmd = 'Do $system.OBJ.LoadDir("/tmp/src", "ck", .errors, 1)\nH\n'
-        subprocess.run(os_cmd, input=load_cmd, capture_output=True, text=True, errors='replace')
+        subprocess.run(
+            os_cmd, input=load_cmd, capture_output=True, text=True, errors="replace"
+        )
 
         logger.info("Robust IRIS setup completed.")
         return True
@@ -161,10 +219,14 @@ def iris_test_container():
     container_name = "iris-vector-graph-main"
 
     if not _HAS_DEVTESTER:
-        yield type('Container', (), {
-            'get_exposed_port': lambda self, p: 1972,
-            'container_name': container_name,
-        })()
+        yield type(
+            "Container",
+            (),
+            {
+                "get_exposed_port": lambda self, p: 1972,
+                "container_name": container_name,
+            },
+        )()
         return
 
     from iris_devtester.containers.iris_container import IRISContainer
@@ -173,8 +235,9 @@ def iris_test_container():
     is_running = False
     try:
         result = subprocess.run(
-            ['docker', 'inspect', '-f', '{{.State.Running}}', container_name],
-            capture_output=True, text=True,
+            ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+            capture_output=True,
+            text=True,
         )
         is_running = result.stdout.strip() == "true"
     except Exception:
@@ -210,13 +273,17 @@ def iris_test_container():
     logger.info(f"Verifying test credentials on port {assigned_port}...")
     for attempt in range(20):  # up to 100 s
         try:
-            _verify_conn = iris_connect('localhost', int(assigned_port), 'USER', 'test', 'test')
+            _verify_conn = iris_connect(
+                "localhost", int(assigned_port), "USER", "test", "test"
+            )
             cur = _verify_conn.cursor()
             cur.execute("SELECT 1")
             cur.fetchone()
             cur.close()
             _verify_conn.close()
-            logger.info(f"Container ready for tests (verified on attempt {attempt + 1})")
+            logger.info(
+                f"Container ready for tests (verified on attempt {attempt + 1})"
+            )
             break
         except Exception as e:
             logger.debug(f"Credential verify attempt {attempt + 1}/20: {e}")
@@ -241,9 +308,13 @@ def iris_master_cleanup(iris_connection):
     cursor = iris_connection.cursor()
     # T013: Aggressively cleanup all graph tables
     tables = [
-        "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props", 
-        "Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized",
-        "Graph_KG.nodes", "Graph_KG.docs"
+        "Graph_KG.rdf_edges",
+        "Graph_KG.rdf_labels",
+        "Graph_KG.rdf_props",
+        "Graph_KG.kg_NodeEmbeddings",
+        "Graph_KG.kg_NodeEmbeddings_optimized",
+        "Graph_KG.nodes",
+        "Graph_KG.docs",
     ]
     for table in tables:
         try:
@@ -270,20 +341,29 @@ def iris_connection(iris_test_container):
     for attempt in range(6):
         try:
             conn = iris_connect(
-                'localhost',
+                "localhost",
                 int(assigned_port),
-                'USER',
-                'test',
-                'test',
+                "USER",
+                "test",
+                "test",
             )
             break
         except Exception as e:
-            if attempt < 5 and any(k in str(e) for k in ("Password change required", "Access Denied", "Authentication failed")):
-                logger.warning(f"Connection attempt {attempt+1} failed: {e}. Retrying password reset...")
+            if attempt < 5 and any(
+                k in str(e)
+                for k in (
+                    "Password change required",
+                    "Access Denied",
+                    "Authentication failed",
+                )
+            ):
+                logger.warning(
+                    f"Connection attempt {attempt + 1} failed: {e}. Retrying password reset..."
+                )
                 _apply_aggressive_password_reset(container_name)
                 time.sleep(5)
             else:
-                logger.error(f"Failed to connect to IRIS on attempt {attempt+1}: {e}")
+                logger.error(f"Failed to connect to IRIS on attempt {attempt + 1}: {e}")
                 if attempt == 5:
                     raise
 
@@ -302,6 +382,7 @@ def iris_cursor(iris_connection):
         logger.warning(f"Failed to set default schema SQLUser: {e}")
     yield cursor
     import contextlib
+
     with contextlib.suppress(Exception):
         iris_connection.rollback()
 
@@ -310,13 +391,15 @@ def iris_cursor(iris_connection):
 def clean_test_data(iris_connection):
     """Provides a unique prefix for test data and cleans it up after."""
     import uuid
+
     prefix = f"TEST_{uuid.uuid4().hex[:8]}:"
     yield prefix
     cursor = iris_connection.cursor()
     import contextlib
+
     with contextlib.suppress(Exception):
         for t in ["kg_NodeEmbeddings", "rdf_edges", "rdf_props", "rdf_labels", "nodes"]:
-            col = 'id' if 'Emb' in t else 'node_id' if t == 'nodes' else 's'
+            col = "id" if "Emb" in t else "node_id" if t == "nodes" else "s"
             cursor.execute(f"DELETE FROM {t} WHERE {col} LIKE ?", (f"{prefix}%",))
         iris_connection.commit()
 
@@ -326,10 +409,14 @@ from iris_vector_graph.utils import _split_sql_statements
 
 def pytest_configure(config):
     """Register custom markers."""
-    config.addinivalue_line("markers", "requires_database: mark test as requiring live IRIS database")
+    config.addinivalue_line(
+        "markers", "requires_database: mark test as requiring live IRIS database"
+    )
     config.addinivalue_line("markers", "integration: mark test as integration test")
     config.addinivalue_line("markers", "e2e: mark test as end-to-end test")
-    config.addinivalue_line("markers", "performance: mark test as performance benchmark")
+    config.addinivalue_line(
+        "markers", "performance: mark test as performance benchmark"
+    )
 
 
 def pytest_addoption(parser):
@@ -362,7 +449,11 @@ def pytest_collect_file(parent, file_path):
     ATTACH_PATTERN = re.compile(r'IRISContainer\.attach\(["\']([^"\']+)["\']\)')
     CANONICAL_CONTAINER = "iris-vector-graph-main"
 
-    if file_path.suffix == ".py" and file_path.stat().st_size > 0 and file_path.name != "conftest.py":
+    if (
+        file_path.suffix == ".py"
+        and file_path.stat().st_size > 0
+        and file_path.name != "conftest.py"
+    ):
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
 

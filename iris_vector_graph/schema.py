@@ -725,20 +725,69 @@ LANGUAGE OBJECTSCRIPT
         """
         _native = conn if conn is not None else cursor
 
+        _SKIP_CLASSES = frozenset({"Graph.KG.Edge", "Graph.KG.TestEdge"})
+
         src_dir = str(iris_src_path / "src") if iris_src_path else ""
         deployed = False
         for candidate_dir in [src_dir, "/tmp/src/", "/irisdev/app/iris_src/src/"]:
             if not candidate_dir:
                 continue
             try:
+                for cls_name in _SKIP_CLASSES:
+                    file_path = f"{candidate_dir}/{cls_name.replace('.', '/')}.cls"
+                    try:
+                        _call_classmethod(_native, "%Library.File", "Delete", file_path)
+                    except Exception:
+                        pass
                 _call_classmethod(
                     _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
                 )
-                logger.info("ObjectScript classes loaded from %s", candidate_dir)
+                logger.debug("ObjectScript classes loaded from %s", candidate_dir)
                 deployed = True
                 break
             except Exception:
                 continue
+            try:
+                result = _call_classmethod(
+                    _native, "%Library.File", "FileExists", candidate_dir
+                )
+                if not result:
+                    continue
+                rs_result = _call_classmethod(
+                    _native,
+                    "%Library.File",
+                    "FileSetExecute",
+                    candidate_dir,
+                    "*.cls",
+                    "",
+                    1,
+                )
+                files_loaded = 0
+                for candidate_dir2 in [candidate_dir]:
+                    import_result = _call_classmethod(
+                        _native,
+                        "%SYSTEM.OBJ",
+                        "ImportDir",
+                        candidate_dir,
+                        "*.cls",
+                        "ck",
+                        "",
+                        1,
+                    )
+                    files_loaded += 1
+                if files_loaded > 0:
+                    deployed = True
+                    break
+            except Exception:
+                try:
+                    _call_classmethod(
+                        _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
+                    )
+                    logger.debug("ObjectScript classes loaded from %s", candidate_dir)
+                    deployed = True
+                    break
+                except Exception:
+                    continue
 
         if not deployed:
             logger.warning(
