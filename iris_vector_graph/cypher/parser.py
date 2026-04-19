@@ -111,10 +111,25 @@ class Parser:
         )
 
     def parse(self) -> ast.CypherQuery:
-        """Entry point for parsing a complete query"""
+        graph_context = None
+        if (
+            self.peek().kind == TokenType.IDENTIFIER
+            and self.peek().value
+            and self.peek().value.upper() == "USE"
+            and self.lexer.peek_ahead(1).kind == TokenType.IDENTIFIER
+            and self.lexer.peek_ahead(1).value
+            and self.lexer.peek_ahead(1).value.upper() == "GRAPH"
+        ):
+            self.eat()
+            self.eat()
+            graph_name_tok = self.peek()
+            if graph_name_tok.kind == TokenType.STRING_LITERAL:
+                graph_context = self.eat().value
+            elif graph_name_tok.kind == TokenType.IDENTIFIER:
+                graph_context = self.eat().value
+
         query_parts = []
 
-        # CALL clause — procedure or subquery
         if self.peek().kind == TokenType.CALL:
             if self.lexer.peek_ahead(1).kind == TokenType.LBRACE:
                 pass  # fall through to normal query_part parsing below
@@ -191,6 +206,7 @@ class Parser:
             order_by_clause=order_by,
             skip=skip,
             limit=limit,
+            graph_context=graph_context,
         )
         q.union_queries = union_queries
         return q

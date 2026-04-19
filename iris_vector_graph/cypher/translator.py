@@ -905,6 +905,35 @@ def translate_to_sql(
     # Process ORDER BY BEFORE building SQL to ensure JOINs are included
     order_by_items = preprocess_order_by(cypher_query, context)
 
+    if cypher_query.graph_context:
+        safe_graph = cypher_query.graph_context.replace("'", "''")
+        edge_aliases = [
+            v
+            for v in context.variable_aliases.values()
+            if v and v.startswith("e") and not v.startswith("ES_")
+        ]
+        for ea in edge_aliases:
+            context.where_conditions.append(
+                f"({ea}.graph_id = '{safe_graph}' OR {ea}.graph_id IS NULL)"
+            )
+        context.where_conditions.append(
+            f"(SELECT graph_id FROM {_table('rdf_edges')} WHERE 1=1) = '{safe_graph}'"
+            if False
+            else f"1=1"
+        )
+        graph_filter = f"'{safe_graph}'"
+        for ea in list(context.variable_aliases.values()):
+            if (
+                ea
+                and not ea.startswith("n")
+                and not ea.startswith("l")
+                and not ea.startswith("Stage")
+            ):
+                context.where_conditions.append(
+                    f"({ea}.graph_id = {graph_filter} OR {ea}.graph_id IS NULL)"
+                )
+                break
+
     if is_transactional:
         stmts, all_params = [], []
         for s, p in context.dml_statements:

@@ -409,10 +409,14 @@ class ExistsExpression:
 
 @dataclass(slots=True)
 class CypherQuery:
-    """Root AST node for openCypher query"""
-
     query_parts: List[QueryPart] = field(default_factory=list)
     return_clause: Optional[ReturnClause] = None
+    order_by_clause: Optional[OrderByClause] = None
+    skip: Optional[int] = None
+    limit: Optional[int] = None
+    procedure_call: Optional[CypherProcedureCall] = None
+    union_queries: List[dict] = field(default_factory=list)
+    graph_context: Optional[str] = None
     order_by_clause: Optional[OrderByClause] = None
     skip: Optional[int] = None
     limit: Optional[int] = None
