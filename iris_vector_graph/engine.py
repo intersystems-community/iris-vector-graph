@@ -380,9 +380,19 @@ class IRISGraphEngine:
         if not self.embedder:
             # Try to auto-load a default model if sentence-transformers is available
             try:
-                from sentence_transformers import SentenceTransformer
+                import logging as _logging
+                import transformers as _tf
 
-                self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
+                _tf.logging.set_verbosity_error()
+                _logging.getLogger("safetensors").setLevel(_logging.ERROR)
+                from sentence_transformers import SentenceTransformer
+                import warnings as _w
+
+                with _w.catch_warnings():
+                    _w.simplefilter("ignore")
+                    self.embedder = SentenceTransformer(
+                        "all-MiniLM-L6-v2", local_files_only=False
+                    )
                 logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
             except ImportError:
                 raise RuntimeError(
@@ -1396,6 +1406,60 @@ class IRISGraphEngine:
                     ],
                 ],
             }
+
+        if name == "apoc.meta.data":
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
+            labels = [row[0] for row in cursor.fetchall()]
+            rows = []
+            for label in labels[:50]:
+                cursor.execute(
+                    "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                    [label],
+                )
+                sample = cursor.fetchone()
+                if sample:
+                    cursor.execute(
+                        'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props WHERE s = ? ORDER BY "key"',
+                        [sample[0]],
+                    )
+                    for (prop_name,) in cursor.fetchall():
+                        rows.append(
+                            [label, prop_name, "STRING", "node", False, False, False]
+                        )
+            cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+            for (rel_type,) in cursor.fetchall():
+                rows.append(
+                    [
+                        rel_type,
+                        None,
+                        "RELATIONSHIP",
+                        "relationship",
+                        False,
+                        False,
+                        False,
+                    ]
+                )
+            return {
+                "columns": [
+                    "label",
+                    "property",
+                    "type",
+                    "elementType",
+                    "unique",
+                    "index",
+                    "existence",
+                ],
+                "rows": rows,
+            }
+
+        if name == "apoc.meta.schema":
+            result = self._try_system_procedure(
+                type("P", (), {"procedure_name": "apoc.meta.data"})()
+            )
+            return {"columns": ["value"], "rows": [[result or {}]]}
 
         if name.startswith("apoc."):
             return {"columns": ["value"], "rows": []}
