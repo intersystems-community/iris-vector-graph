@@ -484,6 +484,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.51.0 (2026-04-18)
+- feat: `keys(n)` returns node property keys via rdf_props subquery
+- feat: `range(start, end)` and `range(start, end, step)` generate integer lists
+- feat: `size(list)` uses JSON_ARRAYLENGTH; `head()`, `last()`, `tail()`, `isEmpty()` implemented
+
+
 ### v1.50.3 (2026-04-18)
 - Fix: `initialize_schema()` creates `SQLUser.*` views automatically — no more manual DEFAULT_SCHEMA workaround
 - Fix: `initialize_schema()` detects pre-compiled ObjectScript classes via `%Dictionary` — fast 0.2ms PPR path activates correctly instead of falling back to 1800ms Python path
