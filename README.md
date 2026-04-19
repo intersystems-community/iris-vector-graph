@@ -484,6 +484,11 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.51.1 (2026-04-18)
+- feat: `apoc.meta.data()` returns proper schema columns — LangChain `Neo4jGraph()` connects without error
+- feat: `apoc.meta.schema()` returns schema summary
+
+
 ### v1.51.0 (2026-04-18)
 - feat: `keys(n)` returns node property keys via rdf_props subquery
 - feat: `range(start, end)` and `range(start, end, step)` generate integer lists
