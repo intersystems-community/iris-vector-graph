@@ -838,6 +838,8 @@ class Parser:
                 already_consumed = True
             case TokenType.CONTAINS:
                 op = ast.BooleanOperator.CONTAINS
+            case TokenType.REGEX_MATCH:
+                op = ast.BooleanOperator.REGEX_MATCH
             case TokenType.IN:
                 op = ast.BooleanOperator.IN
             case TokenType.IS:

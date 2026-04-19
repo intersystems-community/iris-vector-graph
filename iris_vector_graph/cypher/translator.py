@@ -1979,6 +1979,8 @@ def translate_boolean_expression(expr, context) -> str:
         return f"{left} LIKE ('%' || {right})"
     if op == ast.BooleanOperator.CONTAINS:
         return f"{left} LIKE ('%' || {right} || '%')"
+    if op == ast.BooleanOperator.REGEX_MATCH:
+        return f"{left} %MATCHES {right}"
     if op == ast.BooleanOperator.IN:
         return f"{left} IN {right}"
     raise ValueError(f"Unsupported operator: {op}")
@@ -2310,8 +2312,22 @@ def translate_expression(expr, context, segment="select") -> str:
         fn, args_exprs = expr.function_name.lower(), expr.arguments
         args = [translate_expression(a, context, segment=segment) for a in args_exprs]
 
-        if fn in ("id", "type"):
+        if fn == "type":
+            if args_exprs and isinstance(args_exprs[0], ast.Variable):
+                var_name = args_exprs[0].name
+                alias = context.variable_aliases.get(var_name, "")
+                if alias:
+                    return f"{alias}.p"
             return args[0] if args else "NULL"
+
+        if fn == "id":
+            if args_exprs and isinstance(args_exprs[0], ast.Variable):
+                var_name = args_exprs[0].name
+                alias = context.variable_aliases.get(var_name, "")
+                if alias:
+                    return f"{alias}.node_id"
+            return args[0] if args else "NULL"
+
         if fn == "labels":
             return labels_subquery(args[0] if args else "NULL")
         if fn == "properties":

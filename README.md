@@ -484,6 +484,14 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.55.3 (2026-04-19)
+- fix: Bug 6 final — SQLCODE -400 on rdf_edges CREATE INDEX now debug-level (ALTER TABLE fallback handles it)
+- fix: type(r) now returns edge predicate column (e.p) not node_id
+- fix: id(n) now returns actual node_id column
+- feat: =~ regex match operator — translates to IRIS %MATCHES
+- fix: N-Quads import captures graph URI from quad's 4th element as graph_id
+
+
 ### v1.55.2 (2026-04-19)
 - fix: Bug 6 (final) — SQLCODE -400 on rdf_edges index creation now falls back to ALTER TABLE ADD INDEX; all standard indexes created even when Graph.KG.Edge class was never compiled
 

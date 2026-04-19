@@ -77,6 +77,8 @@ class TokenType(enum.Enum):
     MINUS = "-"
     STAR = "*"
     SLASH = "/"
+    TILDE = "~"
+    REGEX_MATCH = "=~"
     PERCENT = "%"
     CARET = "^"
     FOREACH = "FOREACH"
@@ -148,7 +150,12 @@ class Lexer:
                 case "^":
                     self._add_token(TokenType.CARET, char)
                 case "=":
-                    self._add_token(TokenType.EQUALS, char)
+                    if self._peek() == "~":
+                        self.cursor += 1
+                        self.column += 1
+                        self._add_token(TokenType.REGEX_MATCH, "=~")
+                    else:
+                        self._add_token(TokenType.EQUALS, char)
                 case "<":
                     if self._peek() == ">":
                         self.cursor += 1
