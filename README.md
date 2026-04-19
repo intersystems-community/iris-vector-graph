@@ -308,6 +308,64 @@ results = engine.plaid_search("colbert_idx", query_tokens, k=10)
 
 ---
 
+## Weighted Shortest Path (Dijkstra)
+
+Finds the minimum-**cost** path between two nodes using Dijkstra's algorithm. Unlike `shortestPath()` which minimizes hops, this minimizes the sum of edge weights.
+
+Edge weights come from the numeric value stored in `^KG("out",0,s,p,o)` — set automatically when you call `create_edge` or `WriteAdjacency` with a weight parameter.
+
+```python
+# Store weighted edges
+engine.create_node("svc:auth")
+engine.create_node("svc:db")
+iris_obj = engine._iris_obj()
+iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
+    "svc:auth", "CALLS", "svc:db", "5.2")  # weight=5.2ms latency
+
+iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
+    "svc:auth", "CALLS", "svc:cache", "0.3")
+iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
+    "svc:cache", "CALLS", "svc:db", "0.8")
+```
+
+```cypher
+-- Minimum-latency path (prefers cache hop at cost 1.1 over direct at cost 5.2)
+CALL ivg.shortestPath.weighted(
+  'svc:auth', 'svc:db',
+  'weight',
+  9999,
+  10
+) YIELD path, totalCost
+RETURN path, totalCost
+```
+
+Returns:
+```json
+{
+  "nodes": ["svc:auth", "svc:cache", "svc:db"],
+  "rels":  ["CALLS", "CALLS"],
+  "costs": [0.3, 0.8],
+  "length": 2,
+  "totalCost": 1.1
+}
+```
+
+**Parameters**: `(from, to, weightProp, maxCost, maxHops)`
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `from` | Source node ID (string or `$param`) | required |
+| `to` | Target node ID | required |
+| `weightProp` | Edge weight property name (currently uses `^KG` value) | `"weight"` |
+| `maxCost` | Stop searching if cost exceeds this | `9999` |
+| `maxHops` | Maximum path length | `10` |
+
+**YIELD columns**: `path` (JSON with nodes/rels/costs/length/totalCost), `totalCost` (float)
+
+Falls back to unit weight (1.0 per hop = equivalent to BFS) when no weight is stored for an edge.
+
+---
+
 ## Cypher
 
 ### Temporal edge filtering (v1.42.0+)
