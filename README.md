@@ -484,6 +484,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.54.1 (2026-04-18)
+- fix: initialize_schema() idempotent — "already has index" suppressed (Bug 1)
+- fix: idx_props_val_ifind (iFind) and idx_edges_confidence (JSON_VALUE) now optional — graceful skip on Community (Bugs 2+3)
+- test: 6 new E2E schema init tests covering idempotency, required tables, optional indexes, core procedures (spec 060)
+
+
 ### v1.54.0 (2026-04-18)
 - fix: materialize_inference respects named graphs — inferred triples use correct graph_id (spec 055)
 - fix: materialize_inference/retract_inference accept graph= parameter

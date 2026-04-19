@@ -247,7 +247,6 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 "idx_labels_s_label",
                 "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)",
             ),
-            # Substring and Functional Indexes
             (
                 "idx_props_val_ifind",
                 "CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic",
@@ -260,17 +259,24 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
 
+        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_edges_confidence"}
+
         status = {}
         for name, sql in indexes:
             try:
                 cursor.execute(sql)
                 status[name] = True
             except Exception as e:
+                err = str(e).lower()
                 if (
-                    "already exists" in str(e).lower()
-                    or "already has" in str(e).lower()
+                    "already exists" in err
+                    or "already has" in err
+                    or "already has index" in err
                 ):
                     status[name] = True
+                elif name in _OPTIONAL_INDEXES:
+                    logger.debug("Optional index %s skipped: %s", name, e)
+                    status[name] = False
                 else:
                     status[name] = False
 
