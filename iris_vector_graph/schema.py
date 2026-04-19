@@ -282,14 +282,46 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
 
         status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
         status["add_graph_id_column"] = GraphSchema.add_graph_id_column(cursor)
+        status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor)
+        status["update_spo_unique_constraint"] = (
+            GraphSchema.update_spo_unique_constraint(cursor)
+        )
 
         return status
+
+    @staticmethod
+    def update_spo_unique_constraint(cursor) -> bool:
+        try:
+            cursor.execute("ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT u_spo")
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE Graph_KG.rdf_edges ADD CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)"
+            )
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                return True
+            return False
+
+    @staticmethod
+    def add_graph_id_index(cursor) -> bool:
+        try:
+            cursor.execute(
+                "CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)"
+            )
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower() or "already has" in str(e).lower():
+                return True
+            return False
 
     @staticmethod
     def add_graph_id_column(cursor) -> bool:
         try:
             cursor.execute(
-                "ALTER TABLE Graph_KG.rdf_edges ADD COLUMN graph_id VARCHAR(256) NULL"
+                "ALTER TABLE Graph_KG.rdf_edges ADD COLUMN graph_id VARCHAR(256) %EXACT NULL"
             )
             return True
         except Exception as e:
@@ -366,6 +398,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
             "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
             "rdf_edges": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
+            "rdf_edges_with_graph": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND (graph_id = ? OR (graph_id IS NULL AND ? IS NULL)))",
             "kg_NodeEmbeddings": "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) SELECT ?, TO_VECTOR(?), ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
         }
         if table not in templates:
