@@ -262,6 +262,8 @@ class Parser:
                 TokenType.DETACH,
             ):
                 clauses.append(self.parse_updating_clause())
+            elif kind == TokenType.FOREACH:
+                clauses.append(self.parse_foreach_clause())
             elif kind == TokenType.WHERE:
                 clauses.append(self.parse_where_clause())
             elif (
@@ -450,6 +452,33 @@ class Parser:
         q.skip = skip_val
         q.limit = limit_val
         return q
+
+    def parse_foreach_clause(self) -> ast.ForeachClause:
+        self.expect(TokenType.FOREACH)
+        self.expect(TokenType.LPAREN)
+        var_tok = self.expect(TokenType.IDENTIFIER)
+        var_name = var_tok.value
+        self.expect(TokenType.IN)
+        source = self.parse_expression()
+        self.expect(TokenType.PIPE)
+        update_clauses = []
+        while self.peek().kind in (
+            TokenType.CREATE,
+            TokenType.DELETE,
+            TokenType.MERGE,
+            TokenType.SET,
+            TokenType.REMOVE,
+            TokenType.DETACH,
+            TokenType.FOREACH,
+        ):
+            if self.peek().kind == TokenType.FOREACH:
+                update_clauses.append(self.parse_foreach_clause())
+            else:
+                update_clauses.append(self.parse_updating_clause())
+        self.expect(TokenType.RPAREN)
+        return ast.ForeachClause(
+            variable=var_name, source=source, update_clauses=update_clauses
+        )
 
     def parse_updating_clause(self) -> ast.UpdatingClause:
         """Parse CREATE, MERGE, DELETE, SET, REMOVE"""
@@ -731,6 +760,8 @@ class Parser:
             ):
                 self.eat()
                 self.eat()
+                if self.peek().kind == TokenType.MATCH:
+                    self.eat()
                 pattern = self.parse_graph_pattern()
                 self.expect(TokenType.RBRACE)
                 return ast.ExistsExpression(pattern=pattern, negated=True)
@@ -750,15 +781,28 @@ class Parser:
         return left
 
     def parse_multiplicative_expression(self) -> Any:
-        left = self.parse_primary_expression()
-        while self.peek().kind in (TokenType.STAR, TokenType.SLASH):
-            op = "*" if self.peek().kind == TokenType.STAR else "/"
+        left = self.parse_power_expression()
+        while self.peek().kind in (TokenType.STAR, TokenType.SLASH, TokenType.PERCENT):
+            if self.peek().kind == TokenType.STAR:
+                op = "*"
+            elif self.peek().kind == TokenType.SLASH:
+                op = "/"
+            else:
+                op = "%"
             self.eat()
-            right = self.parse_primary_expression()
+            right = self.parse_power_expression()
             left = ast.FunctionCall(
                 function_name=f"__arith_{op}", arguments=[left, right]
             )
         return left
+
+    def parse_power_expression(self) -> Any:
+        base = self.parse_primary_expression()
+        if self.peek().kind == TokenType.CARET:
+            self.eat()
+            exp = self.parse_power_expression()
+            return ast.FunctionCall(function_name="__arith_^", arguments=[base, exp])
+        return base
 
     def parse_comparison_expression(self) -> Any:
         left = self.parse_additive_expression()
@@ -836,6 +880,8 @@ class Parser:
 
             if name.lower() == "exists" and self.peek().kind == TokenType.LBRACE:
                 self.eat()
+                if self.peek().kind == TokenType.MATCH:
+                    self.eat()
                 pattern = self.parse_graph_pattern()
                 self.expect(TokenType.RBRACE)
                 return ast.ExistsExpression(pattern=pattern, negated=False)
@@ -937,6 +983,18 @@ class Parser:
             self.eat()
             items = []
             if not self.matches(TokenType.RBRACKET):
+                if self.peek().kind == TokenType.LPAREN:
+                    pattern = self.parse_graph_pattern()
+                    predicate = None
+                    if self.matches(TokenType.WHERE):
+                        predicate = self.parse_expression()
+                    projection = None
+                    if self.matches(TokenType.PIPE):
+                        projection = self.parse_expression()
+                    self.expect(TokenType.RBRACKET)
+                    return ast.PatternComprehension(
+                        pattern=pattern, predicate=predicate, projection=projection
+                    )
                 if (
                     self.peek().kind == TokenType.IDENTIFIER
                     and self.lexer.peek_ahead(1).kind == TokenType.IN

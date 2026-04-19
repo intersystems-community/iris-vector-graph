@@ -861,6 +861,30 @@ def translate_to_sql(
                 translate_unwind_clause(clause, context)
             elif isinstance(clause, ast.SubqueryCall):
                 translate_subquery_call(clause, context, metadata)
+            elif isinstance(clause, ast.ForeachClause):
+                is_transactional = True
+                if isinstance(clause.source, ast.Literal) and isinstance(
+                    clause.source.value, list
+                ):
+                    for item in clause.source.value:
+                        orig_aliases = dict(context.variable_aliases)
+                        context.variable_aliases[clause.variable] = (
+                            "__foreach_literal__"
+                        )
+                        context.foreach_literals = getattr(
+                            context, "foreach_literals", {}
+                        )
+                        context.foreach_literals[clause.variable] = item
+                        for uc in clause.update_clauses:
+                            if isinstance(uc, ast.UpdatingClause):
+                                translate_updating_clause(uc, context, metadata)
+                        context.variable_aliases = orig_aliases
+                        if hasattr(context, "foreach_literals"):
+                            context.foreach_literals.pop(clause.variable, None)
+                else:
+                    for uc in clause.update_clauses:
+                        if isinstance(uc, ast.UpdatingClause):
+                            translate_updating_clause(uc, context, metadata)
             elif isinstance(clause, ast.UpdatingClause):
                 is_transactional = True
                 translate_updating_clause(clause, context, metadata)
@@ -1980,10 +2004,58 @@ def _inline_literal(expr) -> Optional[str]:
 
 def translate_expression(expr, context, segment="select") -> str:
 
+    if isinstance(expr, ast.PatternComprehension):
+        pat = expr.pattern
+        src_node = pat.nodes[0] if pat.nodes else None
+        tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
+        rel = pat.relationships[0] if pat.relationships else None
+
+        n_alias = context.next_alias("pcn")
+        e_alias = context.next_alias("pce")
+        t_alias = context.next_alias("pct")
+
+        pred_type = ""
+        if rel and rel.types:
+            safe_type = rel.types[0].replace("'", "''")
+            pred_type = f" AND {e_alias}.p = '{safe_type}'"
+
+        src_bind = ""
+        if (
+            src_node
+            and src_node.variable
+            and src_node.variable in context.variable_aliases
+        ):
+            src_id = f"{context.variable_aliases[src_node.variable]}.node_id"
+            src_bind = f" AND {e_alias}.s = {src_id}"
+
+        if expr.projection:
+            if rel and rel.variable:
+                context.variable_aliases[rel.variable] = e_alias
+            if tgt_node and tgt_node.variable:
+                context.variable_aliases[tgt_node.variable] = t_alias
+            proj_sql = translate_expression(expr.projection, context, segment="select")
+            if rel and rel.variable:
+                del context.variable_aliases[rel.variable]
+            if tgt_node and tgt_node.variable:
+                del context.variable_aliases[tgt_node.variable]
+        else:
+            proj_sql = f"{t_alias}.node_id"
+
+        return (
+            f"(SELECT JSON_ARRAYAGG({proj_sql}) FROM "
+            f"{_table('rdf_edges')} {e_alias} "
+            f"JOIN {_table('nodes')} {t_alias} ON {t_alias}.node_id = {e_alias}.o_id "
+            f"WHERE 1=1{pred_type}{src_bind})"
+        )
+
     if isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_"):
         op = expr.function_name[len("__arith_") :]
         left = translate_expression(expr.arguments[0], context, segment=segment)
         right = translate_expression(expr.arguments[1], context, segment=segment)
+        if op == "%":
+            return f"MOD({left}, {right})"
+        if op == "^":
+            return f"POWER({left}, {right})"
         return f"({left} {op} {right})"
 
     if isinstance(expr, ast.ListPredicateExpression):

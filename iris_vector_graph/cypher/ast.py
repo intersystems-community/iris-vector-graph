@@ -377,9 +377,23 @@ class CypherProcedureCall:
 
 
 @dataclass(slots=True)
+class ForeachClause:
+    variable: str
+    source: Any
+    update_clauses: List[Any] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class ListComprehension:
     variable: str
     source: Any
+    predicate: Optional[Any] = None
+    projection: Optional[Any] = None
+
+
+@dataclass(slots=True)
+class PatternComprehension:
+    pattern: Any
     predicate: Optional[Any] = None
     projection: Optional[Any] = None
 
