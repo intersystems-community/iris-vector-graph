@@ -484,6 +484,11 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.52.1 (2026-04-18)
+- feat: `engine.import_rdf(path)` — load Turtle (.ttl), N-Triples (.nt), N-Quads (.nq) into the graph
+- Format auto-detected from extension; streaming batch ingest; blank node synthetic IDs; language tags preserved
+
+
 ### v1.52.0 (2026-04-18)
 - feat: `ALL/ANY/NONE/SINGLE(x IN list WHERE ...)` list predicate expressions
 - feat: `[x IN list WHERE pred | proj]` list comprehensions

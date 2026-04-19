@@ -2048,6 +2048,145 @@ class IRISGraphEngine:
             "skipped_edges": skipped_edges,
         }
 
+    def import_rdf(
+        self,
+        path: str,
+        format: Optional[str] = None,
+        batch_size: int = 10000,
+        progress=None,
+    ) -> Dict[str, int]:
+        try:
+            import rdflib
+            from rdflib import (
+                Graph,
+                ConjunctiveGraph,
+                URIRef,
+                Literal as RDFLiteral,
+                BNode,
+            )
+        except ImportError:
+            raise ImportError("import_rdf requires rdflib: pip install rdflib")
+
+        if format is None:
+            ext = path.rsplit(".", 1)[-1].lower()
+            format = {
+                "ttl": "turtle",
+                "nt": "nt",
+                "nq": "nquads",
+                "n3": "n3",
+                "trig": "trig",
+                "jsonld": "json-ld",
+            }.get(ext, "turtle")
+
+        is_quads = format in ("nquads", "trig")
+        if is_quads:
+            g = ConjunctiveGraph()
+        else:
+            g = Graph()
+        g.parse(path, format=format)
+
+        cursor = self.conn.cursor()
+        nodes_inserted = 0
+        edges_inserted = 0
+        props_inserted = 0
+        triple_count = 0
+        blank_prefix = f"_:{abs(hash(path)) % 10**8}:"
+
+        def _node_id(term):
+            if isinstance(term, URIRef):
+                return str(term)
+            if isinstance(term, BNode):
+                return f"{blank_prefix}{term}"
+            return str(term)
+
+        def _ensure_node(nid):
+            try:
+                cursor.execute(
+                    f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [nid]
+                )
+                return True
+            except Exception:
+                return False
+
+        batch_nodes: set = set()
+        batch_edges: List = []
+        batch_props: List = []
+
+        def _flush():
+            nonlocal nodes_inserted, edges_inserted, props_inserted
+            for nid in batch_nodes:
+                if _ensure_node(nid):
+                    nodes_inserted += 1
+            for s, p, o in batch_edges:
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
+                        [s, p, o],
+                    )
+                    edges_inserted += 1
+                except Exception:
+                    pass
+            for s, k, v in batch_props:
+                try:
+                    cursor.execute(
+                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
+                        [s, k, v[:64000]],
+                    )
+                    props_inserted += 1
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            batch_nodes.clear()
+            batch_edges.clear()
+            batch_props.clear()
+
+        triples_iter = g.quads() if is_quads else ((s, p, o, None) for s, p, o in g)
+
+        for s, p, o, graph_ctx in triples_iter:
+            triple_count += 1
+            s_id = _node_id(s)
+            p_str = _node_id(p)
+            batch_nodes.add(s_id)
+
+            if isinstance(o, RDFLiteral):
+                key = p_str.rsplit("/", 1)[-1].rsplit("#", 1)[-1][:128]
+                val = str(o)
+                lang = getattr(o, "language", None)
+                if lang:
+                    batch_props.append((s_id, key, val))
+                    batch_props.append((s_id, f"{key}_lang", lang))
+                else:
+                    batch_props.append((s_id, key, val))
+                props_inserted += 0
+            elif isinstance(o, (URIRef, BNode)):
+                o_id = _node_id(o)
+                batch_nodes.add(o_id)
+                batch_edges.append((s_id, p_str, o_id))
+            else:
+                batch_props.append((s_id, p_str[:128], str(o)[:64000]))
+
+            if triple_count % batch_size == 0:
+                _flush()
+                if progress:
+                    progress(triple_count, 0)
+
+        _flush()
+
+        try:
+            self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
+        except Exception as e:
+            logger.warning(f"import_rdf BuildKG failed (^KG may be stale): {e}")
+
+        return {
+            "triples": triple_count,
+            "nodes": nodes_inserted,
+            "edges": edges_inserted,
+            "properties": props_inserted,
+        }
+
     def load_obo(
         self,
         path_or_url: str,
