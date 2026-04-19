@@ -1203,9 +1203,33 @@ class IRISGraphEngine:
             }
 
         if name == "db.schema.reltypeproperties":
+            cursor = self.conn.cursor()
+            rows = []
+            try:
+                cursor.execute(
+                    "SELECT DISTINCT p FROM Graph_KG.rdf_edges WHERE p IS NOT NULL ORDER BY p"
+                )
+                rel_types = [r[0] for r in cursor.fetchall()]
+                for rel_type in rel_types[:50]:
+                    props = {"weight"}
+                    cursor.execute(
+                        "SELECT TOP 1 qualifiers FROM Graph_KG.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
+                        [rel_type],
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        try:
+                            keys = list(json.loads(str(row[0])).keys())
+                            props.update(keys[:20])
+                        except Exception:
+                            pass
+                    for prop in sorted(props):
+                        rows.append([rel_type, prop, ["STRING"], False])
+            except Exception as e:
+                logger.debug("relTypeProperties query failed: %s", e)
             return {
                 "columns": ["relType", "propertyName", "propertyTypes", "mandatory"],
-                "rows": [],
+                "rows": rows,
             }
 
         if name == "dbms.components":
@@ -1970,6 +1994,7 @@ class IRISGraphEngine:
         self,
         edges: List[Dict[str, Any]],
         disable_indexes: bool = True,
+        graph: Optional[str] = None,
     ) -> int:
         """
         Bulk create edges using high-performance batch SQL.
@@ -1994,13 +2019,25 @@ class IRISGraphEngine:
 
             edge_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
             edge_params = []
-            for e in edges:
-                if all(k in e for k in ("source_id", "predicate", "target_id")):
-                    # params: [s, p, o_id, s, p, o_id] for WHERE NOT EXISTS
-                    s, p, o = e["source_id"], e["predicate"], e["target_id"]
-                    edge_params.append([s, p, o, s, p, o])
-
-            cursor.executemany(edge_sql, edge_params)
+            has_graph = graph is not None or any(e.get("graph") for e in edges)
+            if has_graph:
+                graph_sql = GraphSchema.get_bulk_insert_sql("rdf_edges_with_graph")
+                plain_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
+                for e in edges:
+                    if all(k in e for k in ("source_id", "predicate", "target_id")):
+                        s, p, o = e["source_id"], e["predicate"], e["target_id"]
+                        g = e.get("graph", graph)
+                        if g is not None:
+                            edge_params.append([s, p, o, g, s, p, o, g, g])
+                            cursor.execute(graph_sql, [s, p, o, g, s, p, o, g, g])
+                        else:
+                            cursor.execute(plain_sql, [s, p, o, s, p, o])
+            else:
+                for e in edges:
+                    if all(k in e for k in ("source_id", "predicate", "target_id")):
+                        s, p, o = e["source_id"], e["predicate"], e["target_id"]
+                        edge_params.append([s, p, o, s, p, o])
+                cursor.executemany(edge_sql, edge_params)
 
             self.conn.commit()
             return len(edge_params)
@@ -2150,7 +2187,8 @@ class IRISGraphEngine:
         def _ensure_node(nid):
             try:
                 cursor.execute(
-                    f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [nid]
+                    f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+                    [nid, nid],
                 )
                 return True
             except Exception:
@@ -2167,10 +2205,16 @@ class IRISGraphEngine:
                     nodes_inserted += 1
             for s, p, o in batch_edges:
                 try:
-                    cursor.execute(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
-                        [s, p, o],
-                    )
+                    if graph:
+                        cursor.execute(
+                            f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
+                            [s, p, o, graph, s, p, o, graph],
+                        )
+                    else:
+                        cursor.execute(
+                            f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id IS NULL)",
+                            [s, p, o, s, p, o],
+                        )
                     edges_inserted += 1
                 except Exception:
                     pass
@@ -3942,6 +3986,7 @@ class IRISGraphEngine:
         weight: float = 1.0,
         attrs: dict = None,
         upsert: bool = False,
+        graph: Optional[str] = None,
     ) -> bool:
         try:
             ts = int(timestamp) if timestamp is not None else ""
@@ -3957,17 +4002,77 @@ class IRISGraphEngine:
                 attrs_json,
                 1 if upsert else 0,
             )
+            if graph is not None:
+                cursor = self.conn.cursor()
+                for nid in [source, target]:
+                    try:
+                        cursor.execute(
+                            "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
+                            [nid, nid],
+                        )
+                    except Exception:
+                        pass
+                try:
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
+                        [
+                            source,
+                            predicate,
+                            target,
+                            graph,
+                            source,
+                            predicate,
+                            target,
+                            graph,
+                        ],
+                    )
+                    self.conn.commit()
+                except Exception as e:
+                    logger.debug("create_edge_temporal rdf_edges insert skipped: %s", e)
             return True
         except Exception as e:
             logger.warning(f"create_edge_temporal failed: {e}")
             return False
 
-    def bulk_create_edges_temporal(self, edges: list, upsert: bool = False) -> int:
+    def bulk_create_edges_temporal(
+        self, edges: list, upsert: bool = False, graph: Optional[str] = None
+    ) -> int:
         batch_json = json.dumps(edges)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0
         )
-        return int(result)
+        count = int(result)
+        if graph is not None or any(e.get("graph") for e in edges):
+            cursor = self.conn.cursor()
+            for e in edges:
+                s = e.get("s") or e.get("source_id", "")
+                p = e.get("p") or e.get("predicate", "")
+                o = e.get("o") or e.get("target_id", "")
+                g = e.get("graph", graph)
+                if not (s and p and o and g):
+                    continue
+                for nid in [s, o]:
+                    try:
+                        cursor.execute(
+                            "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
+                            [nid, nid],
+                        )
+                    except Exception:
+                        pass
+                try:
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
+                        [s, p, o, g, s, p, o, g],
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "bulk_create_edges_temporal rdf_edges insert skipped: %s", e
+                    )
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+        return count
 
     def get_edges_in_window(
         self,

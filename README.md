@@ -484,6 +484,17 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.55.0 (2026-04-19)
+- feat: import_rdf/bulk_create_edges/create_edge_temporal/bulk_create_edges_temporal all accept graph= parameter
+- feat: USE GRAPH filtering now strict (exact graph_id match, no NULL leakage)
+- feat: UNIQUE constraint updated to (s,p,o_id,graph_id) allowing same triple in multiple named graphs
+- feat: db.schema.relTypeProperties() returns actual relationship property names
+- fix: import_rdf _ensure_node uses WHERE NOT EXISTS (no duplicate key errors)
+- fix: import_rdf edge INSERT scoped to graph_id in WHERE NOT EXISTS check
+- fix: graph_id column uses %EXACT for case-sensitive storage
+- test: 8 E2E tests proving fail-before/pass-after for all 5 FRs (spec 061)
+
+
 ### v1.54.1 (2026-04-18)
 - fix: initialize_schema() idempotent — "already has index" suppressed (Bug 1)
 - fix: idx_props_val_ifind (iFind) and idx_edges_confidence (JSON_VALUE) now optional — graceful skip on Community (Bugs 2+3)

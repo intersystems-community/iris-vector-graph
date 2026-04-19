@@ -127,6 +127,10 @@ class TranslationContext:
             set() if parent is None else parent.scalar_variables.copy()
         )
 
+        self.graph_context: Optional[str] = (
+            None if parent is None else parent.graph_context
+        )
+
         # Named path registry: path variable → AST NamedPath + SQL aliases
         self.named_paths: Dict[str, ast.NamedPath] = (
             {} if parent is None else parent.named_paths.copy()
@@ -822,6 +826,7 @@ def translate_to_sql(
     context = TranslationContext()
     context.input_params = params or {}
     context._engine = engine
+    context.graph_context = getattr(cypher_query, "graph_context", None)
     metadata = QueryMetadata()
     context._metadata = metadata
     is_transactional = False
@@ -937,14 +942,8 @@ def translate_to_sql(
             if v and v.startswith("e") and not v.startswith("ES_")
         ]
         for ea in edge_aliases:
-            context.where_conditions.append(
-                f"({ea}.graph_id = '{safe_graph}' OR {ea}.graph_id IS NULL)"
-            )
-        context.where_conditions.append(
-            f"(SELECT graph_id FROM {_table('rdf_edges')} WHERE 1=1) = '{safe_graph}'"
-            if False
-            else f"1=1"
-        )
+            context.where_conditions.append(f"{ea}.graph_id = '{safe_graph}'")
+        context.where_conditions.append(f"1=1")
         graph_filter = f"'{safe_graph}'"
         for ea in list(context.variable_aliases.values()):
             if (
@@ -953,9 +952,7 @@ def translate_to_sql(
                 and not ea.startswith("l")
                 and not ea.startswith("Stage")
             ):
-                context.where_conditions.append(
-                    f"({ea}.graph_id = {graph_filter} OR {ea}.graph_id IS NULL)"
-                )
+                context.where_conditions.append(f"{ea}.graph_id = {graph_filter}")
                 break
 
     if is_transactional:
@@ -1824,7 +1821,7 @@ def translate_relationship_pattern(
         else:
             src_id_sql = None
 
-        if src_id_sql is not None:
+        if src_id_sql is not None and not context.graph_context:
             derived = (
                 f"(\n"
                 f"SELECT j.s, j.p, j.o_id, j.w\n"
