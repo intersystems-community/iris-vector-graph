@@ -268,14 +268,44 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 status[name] = True
             except Exception as e:
                 err = str(e).lower()
+                sqlcode = ""
+                import re as _re
+
+                m = _re.search(r"sqlcode.*?<(-?\d+)>", err)
+                if m:
+                    sqlcode = m.group(1)
+
                 if (
                     "already exists" in err
                     or "already has" in err
                     or "already has index" in err
                 ):
                     status[name] = True
-                elif name in _OPTIONAL_INDEXES:
-                    logger.debug("Optional index %s skipped: %s", name, e)
+                elif sqlcode == "-400" and "rdf_edges" in sql.lower():
+                    alt_sql = GraphSchema._create_index_alter_table(name, sql)
+                    if alt_sql:
+                        try:
+                            cursor.execute(alt_sql)
+                            status[name] = True
+                            continue
+                        except Exception as e2:
+                            e2_err = str(e2).lower()
+                            if "already exists" in e2_err or "already has" in e2_err:
+                                status[name] = True
+                            else:
+                                logger.debug(
+                                    "Index %s ALTER TABLE fallback failed: %s", name, e2
+                                )
+                                status[name] = False
+                    else:
+                        logger.debug(
+                            "Index %s skipped (-400, no ALTER TABLE equivalent): %s",
+                            name,
+                            e,
+                        )
+                        status[name] = False
+                elif name in _OPTIONAL_INDEXES or sqlcode == "-400":
+                    logger.debug("Optional/fatal index %s skipped: %s", name, e)
                     status[name] = False
                 else:
                     status[name] = False
@@ -316,6 +346,20 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             if "already exists" in str(e).lower() or "already has" in str(e).lower():
                 return True
             return False
+
+    @staticmethod
+    def _create_index_alter_table(name: str, create_sql: str) -> Optional[str]:
+        import re as _re
+
+        m = _re.match(
+            r"CREATE\s+INDEX\s+(\w+)\s+ON\s+([\w\.]+)\s*\(([^)]+)\)",
+            create_sql.strip(),
+            _re.IGNORECASE,
+        )
+        if not m:
+            return None
+        idx_name, table, cols = m.group(1), m.group(2), m.group(3)
+        return f"ALTER TABLE {table} ADD INDEX {idx_name} ({cols})"
 
     @staticmethod
     def add_graph_id_column(cursor) -> bool:
