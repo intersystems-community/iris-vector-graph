@@ -484,6 +484,13 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.53.1 (2026-04-18)
+- feat: `engine.materialize_inference(rules="rdfs"|"owl")` — transitive subClassOf/subPropertyOf closure, rdf:type inheritance, domain/range, OWL equivalentClass/inverseOf/TransitiveProperty/SymmetricProperty
+- feat: `engine.retract_inference()` — removes all inferred triples, restoring asserted-only graph
+- feat: `import_rdf(path, infer="rdfs")` — runs inference automatically after load
+- Inferred triples tagged `qualifiers={"inferred":true}` for easy exclusion
+
+
 ### v1.53.0 (2026-04-18)
 - feat: Named graphs — `create_edge(graph='name')`, `list_graphs()`, `drop_graph(name)`
 - feat: `USE GRAPH 'name' MATCH (a)-[r]->(b)` Cypher syntax adds graph_id filter

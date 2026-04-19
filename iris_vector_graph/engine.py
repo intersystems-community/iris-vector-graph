@@ -2078,6 +2078,7 @@ class IRISGraphEngine:
         format: Optional[str] = None,
         batch_size: int = 10000,
         progress=None,
+        infer=False,
     ) -> Dict[str, int]:
         try:
             import rdflib
@@ -2204,12 +2205,172 @@ class IRISGraphEngine:
         except Exception as e:
             logger.warning(f"import_rdf BuildKG failed (^KG may be stale): {e}")
 
-        return {
+        result = {
             "triples": triple_count,
             "nodes": nodes_inserted,
             "edges": edges_inserted,
             "properties": props_inserted,
         }
+
+        if infer:
+            rules = infer if isinstance(infer, str) else "rdfs"
+            inf_result = self.materialize_inference(rules=rules)
+            result["inferred"] = inf_result.get("inferred", 0)
+
+        return result
+
+    def materialize_inference(self, rules: str = "rdfs") -> Dict[str, int]:
+        RDFS_SUBCLASSOF = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
+        RDFS_SUBPROPOF = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf"
+        RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        RDFS_DOMAIN = "http://www.w3.org/2000/01/rdf-schema#domain"
+        RDFS_RANGE = "http://www.w3.org/2000/01/rdf-schema#range"
+        OWL_EQUIV_CLASS = "http://www.w3.org/2002/07/owl#equivalentClass"
+        OWL_EQUIV_PROP = "http://www.w3.org/2002/07/owl#equivalentProperty"
+        OWL_INVERSE = "http://www.w3.org/2002/07/owl#inverseOf"
+        OWL_SAME_AS = "http://www.w3.org/2002/07/owl#sameAs"
+        OWL_TRANS_PROP = "http://www.w3.org/2002/07/owl#TransitiveProperty"
+        OWL_SYM_PROP = "http://www.w3.org/2002/07/owl#SymmetricProperty"
+        INFERRED_JSON = '{"inferred":true}'
+
+        cursor = self.conn.cursor()
+        inferred_count = 0
+
+        def _fetch_edges(predicate):
+            cursor.execute(
+                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ? "
+                "AND (qualifiers IS NULL OR JSON_VALUE(qualifiers, '$.inferred') IS NULL)",
+                [predicate],
+            )
+            return set((r[0], r[1]) for r in cursor.fetchall())
+
+        def _exists(s, p, o):
+            cursor.execute(
+                "SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? FETCH FIRST 1 ROWS ONLY",
+                [s, p, o],
+            )
+            return cursor.fetchone() is not None
+
+        def _insert_inferred(triples):
+            nonlocal inferred_count
+            for s, p, o in triples:
+                if not _exists(s, p, o):
+                    try:
+                        cursor.execute(
+                            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                            [s, p, o, INFERRED_JSON],
+                        )
+                        inferred_count += 1
+                    except Exception:
+                        pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+
+        def _transitive_closure(direct_edges):
+            closure = set(direct_edges)
+            changed = True
+            while changed:
+                changed = False
+                new = set()
+                for a, b in closure:
+                    for b2, c in closure:
+                        if b == b2 and (a, c) not in closure and a != c:
+                            new.add((a, c))
+                if new:
+                    closure |= new
+                    changed = True
+            return closure - direct_edges
+
+        subclass_direct = _fetch_edges(RDFS_SUBCLASSOF)
+        subprop_direct = _fetch_edges(RDFS_SUBPROPOF)
+
+        inferred = set()
+        inferred |= {
+            (a, RDFS_SUBCLASSOF, c) for a, c in _transitive_closure(subclass_direct)
+        }
+        inferred |= {
+            (a, RDFS_SUBPROPOF, c) for a, c in _transitive_closure(subprop_direct)
+        }
+
+        rdf_type_edges = _fetch_edges(RDF_TYPE)
+        all_subclass = subclass_direct | {
+            (a, c) for a, _, c in inferred if _ == RDFS_SUBCLASSOF
+        }
+        for x, cls_a in list(rdf_type_edges):
+            for a, b in all_subclass:
+                if a == cls_a:
+                    inferred.add((x, RDF_TYPE, b))
+
+        domain_edges = _fetch_edges(RDFS_DOMAIN)
+        range_edges = _fetch_edges(RDFS_RANGE)
+        all_predicate_edges = {}
+        cursor.execute(
+            "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE p NOT IN (?, ?, ?, ?, ?) LIMIT 50000",
+            [RDFS_SUBCLASSOF, RDFS_SUBPROPOF, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE],
+        )
+        for s, p, o in cursor.fetchall():
+            all_predicate_edges.setdefault(p, []).append((s, o))
+
+        for p, domain in domain_edges:
+            for s, _ in all_predicate_edges.get(p, []):
+                inferred.add((s, RDF_TYPE, domain))
+
+        for p, rng in range_edges:
+            for _, o in all_predicate_edges.get(p, []):
+                inferred.add((o, RDF_TYPE, rng))
+
+        if rules == "owl":
+            equiv_class = _fetch_edges(OWL_EQUIV_CLASS)
+            for a, b in equiv_class:
+                inferred.add((a, RDFS_SUBCLASSOF, b))
+                inferred.add((b, RDFS_SUBCLASSOF, a))
+
+            equiv_prop = _fetch_edges(OWL_EQUIV_PROP)
+            for p, q in equiv_prop:
+                inferred.add((p, RDFS_SUBPROPOF, q))
+                inferred.add((q, RDFS_SUBPROPOF, p))
+
+            inverse_edges = _fetch_edges(OWL_INVERSE)
+            for p, q in inverse_edges:
+                for x, y in all_predicate_edges.get(p, []):
+                    inferred.add((y, q, x))
+                for x, y in all_predicate_edges.get(q, []):
+                    inferred.add((y, p, x))
+
+            cursor.execute(
+                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?",
+                [RDF_TYPE, OWL_TRANS_PROP],
+            )
+            trans_props = {r[0] for r in cursor.fetchall()}
+            for tp in trans_props:
+                tp_edges = _fetch_edges(tp)
+                inferred |= {(a, tp, c) for a, c in _transitive_closure(tp_edges)}
+
+            cursor.execute(
+                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?",
+                [RDF_TYPE, OWL_SYM_PROP],
+            )
+            sym_props = {r[0] for r in cursor.fetchall()}
+            for sp in sym_props:
+                for x, y in all_predicate_edges.get(sp, []):
+                    inferred.add((y, sp, x))
+
+        _insert_inferred(inferred)
+        return {"inferred": inferred_count}
+
+    def retract_inference(self) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true'"
+        )
+        deleted = cursor.rowcount or 0
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        return deleted
 
     def load_obo(
         self,
