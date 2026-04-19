@@ -247,10 +247,11 @@ def translate_procedure_call(
 
     Supported procedures:
     - ivg.vector.search(label, property, query_input, limit [, options])
-    - ivg.neighbors(source_node_or_list, predicate, direction)
-    - ivg.ppr(seed_node_or_list, alpha, max_iterations)
-    - ivg.bm25.search(name, query, k)
-    - ivg.ivf.search(name, query_vec, k, nprobe)
+     - ivg.neighbors(source_node_or_list, predicate, direction)
+     - ivg.ppr(seed_node_or_list, alpha, max_iterations)
+     - ivg.bm25.search(name, query, k)
+     - ivg.ivf.search(name, query_vec, k, nprobe)
+     - ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops)
     """
     name = proc.procedure_name
     if name == "ivg.vector.search":
@@ -263,9 +264,11 @@ def translate_procedure_call(
         _translate_bm25_search(proc, context)
     elif name == "ivg.ivf.search":
         _translate_ivf_search(proc, context)
+    elif name == "ivg.shortestpath.weighted" or name == "ivg.shortestPath.weighted":
+        _translate_weighted_shortest_path(proc, context)
     else:
         raise ValueError(
-            f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search"
+            f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted"
         )
 
 
@@ -651,6 +654,66 @@ def _translate_ivf_search(
         context.variable_aliases[item] = "IVF"
     if "score" in proc.yield_items:
         context.scalar_variables.add("score")
+
+
+def _translate_weighted_shortest_path(
+    proc: ast.CypherProcedureCall, context: TranslationContext
+) -> None:
+    args = proc.arguments
+    if len(args) < 2:
+        raise ValueError(
+            "ivg.shortestPath.weighted requires at least 2 arguments: from, to"
+        )
+
+    from_id = _resolve_arg(args[0], context, "ivg.shortestPath.weighted")
+    to_id = _resolve_arg(args[1], context, "ivg.shortestPath.weighted")
+    weight_prop = (
+        str(_resolve_arg(args[2], context, "ivg.shortestPath.weighted"))
+        if len(args) > 2
+        else "weight"
+    )
+    max_cost = (
+        float(_resolve_arg(args[3], context, "ivg.shortestPath.weighted"))
+        if len(args) > 3
+        else 9999.0
+    )
+    max_hops = (
+        int(_resolve_arg(args[4], context, "ivg.shortestPath.weighted"))
+        if len(args) > 4
+        else 10
+    )
+    direction = (
+        str(_resolve_arg(args[5], context, "ivg.shortestPath.weighted"))
+        if len(args) > 5
+        else "out"
+    )
+
+    if not isinstance(from_id, str) or not isinstance(to_id, str):
+        raise ValueError(
+            "ivg.shortestPath.weighted: from and to must be string literals or $param"
+        )
+
+    context.var_length_paths.append(
+        {
+            "weighted": True,
+            "src_id_param": from_id
+            if not isinstance(from_id, str) or from_id.startswith("$")
+            else f"'{from_id}'",
+            "dst_id_param": to_id
+            if not isinstance(to_id, str) or to_id.startswith("$")
+            else f"'{to_id}'",
+            "weight_prop": weight_prop,
+            "max_cost": max_cost,
+            "max_hops": max_hops,
+            "direction": direction,
+            "return_path_funcs": list(proc.yield_items),
+        }
+    )
+
+    for item in proc.yield_items:
+        if item in ("path", "totalCost", "totalcost", "node"):
+            context.variable_aliases[item] = "WS"
+            context.scalar_variables.add(item)
 
 
 _TEMPORAL_TS_OPS = {
