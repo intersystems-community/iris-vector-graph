@@ -484,6 +484,14 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.52.0 (2026-04-18)
+- feat: `ALL/ANY/NONE/SINGLE(x IN list WHERE ...)` list predicate expressions
+- feat: `[x IN list WHERE pred | proj]` list comprehensions
+- feat: `reduce(acc = init, x IN list | body)` reduce expressions
+- feat: `filter()/extract()` legacy list functions as aliases
+- feat: Arithmetic operators `+`, `-`, `*`, `/` in Cypher expressions
+
+
 ### v1.51.1 (2026-04-18)
 - feat: `apoc.meta.data()` returns proper schema columns — LangChain `Neo4jGraph()` connects without error
 - feat: `apoc.meta.schema()` returns schema summary

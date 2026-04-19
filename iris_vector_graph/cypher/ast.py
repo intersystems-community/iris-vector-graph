@@ -14,8 +14,10 @@ from enum import Enum
 # Enums
 # ==============================================================================
 
+
 class Direction(Enum):
     """Direction for relationship traversal"""
+
     OUTGOING = "OUTGOING"
     INCOMING = "INCOMING"
     BOTH = "BOTH"
@@ -23,6 +25,7 @@ class Direction(Enum):
 
 class BooleanOperator(Enum):
     """Boolean operators for WHERE clause"""
+
     AND = "AND"
     OR = "OR"
     NOT = "NOT"
@@ -45,12 +48,14 @@ class BooleanOperator(Enum):
 # Graph Pattern Elements
 # ==============================================================================
 
+
 @dataclass(slots=True)
 class NodePattern:
     """
     Node pattern in MATCH clause.
     Example: (p:Protein {id: 'PROTEIN:TP53'})
     """
+
     variable: Optional[str] = None
     labels: List[str] = field(default_factory=list)
     properties: Dict[str, Any] = field(default_factory=dict)
@@ -79,6 +84,7 @@ class RelationshipPattern:
     Relationship pattern in MATCH clause.
     Example: -[:INTERACTS_WITH*1..2]->
     """
+
     types: List[str] = field(default_factory=list)
     direction: Direction = Direction.BOTH
     variable: Optional[str] = None
@@ -89,6 +95,7 @@ class RelationshipPattern:
 @dataclass(slots=True)
 class GraphPattern:
     """Complete graph pattern (nodes + relationships)"""
+
     nodes: List[NodePattern] = field(default_factory=list)
     relationships: List[RelationshipPattern] = field(default_factory=list)
 
@@ -110,9 +117,11 @@ class NamedPath:
 # Expressions and Clauses
 # ==============================================================================
 
+
 @dataclass(slots=True)
 class PropertyReference:
     """Reference to a node/relationship property (e.g., p.name)"""
+
     variable: str
     property_name: str
 
@@ -120,47 +129,78 @@ class PropertyReference:
 @dataclass(slots=True)
 class Literal:
     """Literal value (string, number, boolean, null)"""
+
     value: Any
 
 
 @dataclass(slots=True)
 class Variable:
     """Variable reference (e.g., p, r, m)"""
+
     name: str
 
 
 @dataclass(slots=True)
 class AggregationFunction:
     """Aggregation function (count, sum, avg, collect, etc.)"""
+
     function_name: str
-    argument: Optional[Union['BooleanExpression', 'PropertyReference', 'Variable', 'Literal', 'FunctionCall']] = None
+    argument: Optional[
+        Union[
+            "BooleanExpression",
+            "PropertyReference",
+            "Variable",
+            "Literal",
+            "FunctionCall",
+        ]
+    ] = None
     distinct: bool = False
 
 
 @dataclass(slots=True)
 class FunctionCall:
     """Function call (id, type, labels, etc.)"""
+
     function_name: str
-    arguments: List[Union['BooleanExpression', 'PropertyReference', 'Variable', 'Literal', 'FunctionCall']]
+    arguments: List[
+        Union[
+            "BooleanExpression",
+            "PropertyReference",
+            "Variable",
+            "Literal",
+            "FunctionCall",
+        ]
+    ]
 
 
 @dataclass(slots=True)
 class BooleanExpression:
     """Boolean expression in WHERE clause (recursive)"""
-    operator: BooleanOperator
-    operands: List[Union['BooleanExpression', 'PropertyReference', 'Literal', 'Variable', 'AggregationFunction', 'FunctionCall']]
 
+    operator: BooleanOperator
+    operands: List[
+        Union[
+            "BooleanExpression",
+            "PropertyReference",
+            "Literal",
+            "Variable",
+            "AggregationFunction",
+            "FunctionCall",
+        ]
+    ]
 
 
 @dataclass(slots=True)
 class WhereClause:
     """WHERE clause with filter expression"""
+
     expression: BooleanExpression
 
 
 @dataclass(slots=True)
 class MatchClause:
     """MATCH clause with one or more patterns"""
+
     patterns: List[GraphPattern]
     named_paths: List[NamedPath] = field(default_factory=list)
     optional: bool = False
@@ -169,13 +209,22 @@ class MatchClause:
 @dataclass(slots=True)
 class ReturnItem:
     """Single item in RETURN or WITH clause"""
-    expression: Union[PropertyReference, Variable, AggregationFunction, Literal, BooleanExpression, FunctionCall]
+
+    expression: Union[
+        PropertyReference,
+        Variable,
+        AggregationFunction,
+        Literal,
+        BooleanExpression,
+        FunctionCall,
+    ]
     alias: Optional[str] = None
 
 
 @dataclass(slots=True)
 class WithClause:
     """WITH clause for chaining queries"""
+
     items: List[ReturnItem]
     distinct: bool = False
     where_clause: Optional[WhereClause] = None
@@ -184,55 +233,74 @@ class WithClause:
 @dataclass(slots=True)
 class UpdateItem:
     """Base class for updating items (SET, REMOVE)"""
+
     pass
+
 
 @dataclass(slots=True)
 class SetItem(UpdateItem):
     """SET item (property update or label addition)"""
+
     expression: Union[PropertyReference, Variable]
-    value: Any # For SET n.prop = value or SET n:Label
+    value: Any  # For SET n.prop = value or SET n:Label
+
 
 @dataclass(slots=True)
 class RemoveItem(UpdateItem):
     """REMOVE item (property or label removal)"""
+
     expression: Union[PropertyReference, Variable]
+
 
 @dataclass(slots=True)
 class UpdatingClause:
     """Base class for clauses that update the graph"""
+
     pass
+
 
 @dataclass(slots=True)
 class CreateClause(UpdatingClause):
     """CREATE clause"""
+
     pattern: GraphPattern
+
 
 @dataclass(slots=True)
 class DeleteClause(UpdatingClause):
     """DELETE clause"""
+
     expressions: List[Variable]
     detach: bool = False
+
 
 @dataclass(slots=True)
 class MergeAction:
     """ON CREATE or ON MATCH action for MERGE"""
+
     items: List[UpdateItem]
+
 
 @dataclass(slots=True)
 class MergeClause(UpdatingClause):
     """MERGE clause"""
+
     pattern: GraphPattern
     on_create: Optional[MergeAction] = None
     on_match: Optional[MergeAction] = None
 
+
 @dataclass(slots=True)
 class SetClause(UpdatingClause):
     """SET clause"""
+
     items: List[SetItem]
+
 
 @dataclass(slots=True)
 class RemoveClause(UpdatingClause):
     """REMOVE clause"""
+
     items: List[RemoveItem]
 
 
@@ -241,35 +309,44 @@ class CaseWhenClause:
     condition: Any
     result: Any
 
+
 @dataclass(slots=True)
 class CaseExpression:
-    when_clauses: List['CaseWhenClause']
+    when_clauses: List["CaseWhenClause"]
     else_result: Optional[Any] = None
     test_expression: Optional[Any] = None
+
 
 @dataclass(slots=True)
 class UnwindClause:
     """UNWIND clause for collection expansion"""
+
     expression: Union[Variable, Literal, FunctionCall]
     alias: str
 
+
 @dataclass(slots=True)
 class SubqueryCall:
-    inner_query: 'CypherQuery'
+    inner_query: "CypherQuery"
     import_variables: List[str] = field(default_factory=list)
     in_transactions: bool = False
     transactions_batch_size: Optional[int] = None
 
+
 @dataclass(slots=True)
 class QueryPart:
     """A stage in a multi-stage query (sequence of clauses)"""
-    clauses: List[Union[MatchClause, UnwindClause, UpdatingClause, WhereClause, 'SubqueryCall']] = field(default_factory=list)
+
+    clauses: List[
+        Union[MatchClause, UnwindClause, UpdatingClause, WhereClause, "SubqueryCall"]
+    ] = field(default_factory=list)
     with_clause: Optional[WithClause] = None
 
 
 @dataclass(slots=True)
 class ReturnClause:
     """Final projection of the query"""
+
     items: List[ReturnItem]
     distinct: bool = False
 
@@ -277,6 +354,7 @@ class ReturnClause:
 @dataclass(slots=True)
 class OrderByItem:
     """Single item in ORDER BY clause"""
+
     expression: Union[PropertyReference, Variable]
     ascending: bool = True
 
@@ -284,12 +362,14 @@ class OrderByItem:
 @dataclass(slots=True)
 class OrderByClause:
     """ORDER BY clause"""
+
     items: List[OrderByItem]
 
 
 @dataclass(slots=True)
 class CypherProcedureCall:
     """Custom procedure call (CALL clause)"""
+
     procedure_name: str
     arguments: List[Union[Literal, Variable, PropertyReference]]
     yield_items: List[str] = field(default_factory=list)
@@ -297,14 +377,40 @@ class CypherProcedureCall:
 
 
 @dataclass(slots=True)
+class ListComprehension:
+    variable: str
+    source: Any
+    predicate: Optional[Any] = None
+    projection: Optional[Any] = None
+
+
+@dataclass(slots=True)
+class ListPredicateExpression:
+    quantifier: str
+    variable: str
+    source: Any
+    predicate: Any
+
+
+@dataclass(slots=True)
+class ReduceExpression:
+    accumulator: str
+    init: Any
+    variable: str
+    source: Any
+    body: Any
+
+
+@dataclass(slots=True)
 class ExistsExpression:
-    pattern: 'GraphPattern'
+    pattern: "GraphPattern"
     negated: bool = False
 
 
 @dataclass(slots=True)
 class CypherQuery:
     """Root AST node for openCypher query"""
+
     query_parts: List[QueryPart] = field(default_factory=list)
     return_clause: Optional[ReturnClause] = None
     order_by_clause: Optional[OrderByClause] = None
@@ -315,8 +421,10 @@ class CypherQuery:
 
     def __post_init__(self):
         if not self.query_parts and not self.procedure_call:
-            raise ValueError("Query must have at least one MATCH/WITH stage or CALL clause")
+            raise ValueError(
+                "Query must have at least one MATCH/WITH stage or CALL clause"
+            )
         if not self.return_clause and not self.procedure_call:
-            # RETURN is not required if there's a standalone procedure call, 
+            # RETURN is not required if there's a standalone procedure call,
             # but usually Cypher expects RETURN.
             pass

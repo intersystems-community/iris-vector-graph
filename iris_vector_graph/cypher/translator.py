@@ -1951,6 +1951,129 @@ def _inline_literal(expr) -> Optional[str]:
 
 def translate_expression(expr, context, segment="select") -> str:
 
+    if isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_"):
+        op = expr.function_name[len("__arith_") :]
+        left = translate_expression(expr.arguments[0], context, segment=segment)
+        right = translate_expression(expr.arguments[1], context, segment=segment)
+        return f"({left} {op} {right})"
+
+    if isinstance(expr, ast.ListPredicateExpression):
+        source_sql = translate_expression(expr.source, context, segment=segment)
+        var = sanitize_identifier(expr.variable)
+        alias = context.next_alias("lp")
+        context.variable_aliases[expr.variable] = f"{alias}"
+        pred_sql = translate_expression(expr.predicate, context, segment=segment)
+        del context.variable_aliases[expr.variable]
+        pred_with_alias = pred_sql.replace(
+            f"{alias}.node_id", f"{alias}.{var}"
+        ).replace(f"{alias}.", f"{alias}.")
+        pred_with_alias = pred_sql
+        for col in ("node_id", "p", "val", "label"):
+            pred_with_alias = pred_with_alias.replace(
+                f"{alias}.{col}", f"{alias}.{var}"
+            )
+        count_alias = context.next_alias("lpc")
+        inner = (
+            f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
+            f" WHERE {pred_with_alias}"
+        )
+        all_count = f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {count_alias}"
+        if expr.quantifier == "all":
+            return f"(({inner}) = ({all_count}))"
+        if expr.quantifier == "any":
+            return f"(({inner}) > 0)"
+        if expr.quantifier == "none":
+            return f"(({inner}) = 0)"
+        if expr.quantifier == "single":
+            return f"(({inner}) = 1)"
+        return f"(({inner}) > 0)"
+
+    if isinstance(expr, ast.ListComprehension):
+        source_sql = translate_expression(expr.source, context, segment=segment)
+        var = sanitize_identifier(expr.variable)
+        alias = context.next_alias("lc")
+        context.variable_aliases[expr.variable] = alias
+        where_clause = ""
+        if expr.predicate:
+            pred_sql = translate_expression(expr.predicate, context, segment=segment)
+            for col in ("node_id", "p", "val", "label"):
+                pred_sql = pred_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
+            where_clause = f" WHERE {pred_sql}"
+        select_expr = f"{alias}.{var}"
+        if expr.projection:
+            proj_sql = translate_expression(expr.projection, context, segment=segment)
+            for col in ("node_id", "p", "val", "label"):
+                proj_sql = proj_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
+            select_expr = proj_sql
+        del context.variable_aliases[expr.variable]
+        return (
+            f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
+            f"{where_clause})"
+        )
+
+    if isinstance(expr, ast.ReduceExpression):
+        source_sql = translate_expression(expr.source, context, segment=segment)
+        init_sql = translate_expression(expr.init, context, segment=segment)
+        var = sanitize_identifier(expr.variable)
+        alias = context.next_alias("re")
+        acc = expr.accumulator
+        context.variable_aliases[expr.variable] = alias
+        context.variable_aliases[acc] = "__acc__"
+        body_sql = translate_expression(expr.body, context, segment=segment)
+        for col in ("node_id", "p", "val", "label"):
+            body_sql = body_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
+        body_sql = body_sql.replace("__acc__.node_id", "0").replace("__acc__", "0")
+        del context.variable_aliases[expr.variable]
+        del context.variable_aliases[acc]
+        return (
+            f"({init_sql} + (SELECT SUM({body_sql}) FROM "
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} DOUBLE PATH '$')) {alias}))"
+        )
+        count_alias = context.next_alias("lpc")
+        all_count = f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {count_alias}"
+        if expr.quantifier == "all":
+            return f"(({inner}) = ({all_count}))"
+        if expr.quantifier == "any":
+            return f"(({inner}) > 0)"
+        if expr.quantifier == "none":
+            return f"(({inner}) = 0)"
+        if expr.quantifier == "single":
+            return f"(({inner}) = 1)"
+        return f"(({inner}) > 0)"
+
+    if isinstance(expr, ast.ListComprehension):
+        source_sql = translate_expression(expr.source, context, segment=segment)
+        var = sanitize_identifier(expr.variable)
+        alias = context.next_alias("lc")
+        where_clause = ""
+        if expr.predicate:
+            pred_sql = translate_expression(expr.predicate, context, segment=segment)
+            where_clause = f" WHERE {pred_sql.replace(var, f'{alias}.{var}')}"
+        select_expr = f"{alias}.{var}"
+        if expr.projection:
+            proj_sql = translate_expression(expr.projection, context, segment=segment)
+            select_expr = proj_sql.replace(var, f"{alias}.{var}")
+        return (
+            f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
+            f"{where_clause})"
+        )
+
+    if isinstance(expr, ast.ReduceExpression):
+        source_sql = translate_expression(expr.source, context, segment=segment)
+        init_sql = translate_expression(expr.init, context, segment=segment)
+        var = sanitize_identifier(expr.variable)
+        alias = context.next_alias("re")
+        body_sql = translate_expression(expr.body, context, segment=segment)
+        body_replaced = body_sql.replace(var, f"{alias}.{var}").replace(
+            sanitize_identifier(expr.accumulator), f"0"
+        )
+        return (
+            f"(SELECT SUM({body_replaced}) + {init_sql} FROM "
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias})"
+        )
+
     if isinstance(expr, ast.CaseExpression):
         parts = ["CASE"]
         if expr.test_expression is not None:
