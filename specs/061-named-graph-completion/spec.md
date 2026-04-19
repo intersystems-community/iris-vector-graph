@@ -24,6 +24,8 @@ Additionally:
 - Q: bulk_create_edges — per-edge graph key OR method-level graph= OR both? → A: Both — method-level `graph=` is the default; per-edge `"graph"` key overrides it
 - Q: create_edge_temporal — write graph_id to rdf_edges only or also ^KG temporal globals? → A: rdf_edges only; ^KG("tout") has no graph subscript in current layout (PR-B scope)
 - Q: db.schema.relTypeProperties — what to return when qualifiers are missing? → A: Return `weight` always plus top-20 distinct JSON key names sampled from rdf_edges.qualifiers for each predicate
+- Q: MatchEdges CTE graph_id — add to proc or fall back to rdf_edges SQL? → A: **Option B** — translator falls back to rdf_edges SQL JOIN when graph_context is set; no ObjectScript changes
+- Q: bulk_create_edges_temporal with graph= — write rdf_edges or out of scope? → A: **Option A** — does write rdf_edges rows with graph_id; consistency over performance
 
 ## User Scenarios & Testing
 
