@@ -454,10 +454,29 @@ class IRISGraphEngine:
                 cursor.execute(stmt)
             except Exception as e:
                 err = str(e).lower()
-                if "already exists" not in err and "already has a" not in err and "already has index" not in err:
-                    logger.warning(
-                        "Schema setup warning: %s | Statement: %.100s", e, stmt
-                    )
+                _OPTIONAL_DDL_PATTERNS = (
+                    "ifind",
+                    "json_value",
+                    "indextype",
+                    "%find",
+                    "kg_txt",
+                    "kg_rrf",
+                    "irisdev",
+                    "iris_src",
+                )
+                if (
+                    "already exists" not in err
+                    and "already has a" not in err
+                    and "already has index" not in err
+                ):
+                    if any(
+                        p in err or p in stmt.lower() for p in _OPTIONAL_DDL_PATTERNS
+                    ):
+                        logger.debug("Optional DDL skipped: %s", stmt[:80])
+                    else:
+                        logger.warning(
+                            "Schema setup warning: %s | Statement: %.100s", e, stmt
+                        )
 
         # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
         GraphSchema.ensure_indexes(cursor)
@@ -500,8 +519,8 @@ class IRISGraphEngine:
                         e,
                     )
                 else:
-                    logger.warning(
-                        "Optional procedure DDL failed (non-fatal): %s | Error: %s",
+                    logger.debug(
+                        "Optional procedure DDL skipped (non-fatal): %s | Error: %s",
                         stmt[:80],
                         e,
                     )
@@ -537,7 +556,10 @@ class IRISGraphEngine:
                     cursor, pkg_dir.resolve(), conn=self.conn
                 )
             except Exception as exc:
-                logger.warning("ObjectScript deploy step failed: %s", exc)
+                logger.debug(
+                    "ObjectScript auto-deploy skipped (expected in Docker — use docker cp + LoadDir): %s",
+                    exc,
+                )
                 self.capabilities = IRISCapabilities()
         else:
             self.capabilities = IRISCapabilities()
@@ -2079,6 +2101,7 @@ class IRISGraphEngine:
         batch_size: int = 10000,
         progress=None,
         infer=False,
+        graph: Optional[str] = None,
     ) -> Dict[str, int]:
         try:
             import rdflib
@@ -2214,9 +2237,7 @@ class IRISGraphEngine:
 
         if infer:
             rules = infer if isinstance(infer, str) else "rdfs"
-            inf_result = self.materialize_inference(
-                rules=rules, graph=graph if "graph" in locals() else None
-            )
+            inf_result = self.materialize_inference(rules=rules, graph=graph)
             result["inferred"] = inf_result.get("inferred", 0)
 
         return result
