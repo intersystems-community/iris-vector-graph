@@ -469,10 +469,28 @@ class IRISGraphEngine:
                     and "already has a" not in err
                     and "already has index" not in err
                 ):
-                    if any(
-                        p in err or p in stmt.lower() for p in _OPTIONAL_DDL_PATTERNS
+                    import re as _re_ddl
+
+                    _sqlcode = _re_ddl.search(
+                        r"sqlcode.*?<(-?\d+)>", err
+                    ) or _re_ddl.search(r"<(-\d+)>", err)
+                    _sqlcode_val = _sqlcode.group(1) if _sqlcode else ""
+                    is_index_on_rdf_edges = (
+                        _sqlcode_val == "-400"
+                        and "rdf_edges" in stmt.lower()
+                        and "create index" in stmt.lower()
+                    )
+                    if (
+                        any(
+                            p in err or p in stmt.lower()
+                            for p in _OPTIONAL_DDL_PATTERNS
+                        )
+                        or is_index_on_rdf_edges
                     ):
-                        logger.debug("Optional DDL skipped: %s", stmt[:80])
+                        logger.debug(
+                            "Optional DDL skipped (will retry via ALTER TABLE): %s",
+                            stmt[:80],
+                        )
                     else:
                         logger.warning(
                             "Schema setup warning: %s | Statement: %.100s", e, stmt
@@ -2203,12 +2221,12 @@ class IRISGraphEngine:
             for nid in batch_nodes:
                 if _ensure_node(nid):
                     nodes_inserted += 1
-            for s, p, o in batch_edges:
+            for s, p, o, edge_graph in batch_edges:
                 try:
-                    if graph:
+                    if edge_graph:
                         cursor.execute(
                             f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
-                            [s, p, o, graph, s, p, o, graph],
+                            [s, p, o, edge_graph, s, p, o, edge_graph],
                         )
                     else:
                         cursor.execute(
@@ -2243,6 +2261,12 @@ class IRISGraphEngine:
             p_str = _node_id(p)
             batch_nodes.add(s_id)
 
+            effective_graph = graph
+            if graph_ctx is not None:
+                ctx_str = str(graph_ctx)
+                if ctx_str and ctx_str not in ("", "DEFAULT", "urn:x-rdflib:default"):
+                    effective_graph = ctx_str
+
             if isinstance(o, RDFLiteral):
                 key = p_str.rsplit("/", 1)[-1].rsplit("#", 1)[-1][:128]
                 val = str(o)
@@ -2256,7 +2280,7 @@ class IRISGraphEngine:
             elif isinstance(o, (URIRef, BNode)):
                 o_id = _node_id(o)
                 batch_nodes.add(o_id)
-                batch_edges.append((s_id, p_str, o_id))
+                batch_edges.append((s_id, p_str, o_id, effective_graph))
             else:
                 batch_props.append((s_id, p_str[:128], str(o)[:64000]))
 

@@ -42,6 +42,7 @@ class BooleanOperator(Enum):
     STARTS_WITH = "STARTS WITH"
     ENDS_WITH = "ENDS WITH"
     CONTAINS = "CONTAINS"
+    REGEX_MATCH = "=~"
 
 
 # ==============================================================================
