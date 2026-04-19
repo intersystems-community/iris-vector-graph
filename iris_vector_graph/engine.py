@@ -1777,14 +1777,21 @@ class IRISGraphEngine:
         predicate: str,
         target_id: str,
         qualifiers: Dict[str, Any] = None,
+        graph: Optional[str] = None,
     ) -> bool:
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
-            cursor.execute(
-                f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                [source_id, predicate, target_id, qual_json],
-            )
+            if graph:
+                cursor.execute(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                    [source_id, predicate, target_id, qual_json, graph],
+                )
+            else:
+                cursor.execute(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                    [source_id, predicate, target_id, qual_json],
+                )
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
@@ -1827,6 +1834,23 @@ class IRISGraphEngine:
         except Exception as e:
             logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
         return True
+
+    def list_graphs(self) -> List[str]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT graph_id FROM Graph_KG.rdf_edges WHERE graph_id IS NOT NULL ORDER BY graph_id"
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def drop_graph(self, graph_id: str) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE graph_id = ?", [graph_id])
+        deleted = cursor.rowcount if cursor.rowcount is not None else 0
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        return deleted
 
     def bulk_create_nodes(
         self,

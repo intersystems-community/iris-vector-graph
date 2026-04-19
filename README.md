@@ -484,6 +484,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.53.0 (2026-04-18)
+- feat: Named graphs — `create_edge(graph='name')`, `list_graphs()`, `drop_graph(name)`
+- feat: `USE GRAPH 'name' MATCH (a)-[r]->(b)` Cypher syntax adds graph_id filter
+- feat: Schema migration — `graph_id` column added to `rdf_edges` (idempotent, run on initialize_schema)
+
+
 ### v1.52.1 (2026-04-18)
 - feat: `engine.import_rdf(path)` — load Turtle (.ttl), N-Triples (.nt), N-Quads (.nq) into the graph
 - Format auto-detected from extension; streaming batch ingest; blank node synthetic IDs; language tags preserved
