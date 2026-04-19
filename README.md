@@ -484,6 +484,14 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.56.0 (2026-04-19)
+- feat: `CALL ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops) YIELD path, totalCost` — Dijkstra minimum-cost path in pure ObjectScript
+- Uses edge weights from `^KG("out",0,...)` globals (set by create_edge WriteAdjacency)
+- Falls back to unit weight 1.0 when weightProp not found
+- Supports directed ("out") and undirected ("both") traversal
+- 4 E2E tests: prefer lower-cost longer path, no path, same source/target, unit weight fallback
+
+
 ### v1.55.3 (2026-04-19)
 - fix: Bug 6 final — SQLCODE -400 on rdf_edges CREATE INDEX now debug-level (ALTER TABLE fallback handles it)
 - fix: type(r) now returns edge predicate column (e.p) not node_id

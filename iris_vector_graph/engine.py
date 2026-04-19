@@ -800,6 +800,8 @@ class IRISGraphEngine:
 
         if sql_query.var_length_paths:
             vl0 = sql_query.var_length_paths[0]
+            if vl0.get("weighted"):
+                return self._execute_weighted_shortest_path(sql_query, parameters)
             if vl0.get("shortest") or vl0.get("all_shortest"):
                 return self._execute_shortest_path_cypher(sql_query, parameters)
             return self._execute_var_length_cypher(sql_query, parameters)
@@ -864,6 +866,109 @@ class IRISGraphEngine:
                 "params": p,
                 "metadata": metadata,
             }
+
+    def _execute_weighted_shortest_path(
+        self, sql_query, parameters=None
+    ) -> Dict[str, Any]:
+        import json as _json
+
+        vl = sql_query.var_length_paths[0]
+
+        def _resolve(param_ref):
+            if param_ref is None:
+                return None
+            s = str(param_ref)
+            if s.startswith("'") and s.endswith("'"):
+                return s[1:-1]
+            if s.startswith("$"):
+                name = s[1:]
+                if parameters and name in parameters:
+                    return str(parameters[name])
+                return None
+            return s
+
+        source_id = _resolve(vl.get("src_id_param"))
+        target_id = _resolve(vl.get("dst_id_param"))
+
+        if source_id is None or target_id is None:
+            raise ValueError(
+                "ivg.shortestPath.weighted requires both from and to to be bound IDs"
+            )
+
+        weight_prop = vl.get("weight_prop", "weight") or "weight"
+        max_cost = float(vl.get("max_cost", 9999))
+        max_hops = int(vl.get("max_hops", 10))
+        direction = vl.get("direction", "out") or "out"
+
+        try:
+            raw = _call_classmethod(
+                self.conn,
+                "Graph.KG.Traversal",
+                "DijkstraJson",
+                source_id,
+                target_id,
+                weight_prop,
+                max_cost,
+                max_hops,
+                direction,
+            )
+            result_str = str(raw) if raw else "{}"
+        except Exception as e:
+            logger.warning(f"DijkstraJson failed: {e}")
+            return {
+                "columns": ["path", "totalCost"],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
+
+        if not result_str or result_str == "{}":
+            return {
+                "columns": ["path", "totalCost"],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
+
+        try:
+            path_obj = _json.loads(result_str)
+        except Exception:
+            return {
+                "columns": ["path", "totalCost"],
+                "rows": [],
+                "sql": "",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
+
+        total_cost = float(path_obj.get("totalCost", 0))
+        return_funcs = vl.get("return_path_funcs", [])
+
+        row = []
+        cols = []
+        if not return_funcs or "path" in return_funcs:
+            row.append(result_str)
+            cols.append("path")
+        if "totalCost" in return_funcs or "totalcost" in return_funcs:
+            row.append(total_cost)
+            cols.append("totalCost")
+        if "node" in return_funcs:
+            nodes = path_obj.get("nodes", [])
+            row.append(nodes[-1] if nodes else None)
+            cols.append("node")
+        if not cols:
+            row = [result_str, total_cost]
+            cols = ["path", "totalCost"]
+
+        return {
+            "columns": cols,
+            "rows": [row],
+            "sql": f"DijkstraJson({source_id}, {target_id})",
+            "params": [],
+            "metadata": sql_query.query_metadata,
+        }
 
     def _execute_shortest_path_cypher(
         self, sql_query, parameters=None
@@ -1159,6 +1264,62 @@ class IRISGraphEngine:
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
+
+        if name in ("ivg.shortestpath.weighted", "ivg.shortestpath.weighted"):
+            args = proc.arguments
+            from iris_vector_graph.cypher import ast as cypher_ast
+
+            def _arg_str(a, params=None):
+                if isinstance(a, cypher_ast.Literal):
+                    return str(a.value)
+                if isinstance(a, cypher_ast.Variable):
+                    if params and a.name in params:
+                        return str(params[a.name])
+                    return a.name
+                return str(a)
+
+            source_id = _arg_str(args[0]) if len(args) > 0 else None
+            target_id = _arg_str(args[1]) if len(args) > 1 else None
+            weight_prop = _arg_str(args[2]) if len(args) > 2 else "weight"
+            max_cost = float(_arg_str(args[3])) if len(args) > 3 else 9999.0
+            max_hops = int(float(_arg_str(args[4]))) if len(args) > 4 else 10
+            direction = _arg_str(args[5]) if len(args) > 5 else "out"
+
+            if not source_id or not target_id:
+                return {"columns": ["path", "totalCost"], "rows": []}
+
+            import json as _json
+
+            try:
+                raw = _call_classmethod(
+                    self.conn,
+                    "Graph.KG.Traversal",
+                    "DijkstraJson",
+                    source_id,
+                    target_id,
+                    weight_prop,
+                    max_cost,
+                    max_hops,
+                    direction,
+                )
+                result_str = str(raw) if raw else "{}"
+            except Exception as e:
+                logger.warning(f"DijkstraJson failed: {e}")
+                return {"columns": ["path", "totalCost"], "rows": []}
+
+            if not result_str or result_str == "{}":
+                return {"columns": ["path", "totalCost"], "rows": []}
+
+            try:
+                path_obj = _json.loads(result_str)
+            except Exception:
+                return {"columns": ["path", "totalCost"], "rows": []}
+
+            total_cost = float(path_obj.get("totalCost", 0))
+            return {
+                "columns": ["path", "totalCost"],
+                "rows": [[result_str, total_cost]],
+            }
 
         if name == "db.labels":
             cursor = self.conn.cursor()

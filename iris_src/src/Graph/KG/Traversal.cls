@@ -494,4 +494,150 @@ ClassMethod BacktrackPath(srcId As %String, dstId As %String, depth As %Integer)
 	Return path
 }
 
+ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String
+{
+	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
+
+	Set srcId = $Get(srcId, "")
+	Set dstId = $Get(dstId, "")
+	Set weightProp = $Get(weightProp, "")
+
+	If srcId = "" || (dstId = "") {
+		Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
+		Return "{}"
+	}
+
+	If srcId = dstId {
+		Set result = ##class(%DynamicObject).%New()
+		Set nodes = ##class(%DynamicArray).%New()
+		Do nodes.%Push(srcId)
+		Do result.%Set("nodes", nodes)
+		Do result.%Set("rels", ##class(%DynamicArray).%New())
+		Do result.%Set("costs", ##class(%DynamicArray).%New())
+		Do result.%Set("length", 0)
+		Do result.%Set("totalCost", 0)
+		Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
+		Return result.%ToJSON()
+	}
+
+	Set ^||Dij.pq(0, srcId) = ""
+	Set ^||Dij.dist(srcId) = 0
+
+	For {
+		Set minCost = $Order(^||Dij.pq(""))
+		Quit:minCost=""
+		Set curNode = $Order(^||Dij.pq(minCost, ""))
+		Quit:curNode=""
+		Kill ^||Dij.pq(minCost, curNode)
+
+		If $Data(^||Dij.seen(curNode)) Continue
+		Set ^||Dij.seen(curNode) = ""
+
+		If curNode = dstId {
+			Set result = ..DijkstraBacktrack(srcId, dstId, +minCost)
+			Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
+			Return result
+		}
+
+		If minCost >= maxCost Continue
+
+		If direction = "out" || (direction = "both") {
+			Set p = ""
+			For {
+				Set p = $Order(^KG("out", 0, curNode, p))
+				Quit:p=""
+				Set neighbor = ""
+				For {
+					Set neighbor = $Order(^KG("out", 0, curNode, p, neighbor))
+					Quit:neighbor=""
+					If $Data(^||Dij.seen(neighbor)) Continue
+					Set rawW = $Get(^KG("out", 0, curNode, p, neighbor), 1)
+					Set edgeW = +rawW
+					If edgeW <= 0 Set edgeW = 1.0
+					Set newCost = minCost + edgeW
+					If newCost > maxCost Continue
+					If '$Data(^||Dij.seen(neighbor)) {
+						If '$Data(^||Dij.dist(neighbor)) || (newCost < ^||Dij.dist(neighbor)) {
+							Set ^||Dij.dist(neighbor) = newCost
+							Set ^||Dij.pq(newCost, neighbor) = ""
+							Set ^||Dij.parent(neighbor) = $ListBuild(curNode, p, edgeW)
+						}
+					}
+				}
+			}
+		}
+
+		If direction = "both" {
+			Set p = ""
+			For {
+				Set p = $Order(^KG("in", 0, curNode, p))
+				Quit:p=""
+				Set neighbor = ""
+				For {
+					Set neighbor = $Order(^KG("in", 0, curNode, p, neighbor))
+					Quit:neighbor=""
+					If $Data(^||Dij.seen(neighbor)) Continue
+					Set rawW = $Get(^KG("in", 0, curNode, p, neighbor), 1)
+					Set edgeW = +rawW
+					If edgeW <= 0 Set edgeW = 1.0
+					Set newCost = minCost + edgeW
+					If newCost > maxCost Continue
+					If '$Data(^||Dij.dist(neighbor)) || (newCost < ^||Dij.dist(neighbor)) {
+						Set ^||Dij.dist(neighbor) = newCost
+						Set ^||Dij.pq(newCost, neighbor) = ""
+						Set ^||Dij.parent(neighbor) = $ListBuild(curNode, p, edgeW)
+					}
+				}
+			}
+		}
+	}
+
+	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
+	Return "{}"
+}
+
+ClassMethod DijkstraBacktrack(srcId As %String, dstId As %String, totalCost As %Double) As %String [ Private ]
+{
+	Set nodeStack = $ListBuild(dstId)
+	Set relStack = ""
+	Set costStack = ""
+	Set cur = dstId
+
+	While cur '= srcId {
+		Set lb = $Get(^||Dij.parent(cur))
+		If lb = "" Quit
+		Set parentNode = $ListGet(lb, 1)
+		Set relType = $ListGet(lb, 2)
+		Set edgeCost = +$ListGet(lb, 3)
+		Set nodeStack = $ListBuild(parentNode) _ nodeStack
+		Set relStack = $ListBuild(relType) _ relStack
+		Set costStack = $ListBuild(edgeCost) _ costStack
+		Set cur = parentNode
+	}
+
+	Set nodes = ##class(%DynamicArray).%New()
+	Set rels = ##class(%DynamicArray).%New()
+	Set costs = ##class(%DynamicArray).%New()
+
+	Set ptr = 0
+	While $ListNext(nodeStack, ptr, n) { Do nodes.%Push(n) }
+	Set ptr = 0
+	While $ListNext(relStack, ptr, r) { Do rels.%Push(r) }
+	Set ptr = 0
+	While $ListNext(costStack, ptr, c) { Do costs.%Push(+c) }
+
+	Set result = ##class(%DynamicObject).%New()
+	Do result.%Set("nodes", nodes)
+	Do result.%Set("rels", rels)
+	Do result.%Set("costs", costs)
+	Do result.%Set("length", nodes.%Size() - 1)
+	Do result.%Set("totalCost", totalCost)
+	Return result.%ToJSON()
+}
+
+ClassMethod DijkstraProc(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String [ SqlProc, SqlName = DijkstraPath ]
+{
+	Quit ..DijkstraJson(srcId, dstId, weightProp, maxCost, maxHops, direction)
+}
+
 }
