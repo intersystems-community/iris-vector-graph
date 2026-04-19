@@ -1462,19 +1462,19 @@ class IRISGraphEngine:
             rows = []
             for label in labels[:50]:
                 cursor.execute(
-                    "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props rp '
+                    "JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s "
+                    'WHERE rl.label = ? ORDER BY "key"',
                     [label],
                 )
-                sample = cursor.fetchone()
-                if sample:
-                    cursor.execute(
-                        'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props WHERE s = ? ORDER BY "key"',
-                        [sample[0]],
-                    )
-                    for (prop_name,) in cursor.fetchall():
+                props = [row[0] for row in cursor.fetchall()]
+                if props:
+                    for prop_name in props:
                         rows.append(
                             [label, prop_name, "STRING", "node", False, False, False]
                         )
+                else:
+                    rows.append([label, None, "STRING", "node", False, False, False])
             cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
             for (rel_type,) in cursor.fetchall():
                 rows.append(

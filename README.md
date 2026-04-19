@@ -484,6 +484,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.55.1 (2026-04-19)
+- fix: Graph.KG.Edge/TestEdge persistent classes excluded from ObjectScript deploy (fix DDL table ownership conflict — Bug 6)
+- fix: conftest removes conflicting .cls before LoadDir
+- fix: apoc.meta.data() samples all nodes per label via JOIN on rdf_labels (no longer skips labels with no first-node properties)
+
+
 ### v1.55.0 (2026-04-19)
 - feat: import_rdf/bulk_create_edges/create_edge_temporal/bulk_create_edges_temporal all accept graph= parameter
 - feat: USE GRAPH filtering now strict (exact graph_id match, no NULL leakage)
