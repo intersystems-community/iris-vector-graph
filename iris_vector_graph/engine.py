@@ -454,7 +454,7 @@ class IRISGraphEngine:
                 cursor.execute(stmt)
             except Exception as e:
                 err = str(e).lower()
-                if "already exists" not in err and "already has a" not in err:
+                if "already exists" not in err and "already has a" not in err and "already has index" not in err:
                     logger.warning(
                         "Schema setup warning: %s | Statement: %.100s", e, stmt
                     )
@@ -2214,12 +2214,16 @@ class IRISGraphEngine:
 
         if infer:
             rules = infer if isinstance(infer, str) else "rdfs"
-            inf_result = self.materialize_inference(rules=rules)
+            inf_result = self.materialize_inference(
+                rules=rules, graph=graph if "graph" in locals() else None
+            )
             result["inferred"] = inf_result.get("inferred", 0)
 
         return result
 
-    def materialize_inference(self, rules: str = "rdfs") -> Dict[str, int]:
+    def materialize_inference(
+        self, rules: str = "rdfs", graph: Optional[str] = None
+    ) -> Dict[str, int]:
         RDFS_SUBCLASSOF = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
         RDFS_SUBPROPOF = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf"
         RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
@@ -2236,19 +2240,29 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         inferred_count = 0
 
+        graph_filter_sql = " AND graph_id = ?" if graph else " AND (graph_id IS NULL)"
+        graph_filter_params = [graph] if graph else []
+
         def _fetch_edges(predicate):
             cursor.execute(
                 "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ? "
-                "AND (qualifiers IS NULL OR JSON_VALUE(qualifiers, '$.inferred') IS NULL)",
-                [predicate],
+                "AND (qualifiers IS NULL OR JSON_VALUE(qualifiers, '$.inferred') IS NULL)"
+                + graph_filter_sql,
+                [predicate] + graph_filter_params,
             )
             return set((r[0], r[1]) for r in cursor.fetchall())
 
         def _exists(s, p, o):
-            cursor.execute(
-                "SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? FETCH FIRST 1 ROWS ONLY",
-                [s, p, o],
-            )
+            if graph:
+                cursor.execute(
+                    "SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id=? FETCH FIRST 1 ROWS ONLY",
+                    [s, p, o, graph],
+                )
+            else:
+                cursor.execute(
+                    "SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND (graph_id IS NULL) FETCH FIRST 1 ROWS ONLY",
+                    [s, p, o],
+                )
             return cursor.fetchone() is not None
 
         def _insert_inferred(triples):
@@ -2256,10 +2270,16 @@ class IRISGraphEngine:
             for s, p, o in triples:
                 if not _exists(s, p, o):
                     try:
-                        cursor.execute(
-                            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                            [s, p, o, INFERRED_JSON],
-                        )
+                        if graph:
+                            cursor.execute(
+                                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                                [s, p, o, INFERRED_JSON, graph],
+                            )
+                        else:
+                            cursor.execute(
+                                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                                [s, p, o, INFERRED_JSON],
+                            )
                         inferred_count += 1
                     except Exception:
                         pass
@@ -2360,11 +2380,17 @@ class IRISGraphEngine:
         _insert_inferred(inferred)
         return {"inferred": inferred_count}
 
-    def retract_inference(self) -> int:
+    def retract_inference(self, graph: Optional[str] = None) -> int:
         cursor = self.conn.cursor()
-        cursor.execute(
-            "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true'"
-        )
+        if graph:
+            cursor.execute(
+                "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true' AND graph_id = ?",
+                [graph],
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true'"
+            )
         deleted = cursor.rowcount or 0
         try:
             self.conn.commit()

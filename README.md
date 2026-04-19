@@ -484,6 +484,15 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.54.0 (2026-04-18)
+- fix: materialize_inference respects named graphs — inferred triples use correct graph_id (spec 055)
+- fix: materialize_inference/retract_inference accept graph= parameter
+- feat: Cypher % (modulo → MOD) and ^ (power → POWER) operators (spec 056)
+- feat: FOREACH clause — `FOREACH (x IN list | update_clause)` (spec 057)
+- fix: EXISTS { (n)-[r]->(m) } with edge patterns now works; MATCH keyword optional inside EXISTS (spec 058)
+- feat: Pattern comprehension `[(a)-[r]->(b) | proj]` collecting edge projections (spec 059)
+
+
 ### v1.53.1 (2026-04-18)
 - feat: `engine.materialize_inference(rules="rdfs"|"owl")` — transitive subClassOf/subPropertyOf closure, rdf:type inheritance, domain/range, OWL equivalentClass/inverseOf/TransitiveProperty/SymmetricProperty
 - feat: `engine.retract_inference()` — removes all inferred triples, restoring asserted-only graph
