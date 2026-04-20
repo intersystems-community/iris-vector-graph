@@ -40,6 +40,8 @@ class IRISGraphEngine:
         embedding_dimension: Optional[int] = None,
         embedder: Optional[Any] = None,
         embedding_config: Optional[str] = None,
+        embed_fn=None,
+        use_iris_embedding: bool = False,
     ):
         """
         Initialize with IRIS database connection.
@@ -61,6 +63,8 @@ class IRISGraphEngine:
         self.embedding_dimension = embedding_dimension
         self.embedder = embedder
         self.embedding_config = embedding_config
+        self._embed_fn = embed_fn
+        self._use_iris_embedding = use_iris_embedding
         set_schema_prefix("Graph_KG")
         self._embedding_function_available: Optional[bool] = None
         self.capabilities: IRISCapabilities = IRISCapabilities()
@@ -506,7 +510,8 @@ class IRISGraphEngine:
                 # Column exists but has no dimension (e.g. created without VECTOR(DOUBLE,N)).
                 # ALTER TABLE to add the dimension so procedure compilation succeeds.
                 logger.info(
-                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)", dim
+                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)",
+                    dim,
                 )
                 try:
                     cursor.execute(
@@ -2664,6 +2669,505 @@ class IRISGraphEngine:
         except Exception:
             pass
         return deleted
+
+    def save_snapshot(
+        self,
+        path: str,
+        layers: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        import zipfile as _zipfile
+        import json as _json
+        import time as _time
+        import uuid as _uuid
+
+        if layers is None:
+            layers = ["sql", "globals"]
+
+        ts = int(_time.time() * 1000)
+        run_id = _uuid.uuid4().hex[:8]
+        import sys as _sys
+
+        try:
+            iris_ver = str(
+                _call_classmethod(self.conn, "%SYSTEM.Version", "GetVersion")
+            )
+        except Exception:
+            iris_ver = "unknown"
+        metadata: Dict[str, Any] = {
+            "version": "1.1",
+            "globals_format": "ndjson",
+            "created_ts": ts,
+            "ivg_version": "1.58.0",
+            "iris_version": iris_ver,
+            "python_version": f"{_sys.version_info.major}.{_sys.version_info.minor}",
+            "has_vector_sql": False,
+            "embedding_dim": self.embedding_dimension or 0,
+            "layers": layers,
+            "tables": {},
+            "globals": {},
+        }
+
+        sql_data: Dict[str, str] = {}
+        globals_data: Dict[str, bytes] = {}
+
+        SQL_TABLES_EXPORT = [
+            ("Graph_KG.nodes", "node_id"),
+            ("Graph_KG.rdf_edges", "s"),
+            ("Graph_KG.rdf_labels", "s"),
+            ("Graph_KG.rdf_props", "s"),
+            ("Graph_KG.rdf_reifications", "subject_s"),
+        ]
+        VECTOR_TABLE = "Graph_KG.kg_NodeEmbeddings"
+
+        if "sql" in layers:
+            cursor = self.conn.cursor()
+            for table, _ in SQL_TABLES_EXPORT:
+                try:
+                    cursor.execute(f"SELECT * FROM {table}")
+                    all_desc = cursor.description
+                    rows = cursor.fetchall()
+                    _ROWID_NAMES = {"edge_id", "reification_id", "label_id", "prop_id"}
+                    skip = {
+                        i
+                        for i, d in enumerate(all_desc)
+                        if d[0].lower() in _ROWID_NAMES
+                    }
+                    cols = [
+                        d[0].lower() for i, d in enumerate(all_desc) if i not in skip
+                    ]
+                    lines = []
+                    for row in rows:
+                        lines.append(
+                            _json.dumps(
+                                {
+                                    k: (
+                                        None
+                                        if v is None
+                                        else v.isoformat()
+                                        if hasattr(v, "isoformat")
+                                        else float(v)
+                                        if hasattr(v, "__float__")
+                                        and not isinstance(v, (int, str, bool))
+                                        else v
+                                    )
+                                    for k, v in zip(
+                                        cols,
+                                        [
+                                            val
+                                            for i, val in enumerate(row)
+                                            if i not in skip
+                                        ],
+                                    )
+                                }
+                            )
+                        )
+                    sql_data[table] = "\n".join(lines)
+                    metadata["tables"][table] = len(rows)
+                except Exception as e:
+                    logger.debug("Snapshot: skipping table %s: %s", table, e)
+                    metadata["tables"][table] = 0
+
+            try:
+                cursor.execute(f"SELECT id, emb, metadata FROM {VECTOR_TABLE}")
+                cols = ["id", "emb", "metadata"]
+                rows = cursor.fetchall()
+                lines = []
+                for row in rows:
+                    nid, emb_val, meta_val = row[0], row[1], row[2]
+                    emb_str = str(emb_val) if emb_val is not None else None
+                    lines.append(
+                        _json.dumps({"id": nid, "emb": emb_str, "metadata": meta_val})
+                    )
+                sql_data[VECTOR_TABLE] = "\n".join(lines)
+                metadata["tables"][VECTOR_TABLE] = len(rows)
+                metadata["has_vector_sql"] = True
+            except Exception as e:
+                logger.debug("Snapshot: kg_NodeEmbeddings not available: %s", e)
+                metadata["has_vector_sql"] = False
+
+        if "globals" in layers:
+            GLOBALS_EXPORT = [
+                ("KG", [["out"], ["in"]]),
+                ("BM25Idx", [[]]),
+                ("IVF", [[]]),
+                ("PLAID", [[]]),
+                ("VecIdx", [[]]),
+                ("NKG", [[]]),
+                ("IVG.CDC", [[]]),
+            ]
+            try:
+                iris_obj = self._iris_obj()
+                for gname, subscript_prefixes in GLOBALS_EXPORT:
+                    lines = []
+                    for prefix_subs in subscript_prefixes:
+                        try:
+                            lines.extend(
+                                self._export_global_to_ndjson(
+                                    iris_obj, f"^{gname}", prefix_subs
+                                )
+                            )
+                        except Exception as eg:
+                            logger.debug(
+                                "Snapshot: skip global ^%s%s: %s",
+                                gname,
+                                prefix_subs,
+                                eg,
+                            )
+                    if lines:
+                        content = "\n".join(lines).encode("utf-8")
+                        globals_data[gname] = content
+                        metadata["globals"][gname] = {
+                            "format": "ndjson",
+                            "subscripts": [s for sl in subscript_prefixes for s in sl],
+                            "size": len(content),
+                        }
+            except Exception as e:
+                logger.warning(
+                    "Snapshot: global export failed (globals layer skipped): %s", e
+                )
+                size_raw = _call_classmethod(
+                    self.conn, "Graph.KG.Snapshot", "GetFileSize", tmp_xml
+                )
+                file_size = int(size_raw or 0)
+                if file_size > 0:
+                    chunks = []
+                    chunk_size = 512 * 1024
+                    offset = 0
+                    while offset < file_size:
+                        chunk = _call_classmethod(
+                            self.conn,
+                            "Graph.KG.Snapshot",
+                            "ReadFileChunk",
+                            tmp_xml,
+                            offset,
+                            chunk_size,
+                        )
+                        if not chunk:
+                            break
+                        chunks.append(str(chunk).encode("utf-8"))
+                        offset += chunk_size
+                    xml_bytes = b"".join(chunks)
+                    globals_data["_all_globals"] = xml_bytes
+                    metadata["globals"]["_all_globals"] = {
+                        "format": "iris-xml",
+                        "size": len(xml_bytes),
+                        "globals": GLOBALS_TO_EXPORT,
+                    }
+                    try:
+                        _call_classmethod(
+                            self.conn,
+                            "Graph.KG.Snapshot",
+                            "DeleteDir",
+                            f"/tmp/ivg_snap_{run_id}_globals.xml",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    logger.debug("Snapshot: globals XML export produced empty file")
+            except Exception as e:
+                logger.warning(
+                    "Snapshot: XML global export failed (globals layer skipped): %s", e
+                )
+        with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("metadata.json", _json.dumps(metadata, indent=2))
+            for table, content in sql_data.items():
+                safe_name = table.replace(".", "_").replace("/", "_")
+                zf.writestr(f"sql/{safe_name}.ndjson", content)
+            for gname, content in globals_data.items():
+                zf.writestr(f"globals/{gname}.ndjson", content)
+
+        return {
+            "path": path,
+            "tables": metadata["tables"],
+            "globals": list(globals_data.keys()),
+            "snapshot_ts": ts,
+        }
+
+    @staticmethod
+    def snapshot_info(path: str) -> Dict[str, Any]:
+        import zipfile as _zipfile
+        import json as _json
+
+        with _zipfile.ZipFile(path, "r") as zf:
+            with zf.open("metadata.json") as f:
+                metadata = _json.loads(f.read())
+        return {
+            "metadata": metadata,
+            "tables": metadata.get("tables", {}),
+            "has_vector_sql": metadata.get("has_vector_sql", False),
+            "version": metadata.get("version", "unknown"),
+            "snapshot_ts": metadata.get("created_ts", 0),
+            "globals": metadata.get("globals", {}),
+        }
+
+    def restore_snapshot(
+        self,
+        path: str,
+        merge: bool = False,
+    ) -> Dict[str, Any]:
+        import zipfile as _zipfile
+        import json as _json
+        import uuid as _uuid
+
+        run_id = _uuid.uuid4().hex[:8]
+
+        with _zipfile.ZipFile(path, "r") as zf:
+            names = zf.namelist()
+            metadata = _json.loads(zf.read("metadata.json"))
+
+            sql_files = {
+                n: zf.read(n).decode("utf-8") for n in names if n.startswith("sql/")
+            }
+            global_files = {n: zf.read(n) for n in names if n.startswith("globals/")}
+
+        restored_tables: Dict[str, int] = {}
+        restored_globals: List[str] = []
+        cursor = self.conn.cursor()
+
+        TABLE_ORDER = [
+            "Graph_KG_nodes.ndjson",
+            "Graph_KG_rdf_edges.ndjson",
+            "Graph_KG_rdf_labels.ndjson",
+            "Graph_KG_rdf_props.ndjson",
+            "Graph_KG_rdf_reifications.ndjson",
+        ]
+        VECTOR_FILE = "Graph_KG_kg_NodeEmbeddings.ndjson"
+
+        if not merge:
+            table_clear_order = [
+                "Graph_KG.rdf_reifications",
+                "Graph_KG.rdf_labels",
+                "Graph_KG.rdf_props",
+                "Graph_KG.rdf_edges",
+                "Graph_KG.kg_NodeEmbeddings",
+                "Graph_KG.nodes",
+            ]
+            globals_in_snapshot = metadata.get("globals", {})
+            for gname, ginfo in globals_in_snapshot.items():
+                subscripts = (
+                    ginfo.get("subscripts", []) if isinstance(ginfo, dict) else []
+                )
+                try:
+                    iris_obj = self._iris_obj()
+                    if subscripts:
+                        for sub in subscripts:
+                            iris_obj.kill(f"^{gname}", sub)
+                    else:
+                        iris_obj.kill(f"^{gname}")
+                except Exception as e:
+                    logger.debug("restore: kill ^%s failed: %s", gname, e)
+            for table in table_clear_order:
+                try:
+                    cursor.execute(f"DELETE FROM {table}")
+                    self.conn.commit()
+                except Exception:
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
+
+        def _insert_row(table: str, row: Dict[str, Any]) -> bool:
+            if not row:
+                return False
+            cols = list(row.keys())
+            vals = list(row.values())
+            placeholders = ", ".join(["?"] * len(cols))
+            col_list = ", ".join(cols)
+            try:
+                cursor.execute(
+                    f"INSERT INTO {table} ({col_list}) SELECT {placeholders} "
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE "
+                    + " AND ".join(
+                        f"{c} = ?" if row[c] is not None else f"{c} IS NULL"
+                        for c in cols[:1]
+                    )
+                    + ")",
+                    vals + [vals[0]],
+                )
+                return True
+            except Exception:
+                return False
+
+        sql_order = [
+            f for f in TABLE_ORDER if f"sql/{f}" in sql_files or f in sql_files
+        ]
+
+        for fname_short in TABLE_ORDER:
+            fname = f"sql/{fname_short}"
+            if fname not in sql_files:
+                continue
+            table_name = fname_short.replace("Graph_KG_", "Graph_KG.").replace(
+                ".ndjson", ""
+            )
+            count = 0
+            for line in sql_files[fname].splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                    cols = list(row.keys())
+                    vals = list(row.values())
+                    placeholders = ", ".join(["?"] * len(cols))
+                    col_list = ", ".join(cols)
+                    if merge:
+                        cursor.execute(
+                            f"INSERT INTO {table_name} ({col_list}) SELECT {placeholders} "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {table_name} WHERE {cols[0]} = ?)",
+                            vals + [vals[0]],
+                        )
+                    else:
+                        cursor.execute(
+                            f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})",
+                            vals,
+                        )
+                    count += 1
+                except Exception as e:
+                    logger.debug("restore: row insert failed for %s: %s", table_name, e)
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables[table_name] = count
+
+        if f"sql/{VECTOR_FILE}" in sql_files:
+            count = 0
+            for line in sql_files[f"sql/{VECTOR_FILE}"].splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                    nid = row.get("id")
+                    emb_str = row.get("emb")
+                    meta_val = row.get("metadata")
+                    if nid and emb_str:
+                        try:
+                            if merge:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
+                                    "SELECT ?, TO_VECTOR(?, DOUBLE) "
+                                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
+                                    [nid, emb_str, nid],
+                                )
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
+                                    "VALUES (?, TO_VECTOR(?, DOUBLE))",
+                                    [nid, emb_str],
+                                )
+                            count += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables["Graph_KG.kg_NodeEmbeddings"] = count
+
+        if global_files:
+            try:
+                iris_obj = self._iris_obj()
+                for gfile_path, content in global_files.items():
+                    gname = (
+                        gfile_path.replace("globals/", "")
+                        .replace(".ndjson", "")
+                        .replace(".xml", "")
+                        .replace(".gof", "")
+                    )
+                    ndjson = content.decode("utf-8", errors="replace")
+                    count = self._import_global_from_ndjson(
+                        iris_obj, f"^{gname}", ndjson
+                    )
+                    if count > 0:
+                        restored_globals.append(gname)
+            except Exception as e:
+                logger.warning("restore: global import failed: %s", e)
+
+        restored_layers = []
+        if restored_tables:
+            restored_layers.append("sql")
+        if restored_globals:
+            restored_layers.append("globals")
+
+        if (
+            not restored_tables
+            and not restored_globals
+            and "globals" in restored_layers
+        ):
+            logger.warning(
+                "Globals-only restore: SQL tables are empty — rdf_edges queries will return no results"
+            )
+
+        return {
+            "restored_tables": restored_tables,
+            "restored_globals": restored_globals,
+            "restored_layers": restored_layers,
+            "snapshot_ts": metadata.get("created_ts", 0),
+        }
+
+    def get_unembedded_nodes(self) -> List[str]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT n.node_id FROM Graph_KG.nodes n "
+                "LEFT JOIN Graph_KG.kg_NodeEmbeddings e ON e.id = n.node_id "
+                "WHERE e.id IS NULL"
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except Exception:
+            return []
+
+    def _export_global_to_ndjson(
+        self, iris_obj, global_name: str, prefix_subs: list
+    ) -> list:
+        import json as _json
+
+        lines = []
+        gname_clean = global_name.lstrip("^")
+
+        def _recurse(subs: list):
+            cur = subs[-1] if subs else 0
+            while True:
+                nxt = (
+                    iris_obj.nextSubscript(False, global_name, *subs[:-1], cur)
+                    if subs
+                    else iris_obj.nextSubscript(False, global_name, cur)
+                )
+                if not nxt:
+                    break
+                new_subs = (subs[:-1] if subs else []) + [nxt]
+                val = iris_obj.get(global_name, *new_subs)
+                if val is not None:
+                    lines.append(_json.dumps({"k": new_subs, "v": str(val)}))
+                _recurse(new_subs + [0])
+                cur = nxt
+
+        seed = prefix_subs + [0] if prefix_subs else [0]
+        _recurse(seed)
+        return lines
+
+    def _import_global_from_ndjson(
+        self, iris_obj, global_name: str, ndjson: str
+    ) -> int:
+        import json as _json
+
+        count = 0
+        for line in ndjson.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = _json.loads(line)
+                subs = entry["k"]
+                val = entry["v"]
+                iris_obj.set(val, global_name, *subs)
+                count += 1
+            except Exception as e:
+                logger.debug("global import line failed: %s", e)
+        return count
 
     def load_obo(
         self,

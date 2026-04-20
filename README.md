@@ -542,6 +542,17 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.58.0 (2026-04-20)
+- feat: `engine.save_snapshot(path)` — portable `.ivg` ZIP: SQL tables as NDJSON + globals as NDJSON (endian-safe, cross-version) (spec 064)
+- feat: `IRISGraphEngine.snapshot_info(path)` — @staticmethod, no connection needed; metadata header with IRIS version, ivg version, has_vector_sql
+- feat: `engine.restore_snapshot(path, merge=False)` — destructive or additive restore; UPSERT on merge
+- feat: `engine.get_unembedded_nodes()` — find nodes with no embedding after restore
+- feat: `embed_fn` and `use_iris_embedding` params on IRISGraphEngine.__init__
+- feat: `Graph.KG.Snapshot` ObjectScript class for file I/O helpers
+- fix: save_snapshot skips IRIS RowID columns (edge_id etc) — prevents non-insertable column errors on restore
+- 5 E2E tests: roundtrip, snapshot_info staticmethod, destructive restore, merge restore, globals BFS after restore
+
+
 ### v1.56.0 (2026-04-19)
 - feat: `CALL ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops) YIELD path, totalCost` — Dijkstra minimum-cost path in pure ObjectScript
 - Uses edge weights from `^KG("out",0,...)` globals (set by create_edge WriteAdjacency)
