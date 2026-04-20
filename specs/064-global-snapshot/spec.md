@@ -108,3 +108,39 @@ engine.replay_changes(dirk_changes)  # from spec 063
 `iris-devtester` is a **test-only** library (in `dev` extras). The conftest.py fixture pattern in User Story 2 uses `IRISContainer` for container management — that's acceptable in test code. The snapshot I/O itself does not touch devtester.
 
 This means `save_snapshot` is available to production code (e.g., scheduled backup jobs, deployment scripts) without pulling in test infrastructure.
+
+## IRIS Tier Considerations for Embeddings
+
+### Corrected tier capability table
+
+| Tier | `$vectorop`/`$vector` (ObjectScript) | SQL `VECTOR` type | `EMBEDDING()` | `VECTOR_COSINE` SQL | Notes |
+|------|--------------------------------------|------------------|---------------|---------------------|-------|
+| Community | ✓ | ✓ | ✓ | ✓ | Free, full stack |
+| Standard/Advanced | ✓ | ✗ | ✗ | ✗ | `$vectorop` works, SQL VECTOR does not |
+| Enterprise | ✓ | ✓ | ✓ | ✓ | Full stack |
+
+**Key**: `$vectorop` is in ALL tiers — IVFFlat, BM25Index, VecIndex, PLAID all work on Standard/Advanced because they use ObjectScript globals and `$vectorop`, not SQL VECTOR columns.
+
+### What this means for snapshots
+
+- **Community/Enterprise**: `kg_NodeEmbeddings` exists (SQL VECTOR column) — include in snapshot, restore via `TO_VECTOR` import
+- **Standard/Advanced**: `kg_NodeEmbeddings` doesn't exist — skip gracefully; all `$vectorop`-based index globals (^BM25Idx, ^IVF, ^PLAID, ^VecIdx) still valid in snapshot
+
+### Auto-embedding on restore/replay — three paths
+
+```python
+engine = IRISGraphEngine(
+    conn,
+    embed_fn=None,               # Python callable (str) -> List[float] — ALL tiers
+    use_iris_embedding=False,    # True: uses EMBEDDING() SQL — Community/Enterprise only
+    embedding_dimension=768,
+)
+```
+
+Priority order when a new node needs embedding:
+1. `use_iris_embedding=True` + Community/Enterprise → `EMBEDDING(text)` SQL (IRIS-native model)
+2. `embed_fn` provided → Python callable (works ALL tiers; stores result in kg_NodeEmbeddings on C/E tiers)
+3. Neither → node added to `new_nodes_without_embeddings` in return value
+
+`save_snapshot` records `{"has_vector_sql": true/false, "embedding_dim": 768}` in metadata.json.
+`restore_snapshot` warns if snapshot has `has_vector_sql=true` but target instance lacks SQL VECTOR support.
