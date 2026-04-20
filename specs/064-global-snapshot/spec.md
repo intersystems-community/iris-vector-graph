@@ -32,6 +32,9 @@ The combined snapshot is a `.ivg` file — a ZIP archive containing:
 - Q: Restore idempotency? → A: Restore is destructive by default — clears target tables/globals before import. Optional `merge=True` for additive restore.
 - Q: Test fixture integration? → A: `IRISContainer.save_snapshot(container, path)` and `IRISContainer.restore_snapshot(container, path)` class methods for use in conftest.py — no engine instance needed for the devtester integration
 - Q: Snapshot portability — can snapshot from IRIS Community restore on IRIS Enterprise? → A: Yes — GOF globals are portable across editions; SQL NDJSON is edition-agnostic
+- Q: How does Python trigger GOF global export? → A: **Option B** — Python calls `_call_classmethod` to invoke `Graph.KG.Snapshot.ExportGlobals(outputDir, globalList)` ObjectScript helper, which writes GOF files to `/tmp/ivg_snapshot/` inside the IRIS container. Python then retrieves them via file transfer (docker cp in test context, or IRIS stream API in production). Import uses `Graph.KG.Snapshot.ImportGlobals(inputDir)` same pattern.
+- Q: What does `merge=True` mean for conflicting rows? → A: **Option A** — UPSERT semantics: snapshot rows always overwrite existing rows. Local rows not in the snapshot are preserved. Net result = snapshot state as baseline, local additions on top. Correct for the snapshot+CDC replay pattern.
+- Q: Should `snapshot_info` require an engine instance? → A: **No** — `IRISGraphEngine.snapshot_info(path)` is a `@staticmethod`. Opens the ZIP and reads `metadata.json` without any IRIS connection. `save_snapshot` and `restore_snapshot` remain instance methods.
 
 ## User Scenarios & Testing
 
@@ -87,9 +90,11 @@ engine.replay_changes(dirk_changes)  # from spec 063
 - **FR-004**: `kg_NodeEmbeddings.emb` VECTOR column MUST be exported as comma-separated float string and imported via TO_VECTOR
 - **FR-005**: `engine.restore_snapshot(path, merge=False)` restores from `.ivg` file; default destroys existing data first
 - **FR-006**: Restore MUST rebuild ^KG adjacency from either globals (fast path, if included) or rdf_edges SQL (fallback via BuildKG)
-- **FR-007**: `engine.snapshot_info(path)` returns metadata dict without loading the snapshot
+- **FR-007**: `IRISGraphEngine.snapshot_info(path)` is a `@staticmethod` — returns metadata dict from ZIP without IRIS connection
 - **FR-008**: Snapshots are portable — restorable on any IRIS instance with the same namespace, regardless of edition
 - **FR-009**: `layers=['sql']` exports only SQL tables (no globals); `layers=['globals']` exports only globals
+- **FR-010**: `Graph.KG.Snapshot.ExportGlobals(outputDir, globalListJson)` and `Graph.KG.Snapshot.ImportGlobals(inputDir)` ObjectScript ClassMethods handle GOF I/O server-side; Python retrieves/sends files via file transfer
+- **FR-011**: `merge=True` uses UPSERT semantics — snapshot rows overwrite conflicts, local-only rows are preserved
 
 ## Success Criteria
 - **SC-001**: Restore time for a 150K-node graph with embeddings < 30 seconds (vs 10+ minutes for full reload)
