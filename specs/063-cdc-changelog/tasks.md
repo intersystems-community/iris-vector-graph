@@ -62,3 +62,11 @@
 - [ ] T026 Commit and publish: `feat: v1.57.0 — CDC changelog via ^IVG.CDC, get_changes_since, replay_changes (spec 063)`
 
 **Dependencies**: T001-T002 → T003-T010 (failing tests) → T011-T012 (scaffold) → T013-T017 (wire) → T018 → T019-T020 → T021 → T022-T023 → T024-T026
+
+---
+
+## Council Conditions (required before implement)
+
+- [ ] TC-001 Add `cdc_errors` counter property to `IRISGraphEngine`: incremented (non-fatally) each time `_write_cdc` fails. Caller can inspect `engine.cdc_errors` to detect silent gaps in the changelog. Reset on `clear_changelog()`.
+- [ ] TC-002 Promote snapshot+CDC E2E test to P1: add `test_snapshot_cdc_replay_roundtrip` in `test_cdc_changelog.py` — this is the primary combined use case. Covered by TC-004 in 064 spec but should also have an entry here referencing spec 064's fixture.
+- [ ] TC-003 Implementation note for T019: verify `iris_obj.order()` exists in the installed `intersystems_iris` version before using it. If missing, use `Graph.KG.CDC.GetChangesSince(ts_ms)` ObjectScript helper returning JSON array. Both are correct approaches; the helper is more reliable across irispython versions.
