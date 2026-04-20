@@ -499,10 +499,27 @@ class IRISGraphEngine:
         # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
         GraphSchema.ensure_indexes(cursor)
 
-        # 4. Check for dimension mismatch on existing tables
+        # 4. Check for dimension mismatch on existing tables; fix untyped vector column
         try:
-            db_dim = self._get_embedding_dimension()
-            if db_dim != dim:
+            db_dim = GraphSchema.get_embedding_dimension(cursor)
+            if db_dim is None:
+                # Column exists but has no dimension (e.g. created without VECTOR(DOUBLE,N)).
+                # ALTER TABLE to add the dimension so procedure compilation succeeds.
+                logger.info(
+                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)", dim
+                )
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE Graph_KG.kg_NodeEmbeddings ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                    )
+                    cursor.execute(
+                        f"ALTER TABLE Graph_KG.kg_NodeEmbeddings_optimized ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                    )
+                    self.conn.commit()
+                    logger.info("ALTER TABLE succeeded — dimension set to %d", dim)
+                except Exception as alter_e:
+                    logger.warning("Could not alter emb column dimension: %s", alter_e)
+            elif db_dim != dim:
                 logger.error(
                     "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
                     "Vector operations will fail. You must drop and recreate kg_NodeEmbeddings to change dimension.",
