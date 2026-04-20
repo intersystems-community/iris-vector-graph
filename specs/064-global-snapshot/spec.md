@@ -123,7 +123,7 @@ This means `save_snapshot` is available to production code (e.g., scheduled back
 
 ### What this means for snapshots
 
-- **Community/Enterprise**: `kg_NodeEmbeddings` exists (SQL VECTOR column) — include in snapshot, restore via `TO_VECTOR` import
+- **Community + Advanced Server**: `kg_NodeEmbeddings` exists (SQL VECTOR column) — include in snapshot, restore via `TO_VECTOR` import
 - **Standard/Advanced**: `kg_NodeEmbeddings` doesn't exist — skip gracefully; all `$vectorop`-based index globals (^BM25Idx, ^IVF, ^PLAID, ^VecIdx) still valid in snapshot
 
 ### Auto-embedding on restore/replay — three paths
@@ -132,13 +132,13 @@ This means `save_snapshot` is available to production code (e.g., scheduled back
 engine = IRISGraphEngine(
     conn,
     embed_fn=None,               # Python callable (str) -> List[float] — ALL tiers
-    use_iris_embedding=False,    # True: uses EMBEDDING() SQL — Community/Enterprise only
+    use_iris_embedding=False,    # True: uses EMBEDDING() SQL — Community + Advanced Server only
     embedding_dimension=768,
 )
 ```
 
 Priority order when a new node needs embedding:
-1. `use_iris_embedding=True` + Community/Enterprise → `EMBEDDING(text)` SQL (IRIS-native model)
+1. `use_iris_embedding=True` + Community + Advanced Server → `EMBEDDING(text)` SQL (IRIS-native model)
 2. `embed_fn` provided → Python callable (works ALL tiers; stores result in kg_NodeEmbeddings on C/E tiers)
 3. Neither → node added to `new_nodes_without_embeddings` in return value
 
