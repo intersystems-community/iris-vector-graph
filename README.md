@@ -366,6 +366,67 @@ Falls back to unit weight (1.0 per hop = equivalent to BFS) when no weight is st
 
 ---
 
+## CDC Changelog
+
+Track every mutation in the graph — edges created, deleted, imported. Enables change replay on top of base snapshots, audit trails, and multi-user workflows where different users build on a shared base ontology.
+
+CDC is opt-in — zero performance impact when disabled.
+
+```python
+engine = IRISGraphEngine(conn, cdc=True)
+
+# All write operations are now tracked in ^IVG.CDC
+engine.create_edge("Drug:Metformin", "TREATS", "Disease:T2D")
+engine.create_edge_temporal("svc:auth", "CALLS_AT", "svc:db", timestamp=now)
+
+# Get changes since a timestamp (epoch milliseconds)
+changes = engine.get_changes_since(ts_before_session)
+# [
+#   {"ts": 1714000001234, "seq": 1, "op": "CREATE_EDGE",
+#    "src": "Drug:Metformin", "pred": "TREATS", "dst": "Disease:T2D", "graph_id": None},
+#   ...
+# ]
+
+# Replay changes on a different graph (staging, test fixture, etc.)
+result = engine_staging.replay_changes(changes)
+# {"applied": 5, "skipped": 0, "new_nodes_without_embeddings": [...]}
+
+# Idempotent — replaying twice produces same result
+engine_staging.replay_changes(changes)  # no duplicates
+
+# Optional: record replay operations in the target CDC log
+engine_staging.replay_changes(changes, record_replay=True)
+# writes REPLAY_CREATE_EDGE / REPLAY_DELETE_EDGE entries (distinguishable from originals)
+
+# Clear the changelog (all, or before a timestamp)
+engine.clear_changelog()
+engine.clear_changelog(before_ts=ts_yesterday)
+```
+
+**Key details:**
+- CDC writes go to `^IVG.CDC(ts_ms, seq)` — epoch milliseconds outer key, auto-increment seq for concurrent writes at same millisecond
+- CDC writes are non-fatal — if a CDC write fails, the primary operation (SQL + ^KG) still succeeds; check `engine.cdc_errors` to detect silent gaps
+- `replay_changes` disables CDC on the target engine during replay by default to avoid recording replayed ops as new changes
+- `get_changes_since(0)` returns all changes; `get_changes_since(ts)` returns only changes at or after that timestamp
+
+**Primary use case — snapshot + replay:**
+```python
+# Save base ontology snapshot (spec 064, coming in v1.58.0)
+engine.save_snapshot("ncit_base.ivg")
+snapshot_ts = int(time.time() * 1000)
+
+# Dirk makes changes in production (cdc=True)
+engine_prod = IRISGraphEngine(prod_conn, cdc=True)
+engine_prod.create_edge("Drug:X", "TREATS", "Disease:Y")
+
+# Restore base + apply Dirk's changes to fresh instance
+engine_test = IRISGraphEngine(test_conn)
+engine_test.restore_snapshot("ncit_base.ivg")  # v1.58.0
+engine_test.replay_changes(engine_prod.get_changes_since(snapshot_ts))
+```
+
+---
+
 ## Cypher
 
 ### Temporal edge filtering (v1.42.0+)
