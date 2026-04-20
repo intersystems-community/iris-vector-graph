@@ -34,15 +34,15 @@
 - [ ] T013 [US1] In `create_edge` (line ~2016): after `self.conn.commit()` succeeds, call `self._write_cdc("CREATE_EDGE", source_id, predicate, target_id, graph)` — T004 now PASSES
 - [ ] T014 [US1] In `delete_edge` (line ~2060): after commit succeeds, call `self._write_cdc("DELETE_EDGE", source_id, predicate, target_id)` — T005 now PASSES
 - [ ] T015 [P] In `create_edge_temporal`: after ObjectScript InsertEdge + rdf_edges insert, call `self._write_cdc("CREATE_EDGE_TEMPORAL", source, predicate, target, graph)`
-- [ ] T016 [P] In `bulk_create_edges`: after the executemany commit, loop edges and call `self._write_cdc("BULK_EDGE", s, p, o, effective_graph)` for each — one entry per edge
-- [ ] T017 [P] In `import_rdf._flush()`: after each successful edge INSERT, call `self._write_cdc("IMPORT_RDF", s, p_str, o_id, effective_graph)`
+- [ ] T016 [P] In `bulk_create_edges`: after the executemany commit, loop edges and call `self._write_cdc("BULK_EDGE", s, p, o, effective_graph)` for each — one entry per edge (cap at 10K entries; beyond that write one BULK_BATCH op with count instead of per-edge entries to preserve performance)
+- [ ] T017 [P] In `import_rdf._flush()`: accumulate CDC entries in a list during the edge loop; after the flush commit, call `_write_cdc_batch` once per flush cycle — avoids per-edge native API overhead on large RDF imports
 - [ ] T018 [US1] Run `pytest test_cdc_changelog.py -k "create or delete or five"` — T004, T005, T010 PASS
 
 ---
 
 ## Phase 5 — get_changes_since + clear_changelog
 
-- [ ] T019 [US1] Implement `get_changes_since(self, ts_ms: int) -> List[dict]`: iterate `^IVG.CDC` subscripts >= ts_ms via native API `iris_obj.order`; for each (ts, seq) pair, get value, split on `\x1f`, build dict with keys ts/seq/op/src/pred/dst/graph_id — T006, T009 now PASS (add T009 after T020)
+- [ ] T019 [US1] Implement `get_changes_since(self, ts_ms: int) -> List[dict]`: FIRST verify if `iris_obj.order()` method exists on intersystems_iris IRIS object; if yes use it; if no, add ObjectScript helper `Graph.KG.CDC.GetChangesSince(ts_ms)` that returns JSON array and call via classMethodValue — iterate subscripts; for each (ts, seq) pair, get value, split on `\x1f`, build dict with keys ts/seq/op/src/pred/dst/graph_id — T006, T009 now PASS (add T009 after T020)
 - [ ] T020 [US1] Implement `clear_changelog(self, before_ts: Optional[int] = None)`: if before_ts is None, `iris_obj.kill("^IVG.CDC")`; else iterate and kill subscripts < before_ts — T009 PASSES
 - [ ] T021 [US1] Run `pytest test_cdc_changelog.py -k "since or clear or five"` — T006, T009, T010 PASS
 
