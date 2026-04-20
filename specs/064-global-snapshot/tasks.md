@@ -75,3 +75,14 @@
 - [ ] T008b Add `ReadFileChunk(path, offset, chunkSize)` and `WriteFileChunk(path, content, append)` ClassMethods to `Snapshot.cls` — enables streaming large GOF files in 1MB chunks to avoid the 3.9MB %String limit; update T011 to use chunked reads
 - [ ] T013b Revise restore kill strategy: instead of `iris_obj.kill("^KG")` (kills entire global including temporal data), kill only specific subscript trees that are in the snapshot: `iris_obj.kill("^KG","out")`, `iris_obj.kill("^KG","in")`, `iris_obj.kill("^BM25Idx")` etc — preserves `^KG("tout"/"tin")` temporal data unless those are explicitly in the snapshot globals list
 - [ ] T004b Add assertion to snapshot_info test: create 5 nodes, save snapshot, call `IRISGraphEngine.snapshot_info(path)` and assert `result["tables"]["Graph_KG.nodes"] >= 5` and `result.get("has_vector_sql")` is bool
+
+---
+
+## Council Conditions (required before implement)
+
+- [ ] TC-001 Update metadata.json globals format to capture subscript-level granularity: instead of `"globals": ["^KG", "^BM25Idx"]`, use `"globals": {"^KG": ["out", "in"], "^BM25Idx": [], "^IVF": []}` — restore kills only the specific subscript trees listed, not the whole global. Update T011 (save) and T013 (restore) accordingly.
+- [ ] TC-002 Add benchmark task: `test_snapshot_benchmark_10k` — load 10K nodes + edges + embeddings, save snapshot, restore, assert restore time < 60s (relaxed from SC-001's 30s; 150K is aspirational). This is the CI-testable proxy for SC-001.
+- [ ] TC-003 Clarify embed_fn scope in T010: rename parameter to `embed_fn` (general-purpose, not restore-only); wire into `create_node` if `embed_fn` is set (auto-embed at write time); document that post-restore embedding is one use case, not the only one. If full create_node wiring is deferred, name it `restore_embed_fn` and document the limitation explicitly.
+- [ ] TC-004 Promote snapshot+CDC E2E test to P1 in 064: add `test_snapshot_cdc_replay_roundtrip` — save snapshot; add 3 edges via CDC-enabled engine; `get_changes_since(snapshot_ts)`; restore snapshot; `replay_changes(changes)`; assert all 3 added edges present AND no extra edges. This is the primary use case for the combined feature.
+- [ ] TC-005 Add warning in `restore_snapshot` when `layers=['globals']` and SQL tables are empty after restore: log at WARNING level "Globals-only restore: SQL tables are empty — rdf_edges queries will return no results"; include `restored_layers` in return value.
+- [ ] TC-006 In `Graph.KG.Snapshot.cls` implementation (T008): use `%Library.GlobalEdit` API (IRIS 2024+ preferred), NOT `^%GO` utility. Verify `%Library.GlobalEdit` is available in the target container before using it; fall back to `^%GO` if not. Document which was used in the return value of ExportGlobals.
