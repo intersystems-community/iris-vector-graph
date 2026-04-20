@@ -40,19 +40,8 @@ class IRISGraphEngine:
         embedding_dimension: Optional[int] = None,
         embedder: Optional[Any] = None,
         embedding_config: Optional[str] = None,
+        cdc: bool = False,
     ):
-        """
-        Initialize with IRIS database connection.
-
-        Args:
-            connection: IRIS database connection object
-            embedding_dimension: Optional fixed dimension for vector embeddings.
-                                 If not provided, it will be auto-detected from the schema.
-            embedder: Optional callable or object with .encode() or .embed() method
-                      for text-to-vector conversion.
-            embedding_config: Optional name of the IRIS embedding configuration
-                              (for native IRIS 2024.3+ embedding).
-        """
         self.conn = connection
         if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
             from .embedded import EmbeddedConnection
@@ -61,6 +50,8 @@ class IRISGraphEngine:
         self.embedding_dimension = embedding_dimension
         self.embedder = embedder
         self.embedding_config = embedding_config
+        self._cdc = cdc
+        self._cdc_errors = 0
         set_schema_prefix("Graph_KG")
         self._embedding_function_available: Optional[bool] = None
         self.capabilities: IRISCapabilities = IRISCapabilities()
@@ -411,6 +402,139 @@ class IRISGraphEngine:
             f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)"
         )
 
+    @property
+    def cdc(self) -> bool:
+        return self._cdc
+
+    @property
+    def cdc_errors(self) -> int:
+        return self._cdc_errors
+
+    def _write_cdc(self, op: str, src: str, pred: str, dst: str, graph_id=None):
+        if not getattr(self, "_cdc", False):
+            return
+        try:
+            import time as _time
+
+            ts_ms = int(_time.time() * 1000)
+            iris_obj = self._iris_obj()
+            seq = int(iris_obj.increment(1, "^IVG.CDC.seq", ts_ms))
+            val = f"{op}\x1f{src}\x1f{pred}\x1f{dst}\x1f{graph_id or ''}"
+            iris_obj.set(val, "^IVG.CDC", ts_ms, seq)
+        except Exception as e:
+            self._cdc_errors += 1
+            logger.debug("CDC write failed (non-fatal): %s", e)
+
+    def get_changes_since(self, ts_ms: int) -> List[Dict[str, Any]]:
+        iris_obj = self._iris_obj()
+        results = []
+        cur_ts = ts_ms - 1
+        while True:
+            cur_ts_raw = iris_obj.nextSubscript(False, "^IVG.CDC", cur_ts)
+            if not cur_ts_raw:
+                break
+            cur_ts = int(cur_ts_raw)
+            seq = 0
+            while True:
+                seq_raw = iris_obj.nextSubscript(False, "^IVG.CDC", cur_ts, seq)
+                if not seq_raw:
+                    break
+                seq = int(seq_raw)
+                val = iris_obj.get("^IVG.CDC", cur_ts, seq)
+                if val:
+                    parts = str(val).split("\x1f")
+                    if len(parts) >= 5:
+                        results.append(
+                            {
+                                "ts": cur_ts,
+                                "seq": seq,
+                                "op": parts[0],
+                                "src": parts[1],
+                                "pred": parts[2],
+                                "dst": parts[3],
+                                "graph_id": parts[4] or None,
+                            }
+                        )
+        return results
+
+    def replay_changes(
+        self, entries: List[Dict[str, Any]], record_replay: bool = False
+    ) -> Dict[str, Any]:
+        applied = 0
+        skipped = 0
+        new_nodes_without_embeddings: List[str] = []
+        orig_cdc = self._cdc
+
+        for entry in entries:
+            op = entry.get("op", "")
+            src = entry.get("src", "")
+            pred = entry.get("pred", "")
+            dst = entry.get("dst", "")
+            graph_id = entry.get("graph_id")
+
+            try:
+                if record_replay:
+                    replay_op = f"REPLAY_{op}"
+                    self._cdc = True
+                    self._write_cdc(replay_op, src, pred, dst, graph_id)
+
+                self._cdc = False
+
+                if op in ("CREATE_EDGE", "BULK_EDGE", "IMPORT_RDF"):
+                    cursor_r = self.conn.cursor()
+                    for nid in [src, dst]:
+                        try:
+                            cursor_r.execute(
+                                f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+                                [nid, nid],
+                            )
+                            self.conn.commit()
+                        except Exception:
+                            try:
+                                self.conn.rollback()
+                            except Exception:
+                                pass
+                    ok = self.create_edge(src, pred, dst, graph=graph_id)
+                    applied += 1 if ok else 0
+                    skipped += 0 if ok else 1
+                elif op == "CREATE_EDGE_TEMPORAL":
+                    ok = self.create_edge_temporal(src, pred, dst, graph=graph_id)
+                    applied += 1 if ok else 0
+                    skipped += 0 if ok else 1
+                elif op == "DELETE_EDGE":
+                    self.delete_edge(src, pred, dst)
+                    applied += 1
+                else:
+                    skipped += 1
+
+            except Exception as e:
+                logger.debug("replay_changes entry failed (non-fatal): %s", e)
+                skipped += 1
+            finally:
+                self._cdc = orig_cdc
+
+        return {
+            "applied": applied,
+            "skipped": skipped,
+            "new_nodes_without_embeddings": new_nodes_without_embeddings,
+        }
+
+    def clear_changelog(self, before_ts: Optional[int] = None) -> None:
+        iris_obj = self._iris_obj()
+        if before_ts is None:
+            iris_obj.kill("^IVG.CDC")
+            iris_obj.kill("^IVG.CDC.seq")
+        else:
+            cur_ts = 0
+            while True:
+                cur_ts = iris_obj.nextSubscript(False, "^IVG.CDC", cur_ts)
+                if cur_ts is None or cur_ts == "":
+                    break
+                if int(cur_ts) >= before_ts:
+                    break
+                iris_obj.kill("^IVG.CDC", int(cur_ts))
+        self._cdc_errors = 0
+
     def initialize_schema(self, auto_deploy_objectscript: bool = True) -> None:
         """
         Create the base schema tables in IRIS, using the configured embedding_dimension.
@@ -506,7 +630,8 @@ class IRISGraphEngine:
                 # Column exists but has no dimension (e.g. created without VECTOR(DOUBLE,N)).
                 # ALTER TABLE to add the dimension so procedure compilation succeeds.
                 logger.info(
-                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)", dim
+                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)",
+                    dim,
                 )
                 try:
                     cursor.execute(
@@ -2026,13 +2151,31 @@ class IRISGraphEngine:
             qual_json = json.dumps(qualifiers) if qualifiers else None
             if graph:
                 cursor.execute(
-                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
-                    [source_id, predicate, target_id, qual_json, graph],
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
+                    [
+                        source_id,
+                        predicate,
+                        target_id,
+                        qual_json,
+                        graph,
+                        source_id,
+                        predicate,
+                        target_id,
+                        graph,
+                    ],
                 )
             else:
                 cursor.execute(
-                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                    [source_id, predicate, target_id, qual_json],
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id IS NULL)",
+                    [
+                        source_id,
+                        predicate,
+                        target_id,
+                        qual_json,
+                        source_id,
+                        predicate,
+                        target_id,
+                    ],
                 )
             self.conn.commit()
         except Exception as e:
@@ -2055,6 +2198,7 @@ class IRISGraphEngine:
             )
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
+        self._write_cdc("CREATE_EDGE", source_id, predicate, target_id, graph)
         return True
 
     def delete_edge(self, source_id: str, predicate: str, target_id: str) -> bool:
@@ -2075,6 +2219,7 @@ class IRISGraphEngine:
             )
         except Exception as e:
             logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
+        self._write_cdc("DELETE_EDGE", source_id, predicate, target_id)
         return True
 
     def list_graphs(self) -> List[str]:

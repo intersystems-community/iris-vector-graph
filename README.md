@@ -542,6 +542,13 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.57.0 (2026-04-20)
+- feat: CDC changelog via ^IVG.CDC — opt-in with `IRISGraphEngine(conn, cdc=True)` (spec 063)
+- feat: `get_changes_since(ts_ms)`, `replay_changes(entries, record_replay=False)`, `clear_changelog()`
+- feat: `cdc_errors` counter for silent gap detection
+- fix: `create_edge` now uses WHERE NOT EXISTS (idempotent — prevents duplicate rows when graph_id IS NULL unique constraint allows NULL duplicates)
+
+
 ### v1.56.0 (2026-04-19)
 - feat: `CALL ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops) YIELD path, totalCost` — Dijkstra minimum-cost path in pure ObjectScript
 - Uses edge weights from `^KG("out",0,...)` globals (set by create_edge WriteAdjacency)

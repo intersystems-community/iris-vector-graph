@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "1.56.0"
+version = "1.57.0"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,9 @@ requires-python = ">=3.10"
 # Core dependencies
 dependencies = [
     "intersystems-irispython>=3.2.0",
+    "numpy>=2.2.6",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
 ]
 
 [project.optional-dependencies]
