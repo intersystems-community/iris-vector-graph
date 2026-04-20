@@ -67,3 +67,11 @@
 - [ ] T020 Commit and publish: `feat: v1.58.0 — save_snapshot/restore_snapshot, snapshot_info @staticmethod, embed_fn (spec 064)`
 
 **Dependencies**: T001-T002 → T003-T007 (failing) → T008-T009 (ObjectScript) → T010-T011 (save) → T012-T013 (restore) → T014 → T015-T016 (embed) → T017-T020
+
+---
+
+## Remediations from Analysis
+
+- [ ] T008b Add `ReadFileChunk(path, offset, chunkSize)` and `WriteFileChunk(path, content, append)` ClassMethods to `Snapshot.cls` — enables streaming large GOF files in 1MB chunks to avoid the 3.9MB %String limit; update T011 to use chunked reads
+- [ ] T013b Revise restore kill strategy: instead of `iris_obj.kill("^KG")` (kills entire global including temporal data), kill only specific subscript trees that are in the snapshot: `iris_obj.kill("^KG","out")`, `iris_obj.kill("^KG","in")`, `iris_obj.kill("^BM25Idx")` etc — preserves `^KG("tout"/"tin")` temporal data unless those are explicitly in the snapshot globals list
+- [ ] T004b Add assertion to snapshot_info test: create 5 nodes, save snapshot, call `IRISGraphEngine.snapshot_info(path)` and assert `result["tables"]["Graph_KG.nodes"] >= 5` and `result.get("has_vector_sql")` is bool

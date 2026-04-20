@@ -121,15 +121,15 @@ This means `save_snapshot` is available to production code (e.g., scheduled back
 | Tier | `$vectorop`/`$vector` (ObjectScript) | SQL `VECTOR` type | `EMBEDDING()` | `VECTOR_COSINE` SQL | Notes |
 |------|--------------------------------------|------------------|---------------|---------------------|-------|
 | Community | ✓ | ✓ | ✓ | ✓ | Free, full stack |
-| Standard/Advanced | ✓ | ✗ | ✗ | ✗ | `$vectorop` works, SQL VECTOR does not |
+| IRIS Server/Enterprise/Elite/Entree | ✓ | ✗ | ✗ | ✗ | `$vectorop` works, SQL VECTOR does not |
 | Enterprise | ✓ | ✓ | ✓ | ✓ | Full stack |
 
-**Key**: `$vectorop` is in ALL tiers — IVFFlat, BM25Index, VecIndex, PLAID all work on Standard/Advanced because they use ObjectScript globals and `$vectorop`, not SQL VECTOR columns.
+**Key**: `$vectorop` is in ALL tiers — IVFFlat, BM25Index, VecIndex, PLAID all work on IRIS Server/Enterprise/Elite/Entree because they use ObjectScript globals and `$vectorop`, not SQL VECTOR columns.
 
 ### What this means for snapshots
 
 - **Community + Advanced Server**: `kg_NodeEmbeddings` exists (SQL VECTOR column) — include in snapshot, restore via `TO_VECTOR` import
-- **Standard/Advanced**: `kg_NodeEmbeddings` doesn't exist — skip gracefully; all `$vectorop`-based index globals (^BM25Idx, ^IVF, ^PLAID, ^VecIdx) still valid in snapshot
+- **IRIS Server/Enterprise/Elite/Entree**: `kg_NodeEmbeddings` doesn't exist — skip gracefully; all `$vectorop`-based index globals (^BM25Idx, ^IVF, ^PLAID, ^VecIdx) still valid in snapshot
 
 ### Auto-embedding on restore/replay — three paths
 
