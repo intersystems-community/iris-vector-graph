@@ -74,3 +74,13 @@ engine.replay_changes(dirk_changes)
 - **SC-001**: 5 consecutive create_edge calls with cdc=True → `get_changes_since(0)` returns exactly 5 entries
 - **SC-002**: Replay on a fresh graph produces identical rdf_edges rows
 - **SC-003**: cdc=False (default) — no entries, no performance regression on existing 531 tests
+
+## IRIS Tier Considerations
+
+CDC itself (`^IVG.CDC` global writes) works on ALL tiers — it uses ObjectScript globals and `$Increment`, not SQL VECTOR or EMBEDDING().
+
+`replay_changes` may need to generate embeddings for new nodes. The approach depends on tier:
+- **Community / Enterprise**: can use `EMBEDDING()` SQL function if IRIS ai-core model is configured (`use_iris_embedding=True`), OR Python `embed_fn`
+- **Standard/Advanced**: SQL VECTOR unavailable — use Python `embed_fn` only; IVFFlat/BM25/VecIndex still work (they use `$vectorop` which is available on all tiers)
+
+`replay_changes` return value includes `new_nodes_without_embeddings` — the caller decides how to embed them based on their tier and available models.
