@@ -15,6 +15,8 @@ Opt-in change data capture for iris-vector-graph. When `cdc=True`, every write o
 - Q: What goes in the CDC entry? → A: `^IVG.CDC(ts, seq) = $LB(op, src, pred, dst, graph_id, qualifiers_json)` where op is one of: CREATE_EDGE, DELETE_EDGE, CREATE_EDGE_TEMPORAL, BULK_EDGE, IMPORT_RDF
 - Q: Sequence within same timestamp? → A: `seq` is an auto-increment counter per timestamp via `$Increment(^IVG.CDC.seq)` — handles concurrent writes
 - Q: Replay semantics? → A: Idempotent — replaying CREATE_EDGE uses WHERE NOT EXISTS, DELETE_EDGE is non-fatal if edge doesn't exist
+- Q: Timestamp resolution? → A: **Epoch milliseconds** (`int(time.time() * 1000)`) — `get_changes_since(ts)` accepts millis; finer resolution, fewer seq collisions
+- Q: Does replay write CDC entries on target? → A: **No by default**. `replay_changes(entries, record_replay=False)` is silent. Pass `record_replay=True` to write `REPLAY_CREATE_EDGE` / `REPLAY_DELETE_EDGE` entries (distinguishable from originals) on the target engine.
 
 ## User Scenarios & Testing
 
@@ -64,8 +66,8 @@ engine.replay_changes(dirk_changes)
 - **FR-002**: With cdc=True, every successful `create_edge` MUST append `^IVG.CDC(ts, seq) = $LB("CREATE_EDGE", s, p, o, graph_id, "")`
 - **FR-003**: With cdc=True, every successful `delete_edge` MUST append with op="DELETE_EDGE"
 - **FR-004**: With cdc=True, `create_edge_temporal`, `bulk_create_edges`, `import_rdf` MUST all append entries
-- **FR-005**: `engine.get_changes_since(ts) -> List[dict]` returns all CDC entries with timestamp >= ts as list of dicts
-- **FR-006**: `engine.replay_changes(entries)` replays a list of change dicts, idempotent (CREATE uses WHERE NOT EXISTS, DELETE is non-fatal)
+- **FR-005**: `engine.get_changes_since(ts) -> List[dict]` where `ts` is epoch milliseconds; returns all CDC entries with timestamp >= ts as list of dicts with keys: `ts`, `seq`, `op`, `src`, `pred`, `dst`, `graph_id`
+- **FR-006**: `engine.replay_changes(entries, record_replay=False)` replays a list of change dicts, idempotent; when `record_replay=True` writes `REPLAY_CREATE_EDGE`/`REPLAY_DELETE_EDGE` entries to `^IVG.CDC` on the target engine
 - **FR-007**: `engine.clear_changelog(before_ts=None)` deletes CDC entries
 - **FR-008**: CDC writes MUST be non-fatal — if ^IVG.CDC write fails, the primary operation still succeeds with a debug log
 - **FR-009**: `engine.cdc` property returns True/False
