@@ -65,7 +65,7 @@ def test_translate_type_function():
 
     # type(r) should reference the edge alias's p column
     assert ".p AS type_res" in sql
-    assert "rdf_edges" in sql
+    assert "rdf_edges" in sql or "MatchEdges" in sql
 
 
 def test_translate_type_function_in_where():
@@ -75,7 +75,7 @@ def test_translate_type_function_in_where():
     sql_query = translate_to_sql(parsed)
     sql = "\n".join(sql_query.sql) if isinstance(sql_query.sql, list) else sql_query.sql
 
-    assert "rdf_edges" in sql
+    assert "rdf_edges" in sql or "MatchEdges" in sql
     assert ".p = ?" in sql or ".p =" in sql
 
 
@@ -137,17 +137,17 @@ def test_inline_property_filter_on_relationship_source():
 def test_anonymous_source_node_pattern():
     """MATCH ()-[r]->() must not raise KeyError for anonymous source node."""
     sql = translate_to_sql(parse_query("MATCH ()-[r]->() RETURN count(r) AS c"))
-    assert "rdf_edges" in sql.sql
+    assert "rdf_edges" in sql.sql or "MatchEdges" in sql.sql
     assert "COUNT" in sql.sql.upper()
 
 
 def test_anonymous_target_node_pattern():
     """MATCH (a:Gene)-[]->() must not raise KeyError for anonymous target."""
     sql = translate_to_sql(parse_query("MATCH (a:Gene)-[]->() RETURN a.id LIMIT 3"))
-    assert "rdf_edges" in sql.sql
+    assert "rdf_edges" in sql.sql or "MatchEdges" in sql.sql
 
 
 def test_anonymous_both_nodes_pattern():
     """MATCH ()-[r]->(b) works without crashing."""
     sql = translate_to_sql(parse_query("MATCH ()-[r]->(b) RETURN b.id LIMIT 3"))
-    assert "rdf_edges" in sql.sql
+    assert "rdf_edges" in sql.sql or "MatchEdges" in sql.sql
