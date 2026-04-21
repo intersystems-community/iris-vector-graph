@@ -967,7 +967,14 @@ class Parser:
                     arg = args[0] if args else None
                     return ast.AggregationFunction(name.lower(), arg, distinct)
                 else:
-                    return ast.FunctionCall(name.lower(), args)
+                    call = ast.FunctionCall(name.lower(), args)
+                if self.matches(TokenType.DOT):
+                    prop_tok = self.expect(TokenType.IDENTIFIER)
+                    return ast.FunctionCall(
+                        "__prop__",
+                        [call, ast.Literal(prop_tok.value)]
+                    )
+                return call
 
             if self.matches(TokenType.DOT):
                 prop_tok = self.expect(TokenType.IDENTIFIER)
