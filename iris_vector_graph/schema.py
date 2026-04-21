@@ -111,6 +111,14 @@ CREATE TABLE Graph_KG.kg_NodeEmbeddings_optimized (
     CONSTRAINT fk_emb_node_opt FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)
 );
 
+CREATE TABLE IF NOT EXISTS Graph_KG.kg_EdgeEmbeddings (
+    s    VARCHAR(256) %EXACT NOT NULL,
+    p    VARCHAR(512) %EXACT NOT NULL,
+    o_id VARCHAR(256) %EXACT NOT NULL,
+    emb  VECTOR(DOUBLE, {embedding_dimension}),
+    CONSTRAINT pk_edge_emb PRIMARY KEY (s, p, o_id)
+);
+
 CREATE TABLE Graph_KG.docs(
   id    VARCHAR(256) %EXACT PRIMARY KEY,
   text  VARCHAR(4000) %EXACT
@@ -482,6 +490,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "Graph_KG.rdf_edges",
             "Graph_KG.kg_NodeEmbeddings",
             "Graph_KG.kg_NodeEmbeddings_optimized",
+            "Graph_KG.kg_EdgeEmbeddings",
             "Graph_KG.docs",
         ]
 

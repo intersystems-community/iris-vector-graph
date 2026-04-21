@@ -38,6 +38,7 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 | **IVFFlat** | Inverted File flat vector index — Python k-means build (sklearn), pure ObjectScript query. Tunable `nprobe` recall/speed tradeoff. `nprobe=nlist` → exact search. Cypher `CALL ivg.ivf.search(name, vec, k, nprobe)`. |
 | **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
 | **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
+| **Edge Embeddings** | Semantic search over graph relationships — `embed_edges()` encodes each `(s, p, o_id)` triple into `kg_EdgeEmbeddings`; `edge_vector_search()` retrieves the most similar edges to a query vector. Snapshot-portable. |
 | **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, `shortestPath()` / `allShortestPaths()`, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
 | **Graph Analytics** | PageRank, WCC, CDLP, PPR-guided subgraph — pure ObjectScript over `^KG` globals. |
 | **FHIR Bridge** | ICD-10→MeSH mapping via UMLS for clinical-to-KG integration. |
@@ -295,6 +296,45 @@ Global storage: `^IVF(name, "cfg"|"centroid"|"list")` — independent of `^KG`, 
 
 ---
 
+## Edge Embeddings
+
+Embed every graph triple as a natural-language sentence and search relationships semantically. Useful for retrieving the edges most similar to a free-text query — e.g., "drug strongly associated with autoimmune disease".
+
+```python
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+engine.initialize_schema()
+
+engine.embed_edges(
+    text_fn=lambda s, p, o: f"{s} {p.replace('_', ' ')} {o}",
+    batch_size=500,
+)
+
+results = engine.edge_vector_search(
+    query_embedding=my_encoder.encode("drug associated with autoimmune disease"),
+    top_k=10,
+    score_threshold=0.7,
+)
+for r in results:
+    print(r["s"], r["p"], r["o_id"], r["score"])
+```
+
+**`embed_edges(model, text_fn, where, batch_size, force, progress_callback) -> dict`**
+
+| Param | Default | Description |
+|-------|---------|-------------|
+| `text_fn` | `lambda s,p,o: f"{s} {p} {o}"` | Serializes each triple to the string that gets embedded |
+| `where` | None | SQL fragment on `(s, p, o_id)` to embed a subset — e.g. `"p = 'associated_with'"` |
+| `force` | False | Re-embed edges already in `kg_EdgeEmbeddings` |
+| `batch_size` | 500 | Edges per batch; commits after each batch |
+
+Returns `{"embedded": int, "skipped": int, "errors": int, "total": int}`. Restores the original embedder in a `finally` block.
+
+**`edge_vector_search(query_embedding, top_k=10, score_threshold=None) -> list[dict]`**
+
+Returns `[{"s": str, "p": str, "o_id": str, "score": float}, ...]` sorted descending by cosine similarity. The `kg_EdgeEmbeddings` table (`VECTOR(DOUBLE, {dim})`, composite PK on `(s, p, o_id)`) is included in `save_snapshot()` / `restore_snapshot()` — edge embeddings survive a snapshot round-trip without re-embedding.
+
+---
+
 ## PLAID Multi-Vector Search
 
 ```python
@@ -490,6 +530,7 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 | `rdf_labels` | Node labels (s, label) |
 | `rdf_props` | Node properties (s, key, val) |
 | `kg_NodeEmbeddings` | HNSW vector index (id, emb VECTOR) |
+| `kg_EdgeEmbeddings` | Triple embeddings (s, p, o_id, emb VECTOR) — composite PK |
 | `fhir_bridges` | ICD-10→MeSH clinical code mappings |
 
 ### ObjectScript Classes
@@ -541,6 +582,13 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.59.0 (2026-04-21)
+- feat: `embed_edges(model, text_fn, where, batch_size, force, progress_callback)` — embed every `(s, p, o_id)` triple into `kg_EdgeEmbeddings(VECTOR(DOUBLE))` (spec 065)
+- feat: `edge_vector_search(query_embedding, top_k, score_threshold)` — cosine similarity search over edge embeddings
+- feat: `kg_EdgeEmbeddings` added to schema DDL (`CREATE TABLE IF NOT EXISTS`, composite PK), `get_schema_status()` required tables, and snapshot save/restore
+- Default text serialization: `"{s} {p} {o_id}"` — caller-overridable via `text_fn`; `force=False` skips already-embedded edges; mirrors `embed_nodes` API exactly
+
 
 ### v1.58.1 (2026-04-20)
 - feat: `startNode(r)` and `endNode(r)` functions — return source/target node IDs from a relationship variable
