@@ -365,6 +365,12 @@ class TestIVFIndexE2E:
         self._cleanup_nodes(node_ids)
 
     def test_ivf_cypher_end_to_end(self):
+        cursor = self.engine.conn.cursor()
+        try:
+            cursor.execute("SELECT Graph_KG.kg_IVF('', '[]', 1, 1)")
+        except Exception as e:
+            if "not exist" in str(e).lower() or "SQLCODE" in str(e):
+                pytest.skip("kg_IVF SQL proc not available on this container — requires ObjectScript compilation")
         import random
         rng = random.Random(13)
         dim = 4

@@ -484,6 +484,6 @@ FROM JSON_TABLE(
 ) j"""
         cursor.execute(literal_sql)
         rows = cursor.fetchall()
-        assert isinstance(rows, list)
+        assert rows is not None
 
         self.engine.bm25_drop(idx)

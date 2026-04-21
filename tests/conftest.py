@@ -140,7 +140,7 @@ Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_labels(s VARCHAR(256) %EXACT NOT NUL
 Do stmt.%Execute()
 Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_props(s VARCHAR(256) %EXACT NOT NULL, key VARCHAR(128) %EXACT NOT NULL, val VARCHAR(4000) %EXACT, CONSTRAINT pk_props PRIMARY KEY (s, key))")
 Do stmt.%Execute()
-Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_edges(edge_id BIGINT IDENTITY PRIMARY KEY, s VARCHAR(256) %EXACT NOT NULL, p VARCHAR(128) %EXACT NOT NULL, o_id VARCHAR(256) %EXACT NOT NULL, qualifiers %Library.DynamicObject, CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id), CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES Graph_KG.nodes(node_id), CONSTRAINT u_spo UNIQUE (s, p, o_id))")
+Do stmt.%Prepare("CREATE TABLE Graph_KG.rdf_edges(edge_id BIGINT IDENTITY PRIMARY KEY, s VARCHAR(256) %EXACT NOT NULL, p VARCHAR(128) %EXACT NOT NULL, o_id VARCHAR(256) %EXACT NOT NULL, qualifiers %Library.DynamicObject, graph_id VARCHAR(256) %EXACT NULL, CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id), CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES Graph_KG.nodes(node_id), CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id))")
 Do stmt.%Execute()
 Do stmt.%Prepare("CREATE TABLE Graph_KG.kg_NodeEmbeddings (id VARCHAR(256) %EXACT PRIMARY KEY, emb VECTOR(DOUBLE), metadata %Library.DynamicObject, CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id))")
 Do stmt.%Execute()
@@ -149,6 +149,8 @@ Do stmt.%Execute()
 Do stmt.%Prepare("CREATE TABLE Graph_KG.docs(id VARCHAR(256) %EXACT PRIMARY KEY, text VARCHAR(4000) %EXACT)")
 Do stmt.%Execute()
 Do stmt.%Prepare("CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)")
+Do stmt.%Execute()
+Do stmt.%Prepare("CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)")
 Do stmt.%Execute()
 
 Do stmt.%Prepare("CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes")
@@ -376,6 +378,16 @@ def iris_connection(iris_test_container):
                 logger.error(f"Failed to connect to IRIS on attempt {attempt + 1}: {e}")
                 if attempt == 5:
                     raise
+
+    from iris_vector_graph.schema import GraphSchema
+    try:
+        cursor_m = conn.cursor()
+        GraphSchema.add_graph_id_column(cursor_m)
+        GraphSchema.update_spo_unique_constraint(cursor_m)
+        GraphSchema.add_graph_id_index(cursor_m)
+        conn.commit()
+    except Exception:
+        pass
 
     yield conn
     if conn:
