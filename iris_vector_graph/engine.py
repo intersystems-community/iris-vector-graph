@@ -2794,6 +2794,22 @@ class IRISGraphEngine:
                 logger.debug("Snapshot: kg_NodeEmbeddings not available: %s", e)
                 metadata["has_vector_sql"] = False
 
+            EDGE_VECTOR_TABLE = "Graph_KG.kg_EdgeEmbeddings"
+            try:
+                cursor.execute(f"SELECT s, p, o_id, emb FROM {EDGE_VECTOR_TABLE}")
+                rows = cursor.fetchall()
+                lines = []
+                for row in rows:
+                    s_val, p_val, o_val, emb_val = row[0], row[1], row[2], row[3]
+                    emb_str = str(emb_val) if emb_val is not None else None
+                    lines.append(
+                        _json.dumps({"s": s_val, "p": p_val, "o_id": o_val, "emb": emb_str})
+                    )
+                sql_data[EDGE_VECTOR_TABLE] = "\n".join(lines)
+                metadata["tables"][EDGE_VECTOR_TABLE] = len(rows)
+            except Exception as e:
+                logger.debug("Snapshot: kg_EdgeEmbeddings not available: %s", e)
+
         if "globals" in layers:
             GLOBALS_EXPORT = [
                 ("KG", [["out"], ["in"]]),
@@ -3075,6 +3091,46 @@ class IRISGraphEngine:
             except Exception:
                 pass
             restored_tables["Graph_KG.kg_NodeEmbeddings"] = count
+
+        EDGE_VECTOR_FILE = "Graph_KG_kg_EdgeEmbeddings.ndjson"
+        if f"sql/{EDGE_VECTOR_FILE}" in sql_files:
+            count = 0
+            for line in sql_files[f"sql/{EDGE_VECTOR_FILE}"].splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                    s_val = row.get("s")
+                    p_val = row.get("p")
+                    o_val = row.get("o_id")
+                    emb_str = row.get("emb")
+                    if s_val and p_val and o_val and emb_str:
+                        try:
+                            if merge:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
+                                    "SELECT ?, ?, ?, TO_VECTOR(?, DOUBLE) "
+                                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_EdgeEmbeddings "
+                                    "WHERE s=? AND p=? AND o_id=?)",
+                                    [s_val, p_val, o_val, emb_str, s_val, p_val, o_val],
+                                )
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
+                                    "VALUES (?, ?, ?, TO_VECTOR(?, DOUBLE))",
+                                    [s_val, p_val, o_val, emb_str],
+                                )
+                            count += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables["Graph_KG.kg_EdgeEmbeddings"] = count
 
         if global_files:
             try:
@@ -3423,6 +3479,160 @@ class IRISGraphEngine:
             }
         finally:
             self.embedder = orig_embedder
+
+    def embed_edges(
+        self,
+        model=None,
+        text_fn=None,
+        where: str = None,
+        batch_size: int = 500,
+        force: bool = False,
+        progress_callback=None,
+    ) -> dict:
+        if where is not None:
+            if any(
+                x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")
+            ):
+                raise ValueError(f"Unsafe WHERE clause rejected: {where!r}")
+
+        orig_embedder = self.embedder
+        if model is not None:
+            if isinstance(model, str):
+                from sentence_transformers import SentenceTransformer
+
+                self.embedder = SentenceTransformer(model)
+            else:
+                self.embedder = model
+
+        try:
+            cursor = self.conn.cursor()
+
+            where_clause = f"WHERE {where}" if where else ""
+            cursor.execute(
+                f"SELECT s, p, o_id FROM {_table('rdf_edges')} {where_clause}"
+            )
+            all_edges = [(row[0], row[1], row[2]) for row in cursor.fetchall()]
+            n_total = len(all_edges)
+
+            if not force:
+                cursor.execute(
+                    f"SELECT s, p, o_id FROM {_table('kg_EdgeEmbeddings')}"
+                )
+                already_embedded = {
+                    (row[0], row[1], row[2]) for row in cursor.fetchall()
+                }
+                to_embed = [e for e in all_edges if e not in already_embedded]
+            else:
+                to_embed = all_edges
+
+            n_to_embed = len(to_embed)
+            embedded = skipped = errors = 0
+
+            for batch_start in range(0, n_to_embed, batch_size):
+                batch = to_embed[batch_start : batch_start + batch_size]
+
+                for s, p, o_id in batch:
+                    if text_fn is not None:
+                        try:
+                            text = text_fn(s, p, o_id)
+                        except Exception as ex:
+                            logger.warning(
+                                "embed_edges: text_fn raised for (%s, %s, %s): %s",
+                                s, p, o_id, ex,
+                            )
+                            errors += 1
+                            continue
+                    else:
+                        text = f"{s} {p} {o_id}"
+
+                    if not text:
+                        skipped += 1
+                        continue
+
+                    try:
+                        emb = self.embed_text(text)
+                        emb_str = ",".join(str(x) for x in emb)
+                        try:
+                            cursor.execute(
+                                f"DELETE FROM {_table('kg_EdgeEmbeddings')} "
+                                "WHERE s=? AND p=? AND o_id=?",
+                                [s, p, o_id],
+                            )
+                        except Exception:
+                            pass
+                        cursor.execute(
+                            f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
+                            "(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?))",
+                            [s, p, o_id, emb_str],
+                        )
+                        embedded += 1
+                    except Exception as ex:
+                        logger.warning(
+                            "embed_edges: failed to embed (%s, %s, %s): %s",
+                            s, p, o_id, ex,
+                        )
+                        errors += 1
+
+                self.conn.commit()
+                n_done = batch_start + len(batch)
+                logger.info(
+                    "embed_edges: %d/%d processed (%d embedded)",
+                    n_done, n_to_embed, embedded,
+                )
+                if progress_callback:
+                    progress_callback(n_done, n_to_embed)
+
+            skipped += n_total - n_to_embed
+            return {
+                "embedded": embedded,
+                "skipped": skipped,
+                "errors": errors,
+                "total": n_total,
+            }
+        finally:
+            self.embedder = orig_embedder
+
+    def edge_vector_search(
+        self,
+        query_embedding,
+        top_k: int = 10,
+        score_threshold: float = None,
+    ) -> List[dict]:
+        if isinstance(query_embedding, list):
+            import json as _json
+            query_vec_str = _json.dumps(query_embedding)
+            dim = len(query_embedding)
+        else:
+            query_vec_str = query_embedding
+            dim = str(query_embedding).count(",") + 1
+
+        query_cast = f"TO_VECTOR(?, DOUBLE, {dim})"
+
+        having = (
+            f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
+        )
+        sql = (
+            f"SELECT TOP {int(top_k)} s, p, o_id, "
+            f"VECTOR_COSINE(emb, {query_cast}) AS score "
+            f"FROM {_table('kg_EdgeEmbeddings')} "
+            f"ORDER BY score DESC "
+            f"{having}"
+        )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql, [query_vec_str])
+        except Exception as e:
+            if "-30" in str(e) or "not found" in str(e).lower() or "empty" in str(e).lower():
+                return []
+            raise
+        rows = cursor.fetchall()
+        if not rows:
+            return []
+        return [
+            {"s": row[0], "p": row[1], "o_id": row[2], "score": float(row[3])}
+            for row in rows
+        ]
 
     def get_embedding(self, node_id: str) -> Optional[Dict[str, Any]]:
         """

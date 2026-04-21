@@ -9,6 +9,7 @@ VALID_GRAPH_TABLES = {
     "rdf_edges",
     "kg_NodeEmbeddings",
     "kg_NodeEmbeddings_optimized",
+    "kg_EdgeEmbeddings",
     "docs",
     "fhir_bridges",
     "rdf_reifications"
