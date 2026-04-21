@@ -2110,6 +2110,17 @@ def translate_expression(expr, context, segment="select") -> str:
             f"WHERE 1=1{pred_type}{src_bind})"
         )
 
+    if isinstance(expr, ast.FunctionCall) and expr.function_name == "__prop__":
+        inner_expr = expr.arguments[0]
+        prop = str(expr.arguments[1].value) if isinstance(expr.arguments[1], ast.Literal) else "node_id"
+        if prop == "id":
+            prop = "node_id"
+        inner_fn = inner_expr.function_name.lower() if isinstance(inner_expr, ast.FunctionCall) else ""
+        if inner_fn in ("startnode", "endnode"):
+            return translate_expression(inner_expr, context, segment=segment)
+        inner = translate_expression(inner_expr, context, segment=segment)
+        return f"{inner}.{prop}"
+
     if isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_"):
         op = expr.function_name[len("__arith_") :]
         left = translate_expression(expr.arguments[0], context, segment=segment)
@@ -2381,6 +2392,22 @@ def translate_expression(expr, context, segment="select") -> str:
                 alias = context.variable_aliases.get(var_name, "")
                 if alias:
                     return f"{alias}.p"
+            return args[0] if args else "NULL"
+
+        if fn in ("startnode",):
+            if args_exprs and isinstance(args_exprs[0], ast.Variable):
+                var_name = args_exprs[0].name
+                alias = context.variable_aliases.get(var_name, "")
+                if alias:
+                    return f"{alias}.s"
+            return args[0] if args else "NULL"
+
+        if fn == "endnode":
+            if args_exprs and isinstance(args_exprs[0], ast.Variable):
+                var_name = args_exprs[0].name
+                alias = context.variable_aliases.get(var_name, "")
+                if alias:
+                    return f"{alias}.o_id"
             return args[0] if args else "NULL"
 
         if fn == "id":

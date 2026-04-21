@@ -542,6 +542,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.58.1 (2026-04-20)
+- feat: `startNode(r)` and `endNode(r)` functions — return source/target node IDs from a relationship variable
+- feat: Property access on function call results — `startNode(r).id`, `endNode(r).name` etc
+- fix: `UNWIND relationships(p) AS r RETURN startNode(r).id, endNode(r).id, type(r)` — canonical path unpacking pattern now works
+
+
 ### v1.58.0 (2026-04-20)
 - feat: `engine.save_snapshot(path)` — portable `.ivg` ZIP: SQL tables as NDJSON + globals as NDJSON (endian-safe, cross-version) (spec 064)
 - feat: `IRISGraphEngine.snapshot_info(path)` — @staticmethod, no connection needed; metadata header with IRIS version, ivg version, has_vector_sql
