@@ -44,14 +44,7 @@ class TestWeightedShortestPathE2E:
     def _add_weighted_edge(self, src, pred, dst, weight):
         self.engine.create_node(src)
         self.engine.create_node(dst)
-        cursor = self.engine.conn.cursor()
-        cursor.execute(
-            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) "
-            "SELECT ?, ?, ? WHERE NOT EXISTS "
-            "(SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id IS NULL)",
-            [src, pred, dst, src, pred, dst],
-        )
-        self.engine.conn.commit()
+        self.engine.create_edge(src, pred, dst)
         iris_obj = self.engine._iris_obj()
         iris_obj.classMethodVoid(
             "Graph.KG.EdgeScan", "WriteAdjacency", src, pred, dst, str(weight)

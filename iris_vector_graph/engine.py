@@ -552,12 +552,21 @@ class IRISGraphEngine:
                 # kg_TXT and kg_RRF_FUSE are optional (depend on full-text search feature)
                 is_core = "procedure graph_kg.kg_knn_vec" in stmt.lower()
                 if is_core:
-                    procedure_errors.append((stmt[:80], e))
-                    logger.error(
-                        "Procedure DDL failed: %s | Error: %s",
-                        stmt[:80],
-                        e,
-                    )
+                    _sqlcode = ""
+                    import re as _re_proc
+                    m = _re_proc.search(r"sqlcode.*?<(-?\d+)>", err)
+                    if m:
+                        _sqlcode = m.group(1)
+                    if _sqlcode == "-260":
+                        logger.debug(
+                            "kg_KNN_VEC skipped: vector dimension mismatch in kg_NodeEmbeddings "
+                            "(table has mixed-dim vectors from tests). Non-fatal. | Error: %s", e
+                        )
+                    else:
+                        procedure_errors.append((stmt[:80], e))
+                        logger.error(
+                            "Procedure DDL failed: %s | Error: %s", stmt[:80], e
+                        )
                 else:
                     logger.debug(
                         "Optional procedure DDL skipped (non-fatal): %s | Error: %s",

@@ -595,9 +595,6 @@ def _translate_bm25_search(
 def _translate_ivf_search(
     proc: ast.CypherProcedureCall, context: TranslationContext
 ) -> None:
-    import base64
-    import struct
-
     args = proc.arguments
     if len(args) < 4:
         raise ValueError(
@@ -638,20 +635,24 @@ def _translate_ivf_search(
 
     ivf_fn = f"{_schema_prefix}.kg_IVF" if _schema_prefix else "kg_IVF"
     safe_idx = idx_name.replace("'", "''")
+
     cte_sql = (
-        f"SELECT j.node_id, j.score\n"
+        f"SELECT j.node, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {ivf_fn}('{safe_idx}', '{query_json}', {k_int}, {nprobe_int}),\n"
         f"  '$[*]' COLUMNS(\n"
-        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    node VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
     )
-    context.stages.insert(0, f"IVF AS (\n{cte_sql}\n)")
+
+    # IRIS can't resolve CTEs over JSON_TABLE(stored_proc(...)) — use inline derived table
+    context.temporal_derived["IVF_SEARCH"] = cte_sql
+    context.from_clauses.append("IVF_SEARCH")
 
     for item in proc.yield_items:
-        context.variable_aliases[item] = "IVF"
+        context.variable_aliases[item] = "IVF_SEARCH"
     if "score" in proc.yield_items:
         context.scalar_variables.add("score")
 
@@ -894,16 +895,20 @@ def translate_to_sql(
     context._metadata = metadata
     is_transactional = False
 
-    # Handle CALL procedure — emits a CTE before any MATCH stages
     if cypher_query.procedure_call is not None:
         translate_procedure_call(cypher_query.procedure_call, context)
         if not cypher_query.query_parts:
-            cte_name = (
-                context.stages[0].split(" AS ")[0].strip()
-                if context.stages
-                else "VecSearch"
-            )
-            context.from_clauses.append(cte_name)
+            if context.temporal_derived:
+                for td_name in context.temporal_derived:
+                    if td_name not in context.from_clauses:
+                        context.from_clauses.append(td_name)
+            else:
+                cte_name = (
+                    context.stages[0].split(" AS ")[0].strip()
+                    if context.stages
+                    else "VecSearch"
+                )
+                context.from_clauses.append(cte_name)
 
     for i, part in enumerate(cypher_query.query_parts):
         context.select_items, context.from_clauses, context.join_clauses = [], [], []
@@ -911,12 +916,19 @@ def translate_to_sql(
         context.select_params, context.join_params, context.where_params = [], [], []
         if i > 0:
             context.from_clauses.append(f"Stage{i}")
+        elif getattr(context, "_ivf_derived", None):
+            context.from_clauses.append(context._ivf_derived)
         elif cypher_query.procedure_call is not None:
-            cte_name = (
-                context.stages[0].split(" AS ")[0].strip()
-                if context.stages
-                else "VecSearch"
-            )
+            if context.temporal_derived:
+                for td_name in context.temporal_derived:
+                    context.from_clauses.append(td_name)
+            elif context.stages:
+                cte_name = context.stages[0].split(" AS ")[0].strip()
+                context.from_clauses.append(cte_name)
+            else:
+                context.from_clauses.append("VecSearch")
+        elif context.stages and not context.from_clauses:
+            cte_name = context.stages[0].split(" AS ")[0].strip()
             context.from_clauses.append(cte_name)
         for clause in part.clauses:
             if isinstance(clause, ast.WhereClause):
@@ -1863,6 +1875,7 @@ def translate_relationship_pattern(
         and not source_alias.startswith("tc")
         and not source_alias.startswith("Stage")
         and not source_alias.startswith("BM25")
+        and not source_alias.startswith("IVF_SEARCH")
         and not source_alias.startswith("IVF")
         and not source_alias.startswith("VecSearch")
     )
@@ -2553,7 +2566,7 @@ def translate_return_clause(ret, context):
                 node_expr = (
                     f"{alias_name}.{var_name}"
                     if alias_name.startswith("Stage")
-                    or alias_name in ("VecSearch", "BM25", "PPR")
+                    or alias_name in ("VecSearch", "BM25", "PPR", "IVF_SEARCH")
                     else f"{alias_name}.node_id"
                 )
                 context.select_items.append(f"{node_expr} AS {prefix}_id")

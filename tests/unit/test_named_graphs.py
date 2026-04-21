@@ -163,6 +163,8 @@ class TestNamedGraphsE2E:
     def test_rel_type_properties_non_empty(self):
         a = self._n("rp_a")
         b = self._n("rp_b")
+        self.engine.create_node(a)
+        self.engine.create_node(b)
         self.engine.create_edge(a, "TREATS", b)
         result = self.engine._try_system_procedure(
             type("P", (), {"procedure_name": "db.schema.reltypeproperties"})()
