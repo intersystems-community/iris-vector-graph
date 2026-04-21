@@ -35,9 +35,10 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 | **Pre-aggregated Analytics** | `^KG("tagg")` per-bucket COUNT/SUM/AVG/MIN/MAX and HLL COUNT DISTINCT. O(1) aggregation queries — 0.085ms for 1-bucket, 0.24ms for 24-hour window. |
 | **BM25Index** | Pure ObjectScript Okapi BM25 lexical search — `^BM25Idx` globals, zero SQL tables. Automatic `kg_TXT` upgrade when `"default"` index exists. Cypher `CALL ivg.bm25.search(name, query, k)`. 0.3ms median search. |
 | **VecIndex** | RP-tree ANN vector search — pure ObjectScript + `$vectorop` SIMD. Annoy-style two-means splitting. |
+| **IVFFlat** | Inverted File flat vector index — Python k-means build (sklearn), pure ObjectScript query. Tunable `nprobe` recall/speed tradeoff. `nprobe=nlist` → exact search. Cypher `CALL ivg.ivf.search(name, vec, k, nprobe)`. |
 | **PLAID** | Multi-vector retrieval (ColBERT-style) — centroid scoring → candidate gen → exact MaxSim. Single server-side call. |
 | **HNSW** | Native IRIS VECTOR index via `kg_KNN_VEC`. Sub-2ms search. |
-| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
+| **Cypher** | openCypher parser/translator — MATCH, WHERE, RETURN, CREATE, UNION, CASE WHEN, variable-length paths, `shortestPath()` / `allShortestPaths()`, CALL subqueries. Bolt 5.4 protocol (TCP + WebSocket) for standard driver connectivity. |
 | **Graph Analytics** | PageRank, WCC, CDLP, PPR-guided subgraph — pure ObjectScript over `^KG` globals. |
 | **FHIR Bridge** | ICD-10→MeSH mapping via UMLS for clinical-to-KG integration. |
 | **GraphQL** | Auto-generated schema from knowledge graph labels. |
@@ -94,8 +95,8 @@ IVG has two distinct edge APIs that write to different storage and support diffe
 
 | | `create_edge` / `bulk_create_edges` | `create_edge_temporal` / `bulk_create_edges_temporal` |
 |--|-------------------------------------|-------------------------------------------------------|
-| **Writes to** | `Graph_KG.rdf_edges` (SQL table) | `^KG("tout"/"tin")` globals (IRIS B-tree) |
-| **Query via** | `MATCH (a)-[:R]->(b)` Cypher | `get_edges_in_window()`, `get_temporal_aggregate()`, temporal Cypher `WHERE r.ts >= $start` |
+| **Writes to** | `Graph_KG.rdf_edges` SQL (durability) + `^KG("out",0,...)` globals (query, synchronous) | `^KG("tout"/"tin")` (time-ordered) + `^KG("out",0,...)` (adjacency) |
+| **Query via** | `MATCH (a)-[:R]->(b)` — immediately visible, no `BuildKG()` needed | `get_edges_in_window()`, `get_temporal_aggregate()`, temporal Cypher `WHERE r.ts >= $start`; also visible in `MATCH (a)-[:R]->(b)` |
 | **Models** | Structural relationship — "A is connected to B" | Event log — "A called B at time T with weight W" |
 | **Example** | `(service:auth)-[:DEPENDS_ON]->(service:payment)` | `(service:auth)-[:CALLS_AT {ts: 1705000042, weight: 38ms}]->(service:payment)` |
 
@@ -103,7 +104,15 @@ IVG has two distinct edge APIs that write to different storage and support diffe
 
 **Use `create_edge_temporal` when** the relationship is a time-series event: service calls, metric emissions, log events, cost observations, anything you'll query by time window or aggregate over time.
 
-The same node pair can have both: a structural `DEPENDS_ON` edge (created once) and thousands of temporal `CALLS_AT` events (one per call). They coexist and are queried through separate APIs.
+The same node pair can have both: a structural `DEPENDS_ON` edge (created once) and thousands of temporal `CALLS_AT` events (one per call). Both are immediately visible in `MATCH (a)-[r]->(b)` — no rebuild required.
+
+**Deleting an edge:**
+```python
+engine.delete_edge("service:auth", "DEPENDS_ON", "service:payment")
+# removes from rdf_edges SQL and kills ^KG("out",0,...) immediately
+```
+
+> **Note — bulk ingest**: `bulk_create_edges` is optimized for high-volume ingest (535M edges validated) and intentionally skips the per-edge `^KG` write for performance. Edges inserted in bulk are visible to `MATCH`/BFS only after calling `BuildKG()` at the end of the ingest session. `bulk_create_edges_temporal` does write `^KG` immediately. `create_edge` (single) always writes immediately.
 
 ### Ingest
 
@@ -258,6 +267,34 @@ results = engine.vec_search("drugs", query_vector, k=5)
 
 ---
 
+## IVFFlat Vector Index
+
+Inverted File with Flat quantization — Python k-means build, pure ObjectScript query. Tunable `nprobe` recall/speed tradeoff; `nprobe=nlist` gives exact results.
+
+```python
+# Build: reads kg_NodeEmbeddings, runs MiniBatchKMeans, stores ^IVF globals
+result = engine.ivf_build("kg_idx", nlist=256, metric="cosine")
+# {"nlist": 256, "indexed": 10000, "dim": 768}
+
+# Search: finds nprobe nearest centroids, scores their cells
+results = engine.ivf_search("kg_idx", query_vector, k=10, nprobe=32)
+# [("NCIT:C12345", 0.97), ("NCIT:C67890", 0.94), ...]
+
+# Lifecycle
+info = engine.ivf_info("kg_idx")   # {"nlist":256,"dim":768,"indexed":10000,...}
+engine.ivf_drop("kg_idx")
+```
+
+Cypher:
+```cypher
+CALL ivg.ivf.search('kg_idx', $query_vec, 10, 32) YIELD node, score
+RETURN node, score ORDER BY score DESC
+```
+
+Global storage: `^IVF(name, "cfg"|"centroid"|"list")` — independent of `^KG`, `^VecIdx`, `^PLAID`, `^BM25Idx`.
+
+---
+
 ## PLAID Multi-Vector Search
 
 ```python
@@ -268,6 +305,64 @@ engine.plaid_build("colbert_idx", docs)  # docs = [{"id": "x", "tokens": [[f1,..
 results = engine.plaid_search("colbert_idx", query_tokens, k=10)
 # [{"id": "doc_3", "score": 0.94}, ...]
 ```
+
+---
+
+## Weighted Shortest Path (Dijkstra)
+
+Finds the minimum-**cost** path between two nodes using Dijkstra's algorithm. Unlike `shortestPath()` which minimizes hops, this minimizes the sum of edge weights.
+
+Edge weights come from the numeric value stored in `^KG("out",0,s,p,o)` — set automatically when you call `create_edge` or `WriteAdjacency` with a weight parameter.
+
+```python
+# Store weighted edges
+engine.create_node("svc:auth")
+engine.create_node("svc:db")
+iris_obj = engine._iris_obj()
+iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
+    "svc:auth", "CALLS", "svc:db", "5.2")  # weight=5.2ms latency
+
+iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
+    "svc:auth", "CALLS", "svc:cache", "0.3")
+iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
+    "svc:cache", "CALLS", "svc:db", "0.8")
+```
+
+```cypher
+-- Minimum-latency path (prefers cache hop at cost 1.1 over direct at cost 5.2)
+CALL ivg.shortestPath.weighted(
+  'svc:auth', 'svc:db',
+  'weight',
+  9999,
+  10
+) YIELD path, totalCost
+RETURN path, totalCost
+```
+
+Returns:
+```json
+{
+  "nodes": ["svc:auth", "svc:cache", "svc:db"],
+  "rels":  ["CALLS", "CALLS"],
+  "costs": [0.3, 0.8],
+  "length": 2,
+  "totalCost": 1.1
+}
+```
+
+**Parameters**: `(from, to, weightProp, maxCost, maxHops)`
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `from` | Source node ID (string or `$param`) | required |
+| `to` | Target node ID | required |
+| `weightProp` | Edge weight property name (currently uses `^KG` value) | `"weight"` |
+| `maxCost` | Stop searching if cost exceeds this | `9999` |
+| `maxHops` | Maximum path length | `10` |
+
+**YIELD columns**: `path` (JSON with nodes/rels/costs/length/totalCost), `totalCost` (float)
+
+Falls back to unit weight (1.0 per hop = equivalent to BFS) when no weight is stored for an edge.
 
 ---
 
@@ -307,6 +402,14 @@ RETURN p, length(p), nodes(p), relationships(p)
 MATCH (a:Service)-[:CALLS*1..3]->(b:Service)
 WHERE a.id = 'auth'
 RETURN b.id
+
+-- Shortest path between two nodes (v1.49.0+)
+MATCH p = shortestPath((a {id: $from})-[*..8]-(b {id: $to}))
+RETURN p, length(p), nodes(p), relationships(p)
+
+-- All shortest paths — returns every minimum-length path
+MATCH p = allShortestPaths((a {id: $from})-[*..8]-(b {id: $to}))
+RETURN p
 
 -- CASE WHEN
 MATCH (n:Service)
@@ -399,9 +502,11 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 | `Graph.KG.PageRank` | RunJson, PageRankGlobalJson |
 | `Graph.KG.Algorithms` | WCCJson, CDLPJson |
 | `Graph.KG.Subgraph` | SubgraphJson, PPRGuidedJson |
-| `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson |
+| `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson, ShortestPathJson |
 | `Graph.KG.BulkLoader` | BulkLoad (`INSERT %NOINDEX %NOCHECK` + `%BuildIndices`) |
 | `Graph.KG.BM25Index` | Build, Search, Insert, Drop, Info, SearchProc (`kg_BM25` stored procedure) |
+| `Graph.KG.IVFIndex` | Build, Search, Drop, Info, SearchProc (`kg_IVF` stored procedure) |
+| `Graph.KG.EdgeScan` | MatchEdges (`Graph_KG.MatchEdges` stored procedure), WriteAdjacency, DeleteAdjacency |
 
 ---
 
@@ -436,6 +541,158 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.58.1 (2026-04-20)
+- feat: `startNode(r)` and `endNode(r)` functions — return source/target node IDs from a relationship variable
+- feat: Property access on function call results — `startNode(r).id`, `endNode(r).name` etc
+- fix: `UNWIND relationships(p) AS r RETURN startNode(r).id, endNode(r).id, type(r)` — canonical path unpacking pattern now works
+
+
+### v1.58.0 (2026-04-20)
+- feat: `engine.save_snapshot(path)` — portable `.ivg` ZIP: SQL tables as NDJSON + globals as NDJSON (endian-safe, cross-version) (spec 064)
+- feat: `IRISGraphEngine.snapshot_info(path)` — @staticmethod, no connection needed; metadata header with IRIS version, ivg version, has_vector_sql
+- feat: `engine.restore_snapshot(path, merge=False)` — destructive or additive restore; UPSERT on merge
+- feat: `engine.get_unembedded_nodes()` — find nodes with no embedding after restore
+- feat: `embed_fn` and `use_iris_embedding` params on IRISGraphEngine.__init__
+- feat: `Graph.KG.Snapshot` ObjectScript class for file I/O helpers
+- fix: save_snapshot skips IRIS RowID columns (edge_id etc) — prevents non-insertable column errors on restore
+- 5 E2E tests: roundtrip, snapshot_info staticmethod, destructive restore, merge restore, globals BFS after restore
+
+
+### v1.56.0 (2026-04-19)
+- feat: `CALL ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops) YIELD path, totalCost` — Dijkstra minimum-cost path in pure ObjectScript
+- Uses edge weights from `^KG("out",0,...)` globals (set by create_edge WriteAdjacency)
+- Falls back to unit weight 1.0 when weightProp not found
+- Supports directed ("out") and undirected ("both") traversal
+- 4 E2E tests: prefer lower-cost longer path, no path, same source/target, unit weight fallback
+
+
+### v1.55.3 (2026-04-19)
+- fix: Bug 6 final — SQLCODE -400 on rdf_edges CREATE INDEX now debug-level (ALTER TABLE fallback handles it)
+- fix: type(r) now returns edge predicate column (e.p) not node_id
+- fix: id(n) now returns actual node_id column
+- feat: =~ regex match operator — translates to IRIS %MATCHES
+- fix: N-Quads import captures graph URI from quad's 4th element as graph_id
+
+
+### v1.55.2 (2026-04-19)
+- fix: Bug 6 (final) — SQLCODE -400 on rdf_edges index creation now falls back to ALTER TABLE ADD INDEX; all standard indexes created even when Graph.KG.Edge class was never compiled
+
+
+### v1.55.1 (2026-04-19)
+- fix: Graph.KG.Edge/TestEdge persistent classes excluded from ObjectScript deploy (fix DDL table ownership conflict — Bug 6)
+- fix: conftest removes conflicting .cls before LoadDir
+- fix: apoc.meta.data() samples all nodes per label via JOIN on rdf_labels (no longer skips labels with no first-node properties)
+
+
+### v1.55.0 (2026-04-19)
+- feat: import_rdf/bulk_create_edges/create_edge_temporal/bulk_create_edges_temporal all accept graph= parameter
+- feat: USE GRAPH filtering now strict (exact graph_id match, no NULL leakage)
+- feat: UNIQUE constraint updated to (s,p,o_id,graph_id) allowing same triple in multiple named graphs
+- feat: db.schema.relTypeProperties() returns actual relationship property names
+- fix: import_rdf _ensure_node uses WHERE NOT EXISTS (no duplicate key errors)
+- fix: import_rdf edge INSERT scoped to graph_id in WHERE NOT EXISTS check
+- fix: graph_id column uses %EXACT for case-sensitive storage
+- test: 8 E2E tests proving fail-before/pass-after for all 5 FRs (spec 061)
+
+
+### v1.54.1 (2026-04-18)
+- fix: initialize_schema() idempotent — "already has index" suppressed (Bug 1)
+- fix: idx_props_val_ifind (iFind) and idx_edges_confidence (JSON_VALUE) now optional — graceful skip on Community (Bugs 2+3)
+- test: 6 new E2E schema init tests covering idempotency, required tables, optional indexes, core procedures (spec 060)
+
+
+### v1.54.0 (2026-04-18)
+- fix: materialize_inference respects named graphs — inferred triples use correct graph_id (spec 055)
+- fix: materialize_inference/retract_inference accept graph= parameter
+- feat: Cypher % (modulo → MOD) and ^ (power → POWER) operators (spec 056)
+- feat: FOREACH clause — `FOREACH (x IN list | update_clause)` (spec 057)
+- fix: EXISTS { (n)-[r]->(m) } with edge patterns now works; MATCH keyword optional inside EXISTS (spec 058)
+- feat: Pattern comprehension `[(a)-[r]->(b) | proj]` collecting edge projections (spec 059)
+
+
+### v1.53.1 (2026-04-18)
+- feat: `engine.materialize_inference(rules="rdfs"|"owl")` — transitive subClassOf/subPropertyOf closure, rdf:type inheritance, domain/range, OWL equivalentClass/inverseOf/TransitiveProperty/SymmetricProperty
+- feat: `engine.retract_inference()` — removes all inferred triples, restoring asserted-only graph
+- feat: `import_rdf(path, infer="rdfs")` — runs inference automatically after load
+- Inferred triples tagged `qualifiers={"inferred":true}` for easy exclusion
+
+
+### v1.53.0 (2026-04-18)
+- feat: Named graphs — `create_edge(graph='name')`, `list_graphs()`, `drop_graph(name)`
+- feat: `USE GRAPH 'name' MATCH (a)-[r]->(b)` Cypher syntax adds graph_id filter
+- feat: Schema migration — `graph_id` column added to `rdf_edges` (idempotent, run on initialize_schema)
+
+
+### v1.52.1 (2026-04-18)
+- feat: `engine.import_rdf(path)` — load Turtle (.ttl), N-Triples (.nt), N-Quads (.nq) into the graph
+- Format auto-detected from extension; streaming batch ingest; blank node synthetic IDs; language tags preserved
+
+
+### v1.52.0 (2026-04-18)
+- feat: `ALL/ANY/NONE/SINGLE(x IN list WHERE ...)` list predicate expressions
+- feat: `[x IN list WHERE pred | proj]` list comprehensions
+- feat: `reduce(acc = init, x IN list | body)` reduce expressions
+- feat: `filter()/extract()` legacy list functions as aliases
+- feat: Arithmetic operators `+`, `-`, `*`, `/` in Cypher expressions
+
+
+### v1.51.1 (2026-04-18)
+- feat: `apoc.meta.data()` returns proper schema columns — LangChain `Neo4jGraph()` connects without error
+- feat: `apoc.meta.schema()` returns schema summary
+
+
+### v1.51.0 (2026-04-18)
+- feat: `keys(n)` returns node property keys via rdf_props subquery
+- feat: `range(start, end)` and `range(start, end, step)` generate integer lists
+- feat: `size(list)` uses JSON_ARRAYLENGTH; `head()`, `last()`, `tail()`, `isEmpty()` implemented
+
+
+### v1.50.3 (2026-04-18)
+- Fix: `initialize_schema()` creates `SQLUser.*` views automatically — no more manual DEFAULT_SCHEMA workaround
+- Fix: `initialize_schema()` detects pre-compiled ObjectScript classes via `%Dictionary` — fast 0.2ms PPR path activates correctly instead of falling back to 1800ms Python path
+
+
+### v1.50.2 (2026-04-18)
+- Fix: `MATCH (a)-[r]->(b)` with unbound source falls back to `rdf_edges` SQL (avoids IRIS SqlProc 32KB string limit for large graphs with 88K+ edges)
+- `MatchEdges` is now only used when source node ID is bound — safe path for single-node traversal
+
+
+### v1.50.1 (2026-04-18)
+- Fix: `bulk_create_edges` now calls `BuildKG()` after batch SQL — bulk-inserted static edges immediately visible to MATCH/BFS
+- Fix: `BuildKG()` already uses shard-0 `^KG("out",0,...)` layout (confirmed, no code change needed)
+
+
+### v1.50.0 (2026-04-18)
+- **Unified edge store PR-A** — `MATCH (a)-[r]->(b)` now returns both static and temporal edges (spec 048)
+- `Graph.KG.EdgeScan` — `MatchEdges(sourceId, predicate, shard)` SqlProc scans `^KG("out",0,...)` globals
+- `create_edge` writes `^KG` synchronously; `delete_edge` (new) kills `^KG` entry synchronously
+- Cypher `MATCH (a)-[r]->(b)` routes to `MatchEdges` CTE — no SQL JOIN on rdf_edges
+- `TemporalIndex` and all traversal code updated to shard-0 layout
+- IVF index fixes: `$vector("double")`, JSON float arrays, leading-zero scores, `VECTOR(DOUBLE)` schema
+- Parser: negative float literals in list expressions now work
+
+
+### v1.49.0 (2026-04-18)
+- **`shortestPath()` / `allShortestPaths()` openCypher syntax** — fixes parse error reported by mindwalk (spec 047)
+- `MATCH p = shortestPath((a {id:$from})-[*..8]-(b {id:$to})) RETURN p` now works end-to-end
+- `RETURN p` → JSON `{"nodes":[...],"rels":[...],"length":N}`; `RETURN length(p)`, `nodes(p)`, `relationships(p)` all supported
+- `allShortestPaths(...)` returns all minimum-length paths (diamond graphs return both paths)
+- `Graph.KG.Traversal.ShortestPathJson` — pure ObjectScript BFS with multi-parent backtracking for all-paths support
+- Parser fix: `[*..N]` (dot-dot without leading integer) now parses correctly
+- Parser fix: bare `--` undirected relationship pattern now parses correctly
+- Translator/engine fix: `CREATE` without RETURN clause no longer throws `UnboundLocalError`
+
+### v1.48.0 (2026-04-18)
+- **IVFFlat vector index** — `Graph.KG.IVFIndex` ObjectScript class + `^IVF` globals (spec 046)
+- `ivf_build(name, nlist, metric, batch_size)` — Python MiniBatchKMeans build from `kg_NodeEmbeddings`; stores centroids + inverted lists as `$vector` in `^IVF` globals
+- `ivf_search(name, query, k, nprobe)` — pure ObjectScript centroid scoring → cell scan → top-k; `nprobe=nlist` gives exact search
+- `ivf_drop(name)` / `ivf_info(name)` — lifecycle management
+- `Graph_KG.kg_IVF` SQL stored procedure — enables `JSON_TABLE` CTE pattern
+- Cypher `CALL ivg.ivf.search(name, query_vec, k, nprobe) YIELD node, score`
+- Translator fix: `ORDER BY <alias> DESC` now resolves SELECT-level aliases (e.g. `count(r) AS deg`) without `Undefined` error
+- `cypher_api.py`: Bolt TCP/WS sessions use dedicated IRIS connections (`_make_engine`) to prevent connection contention with HTTP handlers; `threading.Lock` on shared engine cache
+- `test_bolt_server.py`: fixed 2 `TestBoltSessionHello` tests using deprecated `asyncio.get_event_loop().run_until_complete()` → `asyncio.run()`
 
 ### v1.47.0 (2026-04-10)
 - **Bolt 5.4 protocol server** — TCP (port 7687) + WebSocket (port 8000). Standard graph drivers (Python, Java, Go, .NET), LangChain, and visualization tools connect via `bolt://`

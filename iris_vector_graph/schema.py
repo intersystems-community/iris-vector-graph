@@ -32,15 +32,16 @@ def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) 
     """
     # Accept either a connection or a cursor
     if hasattr(conn_or_cursor, "cursor"):
-        conn = conn_or_cursor          # it's a connection
+        conn = conn_or_cursor  # it's a connection
     elif hasattr(conn_or_cursor, "_connection"):
         conn = conn_or_cursor._connection  # it's a cursor
     else:
-        conn = conn_or_cursor           # best-effort fallback
+        conn = conn_or_cursor  # best-effort fallback
 
     # Try iris.createIRIS first (accepts iris.IRISConnection from iris.connect())
     try:
         import iris as _iris_pkg  # type: ignore[import]
+
         iris_obj = _iris_pkg.createIRIS(conn)
         return iris_obj.classMethodValue(class_name, method_name, *args)
     except (ImportError, AttributeError, TypeError):
@@ -48,8 +49,10 @@ def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) 
 
     # Fall back to intersystems_iris.createIRIS (accepts intersystems_iris.IRISConnection)
     import intersystems_iris as _iris_pkg2  # type: ignore[import]
+
     iris_obj = _iris_pkg2.createIRIS(conn)
     return iris_obj.classMethodValue(class_name, method_name, *args)
+
 
 class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
@@ -204,70 +207,197 @@ CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.I
 CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER));
 """
 
-
     @staticmethod
     def ensure_indexes(cursor) -> Dict[str, bool]:
         """
         Create performance indexes if they don't exist. Safe for existing databases.
-        
+
         Returns:
             Dict mapping index name to success status
         """
         indexes = [
             # Single-column indexes
             ("idx_labels_s", "CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s)"),
-            ("idx_labels_label", "CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label)"),
+            (
+                "idx_labels_label",
+                "CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label)",
+            ),
             ("idx_props_s", "CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s)"),
             ("idx_props_key", "CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key)"),
             ("idx_edges_s", "CREATE INDEX idx_edges_s ON Graph_KG.rdf_edges (s)"),
-            ("idx_edges_oid", "CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)"),
+            (
+                "idx_edges_oid",
+                "CREATE INDEX idx_edges_oid ON Graph_KG.rdf_edges (o_id)",
+            ),
             ("idx_edges_p", "CREATE INDEX idx_edges_p ON Graph_KG.rdf_edges (p)"),
             # Composite indexes for common patterns
-            ("idx_props_s_key", "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)"),
-            ("idx_edges_s_p", "CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p)"),
-            ("idx_edges_p_oid", "CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id)"),
-            ("idx_labels_s_label", "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)"),
-            # Substring and Functional Indexes
-            ("idx_props_val_ifind", "CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic"),
-            ("idx_edges_confidence", "CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER))"),
+            (
+                "idx_props_s_key",
+                "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)",
+            ),
+            (
+                "idx_edges_s_p",
+                "CREATE INDEX idx_edges_s_p ON Graph_KG.rdf_edges (s, p)",
+            ),
+            (
+                "idx_edges_p_oid",
+                "CREATE INDEX idx_edges_p_oid ON Graph_KG.rdf_edges (p, o_id)",
+            ),
+            (
+                "idx_labels_s_label",
+                "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)",
+            ),
+            (
+                "idx_props_val_ifind",
+                "CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic",
+            ),
+            (
+                "idx_edges_confidence",
+                "CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER))",
+            ),
             # Drop problematic indexes
             ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
-        
+
+        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_edges_confidence"}
+
         status = {}
         for name, sql in indexes:
             try:
                 cursor.execute(sql)
                 status[name] = True
             except Exception as e:
-                # Index already exists is OK
-                if "already exists" in str(e).lower() or "already has" in str(e).lower():
+                err = str(e).lower()
+                sqlcode = ""
+                import re as _re
+
+                m = _re.search(r"sqlcode.*?<(-?\d+)>", err)
+                if m:
+                    sqlcode = m.group(1)
+
+                if (
+                    "already exists" in err
+                    or "already has" in err
+                    or "already has index" in err
+                ):
                     status[name] = True
+                elif sqlcode == "-400" and "rdf_edges" in sql.lower():
+                    alt_sql = GraphSchema._create_index_alter_table(name, sql)
+                    if alt_sql:
+                        try:
+                            cursor.execute(alt_sql)
+                            status[name] = True
+                            continue
+                        except Exception as e2:
+                            e2_err = str(e2).lower()
+                            if "already exists" in e2_err or "already has" in e2_err:
+                                status[name] = True
+                            else:
+                                logger.debug(
+                                    "Index %s ALTER TABLE fallback failed: %s", name, e2
+                                )
+                                status[name] = False
+                    else:
+                        logger.debug(
+                            "Index %s skipped (-400, no ALTER TABLE equivalent): %s",
+                            name,
+                            e,
+                        )
+                        status[name] = False
+                elif name in _OPTIONAL_INDEXES or sqlcode == "-400":
+                    logger.debug("Optional/fatal index %s skipped: %s", name, e)
+                    status[name] = False
                 else:
                     status[name] = False
-        
-        # Upgrade val column size
+
         status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
-        
+        status["add_graph_id_column"] = GraphSchema.add_graph_id_column(cursor)
+        status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor)
+        status["update_spo_unique_constraint"] = (
+            GraphSchema.update_spo_unique_constraint(cursor)
+        )
+
         return status
+
+    @staticmethod
+    def update_spo_unique_constraint(cursor) -> bool:
+        try:
+            cursor.execute("ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT u_spo")
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                "ALTER TABLE Graph_KG.rdf_edges ADD CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)"
+            )
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower():
+                return True
+            return False
+
+    @staticmethod
+    def add_graph_id_index(cursor) -> bool:
+        try:
+            cursor.execute(
+                "CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)"
+            )
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower() or "already has" in str(e).lower():
+                return True
+            return False
+
+    @staticmethod
+    def _create_index_alter_table(name: str, create_sql: str) -> Optional[str]:
+        import re as _re
+
+        m = _re.match(
+            r"CREATE\s+INDEX\s+(\w+)\s+ON\s+([\w\.]+)\s*\(([^)]+)\)",
+            create_sql.strip(),
+            _re.IGNORECASE,
+        )
+        if not m:
+            return None
+        idx_name, table, cols = m.group(1), m.group(2), m.group(3)
+        return f"ALTER TABLE {table} ADD INDEX {idx_name} ({cols})"
+
+    @staticmethod
+    def add_graph_id_column(cursor) -> bool:
+        try:
+            cursor.execute(
+                "ALTER TABLE Graph_KG.rdf_edges ADD COLUMN graph_id VARCHAR(256) %EXACT NULL"
+            )
+            return True
+        except Exception as e:
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                return True
+            return False
 
     @staticmethod
     def disable_indexes(cursor) -> Dict[str, bool]:
         """
         Disable indexes for bulk loading. Re-enable with rebuild_indexes() after loading.
-        
+
         This dramatically speeds up bulk INSERT operations by skipping index maintenance.
-        
+
         Returns:
             Dict mapping index name to success status
         """
         # IRIS: ALTER INDEX ... DISABLE or DROP INDEX
         indexes = [
-            "idx_labels_s", "idx_labels_label", "idx_labels_s_label",
-            "idx_props_s", "idx_props_key", "idx_props_s_key",
-            "idx_edges_s", "idx_edges_oid", "idx_edges_p", "idx_edges_s_p", "idx_edges_p_oid",
+            "idx_labels_s",
+            "idx_labels_label",
+            "idx_labels_s_label",
+            "idx_props_s",
+            "idx_props_key",
+            "idx_props_s_key",
+            "idx_edges_s",
+            "idx_edges_oid",
+            "idx_edges_p",
+            "idx_edges_s_p",
+            "idx_edges_p_oid",
         ]
-        
+
         status = {}
         for name in indexes:
             try:
@@ -286,7 +416,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     def rebuild_indexes(cursor) -> Dict[str, bool]:
         """
         Rebuild all indexes after bulk loading. Call this after disable_indexes() + bulk INSERT.
-        
+
         Returns:
             Dict mapping index name to success status
         """
@@ -296,23 +426,24 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     def get_bulk_insert_sql(table: str) -> str:
         """
         Get INSERT statement with %NOINDEX hint for bulk loading.
-        
+
         Args:
             table: Table name ('nodes', 'rdf_labels', 'rdf_props', 'rdf_edges', 'kg_NodeEmbeddings')
-            
+
         Returns:
             INSERT SQL with %NOINDEX for fast bulk loading
-            
+
         Example:
             sql = GraphSchema.get_bulk_insert_sql('rdf_labels')
             cursor.execute(sql, [node_id, label])
         """
         templates = {
-            'nodes': "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
-            'rdf_labels': "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
-            'rdf_props': "INSERT INTO Graph_KG.rdf_props (s, \"key\", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND \"key\" = ?)",
-            'rdf_edges': "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
-            'kg_NodeEmbeddings': "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) SELECT ?, TO_VECTOR(?), ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
+            "nodes": "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
+            "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
+            "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
+            "rdf_edges": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
+            "rdf_edges_with_graph": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND (graph_id = ? OR (graph_id IS NULL AND ? IS NULL)))",
+            "kg_NodeEmbeddings": "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) SELECT ?, TO_VECTOR(?), ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
         }
         if table not in templates:
             raise ValueError(f"Unknown table: {table}. Valid: {list(templates.keys())}")
@@ -322,15 +453,17 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     def upgrade_val_column(cursor) -> bool:
         """
         Upgrade rdf_props.val from VARCHAR(4000) to VARCHAR(64000) for large value support.
-        
+
         Safe to run on existing databases - will alter column type if needed.
         VARCHAR(64000) supports values up to 64KB while keeping REPLACE function compatibility.
-        
+
         Returns:
             True if upgraded or already large enough, False on error
         """
         try:
-            cursor.execute("ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)")
+            cursor.execute(
+                "ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)"
+            )
             return True
         except Exception as e:
             # Already correct size or other issue
@@ -344,12 +477,12 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         Validates that required schema tables exist
         """
         required_tables = [
-            'Graph_KG.rdf_labels',
-            'Graph_KG.rdf_props',
-            'Graph_KG.rdf_edges',
-            'Graph_KG.kg_NodeEmbeddings',
-            'Graph_KG.kg_NodeEmbeddings_optimized',
-            'Graph_KG.docs'
+            "Graph_KG.rdf_labels",
+            "Graph_KG.rdf_props",
+            "Graph_KG.rdf_edges",
+            "Graph_KG.kg_NodeEmbeddings",
+            "Graph_KG.kg_NodeEmbeddings_optimized",
+            "Graph_KG.docs",
         ]
 
         status = {}
@@ -365,7 +498,9 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return status
 
     @staticmethod
-    def get_embedding_dimension(cursor, table_name: str = "Graph_KG.kg_NodeEmbeddings") -> Optional[int]:
+    def get_embedding_dimension(
+        cursor, table_name: str = "Graph_KG.kg_NodeEmbeddings"
+    ) -> Optional[int]:
         """
         Detects the vector embedding dimension for a table using IRIS metadata.
         """
@@ -386,12 +521,12 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             rows = cursor.fetchall()
             for row in rows:
                 params = str(row[0])
-                if 'LEN,' in params:
+                if "LEN," in params:
                     # Parse 'LEN,768' from params string
-                    parts = params.split(',')
+                    parts = params.split(",")
                     for i, p in enumerate(parts):
-                        if p == 'LEN' and i + 1 < len(parts):
-                            return int(parts[i+1])
+                        if p == "LEN" and i + 1 < len(parts):
+                            return int(parts[i + 1])
         except Exception:
             pass
 
@@ -400,7 +535,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         table = "kg_NodeEmbeddings"
         if "." in table_name:
             schema, table = table_name.split(".", 1)
-            
+
         try:
             result = None
             for s_name, t_name in [(schema, table), (schema.upper(), table.upper())]:
@@ -412,23 +547,28 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                       AND TABLE_NAME = ?
                       AND COLUMN_NAME = 'emb'
                     """,
-                    [s_name, t_name]
+                    [s_name, t_name],
                 )
                 result = cursor.fetchone()
-                if result: break
-            
+                if result:
+                    break
+
             if result:
                 for val in result:
-                    if not val: continue
+                    if not val:
+                        continue
                     val_str = str(val)
                     import re
-                    matches = re.findall(r'(\d+)\s*\)', val_str)
-                    if matches: return int(matches[-1])
+
+                    matches = re.findall(r"(\d+)\s*\)", val_str)
+                    if matches:
+                        return int(matches[-1])
                     digits = "".join(ch for ch in val_str if ch.isdigit())
-                    if digits: return int(digits)
+                    if digits:
+                        return int(digits)
         except Exception:
             pass
-            
+
         return None
 
     @staticmethod
@@ -526,7 +666,7 @@ LANGUAGE OBJECTSCRIPT
     set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight)
     quit result
 }}
-"""
+""",
         ]
 
     # ------------------------------------------------------------------
@@ -565,7 +705,9 @@ LANGUAGE OBJECTSCRIPT
             caps.objectscript_deployed = bool(row and row[0])
         except Exception:
             try:
-                result = _call_classmethod(_native_target, 'Graph.KG.PageRank', '%Exists', 1)
+                result = _call_classmethod(
+                    _native_target, "Graph.KG.PageRank", "%Exists", 1
+                )
                 caps.objectscript_deployed = bool(result)
             except Exception:
                 caps.objectscript_deployed = False
@@ -580,20 +722,26 @@ LANGUAGE OBJECTSCRIPT
             caps.graphoperators_deployed = bool(row and row[0])
         except Exception:
             try:
-                result = _call_classmethod(_native_target, 'iris.vector.graph.GraphOperators', '%Exists', 1)
+                result = _call_classmethod(
+                    _native_target, "iris.vector.graph.GraphOperators", "%Exists", 1
+                )
                 caps.graphoperators_deployed = bool(result)
             except Exception:
                 caps.graphoperators_deployed = False
 
         # --- ^KG bootstrap marker via native API ---
         try:
-            result = _call_classmethod(_native_target, 'Graph.KG.Meta', 'IsSet', 'kg_built')
+            result = _call_classmethod(
+                _native_target, "Graph.KG.Meta", "IsSet", "kg_built"
+            )
             caps.kg_built = bool(result)
         except Exception:
             caps.kg_built = False
 
         try:
-            result = _call_classmethod(_native_target, 'Graph.KG.Meta', 'IsSet', 'nkg_built')
+            result = _call_classmethod(
+                _native_target, "Graph.KG.Meta", "IsSet", "nkg_built"
+            )
             caps.nkg_built = bool(result)
         except Exception:
             caps.nkg_built = False
@@ -601,7 +749,9 @@ LANGUAGE OBJECTSCRIPT
         return caps
 
     @staticmethod
-    def deploy_objectscript_classes(cursor, iris_src_path: Path, conn=None) -> "IRISCapabilities":
+    def deploy_objectscript_classes(
+        cursor, iris_src_path: Path, conn=None
+    ) -> "IRISCapabilities":
         """
         Deploy ObjectScript .cls files to IRIS and return capability flags.
 
@@ -619,18 +769,69 @@ LANGUAGE OBJECTSCRIPT
         """
         _native = conn if conn is not None else cursor
 
+        _SKIP_CLASSES = frozenset({"Graph.KG.Edge", "Graph.KG.TestEdge"})
+
         src_dir = str(iris_src_path / "src") if iris_src_path else ""
         deployed = False
         for candidate_dir in [src_dir, "/tmp/src/", "/irisdev/app/iris_src/src/"]:
             if not candidate_dir:
                 continue
             try:
-                _call_classmethod(_native, '%SYSTEM.OBJ', 'LoadDir', candidate_dir, 'ck', '', 1)
-                logger.info("ObjectScript classes loaded from %s", candidate_dir)
+                for cls_name in _SKIP_CLASSES:
+                    file_path = f"{candidate_dir}/{cls_name.replace('.', '/')}.cls"
+                    try:
+                        _call_classmethod(_native, "%Library.File", "Delete", file_path)
+                    except Exception:
+                        pass
+                _call_classmethod(
+                    _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
+                )
+                logger.debug("ObjectScript classes loaded from %s", candidate_dir)
                 deployed = True
                 break
             except Exception:
                 continue
+            try:
+                result = _call_classmethod(
+                    _native, "%Library.File", "FileExists", candidate_dir
+                )
+                if not result:
+                    continue
+                rs_result = _call_classmethod(
+                    _native,
+                    "%Library.File",
+                    "FileSetExecute",
+                    candidate_dir,
+                    "*.cls",
+                    "",
+                    1,
+                )
+                files_loaded = 0
+                for candidate_dir2 in [candidate_dir]:
+                    import_result = _call_classmethod(
+                        _native,
+                        "%SYSTEM.OBJ",
+                        "ImportDir",
+                        candidate_dir,
+                        "*.cls",
+                        "ck",
+                        "",
+                        1,
+                    )
+                    files_loaded += 1
+                if files_loaded > 0:
+                    deployed = True
+                    break
+            except Exception:
+                try:
+                    _call_classmethod(
+                        _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
+                    )
+                    logger.debug("ObjectScript classes loaded from %s", candidate_dir)
+                    deployed = True
+                    break
+                except Exception:
+                    continue
 
         if not deployed:
             logger.warning(
@@ -664,7 +865,7 @@ LANGUAGE OBJECTSCRIPT
 
         # Already done?
         try:
-            result = _call_classmethod(_native, 'Graph.KG.Meta', 'IsSet', 'kg_built')
+            result = _call_classmethod(_native, "Graph.KG.Meta", "IsSet", "kg_built")
             if result:
                 return False
         except Exception:
@@ -681,15 +882,15 @@ LANGUAGE OBJECTSCRIPT
 
         # Run BuildKG via native API
         try:
-            _call_classmethod(_native, 'Graph.KG.Traversal', 'BuildKG')
+            _call_classmethod(_native, "Graph.KG.Traversal", "BuildKG")
         except Exception as exc:
             logger.warning("BuildKG() failed: %s", exc)
             return False
 
         # Record completion
         try:
-            _call_classmethod(_native, 'Graph.KG.Meta', 'Set', 'kg_built', '1')
-            _call_classmethod(_native, 'Graph.KG.Meta', 'Set', 'nkg_built', '1')
+            _call_classmethod(_native, "Graph.KG.Meta", "Set", "kg_built", "1")
+            _call_classmethod(_native, "Graph.KG.Meta", "Set", "nkg_built", "1")
         except Exception as exc:
             logger.warning("Could not record kg_built in Graph.KG.Meta: %s", exc)
 
