@@ -233,21 +233,31 @@ def iris_test_container():
 
     # ── Attach to existing container if it's already running ──────────────────
     is_running = False
+    container_exists = False
     try:
         result = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
             capture_output=True,
             text=True,
         )
-        is_running = result.stdout.strip() == "true"
+        if result.returncode == 0:
+            container_exists = True
+            is_running = result.stdout.strip() == "true"
     except Exception:
         pass
 
     needs_setup = True
     if is_running:
-        logger.info(f"Attaching to existing container: {container_name}")
+        logger.info(f"Attaching to existing running container: {container_name}")
         container = IRISContainer.attach(container_name)
         needs_setup = True  # always run setup; DDL is idempotent (CREATE TABLE is ignored if exists)
+    elif container_exists:
+        logger.info(f"Starting stopped container: {container_name}")
+        subprocess.run(["docker", "start", container_name], capture_output=True)
+        import time as _time
+        _time.sleep(10)
+        container = IRISContainer.attach(container_name)
+        needs_setup = True
     else:
         # ── Start a fresh container ────────────────────────────────────────────
         logger.info(f"Starting fresh IRIS container: {container_name}")
