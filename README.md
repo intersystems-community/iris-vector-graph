@@ -583,6 +583,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.59.2 (2026-04-24)
+- fix: Cypher `WHERE x IN $param` and `WHERE x IN [list]` now correctly emit `IN (?,?,?)` — previously emitted `IN ?` which IRIS DBAPI can't expand. Enables batch multi-node queries like `MATCH (a)-[r]-(b) WHERE a.id IN $node_ids RETURN ...` (20× speedup for 2-hop expansion vs N sequential queries).
+
+
 ### v1.59.1 (2026-04-21)
 - perf: `embed_nodes()` and `embed_edges()` — 4–10x speedup for SentenceTransformer embedders: batch `model.encode(texts_list)` replaces N serial calls; `executemany()` replaces N per-row INSERTs; batch `DELETE WHERE id IN (...)` replaces N individual DELETEs. Estimated 94min → 10–25min for 205K nodes. Falls back gracefully for non-SentenceTransformer embedders and IRIS EMBEDDING() path.
 
