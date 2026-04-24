@@ -3425,6 +3425,8 @@ class IRISGraphEngine:
                     node_id, key, val = row[0], row[1], row[2]
                     props_by_node.setdefault(node_id, {})[key] = val
 
+                texts: List[str] = []
+                valid_ids: List[str] = []
                 for node_id in batch_ids:
                     props = props_by_node.get(node_id, {})
                     if text_fn is not None:
@@ -3443,24 +3445,77 @@ class IRISGraphEngine:
                         skipped += 1
                         continue
 
-                    try:
-                        emb = self.embed_text(text)
-                        emb_str = ",".join(str(x) for x in emb)
+                    texts.append(text)
+                    valid_ids.append(node_id)
+
+                if not texts:
+                    self.conn.commit()
+                    n_done = batch_start + len(batch_ids)
+                    if progress_callback:
+                        progress_callback(n_done, n_to_embed)
+                    continue
+
+                try:
+                    use_batch = False
+                    if not self.embedding_config and self.embedder is not None:
                         try:
-                            cursor.execute(
-                                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?",
-                                [node_id],
-                            )
-                        except Exception:
+                            from sentence_transformers import SentenceTransformer as _ST
+                            use_batch = isinstance(self.embedder, _ST)
+                        except ImportError:
                             pass
-                        cursor.execute(
-                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
-                            [node_id, emb_str],
+                    if use_batch:
+                        raw = self.embedder.encode(
+                            texts, batch_size=min(64, len(texts)), show_progress_bar=False
                         )
-                        embedded += 1
-                    except Exception as ex:
-                        logger.warning(f"embed_nodes: failed to embed {node_id}: {ex}")
+                        embeddings = [row.tolist() for row in raw]
+                    else:
+                        embeddings = [self.embed_text(t) for t in texts]
+                except Exception as ex:
+                    logger.warning(f"embed_nodes: batch encode failed, falling back per-node: {ex}")
+                    embeddings = []
+                    for t in texts:
+                        try:
+                            embeddings.append(self.embed_text(t))
+                        except Exception as ex2:
+                            logger.warning(f"embed_nodes: embed_text failed: {ex2}")
+                            embeddings.append(None)
+
+                insert_params = []
+                for node_id, emb in zip(valid_ids, embeddings):
+                    if emb is None:
                         errors += 1
+                        continue
+                    emb_str = ",".join(str(x) for x in emb)
+                    insert_params.append((node_id, emb_str))
+
+                if insert_params:
+                    ids_to_delete = [p[0] for p in insert_params]
+                    del_placeholders = ", ".join("?" * len(ids_to_delete))
+                    try:
+                        cursor.execute(
+                            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({del_placeholders})",
+                            ids_to_delete,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        cursor.executemany(
+                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
+                            insert_params,
+                        )
+                        embedded += len(insert_params)
+                    except Exception as ex:
+                        logger.warning(f"embed_nodes: executemany failed, falling back per-row: {ex}")
+                        for node_id, emb_str in insert_params:
+                            try:
+                                cursor.execute(
+                                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
+                                    [node_id, emb_str],
+                                )
+                                embedded += 1
+                            except Exception as ex2:
+                                logger.warning(f"embed_nodes: insert failed for {node_id}: {ex2}")
+                                errors += 1
 
                 self.conn.commit()
                 n_done = batch_start + len(batch_ids)
@@ -3531,6 +3586,8 @@ class IRISGraphEngine:
             for batch_start in range(0, n_to_embed, batch_size):
                 batch = to_embed[batch_start : batch_start + batch_size]
 
+                texts: List[str] = []
+                valid_edges: List[tuple] = []
                 for s, p, o_id in batch:
                     if text_fn is not None:
                         try:
@@ -3549,29 +3606,84 @@ class IRISGraphEngine:
                         skipped += 1
                         continue
 
-                    try:
-                        emb = self.embed_text(text)
-                        emb_str = ",".join(str(x) for x in emb)
+                    texts.append(text)
+                    valid_edges.append((s, p, o_id))
+
+                if not texts:
+                    self.conn.commit()
+                    n_done = batch_start + len(batch)
+                    if progress_callback:
+                        progress_callback(n_done, n_to_embed)
+                    continue
+
+                try:
+                    use_batch = False
+                    if not self.embedding_config and self.embedder is not None:
                         try:
-                            cursor.execute(
-                                f"DELETE FROM {_table('kg_EdgeEmbeddings')} "
-                                "WHERE s=? AND p=? AND o_id=?",
-                                [s, p, o_id],
-                            )
-                        except Exception:
+                            from sentence_transformers import SentenceTransformer as _ST
+                            use_batch = isinstance(self.embedder, _ST)
+                        except ImportError:
                             pass
-                        cursor.execute(
+                    if use_batch:
+                        raw = self.embedder.encode(texts, batch_size=min(64, len(texts)), show_progress_bar=False)
+                        embeddings = [row.tolist() for row in raw]
+                    else:
+                        embeddings = [self.embed_text(t) for t in texts]
+                except Exception as ex:
+                    logger.warning(f"embed_edges: batch encode failed, falling back per-edge: {ex}")
+                    embeddings = []
+                    for t in texts:
+                        try:
+                            embeddings.append(self.embed_text(t))
+                        except Exception as ex2:
+                            logger.warning(f"embed_edges: embed_text failed: {ex2}")
+                            embeddings.append(None)
+
+                insert_params = []
+                for (s, p, o_id), emb in zip(valid_edges, embeddings):
+                    if emb is None:
+                        errors += 1
+                        continue
+                    emb_str = ",".join(str(x) for x in emb)
+                    insert_params.append((s, p, o_id, emb_str))
+
+                if insert_params:
+                    try:
+                        del_params = [(p[0], p[1], p[2]) for p in insert_params]
+                        for s, p, o_id in del_params:
+                            try:
+                                cursor.execute(
+                                    f"DELETE FROM {_table('kg_EdgeEmbeddings')} "
+                                    "WHERE s=? AND p=? AND o_id=?",
+                                    [s, p, o_id],
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        cursor.executemany(
                             f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
                             "(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?))",
-                            [s, p, o_id, emb_str],
+                            insert_params,
                         )
-                        embedded += 1
+                        embedded += len(insert_params)
                     except Exception as ex:
-                        logger.warning(
-                            "embed_edges: failed to embed (%s, %s, %s): %s",
-                            s, p, o_id, ex,
-                        )
-                        errors += 1
+                        logger.warning(f"embed_edges: executemany failed, falling back per-row: {ex}")
+                        for s, p, o_id, emb_str in insert_params:
+                            try:
+                                cursor.execute(
+                                    f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
+                                    "(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?))",
+                                    [s, p, o_id, emb_str],
+                                )
+                                embedded += 1
+                            except Exception as ex2:
+                                logger.warning(
+                                    "embed_edges: insert failed for (%s, %s, %s): %s",
+                                    s, p, o_id, ex2,
+                                )
+                                errors += 1
 
                 self.conn.commit()
                 n_done = batch_start + len(batch)
