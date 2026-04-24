@@ -2026,6 +2026,21 @@ def translate_boolean_expression(expr, context) -> str:
         return f"{left} IS NULL"
     if op == ast.BooleanOperator.IS_NOT_NULL:
         return f"{left} IS NOT NULL"
+    if op == ast.BooleanOperator.IN:
+        if isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, list):
+            items = right_expr.value
+            placeholders = ", ".join(
+                context.add_where_param(
+                    item.value if isinstance(item, ast.Literal) else item
+                )
+                for item in items
+            )
+            return f"{left} IN ({placeholders})"
+        if isinstance(right_expr, ast.Variable) and right_expr.name in context.input_params:
+            val = context.input_params[right_expr.name]
+            if isinstance(val, list):
+                placeholders = ", ".join(context.add_where_param(v) for v in val)
+                return f"{left} IN ({placeholders})"
     right = translate_expression(right_expr, context, segment="where")
     if op in (
         ast.BooleanOperator.LESS_THAN,

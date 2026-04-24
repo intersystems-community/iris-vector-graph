@@ -151,3 +151,33 @@ def test_anonymous_both_nodes_pattern():
     """MATCH ()-[r]->(b) works without crashing."""
     sql = translate_to_sql(parse_query("MATCH ()-[r]->(b) RETURN b.id LIMIT 3"))
     assert "rdf_edges" in sql.sql or "MatchEdges" in sql.sql
+
+
+def test_in_list_param_expands_placeholders():
+    """WHERE a.id IN $ids with a list param must produce IN (?,?,?) not IN ?."""
+    q = "MATCH (a)-[r]-(b) WHERE a.id IN $node_ids RETURN a.id AS src, type(r) AS rel, b.id AS dst LIMIT 100"
+    result = translate_to_sql(parse_query(q), {"node_ids": ["node1", "node2", "node3"]})
+    assert "IN (?, ?, ?)" in result.sql or "IN (?,?,?)" in result.sql.replace(" ", ""), \
+        f"Expected IN (?,?,?) expansion, got: {result.sql}"
+    params = result.parameters[0] if result.parameters else []
+    assert "node1" in params and "node2" in params and "node3" in params, \
+        f"Expected list values as individual params, got: {params}"
+    assert not any(isinstance(p, list) for p in params), \
+        f"No nested list should appear in params after expansion, got: {params}"
+
+
+def test_in_literal_list_expands_placeholders():
+    """WHERE a.id IN ['x','y','z'] must produce IN (?,?,?) not IN [literal]."""
+    q = "MATCH (a) WHERE a.id IN ['python','rust','go'] RETURN a.id"
+    result = translate_to_sql(parse_query(q), {})
+    assert "IN (?, ?, ?)" in result.sql or "IN (?,?,?)" in result.sql.replace(" ", ""), \
+        f"Expected IN (?,?,?) expansion for literal list, got: {result.sql}"
+    params = result.parameters[0] if result.parameters else []
+    assert "python" in params and "rust" in params and "go" in params
+
+
+def test_in_param_empty_list_handled():
+    """WHERE a.id IN $ids with empty list should not crash (returns no results)."""
+    q = "MATCH (a) WHERE a.id IN $ids RETURN a.id"
+    result = translate_to_sql(parse_query(q), {"ids": []})
+    assert result.sql is not None
