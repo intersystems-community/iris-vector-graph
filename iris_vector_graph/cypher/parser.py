@@ -501,8 +501,10 @@ class Parser:
 
     def parse_create_clause(self) -> ast.CreateClause:
         self.expect(TokenType.CREATE)
-        pattern = self.parse_graph_pattern()
-        return ast.CreateClause(pattern=pattern)
+        patterns = [self.parse_graph_pattern()]
+        while self.matches(TokenType.COMMA):
+            patterns.append(self.parse_graph_pattern())
+        return ast.CreateClause(patterns=patterns)
 
     def parse_delete_clause(self) -> ast.DeleteClause:
         detach = self.matches(TokenType.DETACH)
