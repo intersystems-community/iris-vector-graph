@@ -275,6 +275,10 @@ class Parser:
                 and self.lexer.peek_ahead(1).kind == TokenType.LBRACE
             ):
                 clauses.append(self.parse_subquery_call())
+            elif kind == TokenType.CALL:
+                part = ast.QueryPart(clauses=clauses)
+                part.procedure_call = self.parse_procedure_call()
+                return part
             else:
                 break
 
@@ -568,6 +572,10 @@ class Parser:
             if self.matches(TokenType.EQUALS):
                 value = self.parse_expression()
                 items.append(ast.SetItem(expression=target, value=value))
+            elif self.peek().kind == TokenType.PLUS_EQUAL:
+                self.eat()
+                value = self.parse_expression()
+                items.append(ast.SetItem(expression=target, value=value, merge=True))
             elif self.matches(TokenType.COLON):
                 # SET n:Label
                 label_tok = self.expect(TokenType.IDENTIFIER)
@@ -938,6 +946,21 @@ class Parser:
                 self.expect(TokenType.RBRACE)
                 return ast.ExistsExpression(pattern=pattern, negated=False)
 
+            if name.lower() in ("shortestpath", "allshortestpaths") and self.peek().kind == TokenType.LPAREN:
+                self.eat()
+                pattern = self.parse_graph_pattern()
+                self.expect(TokenType.RPAREN)
+                is_all = name.lower() == "allshortestpaths"
+                for rel in pattern.relationships:
+                    if rel.variable_length is None:
+                        rel.variable_length = ast.VariableLength(
+                            min_hops=1, max_hops=5, shortest=not is_all, all_shortest=is_all
+                        )
+                    else:
+                        rel.variable_length.shortest = not is_all
+                        rel.variable_length.all_shortest = is_all
+                return ast.FunctionCall(function_name=name.lower(), arguments=[ast.Literal(pattern)])
+
             if (
                 name.lower() in ("any", "none", "single", "all")
                 and self.peek().kind == TokenType.LPAREN
@@ -1078,8 +1101,6 @@ class Parser:
                 items.append(first)
                 while self.matches(TokenType.COMMA):
                     items.append(self.parse_expression())
-                self.expect(TokenType.RBRACKET)
-            else:
                 self.expect(TokenType.RBRACKET)
             return ast.Literal(items)
 

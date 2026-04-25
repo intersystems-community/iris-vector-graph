@@ -74,6 +74,7 @@ class TokenType(enum.Enum):
     GREATER_THAN = ">"
     GREATER_THAN_OR_EQUAL = ">="
     PLUS = "+"
+    PLUS_EQUAL = "+="
     MINUS = "-"
     STAR = "*"
     SLASH = "/"
@@ -140,7 +141,12 @@ class Lexer:
                 case "|":
                     self._add_token(TokenType.PIPE, char)
                 case "+":
-                    self._add_token(TokenType.PLUS, char)
+                    if self._peek() == "=":
+                        self.tokens.append(Token(TokenType.PLUS_EQUAL, "+=", self.cursor, self.line, self.column))
+                        self.cursor += 2
+                        self.column += 2
+                    else:
+                        self._add_token(TokenType.PLUS, char)
                 case "*":
                     self._add_token(TokenType.STAR, char)
                 case "/":

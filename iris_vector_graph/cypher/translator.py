@@ -973,6 +973,8 @@ def translate_to_sql(
                 translate_updating_clause(clause, context, metadata)
             elif isinstance(clause, ast.WhereClause):
                 translate_where_clause(clause, context)
+        if part.procedure_call is not None:
+            translate_procedure_call(part.procedure_call, context)
         if part.with_clause:
             translate_with_clause(part.with_clause, context)
             sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
@@ -1406,7 +1408,36 @@ def translate_merge_clause(merge, context, metadata):
 
 def translate_set_clause(set_cl, context, metadata):
     for item in set_cl.items:
-        if isinstance(item.expression, ast.PropertyReference):
+        if isinstance(item.expression, ast.Variable) and getattr(item, "merge", False):
+            alias = context.variable_aliases.get(item.expression.name)
+            subquery, subparams = context.build_stage_sql(
+                select_override=f"SELECT {alias}.node_id"
+            )
+            val_expr = item.value
+            if isinstance(val_expr, ast.Variable) and val_expr.name in context.input_params:
+                map_val = context.input_params[val_expr.name]
+                if isinstance(map_val, dict):
+                    for k, v in map_val.items():
+                        context.add_dml(
+                            f'UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
+                            [v] + subparams + [k],
+                        )
+                        context.add_dml(
+                            f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
+                            [k, v] + subparams + [k],
+                        )
+            elif isinstance(val_expr, ast.MapLiteral):
+                for k, v in val_expr.entries.items():
+                    val = v.value if isinstance(v, ast.Literal) else context.input_params.get(v.name) if isinstance(v, ast.Variable) else v
+                    context.add_dml(
+                        f'UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
+                        [val] + subparams + [k],
+                    )
+                    context.add_dml(
+                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
+                        [k, val] + subparams + [k],
+                    )
+        elif isinstance(item.expression, ast.PropertyReference):
             alias, k, v = (
                 context.variable_aliases.get(item.expression.variable),
                 item.expression.property_name,
@@ -2478,6 +2509,23 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
     if isinstance(expr, ast.FunctionCall):
         fn = expr.function_name.lower()
+
+        if fn in ("shortestpath", "allshortestpaths") and expr.arguments:
+            arg = expr.arguments[0]
+            if isinstance(arg, ast.Literal) and isinstance(arg.value, ast.GraphPattern):
+                pattern = arg.value
+                is_all = fn == "allshortestpaths"
+                for rel in pattern.relationships:
+                    if rel.variable_length is None:
+                        rel.variable_length = ast.VariableLength(
+                            min_hops=1, max_hops=5, shortest=not is_all, all_shortest=is_all
+                        )
+                    else:
+                        rel.variable_length.shortest = not is_all
+                        rel.variable_length.all_shortest = is_all
+                fake_match = ast.MatchClause(patterns=[pattern], optional=False)
+                translate_match_clause(fake_match, context, {})
+                return "'path'"
 
         if fn in ("length", "nodes", "relationships") and len(expr.arguments) == 1:
             arg = expr.arguments[0]
