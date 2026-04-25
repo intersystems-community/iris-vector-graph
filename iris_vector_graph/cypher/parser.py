@@ -695,6 +695,12 @@ class Parser:
                     max_h = int(max_tok.value)
             var_len = ast.VariableLength(min_h, max_h)
 
+        props = {}
+        if self.peek().kind == TokenType.LBRACE:
+            self.eat()
+            props = self.parse_map_literal()
+            self.expect(TokenType.RBRACE)
+
         self.expect(TokenType.RBRACKET)
 
         # Closing arrow
@@ -708,7 +714,8 @@ class Parser:
                 direction = ast.Direction.BOTH
 
         return ast.RelationshipPattern(
-            variable=var, types=types, direction=direction, variable_length=var_len
+            variable=var, types=types, direction=direction, variable_length=var_len,
+            properties=props,
         )
 
     def parse_return_clause(self) -> ast.ReturnClause:
