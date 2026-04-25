@@ -1207,129 +1207,118 @@ def translate_unwind_clause(unwind, context):
 
 
 def translate_create_clause(create, context, metadata):
-    for node in create.pattern.nodes:
-        if node.variable and node.variable in context.variable_aliases:
-            continue
-        node_id_expr = node.properties.get("id") or node.properties.get("node_id")
-        if node_id_expr is None:
-            raise ValueError("CREATE node requires an 'id' property")
+    for pat in create.patterns:
+        for node in pat.nodes:
+            if node.variable and node.variable in context.variable_aliases:
+                continue
+            node_id_expr = node.properties.get("id") or node.properties.get("node_id")
+            if node_id_expr is None:
+                raise ValueError("CREATE node requires an 'id' property")
 
-        if isinstance(node_id_expr, ast.Variable):
-            var_alias = context.variable_aliases.get(node_id_expr.name)
-            if not var_alias:
-                raise ValueError(f"Undefined: {node_id_expr.name}")
+            if isinstance(node_id_expr, ast.Variable):
+                var_alias = context.variable_aliases.get(node_id_expr.name)
+                if not var_alias:
+                    raise ValueError(f"Undefined: {node_id_expr.name}")
 
-            # 1.1 Insert into nodes
-            # We need to capture the parameters specifically for this rowset subquery
-            sql, p = context.build_stage_sql(
-                select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
-            )
-            # Filter parameters to only include those referenced in the SQL subquery
-            # Since build_stage_sql just concatenates all params, and we used ? for all,
-            # we need to ensure the number of ? matches len(p).
-            # Our current build_stage_sql is correct because it only includes params for the current stage.
-            context.add_dml(
-                f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
-                p,
-            )
-            for label in node.labels:
-                context.add_dml(
-                    f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
-                    [label] + p + [label],
-                )
-        else:
-            node_id = (
-                node_id_expr.value
-                if isinstance(node_id_expr, ast.Literal)
-                else node_id_expr
-            )
-            context.add_dml(
-                f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
-                [node_id, node_id],
-            )
-            for label in node.labels:
-                context.add_dml(
-                    f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
-                    [node_id, label, node_id, label],
-                )
-            for k, v in node.properties.items():
-                val = v.value if isinstance(v, ast.Literal) else v
-                # Property 'id' or 'node_id' is stored in both nodes table AND rdf_props
-                # for Cypher query consistency.
-                context.add_dml(
-                    f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
-                    [node_id, k, val, node_id, k],
-                )
-        if node.variable:
-            context.register_variable(node.variable)
-
-    for i, rel in enumerate(create.pattern.relationships):
-        source_node, target_node = create.pattern.nodes[i], create.pattern.nodes[i + 1]
-        s_id_expr = source_node.properties.get("id") or source_node.properties.get(
-            "node_id"
-        )
-        t_id_expr = target_node.properties.get("id") or target_node.properties.get(
-            "node_id"
-        )
-        s_id = (
-            s_id_expr.value
-            if isinstance(s_id_expr, ast.Literal)
-            else s_id_expr
-            if not isinstance(s_id_expr, ast.Variable)
-            else None
-        )
-        t_id = (
-            t_id_expr.value
-            if isinstance(t_id_expr, ast.Literal)
-            else t_id_expr
-            if not isinstance(t_id_expr, ast.Variable)
-            else None
-        )
-        if s_id and t_id:
-            for rt in rel.types:
-                context.add_dml(
-                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
-                    [s_id, rt, t_id],
-                )
-        else:
-            s_alias = (
-                context.variable_aliases.get(source_node.variable)
-                if source_node.variable
-                else None
-            )
-            t_alias = (
-                context.variable_aliases.get(target_node.variable)
-                if target_node.variable
-                else None
-            )
-            s_expr, s_p = (
-                ("?", [s_id])
-                if s_id
-                else (
-                    f"{s_alias}.{source_node.variable}"
-                    if s_alias and s_alias.startswith("Stage")
-                    else f"{s_alias}.node_id",
-                    [],
-                )
-            )
-            t_expr, t_p = (
-                ("?", [t_id])
-                if t_id
-                else (
-                    f"{t_alias}.{target_node.variable}"
-                    if t_alias and t_alias.startswith("Stage")
-                    else f"{t_alias}.node_id",
-                    [],
-                )
-            )
-            for rt in rel.types:
                 sql, p = context.build_stage_sql(
-                    select_override=f"SELECT {s_expr}, ?, {t_expr}"
+                    select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
                 )
                 context.add_dml(
-                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
-                    s_p + [rt] + t_p + p,
+                    f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
+                    p,
                 )
+                for label in node.labels:
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
+                        [label] + p + [label],
+                    )
+            else:
+                node_id = (
+                    node_id_expr.value
+                    if isinstance(node_id_expr, ast.Literal)
+                    else node_id_expr
+                )
+                context.add_dml(
+                    f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+                    [node_id, node_id],
+                )
+                for label in node.labels:
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
+                        [node_id, label, node_id, label],
+                    )
+                for k, v in node.properties.items():
+                    val = v.value if isinstance(v, ast.Literal) else v
+                    context.add_dml(
+                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+                        [node_id, k, val, node_id, k],
+                    )
+            if node.variable:
+                context.register_variable(node.variable)
+
+        for i, rel in enumerate(pat.relationships):
+            source_node, target_node = pat.nodes[i], pat.nodes[i + 1]
+            s_id_expr = source_node.properties.get("id") or source_node.properties.get("node_id")
+            t_id_expr = target_node.properties.get("id") or target_node.properties.get("node_id")
+            s_id = (
+                s_id_expr.value
+                if isinstance(s_id_expr, ast.Literal)
+                else s_id_expr
+                if not isinstance(s_id_expr, ast.Variable)
+                else None
+            )
+            t_id = (
+                t_id_expr.value
+                if isinstance(t_id_expr, ast.Literal)
+                else t_id_expr
+                if not isinstance(t_id_expr, ast.Variable)
+                else None
+            )
+            if s_id and t_id:
+                for rt in rel.types:
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
+                        [s_id, rt, t_id],
+                    )
+            else:
+                s_alias = (
+                    context.variable_aliases.get(source_node.variable)
+                    if source_node.variable
+                    else None
+                )
+                t_alias = (
+                    context.variable_aliases.get(target_node.variable)
+                    if target_node.variable
+                    else None
+                )
+                s_expr, s_p = (
+                    ("?", [s_id])
+                    if s_id
+                    else (
+                        f"{s_alias}.{source_node.variable}"
+                        if s_alias and s_alias.startswith("Stage")
+                        else f"{s_alias}.node_id",
+                        [],
+                    )
+                )
+                t_expr, t_p = (
+                    ("?", [t_id])
+                    if t_id
+                    else (
+                        f"{t_alias}.{target_node.variable}"
+                        if t_alias and t_alias.startswith("Stage")
+                        else f"{t_alias}.node_id",
+                        [],
+                    )
+                )
+                for rt in rel.types:
+                    sql, p = context.build_stage_sql(
+                        select_override=f"SELECT {s_expr}, ?, {t_expr}"
+                    )
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
+                        s_p + [rt] + t_p + p,
+                    )
 
 
 def translate_delete_clause(delete, context, metadata):
@@ -1371,7 +1360,7 @@ def translate_delete_clause(delete, context, metadata):
 
 
 def translate_merge_clause(merge, context, metadata):
-    translate_create_clause(ast.CreateClause(merge.pattern), context, metadata)
+    translate_create_clause(ast.CreateClause(patterns=[merge.pattern]), context, metadata)
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
             for item in action.items:

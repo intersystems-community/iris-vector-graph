@@ -8,7 +8,7 @@ def test_parse_create():
     
     part = q.query_parts[0]
     create = next(c for c in part.clauses if isinstance(c, ast.CreateClause))
-    pattern = create.pattern
+    pattern = create.patterns[0]
     assert pattern.nodes[0].variable == "a"
     assert pattern.nodes[0].labels == ["Account"]
     assert pattern.nodes[0].properties["id"].value == "ACC1"

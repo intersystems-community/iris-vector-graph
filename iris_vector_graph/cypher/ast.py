@@ -291,9 +291,7 @@ class UpdatingClause:
 
 @dataclass(slots=True)
 class CreateClause(UpdatingClause):
-    """CREATE clause"""
-
-    pattern: GraphPattern
+    patterns: List[GraphPattern]
 
 
 @dataclass(slots=True)
