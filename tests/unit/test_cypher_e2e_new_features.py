@@ -552,3 +552,84 @@ class TestUndirectedBFSE2E:
         ids = {row[0] for row in result["rows"]}
         assert b in ids, f"inbound src missing: {ids}"
         assert c not in ids, f"outbound dst should not appear: {ids}"
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestAdjacencyIndexBuilt:
+    """
+    Guard test: BFS silently returns empty results if ^KG is not populated.
+    This test catches the class of bug where BuildKG() was never called after
+    graph load (e.g. missing from iris-init.sh on container restart).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, iris_connection):
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.conn = iris_connection
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine.initialize_schema()
+        self._run = uuid.uuid4().hex[:8]
+        self._nodes = []
+        yield
+        cursor = self.conn.cursor()
+        for nid in self._nodes:
+            try:
+                cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s=? OR o_id=?", [nid, nid])
+                cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s=?", [nid])
+                cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
+            except Exception:
+                pass
+        try:
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+
+    def _node(self, suffix):
+        nid = f"adj_{self._run}_{suffix}"
+        self._nodes.append(nid)
+        self.engine.create_node(nid, labels=["Gene"])
+        return nid
+
+    def test_bfs_returns_results_after_edge_creation(self):
+        """
+        After create_edge(), BFS must return the neighbor.
+        If ^KG is empty (BuildKG never called), this returns 0 rows silently.
+        The real enforcement: create_edge() calls WriteAdjacency() per-edge,
+        so ^KG is always populated incrementally without needing a separate BuildKG.
+        """
+        src = self._node("src")
+        dst = self._node("dst")
+        self.engine.create_edge(src, "KNOWS", dst)
+
+        result = self.engine.execute_cypher(
+            "MATCH (a)-[r*1..1]->(b) WHERE a.id = $id RETURN b.id",
+            {"id": src},
+        )
+        rows = result.get("rows", [])
+        ids = {row[0] for row in rows}
+        assert dst in ids, (
+            f"BFS returned 0 results after create_edge(). "
+            f"^KG may not be populated — check that WriteAdjacency() is called "
+            f"in create_edge() and that BuildKG() runs on container startup "
+            f"(iris-init.sh) after bulk loads."
+        )
+
+    def test_bulk_create_edges_populates_adjacency(self):
+        """bulk_create_edges() calls BuildKG() in finally block — verify."""
+        nodes = [self._node(f"bulk_{i}") for i in range(4)]
+        edges = [
+            {"source_id": nodes[0], "predicate": "REL", "target_id": nodes[1]},
+            {"source_id": nodes[1], "predicate": "REL", "target_id": nodes[2]},
+            {"source_id": nodes[2], "predicate": "REL", "target_id": nodes[3]},
+        ]
+        self.engine.bulk_create_edges(edges)
+
+        result = self.engine.execute_cypher(
+            "MATCH (a)-[r*1..3]->(b) WHERE a.id = $id RETURN b.id",
+            {"id": nodes[0]},
+        )
+        ids = {row[0] for row in result.get("rows", [])}
+        assert nodes[1] in ids and nodes[3] in ids, (
+            f"bulk_create_edges BFS returned {ids} — expected all 3 downstream nodes. "
+            f"Check that BuildKG() is called in the finally block of bulk_create_edges()."
+        )
