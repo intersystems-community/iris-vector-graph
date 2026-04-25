@@ -583,6 +583,17 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.62.0 (2026-04-25)
+
+**openCypher spec: 100% (99/99 testable features)**
+
+- feat: `SET n += {map}` / `SET n += $param` — map merge operator (spec 075)
+- fix: `isEmpty([])` — parser bug with empty list in function args (spec 076)
+- feat: `shortestPath((a)-[*]->(b))` in RETURN expression (spec 077)
+- feat: `MATCH ... CALL proc() YIELD ... RETURN` — CALL in same query part as MATCH (spec 078)
+- 26 E2E tests all passing against live IRIS container
+
+
 ### v1.61.0 (2026-04-24)
 
 Three more openCypher gaps closed, verified against the official openCypher grammar:
