@@ -212,8 +212,12 @@ class Parser:
         return q
 
     def parse_with_clause(self) -> ast.WithClause:
-        """Parse WITH a, b.prop AS alias WHERE ..."""
         self.expect(TokenType.WITH)
+
+        if self.peek().kind == TokenType.STAR:
+            self.eat()
+            where_clause = self.parse_where_clause()
+            return ast.WithClause(items=[], distinct=False, where_clause=where_clause, star=True)
 
         distinct = self.matches(TokenType.DISTINCT)
         items = []
