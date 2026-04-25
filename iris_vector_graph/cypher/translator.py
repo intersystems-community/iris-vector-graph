@@ -149,6 +149,7 @@ class TranslationContext:
         self.from_clauses: List[str] = []
         self.join_clauses: List[str] = []
         self.where_conditions: List[str] = []
+        self.having_conditions: List[str] = []
         self.group_by_items: List[str] = []
 
         self.select_params: List[Any] = []
@@ -228,6 +229,8 @@ class TranslationContext:
             parts.append(f"WHERE {' AND '.join(self.where_conditions)}")
         if self.group_by_items:
             parts.append(f"GROUP BY {', '.join(self.group_by_items)}")
+        if self.having_conditions:
+            parts.append(f"HAVING {' AND '.join(self.having_conditions)}")
         sql = "\n".join(parts)
         params = (
             (self.select_params if not select_override else [])
@@ -2633,6 +2636,7 @@ def translate_with_clause(with_clause, context):
     has_agg = any(
         isinstance(i.expression, ast.AggregationFunction) for i in with_clause.items
     )
+    agg_aliases: set = set()
     for item in with_clause.items:
         sql = translate_expression(item.expression, context, segment="select")
         alias = item.alias
@@ -2648,7 +2652,54 @@ def translate_with_clause(with_clause, context):
         context.select_items.append(f"{sql} AS {alias.replace('.', '_')}")
         if has_agg and not isinstance(item.expression, ast.AggregationFunction):
             context.group_by_items.append(sql)
+        if isinstance(item.expression, ast.AggregationFunction):
+            agg_aliases.add(alias)
     if with_clause.where_clause:
-        context.where_conditions.append(
-            translate_boolean_expression(with_clause.where_clause.expression, context)
-        )
+        expr = with_clause.where_clause.expression
+        if has_agg and agg_aliases and _references_agg_alias(expr, agg_aliases):
+            context.having_conditions.append(
+                _translate_having_expr(expr, agg_aliases, context)
+            )
+        else:
+            context.where_conditions.append(
+                translate_boolean_expression(expr, context)
+            )
+
+
+def _references_agg_alias(expr, agg_aliases: set) -> bool:
+    if isinstance(expr, ast.Variable) and expr.name in agg_aliases:
+        return True
+    if isinstance(expr, ast.BooleanExpression):
+        return any(_references_agg_alias(o, agg_aliases) for o in expr.operands)
+    return False
+
+
+def _translate_having_expr(expr, agg_aliases: set, context) -> str:
+    if isinstance(expr, ast.Variable) and expr.name in agg_aliases:
+        return expr.name
+    if isinstance(expr, ast.BooleanExpression):
+        op = expr.operator
+        if op == ast.BooleanOperator.AND:
+            return "(" + " AND ".join(
+                _translate_having_expr(o, agg_aliases, context) for o in expr.operands
+            ) + ")"
+        if op == ast.BooleanOperator.OR:
+            return "(" + " OR ".join(
+                _translate_having_expr(o, agg_aliases, context) for o in expr.operands
+            ) + ")"
+        if op == ast.BooleanOperator.NOT:
+            return f"NOT ({_translate_having_expr(expr.operands[0], agg_aliases, context)})"
+        left = _translate_having_expr(expr.operands[0], agg_aliases, context)
+        right_expr = expr.operands[1] if len(expr.operands) > 1 else None
+        right = translate_expression(right_expr, context, segment="where") if right_expr is not None else ""
+        op_map = {
+            ast.BooleanOperator.EQUALS: "=",
+            ast.BooleanOperator.NOT_EQUALS: "<>",
+            ast.BooleanOperator.LESS_THAN: "<",
+            ast.BooleanOperator.LESS_THAN_OR_EQUAL: "<=",
+            ast.BooleanOperator.GREATER_THAN: ">",
+            ast.BooleanOperator.GREATER_THAN_OR_EQUAL: ">=",
+        }
+        if op in op_map:
+            return f"{left} {op_map[op]} {right}"
+    return translate_boolean_expression(expr, context)
