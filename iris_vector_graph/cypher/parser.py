@@ -802,6 +802,32 @@ class Parser:
             self.eat()
             exp = self.parse_power_expression()
             return ast.FunctionCall(function_name="__arith_^", arguments=[base, exp])
+        while self.peek().kind in (TokenType.LBRACKET, TokenType.DOT):
+            if self.peek().kind == TokenType.LBRACKET:
+                self.eat()
+                if self.peek().kind == TokenType.DOT and self.lexer.peek_ahead(1).kind == TokenType.DOT:
+                    self.eat()
+                    self.eat()
+                    end = self.parse_primary_expression()
+                    self.expect(TokenType.RBRACKET)
+                    base = ast.SliceExpression(expression=base, start=ast.Literal(0), end=end)
+                else:
+                    first = self.parse_primary_expression()
+                    if self.peek().kind == TokenType.DOT and self.lexer.peek_ahead(1).kind == TokenType.DOT:
+                        self.eat()
+                        self.eat()
+                        second = self.parse_primary_expression()
+                        self.expect(TokenType.RBRACKET)
+                        base = ast.SliceExpression(expression=base, start=first, end=second)
+                    else:
+                        self.expect(TokenType.RBRACKET)
+                        base = ast.SubscriptExpression(expression=base, index=first)
+            elif self.peek().kind == TokenType.DOT:
+                self.eat()
+                prop_tok = self.expect(TokenType.IDENTIFIER)
+                base = ast.PropertyAccessExpression(
+                    expression=base, property_name=prop_tok.value or ""
+                )
         return base
 
     def parse_comparison_expression(self) -> Any:
