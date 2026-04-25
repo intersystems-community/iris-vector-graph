@@ -978,6 +978,8 @@ def translate_to_sql(
             sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
             context.all_stage_params.extend(stage_params)
             context.stages.append(f"Stage{i + 1} AS (\n{sql}\n)")
+            context.having_conditions = []
+            context.where_params = []
             new_stage = f"Stage{i + 1}"
             if part.with_clause.star:
                 new_aliases = {var: new_stage for var in context.variable_aliases}
@@ -991,6 +993,8 @@ def translate_to_sql(
                     )
                     if alias:
                         new_aliases[alias] = new_stage
+                    if isinstance(item.expression, ast.AggregationFunction) and alias:
+                        context.scalar_variables.add(alias)
             context.variable_aliases = new_aliases
 
     # 2. Final stage (RETURN)
@@ -1215,11 +1219,15 @@ def translate_create_clause(create, context, metadata):
             if node_id_expr is None:
                 raise ValueError("CREATE node requires an 'id' property")
 
+            var_alias = None
             if isinstance(node_id_expr, ast.Variable):
                 var_alias = context.variable_aliases.get(node_id_expr.name)
-                if not var_alias:
+                if not var_alias and node_id_expr.name in context.input_params:
+                    node_id_expr = ast.Literal(context.input_params[node_id_expr.name])
+                elif not var_alias:
                     raise ValueError(f"Undefined: {node_id_expr.name}")
 
+            if isinstance(node_id_expr, ast.Variable) and var_alias:
                 sql, p = context.build_stage_sql(
                     select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
                 )
@@ -1248,7 +1256,12 @@ def translate_create_clause(create, context, metadata):
                         [node_id, label, node_id, label],
                     )
                 for k, v in node.properties.items():
-                    val = v.value if isinstance(v, ast.Literal) else v
+                    if isinstance(v, ast.Literal):
+                        val = v.value
+                    elif isinstance(v, ast.Variable) and v.name in context.input_params:
+                        val = context.input_params[v.name]
+                    else:
+                        val = v
                     context.add_dml(
                         f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
                         [node_id, k, val, node_id, k],
@@ -1260,20 +1273,22 @@ def translate_create_clause(create, context, metadata):
             source_node, target_node = pat.nodes[i], pat.nodes[i + 1]
             s_id_expr = source_node.properties.get("id") or source_node.properties.get("node_id")
             t_id_expr = target_node.properties.get("id") or target_node.properties.get("node_id")
-            s_id = (
-                s_id_expr.value
-                if isinstance(s_id_expr, ast.Literal)
-                else s_id_expr
-                if not isinstance(s_id_expr, ast.Variable)
-                else None
-            )
-            t_id = (
-                t_id_expr.value
-                if isinstance(t_id_expr, ast.Literal)
-                else t_id_expr
-                if not isinstance(t_id_expr, ast.Variable)
-                else None
-            )
+
+            def _resolve_id(id_expr, node):
+                if id_expr is None:
+                    if node.variable and node.variable in context.input_params:
+                        return context.input_params[node.variable]
+                    return None
+                if isinstance(id_expr, ast.Literal):
+                    return id_expr.value
+                if isinstance(id_expr, ast.Variable) and id_expr.name in context.input_params:
+                    return context.input_params[id_expr.name]
+                if not isinstance(id_expr, ast.Variable):
+                    return id_expr
+                return None
+
+            s_id = _resolve_id(s_id_expr, source_node)
+            t_id = _resolve_id(t_id_expr, target_node)
             if s_id and t_id:
                 for rt in rel.types:
                     context.add_dml(
@@ -1350,12 +1365,19 @@ def translate_delete_clause(delete, context, metadata):
                 subparams,
             )
         else:
-            subquery_spo, subparams_spo = context.build_stage_sql(
-                select_override=f"SELECT {alias}.s, {alias}.p, {alias}.o_id"
+            subquery_s, subparams_s = context.build_stage_sql(
+                select_override=f"SELECT {alias}.s"
+            )
+            subquery_p, subparams_p = context.build_stage_sql(
+                select_override=f"SELECT {alias}.p"
+            )
+            subquery_o, subparams_o = context.build_stage_sql(
+                select_override=f"SELECT {alias}.o_id"
             )
             context.add_dml(
-                f"DELETE FROM {_table('rdf_edges')} WHERE (s, p, o_id) IN ({subquery_spo})",
-                subparams_spo,
+                f"DELETE FROM {_table('rdf_edges')} WHERE "
+                f"s IN ({subquery_s}) AND p IN ({subquery_p}) AND o_id IN ({subquery_o})",
+                subparams_s + subparams_p + subparams_o,
             )
 
 
@@ -2357,22 +2379,47 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"{p_alias}.val"
     if isinstance(expr, ast.MapLiteral):
         if not expr.entries:
-            return "JSON_OBJECT()"
+            return "'{}'"
         parts = []
         for k, v in expr.entries.items():
-            key_sql = f"'{k}'"
-            val_sql = translate_expression(v, context, segment=segment)
-            parts.append(f"{key_sql}, {val_sql}")
-        return f"JSON_OBJECT({', '.join(parts)})"
+            safe_k = k.replace("'", "''")
+            if isinstance(v, ast.Literal) and v.value is None:
+                parts.append(f"'\"'||'{safe_k}'||'\":null'")
+            elif isinstance(v, ast.Literal) and isinstance(v.value, bool):
+                bval = "true" if v.value else "false"
+                parts.append(f"'\"'||'{safe_k}'||'\":{bval}'")
+            elif isinstance(v, ast.Literal) and isinstance(v.value, (int, float)):
+                parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({v.value} AS VARCHAR)")
+            elif isinstance(v, ast.Literal) and isinstance(v.value, str):
+                safe_v = v.value.replace("\\", "\\\\").replace('"', '\\"').replace("'", "''")
+                parts.append(f"'\"'||'{safe_k}'||'\":\"'||'{safe_v}'||'\"'")
+            else:
+                val_sql = translate_expression(v, context, segment=segment)
+                parts.append(f"'\"'||'{safe_k}'||'\":\"'||CAST({val_sql} AS VARCHAR)||'\"'")
+        inner = " || ',' || ".join(parts)
+        return f"('{{'||{inner}||'}}')"
     if isinstance(expr, ast.SubscriptExpression):
         base_sql = translate_expression(expr.expression, context, segment=segment)
+        if isinstance(expr.index, ast.Literal) and isinstance(expr.index.value, int):
+            idx = expr.index.value
+            return (
+                f"(SELECT elem FROM JSON_TABLE({base_sql}, "
+                f"'$[{idx}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
+            )
         idx_sql = translate_expression(expr.index, context, segment=segment)
-        return f"JSON_ARRAYGET({base_sql}, {idx_sql})"
+        return (
+            f"JSON_TABLE({base_sql}, '$[*]' COLUMNS "
+            f"(idx FOR ORDINALITY, elem VARCHAR(1000) PATH '$'))[{idx_sql}].elem"
+        )
     if isinstance(expr, ast.SliceExpression):
         base_sql = translate_expression(expr.expression, context, segment=segment)
+        start_val = expr.start.value if isinstance(expr.start, ast.Literal) else None
+        end_val = expr.end.value if isinstance(expr.end, ast.Literal) else None
+        if start_val is not None and end_val is not None:
+            return f"SUBSTRING({base_sql}, {int(start_val) + 1}, {int(end_val) - int(start_val)})"
         start_sql = translate_expression(expr.start, context, segment=segment)
         end_sql = translate_expression(expr.end, context, segment=segment)
-        return f"JSON_ARRAY_SLICE({base_sql}, {start_sql}, {end_sql})"
+        return f"SUBSTRING({base_sql}, ({start_sql}) + 1, ({end_sql}) - ({start_sql}))"
     if isinstance(expr, ast.PropertyAccessExpression):
         base_sql = translate_expression(expr.expression, context, segment=segment)
         prop = expr.property_name.replace("'", "''")
@@ -2402,13 +2449,16 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"{alias}.node_id"
     if isinstance(expr, ast.Literal):
         v = expr.value
-        # Boolean/NULL literals translate to SQL constants — no parameterization needed
         if v is True:
             return "1"
         if v is False:
             return "0"
         if v is None:
             return "NULL"
+        if isinstance(v, list):
+            import json as _json
+            items = [item.value if isinstance(item, ast.Literal) else item for item in v]
+            return f"'{_json.dumps(items)}'"
         if segment == "select":
             return context.add_select_param(v)
         if segment == "join":
