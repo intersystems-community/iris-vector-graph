@@ -1691,6 +1691,10 @@ def translate_relationship_pattern(
                 "src_id_param": src_id_param,
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
+                "properties": {
+                    k: (v.value if isinstance(v, ast.Literal) else v)
+                    for k, v in rel.properties.items()
+                } if rel.properties else {},
             }
         )
         if not context.from_clauses:

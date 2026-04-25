@@ -1122,6 +1122,7 @@ class IRISGraphEngine:
         predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
         max_hops = vl["max_hops"]
         min_hops = vl["min_hops"]
+        rel_props_filter = vl.get("properties", {})
 
         params = sql_query.parameters[0] if sql_query.parameters else []
         source_id = None
