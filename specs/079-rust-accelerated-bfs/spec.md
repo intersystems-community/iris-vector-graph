@@ -2,6 +2,7 @@
 
 **Feature Branch**: `079-rust-accelerated-bfs`
 **Created**: 2026-04-25
+**Cross-reference**: `arno` spec 035 (`035-nkg-bfs-callout`) — covers all Rust + ObjectScript deliverables
 **Status**: Spec-reviewed (council 2026-04-25)
 
 ## Motivation
