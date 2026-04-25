@@ -583,6 +583,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.63.0 (2026-04-25)
+- feat: Arno/Rust fast path for BFS (`_execute_var_length_cypher`) — when `libarno_callout.so` is loaded with `Graph.KG.NKGAccel.BFSJson`, var-length Cypher queries use Rust BFS over `^NKG` integer adjacency instead of ObjectScript `BFSFastJson`. Projected 128ms → <30ms p50 for 6K+ result BFS at 10K/50K scale. Falls back transparently to `BFSFastJson` when Arno not loaded. (spec 079, arno spec 035)
+
+
 ### v1.62.1 (2026-04-25)
 - fix: `WITH n, count(r) AS cnt WHERE cnt > N` — IRIS SQLCODE -23 fixed; CTEs containing GROUP BY now emit inline subqueries `FROM (...GROUP BY...) Stage1` instead of `WITH Stage1 AS (...GROUP BY...) SELECT ... FROM Stage1` (IRIS 2025.x doesn't support aggregation in CTEs)
 - fix: `WITH HAVING` now uses the full aggregate expression (e.g. `COUNT(e.p) >= 2`) not the alias (`cnt >= 2`) — IRIS doesn't allow column aliases in HAVING
