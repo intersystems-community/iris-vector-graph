@@ -583,6 +583,17 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.60.0 (2026-04-24)
+
+Four openCypher gaps closed, all from structured gap analysis against the openCypher grammar spec:
+
+- feat: `WHERE n:Label` predicate — `MATCH (n) WHERE n:Gene AND n.id = 'x'` now works; translates to `EXISTS (SELECT 1 FROM rdf_labels WHERE label = ?)` (spec 068)
+- feat: Map literal expressions — `RETURN {id: n.id, score: 0.9} AS obj` translates to `JSON_OBJECT(...)` (spec 069)
+- feat: `WITH agg-alias HAVING filter` — `WITH n, count(r) AS cnt WHERE cnt > 2` now emits SQL `HAVING cnt > 2` correctly; was `ValueError: Undefined: cnt` (spec 070)
+- feat: Subscript/slice/property-access postfix — `list[n]`, `list[start..end]`, `expr.key` on any expression; translates to `JSON_ARRAYGET`, `JSON_ARRAY_SLICE`, `JSON_VALUE` (spec 071)
+- fix: `DELETE r` by relationship variable now emits `WHERE (s,p,o_id) IN (SELECT ...)` instead of broken correlated subquery (spec 071)
+
+
 ### v1.59.2 (2026-04-24)
 - fix: Cypher `WHERE x IN $param` and `WHERE x IN [list]` now correctly emit `IN (?,?,?)` — previously emitted `IN ?` which IRIS DBAPI can't expand. Enables batch multi-node queries like `MATCH (a)-[r]-(b) WHERE a.id IN $node_ids RETURN ...` (20× speedup for 2-hop expansion vs N sequential queries).
 
