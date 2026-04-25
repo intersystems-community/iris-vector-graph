@@ -457,3 +457,98 @@ class TestCypherRound2E2E:
         q = "MATCH (n) WHERE n.id = $id CALL ivg.vector.search('Gene','embedding',[0.1,0.2,0.3,0.4],5) YIELD node, score RETURN n.id, node, score"
         r = translate_to_sql(parse_query(q), {"id": "x"})
         assert r.var_length_paths is not None or r.sql is not None
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestUndirectedBFSE2E:
+
+    @pytest.fixture(autouse=True)
+    def setup(self, iris_connection):
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.conn = iris_connection
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine.initialize_schema()
+        self._run = uuid.uuid4().hex[:8]
+        self._nodes = []
+        yield
+        cursor = self.conn.cursor()
+        for nid in self._nodes:
+            try:
+                cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s=? OR o_id=?", [nid, nid])
+                cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s=?", [nid])
+                cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
+            except Exception:
+                pass
+        try:
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+
+    def _node(self, suffix):
+        nid = f"ubfs_{self._run}_{suffix}"
+        self._nodes.append(nid)
+        self.engine.create_node(nid, labels=["Gene"])
+        return nid
+
+    def _edge(self, s, p, o):
+        self.engine.create_edge(s, p, o)
+
+    def test_directed_out_returns_outbound_only(self):
+        a = self._node("A")
+        b = self._node("B")
+        c = self._node("C")
+        self._edge(a, "REL", b)
+        self._edge(c, "REL", a)
+
+        result = self.engine.execute_cypher(
+            "MATCH (x)-[r*1..1]->(y) WHERE x.id = $id RETURN y.id",
+            {"id": a},
+        )
+        ids = {row[0] for row in result["rows"]}
+        assert b in ids
+        assert c not in ids
+
+    def test_undirected_returns_both_inbound_and_outbound(self):
+        a = self._node("hub")
+        b = self._node("outbound")
+        c = self._node("inbound")
+        self._edge(a, "REL", b)
+        self._edge(c, "REL", a)
+
+        result = self.engine.execute_cypher(
+            "MATCH (x)-[r*1..1]-(y) WHERE x.id = $id RETURN y.id",
+            {"id": a},
+        )
+        ids = {row[0] for row in result["rows"]}
+        assert b in ids, f"outbound neighbor missing: {ids}"
+        assert c in ids, f"inbound neighbor missing: {ids}"
+
+    def test_undirected_multihop(self):
+        a = self._node("mh_a")
+        b = self._node("mh_b")
+        c = self._node("mh_c")
+        self._edge(b, "REL", a)
+        self._edge(b, "REL", c)
+
+        result = self.engine.execute_cypher(
+            "MATCH (x)-[r*1..2]-(y) WHERE x.id = $id RETURN y.id",
+            {"id": a},
+        )
+        ids = {row[0] for row in result["rows"]}
+        assert b in ids
+        assert c in ids
+
+    def test_directed_in_returns_inbound_only(self):
+        a = self._node("tgt")
+        b = self._node("src")
+        c = self._node("other")
+        self._edge(b, "REL", a)
+        self._edge(a, "REL", c)
+
+        result = self.engine.execute_cypher(
+            "MATCH (x)<-[r*1..1]-(y) WHERE x.id = $id RETURN y.id",
+            {"id": a},
+        )
+        ids = {row[0] for row in result["rows"]}
+        assert b in ids, f"inbound src missing: {ids}"
+        assert c not in ids, f"outbound dst should not appear: {ids}"

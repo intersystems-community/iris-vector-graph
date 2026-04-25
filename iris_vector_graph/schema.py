@@ -757,7 +757,7 @@ LANGUAGE OBJECTSCRIPT
 
         src_dir = str(iris_src_path / "src") if iris_src_path else ""
         deployed = False
-        for candidate_dir in [src_dir, "/tmp/src/", "/irisdev/app/iris_src/src/"]:
+        for candidate_dir in ["/tmp/src/", "/irisdev/app/iris_src/src/", src_dir]:
             if not candidate_dir:
                 continue
             try:
