@@ -1744,6 +1744,9 @@ def translate_relationship_pattern(
         def _resolve_id_param(node):
             id_val = node.properties.get("id")
             if id_val is None:
+                if node.variable and node.variable in context.input_params:
+                    val = context.input_params[node.variable]
+                    return f"${node.variable}" if isinstance(val, str) else None
                 return None
             if isinstance(id_val, ast.Variable):
                 return f"${id_val.name}"

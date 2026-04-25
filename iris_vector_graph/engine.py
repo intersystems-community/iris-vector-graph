@@ -1025,6 +1025,31 @@ class IRISGraphEngine:
         source_id = _resolve(vl.get("src_id_param"))
         target_id = _resolve(vl.get("dst_id_param"))
 
+        if source_id is None and parameters:
+            src_var = vl.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(
+                    (str(v) for v in parameters.values() if isinstance(v, str)), None
+                )
+
+        if target_id is None and parameters:
+            dst_var = vl.get("target_var")
+            if dst_var and dst_var in parameters:
+                target_id = str(parameters[dst_var])
+            else:
+                vals = [str(v) for v in parameters.values() if isinstance(v, str)]
+                target_id = vals[1] if len(vals) > 1 else None
+
+        if source_id is None or target_id is None:
+            sql_params = sql_query.parameters[0] if sql_query.parameters else []
+            str_params = [p for p in sql_params if isinstance(p, str) and not p.startswith("Graph_KG")]
+            if source_id is None and len(str_params) >= 1:
+                source_id = str_params[0]
+            if target_id is None and len(str_params) >= 2:
+                target_id = str_params[1]
+
         if source_id is None or target_id is None:
             raise ValueError(
                 "shortestPath requires both source and target node IDs to be bound. "
@@ -1131,7 +1156,11 @@ class IRISGraphEngine:
                 source_id = item
                 break
         if source_id is None and parameters:
-            source_id = next(iter(parameters.values()), None)
+            src_var = vl.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(iter(parameters.values()), None)
 
         if source_id is None:
             return {
@@ -1214,9 +1243,14 @@ class IRISGraphEngine:
                 seen.add(oid)
                 target_ids.append(oid)
 
+        import re as _re
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+        alias_match = _re.search(r'SELECT\s+DISTINCT\s+\S+\s+AS\s+(\w+)|SELECT\s+\S+\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
+        col_name = (alias_match.group(1) or alias_match.group(2)) if alias_match else "b_id"
+
         if not target_ids:
             return {
-                "columns": ["b_id", "b_labels", "b_props"],
+                "columns": [col_name, "b_labels", "b_props"],
                 "rows": [],
                 "sql": "",
                 "params": [],
@@ -1236,7 +1270,7 @@ class IRISGraphEngine:
             )
 
         return {
-            "columns": ["b_id", "b_labels", "b_props"],
+            "columns": [col_name, "b_labels", "b_props"],
             "rows": [list(r) for r in rows],
             "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
             "params": [],
