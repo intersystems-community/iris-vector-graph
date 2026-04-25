@@ -807,6 +807,11 @@ class Parser:
     def parse_comparison_expression(self) -> Any:
         left = self.parse_additive_expression()
 
+        if isinstance(left, ast.Variable) and self.peek().kind == TokenType.COLON:
+            self.eat()
+            label_tok = self.expect(TokenType.IDENTIFIER)
+            return ast.LabelPredicate(variable=left.name, label=label_tok.value or "")
+
         # Binary comparisons
         tok = self.peek()
         op = None

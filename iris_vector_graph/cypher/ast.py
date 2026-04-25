@@ -199,6 +199,12 @@ class WhereClause:
 
 
 @dataclass(slots=True)
+class LabelPredicate:
+    variable: str
+    label: str
+
+
+@dataclass(slots=True)
 class MatchClause:
     """MATCH clause with one or more patterns"""
 
