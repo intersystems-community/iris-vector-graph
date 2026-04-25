@@ -17,41 +17,16 @@ logger = logging.getLogger(__name__)
 
 
 def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) -> Any:
-    """Call an IRIS ObjectScript class method using the native API.
-
-    Works with both the ``iris`` package (iris.createIRIS) and the
-    ``intersystems_iris`` package (intersystems_iris.createIRIS).  Tries
-    ``iris.createIRIS`` first because it accepts the connection objects
-    returned by ``iris.connect()`` (the standard test-fixture connection).
-
-    Resolves the connection from either a connection object directly or from
-    ``cursor._connection`` if a cursor is passed.
-
-    Returns the method's return value, or raises if the class/method does not
-    exist or the native API is unavailable.
-    """
-    # Accept either a connection or a cursor
     if hasattr(conn_or_cursor, "cursor"):
-        conn = conn_or_cursor  # it's a connection
+        conn = conn_or_cursor
     elif hasattr(conn_or_cursor, "_connection"):
-        conn = conn_or_cursor._connection  # it's a cursor
+        conn = conn_or_cursor._connection
     else:
-        conn = conn_or_cursor  # best-effort fallback
-
-    # Try iris.createIRIS first (accepts iris.IRISConnection from iris.connect())
-    try:
-        import iris as _iris_pkg  # type: ignore[import]
-
-        iris_obj = _iris_pkg.createIRIS(conn)
-        return iris_obj.classMethodValue(class_name, method_name, *args)
-    except (ImportError, AttributeError, TypeError):
-        pass
-
-    # Fall back to intersystems_iris.createIRIS (accepts intersystems_iris.IRISConnection)
-    import intersystems_iris as _iris_pkg2  # type: ignore[import]
-
-    iris_obj = _iris_pkg2.createIRIS(conn)
+        conn = conn_or_cursor
+    import iris as _iris_pkg
+    iris_obj = _iris_pkg.createIRIS(conn)
     return iris_obj.classMethodValue(class_name, method_name, *args)
+
 
 
 class GraphSchema:
