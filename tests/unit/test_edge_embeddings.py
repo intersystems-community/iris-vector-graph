@@ -395,3 +395,70 @@ class TestEdgeEmbeddingsE2E:
         results = self.engine.edge_vector_search([0.5, 0.5, 0.5, 0.5], top_k=10)
         matching = [r for r in results if r["s"].startswith(f"ee65_{self._run}")]
         assert len(matching) == 3
+
+
+class TestRelPropFilter:
+
+    def _make_engine_with_quals(self, qual_map: dict):
+        import json as _json
+        from unittest.mock import MagicMock, call
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+
+        def fetchone_side_effect():
+            args = cursor.execute.call_args[0][1]
+            s, p, o = args[0], args[1], args[2]
+            qual = qual_map.get((s, p, o))
+            return (_json.dumps(qual),) if qual is not None else (None,)
+
+        cursor.fetchone.side_effect = fetchone_side_effect
+        engine = IRISGraphEngine(conn, embedding_dimension=4)
+        return engine
+
+    def test_filter_by_weight(self):
+        engine = self._make_engine_with_quals({
+            ("a", "KNOWS", "b"): {"weight": 5, "since": 2020},
+            ("b", "KNOWS", "c"): {"weight": 3},
+            ("a", "KNOWS", "c"): None,
+        })
+        bfs = [
+            {"s": "a", "p": "KNOWS", "o": "b", "step": 1, "w": 1.0},
+            {"s": "b", "p": "KNOWS", "o": "c", "step": 2, "w": 1.0},
+            {"s": "a", "p": "KNOWS", "o": "c", "step": 1, "w": 1.0},
+        ]
+        result = engine._filter_edges_by_properties(bfs, {"weight": 5})
+        assert len(result) == 1
+        assert result[0]["o"] == "b"
+
+    def test_filter_multi_prop(self):
+        engine = self._make_engine_with_quals({
+            ("a", "KNOWS", "b"): {"weight": 5, "since": 2020},
+            ("b", "KNOWS", "c"): {"weight": 3},
+        })
+        bfs = [
+            {"s": "a", "p": "KNOWS", "o": "b", "step": 1, "w": 1.0},
+            {"s": "b", "p": "KNOWS", "o": "c", "step": 2, "w": 1.0},
+        ]
+        result = engine._filter_edges_by_properties(bfs, {"weight": 5, "since": 2020})
+        assert len(result) == 1
+        assert result[0]["o"] == "b"
+
+    def test_no_match_returns_empty(self):
+        engine = self._make_engine_with_quals({
+            ("a", "KNOWS", "b"): {"weight": 3},
+        })
+        bfs = [{"s": "a", "p": "KNOWS", "o": "b", "step": 1, "w": 1.0}]
+        result = engine._filter_edges_by_properties(bfs, {"weight": 99})
+        assert result == []
+
+    def test_empty_filter_returns_all(self):
+        engine = self._make_engine_with_quals({})
+        bfs = [
+            {"s": "a", "p": "KNOWS", "o": "b", "step": 1, "w": 1.0},
+            {"s": "b", "p": "KNOWS", "o": "c", "step": 2, "w": 1.0},
+        ]
+        result = engine._filter_edges_by_properties(bfs, {})
+        assert len(result) == 2

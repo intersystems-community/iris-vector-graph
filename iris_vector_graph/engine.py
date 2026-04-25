@@ -1177,6 +1177,9 @@ class IRISGraphEngine:
                 if min_step_per_node.get(r.get("o"), 0) >= min_hops
             ]
 
+        if rel_props_filter and bfs_results:
+            bfs_results = self._filter_edges_by_properties(bfs_results, rel_props_filter)
+
         seen = set()
         target_ids = []
         for r in bfs_results:
@@ -1814,6 +1817,49 @@ class IRISGraphEngine:
         """
         nodes = self.get_nodes([node_id])
         return nodes[0] if nodes else None
+
+    def _filter_edges_by_properties(
+        self, bfs_results: list, prop_filter: dict
+    ) -> list:
+        if not prop_filter:
+            return bfs_results
+        import json as _json
+        edges = [(r["s"], r["p"], r["o"]) for r in bfs_results if r.get("s") and r.get("p") and r.get("o")]
+        if not edges:
+            return bfs_results
+
+        cursor = self.conn.cursor()
+        try:
+            results = []
+            for s, p, o in edges:
+                cursor.execute(
+                    f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                    "WHERE s=? AND p=? AND o_id=?",
+                    [s, p, o],
+                )
+                row = cursor.fetchone()
+                qual_json = row[0] if row else None
+                try:
+                    qualifiers = _json.loads(qual_json) if qual_json else {}
+                except Exception:
+                    qualifiers = {}
+                if all(str(qualifiers.get(k)) == str(v) for k, v in prop_filter.items()):
+                    results.append((s, p, o))
+        except Exception as e:
+            logger.warning("_filter_edges_by_properties query failed: %s", e)
+            return bfs_results
+
+        passing = set(results)
+
+        if not passing:
+            logger.debug(
+                "_filter_edges_by_properties: no edges match filter %s", prop_filter
+            )
+
+        return [
+            r for r in bfs_results
+            if (r.get("s"), r.get("p"), r.get("o")) in passing
+        ]
 
     def get_nodes(self, node_ids: List[str]) -> List[Dict[str, Any]]:
         """
