@@ -210,6 +210,25 @@ class MapLiteral:
 
 
 @dataclass(slots=True)
+class SubscriptExpression:
+    expression: Any
+    index: Any
+
+
+@dataclass(slots=True)
+class SliceExpression:
+    expression: Any
+    start: Any
+    end: Any
+
+
+@dataclass(slots=True)
+class PropertyAccessExpression:
+    expression: Any
+    property_name: str
+
+
+@dataclass(slots=True)
 class MatchClause:
     """MATCH clause with one or more patterns"""
 

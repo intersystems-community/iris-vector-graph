@@ -1357,9 +1357,12 @@ def translate_delete_clause(delete, context, metadata):
                 subparams,
             )
         else:
+            subquery_spo, subparams_spo = context.build_stage_sql(
+                select_override=f"SELECT {alias}.s, {alias}.p, {alias}.o_id"
+            )
             context.add_dml(
-                f"DELETE FROM {_table('rdf_edges')} WHERE s = (SELECT s FROM {_table('rdf_edges')} {alias}) AND p = (SELECT p FROM {_table('rdf_edges')} {alias}) AND o_id = (SELECT o_id FROM {_table('rdf_edges')} {alias})",
-                [],
+                f"DELETE FROM {_table('rdf_edges')} WHERE (s, p, o_id) IN ({subquery_spo})",
+                subparams_spo,
             )
 
 
@@ -2364,6 +2367,19 @@ def translate_expression(expr, context, segment="select") -> str:
             val_sql = translate_expression(v, context, segment=segment)
             parts.append(f"{key_sql}, {val_sql}")
         return f"JSON_OBJECT({', '.join(parts)})"
+    if isinstance(expr, ast.SubscriptExpression):
+        base_sql = translate_expression(expr.expression, context, segment=segment)
+        idx_sql = translate_expression(expr.index, context, segment=segment)
+        return f"JSON_ARRAYGET({base_sql}, {idx_sql})"
+    if isinstance(expr, ast.SliceExpression):
+        base_sql = translate_expression(expr.expression, context, segment=segment)
+        start_sql = translate_expression(expr.start, context, segment=segment)
+        end_sql = translate_expression(expr.end, context, segment=segment)
+        return f"JSON_ARRAY_SLICE({base_sql}, {start_sql}, {end_sql})"
+    if isinstance(expr, ast.PropertyAccessExpression):
+        base_sql = translate_expression(expr.expression, context, segment=segment)
+        prop = expr.property_name.replace("'", "''")
+        return f"JSON_VALUE({base_sql}, '$.{prop}')"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)
         if not alias:
