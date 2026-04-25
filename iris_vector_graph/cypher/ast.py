@@ -254,11 +254,10 @@ class ReturnItem:
 
 @dataclass(slots=True)
 class WithClause:
-    """WITH clause for chaining queries"""
-
     items: List[ReturnItem]
     distinct: bool = False
     where_clause: Optional[WhereClause] = None
+    star: bool = False
 
 
 @dataclass(slots=True)

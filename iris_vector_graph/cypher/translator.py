@@ -978,15 +978,19 @@ def translate_to_sql(
             sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
             context.all_stage_params.extend(stage_params)
             context.stages.append(f"Stage{i + 1} AS (\n{sql}\n)")
-            new_aliases = {}
-            for item in part.with_clause.items:
-                alias = item.alias or (
-                    item.expression.name
-                    if isinstance(item.expression, ast.Variable)
-                    else None
-                )
-                if alias:
-                    new_aliases[alias] = f"Stage{i + 1}"
+            new_stage = f"Stage{i + 1}"
+            if part.with_clause.star:
+                new_aliases = {var: new_stage for var in context.variable_aliases}
+            else:
+                new_aliases = {}
+                for item in part.with_clause.items:
+                    alias = item.alias or (
+                        item.expression.name
+                        if isinstance(item.expression, ast.Variable)
+                        else None
+                    )
+                    if alias:
+                        new_aliases[alias] = new_stage
             context.variable_aliases = new_aliases
 
     # 2. Final stage (RETURN)
@@ -2649,6 +2653,17 @@ def translate_return_clause(ret, context):
 
 
 def translate_with_clause(with_clause, context):
+    if with_clause.star:
+        for var, alias in context.variable_aliases.items():
+            if alias.startswith("e"):
+                context.select_items.append(f"{alias}.s AS {var}_s, {alias}.p AS {var}_p, {alias}.o_id AS {var}_o_id")
+            else:
+                context.select_items.append(f"{alias}.node_id AS {var}")
+        if with_clause.where_clause:
+            context.where_conditions.append(
+                translate_boolean_expression(with_clause.where_clause.expression, context)
+            )
+        return
     has_agg = any(
         isinstance(i.expression, ast.AggregationFunction) for i in with_clause.items
     )
