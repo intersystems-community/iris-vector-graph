@@ -597,7 +597,12 @@ class Parser:
                 raise CypherParseError(
                     "REMOVE target must be property reference or variable"
                 )
-            items.append(ast.RemoveItem(expression=target))
+            if isinstance(target, ast.Variable) and self.peek().kind == TokenType.COLON:
+                self.eat()
+                label_tok = self.expect(TokenType.IDENTIFIER)
+                items.append(ast.RemoveItem(expression=target, label=label_tok.value or ""))
+            else:
+                items.append(ast.RemoveItem(expression=target))
             if not self.matches(TokenType.COMMA):
                 break
         return ast.RemoveClause(items=items)

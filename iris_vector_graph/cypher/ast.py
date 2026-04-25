@@ -276,9 +276,8 @@ class SetItem(UpdateItem):
 
 @dataclass(slots=True)
 class RemoveItem(UpdateItem):
-    """REMOVE item (property or label removal)"""
-
     expression: Union[PropertyReference, Variable]
+    label: Optional[str] = None
 
 
 @dataclass(slots=True)
