@@ -583,6 +583,15 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.61.0 (2026-04-24)
+
+Three more openCypher gaps closed, verified against the official openCypher grammar:
+
+- feat: `WITH *` — pass-through all bound variables to next stage; fixes `ValueError: Undefined` on any var after `WITH *` (spec 072)
+- feat: Multi-pattern `CREATE (a:Gene {id:"x"}), (b:Drug {id:"y"}), (a)-[:BINDS]->(b)` — parser now loops on comma to accept any number of patterns (spec 073)
+- feat: Relationship property filter on variable-length paths: `[r*1..3 {weight: 5}]` — parser accepts `{prop:val}` after `*min..max`; properties passed through to BFS execution (spec 074)
+
+
 ### v1.60.0 (2026-04-24)
 
 Four openCypher gaps closed, all from structured gap analysis against the openCypher grammar spec:
