@@ -269,10 +269,9 @@ class UpdateItem:
 
 @dataclass(slots=True)
 class SetItem(UpdateItem):
-    """SET item (property update or label addition)"""
-
     expression: Union[PropertyReference, Variable]
-    value: Any  # For SET n.prop = value or SET n:Label
+    value: Any
+    merge: bool = False
 
 
 @dataclass(slots=True)
@@ -363,12 +362,11 @@ class SubqueryCall:
 
 @dataclass(slots=True)
 class QueryPart:
-    """A stage in a multi-stage query (sequence of clauses)"""
-
     clauses: List[
         Union[MatchClause, UnwindClause, UpdatingClause, WhereClause, "SubqueryCall"]
     ] = field(default_factory=list)
     with_clause: Optional[WithClause] = None
+    procedure_call: Optional["CypherProcedureCall"] = None
 
 
 @dataclass(slots=True)

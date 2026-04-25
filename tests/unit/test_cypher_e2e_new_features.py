@@ -365,3 +365,95 @@ class TestCypherNewFeaturesE2E:
         ids = [r[0] for r in result["rows"]]
         assert dst1 in ids
         assert dst2 in ids
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestCypherRound2E2E:
+
+    @pytest.fixture(autouse=True)
+    def setup(self, iris_connection):
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.conn = iris_connection
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine.initialize_schema()
+        self._run = uuid.uuid4().hex[:8]
+        self._nodes = []
+        yield
+        cursor = self.conn.cursor()
+        for nid in self._nodes:
+            for tbl in ["rdf_edges", "rdf_labels", "rdf_props", "nodes"]:
+                try:
+                    col = "s" if tbl in ("rdf_edges","rdf_labels","rdf_props") else "node_id"
+                    cursor.execute(f"DELETE FROM Graph_KG.{tbl} WHERE {col}=?", [nid])
+                    if tbl == "rdf_edges":
+                        cursor.execute(f"DELETE FROM Graph_KG.{tbl} WHERE o_id=?", [nid])
+                except Exception:
+                    pass
+        try:
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+
+    def _node(self, label, suffix):
+        nid = f"r2_{self._run}_{suffix}"
+        self._nodes.append(nid)
+        self.engine.create_node(nid, labels=[label], properties={"name": suffix, "score": len(suffix)})
+        return nid
+
+    def _edge(self, s, p, o, qualifiers=None):
+        self.engine.create_edge(s, p, o, qualifiers=qualifiers)
+
+    def _cypher(self, q, params=None):
+        return self.engine.execute_cypher(q, params or {})
+
+    def test_075_set_map_merge_literal(self):
+        nid = self._node("Gene", "set_merge_a")
+        self._cypher("MATCH (n) WHERE n.id = $id SET n += {extra: 'merged', score: 99}", {"id": nid})
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT val FROM Graph_KG.rdf_props WHERE s=? AND \"key\"='extra'", [nid])
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == "merged"
+
+    def test_075_set_map_merge_param(self):
+        nid = self._node("Gene", "set_merge_b")
+        self._cypher("MATCH (n) WHERE n.id = $id SET n += $props", {"id": nid, "props": {"extra": "from_param"}})
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT val FROM Graph_KG.rdf_props WHERE s=? AND \"key\"='extra'", [nid])
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == "from_param"
+
+    def test_075_set_map_preserves_existing(self):
+        nid = self._node("Gene", "set_merge_c")
+        self._cypher("MATCH (n) WHERE n.id = $id SET n += {extra: 'new'}", {"id": nid})
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT val FROM Graph_KG.rdf_props WHERE s=? AND \"key\"='name'", [nid])
+        row = cursor.fetchone()
+        assert row is not None and row[0] == "set_merge_c"
+
+    def test_076_isempty_empty_list(self):
+        result = self._cypher("RETURN isEmpty([]) AS e")
+        assert len(result["rows"]) == 1
+        assert result["rows"][0][0] in (1, "1", True, "true")
+
+    def test_076_isempty_nonempty_list(self):
+        result = self._cypher("RETURN isEmpty([1,2,3]) AS e")
+        assert len(result["rows"]) == 1
+        assert result["rows"][0][0] in (0, "0", False, "false")
+
+    def test_077_shortestpath_expression_parses_and_routes(self):
+        from iris_vector_graph.cypher.translator import translate_to_sql
+        from iris_vector_graph.cypher.parser import parse_query
+        q = "MATCH (a),(b) WHERE a.id = $src AND b.id = $dst RETURN shortestPath((a)-[*1..5]->(b))"
+        r = translate_to_sql(parse_query(q), {"src": "x", "dst": "y"})
+        assert r.var_length_paths is not None
+        assert len(r.var_length_paths) >= 1
+        assert r.var_length_paths[0]["shortest"] is True
+
+    def test_078_match_then_call_parses(self):
+        from iris_vector_graph.cypher.translator import translate_to_sql
+        from iris_vector_graph.cypher.parser import parse_query
+        q = "MATCH (n) WHERE n.id = $id CALL ivg.vector.search('Gene','embedding',[0.1,0.2,0.3,0.4],5) YIELD node, score RETURN n.id, node, score"
+        r = translate_to_sql(parse_query(q), {"id": "x"})
+        assert r.var_length_paths is not None or r.sql is not None
