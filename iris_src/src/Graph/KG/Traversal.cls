@@ -151,8 +151,9 @@ ClassMethod TraverseAllPredicates(s As %String, hop As %Integer, maxHops As %Int
 }
 
 /// Optimized BFS using Process-Private Globals and $ListBuild to bypass object bottleneck
+/// @param direction "out" (default), "in", or "both" for undirected BFS
 /// @returns Number of edges found. Results are in ^||BFS.Results(i) = $lb(s, p, o, w, step)
-ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "") As %Integer
+ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %Integer
 {
     Kill ^||BFS.Results
     If (srcId = "") || (maxHops <= 0) Return 0
@@ -171,10 +172,20 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
             Set s = $Order(frontier(s))
             If s = "" Quit
             
-            If fixedP '= "" {
-                Do ..TraverseWithPredicateFast(s, fixedP, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
-            } Else {
-                Do ..TraverseAllPredicatesFast(s, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+            If direction = "out" || (direction = "both") {
+                If fixedP '= "" {
+                    Do ..TraverseWithPredicateFast(s, fixedP, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+                } Else {
+                    Do ..TraverseAllPredicatesFast(s, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+                }
+            }
+            
+            If direction = "in" || (direction = "both") {
+                If fixedP '= "" {
+                    Do ..TraverseWithPredicateFastInbound(s, fixedP, hop, .count, .nextFrontier, .seen)
+                } Else {
+                    Do ..TraverseAllPredicatesFastInbound(s, hop, .count, .nextFrontier, .seen)
+                }
             }
         }
         
@@ -213,6 +224,30 @@ ClassMethod TraverseAllPredicatesFast(s As %String, hop As %Integer, maxHops As 
         Set p = $Order(^KG("out", 0, s, p))
         If p = "" Quit
         Do ..TraverseWithPredicateFast(s, p, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+    }
+}
+
+/// Inbound BFS: traverse ^KG("in", 0, s, p, o) where s is the target, o is the source.
+/// Result stored as (o, p, s) to preserve original edge direction.
+ClassMethod TraverseWithPredicateFastInbound(s As %String, p As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+{
+    Set o = ""
+    For {
+        Set o = $Order(^KG("in", 0, s, p, o))
+        If o = "" Quit
+        Set count = count + 1
+        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", 0, o, p, s), 1.0), hop)
+        If '$Data(seen(o)) Set nextFrontier(o) = ""
+    }
+}
+
+ClassMethod TraverseAllPredicatesFastInbound(s As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+{
+    Set p = ""
+    For {
+        Set p = $Order(^KG("in", 0, s, p))
+        If p = "" Quit
+        Do ..TraverseWithPredicateFastInbound(s, p, hop, .count, .nextFrontier, .seen)
     }
 }
 
@@ -287,7 +322,7 @@ ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Intege
 /// @param maxHops  Maximum hops (default 2)
 /// @param dstLabel Filter destination nodes by label (empty = no filter)
 /// @returns JSON array: [{"s":..,"p":..,"o":..,"w":..,"step":..}, ...] in traversal order
-ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "") As %String
+ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
 {
     // Parse predicates JSON into a %DynamicArray (null/"" means all predicates)
     Set preds = ""
@@ -300,7 +335,7 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
     }
 
     // Run BFSFast -- writes to ^||BFS.Results(i) = $ListBuild(s,p,o,w,step)
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
 
     If count = 0 Return "[]"
 

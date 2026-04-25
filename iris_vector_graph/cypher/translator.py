@@ -1759,7 +1759,7 @@ def translate_relationship_pattern(
         src_id_param = _resolve_id_param(source_node)
         dst_id_param = _resolve_id_param(target_node)
 
-        direction_str = "both" if rel.direction == ast.Direction.BOTH else "out"
+        direction_str = "both" if rel.direction == ast.Direction.BOTH else ("in" if rel.direction == ast.Direction.INCOMING else "out")
 
         context.var_length_paths.append(
             {

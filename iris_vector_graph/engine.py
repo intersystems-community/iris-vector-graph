@@ -1206,6 +1206,7 @@ class IRISGraphEngine:
                     predicates_json,
                     max_hops,
                     "",
+                    vl.get("direction", "out"),
                 )
                 bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
             except Exception as e:
@@ -4887,7 +4888,7 @@ class IRISGraphEngine:
             try:
                 iris_obj = self._iris_obj()
                 result = iris_obj.classMethodValue(
-                    "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, ""
+                    "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "", "out"
                 )
                 if result:
                     edges = json.loads(str(result))
@@ -4950,9 +4951,9 @@ class IRISGraphEngine:
 
             return iris.createIRIS(self.conn)
         except (TypeError, AttributeError):
-            import intersystems_iris
+            import iris
 
-            return intersystems_iris.createIRIS(self.conn)
+            return iris.createIRIS(self.conn)
 
     def vec_create_index(
         self,
