@@ -878,6 +878,12 @@ class Parser:
             self.expect(TokenType.RPAREN)
             return expr
 
+        if tok.kind == TokenType.LBRACE:
+            self.eat()
+            entries = self.parse_map_literal()
+            self.expect(TokenType.RBRACE)
+            return ast.MapLiteral(entries=entries)
+
         if tok.kind == TokenType.IDENTIFIER:
             name = self.eat().value
             if name is None:

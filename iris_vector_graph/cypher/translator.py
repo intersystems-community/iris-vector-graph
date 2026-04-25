@@ -2352,6 +2352,15 @@ def translate_expression(expr, context, segment="select") -> str:
             f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(expr.property_name)}'
         )
         return f"{p_alias}.val"
+    if isinstance(expr, ast.MapLiteral):
+        if not expr.entries:
+            return "JSON_OBJECT()"
+        parts = []
+        for k, v in expr.entries.items():
+            key_sql = f"'{k}'"
+            val_sql = translate_expression(v, context, segment=segment)
+            parts.append(f"{key_sql}, {val_sql}")
+        return f"JSON_OBJECT({', '.join(parts)})"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)
         if not alias:

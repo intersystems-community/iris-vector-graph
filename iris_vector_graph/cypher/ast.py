@@ -205,6 +205,11 @@ class LabelPredicate:
 
 
 @dataclass(slots=True)
+class MapLiteral:
+    entries: dict
+
+
+@dataclass(slots=True)
 class MatchClause:
     """MATCH clause with one or more patterns"""
 
