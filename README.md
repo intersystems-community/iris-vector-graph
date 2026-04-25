@@ -583,6 +583,14 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.63.2 (2026-04-25)
+- fix: `MATCH (a)-[r*1..N]-(b)` undirected BFS now traverses `^KG("in",...)` for inbound edges (was outbound-only)
+- fix: `MATCH (a)<-[r*1..N]-(b)` inbound-only BFS now works  
+- fix: `initialize_schema()` ObjectScript LoadDir tries Docker `/tmp/src/` before Mac path — fixes silent compile failure in test containers
+- 4 E2E tests: directed-out, undirected, multihop undirected, directed-in all passing
+- Arno BFSJson falls back gracefully to BFSFastJson for graphs >3.5MB adjacency string (299K+ long-ID edges); per-seed export is spec 079 future work
+
+
 ### v1.63.0 (2026-04-25)
 - feat: Arno/Rust fast path for BFS (`_execute_var_length_cypher`) — when `libarno_callout.so` is loaded with `Graph.KG.NKGAccel.BFSJson`, var-length Cypher queries use Rust BFS over `^NKG` integer adjacency instead of ObjectScript `BFSFastJson`. Projected 128ms → <30ms p50 for 6K+ result BFS at 10K/50K scale. Falls back transparently to `BFSFastJson` when Arno not loaded. (spec 079, arno spec 035)
 
