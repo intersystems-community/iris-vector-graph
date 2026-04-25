@@ -1142,26 +1142,52 @@ class IRISGraphEngine:
                 "metadata": sql_query.query_metadata,
             }
 
-        try:
-            bfs_json = _call_classmethod(
-                self.conn,
-                "Graph.KG.Traversal",
-                "BFSFastJson",
-                source_id,
-                predicates_json,
-                max_hops,
-                "",
-            )
-            bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
-        except Exception as e:
-            logger.warning(f"BFSFastJson failed: {e}")
-            return {
-                "columns": [],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+        max_results = 0
+        if sql_query.sql:
+            import re as _re
+            sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
+            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            if m:
+                max_results = int(m.group(1))
+
+        bfs_results = None
+        if self._detect_arno() and self._arno_capabilities.get("bfs"):
+            try:
+                bfs_json = self._arno_call(
+                    "Graph.KG.NKGAccel",
+                    "BFSJson",
+                    source_id,
+                    predicates_json,
+                    max_hops,
+                    max_results,
+                )
+                bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
+                logger.debug("Arno BFSJson: %d results for %s", len(bfs_results), source_id)
+            except Exception as e:
+                logger.warning(f"Arno BFSJson failed, falling back to BFSFastJson: {e}")
+                bfs_results = None
+
+        if bfs_results is None:
+            try:
+                bfs_json = _call_classmethod(
+                    self.conn,
+                    "Graph.KG.Traversal",
+                    "BFSFastJson",
+                    source_id,
+                    predicates_json,
+                    max_hops,
+                    "",
+                )
+                bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
+            except Exception as e:
+                logger.warning(f"BFSFastJson failed: {e}")
+                return {
+                    "columns": [],
+                    "rows": [],
+                    "sql": "",
+                    "params": [],
+                    "metadata": sql_query.query_metadata,
+                }
 
         if min_hops > 1:
             min_step_per_node: dict = {}
