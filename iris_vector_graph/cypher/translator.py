@@ -1999,6 +1999,15 @@ def translate_boolean_expression(expr, context) -> str:
             prefix = "NOT " if expr.negated else ""
             return f"{prefix}EXISTS ({sub})"
         return "1=1"
+    if isinstance(expr, ast.LabelPredicate):
+        alias = context.variable_aliases.get(expr.variable)
+        node_col = f"{alias}.node_id" if alias else "node_id"
+        labels_tbl = _table("rdf_labels")
+        safe_label = context.add_where_param(expr.label)
+        return (
+            f"EXISTS (SELECT 1 FROM {labels_tbl} _lp WHERE _lp.s = {node_col}"
+            f" AND _lp.label = {safe_label})"
+        )
     if not isinstance(expr, ast.BooleanExpression):
         return translate_expression(expr, context, segment="where")
     op = expr.operator
