@@ -862,6 +862,22 @@ def _remove_ts_conditions_from_where(context, rel_var: str):
     context.where_conditions = kept
 
 
+def _demote_agg_stages_to_subqueries(sql: str, ctes: list) -> tuple:
+    remaining_ctes = []
+    for cte in ctes:
+        name_end = cte.index(" AS (")
+        cte_name = cte[:name_end].strip()
+        body_start = cte.index(" AS (") + 5
+        body_end = cte.rindex(")")
+        body = cte[body_start:body_end].strip()
+
+        if "GROUP BY" in body.upper() and f"FROM {cte_name}" in sql:
+            sql = sql.replace(f"FROM {cte_name}", f"FROM ({body}) {cte_name}", 1)
+        else:
+            remaining_ctes.append(cte)
+    return sql, remaining_ctes
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None, engine=None
 ) -> SQLQuery:
@@ -1058,10 +1074,12 @@ def translate_to_sql(
             if not any(td in c for td in context.temporal_derived)
         ] + context.stages
         if all_ctes and sql is not None:
-            sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
+            sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
+            if all_ctes:
+                sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
             all_params.append(context.all_stage_params + p)
         elif sql is not None:
-            all_params.append(p)
+             all_params.append(p)
         if sql is not None:
             stmts.append(sql)
         return SQLQuery(
@@ -1115,7 +1133,9 @@ def translate_to_sql(
             if not any(td in c for td in context.temporal_derived)
         ] + context.stages
         if all_ctes:
-            sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
+            sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
+            if all_ctes:
+                sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
             return SQLQuery(
                 sql=sql,
                 parameters=[context.all_stage_params + p],
@@ -1475,7 +1495,16 @@ def translate_set_clause(set_cl, context, metadata):
 
 def translate_remove_clause(remove, context, metadata):
     for item in remove.items:
-        if isinstance(item.expression, ast.PropertyReference):
+        if isinstance(item.expression, ast.Variable) and item.label:
+            alias = context.variable_aliases.get(item.expression.name)
+            subquery, subparams = context.build_stage_sql(
+                select_override=f"SELECT {alias}.node_id"
+            )
+            context.add_dml(
+                f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({subquery}) AND label = ?",
+                subparams + [item.label],
+            )
+        elif isinstance(item.expression, ast.PropertyReference):
             alias, k = (
                 context.variable_aliases.get(item.expression.variable),
                 item.expression.property_name,
@@ -2776,11 +2805,18 @@ def translate_with_clause(with_clause, context):
             context.group_by_items.append(sql)
         if isinstance(item.expression, ast.AggregationFunction):
             agg_aliases.add(alias)
+    agg_alias_sql: dict = {}
+    for item in with_clause.items:
+        if isinstance(item.expression, ast.AggregationFunction):
+            alias = item.alias
+            if alias is None:
+                alias = item.expression.function_name
+            agg_alias_sql[alias] = translate_expression(item.expression, context, segment="select")
     if with_clause.where_clause:
         expr = with_clause.where_clause.expression
         if has_agg and agg_aliases and _references_agg_alias(expr, agg_aliases):
             context.having_conditions.append(
-                _translate_having_expr(expr, agg_aliases, context)
+                _translate_having_expr(expr, agg_aliases, agg_alias_sql, context)
             )
         else:
             context.where_conditions.append(
@@ -2796,22 +2832,22 @@ def _references_agg_alias(expr, agg_aliases: set) -> bool:
     return False
 
 
-def _translate_having_expr(expr, agg_aliases: set, context) -> str:
+def _translate_having_expr(expr, agg_aliases: set, agg_alias_sql: dict, context) -> str:
     if isinstance(expr, ast.Variable) and expr.name in agg_aliases:
-        return expr.name
+        return agg_alias_sql.get(expr.name, expr.name)
     if isinstance(expr, ast.BooleanExpression):
         op = expr.operator
         if op == ast.BooleanOperator.AND:
             return "(" + " AND ".join(
-                _translate_having_expr(o, agg_aliases, context) for o in expr.operands
+                _translate_having_expr(o, agg_aliases, agg_alias_sql, context) for o in expr.operands
             ) + ")"
         if op == ast.BooleanOperator.OR:
             return "(" + " OR ".join(
-                _translate_having_expr(o, agg_aliases, context) for o in expr.operands
+                _translate_having_expr(o, agg_aliases, agg_alias_sql, context) for o in expr.operands
             ) + ")"
         if op == ast.BooleanOperator.NOT:
-            return f"NOT ({_translate_having_expr(expr.operands[0], agg_aliases, context)})"
-        left = _translate_having_expr(expr.operands[0], agg_aliases, context)
+            return f"NOT ({_translate_having_expr(expr.operands[0], agg_aliases, agg_alias_sql, context)})"
+        left = _translate_having_expr(expr.operands[0], agg_aliases, agg_alias_sql, context)
         right_expr = expr.operands[1] if len(expr.operands) > 1 else None
         right = translate_expression(right_expr, context, segment="where") if right_expr is not None else ""
         op_map = {
