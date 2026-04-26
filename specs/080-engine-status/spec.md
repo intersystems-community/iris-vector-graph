@@ -65,7 +65,7 @@ if not s.ready_for_bfs:
 - **FR-009**: `status()` MUST complete in <500ms on a standard IRIS instance with <1M rows
 - **FR-010**: Any probe failure MUST be caught, added to `EngineStatus.errors`, and NOT raise to the caller
 - **FR-011**: `EngineStatus.report() -> str` MUST produce a human-readable multi-line string suitable for notebook output
-- **FR-012**: `EngineStatus.ready_for_bfs`, `.ready_for_vector_search`, `.ready_for_full_text` MUST be computed properties
+- **FR-012**: `EngineStatus.ready_for_bfs`, `.ready_for_vector_search`, `.ready_for_full_text`, `.ready_for_edge_search` MUST be computed properties
 - **FR-013**: `status()` MUST NOT be called automatically at init or before queries — explicit call only
 
 ## Key Entities
