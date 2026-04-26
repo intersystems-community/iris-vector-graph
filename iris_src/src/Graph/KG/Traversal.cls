@@ -13,7 +13,7 @@ ClassMethod BuildKG() As %Status
 		TStart
 		
 		// 1. Labels
-		&sql(DECLARE c1 CURSOR FOR SELECT s, label FROM rdf_labels)
+		&sql(DECLARE c1 CURSOR FOR SELECT s, label FROM Graph_KG.rdf_labels)
 		&sql(OPEN c1)
 		For {
 			&sql(FETCH c1 INTO :s, :label)
@@ -23,7 +23,7 @@ ClassMethod BuildKG() As %Status
 		&sql(CLOSE c1)
 		
 		// 2. Props
-		&sql(DECLARE c2 CURSOR FOR SELECT s, key, val FROM rdf_props)
+		&sql(DECLARE c2 CURSOR FOR SELECT s, key, val FROM Graph_KG.rdf_props)
 		&sql(OPEN c2)
 		For {
 			&sql(FETCH c2 INTO :s, :key, :val)
@@ -34,7 +34,7 @@ ClassMethod BuildKG() As %Status
 		
 		// 3. Edges & Stats (including weights)
 		Set count = 0
-		&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers FROM rdf_edges)
+		&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers FROM Graph_KG.rdf_edges)
 		&sql(OPEN c3)
 		For {
 			&sql(FETCH c3 INTO :s, :p, :o, :qual)
@@ -673,6 +673,24 @@ ClassMethod DijkstraBacktrack(srcId As %String, dstId As %String, totalCost As %
 ClassMethod DijkstraProc(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String [ SqlProc, SqlName = DijkstraPath ]
 {
 	Quit ..DijkstraJson(srcId, dstId, weightProp, maxCost, maxHops, direction)
+}
+
+ClassMethod KGEdgeCount(maxCount As %Integer = 10000) As %Integer
+{
+    Set count = 0
+    Set s = ""
+    For {
+        Set s = $Order(^KG("out", 0, s))
+        Quit:s=""
+        Set count = count + 1
+        If count >= maxCount Quit
+    }
+    Return count
+}
+
+ClassMethod NKGPopulated() As %Integer
+{
+    Return ($Data(^NKG) > 0)
 }
 
 }

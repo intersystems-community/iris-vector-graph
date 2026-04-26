@@ -20,6 +20,10 @@ from iris_vector_graph.cypher.translator import (
 )
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.capabilities import IRISCapabilities
+from iris_vector_graph.status import (
+    EngineStatus, TableCounts, AdjacencyStatus,
+    ObjectScriptStatus, ArnoStatus, IndexInventory,
+)
 from iris_vector_graph.security import validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -2053,6 +2057,145 @@ class IRISGraphEngine:
         }
 
         return {"id": row_map[id_key], "labels": labels, "properties": props}
+
+    def status(self) -> "EngineStatus":
+        import time as _time
+        t0 = _time.perf_counter()
+        errors: list = []
+        cursor = self.conn.cursor()
+
+        def _count(sql):
+            try:
+                cursor.execute(sql)
+                row = cursor.fetchone()
+                return int(row[0]) if row else 0
+            except Exception as e:
+                errors.append(f"count probe failed: {e}")
+                return 0
+
+        tables = TableCounts(
+            nodes=_count(f"SELECT COUNT(*) FROM {_table('nodes')}"),
+            edges=_count(f"SELECT COUNT(*) FROM {_table('rdf_edges')}"),
+            labels=_count(f"SELECT COUNT(*) FROM {_table('rdf_labels')}"),
+            props=_count(f"SELECT COUNT(*) FROM {_table('rdf_props')}"),
+            node_embeddings=_count(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings')}"),
+            edge_embeddings=_count(f"SELECT COUNT(*) FROM {_table('kg_EdgeEmbeddings')}"),
+        )
+
+        kg_count = 0
+        kg_capped = False
+        kg_populated = False
+        nkg_populated = False
+        try:
+            native = self._iris_obj()
+            kg_count = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 10000))
+            kg_populated = kg_count > 0
+            kg_capped = kg_count >= 10000
+            nkg_populated = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
+        except Exception as e:
+            try:
+                iris_native = self._iris_obj()
+                kg_populated = bool(iris_native.isDefined(["KG", "out"]))
+            except Exception:
+                errors.append(f"^KG probe failed: {e}")
+
+        adjacency = AdjacencyStatus(
+            kg_populated=kg_populated,
+            kg_edge_count=kg_count,
+            kg_edge_count_capped=kg_capped,
+            nkg_populated=nkg_populated,
+        )
+
+        if kg_populated and tables.edges > 0:
+            try:
+                native = self._iris_obj()
+                kg_pred = str(native.get(["KG", "out", 0, ""])) or ""
+                if not kg_pred:
+                    s_val = ""
+                    kg_pred_node = native.orderAll(["KG", "out", 0, s_val])
+                    if kg_pred_node:
+                        kg_pred = str(native.orderAll(
+                            ["KG", "out", 0, str(kg_pred_node), ""]
+                        ) or "")
+            except Exception:
+                kg_pred = ""
+
+            if kg_pred:
+                try:
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {_table('rdf_edges')} WHERE p = ?",
+                        [kg_pred],
+                    )
+                    row = cursor.fetchone()
+                    if row and int(row[0]) == 0:
+                        errors.append(
+                            f"^KG predicate mismatch: ^KG has '{kg_pred[:60]}' "
+                            f"but rdf_edges has no matching p — "
+                            f"^KG is stale from a different data snapshot. "
+                            f"Run BuildKG() after reloading graph data."
+                        )
+                except Exception:
+                    pass
+
+        os_classes = []
+        os_deployed = self.capabilities.objectscript_deployed
+        _known_classes = [
+            "Graph.KG.Traversal", "Graph.KG.PageRank", "Graph.KG.IVFIndex",
+            "Graph.KG.BM25Index", "Graph.KG.ArnoAccel", "Graph.KG.Snapshot",
+            "Graph.KG.Dijkstra",
+        ]
+        if os_deployed:
+            for cls in _known_classes:
+                try:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = ?",
+                        [cls],
+                    )
+                    row = cursor.fetchone()
+                    if row and int(row[0]) > 0:
+                        os_classes.append(cls)
+                except Exception:
+                    pass
+
+        objectscript = ObjectScriptStatus(deployed=os_deployed, classes=os_classes)
+
+        self._detect_arno()
+        arno = ArnoStatus(
+            loaded=bool(self._arno_available),
+            capabilities=dict(self._arno_capabilities),
+        )
+
+        hnsw_built = _count(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings_optimized')}") > 0
+
+        def _list_index(sql):
+            try:
+                cursor.execute(sql)
+                return [row[0] for row in cursor.fetchall() if row[0]]
+            except Exception:
+                return []
+
+        ivf = _list_index(f"SELECT DISTINCT name FROM {_table('kg_IVFMeta')}")
+        bm25 = _list_index(f"SELECT DISTINCT name FROM {_table('kg_BM25Meta')}")
+        plaid = _list_index(f"SELECT DISTINCT idx_name FROM {_table('kg_PlaidMeta')}")
+
+        indexes = IndexInventory(
+            hnsw_built=hnsw_built,
+            ivf_indexes=ivf,
+            bm25_indexes=bm25,
+            plaid_indexes=plaid,
+        )
+
+        probe_ms = (_time.perf_counter() - t0) * 1000
+        return EngineStatus(
+            tables=tables,
+            adjacency=adjacency,
+            objectscript=objectscript,
+            arno=arno,
+            indexes=indexes,
+            embedding_dimension=self.embedding_dimension,
+            probe_ms=probe_ms,
+            errors=errors,
+        )
 
     def count_nodes(self, label: Optional[str] = None) -> int:
         """

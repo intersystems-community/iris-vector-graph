@@ -3,6 +3,7 @@ IRIS Graph Core - Domain-Agnostic Graph Engine
 """
 
 from .engine import IRISGraphEngine
+from .status import EngineStatus
 from .schema import GraphSchema
 from .capabilities import IRISCapabilities
 from .vector_utils import VectorOptimizer
