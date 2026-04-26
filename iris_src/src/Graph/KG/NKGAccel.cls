@@ -450,7 +450,7 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
     Return result
 }
 
-ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
+ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
 {
     Set dllPath = $Get(^||NKGAccel("libPath"), "/usr/irissys/mgr/libarno_callout.so")
     If '$Data(^||NKGAccel("bfs_fn")) {
@@ -466,23 +466,108 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     If fnid = 0 {
         Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
     }
-    Set adjStr = ..ExportAdjacencyWithPreds()
-    If $Extract(adjStr, 1, 8) = "CHUNKED:" {
-        Set nChunks = $Piece(adjStr, ":", 2)
-        Set adjStr = ""
-        For i = 1:1:nChunks {
-            Set adjStr = adjStr _ ^||adjWP(i)
-            If $Length(adjStr) > 3500000 {
-                Kill ^||adjWP
-                Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
-            }
-        }
-        Kill ^||adjWP
-    }
+
+    // Per-seed export: only export the subgraph reachable from seed (bounded by maxHops+1)
+    // This keeps adjStr small even on 300K+ edge graphs
+    Set adjStr = ..ExportAdjacencyFromSeed(seed, maxHops + 1, predicatesJson)
     If $Length(adjStr) = 0 {
         Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
     }
     Return $ZF(-5, dllid, fnid, adjStr, seed, predicatesJson, maxHops, maxResults)
+}
+
+ClassMethod ExportAdjacencyFromSeed(seed As %String, maxHops As %Integer = 4, predicatesJson As %String = "[]") As %String [ Private ]
+{
+    Set seedIdx = $Get(^NKG("$NI", seed), "")
+    If seedIdx = "" Return ""
+
+    Set preds = ""
+    If predicatesJson '= "[]" && (predicatesJson '= "") {
+        Try { Set preds = ##class(%DynamicArray).%FromJSON(predicatesJson) } Catch { Set preds = "" }
+    }
+
+    // BFS to collect reachable node indices within maxHops
+    Kill ^||seedBFS
+    Set ^||seedBFS("frontier", seedIdx) = ""
+    Set ^||seedBFS("seen", seedIdx) = ""
+
+    For hop = 1:1:maxHops {
+        Kill ^||seedBFS("nextFrontier")
+        Set s = ""
+        For {
+            Set s = $Order(^||seedBFS("frontier", s))
+            Quit:s=""
+            Set pred = ""
+            For {
+                Set pred = $Order(^NKG(-1, s, pred))
+                Quit:pred=""
+                If $IsObject(preds) {
+                    Set allowed = 0
+                    Set predStr = $Get(^NKG("$LS", -pred - 1), "")
+                    For pi = 0:1:preds.%Size()-1 {
+                        If preds.%Get(pi) = predStr { Set allowed = 1 Quit }
+                    }
+                    If 'allowed Continue
+                }
+                Set dst = ""
+                For {
+                    Set dst = $Order(^NKG(-1, s, pred, dst))
+                    Quit:dst=""
+                    Set ^||seedBFS("nodes", s) = ""
+                    Set ^||seedBFS("nodes", dst) = ""
+                    If '$Data(^||seedBFS("seen", dst)) {
+                        Set ^||seedBFS("seen", dst) = ""
+                        Set ^||seedBFS("nextFrontier", dst) = ""
+                    }
+                }
+            }
+            // Inbound traversal for undirected
+            Set pred = ""
+            For {
+                Set pred = $Order(^NKG(-2, s, pred))
+                Quit:pred=""
+                Set dst = ""
+                For {
+                    Set dst = $Order(^NKG(-2, s, pred, dst))
+                    Quit:dst=""
+                    Set ^||seedBFS("nodes", s) = ""
+                    Set ^||seedBFS("nodes", dst) = ""
+                    If '$Data(^||seedBFS("seen", dst)) {
+                        Set ^||seedBFS("seen", dst) = ""
+                        Set ^||seedBFS("nextFrontier", dst) = ""
+                    }
+                }
+            }
+        }
+        If '$Data(^||seedBFS("nextFrontier")) Quit
+        Merge ^||seedBFS("frontier") = ^||seedBFS("nextFrontier")
+        Kill ^||seedBFS("nextFrontier")
+    }
+
+    // Export only edges between collected nodes
+    Set result = ""
+    Set nodeIdx = ""
+    For {
+        Set nodeIdx = $Order(^||seedBFS("nodes", nodeIdx))
+        Quit:nodeIdx=""
+        Set srcStr = $Get(^NKG("$ND", nodeIdx), nodeIdx)
+        Set pred = ""
+        For {
+            Set pred = $Order(^NKG(-1, nodeIdx, pred))
+            Quit:pred=""
+            Set predStr = $Get(^NKG("$LS", -pred - 1), pred)
+            Set dst = ""
+            For {
+                Set dst = $Order(^NKG(-1, nodeIdx, pred, dst))
+                Quit:dst=""
+                If '$Data(^||seedBFS("nodes", dst)) Continue
+                Set dstStr = $Get(^NKG("$ND", dst), dst)
+                Set result = result _ srcStr _ $Char(31) _ predStr _ $Char(31) _ dstStr _ $Char(10)
+            }
+        }
+    }
+    Kill ^||seedBFS
+    Return result
 }
 
 ClassMethod ExportAdjacencyWithPreds() As %String [ Private ]
