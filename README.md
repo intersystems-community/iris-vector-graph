@@ -335,6 +335,43 @@ Returns `[{"s": str, "p": str, "o_id": str, "score": float}, ...]` sorted descen
 
 ---
 
+## Engine Status
+
+Call `engine.status()` at any time to get a structured snapshot of all components. This is the canonical answer to "why is query X returning nothing?"
+
+```python
+s = engine.status()
+print(s.report())
+
+# Readiness gates — use before running query types
+s.ready_for_bfs           # var-length / undirected / shortestPath — needs ^KG + edges
+s.ready_for_vector_search # needs node embeddings
+s.ready_for_edge_search   # needs edge embeddings
+s.ready_for_full_text     # needs BM25 index
+
+# Example: rebuild ^KG if stale
+if not s.ready_for_bfs and s.tables.edges > 0:
+    engine.build_graph_globals()  # calls BuildKG()
+```
+
+Sample output:
+```
+IVG Engine Status
+══════════════════════════════════════════
+SQL Tables  (probe: 23ms)
+  nodes              10,000
+  edges              50,000
+  ...
+Adjacency Globals
+  ✓ ^KG   (50,000 source nodes indexed)
+  ✗ ^NKG  (Arno integer index)
+...
+```
+
+`status()` is explicit-call only — never run automatically at init or before queries. Cost ~50ms.
+
+---
+
 ## PLAID Multi-Vector Search
 
 ```python
@@ -582,6 +619,13 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 ---
 
 ## Changelog
+
+### v1.63.3 (2026-04-26)
+- feat: `engine.status() -> EngineStatus` — structured runtime snapshot: SQL row counts, `^KG`/`^NKG` population, ObjectScript classes, Arno capabilities, HNSW/IVF/BM25/PLAID index inventory. Readiness properties: `ready_for_bfs`, `ready_for_vector_search`, `ready_for_edge_search`, `ready_for_full_text`. Detects `^KG`/`rdf_edges` predicate mismatch (stale ^KG from different data snapshot). (spec 080)
+- fix: `BuildKG()` `Traversal.cls` SQL cursors now use fully-qualified `Graph_KG.rdf_edges`, `Graph_KG.rdf_labels`, `Graph_KG.rdf_props` — fixes predicate mismatch when IRIS namespace default SQL schema is not `Graph_KG` (e.g. MINDWALK namespace with `SQLUser` default)
+- fix: `kg_IVFMeta`, `kg_BM25Meta`, `kg_PlaidMeta` added to security allowlist
+- `EngineStatus` exported from top-level `iris_vector_graph`
+
 
 ### v1.63.2 (2026-04-25)
 - fix: `MATCH (a)-[r*1..N]-(b)` undirected BFS now traverses `^KG("in",...)` for inbound edges (was outbound-only)

@@ -273,8 +273,8 @@ class BulkLoader:
         Must be called after load_edges(use_noindex=True).
         Also rebuilds bitmap extent indexes for correct COUNT(*).
         """
-        import intersystems_iris
-        iris_obj = intersystems_iris.createIRIS(self.conn)
+        import iris
+        iris_obj = iris.createIRIS(self.conn)
         results = {}
 
         for cls in ["Graph.KG.rdfedges", "Graph.KG.rdflabels", "Graph.KG.rdfprops", "Graph.KG.nodes"]:
@@ -301,8 +301,8 @@ class BulkLoader:
         Returns True if successful.
         """
         try:
-            import intersystems_iris
-            iris_obj = intersystems_iris.createIRIS(self.conn)
+            import iris
+            iris_obj = iris.createIRIS(self.conn)
             logger.info("Building ^KG + ^NKG globals from SQL tables...")
             t0 = time.time()
             iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
@@ -422,7 +422,7 @@ def main():
     logger.info(f"Graph: {G.number_of_nodes():,} nodes, {G.number_of_edges():,} edges")
 
 
-    from intersystems_iris.dbapi._DBAPI import connect
+    from iris.dbapi._DBAPI import connect  # intersystems_iris.dbapi = iris.dbapi
     conn = connect(args.host, args.port, args.namespace, args.user, args.password)
     logger.info(f"Connected to IRIS {args.host}:{args.port}/{args.namespace}")
 

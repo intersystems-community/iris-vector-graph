@@ -1039,7 +1039,7 @@ wheels = [
 
 [[package]]
 name = "iris-vector-graph"
-version = "1.59.1"
+version = "1.63.0"
 source = { editable = "." }
 dependencies = [
     { name = "intersystems-irispython" },
