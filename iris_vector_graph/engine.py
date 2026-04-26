@@ -2099,13 +2099,7 @@ class IRISGraphEngine:
             except Exception:
                 errors.append(f"^KG probe failed: {e}")
 
-        adjacency = AdjacencyStatus(
-            kg_populated=kg_populated,
-            kg_edge_count=kg_count,
-            kg_edge_count_capped=kg_capped,
-            nkg_populated=nkg_populated,
-        )
-
+        kg_predicates_consistent = True
         if kg_populated and tables.edges > 0:
             try:
                 native = self._iris_obj()
@@ -2128,6 +2122,7 @@ class IRISGraphEngine:
                     )
                     row = cursor.fetchone()
                     if row and int(row[0]) == 0:
+                        kg_predicates_consistent = False
                         errors.append(
                             f"^KG predicate mismatch: ^KG has '{kg_pred[:60]}' "
                             f"but rdf_edges has no matching p — "
@@ -2136,6 +2131,15 @@ class IRISGraphEngine:
                         )
                 except Exception:
                     pass
+
+        adjacency = AdjacencyStatus(
+            kg_populated=kg_populated,
+            kg_edge_count=kg_count,
+            kg_edge_count_capped=kg_capped,
+            nkg_populated=nkg_populated,
+            kg_predicates_consistent=kg_predicates_consistent,
+            bfs_path="none",
+        )
 
         os_classes = []
         os_deployed = self.capabilities.objectscript_deployed
@@ -2184,6 +2188,11 @@ class IRISGraphEngine:
             bm25_indexes=bm25,
             plaid_indexes=plaid,
         )
+
+        if arno.loaded and arno.capabilities.get("bfs") and adjacency.nkg_populated:
+            adjacency.bfs_path = "arno"
+        elif objectscript.deployed and adjacency.kg_populated:
+            adjacency.bfs_path = "objectscript"
 
         probe_ms = (_time.perf_counter() - t0) * 1000
         return EngineStatus(
