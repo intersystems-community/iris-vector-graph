@@ -620,6 +620,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.63.4 (2026-04-26)
+- chore: merge 080-engine-status to main; NKGAccel.cls added to iris_src from arno upstream
+
+
 ### v1.63.3 (2026-04-26)
 - feat: `engine.status() -> EngineStatus` — structured runtime snapshot: SQL row counts, `^KG`/`^NKG` population, ObjectScript classes, Arno capabilities, HNSW/IVF/BM25/PLAID index inventory. Readiness properties: `ready_for_bfs`, `ready_for_vector_search`, `ready_for_edge_search`, `ready_for_full_text`. Detects `^KG`/`rdf_edges` predicate mismatch (stale ^KG from different data snapshot). (spec 080)
 - fix: `BuildKG()` `Traversal.cls` SQL cursors now use fully-qualified `Graph_KG.rdf_edges`, `Graph_KG.rdf_labels`, `Graph_KG.rdf_props` — fixes predicate mismatch when IRIS namespace default SQL schema is not `Graph_KG` (e.g. MINDWALK namespace with `SQLUser` default)
