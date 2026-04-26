@@ -20,6 +20,8 @@ class AdjacencyStatus:
     kg_edge_count: int = 0
     kg_edge_count_capped: bool = False
     nkg_populated: bool = False
+    kg_predicates_consistent: bool = True
+    bfs_path: str = "none"
 
 
 @dataclass
@@ -58,6 +60,14 @@ class EngineStatus:
         return self.adjacency.kg_populated and self.tables.edges > 0
 
     @property
+    def ready_for_multihop_bfs(self) -> bool:
+        if not self.ready_for_bfs:
+            return False
+        if not self.adjacency.kg_predicates_consistent:
+            return False
+        return self.adjacency.bfs_path in ("arno", "objectscript")
+
+    @property
     def ready_for_vector_search(self) -> bool:
         return self.tables.node_embeddings > 0
 
@@ -94,6 +104,15 @@ class EngineStatus:
             f"  {tick(self.adjacency.kg_populated)} ^KG   ({kg_count} source nodes indexed)",
             f"  {tick(self.adjacency.nkg_populated)} ^NKG  (Arno integer index)",
         ]
+
+        bfs_sym = "✓" if self.adjacency.bfs_path in ("arno", "objectscript") else "✗"
+        lines.append(f"  {bfs_sym} BFS path: {self.adjacency.bfs_path}")
+
+        if not self.adjacency.kg_predicates_consistent and self.adjacency.kg_populated:
+            lines.append(
+                "  ⚠ ^KG predicate mismatch — stale from different data snapshot. "
+                "Run BuildKG() after reloading graph data."
+            )
 
         if not self.adjacency.kg_populated and self.tables.edges > 0:
             lines.append(
