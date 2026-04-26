@@ -620,6 +620,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ## Changelog
 
+### v1.63.5 (2026-04-26)
+- fix: `NKGAccel.BFSJson` per-seed adjacency export — `ExportAdjacencyFromSeed()` exports only the subgraph reachable from the seed node (not the full 299K-edge graph). Fixes `<MAXSTRING>` on Mindwalk-scale graphs, enabling Arno-accelerated multi-hop BFS. Adjacency string now scales with BFS result size (~10KB per seed instead of >3.5MB full graph). Handles outbound + inbound edges for undirected BFS.
+
+
 ### v1.63.4 (2026-04-26)
 - chore: merge 080-engine-status to main; NKGAccel.cls added to iris_src from arno upstream
 
