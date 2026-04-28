@@ -467,6 +467,17 @@ class CypherQuery:
             raise ValueError(
                 "Query must have at least one MATCH/WITH stage or CALL clause"
             )
+
+    @property
+    def is_mutation(self) -> bool:
+        _MUTATION_TYPES = (CreateClause, DeleteClause, MergeClause, SetClause, RemoveClause)
+        for part in self.query_parts:
+            for clause in part.clauses:
+                if isinstance(clause, _MUTATION_TYPES):
+                    return True
+                if isinstance(clause, ForeachClause):
+                    return True
+        return False
         if not self.return_clause and not self.procedure_call:
             # RETURN is not required if there's a standalone procedure call,
             # but usually Cypher expects RETURN.
