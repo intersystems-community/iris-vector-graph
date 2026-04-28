@@ -704,7 +704,8 @@ class IRISGraphEngine:
             raise ValueError(f"Node does not exist: {node_id}")
 
     def execute_cypher(
-        self, cypher_query: str, parameters: Dict[str, Any] = None
+        self, cypher_query: str, parameters: Dict[str, Any] = None,
+        read_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Execute a Cypher query by translating it to IRIS SQL.
@@ -712,6 +713,7 @@ class IRISGraphEngine:
         Args:
             cypher_query: Cypher query string
             parameters: Optional query parameters
+            read_only: If True, rejects any mutation (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH)
 
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
@@ -794,6 +796,12 @@ class IRISGraphEngine:
             return self._handle_show_command(stripped)
 
         parsed = parse_query(cypher_query)
+
+        if read_only and parsed.is_mutation:
+            raise PermissionError(
+                f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH) "
+                f"are not allowed. Query: {cypher_query[:100]}"
+            )
 
         if parsed.procedure_call is not None:
             result = self._try_system_procedure(parsed.procedure_call)
