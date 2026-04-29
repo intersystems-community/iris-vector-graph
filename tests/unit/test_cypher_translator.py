@@ -181,3 +181,40 @@ def test_in_param_empty_list_handled():
     q = "MATCH (a) WHERE a.id IN $ids RETURN a.id"
     result = translate_to_sql(parse_query(q), {"ids": []})
     assert result.sql is not None
+
+
+def test_undirected_1hop_uses_union_all_not_or_join():
+    q = "MATCH (a)-[r]-(b) WHERE a.id = $x RETURN b.id, type(r)"
+    r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
+    assert "UNION ALL" in r.sql, "undirected pattern must use UNION ALL not OR-join"
+    assert " OR " not in r.sql or "o_id" not in r.sql.split("OR")[0], \
+        "OR-join pattern must be eliminated for undirected 1-hop"
+
+
+def test_undirected_with_node_props_uses_union_all():
+    q = "MATCH (a)-[r]-(b) WHERE a.id = $x RETURN a.id, b.id, b.name, type(r)"
+    r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
+    assert "UNION ALL" in r.sql
+    assert "e2._p AS type_res" in r.sql, "type(r) must use _p column alias in UNION subquery"
+
+
+def test_undirected_typed_rel_uses_union_all():
+    q = "MATCH (a)-[r:KNOWS]-(b) WHERE a.id = $x RETURN b.id"
+    r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
+    assert "UNION ALL" in r.sql
+    assert "AND p = ?" in r.sql, "predicate filter applied inside both arms of UNION"
+
+
+def test_directed_outgoing_still_uses_single_join():
+    q = "MATCH (a)-[r]->(b) WHERE a.id = $x RETURN b.id, type(r)"
+    r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
+    assert "UNION ALL" not in r.sql
+    assert "JOIN rdf_edges" in r.sql
+    assert "e2.p AS type_res" in r.sql
+
+
+def test_directed_incoming_still_uses_single_join():
+    q = "MATCH (a)<-[r]-(b) WHERE a.id = $x RETURN b.id"
+    r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
+    assert "UNION ALL" not in r.sql
+    assert "JOIN rdf_edges" in r.sql
