@@ -2565,19 +2565,44 @@ def translate_expression(expr, context, segment="select") -> str:
             return "NULL"
         if isinstance(v, list):
             import json as _json
-            items = [item.value if isinstance(item, ast.Literal) else item for item in v]
-            return f"'{_json.dumps(items)}'"
+            all_simple = all(
+                isinstance(item, ast.Literal) and isinstance(item.value, (int, float, str, bool, type(None)))
+                for item in v
+            )
+            if all_simple:
+                items = [item.value for item in v]
+                return f"'{_json.dumps(items)}'"
+            sql_items = []
+            for item in v:
+                if isinstance(item, ast.Literal):
+                    iv = item.value
+                    if iv is True: sql_items.append("1")
+                    elif iv is False: sql_items.append("0")
+                    elif iv is None: sql_items.append("NULL")
+                    elif isinstance(iv, str): sql_items.append(f"'{iv.replace(chr(39), chr(39)+chr(39))}'")
+                    else: sql_items.append(str(iv))
+                else:
+                    sql_items.append(translate_expression(item, context, segment=segment))
+            return f"JSON_ARRAY({', '.join(sql_items)})"
         if segment == "select":
             return context.add_select_param(v)
         if segment == "join":
             return context.add_join_param(v)
         return context.add_where_param(v)
     if isinstance(expr, ast.AggregationFunction):
-        arg = (
-            translate_expression(expr.argument, context, segment=segment)
-            if expr.argument
-            else "*"
-        )
+        if expr.argument and isinstance(expr.argument, ast.Literal):
+            v = expr.argument.value
+            if v is True: arg = "1"
+            elif v is False: arg = "0"
+            elif v is None: arg = "NULL"
+            elif isinstance(v, str): arg = f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+            else: arg = str(v)
+        else:
+            arg = (
+                translate_expression(expr.argument, context, segment=segment)
+                if expr.argument
+                else "*"
+            )
         fn = (
             "JSON_ARRAYAGG"
             if expr.function_name.upper() == "COLLECT"
