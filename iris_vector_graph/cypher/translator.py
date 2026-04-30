@@ -2646,6 +2646,10 @@ def translate_expression(expr, context, segment="select") -> str:
                     raise ValueError(f"'{arg.name}' is not a named path variable")
 
         fn, args_exprs = expr.function_name.lower(), expr.arguments
+        if fn == "toboolean" and args_exprs and isinstance(args_exprs[0], ast.Literal):
+            v = args_exprs[0].value
+            if not isinstance(v, str):
+                return "1" if v else "0"
         args = [translate_expression(a, context, segment=segment) for a in args_exprs]
 
         if fn == "type":
@@ -2788,7 +2792,7 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "tostring":
             return f"CAST({args[0]} AS VARCHAR(4096))"
         if fn == "toboolean":
-            return f"CASE WHEN LOWER({args[0]}) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
+            return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
         return f"{sql_fn}({', '.join(args)})"
     return "NULL"
 
