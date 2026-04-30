@@ -214,7 +214,7 @@ class Parser:
             self.peek().kind == TokenType.IDENTIFIER
             and self.peek().value
             and self.peek().value.upper() in ("OPTIONAL", "USE")
-        ) or self.peek().kind == TokenType.WHERE:
+        ) or self.peek().kind == TokenType.WHERE or self.peek().kind == TokenType.RETURN:
             if self.peek().kind == TokenType.WHERE:
                 self.eat()
                 self.parse_expression()
@@ -226,6 +226,15 @@ class Parser:
                     stub = ast.CypherQuery(query_parts=q.query_parts, return_clause=ret2,
                                           order_by_clause=ob2, skip=sk2, limit=li2)
                     q.subsequent_queries.append(stub)
+                continue
+            if self.peek().kind == TokenType.RETURN:
+                ret2 = self.parse_return_clause()
+                ob2 = self.parse_order_by_clause()
+                sk2 = self.parse_skip()
+                li2 = self.parse_limit()
+                stub = ast.CypherQuery(query_parts=q.query_parts, return_clause=ret2,
+                                      order_by_clause=ob2, skip=sk2, limit=li2)
+                q.subsequent_queries.append(stub)
                 continue
             subsequent = self.parse()
             q.subsequent_queries.append(subsequent)
