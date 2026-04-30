@@ -618,9 +618,18 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
 ---
 
-## Changelog
+ ## Changelog
 
-### v1.63.5 (2026-04-26)
+### v1.66.0 (2026-04-30)
+- fix: 818/818 tests green on `gqs-ivg-test` live IRIS container (no mocked IRIS in e2e)
+- fix: ObjectScript ^KG shard-0 migration — `Algorithms.cls`, `PageRank.cls`, `Subgraph.cls` updated from `^KG("out",node,...)` to `^KG("out",0,node,...)` — WCC/CDLP/PPR/Subgraph all work against live `^KG` data
+- fix: `kg_NodeEmbeddings` / `kg_EdgeEmbeddings` recreated as `VECTOR(DOUBLE, 768)` — corrects prior schema with wrong column type
+- feat: Cypher `WITH...ORDER BY...RETURN` — RETURN clause after `WITH ... ORDER BY` was being parsed as a subsequent query; now correctly merged as main query return
+- feat: WITH clause scalar alias propagation — `PropertyReference` and non-Variable WITH aliases now added to `scalar_variables`, preventing node label/props expansion on scalar columns in RETURN
+- fix: `size()` function — dispatches to `LENGTH()` for string/scalar args, `JSON_ARRAYLENGTH()` for list literals. Eliminates param count mismatches when `size('literal')` was called.
+- fix: CALL+MATCH `rdf_edges` JOIN — when source is a VecSearch CTE and EdgeScan is disabled, the rdf_edges JOIN was silently dropped, causing `e1.o_id` undefined alias errors
+
+### v1.65.4 (2026-04-30)
 - fix: `NKGAccel.BFSJson` per-seed adjacency export — `ExportAdjacencyFromSeed()` exports only the subgraph reachable from the seed node (not the full 299K-edge graph). Fixes `<MAXSTRING>` on Mindwalk-scale graphs, enabling Arno-accelerated multi-hop BFS. Adjacency string now scales with BFS result size (~10KB per seed instead of >3.5MB full graph). Handles outbound + inbound edges for undirected BFS.
 
 
