@@ -31,7 +31,7 @@ def iris_connection_pagerank():
     sys.path.insert(0, '.')
     from scripts.migrations.migrate_to_nodepk import get_connection
 
-    conn = get_connection(container_name="iris-vector-graph-main")
+    conn = get_connection(container_name="gqs-ivg-test")
     cursor = conn.cursor()
 
     # Create nodes table if not exists

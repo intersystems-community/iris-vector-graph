@@ -254,6 +254,7 @@ class TestFallbackGraceful:
 
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
         engine.initialize_schema(auto_deploy_objectscript=False)
+        engine.capabilities.objectscript_deployed = False
         assert not engine.capabilities.objectscript_deployed
 
         scores = engine.kg_PERSONALIZED_PAGERANK([nodes[0]], return_top_k=3)

@@ -2065,6 +2065,10 @@ def translate_relationship_pattern(
             context.join_clauses.append(
                 f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
             )
+    else:
+        context.join_clauses.append(
+            f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
+        )
 
     if is_new_target and not target_alias.startswith("Stage"):
         context.join_clauses.append(

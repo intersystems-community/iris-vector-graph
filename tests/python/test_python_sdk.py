@@ -24,7 +24,7 @@ except ImportError:
 # Use iris-devtester for auto-discovery of IRIS container
 try:
     from iris_devtester.connections import auto_detect_iris_host_and_port
-    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port(container_name="iris-vector-graph-main")
+    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port(container_name="gqs-ivg-test")
 except ImportError:
     # Fallback to defaults if iris-devtester not available
     IRIS_HOST = 'localhost'

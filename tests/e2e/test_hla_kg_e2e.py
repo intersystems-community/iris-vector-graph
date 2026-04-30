@@ -2,7 +2,7 @@
 E2E tests using the real 10K HLA immunology knowledge graph.
 
 Data: examples/expanded_mindwalk_KG_10000.{graphml,vectors.npy,vectors.ids.txt}
-Container: iris-vector-graph-main (local, managed by conftest.py)
+Container: gqs-ivg-test (local, managed by conftest.py)
 
 The session fixture loads the graph + embeddings once, then all test classes
 run against it. Re-run with SKIP_DATA_LOAD=true to skip the ~3min ingest.
@@ -36,7 +36,8 @@ def engine(iris_connection):
 
 @pytest.fixture(scope="module")
 def vectors():
-    assert VECTORS_NPY.exists(), f"Missing {VECTORS_NPY} — run expand_mindwalk_kg.py"
+    if not VECTORS_NPY.exists():
+        pytest.skip(f"Missing {VECTORS_NPY} — run expand_mindwalk_kg.py")
     vecs = np.load(str(VECTORS_NPY)).astype(np.float64)
     with open(VECTORS_IDS) as f:
         ids = [l.strip() for l in f if l.strip()]
@@ -49,7 +50,8 @@ def loaded_kg(engine, iris_connection, vectors):
         yield
         return
 
-    assert GRAPHML.exists(), f"Missing {GRAPHML}"
+    if not GRAPHML.exists():
+        pytest.skip(f"Missing {GRAPHML}")
     vecs, ids = vectors
     cur = iris_connection.cursor()
 

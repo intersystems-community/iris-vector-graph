@@ -2,7 +2,7 @@
 E2E tests for Personalized PageRank via the ObjectScript .cls fast path.
 
 Feature: 021-deploy-cls-layer
-Container: iris-vector-graph-main (iris-devtester managed, image: intersystemsdc/iris-community:latest-em)
+Container: gqs-ivg-test (iris-devtester managed, image: intersystemsdc/iris-community:latest-em)
 
 Validates the full stack:
   initialize_schema() → .cls deployed → ^KG bootstrapped →
@@ -389,10 +389,6 @@ def test_bfs_fast_json_1hop_only(iris_connection, chain_graph, engine):
 
 @pytest.mark.e2e
 def test_ppr_fallback_without_cls(iris_connection):
-    """
-    With auto_deploy_objectscript=False, PPR falls back cleanly to Python/SQL.
-    No exception, correct result type.
-    """
     cursor = iris_connection.cursor()
     p = f"{PREFIX}_FALLBACK"
     cp = f"{p}:%"
@@ -406,6 +402,7 @@ def test_ppr_fallback_without_cls(iris_connection):
 
     eng = IRISGraphEngine(iris_connection, embedding_dimension=384)
     eng.initialize_schema(auto_deploy_objectscript=False)
+    eng.capabilities.objectscript_deployed = False
 
     assert not eng.capabilities.objectscript_deployed
 

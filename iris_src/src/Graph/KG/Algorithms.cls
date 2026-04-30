@@ -16,7 +16,7 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 	// Also include nodes that only appear as targets (no outgoing edges = no "deg" entry)
 	Set node = ""
 	For {
-		Set node = $Order(^KG("in", node))
+		Set node = $Order(^KG("in", 0, node))
 		Quit:node=""
 		If '$Data(labels(node)) {
 			Set labels(node) = node
@@ -38,11 +38,11 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 			// Check outgoing neighbors
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					Set nbrLabel = $Get(labels(o), o)
 					If minLabel ]] nbrLabel Set minLabel = nbrLabel
@@ -52,11 +52,11 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 			// Check incoming neighbors
 			Set p = ""
 			For {
-				Set p = $Order(^KG("in", node, p))
+				Set p = $Order(^KG("in", 0, node, p))
 				Quit:p=""
 				Set s = ""
 				For {
-					Set s = $Order(^KG("in", node, p, s))
+					Set s = $Order(^KG("in", 0, node, p, s))
 					Quit:s=""
 					Set nbrLabel = $Get(labels(s), s)
 					If minLabel ]] nbrLabel Set minLabel = nbrLabel
@@ -94,7 +94,7 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 	}
 	Set node = ""
 	For {
-		Set node = $Order(^KG("in", node))
+		Set node = $Order(^KG("in", 0, node))
 		Quit:node=""
 		If '$Data(labels(node)) {
 			Set labels(node) = node
@@ -116,11 +116,11 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 			// Count outgoing neighbor labels
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					Set nbrLabel = $Get(labels(o), o)
 					Set counts(nbrLabel) = $Get(counts(nbrLabel), 0) + 1
@@ -130,11 +130,11 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 			// Count incoming neighbor labels
 			Set p = ""
 			For {
-				Set p = $Order(^KG("in", node, p))
+				Set p = $Order(^KG("in", 0, node, p))
 				Quit:p=""
 				Set s = ""
 				For {
-					Set s = $Order(^KG("in", node, p, s))
+					Set s = $Order(^KG("in", 0, node, p, s))
 					Quit:s=""
 					Set nbrLabel = $Get(labels(s), s)
 					Set counts(nbrLabel) = $Get(counts(nbrLabel), 0) + 1

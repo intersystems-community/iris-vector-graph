@@ -39,7 +39,7 @@ def iris_connection_with_vectors():
     - 2000 edges connecting nodes
     - Labels and properties for rich graph structure
     """
-    conn = get_connection(container_name="iris-vector-graph-main")
+    conn = get_connection(container_name="gqs-ivg-test")
     cursor = conn.cursor()
 
     print("\n🔧 Setting up comprehensive benchmark dataset...")
@@ -439,7 +439,7 @@ class TestAdvancedQueryPatterns:
         """
         def execute_query(query_type, node_idx):
             """Execute a query and return execution time."""
-            conn = get_connection(container_name="iris-vector-graph-main")
+            conn = get_connection(container_name="gqs-ivg-test")
             cursor = conn.cursor()
             node = f'BENCH:node_{node_idx % 100}'
 

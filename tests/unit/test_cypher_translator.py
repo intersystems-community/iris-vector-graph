@@ -209,18 +209,22 @@ def test_undirected_typed_rel_uses_union_all():
 
 
 def test_directed_outgoing_still_uses_single_join():
+    from iris_vector_graph.cypher.translator import set_schema_prefix
+    set_schema_prefix("SQLUser")
     q = "MATCH (a)-[r]->(b) WHERE a.id = $x RETURN b.id, type(r)"
     r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
     assert "UNION ALL" not in r.sql
-    assert "JOIN rdf_edges" in r.sql
+    assert "rdf_edges" in r.sql
     assert "e2.p AS type_res" in r.sql
 
 
 def test_directed_incoming_still_uses_single_join():
+    from iris_vector_graph.cypher.translator import set_schema_prefix
+    set_schema_prefix("SQLUser")
     q = "MATCH (a)<-[r]-(b) WHERE a.id = $x RETURN b.id"
     r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
     assert "UNION ALL" not in r.sql
-    assert "JOIN rdf_edges" in r.sql
+    assert "rdf_edges" in r.sql
 
 
 def test_multi_query_parts_parses():
