@@ -2008,11 +2008,18 @@ def translate_relationship_pattern(
             if prop_node:
                 for k, v in (prop_node.properties or {}).items():
                     if k in ("id", "node_id"):
-                        continue
-                    col = f"{prop_alias}.{k}" if prop_alias else k
-                    context.where_conditions.append(
-                        f"{col} = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
-                    )
+                        id_col = f"{prop_alias}.node_id"
+                        context.where_conditions.append(
+                            f"{id_col} = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
+                        )
+                    else:
+                        p_alias = context.next_alias("p")
+                        context.join_clauses.append(
+                            f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
+                        )
+                        context.where_conditions.append(
+                            f"{p_alias}.val = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
+                        )
         return
 
     if rel.types:
