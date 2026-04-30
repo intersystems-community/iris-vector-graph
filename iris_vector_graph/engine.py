@@ -816,9 +816,15 @@ class IRISGraphEngine:
 
         if parsed.subsequent_queries:
             result = None
+            current_params = dict(parameters) if parameters else {}
             for part_query in [parsed] + parsed.subsequent_queries:
                 part_query.subsequent_queries = []
-                result = self._execute_parsed(part_query, parameters)
+                result = self._execute_parsed(part_query, current_params)
+                if result and result.get("rows") and result.get("columns"):
+                    first_row = result["rows"][0] if result["rows"] else []
+                    for col, val in zip(result["columns"], first_row):
+                        if isinstance(val, (str, int, float, bool, type(None))):
+                            current_params[col] = val
             return result
 
         if parsed.procedure_call is not None:
