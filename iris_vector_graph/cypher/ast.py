@@ -456,11 +456,7 @@ class CypherQuery:
     procedure_call: Optional[CypherProcedureCall] = None
     union_queries: List[dict] = field(default_factory=list)
     graph_context: Optional[str] = None
-    order_by_clause: Optional[OrderByClause] = None
-    skip: Optional[int] = None
-    limit: Optional[int] = None
-    procedure_call: Optional[CypherProcedureCall] = None
-    union_queries: List[dict] = field(default_factory=list)
+    subsequent_queries: List["CypherQuery"] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.query_parts and not self.procedure_call:
@@ -477,6 +473,9 @@ class CypherQuery:
                     return True
                 if isinstance(clause, ForeachClause):
                     return True
+        for sq in self.subsequent_queries:
+            if sq.is_mutation:
+                return True
         return False
         if not self.return_clause and not self.procedure_call:
             # RETURN is not required if there's a standalone procedure call,

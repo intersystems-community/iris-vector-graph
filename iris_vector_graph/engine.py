@@ -814,6 +814,13 @@ class IRISGraphEngine:
                 f"are not allowed. Query: {cypher_query[:100]}"
             )
 
+        if parsed.subsequent_queries:
+            result = None
+            for part_query in [parsed] + parsed.subsequent_queries:
+                part_query.subsequent_queries = []
+                result = self._execute_parsed(part_query, parameters)
+            return result
+
         if parsed.procedure_call is not None:
             result = self._try_system_procedure(parsed.procedure_call)
             if result is not None:
@@ -920,6 +927,48 @@ class IRISGraphEngine:
                 "params": p,
                 "metadata": metadata,
             }
+
+    def _execute_parsed(self, parsed, parameters):
+        if parsed.procedure_call is not None:
+            result = self._try_system_procedure(parsed.procedure_call)
+            if result is not None:
+                return result
+        sql_query = translate_to_sql(parsed, parameters, engine=self)
+        if sql_query.var_length_paths:
+            vl0 = sql_query.var_length_paths[0]
+            if vl0.get("weighted"):
+                return self._execute_weighted_shortest_path(sql_query, parameters)
+            if vl0.get("shortest") or vl0.get("all_shortest"):
+                return self._execute_shortest_path_cypher(sql_query, parameters)
+            return self._execute_var_length_cypher(sql_query, parameters)
+        cursor = self.conn.cursor()
+        metadata = sql_query.query_metadata
+        if sql_query.is_transactional:
+            stmts = sql_query.sql
+            all_params = sql_query.parameters
+            cursor.execute("START TRANSACTION")
+            try:
+                rows = []
+                for i, stmt in enumerate(stmts):
+                    p = all_params[i] if i < len(all_params) else []
+                    cursor.execute(stmt, p)
+                    if cursor.description:
+                        rows = cursor.fetchall()
+                self.conn.commit()
+                cols = [d[0] for d in cursor.description] if cursor.description else []
+                return {"columns": cols, "rows": [list(r) for r in rows],
+                        "sql": str(stmts), "params": all_params, "metadata": metadata}
+            except Exception:
+                self.conn.rollback()
+                raise
+        sql_str = sql_query.sql
+        p = sql_query.parameters[0] if sql_query.parameters else []
+        cursor.execute(sql_str, p)
+        cols = [d[0] for d in cursor.description] if cursor.description else []
+        rows = cursor.fetchall()
+        return {"columns": cols, "rows": [list(r) for r in rows],
+                "sql": sql_str, "params": p, "metadata": metadata}
+
 
     def _execute_weighted_shortest_path(
         self, sql_query, parameters=None
