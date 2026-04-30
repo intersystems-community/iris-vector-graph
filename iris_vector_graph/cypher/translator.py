@@ -2499,6 +2499,17 @@ def translate_expression(expr, context, segment="select") -> str:
             if expr.property_name in ("node_id", "id"):
                 return f"{alias}.{expr.variable}"
             return f"{alias}.{expr.variable}_{expr.property_name}"
+        if alias.startswith("e") and not alias.startswith("ES_"):
+            is_undirected = alias in getattr(context, "_undirected_aliases", set())
+            if expr.property_name == "p":
+                return f"{alias}.{'_p' if is_undirected else 'p'}"
+            if expr.property_name == "s":
+                return f"{alias}.{'_src' if is_undirected else 's'}"
+            if expr.property_name == "o_id":
+                return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
+            if is_undirected:
+                return "NULL"
+            return f"JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}')"
         if expr.property_name in ("node_id", "id"):
             return f"{alias}.node_id"
         p_alias = context.next_alias("p")
