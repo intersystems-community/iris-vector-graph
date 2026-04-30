@@ -795,6 +795,17 @@ class IRISGraphEngine:
         if stripped.startswith("SHOW "):
             return self._handle_show_command(stripped)
 
+        if (stripped.startswith("CREATE CONSTRAINT")
+                or stripped.startswith("DROP CONSTRAINT")
+                or stripped.startswith("CREATE INDEX")
+                or stripped.startswith("CREATE TEXT INDEX")
+                or stripped.startswith("CREATE RANGE INDEX")
+                or stripped.startswith("CREATE POINT INDEX")
+                or stripped.startswith("DROP INDEX")
+                or stripped.startswith("CREATE FULLTEXT")
+                or stripped.startswith("CREATE LOOKUP")):
+            return {"columns": [], "rows": [], "sql": cypher_query, "params": []}
+
         parsed = parse_query(cypher_query)
 
         if read_only and parsed.is_mutation:
