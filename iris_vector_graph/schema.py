@@ -576,6 +576,15 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         """
         return [
             "CREATE SCHEMA iris_vector_graph",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.JSON_ARRAYLENGTH(j VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Set a = ##class(%Library.DynamicArray).%FromJSON(j) Quit a.%Size() }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.JSON_ARRAYGET(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set a = ##class(%Library.DynamicArray).%FromJSON(j) Quit a.%Get(i) _ "" }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.JSON_VALUE(j VARCHAR(32000), p VARCHAR(1000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set obj = ##class(%Library.DynamicObject).%FromJSON(j), key = $Extract(p, 3, *) Quit obj.%Get(key) _ "" }
+""",
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
