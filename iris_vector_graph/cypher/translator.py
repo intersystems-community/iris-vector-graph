@@ -1245,6 +1245,7 @@ def translate_unwind_clause(unwind, context):
         if isinstance(val, list):
             context.join_params[-1] = json.dumps(val)
     alias = context.register_variable(unwind.alias, prefix="u")
+    context.scalar_variables.add(unwind.alias)
     context.from_clauses.append(
         f"JSON_TABLE({expr}, '$[*]' COLUMNS ({unwind.alias} VARCHAR(1000) PATH '$')) {alias}"
     )
