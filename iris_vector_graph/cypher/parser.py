@@ -465,9 +465,9 @@ class Parser:
                 depth -= 1
                 if depth == 0:
                     break
-            elif depth == 1 and t.kind == TokenType.DOT:
+            elif depth >= 1 and t.kind == TokenType.DOT:
                 return False
-            elif depth == 1 and t.kind in (TokenType.PLUS, TokenType.MINUS,
+            elif depth >= 1 and t.kind in (TokenType.PLUS, TokenType.MINUS,
                                             TokenType.STAR, TokenType.SLASH):
                 return False
             j += 1
