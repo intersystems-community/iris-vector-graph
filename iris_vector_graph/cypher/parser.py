@@ -198,8 +198,6 @@ class Parser:
             branch = self._parse_union_branch()
             union_queries.append({"query": branch, "all": union_all})
 
-        self.expect(TokenType.EOF)
-
         q = ast.CypherQuery(
             query_parts=query_parts,
             return_clause=return_clause,
@@ -209,6 +207,18 @@ class Parser:
             graph_context=graph_context,
         )
         q.union_queries = union_queries
+
+        _QUERY_STARTERS = (TokenType.MATCH, TokenType.WITH, TokenType.CALL,
+                           TokenType.CREATE, TokenType.MERGE, TokenType.UNWIND)
+        while self.peek().kind in _QUERY_STARTERS or (
+            self.peek().kind == TokenType.IDENTIFIER
+            and self.peek().value
+            and self.peek().value.upper() in ("OPTIONAL", "USE")
+        ):
+            subsequent = self.parse()
+            q.subsequent_queries.append(subsequent)
+
+        self.expect(TokenType.EOF)
         return q
 
     def parse_with_clause(self) -> ast.WithClause:

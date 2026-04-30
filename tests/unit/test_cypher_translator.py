@@ -221,3 +221,28 @@ def test_directed_incoming_still_uses_single_join():
     r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
     assert "UNION ALL" not in r.sql
     assert "JOIN rdf_edges" in r.sql
+
+
+def test_multi_query_parts_parses():
+    from iris_vector_graph.cypher.parser import parse_query
+    q = "MATCH (a) RETURN a.id MATCH (b) WHERE b.id = 1 RETURN b.id"
+    parsed = parse_query(q)
+    assert len(parsed.subsequent_queries) == 1
+
+def test_multi_query_three_parts_parses():
+    from iris_vector_graph.cypher.parser import parse_query
+    q = "MATCH (a) RETURN a.id MATCH (b) RETURN b.id MATCH (c) RETURN c.id"
+    parsed = parse_query(q)
+    assert len(parsed.subsequent_queries) >= 1
+
+def test_single_query_unchanged():
+    from iris_vector_graph.cypher.parser import parse_query
+    q = "MATCH (a) WHERE a.id = $x RETURN a.id"
+    parsed = parse_query(q)
+    assert len(parsed.subsequent_queries) == 0
+
+def test_gqs_oracle_pattern_parses():
+    from iris_vector_graph.cypher.parser import parse_query
+    q = "MATCH (a)-[r]-(b) WHERE a.id = 1 RETURN count(*) MATCH (a)-[r2]-(b) WHERE a.id = 1 RETURN DISTINCT b.id"
+    parsed = parse_query(q)
+    assert len(parsed.subsequent_queries) >= 1
