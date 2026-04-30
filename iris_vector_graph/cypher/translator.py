@@ -1152,20 +1152,26 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
     if not query.order_by_clause:
         return []
     items = []
-    select_aliases = set()
+    alias_to_sql: dict = {}
     if query.return_clause:
-        for item in query.return_clause.items:
-            if item.alias:
-                select_aliases.add(item.alias)
+        for ret_item in query.return_clause.items:
+            if ret_item.alias:
+                try:
+                    sql_expr = translate_expression(ret_item.expression, context, segment="select")
+                    alias_to_sql[ret_item.alias] = sql_expr
+                except Exception:
+                    pass
     for item in query.order_by_clause.items:
         try:
-            expr = translate_expression(item.expression, context, segment="where")
+            if (isinstance(item.expression, ast.Variable)
+                    and item.expression.name in alias_to_sql):
+                expr = alias_to_sql[item.expression.name]
+            else:
+                expr = translate_expression(item.expression, context, segment="where")
         except ValueError:
-            if (
-                isinstance(item.expression, ast.Variable)
-                and item.expression.name in select_aliases
-            ):
-                expr = sanitize_identifier(item.expression.name)
+            if (isinstance(item.expression, ast.Variable)
+                    and item.expression.name in alias_to_sql):
+                expr = alias_to_sql[item.expression.name]
             else:
                 raise
         items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
