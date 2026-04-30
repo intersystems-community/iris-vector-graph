@@ -620,6 +620,9 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.66.1 (2026-04-30)
+- fix: relationship property translation — `r.id`, `r.k1`, etc. now correctly uses `JSON_VALUE(e.qualifiers, '$.property')` for directed edges. Previously returned `e.node_id` (wrong column — edges don't have `node_id`), causing SQLCODE -29 `<Field not found>` for all edge property access. Undirected edges now return `NULL` for custom properties (UNION ALL subquery can't project qualifiers). Fixes the dominant GQS failure class.
+
 ### v1.66.0 (2026-04-30)
 - fix: 818/818 tests green on `gqs-ivg-test` live IRIS container (no mocked IRIS in e2e)
 - fix: ObjectScript ^KG shard-0 migration — `Algorithms.cls`, `PageRank.cls`, `Subgraph.cls` updated from `^KG("out",node,...)` to `^KG("out",0,node,...)` — WCC/CDLP/PPR/Subgraph all work against live `^KG` data
