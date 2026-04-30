@@ -620,6 +620,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.66.2 (2026-04-30)
+- fix: `JSON_ARRAYLENGTH`, `JSON_ARRAYGET`, `JSON_VALUE` now installed as `SQLUser.*` user-defined functions during `initialize_schema()`. Previously these bare SQL calls were qualified with the default schema (`Graph_KG.JSON_ARRAYLENGTH`) which IRIS couldn't find, causing SQLCODE -359. All three are now qualified as `SQLUser.*` in generated SQL and work regardless of current default schema.
+- fix: `size([list])`, `head(list)`, `last(list)` Cypher functions now work end-to-end against live IRIS.
+
 ### v1.66.1 (2026-04-30)
 - fix: relationship property translation — `r.id`, `r.k1`, etc. now correctly uses `JSON_VALUE(e.qualifiers, '$.property')` for directed edges. Previously returned `e.node_id` (wrong column — edges don't have `node_id`), causing SQLCODE -29 `<Field not found>` for all edge property access. Undirected edges now return `NULL` for custom properties (UNION ALL subquery can't project qualifiers). Fixes the dominant GQS failure class.
 
