@@ -536,7 +536,7 @@ class BoltSession:
                 })
                 self.state = BoltState.FAILED
                 return
-        await self._send_message(TAG_SUCCESS, {})
+        await self._send_message(TAG_SUCCESS, {"server": "iris-vector-graph/5.0.0"})
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
         print(f"[BOLT-WS] RUN query={query[:500]}")
