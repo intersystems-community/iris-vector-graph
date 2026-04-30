@@ -450,6 +450,29 @@ class Parser:
             test_expression=test_expr,
         )
 
+    def _is_pattern_comprehension_start(self) -> bool:
+        i = self.lexer.token_index
+        tokens = self.lexer.tokens
+        if i >= len(tokens) or tokens[i].kind != TokenType.LPAREN:
+            return False
+        depth = 0
+        j = i
+        while j < len(tokens):
+            t = tokens[j]
+            if t.kind == TokenType.LPAREN:
+                depth += 1
+            elif t.kind == TokenType.RPAREN:
+                depth -= 1
+                if depth == 0:
+                    break
+            elif depth == 1 and t.kind == TokenType.DOT:
+                return False
+            elif depth == 1 and t.kind in (TokenType.PLUS, TokenType.MINUS,
+                                            TokenType.STAR, TokenType.SLASH):
+                return False
+            j += 1
+        return True
+
     def _parse_union_branch(self) -> ast.CypherQuery:
         parts = []
         while self.peek().kind not in (
@@ -1080,7 +1103,7 @@ class Parser:
             self.eat()
             items = []
             if not self.matches(TokenType.RBRACKET):
-                if self.peek().kind == TokenType.LPAREN:
+                if self.peek().kind == TokenType.LPAREN and self._is_pattern_comprehension_start():
                     pattern = self.parse_graph_pattern()
                     predicate = None
                     if self.matches(TokenType.WHERE):
