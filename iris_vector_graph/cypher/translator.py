@@ -1014,6 +1014,8 @@ def translate_to_sql(
                         new_aliases[alias] = new_stage
                     if isinstance(item.expression, ast.AggregationFunction) and alias:
                         context.scalar_variables.add(alias)
+                    elif alias and not isinstance(item.expression, ast.Variable):
+                        context.scalar_variables.add(alias)
             context.variable_aliases = new_aliases
 
     # 2. Final stage (RETURN)
@@ -2752,7 +2754,13 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "size":
             if not args:
                 return "0"
-            return f"JSON_ARRAYLENGTH({args[0]})"
+            arg_expr = args_exprs[0] if args_exprs else None
+            is_list = (
+                isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
+            ) or isinstance(arg_expr, ast.ListComprehension)
+            if is_list:
+                return f"JSON_ARRAYLENGTH({args[0]})"
+            return f"LENGTH({args[0]})"
 
         if fn == "head":
             if not args:
