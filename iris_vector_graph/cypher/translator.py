@@ -1156,11 +1156,20 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
     if query.return_clause:
         for ret_item in query.return_clause.items:
             if ret_item.alias:
+                saved_select = list(context.select_params)
+                saved_where = list(context.where_params)
+                saved_join = list(context.join_params)
+                saved_join_clauses = list(context.join_clauses)
                 try:
                     sql_expr = translate_expression(ret_item.expression, context, segment="select")
                     alias_to_sql[ret_item.alias] = sql_expr
                 except Exception:
                     pass
+                finally:
+                    context.select_params = saved_select
+                    context.where_params = saved_where
+                    context.join_params = saved_join
+                    context.join_clauses = saved_join_clauses
     for item in query.order_by_clause.items:
         try:
             if (isinstance(item.expression, ast.Variable)
