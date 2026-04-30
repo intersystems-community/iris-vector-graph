@@ -620,6 +620,9 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.66.3 (2026-04-30)
+- fix: `UNWIND [expr] AS x RETURN x` now emits scalar column access (`u.x`) instead of full node expansion (`u.node_id + rdf_labels + rdf_props`). The UNWIND variable is now registered in `scalar_variables` immediately after JSON_TABLE setup, preventing SQLCODE -23 "label N0 not listed" errors in GQS-style queries.
+
 ### v1.66.2 (2026-04-30)
 - fix: `JSON_ARRAYLENGTH`, `JSON_ARRAYGET`, `JSON_VALUE` now installed as `SQLUser.*` user-defined functions during `initialize_schema()`. Previously these bare SQL calls were qualified with the default schema (`Graph_KG.JSON_ARRAYLENGTH`) which IRIS couldn't find, causing SQLCODE -359. All three are now qualified as `SQLUser.*` in generated SQL and work regardless of current default schema.
 - fix: `size([list])`, `head(list)`, `last(list)` Cypher functions now work end-to-end against live IRIS.
