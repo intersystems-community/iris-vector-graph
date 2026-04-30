@@ -52,25 +52,17 @@ GQS generates: `original_query MATCH (extra) WHERE condition RETURN modified_res
 ## Requirements
 
 - **FR-001**: Parser MUST accept a second MATCH clause following a RETURN clause in the same query string
-- **FR-002**: Each part MUST be executed as an independent query; the final RETURN produces the result
+- **FR-002**: All parts MUST be executed sequentially; only the final part's RETURN result is returned to the caller. Intermediate RETURNs execute and are discarded — this ensures mutations (MERGE, SET) in any part take effect.
 - **FR-003**: Variable scope resets between parts (unless carried via WITH)
 - **FR-004**: `WHERE NOT (expr)` MUST parse correctly in all positions (currently fails in deeply nested contexts)
 - **FR-005**: GQS crash rate for "Expected EOF/WHERE" errors MUST drop to 0 after implementation
-
-## Success Criteria
-
-- **SC-001**: `MATCH (a) RETURN a.id MATCH (b) RETURN b.id` parses and executes without error
-- **SC-002**: GQS 5-minute run produces 0 "Expected EOF, got MATCH" crashes (was ~989/1071)
-- **SC-003**: All existing 567 unit tests continue to pass
-- **SC-004**: `WHERE NOT (expr)` in nested positions parses correctly
-
-## Root Cause Analysis
-
-**Parser**: `parse_query` calls `parse_return_clause` which consumes the `RETURN` and then expects EOF. The outer `parse()` function needs to loop: after a RETURN, check if another MATCH/WITH follows and if so, parse another query part.
-
-**WHERE NOT**: Parser's `parse_not_expression` handles `NOT expr` but nested `NOT ((...))` in complex boolean trees fails at a specific depth. Exact repro needed.
+- **FR-006**: Any parse error in any part (including non-final parts) MUST fail the entire query immediately
 
 ## Clarifications
 
+### Session 2026-04-30
+
+- Q: What to do with intermediate RETURN results? → A: Execute all parts, return only the last (full openCypher semantics — mutations in all parts take effect)
+- Q: Error in non-final part? → A: Fail entire query immediately on any parse error
 - Q: Should multi-part queries return the LAST part's result, or accumulate? → A: Last part (standard openCypher behavior)
 - Q: Variable scoping between parts — strict reset or passthrough? → A: Strict reset per openCypher spec; WITH is the explicit passthrough mechanism
