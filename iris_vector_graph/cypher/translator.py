@@ -2769,7 +2769,16 @@ def translate_expression(expr, context, segment="select") -> str:
 
 
 def translate_return_clause(ret, context):
+    _IRIS_RESERVED = frozenset({
+        "count","sum","avg","min","max","key","value","type","name","label",
+        "order","group","index","select","from","where","join","having",
+        "union","insert","update","delete","create","drop","alter","set",
+        "table","schema","column","row","data","id","user","date","time",
+    })
     has_agg = any(isinstance(i.expression, ast.AggregationFunction) for i in ret.items)
+    def _safe_alias(a):
+        return f'"{a}"' if a and a.lower() in _IRIS_RESERVED else a
+
     for item in ret.items:
         if isinstance(item.expression, ast.Variable):
             var_name = item.expression.name
@@ -2780,7 +2789,7 @@ def translate_return_clause(ret, context):
                 nodes_arr = ", ".join(f"{a}.node_id" for a in node_aliases)
                 rels_arr = ", ".join(f"{a}.p" for a in edge_aliases)
                 json_expr = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || JSON_ARRAY({rels_arr}) || '}}'"
-                context.select_items.append(f"{json_expr} AS {alias}")
+                context.select_items.append(f"{json_expr} AS {_safe_alias(alias)}")
                 continue
             alias_name = context.variable_aliases.get(var_name)
             is_scalar = var_name in context.scalar_variables
@@ -2814,7 +2823,7 @@ def translate_return_clause(ret, context):
             ):
                 alias = f"{item.expression.function_name}_res"
         if alias:
-            context.select_items.append(f"{sql} AS {alias.replace('.', '_')}")
+            context.select_items.append(f"{sql} AS {_safe_alias(alias).replace('.', '_')}")
         else:
             context.select_items.append(sql)
         if has_agg and not isinstance(item.expression, ast.AggregationFunction):
@@ -2849,7 +2858,7 @@ def translate_with_clause(with_clause, context):
                 alias = f"{item.expression.function_name}"
         if alias is None:
             alias = context.next_alias("v")
-        context.select_items.append(f"{sql} AS {alias.replace('.', '_')}")
+        context.select_items.append(f"{sql} AS {_safe_alias(alias).replace('.', '_')}")
         if has_agg and not isinstance(item.expression, ast.AggregationFunction):
             context.group_by_items.append(sql)
         if isinstance(item.expression, ast.AggregationFunction):
