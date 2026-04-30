@@ -169,7 +169,7 @@ class TestEdgeEmbeddingsE2E:
         from iris_vector_graph.engine import IRISGraphEngine
 
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self._run = uuid.uuid4().hex[:8]
         self.engine.initialize_schema()
 
@@ -178,7 +178,7 @@ class TestEdgeEmbeddingsE2E:
             (hash(text) >> 8) % 100 / 100.0,
             (hash(text) >> 16) % 100 / 100.0,
             (hash(text) >> 24) % 100 / 100.0,
-        ]
+        ] + [0.0] * 764
         yield
 
         cursor = self.conn.cursor()
@@ -290,7 +290,7 @@ class TestEdgeEmbeddingsE2E:
 
         self.engine.embed_edges(where=f"s LIKE 'ee65_{self._run}%'", force=True)
 
-        query = [0.5, 0.5, 0.5, 0.5]
+        query = [0.5, 0.5, 0.5, 0.5] + [0.0] * 764
         results = self.engine.edge_vector_search(query, top_k=4)
 
         assert len(results) <= 4
@@ -302,7 +302,7 @@ class TestEdgeEmbeddingsE2E:
 
     def test_edge_vector_search_empty_table(self):
         results = self.engine.edge_vector_search(
-            [0.1, 0.2, 0.3, 0.4], top_k=5
+            [0.1] + [0.0] * 767, top_k=5
         )
         assert results == [] or isinstance(results, list)
 
@@ -326,7 +326,7 @@ class TestEdgeEmbeddingsE2E:
         self.conn.commit()
 
         text = f"{s} {p} {o}"
-        fixed_emb = [0.1, 0.2, 0.3, 0.4]
+        fixed_emb = [0.1, 0.2, 0.3, 0.4] + [0.0] * 764
         self.engine.embed_text = lambda t: fixed_emb
 
         self.engine.embed_edges(where=f"s = '{s}'", force=True)
@@ -392,7 +392,7 @@ class TestEdgeEmbeddingsE2E:
         post_count = cursor.fetchone()[0]
         assert post_count == 3
 
-        results = self.engine.edge_vector_search([0.5, 0.5, 0.5, 0.5], top_k=10)
+        results = self.engine.edge_vector_search([0.5, 0.5, 0.5, 0.5] + [0.0] * 764, top_k=10)
         matching = [r for r in results if r["s"].startswith(f"ee65_{self._run}")]
         assert len(matching) == 3
 

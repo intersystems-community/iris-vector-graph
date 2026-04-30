@@ -259,8 +259,8 @@ class TestGraphOperatorsClass:
         for i in range(5):
             node_id = f'VEC_TEST:{i}'
             cursor.execute(
-                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, ?)",
-                [node_id, test_embedding]
+                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                [node_id, f"[{test_embedding}]"]
             )
         
         iris_connection.commit()

@@ -109,7 +109,7 @@ class TestNKGIndexE2E:
 
         _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
 
-        kg_weight = _get_global(self.conn, "KG", "out", n1, "COMPAT", n2)
+        kg_weight = _get_global(self.conn, "KG", "out", "0", n1, "COMPAT", n2)
         assert kg_weight is not None, "^KG out-edge missing"
 
         nkg_sIdx = _get_global(self.conn, "NKG", "$NI", n1)

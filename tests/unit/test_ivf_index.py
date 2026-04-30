@@ -252,7 +252,7 @@ class TestIVFIndexE2E:
     def test_build_indexes_nodes(self):
         import random
         rng = random.Random(7)
-        dim = 4
+        dim = 768
         nodes = []
         for i in range(5):
             nid = f"ivfbuild_{i}_{self._run}"
@@ -274,7 +274,7 @@ class TestIVFIndexE2E:
     def test_build_idempotent(self):
         import random
         rng = random.Random(8)
-        dim = 4
+        dim = 768
         nodes = [(f"ivfidm_{i}_{self._run}", [rng.gauss(0, 1) for _ in range(dim)]) for i in range(4)]
         self._insert_embeddings(nodes)
         node_ids = [n[0] for n in nodes]
@@ -288,7 +288,7 @@ class TestIVFIndexE2E:
     def test_search_returns_results(self):
         import random
         rng = random.Random(9)
-        dim = 4
+        dim = 768
         nodes = []
         for i in range(20):
             nid = f"ivfsearch_{i}_{self._run}"
@@ -310,7 +310,7 @@ class TestIVFIndexE2E:
     def test_nprobe_exact_matches_brute_force(self):
         import random
         rng = random.Random(10)
-        dim = 4
+        dim = 768
         nodes = []
         for i in range(20):
             nid = f"ivfexact_{i}_{self._run}"
@@ -337,7 +337,7 @@ class TestIVFIndexE2E:
     def test_drop_removes_index(self):
         import random
         rng = random.Random(11)
-        dim = 4
+        dim = 768
         nodes = [(f"ivfdrop_{i}_{self._run}", [rng.gauss(0, 1) for _ in range(dim)]) for i in range(4)]
         self._insert_embeddings(nodes)
         node_ids = [n[0] for n in nodes]
@@ -352,7 +352,7 @@ class TestIVFIndexE2E:
     def test_info_returns_cfg(self):
         import random
         rng = random.Random(12)
-        dim = 4
+        dim = 768
         nodes = [(f"ivfinfo_{i}_{self._run}", [rng.gauss(0, 1) for _ in range(dim)]) for i in range(4)]
         self._insert_embeddings(nodes)
         node_ids = [n[0] for n in nodes]
@@ -373,7 +373,7 @@ class TestIVFIndexE2E:
                 pytest.skip("kg_IVF SQL proc not available on this container — requires ObjectScript compilation")
         import random
         rng = random.Random(13)
-        dim = 4
+        dim = 768
         nodes = []
         for i in range(10):
             nid = f"ivfcyph_{i}_{self._run}"

@@ -50,12 +50,12 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				Set share = (alpha * rank) / deg
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
 				}
@@ -163,12 +163,12 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 			}
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				Set share = (damping * rank) / deg
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
 				}

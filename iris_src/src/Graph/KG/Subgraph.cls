@@ -34,7 +34,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 	For i = 0:1:(seedArr.%Size()-1) {
 		Set s = seedArr.%Get(i)
 		// Accept seed if it has outgoing OR incoming edges in ^KG
-		If $Data(^KG("deg", s)) || ($Order(^KG("in", s, "")) '= "") {
+		If $Data(^KG("deg", s)) || ($Order(^KG("in", 0, s, "")) '= "") {
 			Set frontier(s) = ""
 			If '$Data(seen(s)) {
 				Set seen(s) = ""
@@ -51,10 +51,10 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 			Set node = $Order(frontier(node))
 			Quit:node=""
 			
-			// Walk outgoing edges: ^KG("out", node, predicate, object)
+			// Walk outgoing edges: ^KG("out", 0, node, predicate, object)
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				
 				// Edge type filter
@@ -62,7 +62,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 				
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					
 					// Record edge
@@ -194,12 +194,12 @@ ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %
 			}
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				Set share = (damping * rank) / deg
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
 				}
@@ -302,12 +302,12 @@ ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %
 			Quit:node=""
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", node, p))
+				Set p = $Order(^KG("out", 0, node, p))
 				Quit:p=""
 				If hasFilter && '$Data(allowedPred(p)) Continue
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", node, p, o))
+					Set o = $Order(^KG("out", 0, node, p, o))
 					Quit:o=""
 					Set edgeKey = node_$Char(1)_p_$Char(1)_o
 					If '$Data(edgeSeen(edgeKey)) {

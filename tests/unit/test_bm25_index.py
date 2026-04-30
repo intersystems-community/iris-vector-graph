@@ -1,7 +1,7 @@
 """Unit and E2E tests for Graph.KG.BM25Index — BM25 lexical search (spec 044).
 
 Unit tests use mocked IRIS connection (no container required).
-E2E tests run against the live iris-vector-graph-main container.
+E2E tests run against the live gqs-ivg-test container.
 """
 import json
 import os
@@ -262,13 +262,13 @@ class TestBM25IndexUnit:
 
 
 # ================================================================
-# E2E tests — require live iris-vector-graph-main container
+# E2E tests — require live gqs-ivg-test container
 # ================================================================
 
 
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 class TestBM25IndexE2E:
-    """E2E tests against the live iris-vector-graph-main container."""
+    """E2E tests against the live gqs-ivg-test container."""
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
