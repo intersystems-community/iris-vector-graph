@@ -1955,11 +1955,11 @@ def translate_relationship_pattern(
         pred_filter = ""
         if rel.types:
             if len(rel.types) == 1:
-                pt = context.add_join_param(rel.types[0])
-                pred_filter = f" AND p = {pt}"
+                safe_p = rel.types[0].replace("'", "''")
+                pred_filter = f" AND p = '{safe_p}'"
             else:
-                pts = ", ".join(context.add_join_param(t) for t in rel.types)
-                pred_filter = f" AND p IN ({pts})"
+                safe_ps = ", ".join(f"'{t.replace(chr(39), chr(39)+chr(39))}'" for t in rel.types)
+                pred_filter = f" AND p IN ({safe_ps})"
         edges_tbl = _table("rdf_edges")
         union_derived = (
             f"(\n"

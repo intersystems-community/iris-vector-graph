@@ -202,7 +202,10 @@ def test_undirected_typed_rel_uses_union_all():
     q = "MATCH (a)-[r:KNOWS]-(b) WHERE a.id = $x RETURN b.id"
     r = translate_to_sql(parse_query(q), {"x": "hla-b27"})
     assert "UNION ALL" in r.sql
-    assert "AND p = ?" in r.sql, "predicate filter applied inside both arms of UNION"
+    assert "'KNOWS'" in r.sql, "predicate inlined as literal inside UNION arms (not as bind param)"
+    qmarks = r.sql.count("?")
+    pcount = len(r.parameters[0]) if r.parameters else 0
+    assert qmarks == pcount, f"param count mismatch: {qmarks} ?s vs {pcount} params"
 
 
 def test_directed_outgoing_still_uses_single_join():
