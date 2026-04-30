@@ -620,6 +620,9 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.66.4 (2026-04-30)
+- fix: Inline node property filters in `MATCH` patterns now use `rdf_props` JOIN instead of direct column access. `MATCH (n)-[r]-(m {k12:'val'})` previously generated `WHERE n1.k12=?` which fails SQLCODE -29 (`nodes` table only has `node_id`/`created_at`). Now generates `JOIN rdf_props p ON p.s = n1.node_id AND p.key=? WHERE p.val=?`.
+
 ### v1.66.3 (2026-04-30)
 - fix: `UNWIND [expr] AS x RETURN x` now emits scalar column access (`u.x`) instead of full node expansion (`u.node_id + rdf_labels + rdf_props`). The UNWIND variable is now registered in `scalar_variables` immediately after JSON_TABLE setup, preventing SQLCODE -23 "label N0 not listed" errors in GQS-style queries.
 
