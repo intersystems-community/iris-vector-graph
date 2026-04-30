@@ -2509,7 +2509,7 @@ def translate_expression(expr, context, segment="select") -> str:
                 return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
             if is_undirected:
                 return "NULL"
-            return f"JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}')"
+            return f"SQLUser.JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}')"
         if expr.property_name in ("node_id", "id"):
             return f"{alias}.node_id"
         p_alias = context.next_alias("p")
@@ -2563,7 +2563,7 @@ def translate_expression(expr, context, segment="select") -> str:
     if isinstance(expr, ast.PropertyAccessExpression):
         base_sql = translate_expression(expr.expression, context, segment=segment)
         prop = expr.property_name.replace("'", "''")
-        return f"JSON_VALUE({base_sql}, '$.{prop}')"
+        return f"SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)
         if not alias:
@@ -2770,13 +2770,11 @@ def translate_expression(expr, context, segment="select") -> str:
                 isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
             ) or isinstance(arg_expr, ast.ListComprehension)
             if is_list:
-                return f"JSON_ARRAYLENGTH({args[0]})"
-            return f"LENGTH({args[0]})"
-
+                return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
         if fn == "head":
             if not args:
                 return "NULL"
-            return f"JSON_ARRAYGET({args[0]}, 0)"
+            return f"SQLUser.JSON_ARRAYGET({args[0]}, 0)"
 
         if fn == "tail":
             if not args:
@@ -2786,7 +2784,7 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "last":
             if not args:
                 return "NULL"
-            return f"JSON_ARRAYGET({args[0]}, JSON_ARRAYLENGTH({args[0]}) - 1)"
+            return f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]}) - 1)"
 
         if fn == "isempty":
             if not args:
