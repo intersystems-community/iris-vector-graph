@@ -520,7 +520,7 @@ class BoltSession:
 
         conn_id = str(uuid.uuid4())[:8]
         await self._send_message(TAG_SUCCESS, {
-            "server": "iris-vector-graph/5.0.0",
+            "server": "Neo4j/5.0.0",
             "connection_id": conn_id,
             "hints": {"connection.recv_timeout_seconds": 300},
         })
@@ -536,7 +536,7 @@ class BoltSession:
                 })
                 self.state = BoltState.FAILED
                 return
-        await self._send_message(TAG_SUCCESS, {"server": "iris-vector-graph/5.0.0"})
+        await self._send_message(TAG_SUCCESS, {})
 
     async def _handle_run(self, query: str, params: dict, extra: dict) -> None:
         print(f"[BOLT-WS] RUN query={query[:500]}")
