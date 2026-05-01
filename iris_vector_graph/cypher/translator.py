@@ -2175,6 +2175,11 @@ def translate_boolean_expression(expr, context) -> str:
             f" AND _lp.label = {safe_label})"
         )
     if not isinstance(expr, ast.BooleanExpression):
+        if isinstance(expr, ast.Literal):
+            if expr.value is True:
+                return "(1=1)"
+            if expr.value is False:
+                return "(1=0)"
         return translate_expression(expr, context, segment="where")
     op = expr.operator
     if op == ast.BooleanOperator.AND:
