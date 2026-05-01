@@ -864,6 +864,54 @@ def _remove_ts_conditions_from_where(context, rel_var: str):
     context.where_conditions = kept
 
 
+def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
+    JOIN_THRESHOLD = 20
+    join_count = sql.count(" JOIN ")
+    if join_count <= JOIN_THRESHOLD:
+        return sql
+    import re as _re
+    select_m = _re.match(r'(SELECT\s+(?:DISTINCT\s+)?)(.*?)(\nFROM\s)', sql, _re.DOTALL)
+    if not select_m:
+        return sql
+    select_prefix = select_m.group(1)
+    select_cols = select_m.group(2).strip()
+    has_agg = bool(_re.search(r'\b(AVG|SUM|COUNT|MIN|MAX|STDEV|JSON_ARRAYAGG)\s*\(', select_cols))
+    has_group = 'GROUP BY' in sql
+    if has_agg and not has_group:
+        return sql
+    inner_from_onwards = sql[select_m.start(3):]
+    inner_sql = f"SELECT {select_cols}{inner_from_onwards}"
+    _SQL_TYPES = frozenset({
+        'INTEGER','INT','DOUBLE','FLOAT','REAL','VARCHAR','CHAR','BIGINT','SMALLINT',
+        'DECIMAL','NUMERIC','BOOLEAN','DATE','TIME','TIMESTAMP','VARBINARY','BINARY',
+    })
+    alias_re = _re.compile(r'\)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?:,|\Z)', _re.IGNORECASE | _re.DOTALL)
+    top_as_re = _re.compile(r'(?:^|,)\s*(?:[^,]+?)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?=,|$)', _re.IGNORECASE)
+    seen = {}
+    for m in _re.finditer(r'(?:^|(?<=,))\s*([^,]+?)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?=,|$)', select_cols, _re.DOTALL):
+        alias = m.group(2).strip('"')
+        if alias.upper() not in _SQL_TYPES:
+            seen[alias] = alias
+    outer_cols = ', '.join(seen.keys())
+    if not outer_cols:
+        return sql
+    outer_sql = f"WITH _MR AS (\n{inner_sql}\n)\n{select_prefix}{outer_cols}\nFROM _MR"
+    order_m = _re.search(r'\nORDER BY .+', sql, _re.DOTALL)
+    limit_m = _re.search(r'\nLIMIT \d+', sql)
+    offset_m = _re.search(r'\nOFFSET \d+', sql)
+    suffix = ""
+    if order_m:
+        start = order_m.start()
+        end = limit_m.start() if limit_m and limit_m.start() > start else len(sql)
+        suffix += sql[start:end]
+    if limit_m:
+        suffix += f"\nLIMIT {limit_m.group(0).split()[1]}"
+    if offset_m:
+        suffix += f"\nOFFSET {offset_m.group(0).split()[1]}"
+    outer_sql += suffix
+    return outer_sql
+
+
 def _demote_agg_stages_to_subqueries(sql: str, ctes: list) -> tuple:
     remaining_ctes = []
     for cte in ctes:
@@ -1095,6 +1143,11 @@ def translate_to_sql(
         sql, p = context.build_stage_sql(
             cypher_query.return_clause.distinct if cypher_query.return_clause else False
         )
+        if not context.select_items and context.stages and context.from_clauses:
+            stage_name = context.from_clauses[-1]
+            if stage_name in [s.split(" AS ")[0].strip() for s in context.stages]:
+                sql = sql.replace("SELECT \nFROM", f"SELECT *\nFROM", 1)
+                sql = sql.replace("SELECT DISTINCT \nFROM", f"SELECT DISTINCT *\nFROM", 1)
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
         vl = context.var_length_paths or None
 
@@ -1145,6 +1198,9 @@ def translate_to_sql(
                 query_metadata=metadata,
                 var_length_paths=vl,
             )
+
+        sql = _maybe_split_deep_joins(sql, p, context)
+
         return SQLQuery(
             sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl
         )
