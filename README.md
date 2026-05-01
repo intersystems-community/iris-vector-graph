@@ -620,6 +620,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.69.0 (2026-05-01)
+- **fix(089)**: Empty `SELECT FROM Stage1` (SQLCODE -12) — when a recursive `self.parse()` call handles `WITH...ORDER BY...LIMIT...WHERE...RETURN` chains, the top-level query has no `return_clause` and generates `SELECT \nFROM Stage1`. Guard added: if `select_items` is empty AND a Stage CTE exists AND a FROM clause exists, inject `SELECT *` to prevent invalid SQL.
+- **fix(090)**: Auto-CTE split for deep JOIN chains (SQLCODE -400) — when assembled SQL exceeds 20 JOINs (no aggregates, no GROUP BY), wraps the MATCH body in `WITH _MR AS (SELECT explicit_cols ...) SELECT aliases FROM _MR`. Resolves synthetic GQS queries at 21-29 JOINs. Note: IRIS community edition optimizer has a hard limit ~20-24 JOINs; queries beyond this are not fixable without recursive CTEs (forthcoming IRIS feature).
+
 ### v1.68.0 (2026-05-01)
 - **fix(086)**: Function argument literal inlining — `RIGHT(?,?)` → `RIGHT('str',1)`. Eliminates "Incorrect number of parameters" in 5/7 unique large multi-path GQS queries. Root cause: `translate_expression` was parameterizing compile-time constant literals passed as function args; these are now inlined using `segment='inline'`.
 - **fix(087)**: SQLCODE -23 `Stage1.col` unqualification — IRIS forbids CTE-qualified column references (`Stage1.a0`) in SELECT or ORDER BY when mixed with derived expressions. Variable resolution, PropertyReference, and ORDER BY all now emit unqualified column names when the alias is a Stage CTE. Also: `r.prop` on a Stage alias uses `SQLUser.JSON_VALUE(col, '$.prop')`.
