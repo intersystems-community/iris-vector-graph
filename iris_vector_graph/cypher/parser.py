@@ -223,9 +223,18 @@ class Parser:
                     ob2 = self.parse_order_by_clause()
                     sk2 = self.parse_skip()
                     li2 = self.parse_limit()
-                    stub = ast.CypherQuery(query_parts=q.query_parts, return_clause=ret2,
-                                          order_by_clause=ob2, skip=sk2, limit=li2)
-                    q.subsequent_queries.append(stub)
+                    if q.return_clause is None:
+                        q.return_clause = ret2
+                        if q.order_by_clause is None:
+                            q.order_by_clause = ob2
+                        if q.skip is None:
+                            q.skip = sk2
+                        if q.limit is None:
+                            q.limit = li2
+                    else:
+                        stub = ast.CypherQuery(query_parts=q.query_parts, return_clause=ret2,
+                                              order_by_clause=ob2, skip=sk2, limit=li2)
+                        q.subsequent_queries.append(stub)
                 continue
             if self.peek().kind == TokenType.RETURN:
                 ret2 = self.parse_return_clause()
