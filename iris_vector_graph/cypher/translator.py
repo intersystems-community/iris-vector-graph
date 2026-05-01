@@ -1037,9 +1037,8 @@ def translate_to_sql(
         context.where_conditions, context.where_params = [], []
 
     if cypher_query.return_clause:
-        translate_return_clause(cypher_query.return_clause, context)
+         translate_return_clause(cypher_query.return_clause, context)
 
-    # Process ORDER BY BEFORE building SQL to ensure JOINs are included
     order_by_items = preprocess_order_by(cypher_query, context)
 
     if cypher_query.graph_context:
@@ -1173,17 +1172,19 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                     context.where_params = saved_where
                     context.join_params = saved_join
                     context.join_clauses = saved_join_clauses
+    import re as _re
     for item in query.order_by_clause.items:
         try:
             if (isinstance(item.expression, ast.Variable)
                     and item.expression.name in alias_to_sql):
-                expr = alias_to_sql[item.expression.name]
+                expr = _re.sub(r'^Stage\d+\.', '', alias_to_sql[item.expression.name])
             else:
                 expr = translate_expression(item.expression, context, segment="where")
+                expr = _re.sub(r'^Stage\d+\.', '', expr)
         except ValueError:
             if (isinstance(item.expression, ast.Variable)
                     and item.expression.name in alias_to_sql):
-                expr = alias_to_sql[item.expression.name]
+                expr = _re.sub(r'^Stage\d+\.', '', alias_to_sql[item.expression.name])
             else:
                 raise
         items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
@@ -2514,8 +2515,8 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"{alias}.{sanitize_identifier(expr.property_name)}"
         if alias.startswith("Stage"):
             if expr.property_name in ("node_id", "id"):
-                return f"{alias}.{expr.variable}"
-            return f"{alias}.{expr.variable}_{expr.property_name}"
+                return expr.variable
+            return f"SQLUser.JSON_VALUE({expr.variable}, '$.{expr.property_name}')"
         if alias.startswith("e") and not alias.startswith("ES_"):
             is_undirected = alias in getattr(context, "_undirected_aliases", set())
             is_edgescan = alias in getattr(context, "_edgescan_aliases", set())
@@ -2594,7 +2595,7 @@ def translate_expression(expr, context, segment="select") -> str:
                 return context.add_where_param(v)
             raise ValueError(f"Undefined: {expr.name}")
         if alias.startswith("Stage"):
-            return f"{alias}.{expr.name}"
+            return expr.name
         if alias.startswith("e"):
             is_undirected = alias in getattr(context, "_undirected_aliases", set())
             return f"{alias}.{'_p' if is_undirected else 'p'}"
@@ -2896,7 +2897,7 @@ def translate_return_clause(ret, context):
             if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
                 node_expr = (
-                    f"{alias_name}.{var_name}"
+                    var_name
                     if alias_name.startswith("Stage")
                     or alias_name in ("VecSearch", "BM25", "PPR", "IVF_SEARCH")
                     else f"{alias_name}.node_id"
