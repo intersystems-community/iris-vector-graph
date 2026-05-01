@@ -620,6 +620,9 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.67.1 (2026-05-01)
+- fix: SQLCODE -1/-14/-15 — `false`/`true` Cypher literals in boolean context (`WHERE`, `AND`, `OR`, `NOT`) now emit `(1=0)`/`(1=1)` instead of raw `0`/`1`. IRIS SQL requires a comparison expression for `OR`/`AND` operands; bare `0` was causing SQLCODE -14 "comparison operator required".
+
 ### v1.67.0 (2026-05-01)
 - fix: SQLCODE -23 (UNWIND) — `JSON_TABLE` moved to `CROSS JOIN` (after regular JOINs), not comma-separated in FROM. Prevents `Label N0/P97 not listed` when UNWIND references JOIN aliases.
 - fix: SQLCODE -23 (undirected edge in WITH) — `Variable` expression for undirected edge alias now returns `alias._p` not `alias.p`. Fixes `E16.P not found` when undirected edge used in WITH clause.
