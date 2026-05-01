@@ -6,6 +6,7 @@ import os, sys, time, statistics, uuid
 import pytest
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
+SKIP_BENCHMARK_SCALE = os.environ.get("SKIP_BENCHMARK_SCALE", "true").lower() == "true"
 
 N_NODES = 10_000
 N_EDGES = 50_000
@@ -14,7 +15,8 @@ MEASURED = 20
 BATCH = 500
 
 
-@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+@pytest.mark.skipif(SKIP_IRIS_TESTS or SKIP_BENCHMARK_SCALE, reason="SKIP_IRIS_TESTS or SKIP_BENCHMARK_SCALE=true (set SKIP_BENCHMARK_SCALE=false to run)")
+@pytest.mark.slow
 class TestCypherBenchmarkScale10K:
 
     @pytest.fixture(scope="class", autouse=True)
@@ -23,7 +25,7 @@ class TestCypherBenchmarkScale10K:
         from iris_vector_graph.engine import IRISGraphEngine
 
         self.__class__.conn = iris_connection
-        engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         engine.initialize_schema()
         self.__class__.engine = engine
 
