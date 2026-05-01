@@ -127,3 +127,7 @@ playwright-*.png
 
 # Browser static assets (distributed separately, not in git)
 iris_vector_graph/browser_static/
+iris.key
+libarno_callout.so
+docker/enterprise/iris.key
+docker/enterprise/libarno_callout.so

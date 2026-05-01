@@ -1,0 +1,21 @@
+services:
+  iris-enterprise:
+    image: docker.iscinternal.com/docker-intersystems/intersystems/irishealth:2026.2.0AI.161.0
+    container_name: iris-vector-graph-enterprise
+    ports:
+      - "2972:1972"
+      - "62773:52773"
+    volumes:
+      - ./docker/enterprise/iris.key:/usr/irissys/mgr/iris.key:ro
+      - ivg_enterprise_data:/home/irisowner/irisdata
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "session", "iris", "-U%SYS", "Write 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 24
+      start_period: 60s
+    stdin_open: true
+    tty: true
+
+volumes:
+  ivg_enterprise_data: {}

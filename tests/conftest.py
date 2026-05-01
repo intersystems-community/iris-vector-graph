@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import os
 import re
 import subprocess
 import time
@@ -23,8 +24,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_GQS_CONTAINER = "gqs-ivg-test"
-_GQS_PORT = 1972
+_GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "gqs-ivg-test")
+_GQS_PORT = int(os.environ.get("IVG_TEST_PORT", "1972"))
 
 
 def _ensure_test_user() -> None:
