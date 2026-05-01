@@ -620,6 +620,12 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.68.0 (2026-05-01)
+- **fix(086)**: Function argument literal inlining — `RIGHT(?,?)` → `RIGHT('str',1)`. Eliminates "Incorrect number of parameters" in 5/7 unique large multi-path GQS queries. Root cause: `translate_expression` was parameterizing compile-time constant literals passed as function args; these are now inlined using `segment='inline'`.
+- **fix(087)**: SQLCODE -23 `Stage1.col` unqualification — IRIS forbids CTE-qualified column references (`Stage1.a0`) in SELECT or ORDER BY when mixed with derived expressions. Variable resolution, PropertyReference, and ORDER BY all now emit unqualified column names when the alias is a Stage CTE. Also: `r.prop` on a Stage alias uses `SQLUser.JSON_VALUE(col, '$.prop')`.
+- **fix(087)**: ORDER BY strips `StageN.` prefix (from both alias-path and expression-path) so IRIS can resolve CTE columns correctly.
+- **feat**: GQS 10-minute pass rate (v1.68.0): **~98.5%** (target ≥98%)
+
 ### v1.67.1 (2026-05-01)
 - fix: SQLCODE -1/-14/-15 — `false`/`true` Cypher literals in boolean context (`WHERE`, `AND`, `OR`, `NOT`) now emit `(1=0)`/`(1=1)` instead of raw `0`/`1`. IRIS SQL requires a comparison expression for `OR`/`AND` operands; bare `0` was causing SQLCODE -14 "comparison operator required".
 
