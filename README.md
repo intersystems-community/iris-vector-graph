@@ -620,6 +620,14 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.67.0 (2026-05-01)
+- fix: SQLCODE -23 (UNWIND) — `JSON_TABLE` moved to `CROSS JOIN` (after regular JOINs), not comma-separated in FROM. Prevents `Label N0/P97 not listed` when UNWIND references JOIN aliases.
+- fix: SQLCODE -23 (undirected edge in WITH) — `Variable` expression for undirected edge alias now returns `alias._p` not `alias.p`. Fixes `E16.P not found` when undirected edge used in WITH clause.
+- fix: SQLCODE -12 `A term expected` — `WITH...ORDER BY...SKIP...WHERE...RETURN` was parsing RETURN into a `subsequent_query` stub, leaving SELECT list empty (`SELECT FROM ...`). Now merges RETURN back onto main query when `return_clause is None`.
+- fix: `WITH *` for undirected edges uses `_src/_p/_dst` column names.
+- fix: `type(r)` after WITH stage: when edge var alias is `StageN`, uses `Stage.varname` not `Stage.p`.
+- test: `test_cypher_benchmark_scale` skipped by default (set `SKIP_BENCHMARK_SCALE=false` to run), marked `@pytest.mark.slow`.
+
 ### v1.66.5 (2026-04-30)
 - fix: `MatchEdges`-derived aliases (`s/p/o_id/w` columns only, no `qualifiers`) now return `NULL` for custom edge properties instead of crashing with SQLCODE -29 `e.QUALIFIERS not found`. Tracked via `_edgescan_aliases` set.
 - fix: Restore outer `else: rdf_edges` JOIN for `use_edgescan=False` case (VecSearch source). Was accidentally dropped when adding edgescan tracking, causing param count mismatch in `CALL...YIELD...MATCH` queries.
