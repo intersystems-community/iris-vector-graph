@@ -1247,9 +1247,11 @@ def translate_unwind_clause(unwind, context):
             context.join_params[-1] = json.dumps(val)
     alias = context.register_variable(unwind.alias, prefix="u")
     context.scalar_variables.add(unwind.alias)
-    context.from_clauses.append(
-        f"JSON_TABLE({expr}, '$[*]' COLUMNS ({unwind.alias} VARCHAR(1000) PATH '$')) {alias}"
-    )
+    json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({unwind.alias} VARCHAR(1000) PATH '$')) {alias}"
+    if context.from_clauses:
+        context.join_clauses.append(f"CROSS JOIN {json_table_sql}")
+    else:
+        context.from_clauses.append(json_table_sql)
 
 
 def translate_create_clause(create, context, metadata):
@@ -2589,7 +2591,8 @@ def translate_expression(expr, context, segment="select") -> str:
         if alias.startswith("Stage"):
             return f"{alias}.{expr.name}"
         if alias.startswith("e"):
-            return f"{alias}.p"
+            is_undirected = alias in getattr(context, "_undirected_aliases", set())
+            return f"{alias}.{'_p' if is_undirected else 'p'}"
         if expr.name in context.scalar_variables:
             if alias == "scalar":
                 return expr.name
@@ -2700,6 +2703,8 @@ def translate_expression(expr, context, segment="select") -> str:
                 var_name = args_exprs[0].name
                 alias = context.variable_aliases.get(var_name, "")
                 if alias:
+                    if alias.startswith("Stage"):
+                        return f"{alias}.{var_name}"
                     p_col = "_p" if getattr(context, "_undirected_aliases", set()) and alias in context._undirected_aliases else "p"
                     return f"{alias}.{p_col}"
             return args[0] if args else "NULL"
@@ -2910,7 +2915,11 @@ def translate_with_clause(with_clause, context):
     if with_clause.star:
         for var, alias in context.variable_aliases.items():
             if alias.startswith("e"):
-                context.select_items.append(f"{alias}.s AS {var}_s, {alias}.p AS {var}_p, {alias}.o_id AS {var}_o_id")
+                is_undirected = alias in getattr(context, "_undirected_aliases", set())
+                if is_undirected:
+                    context.select_items.append(f"{alias}._src AS {var}_src, {alias}._p AS {var}_p, {alias}._dst AS {var}_dst")
+                else:
+                    context.select_items.append(f"{alias}.s AS {var}_s, {alias}.p AS {var}_p, {alias}.o_id AS {var}_o_id")
             else:
                 context.select_items.append(f"{alias}.node_id AS {var}")
         if with_clause.where_clause:
