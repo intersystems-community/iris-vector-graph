@@ -2639,6 +2639,9 @@ def translate_expression(expr, context, segment="select") -> str:
             return context.add_select_param(v)
         if segment == "join":
             return context.add_join_param(v)
+        if segment == "inline":
+            if isinstance(v, str): return f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+            return str(v)
         return context.add_where_param(v)
     if isinstance(expr, ast.AggregationFunction):
         if expr.argument and isinstance(expr.argument, ast.Literal):
@@ -2701,7 +2704,14 @@ def translate_expression(expr, context, segment="select") -> str:
             v = args_exprs[0].value
             if not isinstance(v, str):
                 return "1" if v else "0"
-        args = [translate_expression(a, context, segment=segment) for a in args_exprs]
+        def _translate_arg(a):
+            if isinstance(a, ast.Literal) and not isinstance(a.value, list):
+                inlined = _inline_literal(a)
+                if inlined is not None:
+                    return inlined
+            return translate_expression(a, context, segment="inline")
+
+        args = [_translate_arg(a) for a in args_exprs]
 
         if fn == "type":
             if args_exprs and isinstance(args_exprs[0], ast.Variable):
