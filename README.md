@@ -620,6 +620,10 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.66.5 (2026-04-30)
+- fix: `MatchEdges`-derived aliases (`s/p/o_id/w` columns only, no `qualifiers`) now return `NULL` for custom edge properties instead of crashing with SQLCODE -29 `e.QUALIFIERS not found`. Tracked via `_edgescan_aliases` set.
+- fix: Restore outer `else: rdf_edges` JOIN for `use_edgescan=False` case (VecSearch source). Was accidentally dropped when adding edgescan tracking, causing param count mismatch in `CALL...YIELD...MATCH` queries.
+
 ### v1.66.4 (2026-04-30)
 - fix: Inline node property filters in `MATCH` patterns now use `rdf_props` JOIN instead of direct column access. `MATCH (n)-[r]-(m {k12:'val'})` previously generated `WHERE n1.k12=?` which fails SQLCODE -29 (`nodes` table only has `node_id`/`created_at`). Now generates `JOIN rdf_props p ON p.s = n1.node_id AND p.key=? WHERE p.val=?`.
 
