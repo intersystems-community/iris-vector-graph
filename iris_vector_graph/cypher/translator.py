@@ -1643,9 +1643,13 @@ def translate_match_clause(match_clause, context, metadata):
     for pattern in match_clause.patterns:
         if not pattern.nodes:
             continue
-        translate_node_pattern(
-            pattern.nodes[0], context, metadata, optional=match_clause.optional
-        )
+        first_node = pattern.nodes[0]
+        if first_node.variable or first_node.labels or first_node.properties:
+            translate_node_pattern(
+                first_node, context, metadata, optional=match_clause.optional
+            )
+        else:
+            _ = context.next_alias("n")
         for i, rel in enumerate(pattern.relationships):
             translate_relationship_pattern(
                 rel,
@@ -1655,9 +1659,11 @@ def translate_match_clause(match_clause, context, metadata):
                 metadata,
                 optional=match_clause.optional,
             )
-            translate_node_pattern(
-                pattern.nodes[i + 1], context, metadata, optional=match_clause.optional
-            )
+            last_node = pattern.nodes[i + 1]
+            if last_node.variable or last_node.labels or last_node.properties:
+                translate_node_pattern(
+                    last_node, context, metadata, optional=match_clause.optional
+                )
 
     for np in match_clause.named_paths:
         context.named_paths[np.variable] = np
@@ -1908,7 +1914,14 @@ def translate_relationship_pattern(
         else:
             context.join_clauses.append(f"JOIN {_table('nodes')} {target_alias} ON 1=1")
         return
-    if source_node.variable is None:
+    is_anon_source = (
+        source_node.variable is None
+        and not source_node.labels
+        and not source_node.properties
+    )
+    if is_anon_source:
+        source_alias = context.next_alias("n")
+    elif source_node.variable is None:
         source_alias = context.next_alias("n")
         joined = any(
             source_alias in fc for fc in context.from_clauses + context.join_clauses
@@ -2060,10 +2073,16 @@ def translate_relationship_pattern(
     jt = "LEFT OUTER JOIN" if optional else "JOIN"
 
     if rel.direction == ast.Direction.OUTGOING:
-        edge_cond, target_on = (
-            f"{edge_alias}.s = {source_alias}.{s_col}",
-            f"{target_alias}.{t_col} = {edge_alias}.o_id",
-        )
+        if is_anon_source:
+            edge_cond, target_on = (
+                f"1=1",
+                f"{target_alias}.{t_col} = {edge_alias}.o_id",
+            )
+        else:
+            edge_cond, target_on = (
+                f"{edge_alias}.s = {source_alias}.{s_col}",
+                f"{target_alias}.{t_col} = {edge_alias}.o_id",
+            )
     elif rel.direction == ast.Direction.INCOMING:
         edge_cond, target_on = (
             f"{edge_alias}.o_id = {source_alias}.{s_col}",
@@ -2140,7 +2159,7 @@ def translate_relationship_pattern(
         and not source_alias.startswith("VecSearch")
     )
 
-    if use_edgescan:
+    if use_edgescan and not is_anon_source:
         pred_sql = f"'{rel.types[0]}'" if len(rel.types) == 1 else "NULL"
         src_id_val = source_node.properties.get("id") if source_node else None
         if src_id_val is not None:
@@ -2179,9 +2198,21 @@ def translate_relationship_pattern(
                 f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
             )
     else:
-        context.join_clauses.append(
-            f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
-        )
+        if is_anon_source:
+            actual_cond = edge_cond.lstrip("1=1").lstrip(" AND ").strip() if edge_cond.startswith("1=1") else edge_cond
+            if not context.from_clauses:
+                context.from_clauses.append(f"{_table('rdf_edges')} {edge_alias}")
+                if actual_cond:
+                    context.where_conditions.append(actual_cond)
+            else:
+                full_cond = actual_cond if actual_cond else "1=1"
+                context.join_clauses.append(
+                    f"{jt} {_table('rdf_edges')} {edge_alias} ON {full_cond}"
+                )
+        else:
+            context.join_clauses.append(
+                f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
+            )
 
     if is_new_target and not target_alias.startswith("Stage"):
         context.join_clauses.append(
