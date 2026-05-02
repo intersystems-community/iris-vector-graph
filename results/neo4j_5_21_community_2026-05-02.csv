@@ -1,0 +1,134 @@
+element,type,result,error,duration_ms
+MATCH,clause,pass,,146
+OPTIONAL MATCH,clause,pass,,109
+MANDATORY MATCH,clause,pass,,18
+WHERE,clause,pass,,138
+RETURN,clause,pass,,19
+WITH,clause,pass,,19
+UNWIND,clause,pass,,22
+ORDER BY,clause,pass,,29
+SKIP,clause,pass,,26
+LIMIT,clause,pass,,21
+CREATE,clause,pass,,29
+DELETE,clause,pass,,73
+SET,clause,pass,,60
+REMOVE,clause,pass,,50
+MERGE,clause,pass,,48
+UNION,clause,pass,,33
+UNION ALL,clause,pass,,18
+CALL [YIELD],clause,pass,,18
+Boolean,data_type,pass,,10
+Integer,data_type,pass,,5
+Float,data_type,pass,,9
+String,data_type,pass,,9
+Null,data_type,pass,,9
+List,data_type,pass,,9
+Map,data_type,pass,,11
+Node,data_type,pass,,28
+Relationship,data_type,pass,,51
+Path,data_type,pass,,47
+CASE (simple),expression,pass,,16
+CASE (generic),expression,pass,,10
+List comprehension,expression,pass,,42
+Map projection,expression,pass,,34
+count(),function,pass,,31
+count(*),function,pass,,12
+sum(),function,pass,,17
+avg(),function,pass,,20
+min(),function,pass,,13
+max(),function,pass,,12
+collect(),function,pass,,12
+percentileDisc(),function,pass,,17
+percentileCont(),function,pass,,18
+stDev(),function,pass,,13
+stDevP(),function,pass,,15
+keys(),function,pass,,40
+labels(),function,pass,,27
+nodes(),function,pass,,50
+relationships(),function,pass,,40
+range(),function,pass,,9
+reverse(),function,pass,,13
+tail(),function,pass,,9
+abs(),function,pass,,9
+ceil(),function,pass,,11
+floor(),function,pass,,8
+round(),function,pass,,7
+sign(),function,pass,,13
+rand(),function,pass,,8
+log(),function,pass,,8
+log10(),function,pass,,10
+exp(),function,pass,,6
+e(),function,pass,,14
+sqrt(),function,pass,,7
+sin(),function,pass,,7
+cos(),function,pass,,13
+tan(),function,pass,,8
+asin(),function,pass,,8
+acos(),function,pass,,7
+atan(),function,pass,,9
+atan2(),function,pass,,7
+pi(),function,pass,,7
+degrees(),function,pass,,7
+radians(),function,pass,,8
+haversin(),function,pass,,9
+toInteger() from float,function,pass,,10
+toFloat() from int,function,pass,,7
+toInteger() from bool,function,pass,,11
+coalesce(),function,pass,,14
+head(),function,pass,,11
+last(),function,pass,,8
+size(),function,pass,,8
+size() string,function,pass,,7
+toInteger(),function,pass,,6
+toFloat(),function,pass,,7
+toBoolean(),function,pass,,9
+toString(),function,pass,,11
+type(),function,pass,,32
+id(),function,pass,,23
+properties(),function,pass,,22
+timestamp(),function,pass,,15
+randomUUID(),function,pass,,7
+left(),function,pass,,8
+right(),function,pass,,12
+trim(),function,pass,,10
+lTrim(),function,pass,,6
+rTrim(),function,pass,,9
+toUpper(),function,pass,,31
+toLower(),function,pass,,7
+replace(),function,pass,,58
+substring(),function,pass,,9
+split(),function,pass,,8
+reverse() string,function,pass,,7
+toString() from bool,function,pass,,6
+size() string length,function,pass,,8
+datetime(),function,pass,,16
+date(),function,pass,,15
+time(),function,pass,,9
+localtime(),function,pass,,9
+localdatetime(),function,pass,,9
+duration(),function,pass,,9
++,operator,pass,,4
+-,operator,pass,,4
+*,operator,pass,,3
+/,operator,pass,,3
+%,operator,pass,,3
+^,operator,pass,,3
+=,operator,pass,,6
+<>,operator,pass,,9
+<,operator,pass,,4
+>,operator,pass,,22
+<=,operator,pass,,8
+>=,operator,pass,,9
+IS NULL,operator,pass,,7
+IS NOT NULL,operator,pass,,8
+AND,operator,pass,,7
+OR,operator,pass,,7
+XOR,operator,pass,,10
+NOT,operator,pass,,7
+STARTS WITH,operator,pass,,7
+ENDS WITH,operator,pass,,7
+CONTAINS,operator,pass,,7
+=~ (regex),operator,pass,,7
+IN,operator,pass,,8
+[] (list subscript),operator,pass,,8
++ (string concat),operator,pass,,8

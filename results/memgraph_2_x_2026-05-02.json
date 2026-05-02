@@ -1,0 +1,854 @@
+{
+  "metadata": {
+    "database": "Memgraph 2.x",
+    "adapter": "bolt",
+    "host": "localhost",
+    "port": 7688,
+    "database_version": "Memgraph/5.9.0",
+    "spec_version": "9",
+    "timestamp": "2026-05-02T12:13:57.886729+00:00",
+    "catalog_version": "1.0.0",
+    "total_tests": 133,
+    "passed": 122,
+    "failed": 11,
+    "pass_rate": "91.73%"
+  },
+  "summary_by_type": {
+    "clause": {
+      "total": 18,
+      "passed": 17,
+      "failed": 1
+    },
+    "data_type": {
+      "total": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    "expression": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    "function": {
+      "total": 76,
+      "passed": 66,
+      "failed": 10
+    },
+    "operator": {
+      "total": 25,
+      "passed": 25,
+      "failed": 0
+    }
+  },
+  "results": [
+    {
+      "element": "MATCH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 6
+    },
+    {
+      "element": "OPTIONAL MATCH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "MANDATORY MATCH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "WHERE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "RETURN",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "WITH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "UNWIND",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "ORDER BY",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "SKIP",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "LIMIT",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "CREATE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "DELETE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "SET",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "REMOVE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "MERGE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "UNION",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "UNION ALL",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "CALL [YIELD]",
+      "type": "clause",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: There is no procedure named 'db.labels'.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. There is no procedure named 'db.labels'.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "Boolean",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "Integer",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Float",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "String",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Null",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "List",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "Map",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "Node",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "Relationship",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "Path",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "CASE (simple)",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "CASE (generic)",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 3
+    },
+    {
+      "element": "List comprehension",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 4
+    },
+    {
+      "element": "Map projection",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "count()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "count(*)",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sum()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "avg()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "min()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "max()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "collect()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "percentileDisc()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'percentileDisc' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'percentileDisc' doesn't exist.}",
+      "duration_ms": 1
+    },
+    {
+      "element": "percentileCont()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'percentileCont' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'percentileCont' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "stDev()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'stDev' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'stDev' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "stDevP()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'stDevP' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'stDevP' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "keys()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "labels()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "nodes()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "relationships()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "range()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "reverse()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: 'reverse' argument at position 1 must be either 'null' or 'string'.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. 'reverse' argument at position 1 must be either 'null' or 'string'.}",
+      "duration_ms": 1
+    },
+    {
+      "element": "tail()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "abs()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "ceil()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "floor()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "round()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sign()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "rand()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "log()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "log10()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "exp()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "e()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sqrt()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sin()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "cos()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "tan()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "asin()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "acos()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "atan()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "atan2()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "pi()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "degrees()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'degrees' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'degrees' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "radians()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'radians' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'radians' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "haversin()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'haversin' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'haversin' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "toInteger() from float",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toFloat() from int",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toInteger() from bool",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "coalesce()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 6
+    },
+    {
+      "element": "head()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "last()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "size()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "size() string",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toInteger()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toFloat()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toBoolean()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toString()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "type()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "id()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "properties()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "timestamp()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "randomUUID()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "left()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "right()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "trim()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "lTrim()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "rTrim()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toUpper()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toLower()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "replace()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "substring()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "split()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "reverse() string",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toString() from bool",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "size() string length",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "datetime()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 27
+    },
+    {
+      "element": "date()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "time()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'time' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'time' doesn't exist.}",
+      "duration_ms": 0
+    },
+    {
+      "element": "localtime()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "localdatetime()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "duration()",
+      "type": "function",
+      "result": "fail",
+      "error": "Query error: {neo4j_code: Memgraph.TransientError.MemgraphError.MemgraphError} {message: Invalid duration string. \n\"String representing duration should be in the following format:\n\nP[nD]T[nH][nM][nS]\n\nSymbol table:\n|---|---------|\n| D | DAYS    |\n|---|---------|\n| H | HOURS   |\n|---|---------|\n| M | MINUTES |\n|---|---------|\n| S | SECONDS |\n|---|---------|\n\n'n' represents a number that can be an integer of ANY value, or a fraction IF it's the last value in the string.\nAll the fields are optional.\n} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Invalid duration string. \n\"String representing duration should be in the following format:\n\nP[nD]T[nH][nM][nS]\n\nSymbol table:\n|---|---------|\n| D | DAYS    |\n|---|---------|\n| H | HOURS   |\n|---|---------|\n| M | MINUTES |\n|---|---------|\n| S | SECONDS |\n|---|---------|\n\n'n' represents a number that can be an integer of ANY value, or a fraction IF it's the last value in the string.\nAll the fields are optional.\n}",
+      "duration_ms": 0
+    },
+    {
+      "element": "+",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "-",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "*",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "/",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "%",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "^",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "=",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "<>",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "<",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": ">",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "<=",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": ">=",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "IS NULL",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "IS NOT NULL",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "AND",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "OR",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "XOR",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "NOT",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "STARTS WITH",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "ENDS WITH",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "CONTAINS",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "=~ (regex)",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "IN",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 3
+    },
+    {
+      "element": "[] (list subscript)",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "+ (string concat)",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    }
+  ]
+}
