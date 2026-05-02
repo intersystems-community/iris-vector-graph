@@ -77,6 +77,7 @@ class IRISGraphEngine:
         self._table_mapping_cache: Optional[Dict[str, dict]] = None
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
+        logger.debug("IRISGraphEngine initialized (dim=%s)", embedding_dimension or "auto")
 
     @classmethod
     def from_connect(
@@ -2647,6 +2648,7 @@ class IRISGraphEngine:
         edges: List[Dict[str, Any]],
         disable_indexes: bool = True,
         graph: Optional[str] = None,
+        auto_rebuild_kg: bool = True,
     ) -> int:
         """
         Bulk create edges using high-performance batch SQL.
@@ -2701,12 +2703,14 @@ class IRISGraphEngine:
             if disable_indexes:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
-            try:
-                self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
-            except Exception as e:
-                logger.warning(
-                    f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
-                )
+            if auto_rebuild_kg:
+                try:
+                    self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
+                    self.capabilities.kg_built = True
+                except Exception as e:
+                    logger.warning(
+                        f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
+                    )
 
     def rebuild_kg(self) -> bool:
         from iris_vector_graph.schema import _call_classmethod
@@ -2725,6 +2729,7 @@ class IRISGraphEngine:
         label_attr: str = "type",
         skip_existing: bool = True,
         progress_callback=None,
+        auto_rebuild_kg: bool = True,
     ) -> dict:
         added_nodes = 0
         added_edges = 0
@@ -2787,12 +2792,15 @@ class IRISGraphEngine:
         logger.info(f"Edges complete: {added_edges:,} added, {skipped_edges:,} skipped")
         if progress_callback:
             progress_callback(added_nodes + skipped_nodes, added_edges + skipped_edges)
-        return {
+        stats = {
             "nodes": added_nodes,
             "edges": added_edges,
             "skipped_nodes": skipped_nodes,
             "skipped_edges": skipped_edges,
         }
+        if auto_rebuild_kg and (added_nodes > 0 or added_edges > 0):
+            self.rebuild_kg()
+        return stats
 
     def import_rdf(
         self,
