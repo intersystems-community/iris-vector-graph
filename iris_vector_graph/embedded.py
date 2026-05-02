@@ -46,18 +46,24 @@ import sys as _sys
 def _ensure_embedded_iris_first():
     embedded_path = '/usr/irissys/lib/python'
     mgr_path = '/usr/irissys/mgr/python'
-    if embedded_path not in _sys.path:
-        _sys.path.insert(0, embedded_path)
-    elif _sys.path[0] != embedded_path:
-        _sys.path.remove(embedded_path)
-        _sys.path.insert(0, embedded_path)
-    if mgr_path not in _sys.path:
-        _sys.path.insert(1, mgr_path)
+    changed = False
+    for p in [mgr_path, embedded_path]:
+        if p in _sys.path and _sys.path[0] != p:
+            _sys.path.remove(p)
+            _sys.path.insert(0, p)
+            changed = True
+        elif p not in _sys.path:
+            _sys.path.insert(0, p)
+            changed = True
+    if changed:
+        for mod in list(_sys.modules.keys()):
+            if mod == 'iris' or mod.startswith('iris.'):
+                del _sys.modules[mod]
 
 
 def _require_iris_sql():
-    _ensure_embedded_iris_first()
     try:
+        _ensure_embedded_iris_first()
         import iris  # noqa: F401
         if not hasattr(iris, 'sql'):
             raise ImportError(
@@ -75,23 +81,22 @@ def _require_iris_sql():
 
 
 class EmbeddedCursor:
-    """dbapi2 cursor backed by iris.sql.prepare / execute.
 
-    Implements the subset of the dbapi2 cursor interface used by
-    IRISGraphEngine and BulkLoader:
-      execute, executemany, fetchone, fetchall, fetchmany,
-      description, rowcount, close.
-    """
-
-    def __init__(self):
+    def __init__(self, iris_sql=None):
+        self._iris_sql = iris_sql
         self._rs = None
-        self._rows = None   # materialised row cache (used by fetchmany)
-        self._pos = 0       # position in materialised cache
+        self._rows = None
+        self._pos = 0
         self.description = None
         self.rowcount = -1
 
+    def _get_iris_sql(self):
+        if self._iris_sql is not None:
+            return self._iris_sql
+        return _require_iris_sql()
+
     def execute(self, sql, params=None):
-        iris_sql = _require_iris_sql()
+        iris_sql = self._get_iris_sql()
         # START TRANSACTION / COMMIT / ROLLBACK are no-ops in embedded context:
         # IRIS manages transactions automatically in Language=python methods.
         # Calling iris.tstart() / tcommit() from inside a wgproto job raises <COMMAND>.
@@ -128,7 +133,7 @@ class EmbeddedCursor:
                 pass
 
     def executemany(self, sql, seq):
-        iris_sql = _require_iris_sql()
+        iris_sql = self._get_iris_sql()
         stmt = iris_sql.prepare(sql)
         count = 0
         for params in seq:
@@ -180,26 +185,12 @@ class EmbeddedCursor:
 
 
 class EmbeddedConnection:
-    """dbapi2 adapter for IRIS embedded Python (Language=python methods).
 
-    Wraps iris.sql.prepare/execute so IRISGraphEngine and BulkLoader work
-    identically inside IRIS as they do with an external iris.connect() connection.
-
-    Transactions are managed automatically by IRIS in embedded context —
-    commit() and rollback() are intentional no-ops. START TRANSACTION /
-    COMMIT / ROLLBACK issued via cursor.execute() are also silently dropped
-    (calling iris.tstart/tcommit from a wgproto job raises <COMMAND>).
-
-    Usage::
-
-        from iris_vector_graph.embedded import EmbeddedConnection
-        from iris_vector_graph.engine import IRISGraphEngine
-        engine = IRISGraphEngine(EmbeddedConnection())
-        engine.initialize_schema()
-    """
+    def __init__(self, iris_sql=None):
+        self._iris_sql = iris_sql
 
     def cursor(self):
-        return EmbeddedCursor()
+        return EmbeddedCursor(self._iris_sql)
 
     def commit(self):
         pass  # auto-managed by IRIS in embedded context
