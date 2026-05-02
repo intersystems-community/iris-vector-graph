@@ -3171,6 +3171,18 @@ def translate_expression(expr, context, segment="select") -> str:
             "toboolean": "CASE WHEN",
         }
         sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
+        if fn == "coalesce":
+            if len(args) >= 2 and args_exprs:
+                coerced = []
+                for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
+                    if i == 0:
+                        coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                    elif isinstance(arg_expr, ast.Literal) and not isinstance(arg_expr.value, str) and arg_expr.value is not None:
+                        coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                    else:
+                        coerced.append(arg)
+                return f"COALESCE({', '.join(coerced)})"
+            return f"COALESCE({', '.join(args)})" if args else "NULL"
         if fn == "tointeger":
             return f"CAST({args[0]} AS INTEGER)"
         if fn == "tofloat":
