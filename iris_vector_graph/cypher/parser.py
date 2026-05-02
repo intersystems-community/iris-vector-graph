@@ -302,10 +302,25 @@ class Parser:
                 and tok.value
                 and tok.value.upper() == "OPTIONAL"
             ):
-                # Check for OPTIONAL MATCH
-                self.eat()  # OPTIONAL
-                self.expect(TokenType.MATCH)
-                clauses.append(self.parse_match_clause(optional=True))
+                self.eat()
+                if self.peek().kind == TokenType.MATCH:
+                    self.expect(TokenType.MATCH)
+                    clauses.append(self.parse_match_clause(optional=True))
+                elif (
+                    self.peek().kind == TokenType.CALL
+                    and self.lexer.peek_ahead(1).kind == TokenType.LBRACE
+                ):
+                    subq = self.parse_subquery_call()
+                    subq_optional = ast.SubqueryCall(
+                        inner_query=subq.inner_query,
+                        import_variables=subq.import_variables,
+                        in_transactions=subq.in_transactions,
+                        transactions_batch_size=subq.transactions_batch_size,
+                    )
+                    clauses.append(subq_optional)
+                else:
+                    self.expect(TokenType.MATCH)
+                    clauses.append(self.parse_match_clause(optional=True))
             elif kind == TokenType.UNWIND:
                 clauses.append(self.parse_unwind_clause())
             elif kind in (
@@ -428,7 +443,13 @@ class Parser:
         if self.peek().kind == TokenType.RETURN:
             inner_return = self.parse_return_clause()
 
-        if inner_return is None:
+        has_updating = any(
+            isinstance(c, ast.UpdatingClause)
+            for part in inner_parts
+            for c in part.clauses
+        )
+
+        if inner_return is None and not has_updating:
             tok = self.peek()
             raise CypherParseError(
                 "Subquery must contain a RETURN clause",
@@ -707,10 +728,20 @@ class Parser:
             var = self.eat().value
 
         labels = []
+        labels_or = False
         while self.matches(TokenType.COLON):
             label_tok = self.expect(TokenType.IDENTIFIER)
             if label_tok.value:
                 labels.append(label_tok.value)
+            while self.peek().kind == TokenType.PIPE or (
+                self.peek().kind == TokenType.IDENTIFIER
+                and self.peek().value == "|"
+            ):
+                self.eat()
+                labels_or = True
+                alt_tok = self.expect(TokenType.IDENTIFIER)
+                if alt_tok.value:
+                    labels.append(alt_tok.value)
 
         props = {}
         if self.matches(TokenType.LBRACE):
@@ -718,7 +749,7 @@ class Parser:
             self.expect(TokenType.RBRACE)
 
         self.expect(TokenType.RPAREN)
-        return ast.NodePattern(variable=var, labels=labels, properties=props)
+        return ast.NodePattern(variable=var, labels=labels, properties=props, labels_or=labels_or)
 
     def parse_relationship_pattern(self) -> ast.RelationshipPattern:
         """Parse -[r:TYPE]-> or <-[r:TYPE]- or -[r:TYPE]-"""
@@ -870,8 +901,12 @@ class Parser:
                 if self.peek().kind == TokenType.MATCH:
                     self.eat()
                 pattern = self.parse_graph_pattern()
+                where_cond = None
+                if self.peek().kind == TokenType.WHERE:
+                    self.eat()
+                    where_cond = self.parse_expression()
                 self.expect(TokenType.RBRACE)
-                return ast.ExistsExpression(pattern=pattern, negated=True)
+                return ast.ExistsExpression(pattern=pattern, negated=True, where_condition=where_cond)
             operand = self.parse_not_expression()
             return ast.BooleanExpression(ast.BooleanOperator.NOT, [operand])
         return self.parse_comparison_expression()
@@ -1029,8 +1064,16 @@ class Parser:
                 if self.peek().kind == TokenType.MATCH:
                     self.eat()
                 pattern = self.parse_graph_pattern()
+                where_cond = None
+                if self.peek().kind == TokenType.WHERE:
+                    self.eat()
+                    where_cond = self.parse_expression()
+                if self.peek().kind == TokenType.RETURN:
+                    self.eat()
+                    while self.peek().kind not in (TokenType.RBRACE, TokenType.EOF):
+                        self.eat()
                 self.expect(TokenType.RBRACE)
-                return ast.ExistsExpression(pattern=pattern, negated=False)
+                return ast.ExistsExpression(pattern=pattern, negated=False, where_condition=where_cond)
 
             if name.lower() in ("shortestpath", "allshortestpaths") and self.peek().kind == TokenType.LPAREN:
                 self.eat()

@@ -1531,25 +1531,43 @@ def translate_delete_clause(delete, context, metadata):
 
 def translate_merge_clause(merge, context, metadata):
     translate_create_clause(ast.CreateClause(patterns=[merge.pattern]), context, metadata)
+    var = merge.pattern.nodes[0].variable if merge.pattern.nodes else None
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
             for item in action.items:
                 if isinstance(item, ast.SetItem) and isinstance(
                     item.expression, ast.PropertyReference
                 ):
-                    node_id = context.variable_aliases.get(item.expression.variable)
+                    var_name = item.expression.variable
+                    sql_alias = context.variable_aliases.get(var_name, "")
+                    actual_id = (
+                        context.input_params.get(f"__create_id_{var_name}")
+                        or context.input_params.get(var_name)
+                    )
                     k, v = item.expression.property_name, item.value
                     val = v.value if isinstance(v, ast.Literal) else v
                     if is_create:
-                        context.add_dml(
-                            f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id = ? AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
-                            [k, val, node_id, node_id, k],
-                        )
+                        if actual_id:
+                            context.add_dml(
+                                f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+                                [actual_id, k, val, actual_id, k],
+                            )
+                        else:
+                            context.add_dml(
+                                f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id = ? AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+                                [k, val, sql_alias, sql_alias, k],
+                            )
                     else:
-                        context.add_dml(
-                            f'UPDATE {_table("rdf_props")} SET val = ? WHERE s = ? AND "key" = ?',
-                            [val, node_id, k],
-                        )
+                        if actual_id:
+                            context.add_dml(
+                                f'UPDATE {_table("rdf_props")} SET val = ? WHERE s = ? AND "key" = ?',
+                                [val, actual_id, k],
+                            )
+                        else:
+                            context.add_dml(
+                                f'UPDATE {_table("rdf_props")} SET val = ? WHERE s IN (SELECT node_id FROM {_table("nodes")} WHERE node_id = ?) AND "key" = ?',
+                                [val, sql_alias, k],
+                            )
 
 
 def translate_set_clause(set_cl, context, metadata):
@@ -1919,13 +1937,23 @@ def translate_node_pattern(node, context, metadata, optional=False):
         alias in j for j in context.join_clauses
     ):
         context.join_clauses.append(f"CROSS JOIN {nodes_tbl} {alias}")
-    for label in node.labels:
-        l_alias = context.next_alias("l")
-        context.join_clauses.append(
-            f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label = {context.add_join_param(label)}"
-        )
-        if not optional:
-            context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
+    if node.labels:
+        if getattr(node, 'labels_or', False) and len(node.labels) > 1:
+            l_alias = context.next_alias("l")
+            labels_inlined = ", ".join(f"'{lab}'" for lab in node.labels)
+            context.join_clauses.append(
+                f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label IN ({labels_inlined})"
+            )
+            if not optional:
+                context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
+        else:
+            for label in node.labels:
+                l_alias = context.next_alias("l")
+                context.join_clauses.append(
+                    f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label = {context.add_join_param(label)}"
+                )
+                if not optional:
+                    context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
     for k, v in node.properties.items():
         val_sql = translate_expression(v, context, segment="where")
         if k in ("node_id", "id"):
@@ -2364,6 +2392,13 @@ def translate_boolean_expression(expr, context) -> str:
                 and tgt_node.variable in context.variable_aliases
             )
             edge_alias = f"_ex{len(context.variable_aliases) + 1}"
+            child_ctx = TranslationContext()
+            child_ctx.input_params = context.input_params
+            child_ctx._alias_counter = context._alias_counter
+            child_ctx.variable_aliases = dict(context.variable_aliases)
+            if tgt_node and tgt_node.variable and not tgt_bound:
+                tgt_alias = child_ctx.next_alias("n")
+                child_ctx.variable_aliases[tgt_node.variable] = tgt_alias
             if tgt_bound:
                 tgt_ref = context.variable_aliases[tgt_node.variable]
                 cond = f"{edge_alias}.o_id = {tgt_ref}.node_id"
@@ -2374,7 +2409,23 @@ def translate_boolean_expression(expr, context) -> str:
                 cond = "1=1"
             if rel.types:
                 cond += f" AND {edge_alias}.p = '{rel.types[0]}'"
-            sub = f"SELECT 1 FROM {_table('rdf_edges')} {edge_alias} WHERE {cond}"
+            sub_froms = [f"{_table('rdf_edges')} {edge_alias}"]
+            sub_wheres = [cond]
+            if tgt_node and tgt_node.variable and not tgt_bound:
+                tgt_alias = child_ctx.variable_aliases.get(tgt_node.variable, "_tn")
+                sub_froms.append(f"{_table('nodes')} {tgt_alias}")
+                sub_wheres.append(f"{tgt_alias}.node_id = {edge_alias}.o_id")
+                if tgt_node.labels:
+                    for lbl in tgt_node.labels:
+                        lbl_alias = child_ctx.next_alias("l")
+                        sub_froms.append(f"{_table('rdf_labels')} {lbl_alias}")
+                        sub_wheres.append(f"{lbl_alias}.s = {tgt_alias}.node_id AND {lbl_alias}.label = '{lbl}'")
+            if expr.where_condition:
+                where_sql = translate_boolean_expression(expr.where_condition, child_ctx)
+                for p in child_ctx.where_params:
+                    context.where_params.append(p)
+                sub_wheres.append(where_sql)
+            sub = f"SELECT 1 FROM {', '.join(sub_froms)} WHERE {' AND '.join(sub_wheres)}"
             prefix = "NOT " if expr.negated else ""
             return f"{prefix}EXISTS ({sub})"
         return "1=1"
@@ -2803,14 +2854,25 @@ def translate_expression(expr, context, segment="select") -> str:
         inner = " || ',' || ".join(parts)
         return f"('{{'||{inner}||'}}')"
     if isinstance(expr, ast.SubscriptExpression):
-        base_sql = translate_expression(expr.expression, context, segment=segment)
-        if isinstance(expr.index, ast.Literal) and isinstance(expr.index.value, int):
-            idx = expr.index.value
+        base = expr.expression
+        idx = expr.index
+        if isinstance(base, ast.Variable) and isinstance(idx, ast.Variable):
+            node_alias = context.variable_aliases.get(base.name, "")
+            key_val = context.input_params.get(idx.name, idx.name)
+            p_alias = context.next_alias("dp")
+            node_ref = f"{node_alias}.node_id" if node_alias else "NULL"
+            context.join_clauses.append(
+                f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {node_ref} AND {p_alias}.\"key\" = {context.add_join_param(key_val)}"
+            )
+            return f"{p_alias}.val"
+        base_sql = translate_expression(base, context, segment=segment)
+        if isinstance(idx, ast.Literal) and isinstance(idx.value, int):
+            i = idx.value
             return (
                 f"(SELECT elem FROM JSON_TABLE({base_sql}, "
-                f"'$[{idx}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
+                f"'$[{i}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
             )
-        idx_sql = translate_expression(expr.index, context, segment=segment)
+        idx_sql = translate_expression(idx, context, segment=segment)
         return (
             f"JSON_TABLE({base_sql}, '$[*]' COLUMNS "
             f"(idx FOR ORDINALITY, elem VARCHAR(1000) PATH '$'))[{idx_sql}].elem"

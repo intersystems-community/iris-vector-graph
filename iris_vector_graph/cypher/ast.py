@@ -56,11 +56,13 @@ class NodePattern:
     """
     Node pattern in MATCH clause.
     Example: (p:Protein {id: 'PROTEIN:TP53'})
+    labels_or: when True, labels use OR semantics (:A|B), else AND (:A:B)
     """
 
     variable: Optional[str] = None
     labels: List[str] = field(default_factory=list)
     properties: Dict[str, Any] = field(default_factory=dict)
+    labels_or: bool = False
 
 
 @dataclass(slots=True)
@@ -451,6 +453,7 @@ class ReduceExpression:
 class ExistsExpression:
     pattern: "GraphPattern"
     negated: bool = False
+    where_condition: Optional[Any] = None
 
 
 @dataclass(slots=True)
