@@ -1,51 +1,51 @@
 element,type,result,error,duration_ms
-MATCH,clause,pass,,6
+MATCH,clause,pass,,5
 OPTIONAL MATCH,clause,pass,,3
-MANDATORY MATCH,clause,pass,,3
-WHERE,clause,pass,,5
-RETURN,clause,pass,,1
-WITH,clause,pass,,6
-UNWIND,clause,pass,,2
+MANDATORY MATCH,clause,pass,,2
+WHERE,clause,pass,,4
+RETURN,clause,pass,,0
+WITH,clause,pass,,5
+UNWIND,clause,pass,,1
 ORDER BY,clause,pass,,1
 SKIP,clause,pass,,1
-LIMIT,clause,pass,,1
-CREATE,clause,pass,,3
-DELETE,clause,pass,,4
-SET,clause,pass,,5
-REMOVE,clause,pass,,4
-MERGE,clause,pass,,2
-UNION,clause,pass,,1
-UNION ALL,clause,pass,,1
-CALL [YIELD],clause,pass,,1
-Boolean,data_type,pass,,1
-Integer,data_type,pass,,1
+LIMIT,clause,pass,,0
+CREATE,clause,pass,,1
+DELETE,clause,pass,,3
+SET,clause,pass,,3
+REMOVE,clause,pass,,3
+MERGE,clause,pass,,1
+UNION,clause,pass,,0
+UNION ALL,clause,pass,,0
+CALL [YIELD],clause,pass,,0
+Boolean,data_type,pass,,0
+Integer,data_type,pass,,0
 Float,data_type,pass,,0
 String,data_type,pass,,0
-Null,data_type,pass,,1
+Null,data_type,pass,,0
 List,data_type,pass,,0
-Map,data_type,pass,,1
+Map,data_type,pass,,0
 Node,data_type,pass,,2
-Relationship,data_type,pass,,7
-Path,data_type,pass,,20
-CASE (simple),expression,pass,,1
-CASE (generic),expression,pass,,1
-List comprehension,expression,pass,,1
-Map projection,expression,pass,,3
-count(),function,pass,,1
-count(*),function,pass,,1
-sum(),function,pass,,1
-avg(),function,pass,,1
-min(),function,pass,,1
-max(),function,pass,,1
-collect(),function,pass,,1
+Relationship,data_type,pass,,32
+Path,data_type,pass,,4
+CASE (simple),expression,pass,,0
+CASE (generic),expression,pass,,0
+List comprehension,expression,pass,,0
+Map projection,expression,pass,,1
+count(),function,pass,,0
+count(*),function,pass,,0
+sum(),function,pass,,0
+avg(),function,pass,,0
+min(),function,pass,,0
+max(),function,pass,,0
+collect(),function,pass,,0
 percentileDisc(),function,pass,,1
-percentileCont(),function,pass,,1
-stDev(),function,pass,,1
-stDevP(),function,pass,,1
-keys(),function,pass,,2
+percentileCont(),function,pass,,0
+stDev(),function,pass,,0
+stDevP(),function,pass,,0
+keys(),function,pass,,1
 labels(),function,pass,,2
 nodes(),function,pass,,2
-relationships(),function,pass,,2
+relationships(),function,pass,,1
 range(),function,pass,,0
 reverse(),function,pass,,0
 tail(),function,pass,,0
@@ -55,7 +55,7 @@ floor(),function,pass,,0
 round(),function,pass,,0
 sign(),function,pass,,0
 rand(),function,pass,,0
-log(),function,pass,,1
+log(),function,pass,,0
 log10(),function,pass,,0
 exp(),function,pass,,0
 e(),function,pass,,0
@@ -63,7 +63,7 @@ sqrt(),function,pass,,0
 sin(),function,pass,,0
 cos(),function,pass,,0
 tan(),function,pass,,0
-asin(),function,pass,,1
+asin(),function,pass,,0
 acos(),function,pass,,0
 atan(),function,pass,,0
 atan2(),function,pass,,0
@@ -74,22 +74,22 @@ haversin(),function,pass,,0
 toInteger() from float,function,pass,,0
 toFloat() from int,function,pass,,0
 toInteger() from bool,function,pass,,0
-coalesce(),function,pass,,1
+coalesce(),function,pass,,0
 head(),function,pass,,0
 last(),function,pass,,0
 size(),function,pass,,0
-size() string,function,pass,,1
+size() string,function,pass,,0
 toInteger(),function,pass,,0
 toFloat(),function,pass,,0
-toBoolean(),function,pass,,1
+toBoolean(),function,pass,,0
 toString(),function,pass,,0
-type(),function,fail,"Row mismatch: expected [['KNOWS']], got [['KNOWS'], ['KNOWS'], ['KNOWS'], ['KNOWS']]",3
-id(),function,pass,,2
-properties(),function,pass,,3
-timestamp(),function,pass,,1
+type(),function,pass,,2
+id(),function,pass,,1
+properties(),function,pass,,1
+timestamp(),function,pass,,0
 randomUUID(),function,pass,,0
-left(),function,pass,,1
-right(),function,pass,,1
+left(),function,pass,,0
+right(),function,pass,,0
 trim(),function,pass,,0
 lTrim(),function,pass,,0
 rTrim(),function,pass,,0
@@ -114,15 +114,15 @@ duration(),function,pass,,0
 %,operator,pass,,0
 ^,operator,pass,,0
 =,operator,pass,,0
-<>,operator,pass,,1
+<>,operator,pass,,0
 <,operator,pass,,0
 >,operator,pass,,0
 <=,operator,pass,,0
 >=,operator,pass,,0
-IS NULL,operator,pass,,1
-IS NOT NULL,operator,pass,,1
-AND,operator,pass,,1
-OR,operator,pass,,1
+IS NULL,operator,pass,,0
+IS NOT NULL,operator,pass,,0
+AND,operator,pass,,0
+OR,operator,pass,,0
 XOR,operator,pass,,0
 NOT,operator,pass,,0
 STARTS WITH,operator,pass,,0
@@ -130,5 +130,5 @@ ENDS WITH,operator,pass,,0
 CONTAINS,operator,pass,,0
 =~ (regex),operator,pass,,0
 IN,operator,pass,,0
-[] (list subscript),operator,pass,,1
+[] (list subscript),operator,pass,,0
 + (string concat),operator,pass,,0
