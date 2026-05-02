@@ -211,6 +211,12 @@ class MapLiteral:
 
 
 @dataclass(slots=True)
+class MapProjection:
+    variable: str
+    keys: list
+
+
+@dataclass(slots=True)
 class SubscriptExpression:
     expression: Any
     index: Any
