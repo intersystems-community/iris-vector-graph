@@ -976,11 +976,20 @@ class IRISGraphEngine:
                         rows = cursor.fetchall()
 
                 cursor.execute("COMMIT")
-                columns = (
-                    [desc[0] for desc in cursor.description]
-                    if cursor.description
-                    else []
-                )
+                if cursor.description:
+                    columns = [desc[0] for desc in cursor.description]
+                elif rows:
+                    import re as _re_dml
+                    as_aliases = _re_dml.findall(
+                        r'\bAS\s+"?([a-zA-Z_][a-zA-Z0-9_]*)"?',
+                        stmts[-1] if stmts else "", _re_dml.IGNORECASE
+                    )
+                    columns = (
+                        as_aliases if as_aliases and len(as_aliases) == len(rows[0])
+                        else [f"col{i}" for i in range(len(rows[0]))]
+                    )
+                else:
+                    columns = []
                 return {
                     "columns": columns,
                     "rows": rows,
@@ -1005,10 +1014,21 @@ class IRISGraphEngine:
                 else:
                     cursor.execute(sql_str)
 
-                columns = (
-                    [desc[0] for desc in cursor.description] if cursor.description else []
-                )
                 rows = cursor.fetchall()
+                if cursor.description:
+                    columns = [desc[0] for desc in cursor.description]
+                elif rows:
+                    import re as _re_cols
+                    as_aliases = _re_cols.findall(
+                        r'\bAS\s+"?([a-zA-Z_][a-zA-Z0-9_]*)"?',
+                        sql_str, _re_cols.IGNORECASE
+                    )
+                    columns = (
+                        as_aliases if as_aliases and len(as_aliases) == len(rows[0])
+                        else [f"col{i}" for i in range(len(rows[0]))]
+                    )
+                else:
+                    columns = []
 
                 return {
                     "columns": columns,
