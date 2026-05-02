@@ -6,18 +6,18 @@
     "port": 20000,
     "database_version": "iris-vector-graph/5.0.0",
     "spec_version": "9",
-    "timestamp": "2026-05-02T08:56:37.622976+00:00",
+    "timestamp": "2026-05-02T09:17:44.946525+00:00",
     "catalog_version": "1.0.0",
     "total_tests": 133,
-    "passed": 113,
-    "failed": 20,
-    "pass_rate": "84.96%"
+    "passed": 119,
+    "failed": 14,
+    "pass_rate": "89.47%"
   },
   "summary_by_type": {
     "clause": {
       "total": 18,
-      "passed": 14,
-      "failed": 4
+      "passed": 16,
+      "failed": 2
     },
     "data_type": {
       "total": 10,
@@ -31,13 +31,13 @@
     },
     "function": {
       "total": 76,
-      "passed": 66,
-      "failed": 10
+      "passed": 68,
+      "failed": 8
     },
     "operator": {
       "total": 25,
-      "passed": 23,
-      "failed": 2
+      "passed": 25,
+      "failed": 0
     }
   },
   "results": [
@@ -45,26 +45,26 @@
       "element": "MATCH",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 6
+      "duration_ms": 7
     },
     {
       "element": "OPTIONAL MATCH",
       "type": "clause",
       "result": "fail",
-      "error": "Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='1611610762' nodes=(<Node element_id='0' labels=frozenset() properties={'id': ''}>, <Node element_id='1109326198' labels=frozenset() properties={}>) type='Alice' properties={}>, <Node element_id='0' labels=frozenset() properties={'id': ''}>]]",
-      "duration_ms": 3
+      "error": "Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='664929418' nodes=(<Node element_id='0' labels=frozenset() properties={'id': ''}>, <Node element_id='1819177220' labels=frozenset() properties={}>) type='Alice' properties={}>, <Node element_id='0' labels=frozenset() properties={'id': ''}>]]",
+      "duration_ms": 4
     },
     {
       "element": "MANDATORY MATCH",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "element": "WHERE",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 5
+      "duration_ms": 7
     },
     {
       "element": "RETURN",
@@ -95,7 +95,7 @@
       "type": "clause",
       "result": "fail",
       "error": "Column mismatch: expected ['x'], got []",
-      "duration_ms": 31
+      "duration_ms": 30
     },
     {
       "element": "LIMIT",
@@ -106,46 +106,44 @@
     {
       "element": "CREATE",
       "type": "clause",
-      "result": "fail",
-      "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]}",
-      "duration_ms": 43
+      "result": "pass",
+      "duration_ms": 2
     },
     {
       "element": "DELETE",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 4
+      "duration_ms": 3
     },
     {
       "element": "SET",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 5
+      "duration_ms": 3
     },
     {
       "element": "REMOVE",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 4
+      "duration_ms": 3
     },
     {
       "element": "MERGE",
       "type": "clause",
-      "result": "fail",
-      "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]}",
-      "duration_ms": 35
+      "result": "pass",
+      "duration_ms": 3
     },
     {
       "element": "UNION",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "UNION ALL",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "CALL [YIELD]",
@@ -163,25 +161,25 @@
       "element": "Integer",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "element": "Float",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "element": "String",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "element": "Null",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "element": "List",
@@ -199,27 +197,27 @@
       "element": "Node",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 4
+      "duration_ms": 3
     },
     {
       "element": "Relationship",
       "type": "data_type",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 40
+      "duration_ms": 50
     },
     {
       "element": "Path",
       "type": "data_type",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 38
+      "duration_ms": 49
     },
     {
       "element": "CASE (simple)",
       "type": "expression",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "CASE (generic)",
@@ -239,7 +237,7 @@
       "type": "expression",
       "result": "fail",
       "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Cypher error at line 1, col 28: Expected EOF, got {} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Cypher error at line 1, col 28: Expected EOF, got {}",
-      "duration_ms": 4
+      "duration_ms": 3
     },
     {
       "element": "count()",
@@ -269,7 +267,7 @@
       "element": "min()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "max()",
@@ -288,7 +286,7 @@
       "type": "function",
       "result": "fail",
       "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]\r\n[Location: <Prepare>]\r\n[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]\r\n[Location: <Prepare>]\r\n[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]}",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "element": "percentileCont()",
@@ -301,7 +299,7 @@
       "element": "stDev()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 3
+      "duration_ms": 1
     },
     {
       "element": "stDevP()",
@@ -319,41 +317,39 @@
       "element": "labels()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 4
+      "duration_ms": 3
     },
     {
       "element": "nodes()",
       "type": "function",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 41
+      "duration_ms": 35
     },
     {
       "element": "relationships()",
       "type": "function",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 33
+      "duration_ms": 27
     },
     {
       "element": "range()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "reverse()",
       "type": "function",
-      "result": "fail",
-      "error": "Row mismatch: expected [[[3, 2, 1]]], got [[']3 ,2 ,1[']]",
+      "result": "pass",
       "duration_ms": 1
     },
     {
       "element": "tail()",
       "type": "function",
-      "result": "fail",
-      "error": "Row mismatch: expected [[[2, 3]]], got []",
-      "duration_ms": 3
+      "result": "pass",
+      "duration_ms": 1
     },
     {
       "element": "abs()",
@@ -365,7 +361,7 @@
       "element": "ceil()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "floor()",
@@ -376,8 +372,9 @@
     {
       "element": "round()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Row mismatch: expected [[3.0]], got []",
+      "duration_ms": 2
     },
     {
       "element": "sign()",
@@ -395,7 +392,7 @@
       "element": "log()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "log10()",
@@ -407,13 +404,13 @@
       "element": "exp()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "e()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "sqrt()",
@@ -443,37 +440,37 @@
       "element": "asin()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "acos()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "atan()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "atan2()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "pi()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "degrees()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "radians()",
@@ -485,19 +482,19 @@
       "element": "haversin()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toInteger() from float",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toFloat() from int",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toInteger() from bool",
@@ -509,33 +506,31 @@
       "element": "coalesce()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "head()",
       "type": "function",
-      "result": "fail",
-      "error": "Row mismatch: expected [[1]], got [['1']]",
-      "duration_ms": 0
+      "result": "pass",
+      "duration_ms": 1
     },
     {
       "element": "last()",
       "type": "function",
-      "result": "fail",
-      "error": "Row mismatch: expected [[3]], got [['3']]",
+      "result": "pass",
       "duration_ms": 1
     },
     {
       "element": "size()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "size() string",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toInteger()",
@@ -553,12 +548,13 @@
       "element": "toBoolean()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toString()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Row mismatch: expected [['42']], got [[42]]",
       "duration_ms": 1
     },
     {
@@ -566,19 +562,19 @@
       "type": "function",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 39
+      "duration_ms": 37
     },
     {
       "element": "id()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 4
+      "duration_ms": 2
     },
     {
       "element": "properties()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 3
+      "duration_ms": 5
     },
     {
       "element": "timestamp()",
@@ -590,55 +586,55 @@
       "element": "randomUUID()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "left()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "right()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "trim()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "lTrim()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "rTrim()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toUpper()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toLower()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "replace()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "substring()",
@@ -657,7 +653,7 @@
       "element": "reverse() string",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toString() from bool",
@@ -675,7 +671,7 @@
       "element": "datetime()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "date()",
@@ -729,31 +725,31 @@
       "element": "/",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "%",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "^",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "=",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "<>",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "<",
@@ -765,7 +761,7 @@
       "element": ">",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "<=",
@@ -783,13 +779,13 @@
       "element": "IS NULL",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "IS NOT NULL",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "AND",
@@ -831,33 +827,31 @@
       "element": "CONTAINS",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "=~ (regex)",
       "type": "operator",
-      "result": "fail",
-      "error": "Row mismatch: expected [[True]], got [[0]]",
-      "duration_ms": 0
+      "result": "pass",
+      "duration_ms": 1
     },
     {
       "element": "IN",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "[] (list subscript)",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "+ (string concat)",
       "type": "operator",
-      "result": "fail",
-      "error": "Row mismatch: expected [['hello world']], got [[0]]",
-      "duration_ms": 0
+      "result": "pass",
+      "duration_ms": 1
     }
   ]
 }

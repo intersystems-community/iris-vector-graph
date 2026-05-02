@@ -600,6 +600,15 @@ CREATE OR REPLACE FUNCTION SQLUser.LIST_TAIL(j VARCHAR(32000)) RETURNS VARCHAR(3
             """
 CREATE OR REPLACE FUNCTION SQLUser.REGEX_MATCH(s VARCHAR(4000), p VARCHAR(4000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Quit $MATCH(s, p) }
 """,
+            """
+CREATE OR REPLACE FUNCTION SQLUser.LIST_HEAD(j VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), t = arr.%GetTypeOf(0) If t = "number" Quit arr.%Get(0) Quit arr.%GetSerialized(0) }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.LIST_LAST(j VARCHAR(32000)) RETURNS VARCHAR(4000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), n = arr.%Size()-1, t = arr.%GetTypeOf(n) If t = "number" Quit arr.%Get(n) Quit arr.%GetSerialized(n) }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.STR_SPLIT(str VARCHAR(4000), delim VARCHAR(100)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { Set out = ##class(%Library.DynamicArray).%New(), n = $LENGTH(str, delim) For i=1:1:n { Do out.%Push($PIECE(str, delim, i)) } Quit out.%ToJSON() }
+""",
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
