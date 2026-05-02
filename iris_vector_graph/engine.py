@@ -916,23 +916,38 @@ class IRISGraphEngine:
             )
             p = sql_query.parameters[0] if sql_query.parameters else []
 
-            if p:
-                cursor.execute(sql_str, p)
-            else:
-                cursor.execute(sql_str)
+            try:
+                if p:
+                    cursor.execute(sql_str, p)
+                else:
+                    cursor.execute(sql_str)
 
-            columns = (
-                [desc[0] for desc in cursor.description] if cursor.description else []
-            )
-            rows = cursor.fetchall()
+                columns = (
+                    [desc[0] for desc in cursor.description] if cursor.description else []
+                )
+                rows = cursor.fetchall()
 
-            return {
-                "columns": columns,
-                "rows": rows,
-                "sql": sql_str,
-                "params": p,
-                "metadata": metadata,
-            }
+                return {
+                    "columns": columns,
+                    "rows": rows,
+                    "sql": sql_str,
+                    "params": p,
+                    "metadata": metadata,
+                }
+            except Exception as _exec_err:
+                err_str = str(_exec_err)
+                if any(code in err_str for code in ("-400", "-29", "-23", "-12", "-14", "-15", "-1>", "-27")):
+                    import logging as _log
+                    _log.getLogger(__name__).warning(
+                        "IRIS SQL error (query too complex or schema mismatch): %s", err_str[:200]
+                    )
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
+                    return {"columns": [], "rows": [], "sql": sql_str, "params": p,
+                            "metadata": metadata, "error": err_str[:200]}
+                raise
 
     def _execute_parsed(self, parsed, parameters):
         if parsed.procedure_call is not None:
@@ -969,11 +984,26 @@ class IRISGraphEngine:
                 raise
         sql_str = sql_query.sql
         p = sql_query.parameters[0] if sql_query.parameters else []
-        cursor.execute(sql_str, p)
-        cols = [d[0] for d in cursor.description] if cursor.description else []
-        rows = cursor.fetchall()
-        return {"columns": cols, "rows": [list(r) for r in rows],
-                "sql": sql_str, "params": p, "metadata": metadata}
+        try:
+            cursor.execute(sql_str, p)
+            cols = [d[0] for d in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+            return {"columns": cols, "rows": [list(r) for r in rows],
+                    "sql": sql_str, "params": p, "metadata": metadata}
+        except Exception as _exec_err:
+            err_str = str(_exec_err)
+            if any(code in err_str for code in ("-400", "-29", "-23", "-12", "-14", "-15", "-1>", "-27")):
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "IRIS SQL error (query too complex): %s", err_str[:200]
+                )
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                return {"columns": [], "rows": [], "sql": sql_str, "params": p,
+                        "metadata": metadata, "error": err_str[:200]}
+            raise
 
 
     def _execute_weighted_shortest_path(
