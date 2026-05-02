@@ -116,12 +116,14 @@ class Parser:
             self.peek().kind == TokenType.IDENTIFIER
             and self.peek().value
             and self.peek().value.upper() == "USE"
-            and self.lexer.peek_ahead(1).kind == TokenType.IDENTIFIER
-            and self.lexer.peek_ahead(1).value
-            and self.lexer.peek_ahead(1).value.upper() == "GRAPH"
         ):
             self.eat()
-            self.eat()
+            if (
+                self.peek().kind == TokenType.IDENTIFIER
+                and self.peek().value
+                and self.peek().value.upper() == "GRAPH"
+            ):
+                self.eat()
             graph_name_tok = self.peek()
             if graph_name_tok.kind == TokenType.STRING_LITERAL:
                 graph_context = self.eat().value
@@ -213,7 +215,7 @@ class Parser:
         while self.peek().kind in _QUERY_STARTERS or (
             self.peek().kind == TokenType.IDENTIFIER
             and self.peek().value
-            and self.peek().value.upper() in ("OPTIONAL", "USE")
+            and self.peek().value.upper() == "OPTIONAL"
         ) or self.peek().kind == TokenType.WHERE or self.peek().kind == TokenType.RETURN:
             if self.peek().kind == TokenType.WHERE:
                 self.eat()
