@@ -28,6 +28,7 @@ class BooleanOperator(Enum):
 
     AND = "AND"
     OR = "OR"
+    XOR = "XOR"
     NOT = "NOT"
     EQUALS = "="
     NOT_EQUALS = "<>"
@@ -459,7 +460,7 @@ class CypherQuery:
     subsequent_queries: List["CypherQuery"] = field(default_factory=list)
 
     def __post_init__(self):
-        if not self.query_parts and not self.procedure_call:
+        if not self.query_parts and not self.procedure_call and not self.return_clause:
             raise ValueError(
                 "Query must have at least one MATCH/WITH stage or CALL clause"
             )

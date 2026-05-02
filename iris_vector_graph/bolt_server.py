@@ -643,8 +643,32 @@ class BoltSession:
             elif ctype == "rel":
                 result.append(val)
             else:
-                result.append(val)
+                result.append(self._coerce_scalar(val))
         return result
+
+    @staticmethod
+    def _coerce_scalar(val):
+        import decimal, json as _json
+        if val is None:
+            return None
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, decimal.Decimal):
+            f = float(val)
+            return int(f) if f == int(f) else f
+        if isinstance(val, str):
+            s = val.strip()
+            if s.startswith('[') or s.startswith('{'):
+                try:
+                    return _json.loads(s)
+                except (ValueError, _json.JSONDecodeError):
+                    pass
+            try:
+                f = float(s)
+                return int(f) if f == int(f) and '.' not in s and 'e' not in s.lower() else f
+            except (ValueError, TypeError):
+                pass
+        return val
 
     def _recompose_graph_row(self, columns: list, row) -> tuple[list, list]:
         """Detect _id/_labels/_props triplets and recompose into Bolt graph objects.
