@@ -663,11 +663,9 @@ class BoltSession:
                     return _json.loads(s)
                 except (ValueError, _json.JSONDecodeError):
                     pass
-            if s and (s[0].isdigit() or s.startswith('-')):
+            if s and ('E' in s or 'e' in s) and (s[0].isdigit() or s.startswith('-')):
                 try:
-                    if '.' in s or 'E' in s or 'e' in s:
-                        return float(s)
-                    return int(s)
+                    return float(s)
                 except (ValueError, TypeError):
                     pass
         return val

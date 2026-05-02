@@ -1,147 +1,139 @@
 element,type,result,error,duration_ms
-MATCH,clause,pass,,6
-OPTIONAL MATCH,clause,fail,"Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='1611610762' nodes=(<Node element_id='0' labels=frozenset() properties={'id': ''}>, <Node element_id='1109326198' labels=frozenset() properties={}>) type='Alice' properties={}>, <Node element_id='0' labels=frozenset() properties={'id': ''}>]]",3
-MANDATORY MATCH,clause,pass,,2
-WHERE,clause,pass,,5
+MATCH,clause,pass,,7
+OPTIONAL MATCH,clause,fail,"Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='664929418' nodes=(<Node element_id='0' labels=frozenset() properties={'id': ''}>, <Node element_id='1819177220' labels=frozenset() properties={}>) type='Alice' properties={}>, <Node element_id='0' labels=frozenset() properties={'id': ''}>]]",4
+MANDATORY MATCH,clause,pass,,3
+WHERE,clause,pass,,7
 RETURN,clause,pass,,1
 WITH,clause,pass,,5
 UNWIND,clause,pass,,1
 ORDER BY,clause,pass,,1
-SKIP,clause,fail,"Column mismatch: expected ['x'], got []",31
+SKIP,clause,fail,"Column mismatch: expected ['x'], got []",30
 LIMIT,clause,pass,,1
-CREATE,clause,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
-[Location: <Prepare>]
-[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
-[Location: <Prepare>]
-[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]}",43
-DELETE,clause,pass,,4
-SET,clause,pass,,5
-REMOVE,clause,pass,,4
-MERGE,clause,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
-[Location: <Prepare>]
-[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
-[Location: <Prepare>]
-[%msg: < Label 'P1' is not listed among the applicable tables^SELECT p1 . val AS>]}",35
-UNION,clause,pass,,2
-UNION ALL,clause,pass,,2
+CREATE,clause,pass,,2
+DELETE,clause,pass,,3
+SET,clause,pass,,3
+REMOVE,clause,pass,,3
+MERGE,clause,pass,,3
+UNION,clause,pass,,1
+UNION ALL,clause,pass,,1
 CALL [YIELD],clause,pass,,1
 Boolean,data_type,pass,,1
-Integer,data_type,pass,,1
-Float,data_type,pass,,1
-String,data_type,pass,,1
-Null,data_type,pass,,1
+Integer,data_type,pass,,0
+Float,data_type,pass,,0
+String,data_type,pass,,0
+Null,data_type,pass,,0
 List,data_type,pass,,0
 Map,data_type,pass,,1
-Node,data_type,pass,,4
+Node,data_type,pass,,3
 Relationship,data_type,fail,"Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
 [%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
-[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",40
+[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",50
 Path,data_type,fail,"Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
 [%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
-[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",38
-CASE (simple),expression,pass,,2
+[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",49
+CASE (simple),expression,pass,,1
 CASE (generic),expression,pass,,2
 List comprehension,expression,fail,Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <ARGUMENT ERROR> Bad argument given; Details: Incorrect number of parameters} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <ARGUMENT ERROR> Bad argument given; Details: Incorrect number of parameters},0
-Map projection,expression,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Cypher error at line 1, col 28: Expected EOF, got {} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Cypher error at line 1, col 28: Expected EOF, got {}",4
+Map projection,expression,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Cypher error at line 1, col 28: Expected EOF, got {} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Cypher error at line 1, col 28: Expected EOF, got {}",3
 count(),function,pass,,1
 count(*),function,pass,,1
 sum(),function,pass,,1
 avg(),function,pass,,1
-min(),function,pass,,2
+min(),function,pass,,1
 max(),function,pass,,1
 collect(),function,pass,,1
 percentileDisc(),function,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]
 [Location: <Prepare>]
 [%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]
 [Location: <Prepare>]
-[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]}",2
+[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]}",3
 percentileCont(),function,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]
 [Location: <Prepare>]
 [%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_CONT' does not exist>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]
 [Location: <Prepare>]
 [%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_CONT' does not exist>]}",2
-stDev(),function,pass,,3
+stDev(),function,pass,,1
 stDevP(),function,pass,,1
 keys(),function,pass,,4
-labels(),function,pass,,4
+labels(),function,pass,,3
 nodes(),function,fail,"Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
 [%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
-[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",41
+[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",35
 relationships(),function,fail,"Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
 [%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
-[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",33
-range(),function,pass,,2
-reverse(),function,fail,"Row mismatch: expected [[[3, 2, 1]]], got [[']3 ,2 ,1[']]",1
-tail(),function,fail,"Row mismatch: expected [[[2, 3]]], got []",3
+[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",27
+range(),function,pass,,1
+reverse(),function,pass,,1
+tail(),function,pass,,1
 abs(),function,pass,,1
-ceil(),function,pass,,1
+ceil(),function,pass,,2
 floor(),function,pass,,1
-round(),function,pass,,1
+round(),function,fail,"Row mismatch: expected [[3.0]], got []",2
 sign(),function,pass,,1
 rand(),function,pass,,1
-log(),function,pass,,0
+log(),function,pass,,1
 log10(),function,pass,,1
-exp(),function,pass,,0
-e(),function,pass,,0
+exp(),function,pass,,2
+e(),function,pass,,1
 sqrt(),function,pass,,1
 sin(),function,pass,,1
 cos(),function,pass,,1
 tan(),function,pass,,1
-asin(),function,pass,,0
-acos(),function,pass,,0
-atan(),function,pass,,0
-atan2(),function,pass,,0
-pi(),function,pass,,0
-degrees(),function,pass,,0
+asin(),function,pass,,1
+acos(),function,pass,,1
+atan(),function,pass,,1
+atan2(),function,pass,,1
+pi(),function,pass,,1
+degrees(),function,pass,,1
 radians(),function,pass,,1
-haversin(),function,pass,,0
-toInteger() from float,function,pass,,0
-toFloat() from int,function,pass,,0
+haversin(),function,pass,,1
+toInteger() from float,function,pass,,1
+toFloat() from int,function,pass,,1
 toInteger() from bool,function,pass,,0
-coalesce(),function,pass,,0
-head(),function,fail,"Row mismatch: expected [[1]], got [['1']]",0
-last(),function,fail,"Row mismatch: expected [[3]], got [['3']]",1
-size(),function,pass,,0
-size() string,function,pass,,0
+coalesce(),function,pass,,1
+head(),function,pass,,1
+last(),function,pass,,1
+size(),function,pass,,1
+size() string,function,pass,,1
 toInteger(),function,pass,,0
 toFloat(),function,pass,,0
-toBoolean(),function,pass,,0
-toString(),function,pass,,1
+toBoolean(),function,pass,,1
+toString(),function,fail,"Row mismatch: expected [['42']], got [[42]]",1
 type(),function,fail,"Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
 [%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]
 [Location: <Prepare>]
-[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",39
-id(),function,pass,,4
-properties(),function,pass,,3
+[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",37
+id(),function,pass,,2
+properties(),function,pass,,5
 timestamp(),function,pass,,1
-randomUUID(),function,pass,,0
-left(),function,pass,,0
-right(),function,pass,,0
-trim(),function,pass,,0
-lTrim(),function,pass,,0
-rTrim(),function,pass,,0
-toUpper(),function,pass,,0
-toLower(),function,pass,,0
-replace(),function,pass,,0
+randomUUID(),function,pass,,1
+left(),function,pass,,1
+right(),function,pass,,1
+trim(),function,pass,,1
+lTrim(),function,pass,,1
+rTrim(),function,pass,,1
+toUpper(),function,pass,,1
+toLower(),function,pass,,1
+replace(),function,pass,,1
 substring(),function,pass,,1
 split(),function,fail,"Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]
 [Location: <Prepare>]
 [%msg: < User defined SQL function 'GRAPH_KG.STRTOK_TO_TABLE' does not exist>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]
 [Location: <Prepare>]
 [%msg: < User defined SQL function 'GRAPH_KG.STRTOK_TO_TABLE' does not exist>]}",1
-reverse() string,function,pass,,0
+reverse() string,function,pass,,1
 toString() from bool,function,pass,,0
 size() string length,function,pass,,0
-datetime(),function,pass,,0
+datetime(),function,pass,,1
 date(),function,pass,,0
 time(),function,pass,,0
 localtime(),function,pass,,0
@@ -150,25 +142,25 @@ duration(),function,pass,,0
 +,operator,pass,,0
 -,operator,pass,,0
 *,operator,pass,,0
-/,operator,pass,,0
-%,operator,pass,,0
-^,operator,pass,,0
-=,operator,pass,,0
-<>,operator,pass,,0
+/,operator,pass,,1
+%,operator,pass,,1
+^,operator,pass,,1
+=,operator,pass,,1
+<>,operator,pass,,1
 <,operator,pass,,0
->,operator,pass,,0
+>,operator,pass,,1
 <=,operator,pass,,0
 >=,operator,pass,,0
-IS NULL,operator,pass,,0
-IS NOT NULL,operator,pass,,0
+IS NULL,operator,pass,,1
+IS NOT NULL,operator,pass,,1
 AND,operator,pass,,0
 OR,operator,pass,,0
 XOR,operator,pass,,0
 NOT,operator,pass,,0
 STARTS WITH,operator,pass,,0
 ENDS WITH,operator,pass,,0
-CONTAINS,operator,pass,,0
-=~ (regex),operator,fail,"Row mismatch: expected [[True]], got [[0]]",0
-IN,operator,pass,,0
-[] (list subscript),operator,pass,,0
-+ (string concat),operator,fail,"Row mismatch: expected [['hello world']], got [[0]]",0
+CONTAINS,operator,pass,,1
+=~ (regex),operator,pass,,1
+IN,operator,pass,,1
+[] (list subscript),operator,pass,,1
++ (string concat),operator,pass,,1

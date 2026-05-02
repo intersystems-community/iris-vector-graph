@@ -2888,7 +2888,7 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "head":
             if not args:
                 return "NULL"
-            return f"SQLUser.JSON_ARRAYGET({args[0]}, 0)"
+            return f"SQLUser.LIST_HEAD({args[0]})"
 
         if fn == "tail":
             if not args:
@@ -2898,7 +2898,7 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "last":
             if not args:
                 return "NULL"
-            return f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]}) - 1)"
+            return f"SQLUser.LIST_LAST({args[0]})"
 
         if fn == "isempty":
             if not args:
@@ -2906,6 +2906,8 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"CASE WHEN {args[0]} IS NULL OR {args[0]} = '' OR {args[0]} = '[]' OR {args[0]} = '{{}}' THEN 1 ELSE 0 END"
 
         # Cypher → SQL function name mapping
+        if fn == "round":
+            return f"CAST(ROUND({args[0] if args else '0'}, 0) AS DOUBLE)"
         _CYPHER_FN_MAP = {
             "tolower": "LOWER",
             "toupper": "UPPER",
@@ -2979,7 +2981,7 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "randomuuid":
             return "SQLUser.NEWID()"
         if fn == "split":
-            return f"STRTOK_TO_TABLE({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
+            return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
         if fn in ("datetime", "localdatetime"):
             return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
         if fn in ("localtime", "time"):
