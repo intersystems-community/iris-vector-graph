@@ -1140,6 +1140,24 @@ class Parser:
                         "Expected property name", prop_tok.line, prop_tok.column
                     )
                 return ast.PropertyReference(name, prop_tok.value)
+            if self.peek().kind == TokenType.LBRACE:
+                lookahead = self.lexer.peek_ahead(1)
+                if lookahead.kind == TokenType.DOT or (
+                    lookahead.kind == TokenType.IDENTIFIER and self.lexer.peek_ahead(2).kind == TokenType.COLON
+                ) or lookahead.kind == TokenType.RBRACE:
+                    self.eat()
+                    keys = []
+                    while not self.matches(TokenType.RBRACE):
+                        if self.peek().kind == TokenType.DOT:
+                            self.eat()
+                            k = self.expect(TokenType.IDENTIFIER)
+                            keys.append(("." + k.value, None))
+                        elif self.peek().kind == TokenType.IDENTIFIER:
+                            k = self.eat().value
+                            keys.append((k, None))
+                        if self.peek().kind == TokenType.COMMA:
+                            self.eat()
+                    return ast.MapProjection(variable=name, keys=keys)
             return ast.Variable(name)
 
         if tok.kind == TokenType.PARAMETER:

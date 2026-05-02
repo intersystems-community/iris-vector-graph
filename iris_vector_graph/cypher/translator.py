@@ -1344,8 +1344,11 @@ def translate_create_clause(create, context, metadata):
                 import uuid as _uuid
                 generated_id = str(_uuid.uuid4())
                 node_id_expr = ast.Literal(generated_id)
-                if node.variable:
-                    context.input_params[f"__create_id_{node.variable}"] = generated_id
+                key = f"__create_id_{node.variable}" if node.variable else f"__create_id_anon_{id(node)}"
+                context.input_params[key] = generated_id
+                if not hasattr(context, '_anon_node_keys'):
+                    context._anon_node_keys = {}
+                context._anon_node_keys[id(node)] = generated_id
 
             var_alias = None
             if isinstance(node_id_expr, ast.Variable):
@@ -1415,6 +1418,9 @@ def translate_create_clause(create, context, metadata):
                             return stored
                         if node.variable in context.input_params:
                             return context.input_params[node.variable]
+                    anon_id = getattr(context, '_anon_node_keys', {}).get(id(node))
+                    if anon_id:
+                        return anon_id
                     return None
                 if isinstance(id_expr, ast.Literal):
                     return id_expr.value
@@ -2647,6 +2653,20 @@ def translate_expression(expr, context, segment="select") -> str:
             f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(expr.property_name)}'
         )
         return f"{p_alias}.val"
+    if isinstance(expr, ast.MapProjection):
+        alias = context.variable_aliases.get(expr.variable, "")
+        parts = []
+        for key_spec, _ in expr.keys:
+            prop = key_spec.lstrip(".")
+            p_alias = context.next_alias("p")
+            context.join_clauses.append(
+                f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(prop)}"
+            )
+            safe_prop = prop.replace("'", "''")
+            parts.append(f"'\"'||'{safe_prop}'||'\":'||COALESCE('\"'||{p_alias}.val||'\"','null')")
+        if not parts:
+            return "'{}'"
+        return "('{'||" + "||','||".join(parts) + "||'}')"
     if isinstance(expr, ast.MapLiteral):
         if not expr.entries:
             return "'{}'"

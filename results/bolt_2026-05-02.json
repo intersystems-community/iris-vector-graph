@@ -6,18 +6,18 @@
     "port": 20000,
     "database_version": "iris-vector-graph/5.0.0",
     "spec_version": "9",
-    "timestamp": "2026-05-02T10:57:28.248519+00:00",
+    "timestamp": "2026-05-02T11:10:04.479010+00:00",
     "catalog_version": "1.0.0",
     "total_tests": 133,
-    "passed": 125,
-    "failed": 8,
-    "pass_rate": "93.98%"
+    "passed": 127,
+    "failed": 6,
+    "pass_rate": "95.49%"
   },
   "summary_by_type": {
     "clause": {
       "total": 18,
-      "passed": 17,
-      "failed": 1
+      "passed": 18,
+      "failed": 0
     },
     "data_type": {
       "total": 10,
@@ -31,8 +31,8 @@
     },
     "function": {
       "total": 76,
-      "passed": 72,
-      "failed": 4
+      "passed": 73,
+      "failed": 3
     },
     "operator": {
       "total": 25,
@@ -45,14 +45,13 @@
       "element": "MATCH",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 7
+      "duration_ms": 6
     },
     {
       "element": "OPTIONAL MATCH",
       "type": "clause",
-      "result": "fail",
-      "error": "Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='762136352' nodes=(<Node element_id='0' labels=frozenset() properties={}>, <Node element_id='834300402' labels=frozenset() properties={}>) type='Alice' properties={}>, None]]",
-      "duration_ms": 81
+      "result": "pass",
+      "duration_ms": 3
     },
     {
       "element": "MANDATORY MATCH",
@@ -64,13 +63,13 @@
       "element": "WHERE",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 5
+      "duration_ms": 4
     },
     {
       "element": "RETURN",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "element": "WITH",
@@ -106,7 +105,7 @@
       "element": "CREATE",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "DELETE",
@@ -196,21 +195,21 @@
       "element": "Node",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "Relationship",
       "type": "data_type",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 30
+      "duration_ms": 53
     },
     {
       "element": "Path",
       "type": "data_type",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 28
+      "duration_ms": 35
     },
     {
       "element": "CASE (simple)",
@@ -222,20 +221,20 @@
       "element": "CASE (generic)",
       "type": "expression",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "List comprehension",
       "type": "expression",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 4
     },
     {
       "element": "Map projection",
       "type": "expression",
       "result": "fail",
       "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Cypher error at line 1, col 28: Expected EOF, got {} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Cypher error at line 1, col 28: Expected EOF, got {}",
-      "duration_ms": 2
+      "duration_ms": 3
     },
     {
       "element": "count()",
@@ -253,44 +252,43 @@
       "element": "sum()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "avg()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "min()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "max()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "collect()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "percentileDisc()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 9
+      "duration_ms": 1
     },
     {
       "element": "percentileCont()",
       "type": "function",
-      "result": "fail",
-      "error": "Row mismatch: expected [[3.0]], got [[5]]",
-      "duration_ms": 9
+      "result": "pass",
+      "duration_ms": 1
     },
     {
       "element": "stDev()",
@@ -308,189 +306,189 @@
       "element": "keys()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 6
     },
     {
       "element": "labels()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 3
     },
     {
       "element": "nodes()",
       "type": "function",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 29
+      "duration_ms": 39
     },
     {
       "element": "relationships()",
       "type": "function",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 32
+      "duration_ms": 43
     },
     {
       "element": "range()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "reverse()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 8
+      "duration_ms": 2
     },
     {
       "element": "tail()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 8
+      "duration_ms": 2
     },
     {
       "element": "abs()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "ceil()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "floor()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "round()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "sign()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "rand()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "log()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "log10()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "exp()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "e()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "sqrt()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "sin()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "cos()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "tan()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "asin()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "acos()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "atan()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "atan2()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "pi()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "degrees()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "radians()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "haversin()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toInteger() from float",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toFloat() from int",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toInteger() from bool",
@@ -502,31 +500,31 @@
       "element": "coalesce()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "head()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "last()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "size()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "size() string",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toInteger()",
@@ -544,7 +542,7 @@
       "element": "toBoolean()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toString()",
@@ -557,97 +555,97 @@
       "type": "function",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 40
+      "duration_ms": 42
     },
     {
       "element": "id()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 4
     },
     {
       "element": "properties()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 4
     },
     {
       "element": "timestamp()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "randomUUID()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "left()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "right()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "trim()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "lTrim()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "rTrim()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toUpper()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toLower()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "replace()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "substring()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "split()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 9
+      "duration_ms": 1
     },
     {
       "element": "reverse() string",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "toString() from bool",
@@ -665,19 +663,19 @@
       "element": "datetime()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "date()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 2
     },
     {
       "element": "time()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "localtime()",
@@ -695,7 +693,7 @@
       "element": "duration()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "+",
@@ -707,31 +705,31 @@
       "element": "-",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "*",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "/",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "%",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "^",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "=",
@@ -743,49 +741,49 @@
       "element": "<>",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "<",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": ">",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "<=",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": ">=",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "IS NULL",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "IS NOT NULL",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "AND",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "OR",
@@ -827,25 +825,25 @@
       "element": "=~ (regex)",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "IN",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "element": "[] (list subscript)",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "element": "+ (string concat)",
       "type": "operator",
       "result": "pass",
-      "duration_ms": 0
+      "duration_ms": 1
     }
   ]
 }
