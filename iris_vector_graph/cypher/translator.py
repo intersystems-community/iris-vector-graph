@@ -1377,6 +1377,11 @@ def translate_create_clause(create, context, metadata):
                     )
             if node.variable:
                 context.register_variable(node.variable)
+                if not context.from_clauses and isinstance(node_id_expr, ast.Literal):
+                    node_id_val = node_id_expr.value
+                    alias = context.variable_aliases[node.variable]
+                    context.from_clauses.append(f"{_table('nodes')} {alias}")
+                    context.where_conditions.append(f"{alias}.node_id = {context.add_where_param(node_id_val)}")
 
         for i, rel in enumerate(pat.relationships):
             source_node, target_node = pat.nodes[i], pat.nodes[i + 1]
@@ -2321,7 +2326,7 @@ def translate_boolean_expression(expr, context) -> str:
     if op == ast.BooleanOperator.CONTAINS:
         return f"{left} LIKE ('%' || {right} || '%')"
     if op == ast.BooleanOperator.REGEX_MATCH:
-        return f"{left} %MATCHES {right}"
+        return f"SQLUser.REGEX_MATCH({left}, {right}) = 1"
     if op == ast.BooleanOperator.IN:
         return f"{left} IN {right}"
     raise ValueError(f"Unsupported operator: {op}")
@@ -2407,6 +2412,14 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"MOD({left}, {right})"
         if op == "^":
             return f"POWER({left}, {right})"
+        if op == "+":
+            def _is_str(arg):
+                return (isinstance(arg, ast.Literal) and isinstance(arg.value, str)) or \
+                    isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_+")
+            left_str = _is_str(expr.arguments[0])
+            right_str = _is_str(expr.arguments[1])
+            if left_str or right_str:
+                return f"(CAST({left} AS VARCHAR(4096)) || CAST({right} AS VARCHAR(4096)))"
         return f"({left} {op} {right})"
 
     if isinstance(expr, ast.ListPredicateExpression):
@@ -2880,7 +2893,7 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "tail":
             if not args:
                 return "JSON_ARRAY()"
-            return f"(SELECT JSON_ARRAYAGG(val) FROM JSON_TABLE({args[0]}, '$[*]' COLUMNS(idx FOR ORDINALITY, val VARCHAR(256) PATH '$')) jt WHERE idx > 1)"
+            return f"SQLUser.LIST_TAIL({args[0]})"
 
         if fn == "last":
             if not args:
@@ -2937,8 +2950,16 @@ def translate_expression(expr, context, segment="select") -> str:
                     return f"SUBSTRING({args[0]}, {start}, {args[2]})"
                 return f"SUBSTRING({args[0]}, {start})"
             return f"SUBSTRING({args[0]})"
-        if fn == "round":
-            return f"CAST(ROUND({args[0]}, 0) AS DOUBLE)" if args else "NULL"
+        if fn == "reverse":
+            if not args:
+                return "NULL"
+            arg_expr = args_exprs[0] if args_exprs else None
+            is_list = (
+                isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
+            ) or isinstance(arg_expr, ast.ListComprehension)
+            if is_list:
+                return f"SQLUser.LIST_REVERSE({args[0]})"
+            return f"REVERSE({args[0]})"
         if fn in ("stdev", "stdevs"):
             return f"STDDEV({args[0]})" if args else "NULL"
         if fn in ("stdevp",):
