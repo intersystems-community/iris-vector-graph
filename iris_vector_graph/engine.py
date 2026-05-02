@@ -76,6 +76,52 @@ class IRISGraphEngine:
         self._arno_capabilities: Dict[str, Any] = {}
         self._table_mapping_cache: Optional[Dict[str, dict]] = None
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
+        self._connection_params: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_connect(
+        cls,
+        hostname: str,
+        port: int = 1972,
+        namespace: str = "USER",
+        username: str = "_SYSTEM",
+        password: str = "SYS",
+        embedding_dimension: Optional[int] = None,
+        **kwargs,
+    ) -> "IRISGraphEngine":
+        import iris as _iris
+        conn_params = dict(hostname=hostname, port=port, namespace=namespace, username=username, password=password)
+        conn = _iris.connect(**conn_params)
+        engine = cls(conn, embedding_dimension=embedding_dimension, **kwargs)
+        engine._connection_params = conn_params
+        return engine
+
+    @property
+    def is_ready(self) -> bool:
+        try:
+            cur = self.conn.cursor()
+            cur.execute("SELECT 1 FROM Graph_KG.nodes FETCH FIRST 1 ROWS ONLY")
+            return True
+        except Exception:
+            return False
+
+    def _reconnect_if_stale(self) -> None:
+        try:
+            cur = self.conn.cursor()
+            cur.execute("SELECT 1")
+        except Exception as probe_err:
+            err_str = str(probe_err).lower()
+            if any(x in err_str for x in ("epipe", "broken pipe", "connection reset", "closed")):
+                if self._connection_params:
+                    import iris as _iris
+                    self.conn = _iris.connect(**self._connection_params)
+                    logger.info("IRIS connection re-established after EPIPE")
+                else:
+                    raise RuntimeError(
+                        "IRIS connection is stale (EPIPE/BrokenPipe) and cannot auto-reconnect "
+                        "because connection params were not stored. "
+                        "Create the engine with a fresh iris.connect() call."
+                    ) from probe_err
 
     def _invalidate_mapping_cache(self) -> None:
         self._table_mapping_cache = None
@@ -419,9 +465,16 @@ class IRISGraphEngine:
             f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)"
         )
 
-    def initialize_schema(self, auto_deploy_objectscript: bool = True) -> None:
+    def initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
         """
-        Create the base schema tables in IRIS, using the configured embedding_dimension.
+        Create the base schema tables in IRIS.
+
+        Returns a status dict with keys:
+          - 'tables_created': True/False
+          - 'objectscript_deployed': True/False
+          - 'kg_built': True/False  
+          - 'embedding_dimension': int
+          - 'warnings': list[str]
 
         Safe to call on existing databases — statements that fail with "already exists"
         are silently ignored.  Raises if ``embedding_dimension`` has not been set (either
@@ -432,11 +485,6 @@ class IRISGraphEngine:
                 the ObjectScript .cls files from iris_src/ into IRIS.  On failure a
                 warning is logged and the engine falls back to Python/SQL paths.
                 Set to False to skip .cls deployment entirely.
-
-        Example::
-
-            engine = IRISGraphEngine(conn, embedding_dimension=384)
-            engine.initialize_schema()
         """
         from iris_vector_graph.utils import _split_sql_statements
 
@@ -642,6 +690,38 @@ class IRISGraphEngine:
             except Exception as exc:
                 logger.warning("^KG bootstrap failed: %s", exc)
 
+        status = {
+            "tables_created": True,
+            "objectscript_deployed": self.capabilities.objectscript_deployed,
+            "kg_built": self.capabilities.kg_built,
+            "embedding_dimension": dim,
+            "warnings": [],
+        }
+        if not self.capabilities.objectscript_deployed:
+            status["warnings"].append(
+                "ObjectScript classes not deployed — BFS, Subgraph, PageRank using Python fallbacks. "
+                "Run docker cp iris_src/src <container>:/tmp/src && docker exec <container> iris session IRIS "
+                "-U USER 'Do $system.OBJ.LoadDir(\"/tmp/src\",\"ck\",,1)' to deploy."
+            )
+        if not self.capabilities.kg_built:
+            status["warnings"].append(
+                "^KG adjacency index not built — multi-hop BFS unavailable. "
+                "Call BuildKG() after loading data: from iris_vector_graph.schema import _call_classmethod; "
+                "_call_classmethod(conn, 'Graph.KG.Traversal', 'BuildKG')"
+            )
+
+        if status["warnings"]:
+            for w in status["warnings"]:
+                logger.warning("IVG setup: %s", w[:120])
+
+        logger.info(
+            "initialize_schema() complete — objectscript=%s kg_built=%s dim=%d",
+            status["objectscript_deployed"],
+            status["kg_built"],
+            dim,
+        )
+        return status
+
     def _get_embedding_dimension(self) -> int:
         """
         Get the vector embedding dimension, either from initialization or auto-detection.
@@ -807,6 +887,8 @@ class IRISGraphEngine:
             return {"columns": [], "rows": [], "sql": cypher_query, "params": []}
 
         parsed = parse_query(cypher_query)
+
+        self._reconnect_if_stale()
 
         if read_only and parsed.is_mutation:
             raise PermissionError(
@@ -2625,6 +2707,17 @@ class IRISGraphEngine:
                 logger.warning(
                     f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
                 )
+
+    def rebuild_kg(self) -> bool:
+        from iris_vector_graph.schema import _call_classmethod
+        try:
+            _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
+            self.capabilities.kg_built = True
+            logger.info("^KG adjacency index rebuilt successfully")
+            return True
+        except Exception as e:
+            logger.warning("rebuild_kg failed: %s", e)
+            return False
 
     def load_networkx(
         self,
