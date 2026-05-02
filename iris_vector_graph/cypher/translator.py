@@ -950,7 +950,11 @@ def translate_to_sql(
             sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
             all_params.extend(r.parameters)
         sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
-        combined = sep.join(f"({s})" for s in sqls)
+        def _ensure_from(s: str) -> str:
+            if "\nFROM " not in s and "\nfrom " not in s:
+                return s.rstrip() + "\nFROM (SELECT 1) __dual"
+            return s
+        combined = sep.join(f"({_ensure_from(s)})" for s in sqls)
         flat_params = []
         for p_list in all_params:
             flat_params.extend(p_list)
@@ -1273,6 +1277,9 @@ def apply_pagination(
         sql += f"\nORDER BY {', '.join(order_by_items)}"
     limit = _resolve_pagination_value(query.limit, context)
     skip = _resolve_pagination_value(query.skip, context)
+    if limit is not None or skip is not None:
+        if "\nFROM " not in sql and "FROM " not in sql.split("\n")[0]:
+            sql = sql.rstrip() + "\nFROM (SELECT 1) __dual"
     if limit is not None:
         sql += f"\nLIMIT {limit}"
     if skip is not None:
@@ -1318,7 +1325,8 @@ def translate_create_clause(create, context, metadata):
                 continue
             node_id_expr = node.properties.get("id") or node.properties.get("node_id")
             if node_id_expr is None:
-                raise ValueError("CREATE node requires an 'id' property")
+                import uuid as _uuid
+                node_id_expr = ast.Literal(str(_uuid.uuid4()))
 
             var_alias = None
             if isinstance(node_id_expr, ast.Variable):
@@ -2254,6 +2262,11 @@ def translate_boolean_expression(expr, context) -> str:
             )
             + ")"
         )
+    if op == ast.BooleanOperator.XOR:
+        a, b = expr.operands[0], expr.operands[1]
+        sa = translate_boolean_expression(a, context)
+        sb = translate_boolean_expression(b, context)
+        return f"(({sa} AND NOT ({sb})) OR (NOT ({sa}) AND {sb}))"
     if op == ast.BooleanOperator.NOT:
         return f"NOT ({translate_boolean_expression(expr.operands[0], context)})"
     left_expr = expr.operands[0]
@@ -2914,10 +2927,48 @@ def translate_expression(expr, context, segment="select") -> str:
         if fn == "tofloat":
             return f"CAST({args[0]} AS DOUBLE)"
         if fn == "tostring":
+            if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, bool):
+                return f"'{'true' if args_exprs[0].value else 'false'}'"
             return f"CAST({args[0]} AS VARCHAR(4096))"
+        if fn == "substring":
+            if len(args) >= 2:
+                start = f"({args[1]}) + 1"
+                if len(args) >= 3:
+                    return f"SUBSTRING({args[0]}, {start}, {args[2]})"
+                return f"SUBSTRING({args[0]}, {start})"
+            return f"SUBSTRING({args[0]})"
+        if fn == "round":
+            return f"CAST(ROUND({args[0]}, 0) AS DOUBLE)" if args else "NULL"
+        if fn in ("stdev", "stdevs"):
+            return f"STDDEV({args[0]})" if args else "NULL"
+        if fn in ("stdevp",):
+            return f"STDDEV_POP({args[0]})" if args else "NULL"
+        if fn in ("percentiledisc",):
+            return f"PERCENTILE_DISC({args[1] if len(args)>1 else '0.5'}) WITHIN GROUP (ORDER BY {args[0]})" if args else "NULL"
+        if fn in ("percentilecont",):
+            return f"PERCENTILE_CONT({args[1] if len(args)>1 else '0.5'}) WITHIN GROUP (ORDER BY {args[0]})" if args else "NULL"
+        if fn == "haversin":
+            return f"(1 - COS({args[0]})) / 2" if args else "NULL"
+        if fn == "e":
+            return "EXP(1)"
+        if fn == "timestamp":
+            return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
+        if fn == "randomuuid":
+            return "NEWID()"
+        if fn == "split":
+            return f"STRTOK_TO_TABLE({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
+        if fn in ("datetime", "localdatetime"):
+            return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
+        if fn in ("localtime", "time"):
+            return f"CAST(GETDATE() AS TIME)"
+        if fn == "duration":
+            return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
         if fn == "toboolean":
             return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
         return f"{sql_fn}({', '.join(args)})"
+    if isinstance(expr, ast.BooleanExpression):
+        cond = translate_boolean_expression(expr, context)
+        return f"CASE WHEN ({cond}) THEN 1 ELSE 0 END"
     return "NULL"
 
 

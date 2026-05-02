@@ -835,10 +835,17 @@ class Parser:
         return self.parse_or_expression()
 
     def parse_or_expression(self) -> Any:
-        left = self.parse_and_expression()
+        left = self.parse_xor_expression()
         while self.matches(TokenType.OR):
-            right = self.parse_and_expression()
+            right = self.parse_xor_expression()
             left = ast.BooleanExpression(ast.BooleanOperator.OR, [left, right])
+        return left
+
+    def parse_xor_expression(self) -> Any:
+        left = self.parse_and_expression()
+        while self.matches(TokenType.XOR):
+            right = self.parse_and_expression()
+            left = ast.BooleanExpression(ast.BooleanOperator.XOR, [left, right])
         return left
 
     def parse_and_expression(self) -> Any:

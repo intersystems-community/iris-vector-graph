@@ -19,6 +19,7 @@ class TokenType(enum.Enum):
     AS = "AS"
     AND = "AND"
     OR = "OR"
+    XOR = "XOR"
     NOT = "NOT"
     TRUE = "TRUE"
     FALSE = "FALSE"
