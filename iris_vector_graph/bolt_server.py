@@ -721,7 +721,8 @@ class BoltSession:
                   not col.endswith("_props") and
                   "_" not in col and
                   i + 1 < len(columns) and
-                  columns[i+1].endswith("_id")):
+                  columns[i+1].endswith("_id") and
+                  columns[i+1][:-3] == col):
                 rel_type = str(row[i]) if row[i] is not None else "RELATED_TO"
                 start_id = _node_int_id(prev_node_id) if prev_node_id else 0
                 end_node_id_str = str(row[i+1]) if i+1 < len(row) else ""
