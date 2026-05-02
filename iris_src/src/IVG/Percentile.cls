@@ -8,8 +8,8 @@ ClassMethod PDISC(vals As %String, p As %Double) As %String [ SqlProc ]
 	Set arr = ##class(%Library.DynamicArray).%FromJSON(vals)
 	Set n = arr.%Size()
 	If n = 0 { Quit "" }
-	Set i = n * p \ 1
-	If i >= n { Set i = n - 1 }
+	Set i = (n - 1) * p \ 1
+	If i >= (n - 1) { Set i = n - 1 }
 	Quit arr.%Get(i)
 }
 
@@ -19,9 +19,10 @@ ClassMethod PCONT(vals As %String, p As %Double) As %Double [ SqlProc ]
 	Set arr = ##class(%Library.DynamicArray).%FromJSON(vals)
 	Set n = arr.%Size()
 	If n = 0 { Quit 0 }
-	Set lower = n * p \ 1
-	If lower >= n - 1 { Quit arr.%Get(n-1) + 0 }
-	Set frac = n * p - lower
+	Set pos = (n - 1) * p
+	Set lower = pos \ 1
+	If lower >= (n - 1) { Quit arr.%Get(n-1) + 0 }
+	Set frac = pos - lower
 	Quit arr.%Get(lower) + frac * (arr.%Get(lower+1) - arr.%Get(lower))
 }
 
