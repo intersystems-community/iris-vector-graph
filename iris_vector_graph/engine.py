@@ -936,18 +936,16 @@ class IRISGraphEngine:
                 }
             except Exception as _exec_err:
                 err_str = str(_exec_err)
-                if any(code in err_str for code in ("-400", "-29", "-23", "-12", "-14", "-15", "-1>", "-27")):
-                    import logging as _log
-                    _log.getLogger(__name__).warning(
-                        "IRIS SQL error (query too complex or schema mismatch): %s", err_str[:200]
-                    )
-                    try:
-                        self.conn.rollback()
-                    except Exception:
-                        pass
-                    return {"columns": [], "rows": [], "sql": sql_str, "params": p,
-                            "metadata": metadata, "error": err_str[:200]}
-                raise
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "IRIS SQL error: %s", err_str[:200]
+                )
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+                return {"columns": [], "rows": [], "sql": sql_str, "params": p,
+                        "metadata": metadata, "error": err_str[:200]}
 
     def _execute_parsed(self, parsed, parameters):
         if parsed.procedure_call is not None:
@@ -992,18 +990,16 @@ class IRISGraphEngine:
                     "sql": sql_str, "params": p, "metadata": metadata}
         except Exception as _exec_err:
             err_str = str(_exec_err)
-            if any(code in err_str for code in ("-400", "-29", "-23", "-12", "-14", "-15", "-1>", "-27")):
-                import logging as _log
-                _log.getLogger(__name__).warning(
-                    "IRIS SQL error (query too complex): %s", err_str[:200]
-                )
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-                return {"columns": [], "rows": [], "sql": sql_str, "params": p,
-                        "metadata": metadata, "error": err_str[:200]}
-            raise
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "IRIS SQL error: %s", err_str[:200]
+            )
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return {"columns": [], "rows": [], "sql": sql_str, "params": p,
+                    "metadata": metadata, "error": err_str[:200]}
 
 
     def _execute_weighted_shortest_path(
