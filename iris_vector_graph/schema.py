@@ -591,6 +591,15 @@ CREATE OR REPLACE FUNCTION SQLUser.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT {
             """
 CREATE OR REPLACE FUNCTION SQLUser.NEWID() RETURNS VARCHAR(36) LANGUAGE OBJECTSCRIPT { Quit $SYSTEM.Util.CreateGUID() }
 """,
+            """
+CREATE OR REPLACE FUNCTION SQLUser.LIST_REVERSE(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), out = ##class(%Library.DynamicArray).%New(), n = arr.%Size() For i = n-1:-1:0 { Do out.%Push(arr.%Get(i)) } Quit out.%ToJSON() }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.LIST_TAIL(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), out = ##class(%Library.DynamicArray).%New(), n = arr.%Size() For i = 1:1:n-1 { Do out.%Push(arr.%Get(i)) } Quit out.%ToJSON() }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.REGEX_MATCH(s VARCHAR(4000), p VARCHAR(4000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Quit $MATCH(s, p) }
+""",
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
