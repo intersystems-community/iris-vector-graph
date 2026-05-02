@@ -591,7 +591,8 @@ class BoltSession:
                 _, encoded = self._recompose_graph_row(columns, row)
                 await self._send_message(TAG_RECORD, encoded)
             else:
-                await self._send_message(TAG_RECORD, list(row) if not isinstance(row, list) else row)
+                coerced = [self._coerce_scalar(v) for v in (list(row) if not isinstance(row, list) else row)]
+                await self._send_message(TAG_RECORD, coerced)
 
         bookmark = f"ivg:{uuid.uuid4().hex[:8]}"
         await self._send_message(TAG_SUCCESS, {
@@ -654,8 +655,7 @@ class BoltSession:
         if isinstance(val, bool):
             return val
         if isinstance(val, decimal.Decimal):
-            f = float(val)
-            return int(f) if f == int(f) else f
+            return float(val)
         if isinstance(val, str):
             s = val.strip()
             if s.startswith('[') or s.startswith('{'):
@@ -663,11 +663,12 @@ class BoltSession:
                     return _json.loads(s)
                 except (ValueError, _json.JSONDecodeError):
                     pass
-            try:
-                f = float(s)
-                return int(f) if f == int(f) and '.' not in s and 'e' not in s.lower() else f
-            except (ValueError, TypeError):
-                pass
+            if s.startswith('-') or s[0:1].isdigit():
+                try:
+                    if 'E' in s or 'e' in s or '.' in s:
+                        return float(s)
+                except (ValueError, TypeError):
+                    pass
         return val
 
     def _recompose_graph_row(self, columns: list, row) -> tuple[list, list]:

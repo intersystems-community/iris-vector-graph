@@ -2951,10 +2951,12 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"(1 - COS({args[0]})) / 2" if args else "NULL"
         if fn == "e":
             return "EXP(1)"
+        if fn == "rand":
+            return "SQLUser.RAND()"
         if fn == "timestamp":
             return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
         if fn == "randomuuid":
-            return "NEWID()"
+            return "SQLUser.NEWID()"
         if fn == "split":
             return f"STRTOK_TO_TABLE({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
         if fn in ("datetime", "localdatetime"):
