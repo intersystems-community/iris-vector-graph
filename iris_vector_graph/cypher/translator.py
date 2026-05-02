@@ -1152,6 +1152,22 @@ def translate_to_sql(
             if stage_name in [s.split(" AS ")[0].strip() for s in context.stages]:
                 sql = sql.replace("SELECT \nFROM", f"SELECT *\nFROM", 1)
                 sql = sql.replace("SELECT DISTINCT \nFROM", f"SELECT DISTINCT *\nFROM", 1)
+        if hasattr(context, '_percentile_queries') and context._percentile_queries:
+            import re as _re
+            from_match = _re.search(r'\nFROM\s+(.*?)(?:\nWHERE|\nORDER|\nLIMIT|\nGROUP|\nHAVING|$)', sql, _re.DOTALL)
+            if from_match and len(context._percentile_queries) == 1:
+                from_clause = from_match.group(0).strip()
+                val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
+                col_alias = _re.search(r'AS\s+(\w+)\s*$', sql.split('\n')[0])
+                out_alias = col_alias.group(1) if col_alias else "result"
+                proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
+                inner_col = val_expr.split('.')[-1] if '.' in val_expr else val_expr
+                sql = (
+                    f"SELECT IVG.Percentile_{proc}("
+                    f"(SELECT JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)) "
+                    f"\n{from_clause}), {pct_val}) AS {out_alias}"
+                )
+                p = []
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
         vl = context.var_length_paths or None
 
@@ -1326,7 +1342,10 @@ def translate_create_clause(create, context, metadata):
             node_id_expr = node.properties.get("id") or node.properties.get("node_id")
             if node_id_expr is None:
                 import uuid as _uuid
-                node_id_expr = ast.Literal(str(_uuid.uuid4()))
+                generated_id = str(_uuid.uuid4())
+                node_id_expr = ast.Literal(generated_id)
+                if node.variable:
+                    context.input_params[f"__create_id_{node.variable}"] = generated_id
 
             var_alias = None
             if isinstance(node_id_expr, ast.Variable):
@@ -1390,8 +1409,12 @@ def translate_create_clause(create, context, metadata):
 
             def _resolve_id(id_expr, node):
                 if id_expr is None:
-                    if node.variable and node.variable in context.input_params:
-                        return context.input_params[node.variable]
+                    if node.variable:
+                        stored = context.input_params.get(f"__create_id_{node.variable}")
+                        if stored:
+                            return stored
+                        if node.variable in context.input_params:
+                            return context.input_params[node.variable]
                     return None
                 if isinstance(id_expr, ast.Literal):
                     return id_expr.value
@@ -2454,26 +2477,29 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"(({inner}) > 0)"
 
     if isinstance(expr, ast.ListComprehension):
-        source_sql = translate_expression(expr.source, context, segment=segment)
+        source_sql = translate_expression(expr.source, context, segment="inline")
         var = sanitize_identifier(expr.variable)
         alias = context.next_alias("lc")
         context.variable_aliases[expr.variable] = alias
         where_clause = ""
         if expr.predicate:
-            pred_sql = translate_expression(expr.predicate, context, segment=segment)
+            if isinstance(expr.predicate, ast.BooleanExpression):
+                pred_sql = translate_boolean_expression(expr.predicate, context)
+            else:
+                pred_sql = translate_expression(expr.predicate, context, segment="inline")
             for col in ("node_id", "p", "val", "label"):
                 pred_sql = pred_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
             where_clause = f" WHERE {pred_sql}"
         select_expr = f"{alias}.{var}"
         if expr.projection:
-            proj_sql = translate_expression(expr.projection, context, segment=segment)
+            proj_sql = translate_expression(expr.projection, context, segment="inline")
             for col in ("node_id", "p", "val", "label"):
                 proj_sql = proj_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
             select_expr = proj_sql
         del context.variable_aliases[expr.variable]
         return (
             f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
-            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} INTEGER PATH '$')) {alias}"
             f"{where_clause})"
         )
 
@@ -2508,20 +2534,23 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"(({inner}) > 0)"
 
     if isinstance(expr, ast.ListComprehension):
-        source_sql = translate_expression(expr.source, context, segment=segment)
+        source_sql = translate_expression(expr.source, context, segment="inline")
         var = sanitize_identifier(expr.variable)
         alias = context.next_alias("lc")
         where_clause = ""
         if expr.predicate:
-            pred_sql = translate_expression(expr.predicate, context, segment=segment)
+            if isinstance(expr.predicate, ast.BooleanExpression):
+                pred_sql = translate_boolean_expression(expr.predicate, context)
+            else:
+                pred_sql = translate_expression(expr.predicate, context, segment="inline")
             where_clause = f" WHERE {pred_sql.replace(var, f'{alias}.{var}')}"
         select_expr = f"{alias}.{var}"
         if expr.projection:
-            proj_sql = translate_expression(expr.projection, context, segment=segment)
+            proj_sql = translate_expression(expr.projection, context, segment="inline")
             select_expr = proj_sql.replace(var, f"{alias}.{var}")
         return (
             f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
-            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
+            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} INTEGER PATH '$')) {alias}"
             f"{where_clause})"
         )
 
@@ -2966,10 +2995,18 @@ def translate_expression(expr, context, segment="select") -> str:
             return f"STDDEV({args[0]})" if args else "NULL"
         if fn in ("stdevp",):
             return f"STDDEV_POP({args[0]})" if args else "NULL"
-        if fn in ("percentiledisc",):
-            return f"PERCENTILE_DISC({args[1] if len(args)>1 else '0.5'}) WITHIN GROUP (ORDER BY {args[0]})" if args else "NULL"
-        if fn in ("percentilecont",):
-            return f"PERCENTILE_CONT({args[1] if len(args)>1 else '0.5'}) WITHIN GROUP (ORDER BY {args[0]})" if args else "NULL"
+        if fn in ("percentiledisc", "percentilecont"):
+            if not args:
+                return "NULL"
+            val_expr = args[0]
+            pct_expr = args[1] if len(args) > 1 else "0.5"
+            context._percentile_queries = getattr(context, "_percentile_queries", [])
+            if args_exprs and isinstance(args_exprs[0], ast.Variable):
+                var_name = args_exprs[0].name
+                alias = context.variable_aliases.get(var_name, "")
+                pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else 0.5
+                context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
+            return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
         if fn == "haversin":
             return f"(1 - COS({args[0]})) / 2" if args else "NULL"
         if fn == "e":

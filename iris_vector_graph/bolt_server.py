@@ -691,7 +691,15 @@ class BoltSession:
                     columns[i+2].endswith("_props") and
                     col[:-3] == columns[i+1][:-7] == columns[i+2][:-6]):
                 var_name = col[:-3]
-                node_id = str(row[i]) if row[i] is not None else ""
+                node_id = str(row[i]) if row[i] is not None else None
+
+                if node_id is None:
+                    new_cols.append(var_name)
+                    new_row.append(None)
+                    prev_node_id = None
+                    i += 3
+                    continue
+
                 labels_raw = row[i+1]
                 props_raw = row[i+2]
 

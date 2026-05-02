@@ -6,18 +6,18 @@
     "port": 20000,
     "database_version": "iris-vector-graph/5.0.0",
     "spec_version": "9",
-    "timestamp": "2026-05-02T09:33:29.476921+00:00",
+    "timestamp": "2026-05-02T10:23:11.113467+00:00",
     "catalog_version": "1.0.0",
     "total_tests": 133,
-    "passed": 122,
-    "failed": 11,
-    "pass_rate": "91.73%"
+    "passed": 35,
+    "failed": 98,
+    "pass_rate": "26.32%"
   },
   "summary_by_type": {
     "clause": {
       "total": 18,
-      "passed": 16,
-      "failed": 2
+      "passed": 17,
+      "failed": 1
     },
     "data_type": {
       "total": 10,
@@ -26,18 +26,18 @@
     },
     "expression": {
       "total": 4,
-      "passed": 2,
-      "failed": 2
+      "passed": 3,
+      "failed": 1
     },
     "function": {
       "total": 76,
-      "passed": 71,
-      "failed": 5
+      "passed": 7,
+      "failed": 69
     },
     "operator": {
       "total": 25,
-      "passed": 25,
-      "failed": 0
+      "passed": 0,
+      "failed": 25
     }
   },
   "results": [
@@ -45,13 +45,13 @@
       "element": "MATCH",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 6
+      "duration_ms": 5
     },
     {
       "element": "OPTIONAL MATCH",
       "type": "clause",
       "result": "fail",
-      "error": "Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='1774557309' nodes=(<Node element_id='0' labels=frozenset() properties={'id': ''}>, <Node element_id='2146349012' labels=frozenset() properties={}>) type='Alice' properties={}>, <Node element_id='0' labels=frozenset() properties={'id': ''}>]]",
+      "error": "Row mismatch: expected [['Alice', None]], got [[<Relationship element_id='286898036' nodes=(<Node element_id='0' labels=frozenset() properties={}>, <Node element_id='1575226253' labels=frozenset() properties={}>) type='Alice' properties={}>, None]]",
       "duration_ms": 3
     },
     {
@@ -64,13 +64,13 @@
       "element": "WHERE",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 6
+      "duration_ms": 4
     },
     {
       "element": "RETURN",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "element": "WITH",
@@ -82,7 +82,7 @@
       "element": "UNWIND",
       "type": "clause",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "ORDER BY",
@@ -93,9 +93,8 @@
     {
       "element": "SKIP",
       "type": "clause",
-      "result": "fail",
-      "error": "Column mismatch: expected ['x'], got []",
-      "duration_ms": 29
+      "result": "pass",
+      "duration_ms": 1
     },
     {
       "element": "LIMIT",
@@ -197,27 +196,27 @@
       "element": "Node",
       "type": "data_type",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "Relationship",
       "type": "data_type",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 44
+      "duration_ms": 47
     },
     {
       "element": "Path",
       "type": "data_type",
       "result": "fail",
       "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 46
+      "duration_ms": 45
     },
     {
       "element": "CASE (simple)",
       "type": "expression",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "CASE (generic)",
@@ -228,16 +227,15 @@
     {
       "element": "List comprehension",
       "type": "expression",
-      "result": "fail",
-      "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <ARGUMENT ERROR> Bad argument given; Details: Incorrect number of parameters} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <ARGUMENT ERROR> Bad argument given; Details: Incorrect number of parameters}",
-      "duration_ms": 0
+      "result": "pass",
+      "duration_ms": 1
     },
     {
       "element": "Map projection",
       "type": "expression",
       "result": "fail",
       "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: Cypher error at line 1, col 28: Expected EOF, got {} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Cypher error at line 1, col 28: Expected EOF, got {}",
-      "duration_ms": 4
+      "duration_ms": 2
     },
     {
       "element": "count()",
@@ -249,13 +247,13 @@
       "element": "count(*)",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "sum()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "avg()",
@@ -267,13 +265,13 @@
       "element": "min()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "max()",
       "type": "function",
       "result": "pass",
-      "duration_ms": 2
+      "duration_ms": 1
     },
     {
       "element": "collect()",
@@ -285,570 +283,659 @@
       "element": "percentileDisc()",
       "type": "function",
       "result": "fail",
-      "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]\r\n[Location: <Prepare>]\r\n[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]\r\n[Location: <Prepare>]\r\n[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_DISC' does not exist>]}",
-      "duration_ms": 3
+      "error": "Query error: Failed to read from defunct connection IPv4Address(('localhost', 20000)) (ResolvedIPv4Address(('127.0.0.1', 20000)))",
+      "duration_ms": 0
     },
     {
       "element": "percentileCont()",
       "type": "function",
       "result": "fail",
-      "error": "Query error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]\r\n[Location: <Prepare>]\r\n[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_CONT' does not exist>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]\r\n[Location: <Prepare>]\r\n[%msg: < User defined SQL function 'GRAPH_KG.PERCENTILE_CONT' does not exist>]}",
-      "duration_ms": 2
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "stDev()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 2
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "stDevP()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 2
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "keys()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 4
+      "result": "fail",
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "labels()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 3
+      "result": "fail",
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "nodes()",
       "type": "function",
       "result": "fail",
-      "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 36
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "relationships()",
       "type": "function",
       "result": "fail",
-      "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 30
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "range()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "reverse()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "tail()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "abs()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "ceil()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "floor()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "round()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "sign()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1108
     },
     {
       "element": "rand()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "log()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 828
     },
     {
       "element": "log10()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "exp()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "e()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 970
     },
     {
       "element": "sqrt()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "sin()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "cos()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "tan()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 2
     },
     {
       "element": "asin()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 2
     },
     {
       "element": "acos()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "atan()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "atan2()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "pi()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "degrees()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "radians()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "haversin()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "toInteger() from float",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "toFloat() from int",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "toInteger() from bool",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "coalesce()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 973
     },
     {
       "element": "head()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "last()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "size()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "size() string",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "toInteger()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 899
     },
     {
       "element": "toFloat()",
       "type": "function",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "toBoolean()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "toString()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "type()",
       "type": "function",
       "result": "fail",
-      "error": "Setup error: {neo4j_code: Neo.ClientError.Statement.SyntaxError} {message: <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. <SQL ERROR>; Details: [SQLCODE: <-23>:<Label is not listed among the applicable tables>]\r\n[Location: <Prepare>]\r\n[%msg: < Label 'NONE' is not listed among the applicable tables^INSERT INTO Graph_KG . rdf_edges ( s , p , o_id ) SELECT None . node_id ,>]}",
-      "duration_ms": 38
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "id()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 5
+      "result": "fail",
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1166
     },
     {
       "element": "properties()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 5
+      "result": "fail",
+      "error": "Setup error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "timestamp()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1163
     },
     {
       "element": "randomUUID()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "left()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "right()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "trim()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "lTrim()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "rTrim()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "toUpper()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 848
     },
     {
       "element": "toLower()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "replace()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "substring()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "split()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "reverse() string",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "toString() from bool",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1128
     },
     {
       "element": "size() string length",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 11
     },
     {
       "element": "datetime()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 2
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 7
     },
     {
       "element": "date()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 4
     },
     {
       "element": "time()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 3
     },
     {
       "element": "localtime()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 2
     },
     {
       "element": "localdatetime()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "duration()",
       "type": "function",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 2
     },
     {
       "element": "+",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "-",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "*",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "/",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "%",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "^",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "=",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "<>",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "<",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": ">",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "<=",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": ">=",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "IS NULL",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "IS NOT NULL",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "AND",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "OR",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 0
     },
     {
       "element": "XOR",
       "type": "operator",
-      "result": "pass",
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
       "duration_ms": 1
     },
     {
       "element": "NOT",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "STARTS WITH",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "ENDS WITH",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "CONTAINS",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 0
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 1
     },
     {
       "element": "=~ (regex)",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "IN",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 2
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "[] (list subscript)",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 2
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 0
     },
     {
       "element": "+ (string concat)",
       "type": "operator",
-      "result": "pass",
-      "duration_ms": 1
+      "result": "fail",
+      "error": "Query error: Couldn't connect to localhost:20000 (resolved to ('[::1]:20000', '127.0.0.1:20000')):\nFailed to establish connection to ResolvedIPv6Address(('::1', 20000, 0, 0)) (reason [Errno 61] Connection refused)\nFailed to establish connection to ResolvedIPv4Address(('127.0.0.1', 20000)) (reason [Errno 61] Connection refused)",
+      "duration_ms": 2
     }
   ]
 }
