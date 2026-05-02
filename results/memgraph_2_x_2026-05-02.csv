@@ -1,0 +1,170 @@
+element,type,result,error,duration_ms
+MATCH,clause,pass,,6
+OPTIONAL MATCH,clause,pass,,2
+MANDATORY MATCH,clause,pass,,1
+WHERE,clause,pass,,1
+RETURN,clause,pass,,0
+WITH,clause,pass,,1
+UNWIND,clause,pass,,0
+ORDER BY,clause,pass,,0
+SKIP,clause,pass,,0
+LIMIT,clause,pass,,0
+CREATE,clause,pass,,0
+DELETE,clause,pass,,1
+SET,clause,pass,,2
+REMOVE,clause,pass,,1
+MERGE,clause,pass,,0
+UNION,clause,pass,,0
+UNION ALL,clause,pass,,0
+CALL [YIELD],clause,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: There is no procedure named 'db.labels'.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. There is no procedure named 'db.labels'.},0
+Boolean,data_type,pass,,1
+Integer,data_type,pass,,0
+Float,data_type,pass,,0
+String,data_type,pass,,0
+Null,data_type,pass,,0
+List,data_type,pass,,1
+Map,data_type,pass,,1
+Node,data_type,pass,,1
+Relationship,data_type,pass,,2
+Path,data_type,pass,,1
+CASE (simple),expression,pass,,2
+CASE (generic),expression,pass,,3
+List comprehension,expression,pass,,4
+Map projection,expression,pass,,1
+count(),function,pass,,1
+count(*),function,pass,,0
+sum(),function,pass,,1
+avg(),function,pass,,0
+min(),function,pass,,0
+max(),function,pass,,0
+collect(),function,pass,,0
+percentileDisc(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'percentileDisc' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'percentileDisc' doesn't exist.},1
+percentileCont(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'percentileCont' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'percentileCont' doesn't exist.},0
+stDev(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'stDev' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'stDev' doesn't exist.},0
+stDevP(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'stDevP' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'stDevP' doesn't exist.},0
+keys(),function,pass,,1
+labels(),function,pass,,1
+nodes(),function,pass,,1
+relationships(),function,pass,,1
+range(),function,pass,,0
+reverse(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: 'reverse' argument at position 1 must be either 'null' or 'string'.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. 'reverse' argument at position 1 must be either 'null' or 'string'.},1
+tail(),function,pass,,0
+abs(),function,pass,,0
+ceil(),function,pass,,0
+floor(),function,pass,,0
+round(),function,pass,,0
+sign(),function,pass,,0
+rand(),function,pass,,0
+log(),function,pass,,0
+log10(),function,pass,,0
+exp(),function,pass,,0
+e(),function,pass,,0
+sqrt(),function,pass,,0
+sin(),function,pass,,0
+cos(),function,pass,,0
+tan(),function,pass,,0
+asin(),function,pass,,0
+acos(),function,pass,,0
+atan(),function,pass,,0
+atan2(),function,pass,,0
+pi(),function,pass,,0
+degrees(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'degrees' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'degrees' doesn't exist.},0
+radians(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'radians' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'radians' doesn't exist.},0
+haversin(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'haversin' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'haversin' doesn't exist.},0
+toInteger() from float,function,pass,,0
+toFloat() from int,function,pass,,0
+toInteger() from bool,function,pass,,1
+coalesce(),function,pass,,6
+head(),function,pass,,0
+last(),function,pass,,0
+size(),function,pass,,0
+size() string,function,pass,,0
+toInteger(),function,pass,,0
+toFloat(),function,pass,,0
+toBoolean(),function,pass,,0
+toString(),function,pass,,0
+type(),function,pass,,1
+id(),function,pass,,1
+properties(),function,pass,,1
+timestamp(),function,pass,,0
+randomUUID(),function,pass,,0
+left(),function,pass,,0
+right(),function,pass,,0
+trim(),function,pass,,0
+lTrim(),function,pass,,0
+rTrim(),function,pass,,0
+toUpper(),function,pass,,0
+toLower(),function,pass,,0
+replace(),function,pass,,0
+substring(),function,pass,,0
+split(),function,pass,,0
+reverse() string,function,pass,,0
+toString() from bool,function,pass,,0
+size() string length,function,pass,,0
+datetime(),function,pass,,27
+date(),function,pass,,0
+time(),function,fail,Query error: {neo4j_code: Memgraph.ClientError.MemgraphError.MemgraphError} {message: Function 'time' doesn't exist.} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Function 'time' doesn't exist.},0
+localtime(),function,pass,,0
+localdatetime(),function,pass,,0
+duration(),function,fail,"Query error: {neo4j_code: Memgraph.TransientError.MemgraphError.MemgraphError} {message: Invalid duration string. 
+""String representing duration should be in the following format:
+
+P[nD]T[nH][nM][nS]
+
+Symbol table:
+|---|---------|
+| D | DAYS    |
+|---|---------|
+| H | HOURS   |
+|---|---------|
+| M | MINUTES |
+|---|---------|
+| S | SECONDS |
+|---|---------|
+
+'n' represents a number that can be an integer of ANY value, or a fraction IF it's the last value in the string.
+All the fields are optional.
+} {gql_status: 50N42} {gql_status_description: error: general processing exception - unexpected error. Invalid duration string. 
+""String representing duration should be in the following format:
+
+P[nD]T[nH][nM][nS]
+
+Symbol table:
+|---|---------|
+| D | DAYS    |
+|---|---------|
+| H | HOURS   |
+|---|---------|
+| M | MINUTES |
+|---|---------|
+| S | SECONDS |
+|---|---------|
+
+'n' represents a number that can be an integer of ANY value, or a fraction IF it's the last value in the string.
+All the fields are optional.
+}",0
++,operator,pass,,0
+-,operator,pass,,0
+*,operator,pass,,0
+/,operator,pass,,0
+%,operator,pass,,0
+^,operator,pass,,0
+=,operator,pass,,0
+<>,operator,pass,,0
+<,operator,pass,,0
+>,operator,pass,,0
+<=,operator,pass,,0
+>=,operator,pass,,0
+IS NULL,operator,pass,,0
+IS NOT NULL,operator,pass,,0
+AND,operator,pass,,1
+OR,operator,pass,,1
+XOR,operator,pass,,1
+NOT,operator,pass,,1
+STARTS WITH,operator,pass,,0
+ENDS WITH,operator,pass,,0
+CONTAINS,operator,pass,,0
+=~ (regex),operator,pass,,0
+IN,operator,pass,,3
+[] (list subscript),operator,pass,,1
++ (string concat),operator,pass,,0

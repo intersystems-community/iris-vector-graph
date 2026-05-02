@@ -1,0 +1,843 @@
+{
+  "metadata": {
+    "database": "IVG on IRIS 2026.1 Community",
+    "adapter": "bolt",
+    "host": "localhost",
+    "port": 20002,
+    "database_version": "iris-vector-graph/5.0.0",
+    "spec_version": "9",
+    "timestamp": "2026-05-02T12:13:54.328537+00:00",
+    "catalog_version": "1.0.0",
+    "total_tests": 133,
+    "passed": 133,
+    "failed": 0,
+    "pass_rate": "100.00%"
+  },
+  "summary_by_type": {
+    "clause": {
+      "total": 18,
+      "passed": 18,
+      "failed": 0
+    },
+    "data_type": {
+      "total": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    "expression": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    "function": {
+      "total": 76,
+      "passed": 76,
+      "failed": 0
+    },
+    "operator": {
+      "total": 25,
+      "passed": 25,
+      "failed": 0
+    }
+  },
+  "results": [
+    {
+      "element": "MATCH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 5
+    },
+    {
+      "element": "OPTIONAL MATCH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 77
+    },
+    {
+      "element": "MANDATORY MATCH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 6
+    },
+    {
+      "element": "WHERE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 5
+    },
+    {
+      "element": "RETURN",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "WITH",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "UNWIND",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "ORDER BY",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "SKIP",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "LIMIT",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "CREATE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "DELETE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 3
+    },
+    {
+      "element": "SET",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 3
+    },
+    {
+      "element": "REMOVE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "MERGE",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "UNION",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "UNION ALL",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "CALL [YIELD]",
+      "type": "clause",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Boolean",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Integer",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Float",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "String",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Null",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "List",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Map",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "Node",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "Relationship",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "Path",
+      "type": "data_type",
+      "result": "pass",
+      "duration_ms": 4
+    },
+    {
+      "element": "CASE (simple)",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "CASE (generic)",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "List comprehension",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "Map projection",
+      "type": "expression",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "count()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "count(*)",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sum()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "avg()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "min()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "max()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "collect()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "percentileDisc()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "percentileCont()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "stDev()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "stDevP()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "keys()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "labels()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "nodes()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "relationships()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "range()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "reverse()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "tail()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "abs()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "ceil()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "floor()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "round()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sign()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "rand()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "log()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "log10()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "exp()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "e()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sqrt()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "sin()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "cos()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "tan()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "asin()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "acos()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "atan()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "atan2()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "pi()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "degrees()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "radians()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "haversin()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toInteger() from float",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toFloat() from int",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toInteger() from bool",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "coalesce()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "head()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "last()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "size()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "size() string",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toInteger()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toFloat()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toBoolean()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toString()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "type()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 2
+    },
+    {
+      "element": "id()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "properties()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 1
+    },
+    {
+      "element": "timestamp()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "randomUUID()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "left()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "right()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "trim()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "lTrim()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "rTrim()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toUpper()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toLower()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "replace()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "substring()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "split()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "reverse() string",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "toString() from bool",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "size() string length",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "datetime()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "date()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "time()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "localtime()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "localdatetime()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "duration()",
+      "type": "function",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "+",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "-",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "*",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "/",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "%",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "^",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "=",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "<>",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "<",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": ">",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "<=",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": ">=",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "IS NULL",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "IS NOT NULL",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "AND",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "OR",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "XOR",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "NOT",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "STARTS WITH",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "ENDS WITH",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "CONTAINS",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "=~ (regex)",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "IN",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "[] (list subscript)",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    },
+    {
+      "element": "+ (string concat)",
+      "type": "operator",
+      "result": "pass",
+      "duration_ms": 0
+    }
+  ]
+}
