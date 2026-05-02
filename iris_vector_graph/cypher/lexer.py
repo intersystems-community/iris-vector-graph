@@ -196,6 +196,8 @@ class Lexer:
                         self._add_token(TokenType.MINUS, char)
                 case '"' | "'":
                     self._tokenize_string(char)
+                case '`':
+                    self._tokenize_backtick_identifier()
                 case "$":
                     self._tokenize_parameter()
                 case c if c.isdigit():
@@ -229,6 +231,26 @@ class Lexer:
             else:
                 self.column += 1
             self.cursor += 1
+
+    def _tokenize_backtick_identifier(self):
+        start_pos = self.cursor
+        start_col = self.column
+        self.cursor += 1
+        self.column += 1
+        value = ""
+        while self.cursor < len(self.source) and self.source[self.cursor] != '`':
+            value += self.source[self.cursor]
+            self.cursor += 1
+            self.column += 1
+        if self.cursor >= len(self.source):
+            raise SyntaxError(
+                f"Unterminated backtick identifier at line {self.line}, col {start_col}"
+            )
+        self.cursor += 1
+        self.column += 1
+        self.tokens.append(
+            Token(TokenType.IDENTIFIER, value, start_pos, self.line, start_col)
+        )
 
     def _tokenize_string(self, quote: str):
         start_pos = self.cursor
