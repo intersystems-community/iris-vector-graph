@@ -1027,7 +1027,9 @@ def translate_to_sql(
                         context.foreach_literals = getattr(
                             context, "foreach_literals", {}
                         )
-                        context.foreach_literals[clause.variable] = item
+                        context.foreach_literals[clause.variable] = (
+                            item.value if isinstance(item, ast.Literal) else item
+                        )
                         for uc in clause.update_clauses:
                             if isinstance(uc, ast.UpdatingClause):
                                 translate_updating_clause(uc, context, metadata)
@@ -1391,6 +1393,9 @@ def translate_create_clause(create, context, metadata):
                         val = v.value
                     elif isinstance(v, ast.Variable) and v.name in context.input_params:
                         val = context.input_params[v.name]
+                    elif isinstance(v, ast.Variable) and getattr(context, "foreach_literals", {}).get(v.name) is not None:
+                        raw = context.foreach_literals[v.name]
+                        val = raw.value if isinstance(raw, ast.Literal) else raw
                     else:
                         val = v
                     context.add_dml(
@@ -2825,6 +2830,15 @@ def translate_expression(expr, context, segment="select") -> str:
         return f"SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
     if isinstance(expr, ast.Variable):
         alias = context.variable_aliases.get(expr.name)
+        if alias == "__foreach_literal__":
+            val = getattr(context, "foreach_literals", {}).get(expr.name)
+            if val is not None:
+                if isinstance(val, str):
+                    safe = val.replace("'", "''")
+                    return f"'{safe}'"
+                if isinstance(val, bool):
+                    return "1" if val else "0"
+                return str(val)
         if not alias:
             if expr.name in context.input_params:
                 v = context.input_params[expr.name]
