@@ -1,0 +1,17 @@
+# iris-dev workspace configuration
+# Commit this file to share connection settings with your team.
+
+# Docker container name (for local development)
+container = "iris-enterprise-2026"
+
+# Default IRIS namespace
+namespace = "USER"
+
+# Alternative: direct host connection (for remote or CI IRIS)
+# host = "iris.example.com"
+# web_port = 52773
+
+# Credentials (optional)
+# Use IRIS_USERNAME / IRIS_PASSWORD env vars instead of committing credentials.
+username = "_SYSTEM"
+# password = "..."  # not recommended in committed files

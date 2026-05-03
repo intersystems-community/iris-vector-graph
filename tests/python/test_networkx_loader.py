@@ -5,6 +5,7 @@ Tests all format support and CLI functionality
 """
 
 import pytest
+pytest.importorskip("pandas", reason="pandas not installed")
 import tempfile
 import json
 import os

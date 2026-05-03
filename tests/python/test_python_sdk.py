@@ -5,6 +5,7 @@ Tests direct IRIS connectivity, graph operations, and data loading
 """
 
 import pytest
+pytest.importorskip("pandas", reason="pandas not installed")
 import json
 import time
 import tempfile

@@ -174,6 +174,7 @@ class TranslationContext:
         self.temporal_derived: Dict[str, str] = (
             {} if parent is None else parent.temporal_derived.copy()
         )
+        self.system_procedure_call: Optional[Any] = None
         self.pending_where = None
         self.mapped_node_aliases: Dict[str, dict] = (
             {} if parent is None else parent.mapped_node_aliases.copy()
@@ -250,15 +251,17 @@ def translate_procedure_call(
 ) -> None:
     """Translate a CALL procedure into a CTE prepended to context.stages.
 
-    Supported procedures:
-    - ivg.vector.search(label, property, query_input, limit [, options])
-     - ivg.neighbors(source_node_or_list, predicate, direction)
-     - ivg.ppr(seed_node_or_list, alpha, max_iterations)
-     - ivg.bm25.search(name, query, k)
-     - ivg.ivf.search(name, query_vec, k, nprobe)
-     - ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops)
+    Supported:
+    - ivg.*       — IVG-specific procedures (vector search, BFS, BM25, etc.)
+    - db.*        — Neo4j built-in procedures (forwarded to engine)
+    - dbms.*      — Neo4j system procedures (forwarded to engine)
+    - apoc.*      — APOC procedures (forwarded to engine)
     """
+    _SYSTEM_PROC_PREFIXES = ("db.", "dbms.", "apoc.", "gds.")
     name = proc.procedure_name
+    if any(name.lower().startswith(p) for p in _SYSTEM_PROC_PREFIXES):
+        context.system_procedure_call = proc
+        return
     if name == "ivg.vector.search":
         _translate_vector_search(proc, context)
     elif name == "ivg.neighbors":
@@ -970,6 +973,13 @@ def translate_to_sql(
 
     if cypher_query.procedure_call is not None:
         translate_procedure_call(cypher_query.procedure_call, context)
+        if context.system_procedure_call is not None:
+            return SQLQuery(
+                sql="__SYSTEM_PROCEDURE__",
+                parameters=[[]],
+                query_metadata=metadata,
+                var_length_paths=None,
+            )
         if not cypher_query.query_parts:
             if context.temporal_derived:
                 for td_name in context.temporal_derived:
