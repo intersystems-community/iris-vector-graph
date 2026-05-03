@@ -634,6 +634,18 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.81.0 (2026-05-02)
+- **feat**: `IVG.CypherEngine` ObjectScript class — instantiate `Local()` or `Remote()` and submit Cypher from pure ObjectScript; returns `%DynamicObject {columns, rows, error}`
+- **feat**: Python-first introspection API — `get_labels()`, `get_relationship_types()`, `get_node_count(label)`, `get_edge_count(predicate)`, `get_label_distribution()`, `get_property_keys(label)`, `node_exists(node_id)` — no Cypher required
+- **feat**: `embed_nodes(label=, predicate=, node_ids=)` typed params — replaces SQL `where=` fragment; `where=` still works with `DeprecationWarning`
+- **fix**: `EmbeddedConnection` now accepts `iris_sql=` param — allows passing pre-loaded `iris.sql` module from `Language=python` methods, bypassing sys.path manipulation
+- **fix**: `is_ready()` and `node_exists()` — replaced `FETCH FIRST 1 ROWS ONLY` with `COUNT(*)` to avoid IRIS 2025.1 community driver segfault
+- **fix**: `_ensure_embedded_iris_first()` — `lib/python` now correctly placed at `sys.path[0]` ahead of `mgr/python`; `_require_iris_sql()` wraps full call chain in single `try/except ImportError`
+- **fix**: Test collection errors for optional deps (`strawberry`, `pandas`) — added `pytest.importorskip` guards
+- **fix**: `test_named_path_with_where_filter` — added node ID anchor to WHERE clause to prevent cross-test data contamination
+- **test**: `tests/e2e/test_execution_contexts_new.py` — all 3 execution contexts (External DBAPI, EmbeddedConnection unit mock, ObjectScript `IVG.CypherEngine` via docker exec)
+- **test**: `tests/e2e/test_introspection_api.py` — e2e coverage for all 7 new introspection methods
+
 ### v1.80.0 (2026-05-02)
 - **feat**: `(n:Person|Animal)` label OR — parser handles `|` between labels; translator generates `IN ('A','B')` JOIN instead of two separate JOINs
 - **feat**: `EXISTS { MATCH (p)-[:R]->(f) WHERE f.age > 18 }` full form — WHERE clause inside EXISTS subquery now parsed and included in the EXISTS SQL correlated subquery

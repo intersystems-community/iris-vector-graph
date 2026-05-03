@@ -101,10 +101,66 @@ class IRISGraphEngine:
     def is_ready(self) -> bool:
         try:
             cur = self.conn.cursor()
-            cur.execute("SELECT 1 FROM Graph_KG.nodes FETCH FIRST 1 ROWS ONLY")
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            cur.fetchone()
             return True
         except Exception:
             return False
+
+    def get_labels(self) -> List[str]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+        return [r[0] for r in cur.fetchall()]
+
+    def get_relationship_types(self) -> List[str]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+        return [r[0] for r in cur.fetchall()]
+
+    def get_node_count(self, label: str = None) -> int:
+        cur = self.conn.cursor()
+        if label:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
+        else:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+        return int(cur.fetchone()[0])
+
+    def get_edge_count(self, predicate: str = None) -> int:
+        cur = self.conn.cursor()
+        if predicate:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [predicate])
+        else:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+        return int(cur.fetchone()[0])
+
+    def get_label_distribution(self) -> Dict[str, int]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT label, COUNT(*) AS cnt FROM Graph_KG.rdf_labels GROUP BY label ORDER BY cnt DESC"
+        )
+        return {r[0]: int(r[1]) for r in cur.fetchall()}
+
+    def get_property_keys(self, label: str = None) -> List[str]:
+        cur = self.conn.cursor()
+        if label:
+            cur.execute(
+                'SELECT DISTINCT rp."key" FROM Graph_KG.rdf_props rp'
+                " JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s"
+                ' WHERE rl.label = ? ORDER BY rp."key"',
+                [label],
+            )
+        else:
+            cur.execute('SELECT DISTINCT "key" FROM Graph_KG.rdf_props ORDER BY "key"')
+        return [r[0] for r in cur.fetchall()]
+
+    def node_exists(self, node_id: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ?",
+            [node_id],
+        )
+        row = cur.fetchone()
+        return row is not None and int(row[0]) > 0
 
     def _reconnect_if_stale(self) -> None:
         try:
@@ -3017,15 +3073,16 @@ class IRISGraphEngine:
         def _exists(s, p, o):
             if graph:
                 cursor.execute(
-                    "SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id=? FETCH FIRST 1 ROWS ONLY",
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id=?",
                     [s, p, o, graph],
                 )
             else:
                 cursor.execute(
-                    "SELECT 1 FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND (graph_id IS NULL) FETCH FIRST 1 ROWS ONLY",
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND (graph_id IS NULL)",
                     [s, p, o],
                 )
-            return cursor.fetchone() is not None
+            row = cursor.fetchone()
+            return row is not None and int(row[0]) > 0
 
         def _insert_inferred(triples):
             nonlocal inferred_count
@@ -3836,6 +3893,8 @@ class IRISGraphEngine:
         batch_size: int = 500,
         force: bool = False,
         progress_callback=None,
+        label: str = None,
+        node_ids: List[str] = None,
     ) -> dict:
         """Incrementally embed nodes from Graph_KG.nodes into kg_NodeEmbeddings.
 
@@ -3859,12 +3918,31 @@ class IRISGraphEngine:
             {"embedded": int, "skipped": int, "errors": int, "total": int}
         """
         from iris_vector_graph.security import sanitize_identifier
+        import warnings
+
+        if where is not None and (label is not None or node_ids is not None):
+            raise ValueError("where= cannot be combined with label= or node_ids=")
 
         if where is not None:
+            warnings.warn(
+                "embed_nodes(where=) is deprecated. Use label=, node_ids=, or predicate= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             if any(
                 x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")
             ):
                 raise ValueError(f"Unsafe WHERE clause rejected: {where!r}")
+
+        if label is not None:
+            where = (
+                f"node_id IN (SELECT s FROM Graph_KG.rdf_labels WHERE label = '{label}')"
+            )
+        elif node_ids is not None:
+            if not node_ids:
+                return {"embedded": 0, "skipped": 0, "errors": 0, "total": 0}
+            placeholders = ", ".join(f"'{nid}'" for nid in node_ids)
+            where = f"node_id IN ({placeholders})"
 
         orig_embedder = self.embedder
         if model is not None:

@@ -144,8 +144,9 @@ class TestNamedPathsE2E:
     def test_named_path_with_where_filter(self):
         """T028"""
         engine = self._engine()
+        node0 = self.nodes[0]
         result = engine.execute_cypher(
-            f"MATCH p = (a)-[r]->(b) WHERE a.name = 'Alice' RETURN nodes(p) AS ns"
+            f"MATCH p = (a)-[r]->(b) WHERE a.name = 'Alice' AND id(a) = '{node0}' RETURN nodes(p) AS ns"
         )
         assert len(result["rows"]) >= 1
         for i in range(len(result["rows"])):
@@ -153,7 +154,7 @@ class TestNamedPathsE2E:
             ns = row["ns"]
             if isinstance(ns, str):
                 ns = json.loads(ns)
-            assert self.nodes[0] in ns
+            assert node0 in ns
 
     def test_no_match_returns_empty(self):
         """T029"""

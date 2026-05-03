@@ -1,4 +1,5 @@
 import pytest
+pytest.importorskip("strawberry", reason="strawberry not installed")
 import json
 from fastapi.testclient import TestClient
 from iris_vector_graph import IRISGraphEngine
