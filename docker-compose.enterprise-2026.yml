@@ -1,0 +1,36 @@
+services:
+  iris:
+    image: containers.intersystems.com/intersystems/iris:2026.1
+    container_name: iris-enterprise-2026
+    ports:
+      - "4972:1972"
+    volumes:
+      - ./docker/enterprise/iris.key:/usr/irissys/mgr/iris.key:ro
+    healthcheck:
+      test: ["CMD", "/usr/irissys/bin/iris", "session", "IRIS", "-U", "%SYS", "Write 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 24
+      start_period: 60s
+    stdin_open: true
+    tty: true
+    networks:
+      - iris-enterprise-net
+
+  webgateway:
+    image: containers.intersystems.com/intersystems/webgateway:2026.1
+    container_name: iris-enterprise-webgateway
+    ports:
+      - "64780:80"
+    depends_on:
+      iris:
+        condition: service_healthy
+    volumes:
+      - ./docker/enterprise/webgateway-init.sh:/webgateway-init.sh:ro
+    entrypoint: ["/bin/sh", "/webgateway-init.sh"]
+    networks:
+      - iris-enterprise-net
+
+networks:
+  iris-enterprise-net:
+    driver: bridge
