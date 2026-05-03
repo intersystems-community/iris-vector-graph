@@ -4,8 +4,11 @@ services:
     container_name: iris-enterprise-2026
     ports:
       - "4972:1972"
+    environment:
+      - ISC_CPF_MERGE_FILE=/merge.cpf
     volumes:
       - ./docker/enterprise/iris.key:/usr/irissys/mgr/iris.key:ro
+      - ./docker/enterprise/merge.cpf:/merge.cpf:ro
     healthcheck:
       test: ["CMD", "/usr/irissys/bin/iris", "session", "IRIS", "-U", "%SYS", "Write 1"]
       interval: 15s
@@ -15,7 +18,7 @@ services:
     stdin_open: true
     tty: true
     networks:
-      - iris-enterprise-net
+      - ivg-enterprise-net
 
   webgateway:
     image: containers.intersystems.com/intersystems/webgateway:2026.1
@@ -27,10 +30,14 @@ services:
         condition: service_healthy
     volumes:
       - ./docker/enterprise/webgateway-init.sh:/webgateway-init.sh:ro
+      - webgateway_data:/webgateway-data
     entrypoint: ["/bin/sh", "/webgateway-init.sh"]
     networks:
-      - iris-enterprise-net
+      - ivg-enterprise-net
 
 networks:
-  iris-enterprise-net:
+  ivg-enterprise-net:
     driver: bridge
+
+volumes:
+  webgateway_data:

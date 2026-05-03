@@ -75,4 +75,9 @@ Python 3.11, InterSystems IRIS 2025.1+: Follow standard conventions
 - 046-ivfflat-index: Added IVFFlat vector index — `ivf_build/search/drop/info` on `IRISGraphEngine`, `Graph.KG.IVFIndex` ObjectScript class, `CALL ivg.ivf.search(...)` Cypher procedure
 
 <!-- MANUAL ADDITIONS START -->
+## Future: Rename `Graph.KG.*` internal package
+The 21 internal implementation classes live in `Graph.KG.*` (generic, collision-prone).
+Candidate rename: `IVG.Core.*` — established pattern, stays in IVG namespace, clearly internal.
+Requires updating all class names, SQL schema references, and `^KG` global docs.
+Deserves its own spec — no user-visible impact, internal contributors only.
 <!-- MANUAL ADDITIONS END -->

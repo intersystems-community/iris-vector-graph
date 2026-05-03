@@ -1,28 +1,59 @@
 #!/bin/sh
-# Start the webgateway in background
 /startWebGateway &
+WG_PID=$!
 
-# BUG 1 FIX: Wait for CSP.ini to be fully initialized before patching.
-# /startWebGateway writes CSP.ini asynchronously — if you sed it immediately,
-# the file gets regenerated and your changes are lost.
 for i in $(seq 1 60); do
-    grep -q "Configuration_Initialized" /opt/webgateway/bin/CSP.ini 2>/dev/null && break
+    if grep -q "Configuration_Initialized" /opt/webgateway/bin/CSP.ini 2>/dev/null; then
+        break
+    fi
     sleep 1
 done
 
-# BUG 2 FIX: Add credentials to [LOCAL] server section.
-# Default tries CSPSystem which doesn't exist in fresh enterprise containers.
-# Without Username/Password the webgateway gets 403 Access Denied from IRIS.
-sed -i '/^\[LOCAL\]/a Username=_SYSTEM\nPassword=SYS' /opt/webgateway/bin/CSP.ini
+cat > /opt/webgateway/bin/CSP.ini << 'CSPEOF'
+[SYSTEM]
+IRISCONNECT_LIBRARY_PATH=/opt/webgateway/bin
+System_Manager=*.*.*.*
+SM_Timeout=28800
+Server_Response_Timeout=60
+No_Activity_Timeout=86400
+Queued_Request_Timeout=60
+Event_Log_Rotation_Size=2000000000
 
-# Point LOCAL at the IRIS container using the Docker service name (not localhost).
-sed -i 's/^Ip_Address=127\.0\.0\.1/Ip_Address=iris/' /opt/webgateway/bin/CSP.ini
+[SYSTEM_INDEX]
+LOCAL=Enabled
 
-# BUG 3 FIX: Use CSP On directive (not SetHandler csp-handler-sa).
-# SetHandler inside <Location> does not route through the CSP module correctly —
-# Apache's filesystem handler intercepts first and returns 404.
-# CSP On is the official ISC pattern from intersystems-community/webgateway-examples.
-cat > /etc/apache2/conf-enabled/CSP.conf << "EOF"
+[LOCAL]
+Username=_SYSTEM
+Password=]]]U1lT
+Ip_Address=iris
+TCP_Port=1972
+Minimum_Server_Connections=3
+Maximum_Session_Connections=6
+
+[APP_PATH_INDEX]
+/=Enabled
+/api=Enabled
+/isc=Enabled
+/csp=Enabled
+
+[APP_PATH:/]
+Default_Server=LOCAL
+Alternative_Server_0=1~~~~~~LOCAL
+
+[APP_PATH:/csp]
+Default_Server=LOCAL
+Alternative_Server_0=1~~~~~~LOCAL
+
+[APP_PATH:/api]
+Default_Server=LOCAL
+Alternative_Server_0=1~~~~~~LOCAL
+
+[APP_PATH:/isc]
+Default_Server=LOCAL
+Alternative_Server_0=1~~~~~~LOCAL
+CSPEOF
+
+cat > /etc/apache2/conf-enabled/CSP.conf << 'APACHEEOF'
 CSPModulePath "${ISC_PACKAGE_INSTALLDIR}/bin/"
 CSPConfigPath "${ISC_PACKAGE_INSTALLDIR}/bin/"
 
@@ -38,7 +69,8 @@ CSPConfigPath "${ISC_PACKAGE_INSTALLDIR}/bin/"
          Require all denied
     </FilesMatch>
 </Directory>
-EOF
+APACHEEOF
 
 apachectl graceful 2>/dev/null || true
-wait
+
+wait $WG_PID
