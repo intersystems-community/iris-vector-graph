@@ -9,7 +9,8 @@ services:
     volumes:
       - ./docker/enterprise/iris.key:/usr/irissys/mgr/iris.key:ro
       - ./docker/enterprise/merge.cpf:/merge.cpf:ro
-      - ./docker/enterprise/post-start.sh:/post-start.sh:ro
+      - ./docker/enterprise/iris-entrypoint.sh:/iris-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/iris-entrypoint.sh"]
     healthcheck:
       test: ["CMD", "/usr/irissys/bin/iris", "session", "IRIS", "-U", "%SYS", "Write 1"]
       interval: 15s
