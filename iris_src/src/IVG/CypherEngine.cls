@@ -224,10 +224,14 @@ Method IsReady() As %Boolean [ Language = python ]
         return 0
 }
 
-/// Quick smoke test — runs MATCH (n) RETURN count(n) AS cnt and checks result.
+/// Quick smoke test — initializes schema if needed, runs MATCH (n) RETURN count(n) AS cnt.
 ClassMethod SmokeTest()
 {
     Set engine = ..Local()
+    If 'engine.IsReady() {
+        Write "Schema not initialized — running InitSchema()...",!
+        Do engine.InitSchema()
+    }
     Set r = engine.Query("MATCH (n) RETURN count(n) AS cnt")
     If r.error '= "" { Write "FAIL: "_r.error,! Quit }
     Set cols = r.columns
