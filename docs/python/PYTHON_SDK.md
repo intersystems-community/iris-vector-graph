@@ -1,5 +1,12 @@
 # IRIS Vector Graph Python SDK (v1.47.0)
 
+> **This document is outdated (last updated at v1.47.0, current release is v1.83.0).**
+> The README.md changelog is the authoritative reference for new API surface from v1.48.0 onward.
+> Key additions since v1.47: `bulk_ingest_edges`, `rebuild_nkg`, `rebuild_kg`, `search_nodes_by_vector`,
+> `status()`, `bulk_create_edges_temporal`, `export/import_temporal_edges_ndjson`, `bm25_*`, `plaid_*`,
+> `ivf_*` (with `build_batch_size`), `KHopCount`/`KHop2Count` fast paths via `execute_cypher`,
+> `create_node(graph=)`, `get_labels`, `get_relationship_types`, and the full introspection API.
+
 This guide documents the Python API surface for `iris-vector-graph` v1.47.0.
 
 ---
