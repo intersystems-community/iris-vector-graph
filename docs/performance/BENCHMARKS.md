@@ -1,33 +1,57 @@
 # IRIS Graph Performance Benchmarks
 
-## Executive Summary
+## LDBC SNB SF10 Benchmarks (current — v1.83.0)
+
+Measured on **LDBC Social Network Benchmark SF10** (54M+ edges, 62K persons, 3.87M KNOWS edges)
+on MacBook M3 Ultra, 128GB RAM. IRIS 2025.1 Enterprise (Build 230) in Docker.
+
+Comparison: GES/GraphScope published SF1000 numbers on large server cluster.
+
+### Query Performance
+
+| Query | IVG p50 | GES SF1000 p50 | Notes |
+|---|---|---|---|
+| IC13 ShortestPath (SF1) | 0.22ms | 2.69ms | IVG faster |
+| IC13 ShortestPath (SF10) | 2.1–3.2ms | 2.69ms | Comparable |
+| IC2 1-hop COUNT (`KHopCount`) | **0.29ms** | 0.14ms | Competitive (was 2.8ms via Cypher) |
+| IC2 1-hop IDs (`KHopNeighborIds`) | **0.9ms** | — | New fast path |
+| IC3 2-hop LIMIT 1000 (`KHop2NeighborIds`) | **1.2ms** | 4.19ms | **3.5× faster than GES** (was 14–22ms) |
+| IC3 2-hop COUNT (`KHop2Count`) | 70ms | — | Was 195ms; 10ms target needs pre-aggregation |
+| IC3 2-hop approx COUNT DISTINCT | 5.3ms | — | 74× vs exact; ~89% accuracy on social graphs |
+
+### Ingestion Throughput
+
+| Method | Throughput | Notes |
+|---|---|---|
+| `bulk_ingest_edges` (ObjectScript `^KG`) | 190–312K edges/s | Bypasses SQL, writes `^KG` directly |
+| `bulk_create_edges` (SQL batch) | ~50K edges/s | Includes index maintenance |
+| `BuildKG` (SF10 rebuild) | 71s | Rebuilds `^KG` from `rdf_edges` SQL |
+| `BuildNKG` (SF10 rebuild) | 422s | Rebuilds `^NKG` integer index |
+
+### Hardware note
+GES numbers are from a large server/cluster at SF1000 scale.
+IVG numbers are from a MacBook M3 Ultra at SF10 scale.
+At comparable hardware and scale, IVG IC13 is faster; IC2/IC3 LIMIT patterns are competitive or faster.
+
+---
+
+## ACORN-1 Benchmarks (legacy — pre-v1.50)
+
+> The following numbers are from an earlier ACORN-1 prototype on a different hardware configuration
+> and dataset. Retained for historical reference only.
+
+### Executive Summary (legacy)
 
 ACORN-1 optimization delivers **21.7x performance improvement** over Community Edition for biomedical knowledge graph operations.
 
-## Test Environment
+### Test Environment (legacy)
 
-### Hardware Configuration
 - **CPU**: Multi-core x86_64
 - **Memory**: 16GB+ RAM allocation for IRIS
-- **Storage**: SSD with Docker volumes
-- **Network**: Local Docker networking
-
-### Software Versions
 - **IRIS**: 2025.3.0EHAT.127.0 (ACORN-1)
-- **IRIS Community**: Latest stable
 - **Python**: 3.8+
-- **Docker**: 20.10+
 
-## Performance Results
 
-### Data Ingestion Performance
-
-| Metric | Community Edition | ACORN-1 | Improvement |
-|--------|------------------|---------|-------------|
-| **Proteins/Second** | 29 | 476 | **21.7x** |
-| **Total Proteins** | 10,000 | 10,000 | - |
-| **Total Time** | 345 seconds | 21 seconds | **16.4x** |
-| **Index Build Time** | 120 seconds | 0.054 seconds | **2,278x** |
 
 ### Query Performance
 

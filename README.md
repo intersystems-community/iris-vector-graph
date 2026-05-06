@@ -634,6 +634,21 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.83.0 (2026-05-06)
+- **feat**: `KHop2Count` + `KHop2NeighborIds(maxResults)` on `Graph.KG.Traversal` — pure ObjectScript 2-hop traversal with process-private dedup, no JSON serialization
+- **feat**: `execute_cypher` routes `[:PRED*2]` COUNT and LIMIT patterns to fast paths — IC3 LIMIT 1000 now **1.2ms p50** (was 14-22ms; 3.5x faster than GES 4.19ms)
+- **feat**: `create_node(graph=)` — optional named graph param stored as `__graph` property; propagated to `bulk_create_nodes` per-node `graph` key
+- **feat**: `bulk_ingest_edges(edges, predicate)` — engine wrapper for `BulkIngestEdges` with `_nkg_dirty` flag and immediate `RuntimeWarning`
+- **feat**: `rebuild_nkg()` — companion to `bulk_ingest_edges`; clears `_nkg_dirty` flag after `^NKG` rebuild
+- **fix**: `ivf_build` `<STRINGSTACK>` on 768-dim embeddings — `IVFIndex.Build` now sets up centroids only; assignments written via new `IVFIndex.AddBatch` in chunks controlled by `build_batch_size=500`
+- **feat**: `IVFIndex.FinalizeIndex(name)` — recounts indexed vectors after all `AddBatch` calls and updates `cfg.indexed`
+
+### v1.82.0 (2026-05-06)
+- **feat**: `dbapi_utils.py` — low-level vector utilities for raw DBAPI cursors without requiring `IRISGraphEngine`: `normalize_vector`, `insert_vector`, `create_hnsw_index`, `create_ivfflat_index`, `vector_similarity_search`
+- **feat**: `KHopCount` + `KHopNeighborIds` on `Graph.KG.Traversal` — O(1) 1-hop count via `^KG("degp")` counter; newline-delimited ID list without JSON overhead
+- **feat**: `execute_cypher` fast path routes single-hop COUNT and `node_id`-only patterns to `KHopCount`/`KHopNeighborIds` — IC2 COUNT now **0.29ms p50** (was 2.8ms)
+- **feat**: `_nkg_dirty` instance flag on `IRISGraphEngine` — `_execute_var_length_cypher` emits `RuntimeWarning` when `^NKG` is stale
+
 ### v1.81.0 (2026-05-02)
 - **feat**: `IVG.CypherEngine` ObjectScript class — instantiate `Local()` or `Remote()` and submit Cypher from pure ObjectScript; returns `%DynamicObject {columns, rows, error}`
 - **feat**: Python-first introspection API — `get_labels()`, `get_relationship_types()`, `get_node_count(label)`, `get_edge_count(predicate)`, `get_label_distribution()`, `get_property_keys(label)`, `node_exists(node_id)` — no Cypher required
