@@ -9,6 +9,13 @@ from .capabilities import IRISCapabilities
 from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
 from .fusion import RRFFusion
+from .dbapi_utils import (
+    normalize_vector,
+    insert_vector,
+    create_hnsw_index,
+    create_ivfflat_index,
+    vector_similarity_search,
+)
 
 try:
     from .embedded import EmbeddedConnection, EmbeddedCursor
