@@ -1,4 +1,4 @@
-/// Graph.KG.NKGAccel — NICHE Knowledge Graph accelerated analytics.
+/// Graph.KG.NKGAccel - NICHE Knowledge Graph accelerated analytics.
 /// Seed-local algorithms run in ObjectScript at $ORDER speed.
 /// Full-graph algorithms export adjacency for Rust consumption.
 ///
@@ -24,7 +24,7 @@ ClassMethod ResetCache()
 /// Load arno callout library and register all function IDs for this process.
 /// Call once at startup: Do ##class(Graph.KG.NKGAccel).Load("/path/to/libarno_callout.so")
 /// Returns 1 on success, 0 if library not found or load failed.
-/// Safe to call multiple times — no-ops if already loaded in this process.
+/// Safe to call multiple times - no-ops if already loaded in this process.
 ClassMethod Load(libPath As %String = "/usr/irissys/mgr/libarno_callout.so") As %Boolean
 {
     If $Data(^||NKGAccel("dllid")) Return 1
@@ -44,7 +44,7 @@ ClassMethod IsLoaded() As %Boolean
 }
 
 // ============================================================
-// T015: ExportAdjacency — full graph for Rust consumption
+// T015: ExportAdjacency - full graph for Rust consumption
 // ============================================================
 
 /// Export full graph adjacency as integer-indexed lines.
@@ -56,10 +56,10 @@ ClassMethod ExportAdjacency() As %String
     Return ..ExportAdjacencyKG()
 }
 
-/// Export from ^NKG (integer subscripts — zero string overhead)
+/// Export from ^NKG (integer subscripts - zero string overhead)
 ClassMethod ExportAdjacencyNKG() As %String [ Private ]
 {
-    Set result = "", chunk = "", chunkNum = 0
+    Set chunkNum = 0, chunk = ""
     Set src = ""
     For {
         Set src = $Order(^NKG(-3, src))
@@ -74,35 +74,40 @@ ClassMethod ExportAdjacencyNKG() As %String [ Private ]
                 Quit:dst=""
                 Set:nbrs'="" nbrs = nbrs _ ","
                 Set nbrs = nbrs _ dst
+                If $Length(nbrs) > 7000 {
+                    Set line = src _ ":" _ nbrs _ $Char(10)
+                    If $Length(chunk) > 0 {
+                        Set chunkNum = chunkNum + 1
+                        Set ^||adj(chunkNum) = chunk
+                    }
+                    Set chunkNum = chunkNum + 1
+                    Set ^||adj(chunkNum) = line
+                    Set chunk = "", nbrs = ""
+                }
             }
         }
-        Set line = src _ ":" _ nbrs _ $Char(10)
-        If $Length(result) + $Length(line) > 3000000 {
-            // Switch to chunked mode
-            If chunkNum = 0 {
-                Set chunkNum = 1
-                Set ^||adj(1) = result
-                Set result = ""
-            }
-            If $Length(chunk) + $Length(line) > 32000 {
+        If nbrs '= "" {
+            Set line = src _ ":" _ nbrs _ $Char(10)
+            If $Length(chunk) + $Length(line) > 7000 && $Length(chunk) > 0 {
                 Set chunkNum = chunkNum + 1
                 Set ^||adj(chunkNum) = chunk
                 Set chunk = ""
             }
             Set chunk = chunk _ line
-        } Else {
-            Set result = result _ line
         }
     }
+    If chunk '= "" {
+        Set chunkNum = chunkNum + 1
+        Set ^||adj(chunkNum) = chunk
+    }
     If chunkNum > 0 {
-        If chunk '= "" { Set chunkNum = chunkNum + 1, ^||adj(chunkNum) = chunk }
         Set ^||adj = chunkNum
         Return "CHUNKED:" _ chunkNum
     }
-    Return result
+    Return ""
 }
 
-/// Export from ^KG (string subscripts — builds node index on the fly)
+/// Export from ^KG (string subscripts - builds node index on the fly)
 ClassMethod ExportAdjacencyKG() As %String [ Private ]
 {
     // Pass 1: assign integer indices to all nodes
@@ -178,11 +183,11 @@ ClassMethod ExportAdjacencyKG() As %String [ Private ]
 }
 
 // ============================================================
-// T019: KHopNeighbors — seed-local BFS at $ORDER speed
+// T019: KHopNeighbors - seed-local BFS at $ORDER speed
 // ============================================================
 
 /// k-hop BFS from a seed node. Returns JSON with visited nodes and distances.
-/// Runs entirely in ObjectScript — no Rust, no graph serialization.
+/// Runs entirely in ObjectScript - no Rust, no graph serialization.
 /// Cost: ~0.5ms for 2-hop fanout-16 regardless of graph size.
 ClassMethod KHopNeighbors(seedId As %String, k As %Integer = 2, maxNodes As %Integer = 1000) As %String
 {
@@ -268,9 +273,107 @@ KHDone
     Return result
 }
 
-// ============================================================
-// T020: PPRNative — Personalized PageRank via power iteration
-// ============================================================
+ClassMethod KHopNeighborsSorted(seedId As %String, k As %Integer = 2, maxNodes As %Integer = 1000) As %String
+{
+    Set useNKG = ..UseNKG()
+    If useNKG {
+        Set seedIdx = $Get(^NKG("$NI", seedId))
+        If seedIdx = "" Return "SORTED:0"
+    }
+
+    Kill ^||visited, ^||frontier, ^||nextFrontier
+    If useNKG {
+        Set ^||visited(seedIdx) = 0
+        Set ^||frontier(seedIdx) = ""
+    } Else {
+        Set ^||visited(seedId) = 0
+        Set ^||frontier(seedId) = ""
+    }
+    Set totalNodes = 1
+
+    For hop = 1:1:k {
+        Kill ^||nextFrontier
+        Set node = ""
+        For {
+            Set node = $Order(^||frontier(node))
+            Quit:node=""
+            If useNKG {
+                Set pred = ""
+                For {
+                    Set pred = $Order(^NKG(-1, node, pred))
+                    Quit:pred=""
+                    Set dst = ""
+                    For {
+                        Set dst = $Order(^NKG(-1, node, pred, dst))
+                        Quit:dst=""
+                        If '$Data(^||visited(dst)) {
+                            Set ^||visited(dst) = hop
+                            Set ^||nextFrontier(dst) = ""
+                            Set totalNodes = totalNodes + 1
+                            If totalNodes >= maxNodes Goto KHSDone
+                        }
+                    }
+                }
+            } Else {
+                Set pred = ""
+                For {
+                    Set pred = $Order(^KG("out", node, pred))
+                    Quit:pred=""
+                    Set dst = ""
+                    For {
+                        Set dst = $Order(^KG("out", node, pred, dst))
+                        Quit:dst=""
+                        If '$Data(^||visited(dst)) {
+                            Set ^||visited(dst) = hop
+                            Set ^||nextFrontier(dst) = ""
+                            Set totalNodes = totalNodes + 1
+                            If totalNodes >= maxNodes Goto KHSDone
+                        }
+                    }
+                }
+            }
+        }
+        Kill ^||frontier
+        Merge ^||frontier = ^||nextFrontier
+    }
+
+KHSDone
+    Set tag = $TR($ZHex($Now())_$ZHex($RANDOM(999999)),":.","__")
+    Set node = ""
+    For {
+        Set node = $Order(^||visited(node), 1, dist)
+        Quit:node=""
+        If useNKG {
+            Set nodeStr = $Get(^NKG("$ND", node), node)
+        } Else {
+            Set nodeStr = node
+        }
+        Set ^ArnoKG("khop_r", tag, dist, nodeStr) = ""
+    }
+    Return "SORTED:" _ tag _ ":" _ (totalNodes - 1) _ ":" _ seedId _ ":" _ k
+}
+
+ClassMethod ReadKHopResults(tag As %String) As %String
+{
+    Set dist = "", first = 1
+    Set result = ""
+    Set totalNodes = 0
+    For {
+        Set dist = $Order(^ArnoKG("khop_r", tag, dist))
+        Quit:dist=""
+        Set node = ""
+        For {
+            Set node = $Order(^ArnoKG("khop_r", tag, dist, node))
+            Quit:node=""
+            If 'first Set result = result _ ","
+            Set first = 0
+            Set result = result _ "{""id"":"""_$Replace(node,"""","\\""")_""",""dist"":"_dist_"}"
+            Set totalNodes = totalNodes + 1
+        }
+    }
+    Kill ^ArnoKG("khop_r", tag)
+    Return result
+}
 
 /// Personalized PageRank from seed node(s). Runs in ObjectScript.
 /// Returns top-K nodes with scores as JSON.
@@ -388,7 +491,7 @@ ClassMethod PPRNative(seedId As %String, alpha As %Double = 0.85, maxIter As %In
             Set first = 0
             Set result = result _ "{""id"":"""_nodeId_""",""score"":"_$FNumber(score,"",6)_"}"
             Set count = count + 1
-            If count >= topK Goto PPRDone
+            If topK > 0 && count >= topK Goto PPRDone
         }
     }
 
@@ -401,19 +504,19 @@ PPRDone
 // Wrappers that replace CacheGraphJson path for seed-local
 // ============================================================
 
-/// K-hop neighborhood — pure ObjectScript, no Rust needed
+/// K-hop neighborhood - pure ObjectScript, no Rust needed
 ClassMethod KHopJson(seedId As %String, k As %Integer = 2, maxNodes As %Integer = 1000) As %String
 {
-    Return ..KHopNeighbors(seedId, k, maxNodes)
+    Return ..StoreLargeOut("KHOP", ..KHopNeighbors(seedId, k, maxNodes))
 }
 
-/// Personalized PageRank — pure ObjectScript on local subgraph
+/// Personalized PageRank - pure ObjectScript on local subgraph
 ClassMethod PPRJson(seedId As %String, alpha As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
-    Return ..PPRNative(seedId, alpha, maxIter)
+    Return ..StoreLargeOut("PPR", ..PPRNative(seedId, alpha, maxIter))
 }
 
-/// Random walk — pure ObjectScript
+/// Random walk - pure ObjectScript
 ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWalks As %Integer = 10) As %String
 {
     Set useNKG = ..UseNKG()
@@ -447,33 +550,175 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
         Set result = result _ "]"
     }
     Set result = result _ "]"
-    Return result
+    Return ..StoreLargeOut("RW", result)
 }
 
- ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
+ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
 {
     Set dllPath = $Get(^||NKGAccel("libPath"), "/usr/irissys/mgr/libarno_callout.so")
-    If '$Data(^||NKGAccel("bfs_fn")) {
+    If '$Data(^||NKGAccel("compute_fn")) {
         Set dllid = $ZF(-4, 1, dllPath)
         If dllid = 0 {
             Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
         }
         Set ^||NKGAccel("dllid") = dllid
+        Set ^||NKGAccel("compute_fn") = $ZF(-4, 3, dllid, "kg_bfs_compute")
+        Set ^||NKGAccel("read_fn") = $ZF(-4, 3, dllid, "kg_bfs_read_chunk")
         Set ^||NKGAccel("bfs_fn") = $ZF(-4, 3, dllid, "kg_bfs_global")
     }
     Set dllid = ^||NKGAccel("dllid")
-    Set fnid = ^||NKGAccel("bfs_fn")
-    If fnid = 0 {
+    Set computeFn = ^||NKGAccel("compute_fn")
+    If computeFn = 0 {
         Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
     }
+    Do ..CacheNKGAdj()
+    If '$Data(^ArnoKG("KG", "nkg_adj")) {
+        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+    }
+    Kill ^ArnoKG("bfs_result")
+    Set raw = $ZF(-5, dllid, computeFn, "^ArnoKG", "^ArnoKG", seed, predicatesJson, maxHops, maxResults)
+    If $Extract(raw, 1, 8) '= "CHUNKED:" {
+        Return raw
+    }
+    Set n = $Piece(raw, ":", 3)
+    Set readFn = ^||NKGAccel("read_fn")
+    Return raw
+}
 
-    // Per-seed export: only export the subgraph reachable from seed (bounded by maxHops+1)
-    // This keeps adjStr small even on 300K+ edge graphs
-    Set adjStr = ..ExportAdjacencyFromSeed(seed, maxHops + 1, predicatesJson)
-    If $Length(adjStr) = 0 {
-        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+ClassMethod InvalidateAdjCache()
+{
+    Kill ^ArnoKG("KG", "nkg_adj_ver")
+    Kill ^ArnoKG("KG", "nkg_adj")
+}
+
+ClassMethod GetFirstNKGNode() As %String
+{
+    Return $Get(^NKG("$ND", 0), "")
+}
+
+ClassMethod ShortestPathNKG(srcId As %String, dstId As %String, maxHops As %Integer = 10) As %String
+{
+    If srcId = "" || dstId = "" { Return "{""hops"":-1}" }
+
+    Set srcIdx = $Get(^NKG("$NI", srcId), "")
+    Set dstIdx = $Get(^NKG("$NI", dstId), "")
+    If srcIdx = "" { Return "{""hops"":-1}" }
+    If dstIdx = "" { Return "{""hops"":-1}" }
+    If srcIdx = dstIdx { Return "{""hops"":0}" }
+
+    Kill ^||BF, ^||BB, ^||SF, ^||SB, ^||NF, ^||NB
+    Set ^||BF(srcIdx) = "", ^||SF(srcIdx) = 0
+    Set ^||BB(dstIdx) = "", ^||SB(dstIdx) = 0
+
+    For fHop = 1:1:maxHops {
+        Kill ^||NF
+        Set ni = ""
+        For {
+            Set ni = $Order(^||BF(ni))
+            Quit:ni=""
+            Set pred = ""
+            For {
+                Set pred = $Order(^NKG(-1, ni, pred))
+                Quit:pred=""
+                Set di = ""
+                For {
+                    Set di = $Order(^NKG(-1, ni, pred, di))
+                    Quit:di=""
+                    If $Data(^||SB(di)) {
+                        Set result = fHop + ^||SB(di)
+                        Kill ^||BF,^||BB,^||SF,^||SB,^||NF,^||NB
+                        Return "{""hops"":"_result_"}"
+                    }
+                    If '$Data(^||SF(di)) { Set ^||SF(di) = fHop, ^||NF(di) = "" }
+                }
+            }
+        }
+        If '$Data(^||NF) { Kill ^||BF,^||BB,^||SF,^||SB,^||NF,^||NB  Return "{""hops"":-1}" }
+        Kill ^||BF  Merge ^||BF = ^||NF
+
+        Kill ^||NB
+        Set bHop = fHop
+        Set ni = ""
+        For {
+            Set ni = $Order(^||BB(ni))
+            Quit:ni=""
+            Set pred = ""
+            For {
+                Set pred = $Order(^NKG(-2, ni, pred))
+                Quit:pred=""
+                Set si = ""
+                For {
+                    Set si = $Order(^NKG(-2, ni, pred, si))
+                    Quit:si=""
+                    If $Data(^||SF(si)) {
+                        Set result = ^||SF(si) + bHop
+                        Kill ^||BF,^||BB,^||SF,^||SB,^||NF,^||NB
+                        Return "{""hops"":"_result_"}"
+                    }
+                    If '$Data(^||SB(si)) { Set ^||SB(si) = bHop, ^||NB(si) = "" }
+                }
+            }
+        }
+        If '$Data(^||NB) { Kill ^||BF,^||BB,^||SF,^||SB,^||NF,^||NB  Return "{""hops"":-1}" }
+        Kill ^||BB  Merge ^||BB = ^||NB
     }
-    Return $ZF(-5, dllid, fnid, adjStr, seed, predicatesJson, maxHops, maxResults)
+    Kill ^||BF,^||BB,^||SF,^||SB,^||NF,^||NB
+    Return "{""hops"":-1}"
+}
+
+ClassMethod WarmAdjCache() As %Integer
+{
+    Do ..CacheNKGAdj()
+    Return $Get(^ArnoKG("KG", "nkg_adj"), 0)
+}
+
+ClassMethod StoreLargeOut(tag As %String, json As %String) As %String [ Private ]
+{
+    If $Length(json) <= 9000 { Return json }
+    Kill ^||LargeOut(tag)
+    Set chunkSize = 9000, pos = 1, n = 0
+    While pos <= $Length(json) {
+        Set n = n + 1
+        Set ^||LargeOut(tag, n) = $Extract(json, pos, pos + chunkSize - 1)
+        Set pos = pos + chunkSize
+    }
+    Return "CHUNKED:" _ tag _ ":" _ n
+}
+
+ClassMethod ReadLargeOutChunk(tag As %String, chunkNum As %Integer) As %String
+{
+    If tag = "BFS" { Return $Get(^ArnoKG("bfs_result", chunkNum), "") }
+    Return $Get(^||LargeOut(tag, chunkNum), "")
+}
+
+ClassMethod CacheNKGAdj() [ Private ]
+{
+    Set currentVer = $Get(^NKG("$meta", "version"), 0)
+    Set cachedVer = $Get(^ArnoKG("KG", "nkg_adj_ver"), -1)
+    If cachedVer = currentVer Quit
+    Kill ^ArnoKG("KG", "nkg_adj")
+    Set adj = ..ExportAdjacency()
+    If $Extract(adj, 1, 8) = "CHUNKED:" {
+        // ExportAdjacencyNKG already wrote chunks to ^||adj(1..N)
+        // Transfer them directly to ^ArnoKG("KG","nkg_adj",1..N)
+        Set n = $Piece(adj, ":", 2)
+        For i = 1:1:n {
+            Set ^ArnoKG("KG", "nkg_adj", i) = $Get(^||adj(i), "")
+        }
+        Set ^ArnoKG("KG", "nkg_adj") = n
+    } ElseIf $Length(adj) <= 32000 {
+        Set ^ArnoKG("KG", "nkg_adj") = 1
+        Set ^ArnoKG("KG", "nkg_adj", 1) = adj
+    } Else {
+        Set pos = 1, chunkNum = 0
+        While pos <= $Length(adj) {
+            Set chunkNum = chunkNum + 1
+            Set ^ArnoKG("KG", "nkg_adj", chunkNum) = $Extract(adj, pos, pos + 32000 - 1)
+            Set pos = pos + 32000
+        }
+        Set ^ArnoKG("KG", "nkg_adj") = chunkNum
+    }
+    Set ^ArnoKG("KG", "nkg_adj_ver") = currentVer
 }
 
 ClassMethod ExportAdjacencyFromSeed(seed As %String, maxHops As %Integer = 4, predicatesJson As %String = "[]") As %String [ Private ]
@@ -615,6 +860,16 @@ ClassMethod ExportAdjacencyWithPreds() As %String [ Private ]
     Return result
 }
 
+ClassMethod BuildNKGRust() As %String
+{
+    Try {
+        Set result = $ZF(-5, "libarno_callout.so", "kg_build_nkg")
+        Return result
+    } Catch ex {
+        Return "{""error"":""Rust callout unavailable: "_ex.DisplayString()_"""}"
+    }
+}
+
 ClassMethod Capabilities() As %String
 {
     Set cap = {}
@@ -639,7 +894,130 @@ ClassMethod Capabilities() As %String
     }
     Do cap.%Set("rust_algorithms", rustAlgos)
     Do cap.%Set("bfs", 1, "boolean")
+    Do cap.%Set("count_distinct_khop", 1, "boolean")
     Return cap.%ToJSON()
+}
+
+ClassMethod CountDistinctKHop(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, direction As %String = "both") As %String
+{
+    Set sIdx = ##class(Graph.KG.GraphIndex).GetNodeIdx(srcId)
+    If sIdx = "" Return "{""estimate"":0,""registers"":256,""std_error"":0.065,""note"":""node not found""}"
+
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") && (predsJson '= "[]") {
+        Try {
+            Set preds = ##class(%DynamicArray).%FromJSON(predsJson)
+        } Catch {
+            Set preds = ""
+        }
+    }
+
+    Set predsIdxArr = ""
+    If $IsObject(preds) {
+        Set predsIdxArr = ##class(%DynamicArray).%New()
+        For pi = 0:1:(preds.%Size()-1) {
+            Set pName = preds.%Get(pi)
+            Set pIdx = ##class(Graph.KG.GraphIndex).GetLabelIdx(pName)
+            If pIdx '= "" Do predsIdxArr.%Push(pIdx)
+        }
+    }
+
+    Set merged = ##class(Graph.KG.GraphIndex).EmptyHLL()
+    Kill seen, frontier
+    Set seen(sIdx) = ""
+    Set frontier(sIdx) = ""
+
+    // Strategy: expand (maxHops-1) hops to reach the "penultimate" frontier,
+    // then merge those nodes' pre-aggregated HLL sketches to estimate the final hop count.
+    // For *1..2: expand 1 hop (get direct friends), merge their HLLs (estimates 2nd-hop count).
+    // For *1..3: expand 2 hops, merge those nodes' HLLs (estimates 3rd-hop count).
+    // This avoids materializing the final hop entirely -- O(frontier) not O(result_set).
+    Set expansionHops = maxHops - 1
+
+    For hop = 1:1:expansionHops {
+        Kill nextFrontier
+        Set s = ""
+        For {
+            Set s = $Order(frontier(s))
+            Quit:s=""
+            If direction = "out" || (direction = "both") {
+                Set pIdx2 = ""
+                For {
+                    Set pIdx2 = $Order(^NKG(-1, s, pIdx2))
+                    Quit:pIdx2=""
+                    If pIdx2 >= 0 Quit
+                    If $IsObject(predsIdxArr) {
+                        Set matched = 0
+                        For pi = 0:1:(predsIdxArr.%Size()-1) {
+                            If -(pIdx2+1) = predsIdxArr.%Get(pi) { Set matched = 1  Quit }
+                        }
+                        If 'matched Continue
+                    }
+                    Set oIdx = ""
+                    For {
+                        Set oIdx = $Order(^NKG(-1, s, pIdx2, oIdx))
+                        Quit:oIdx=""
+                        If '$Data(seen(oIdx)) {
+                            Set seen(oIdx) = ""
+                            Set nextFrontier(oIdx) = ""
+                        }
+                    }
+                }
+            }
+            If direction = "in" || (direction = "both") {
+                Set pIdx2 = ""
+                For {
+                    Set pIdx2 = $Order(^NKG(-2, s, pIdx2))
+                    Quit:pIdx2=""
+                    If pIdx2 >= 0 Quit
+                    If $IsObject(predsIdxArr) {
+                        Set matched = 0
+                        For pi = 0:1:(predsIdxArr.%Size()-1) {
+                            If -(pIdx2+1) = predsIdxArr.%Get(pi) { Set matched = 1  Quit }
+                        }
+                        If 'matched Continue
+                    }
+                    Set oIdx = ""
+                    For {
+                        Set oIdx = $Order(^NKG(-2, s, pIdx2, oIdx))
+                        Quit:oIdx=""
+                        If '$Data(seen(oIdx)) {
+                            Set seen(oIdx) = ""
+                            Set nextFrontier(oIdx) = ""
+                        }
+                    }
+                }
+            }
+        }
+        If '$Data(nextFrontier) Quit
+        Merge frontier = nextFrontier
+    }
+
+    // Merge pre-aggregated HLL for each node in the final frontier.
+    // Each node's HLL pre-aggregates its outbound neighbors for each predicate.
+    Set s = ""
+    For {
+        Set s = $Order(frontier(s))
+        Quit:s=""
+        If $IsObject(predsIdxArr) {
+            For pi = 0:1:(predsIdxArr.%Size()-1) {
+                Set pIdx = predsIdxArr.%Get(pi)
+                Set hll = $Get(^NKG("$agg", s, pIdx, "hll"))
+                If hll '= "" Do ##class(Graph.KG.GraphIndex).MergeHLL(.merged, hll)
+            }
+        } Else {
+            Set pIdx = ""
+            For {
+                Set pIdx = $Order(^NKG("$agg", s, pIdx))
+                Quit:pIdx=""
+                Set hll = $Get(^NKG("$agg", s, pIdx, "hll"))
+                If hll '= "" Do ##class(Graph.KG.GraphIndex).MergeHLL(.merged, hll)
+            }
+        }
+    }
+
+    Set estimate = ##class(Graph.KG.GraphIndex).EstimateHLL(merged)
+    Return "{""estimate"":"_estimate_",""registers"":256,""std_error"":0.065}"
 }
 
 }

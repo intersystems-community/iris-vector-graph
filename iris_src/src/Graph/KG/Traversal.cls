@@ -102,6 +102,7 @@ ClassMethod BuildNKG() As %Status
 					Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
 					Set edgeCount = edgeCount + 1
 				}
+				Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
 			}
 		}
 		Set ^NKG(-3, sIdx) = $Get(^KG("deg", src))
@@ -153,7 +154,7 @@ ClassMethod TraverseAllPredicates(s As %String, hop As %Integer, maxHops As %Int
 /// Optimized BFS using Process-Private Globals and $ListBuild to bypass object bottleneck
 /// @param direction "out" (default), "in", or "both" for undirected BFS
 /// @returns Number of edges found. Results are in ^||BFS.Results(i) = $lb(s, p, o, w, step)
-ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %Integer
+ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %Integer
 {
     Kill ^||BFS.Results
     If (srcId = "") || (maxHops <= 0) Return 0
@@ -171,6 +172,7 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
         For {
             Set s = $Order(frontier(s))
             If s = "" Quit
+            If (maxResults > 0) && (count >= maxResults) Quit
             
             If direction = "out" || (direction = "both") {
                 If fixedP '= "" {
@@ -189,6 +191,7 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
             }
         }
         
+        If (maxResults > 0) && (count >= maxResults) Quit
         If '$Data(nextFrontier) Quit
         Merge frontier = nextFrontier
         Set node = ""
@@ -354,6 +357,191 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
     }
 
     Return result.%ToJSON()
+}
+
+ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
+{
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") {
+        Try {
+            Set preds = ##class(%DynamicArray).%FromJSON(predsJson)
+        } Catch {
+            Set preds = ""
+        }
+    }
+
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults)
+
+    If count = 0 Return "CHUNKED:0"
+    If (maxResults > 0) && (count > maxResults) Set count = maxResults
+
+    Set tag = $TR($ZHex($Now())_$ZHex($RANDOM(999999)),":.","__")
+    Set chunkSize = 9000
+    Set chunk = ""
+    Set chunkNum = 0
+    Set first = 1
+
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        Set obj = "{""s"":"""_$Replace($ListGet(lb,1),"""","\\""")_""",""p"":"""_$Replace($ListGet(lb,2),"""","\\""")_""",""o"":"""_$Replace($ListGet(lb,3),"""","\\""")_""",""w"":"_(+$ListGet(lb,4))_",""step"":"_(+$ListGet(lb,5))_"}"
+        If 'first Set obj = "," _ obj
+        Set first = 0
+        Set chunk = chunk _ obj
+        If $Length(chunk) > chunkSize {
+            Set chunkNum = chunkNum + 1
+            Set ^ArnoKG("bfs_chunk", tag, chunkNum) = chunk
+            Set chunk = ""
+        }
+    }
+    If chunk '= "" {
+        Set chunkNum = chunkNum + 1
+        Set ^ArnoKG("bfs_chunk", tag, chunkNum) = chunk
+    }
+
+    Return "CHUNKED:" _ tag _ ":" _ chunkNum
+}
+
+ClassMethod ReadBFSChunk(tag As %String, chunkNum As %Integer) As %String
+{
+    Set val = $Get(^ArnoKG("bfs_chunk", tag, chunkNum), "")
+    Kill ^ArnoKG("bfs_chunk", tag, chunkNum)
+    Return val
+}
+
+ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
+{
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") {
+        Try {
+            Set preds = ##class(%DynamicArray).%FromJSON(predsJson)
+        } Catch {
+            Set preds = ""
+        }
+    }
+
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults)
+
+    If count = 0 Return "SORTED:0"
+    If (maxResults > 0) && (count > maxResults) Set count = maxResults
+
+    Set tag = $TR($ZHex($Now())_$ZHex($RANDOM(999999)),":.","__")
+
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        Set s = $ListGet(lb, 1)
+        Set p = $ListGet(lb, 2)
+        Set o = $ListGet(lb, 3)
+        Set w = +$ListGet(lb, 4)
+        Set step = +$ListGet(lb, 5)
+        Set ^ArnoKG("bfs_r", tag, step, o) = $ListBuild(s, p, w)
+    }
+
+    Return "SORTED:" _ tag _ ":" _ count
+}
+
+ClassMethod ReadBFSResults(tag As %String) As %String
+{
+    Set result = "["
+    Set first = 1
+    Set step = ""
+    For {
+        Set step = $Order(^ArnoKG("bfs_r", tag, step))
+        Quit:step=""
+        Set o = ""
+        For {
+            Set o = $Order(^ArnoKG("bfs_r", tag, step, o), 1, lb)
+            Quit:o=""
+            If 'first Set result = result _ ","
+            Set first = 0
+            Set s = $ListGet(lb, 1)
+            Set p = $ListGet(lb, 2)
+            Set w = +$ListGet(lb, 3)
+            Set result = result _ "{""s"":"""_$Replace(s,"""","\\""")_""",""p"":"""_$Replace(p,"""","\\""")_""",""o"":"""_$Replace(o,"""","\\""")_""",""w"":"_w_",""step"":"_step_"}"
+        }
+    }
+    Kill ^ArnoKG("bfs_r", tag)
+    Return result _ "]"
+}
+
+ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %String, pageSize As %Integer = 500) As %String
+{
+    Set result = ""
+    Set count = 0
+    Set nextStep = ""
+    Set nextO = ""
+
+    Set step = cursorStep
+    Set o = cursorO
+
+    If step = "" {
+        Set step = $Order(^ArnoKG("bfs_r", tag, ""))
+        Set o = ""
+    }
+    If step = "" {
+        Kill ^ArnoKG("bfs_r", tag)
+        Return "{""items"":[],""next_step"":-1,""next_o"":"""",""done"":true}"
+    }
+
+    For {
+        Quit:step=""
+        Set o = $Order(^ArnoKG("bfs_r", tag, step, o), 1, lb)
+        If o = "" {
+            Set step = $Order(^ArnoKG("bfs_r", tag, step))
+            Set o = ""
+            Continue
+        }
+
+        Set s = $ListGet(lb, 1)
+        Set p = $ListGet(lb, 2)
+        Set w = +$ListGet(lb, 3)
+        Set entry = "{""s"":"""_$Replace(s,"""","\\""")_""",""p"":"""_$Replace(p,"""","\\""")_""",""o"":"""_$Replace(o,"""","\\""")_""",""w"":"_w_",""step"":"_step_"}"
+        If result '= "" Set result = result _ ","
+        Set result = result _ entry
+        Set count = count + 1
+
+        If count >= pageSize {
+            Set nextO = $Order(^ArnoKG("bfs_r", tag, step, o))
+            If nextO = "" {
+                Set nextStep = $Order(^ArnoKG("bfs_r", tag, step))
+                Set nextO = ""
+            } Else {
+                Set nextStep = step
+            }
+            Set stepVal = $Select(nextStep="":"-1",1:nextStep)
+            Set oVal = """"_$Replace(nextO,"""","\\""")_""""
+            Return "{""items"":["_result_"],""next_step"":"_stepVal_",""next_o"":"_oVal_",""done"":false}"
+        }
+    }
+
+    Kill ^ArnoKG("bfs_r", tag)
+    Return "{""items"":["_result_"],""next_step"":-1,""next_o"":"""",""done"":true}"
+}
+
+ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %Integer
+{
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") {
+        Try {
+            Set preds = ##class(%DynamicArray).%FromJSON(predsJson)
+        } Catch {
+            Set preds = ""
+        }
+    }
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
+    Set distinct = 0
+    Set seen2 = ""
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        Set o = $ListGet(lb, 3)
+        If '$Data(seen2(o)) {
+            Set seen2(o) = ""
+            Set distinct = distinct + 1
+        }
+    }
+    Return distinct
 }
 
 ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", findAll As %Integer = 0) As %String
@@ -691,6 +879,220 @@ ClassMethod KGEdgeCount(maxCount As %Integer = 10000) As %Integer
 ClassMethod NKGPopulated() As %Integer
 {
     Return ($Data(^NKG) > 0)
+}
+
+/// O(1) 1-hop neighbor count for a single predicate via ^KG("degp") counter.
+/// Falls back to $Order scan when degp is not populated.
+ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
+{
+    If pred '= "" {
+        Set cnt = $Get(^KG("degp", srcId, pred), -1)
+        If cnt >= 0 Return +cnt
+    } Else {
+        Set cnt = $Get(^KG("deg", srcId), -1)
+        If cnt >= 0 Return +cnt
+    }
+    Set cnt = 0
+    If pred '= "" {
+        Set o = ""
+        For {
+            Set o = $Order(^KG("out", 0, srcId, pred, o))
+            Quit:o=""
+            Set cnt = cnt + 1
+        }
+    } Else {
+        Set p = ""
+        For {
+            Set p = $Order(^KG("out", 0, srcId, p))
+            Quit:p=""
+            Set o = ""
+            For {
+                Set o = $Order(^KG("out", 0, srcId, p, o))
+                Quit:o=""
+                Set cnt = cnt + 1
+            }
+        }
+    }
+    Return cnt
+}
+
+/// Returns 1-hop neighbor IDs as a newline-delimited string — no JSON overhead.
+/// ~10x faster than BFSFastJson for large neighbor sets when only IDs are needed.
+ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "") As %String
+{
+    Set result = ""
+    If pred '= "" {
+        Set o = ""
+        For {
+            Set o = $Order(^KG("out", 0, srcId, pred, o))
+            Quit:o=""
+            Set result = result _ o _ $Char(10)
+        }
+    } Else {
+        Set p = ""
+        For {
+            Set p = $Order(^KG("out", 0, srcId, p))
+            Quit:p=""
+            Set o = ""
+            For {
+                Set o = $Order(^KG("out", 0, srcId, p, o))
+                Quit:o=""
+                Set result = result _ o _ $Char(10)
+            }
+        }
+    }
+    Return result
+}
+
+/// Distinct 2-hop neighbor count via pure ^KG $Order — no JSON, single round-trip.
+/// Uses process-private globals for dedup. Excludes srcId from count.
+ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
+{
+    Kill ^||kh2s, ^||kh2all
+    Set ^||kh2all(srcId) = ""
+
+    If pred '= "" {
+        Set o1 = ""
+        For {
+            Set o1 = $Order(^KG("out", 0, srcId, pred, o1))
+            Quit:o1=""
+            If '$Data(^||kh2all(o1)) {
+                Set ^||kh2all(o1) = ""
+                Set ^||kh2s(o1) = ""
+            }
+        }
+    } Else {
+        Set p1 = ""
+        For {
+            Set p1 = $Order(^KG("out", 0, srcId, p1))
+            Quit:p1=""
+            Set o1 = ""
+            For {
+                Set o1 = $Order(^KG("out", 0, srcId, p1, o1))
+                Quit:o1=""
+                If '$Data(^||kh2all(o1)) {
+                    Set ^||kh2all(o1) = ""
+                    Set ^||kh2s(o1) = ""
+                }
+            }
+        }
+    }
+
+    Set cnt = 0
+    Set mid = ""
+    For {
+        Set mid = $Order(^||kh2s(mid))
+        Quit:mid=""
+        If pred '= "" {
+            Set o2 = ""
+            For {
+                Set o2 = $Order(^KG("out", 0, mid, pred, o2))
+                Quit:o2=""
+                If '$Data(^||kh2all(o2)) {
+                    Set ^||kh2all(o2) = ""
+                    Set cnt = cnt + 1
+                }
+            }
+        } Else {
+            Set p2 = ""
+            For {
+                Set p2 = $Order(^KG("out", 0, mid, p2))
+                Quit:p2=""
+                Set o2 = ""
+                For {
+                    Set o2 = $Order(^KG("out", 0, mid, p2, o2))
+                    Quit:o2=""
+                    If '$Data(^||kh2all(o2)) {
+                        Set ^||kh2all(o2) = ""
+                        Set cnt = cnt + 1
+                    }
+                }
+            }
+        }
+    }
+    Kill ^||kh2s, ^||kh2all
+    Return cnt
+}
+
+/// Returns 2-hop distinct neighbor IDs as newline-delimited string.
+/// Excludes srcId. Uses process-private globals for dedup — no JSON.
+ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults As %Integer = 0) As %String
+{
+    Kill ^||kh2s, ^||kh2all
+    Set ^||kh2all(srcId) = ""
+
+    If pred '= "" {
+        Set o1 = ""
+        For {
+            Set o1 = $Order(^KG("out", 0, srcId, pred, o1))
+            Quit:o1=""
+            If '$Data(^||kh2all(o1)) {
+                Set ^||kh2all(o1) = ""
+                Set ^||kh2s(o1) = ""
+            }
+        }
+    } Else {
+        Set p1 = ""
+        For {
+            Set p1 = $Order(^KG("out", 0, srcId, p1))
+            Quit:p1=""
+            Set o1 = ""
+            For {
+                Set o1 = $Order(^KG("out", 0, srcId, p1, o1))
+                Quit:o1=""
+                If '$Data(^||kh2all(o1)) {
+                    Set ^||kh2all(o1) = ""
+                    Set ^||kh2s(o1) = ""
+                }
+            }
+        }
+    }
+
+    Set result = ""
+    Set cnt = 0
+    Set mid = ""
+    For {
+        Set mid = $Order(^||kh2s(mid))
+        Quit:mid=""
+        If pred '= "" {
+            Set o2 = ""
+            For {
+                Set o2 = $Order(^KG("out", 0, mid, pred, o2))
+                Quit:o2=""
+                If '$Data(^||kh2all(o2)) {
+                    Set ^||kh2all(o2) = ""
+                    Set result = result _ o2 _ $Char(10)
+                    Set cnt = cnt + 1
+                    If (maxResults > 0) && (cnt >= maxResults) {
+                        Kill ^||kh2s, ^||kh2all
+                        Return result
+                    }
+                }
+            }
+        } Else {
+            Set p2 = ""
+            For {
+                Set p2 = $Order(^KG("out", 0, mid, p2))
+                Quit:p2=""
+                Set o2 = ""
+                For {
+                    Set o2 = $Order(^KG("out", 0, mid, p2, o2))
+                    Quit:o2=""
+                    If '$Data(^||kh2all(o2)) {
+                        Set ^||kh2all(o2) = ""
+                        Set result = result _ o2 _ $Char(10)
+                        Set cnt = cnt + 1
+                        If (maxResults > 0) && (cnt >= maxResults) {
+                            Kill ^||kh2s, ^||kh2all
+                            Return result
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Kill ^||kh2s, ^||kh2all
+    Return result
 }
 
 }

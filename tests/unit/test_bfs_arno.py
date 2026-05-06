@@ -19,8 +19,26 @@ class TestBFSArnoUnit:
         cursor.fetchall.return_value = []
         engine = IRISGraphEngine(conn, embedding_dimension=4)
         engine._arno_available = True
-        engine._arno_capabilities = {"nkg_data": True, "bfs": True, "algorithms": ["bfs"]}
+        engine._arno_capabilities = {"nkg_data": True, "bfs": True, "rust_callout": True, "algorithms": ["bfs"]}
         return engine
+
+    def _make_vl(self, types=None, max_hops=2, src_id="A"):
+        return {
+            "types": types or [],
+            "min_hops": 1,
+            "max_hops": max_hops,
+            "properties": {},
+            "return_path_funcs": [],
+            "src_id_param": src_id,
+            "dst_id_param": None,
+            "source_var": "a",
+            "source_alias": "n0",
+            "target_var": "b",
+            "target_alias": "n1",
+            "direction": "out",
+            "shortest": False,
+            "all_shortest": False,
+        }
 
     def test_arno_bfs_path_called_when_bfs_capability_present(self):
         engine = self._make_engine()
@@ -29,22 +47,7 @@ class TestBFSArnoUnit:
         with patch.object(engine, "_arno_call", return_value=json.dumps(expected)) as mock_call:
             with patch.object(engine, "_detect_arno", return_value=True):
                 from iris_vector_graph.cypher.translator import SQLQuery
-                vl = {
-                    "types": ["BINDS"],
-                    "min_hops": 1,
-                    "max_hops": 3,
-                    "properties": {},
-                    "return_path_funcs": [],
-                    "src_id_param": "A",
-                    "dst_id_param": None,
-                    "source_var": "a",
-                    "source_alias": "n0",
-                    "target_var": "b",
-                    "target_alias": "n1",
-                    "direction": "out",
-                    "shortest": False,
-                    "all_shortest": False,
-                }
+                vl = self._make_vl(types=["BINDS"], max_hops=3)
                 sq = SQLQuery(
                     sql="",
                     parameters=[["A"]],
@@ -67,13 +70,7 @@ class TestBFSArnoUnit:
         with patch("iris_vector_graph.engine._call_classmethod", return_value=json.dumps(fallback_result)):
             with patch.object(engine, "_detect_arno", return_value=False):
                 from iris_vector_graph.cypher.translator import SQLQuery
-                vl = {
-                    "types": [], "min_hops": 1, "max_hops": 2, "properties": {},
-                    "return_path_funcs": [], "src_id_param": "A", "dst_id_param": None,
-                    "source_var": "a", "source_alias": "n0", "target_var": "b",
-                    "target_alias": "n1", "direction": "out", "shortest": False, "all_shortest": False,
-                }
-                sq = SQLQuery(sql="", parameters=[["A"]], var_length_paths=[vl])
+                sq = SQLQuery(sql="", parameters=[["A"]], var_length_paths=[self._make_vl()])
                 with patch.object(engine, "get_nodes", return_value=[{"id": "B", "labels": []}]):
                     result = engine._execute_var_length_cypher(sq)
 
@@ -88,13 +85,7 @@ class TestBFSArnoUnit:
             with patch.object(engine, "_detect_arno", return_value=True):
                 with patch("iris_vector_graph.engine._call_classmethod", return_value=json.dumps(fallback_result)):
                     from iris_vector_graph.cypher.translator import SQLQuery
-                    vl = {
-                        "types": [], "min_hops": 1, "max_hops": 2, "properties": {},
-                        "return_path_funcs": [], "src_id_param": "A", "dst_id_param": None,
-                        "source_var": "a", "source_alias": "n0", "target_var": "b",
-                        "target_alias": "n1", "direction": "out", "shortest": False, "all_shortest": False,
-                    }
-                    sq = SQLQuery(sql="", parameters=[["A"]], var_length_paths=[vl])
+                    sq = SQLQuery(sql="", parameters=[["A"]], var_length_paths=[self._make_vl()])
                     with patch.object(engine, "get_nodes", return_value=[{"id": "B", "labels": []}]):
                         result = engine._execute_var_length_cypher(sq)
 
@@ -110,17 +101,12 @@ class TestBFSArnoUnit:
 
         with patch.object(engine, "_arno_call", side_effect=capture_call):
             with patch.object(engine, "_detect_arno", return_value=True):
+                engine._arno_capabilities = {"nkg_data": True, "bfs": True, "rust_callout": True, "algorithms": ["bfs"]}
                 from iris_vector_graph.cypher.translator import SQLQuery
-                vl = {
-                    "types": [], "min_hops": 1, "max_hops": 2, "properties": {},
-                    "return_path_funcs": [], "src_id_param": "A", "dst_id_param": None,
-                    "source_var": "a", "source_alias": "n0", "target_var": "b",
-                    "target_alias": "n1", "direction": "out", "shortest": False, "all_shortest": False,
-                }
                 sq = SQLQuery(
                     sql="SELECT n FROM Stage1 LIMIT 100",
                     parameters=[["A"]],
-                    var_length_paths=[vl],
+                    var_length_paths=[self._make_vl()],
                 )
                 engine._execute_var_length_cypher(sq)
 

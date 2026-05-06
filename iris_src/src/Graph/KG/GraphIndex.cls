@@ -75,7 +75,68 @@ ClassMethod InsertIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary
 	Set tmp = $Increment(^NKG(-3, sIdx))
 	Set tmp = $Increment(^NKG("$meta", "version"))
 
+	Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
+
 	Quit $$$OK
+}
+
+ClassMethod UpdateStructuralHLL(sIdx As %Integer, pIdx As %Integer, oIdx As %Integer)
+{
+	Set hashBytes = $SYSTEM.Encryption.SHA1Hash(oIdx _ "")
+	Set regIdx = ($ASCII(hashBytes, 1) # 256) + 1
+	Set b1 = $ASCII(hashBytes, 2)
+	Set lz = 1
+	If b1 = 0 {
+		Set lz = 9
+	} Else {
+		While (b1 # 2) = 0 { Set lz = lz + 1, b1 = b1 \ 2 }
+	}
+	Set hll = $Get(^NKG("$agg", sIdx, pIdx, "hll"), ..EmptyHLL())
+	If lz > $List(hll, regIdx) {
+		Set $List(hll, regIdx) = lz
+		Set ^NKG("$agg", sIdx, pIdx, "hll") = hll
+	}
+}
+
+ClassMethod EmptyHLL() As %List
+{
+	Return $ListBuild(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
+}
+
+ClassMethod MergeHLL(ByRef merged As %List, other As %List)
+{
+	For i = 1:1:256 {
+		If $List(other, i) > $List(merged, i) {
+			Set $List(merged, i) = $List(other, i)
+		}
+	}
+}
+
+ClassMethod EstimateHLL(hll As %List) As %Integer
+{
+	Set Z = 0
+	Set zeroCount = 0
+	For i = 1:1:256 {
+		Set reg = $List(hll, i)
+		If reg = 0 { Set zeroCount = zeroCount + 1 }
+		Set Z = Z + (1 / (2 ** reg))
+	}
+	If Z = 0 Return 0
+	Set rawEstimate = 0.7182 * 256 * 256 / Z
+	If zeroCount > 0 && (rawEstimate < (2.5 * 256)) {
+		Return $Number(256 * $ZLN(256 / zeroCount), 0)
+	}
+	Return $Number(rawEstimate, 0)
+}
+
+ClassMethod GetNodeIdx(id As %String) As %String
+{
+	Return $Get(^NKG("$NI", id), "")
+}
+
+ClassMethod GetLabelIdx(label As %String) As %String
+{
+	Return $Get(^NKG("$LI", label), "")
 }
 
 ClassMethod UpdateIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "", olds As %Binary, oldp As %Binary, oldo As %Binary, oldqualifiers As %Binary = "") As %Status [ ServerOnly = 1 ]

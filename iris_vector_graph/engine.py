@@ -29,6 +29,26 @@ from iris_vector_graph.security import validate_table_name
 logger = logging.getLogger(__name__)
 
 
+def _bfs_stream_pages(conn, tag, page_size=500):
+    import json as _j
+    cursor_step = ""
+    cursor_o = ""
+    while True:
+        raw = str(_call_classmethod(
+            conn, "Graph.KG.Traversal", "ReadBFSPage",
+            tag, cursor_step, cursor_o, page_size,
+        ))
+        page = _j.loads(raw)
+        yield from page.get("items", [])
+        if page.get("done"):
+            break
+        next_step = page.get("next_step", -1)
+        if next_step == -1:
+            break
+        cursor_step = str(next_step)
+        cursor_o = page.get("next_o", "")
+
+
 class IRISGraphEngine:
     """
     Domain-agnostic IRIS graph engine providing:
@@ -71,12 +91,14 @@ class IRISGraphEngine:
         self._use_iris_embedding = use_iris_embedding
         set_schema_prefix("Graph_KG")
         self._embedding_function_available: Optional[bool] = None
+        self._native_vec_available: Optional[bool] = None
         self.capabilities: IRISCapabilities = IRISCapabilities()
         self._arno_available: Optional[bool] = None
         self._arno_capabilities: Dict[str, Any] = {}
         self._table_mapping_cache: Optional[Dict[str, dict]] = None
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
+        self._nkg_dirty: bool = False
         logger.debug("IRISGraphEngine initialized (dim=%s)", embedding_dimension or "auto")
 
     @classmethod
@@ -829,6 +851,31 @@ class IRISGraphEngine:
                 pass
         return bool(self._embedding_function_available)
 
+    def _probe_native_vec(self) -> bool:
+        if self._native_vec_available is not None:
+            return self._native_vec_available
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT TOP 1 VECTOR_COSINE(emb, TO_VECTOR('[0]', DOUBLE)) "
+                f"FROM {_table('kg_NodeEmbeddings')} WHERE 1=0"
+            )
+            self._native_vec_available = True
+        except Exception as e:
+            err = str(e).lower()
+            self._native_vec_available = not (
+                "unknown function" in err
+                or "not a recognized" in err
+                or "not found" in err
+                or "no such" in err
+            )
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return bool(self._native_vec_available)
+
     def _assert_node_exists(self, node_id: str) -> None:
         cursor = self.conn.cursor()
         # Use constant table names or sanitized identifiers
@@ -855,6 +902,19 @@ class IRISGraphEngine:
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
+        import re as _re_ec
+        _APPROX_RE = _re_ec.compile(
+            r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
+            _re_ec.IGNORECASE,
+        )
+        _approx_m = _APPROX_RE.search(cypher_query)
+        if _approx_m:
+            return self._execute_approx_count_distinct(cypher_query, parameters, _approx_m)
+
+        _fast = self._try_khop_fast_path(cypher_query, parameters)
+        if _fast is not None:
+            return _fast
+
         stripped = cypher_query.strip().upper()
 
         if "CALL DB.LABELS() YIELD" in stripped and "UNION" in stripped:
@@ -1405,6 +1465,16 @@ class IRISGraphEngine:
 
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
+        import warnings as _warnings
+
+        if self._nkg_dirty:
+            _warnings.warn(
+                "bulk_ingest_edges() was called without a subsequent rebuild_nkg(). "
+                "^NKG is stale — Arno-accelerated BFS may return incomplete results. "
+                "Call engine.rebuild_nkg() to resync.",
+                RuntimeWarning,
+                stacklevel=4,
+            )
 
         vl = sql_query.var_length_paths[0]
         predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
@@ -1435,15 +1505,33 @@ class IRISGraphEngine:
             }
 
         max_results = 0
+        import re as _re
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
         if sql_query.sql:
-            import re as _re
-            sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
             m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
             if m:
                 max_results = int(m.group(1))
 
+        count_match = _re.search(r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
+        if count_match:
+            col_name = count_match.group(1)
+            try:
+                cnt = int(str(_call_classmethod(
+                    self.conn, "Graph.KG.Traversal", "BFSFastCountDistinct",
+                    source_id, predicates_json, max_hops, "", vl.get("direction", "out"),
+                )))
+            except Exception:
+                cnt = 0
+            return {
+                "columns": [col_name],
+                "rows": [[cnt]],
+                "sql": f"BFSFastCountDistinct({source_id}, {predicates_json}, {max_hops})",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
+
         bfs_results = None
-        if self._detect_arno() and self._arno_capabilities.get("bfs"):
+        if self._detect_arno() and self._arno_capabilities.get("bfs") and self._arno_capabilities.get("rust_callout"):
             try:
                 bfs_json = self._arno_call(
                     "Graph.KG.NKGAccel",
@@ -1455,32 +1543,47 @@ class IRISGraphEngine:
                 )
                 bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
                 logger.debug("Arno BFSJson: %d results for %s", len(bfs_results), source_id)
+                if not bfs_results and not self._arno_capabilities.get("rust_callout"):
+                    bfs_results = None
             except Exception as e:
                 logger.warning(f"Arno BFSJson failed, falling back to BFSFastJson: {e}")
                 bfs_results = None
 
         if bfs_results is None:
+            direction = vl.get("direction", "out")
             try:
-                bfs_json = _call_classmethod(
-                    self.conn,
-                    "Graph.KG.Traversal",
-                    "BFSFastJson",
-                    source_id,
-                    predicates_json,
-                    max_hops,
-                    "",
-                    vl.get("direction", "out"),
-                )
-                bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
+                resp = str(_call_classmethod(
+                    self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
+                    source_id, predicates_json, max_hops, "", direction, max_results,
+                ))
+                if resp.startswith("SORTED:") and resp != "SORTED:0":
+                    tag = resp.split(":")[1]
+                    try:
+                        results_str = str(_call_classmethod(
+                            self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                        ))
+                        bfs_results = _json.loads(results_str)
+                    except Exception:
+                        bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                else:
+                    bfs_results = []
             except Exception as e:
-                logger.warning(f"BFSFastJson failed: {e}")
-                return {
-                    "columns": [],
-                    "rows": [],
-                    "sql": "",
-                    "params": [],
-                    "metadata": sql_query.query_metadata,
-                }
+                logger.warning(f"BFSFastJsonSorted failed ({e}), falling back to chunked")
+                try:
+                    resp = str(_call_classmethod(
+                        self.conn, "Graph.KG.Traversal", "BFSFastJsonChunked",
+                        source_id, predicates_json, max_hops, "", direction, max_results,
+                    ))
+                    if resp.startswith("CHUNKED:") and resp != "CHUNKED:0":
+                        tag, n_chunks = resp.split(":")[1], int(resp.split(":")[2])
+                        parts = [str(_call_classmethod(self.conn, "Graph.KG.Traversal", "ReadBFSChunk", tag, str(i))) for i in range(1, n_chunks + 1)]
+                        bfs_results = _json.loads("[" + "".join(parts) + "]")
+                    else:
+                        bfs_results = []
+                except Exception as e2:
+                    logger.warning(f"BFSFastJsonChunked also failed: {e2}")
+                    return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+
 
         if min_hops > 1:
             min_step_per_node: dict = {}
@@ -1507,8 +1610,45 @@ class IRISGraphEngine:
                 seen.add(oid)
                 target_ids.append(oid)
 
-        import re as _re
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+
+        # Fast path: if query only needs node IDs (RETURN DISTINCT b.node_id or RETURN b.node_id),
+        # skip get_nodes() entirely — BFS already has the IDs.
+        id_only_match = _re.search(
+            r'SELECT\s+(?:DISTINCT\s+)?(?:\S+\.node_id|\S+\.id)\s+AS\s+(\w+)',
+            sql_str, _re.IGNORECASE
+        )
+        # Count path: COUNT(DISTINCT ...) — just return the count
+        count_match = _re.search(
+            r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)',
+            sql_str, _re.IGNORECASE
+        )
+
+        if count_match:
+            col_name = count_match.group(1)
+            return {
+                "columns": [col_name],
+                "rows": [[len(target_ids)]],
+                "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
+
+        if id_only_match:
+            col_name = id_only_match.group(1)
+            # Apply LIMIT from SQL if present
+            limit_match = _re.search(r'\bLIMIT\s+(\d+)', sql_str, _re.IGNORECASE)
+            limit = int(limit_match.group(1)) if limit_match else None
+            result_ids = target_ids[:limit] if limit else target_ids
+            return {
+                "columns": [col_name],
+                "rows": [[nid] for nid in result_ids],
+                "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+                "params": [],
+                "metadata": sql_query.query_metadata,
+            }
+
+        # Full path: caller wants labels/props — fall through to get_nodes()
         alias_match = _re.search(r'SELECT\s+DISTINCT\s+\S+\s+AS\s+(\w+)|SELECT\s+\S+\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
         col_name = (alias_match.group(1) or alias_match.group(2)) if alias_match else "b_id"
 
@@ -1539,6 +1679,172 @@ class IRISGraphEngine:
             "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
             "params": [],
             "metadata": sql_query.query_metadata,
+        }
+
+    def _try_khop_fast_path(self, cypher_query: str, parameters) -> Optional[Dict[str, Any]]:
+        import re as _re
+
+        _1HOP_COUNT_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+count\s*\(\s*\3\s*\)\s+AS\s+(\w+)\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        _1HOP_IDS_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+\3\.node_id(?:\s+AS\s+(\w+))?\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        _2HOP_COUNT_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\*2\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+count\s*\(\s*\3\s*\)\s+AS\s+(\w+)\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        _2HOP_IDS_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\*2\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+\3\.node_id(?:\s+AS\s+(\w+))?(?:\s+LIMIT\s+(\d+))?\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+
+        params = parameters or {}
+
+        m = _1HOP_COUNT_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, col = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            try:
+                cnt = int(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "KHopCount", str(src_id), pred
+                ))
+                return {"columns": [col], "rows": [(cnt,)], "metadata": None}
+            except Exception:
+                return None
+
+        m = _1HOP_IDS_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, alias = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            try:
+                raw = str(self._iris_obj().classMethodString(
+                    "Graph.KG.Traversal", "KHopNeighborIds", str(src_id), pred
+                ))
+                ids = [x for x in raw.split("\n") if x]
+                col = alias or "node_id"
+                return {"columns": [col], "rows": [(nid,) for nid in ids], "metadata": None}
+            except Exception:
+                return None
+
+        m = _2HOP_COUNT_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, col = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            try:
+                cnt = int(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "KHop2Count", str(src_id), pred
+                ))
+                return {"columns": [col], "rows": [(cnt,)], "metadata": None}
+            except Exception:
+                return None
+
+        m = _2HOP_IDS_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, alias, limit_str = (
+                m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+            )
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            limit = int(limit_str) if limit_str else 0
+            try:
+                raw = str(self._iris_obj().classMethodString(
+                    "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
+                ))
+                ids = [x for x in raw.split("\n") if x]
+                col = alias or "node_id"
+                return {"columns": [col], "rows": [(nid,) for nid in ids], "metadata": None}
+            except Exception:
+                return None
+
+        return None
+
+        return None
+
+    def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> Dict[str, Any]:
+        import json as _json
+        import re as _re
+        from .schema import _call_classmethod
+
+        col_name = match.group(2)
+
+        from .cypher.parser import parse_query
+        from .cypher.translator import translate_to_sql
+        try:
+            q = parse_query(cypher_query)
+            sql_query = translate_to_sql(q, params=parameters or {})
+        except Exception:
+            return {"columns": [col_name], "rows": [[0]], "sql": "", "params": [], "metadata": None}
+
+        if not sql_query.var_length_paths:
+            return {"columns": [col_name], "rows": [[0]], "sql": "", "params": [], "metadata": None}
+
+        vl = sql_query.var_length_paths[0]
+        predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
+        max_hops = vl["max_hops"]
+        direction = vl.get("direction", "both")
+
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        source_id = None
+        for item in params:
+            if isinstance(item, str) and not item.startswith("Graph_KG"):
+                source_id = item
+                break
+        if source_id is None and parameters:
+            src_var = vl.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(iter(parameters.values()), None) if parameters else None
+
+        if not source_id:
+            return {"columns": [col_name], "rows": [[0]], "sql": "", "params": [], "metadata": None}
+
+        try:
+            raw = str(_call_classmethod(
+                self.conn, "Graph.KG.NKGAccel", "CountDistinctKHop",
+                source_id, predicates_json, max_hops, direction,
+            ))
+            result = _json.loads(raw)
+            estimate = result.get("estimate", 0)
+            registers = result.get("registers", 256)
+            std_error = result.get("std_error", 0.065)
+        except Exception as e:
+            logger.warning(f"CountDistinctKHop failed: {e}")
+            estimate = 0
+            registers = 256
+            std_error = 0.065
+
+        from .cypher.translator import QueryMetadata
+        meta = QueryMetadata(
+            warnings=[
+                f"approx_count_distinct: HLL-{registers}, "
+                f"std_error={std_error*100:.1f}%, registers={registers}"
+            ]
+        )
+        return {
+            "columns": [col_name],
+            "rows": [[estimate]],
+            "sql": f"CountDistinctKHop({source_id}, {predicates_json}, {max_hops})",
+            "params": [],
+            "metadata": meta,
         }
 
     def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
@@ -1624,7 +1930,7 @@ class IRISGraphEngine:
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
-        if name in ("ivg.shortestpath.weighted", "ivg.shortestpath.weighted"):
+        if name == "ivg.shortestpath.weighted":
             args = proc.arguments
             from iris_vector_graph.cypher import ast as cypher_ast
 
@@ -2492,22 +2798,17 @@ class IRISGraphEngine:
             return 0
 
     def create_node(
-        self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None
+        self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None,
+        graph: Optional[str] = None,
     ) -> bool:
-        """
-        Create a single node with labels and properties in a single transaction.
-        Optimized for individual creations with proper batching of internal inserts.
-        """
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
 
-            # 1. Create node
             cursor.execute(
                 f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
             )
 
-            # 2. Batch labels
             if labels:
                 label_data = [[node_id, label] for label in labels]
                 cursor.executemany(
@@ -2515,18 +2816,15 @@ class IRISGraphEngine:
                     label_data,
                 )
 
-            # 3. Batch properties
-            # Always include 'id' in rdf_props so Cypher queries like
-            # MATCH (n {id: $value}) or WHERE n.id = $value can find the node.
             props = dict(properties) if properties else {}
             if "id" not in props:
                 props["id"] = node_id
+            if graph:
+                props["__graph"] = graph
 
             prop_data = []
             for k, v in props.items():
                 val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                # Use safe INSERT pattern to prevent duplicate property violations
-                # params: [s, key, val, s, key]
                 prop_data.append([node_id, k, val_str, node_id, k])
 
             prop_sql = f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)'
@@ -2683,9 +2981,10 @@ class IRISGraphEngine:
                     all_labels.append((node_id, label, node_id, label))
 
                 props = node.get("properties", {})
-                # Ensure ID is in properties for consistency with Cypher CREATE
                 if "id" not in props:
                     props["id"] = node_id
+                if node.get("graph"):
+                    props["__graph"] = node["graph"]
 
                 for k, v in props.items():
                     if v is None:
@@ -2793,11 +3092,57 @@ class IRISGraphEngine:
         try:
             _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
             self.capabilities.kg_built = True
+            self._nkg_dirty = True
             logger.info("^KG adjacency index rebuilt successfully")
             return True
         except Exception as e:
             logger.warning("rebuild_kg failed: %s", e)
             return False
+
+    def rebuild_nkg(self) -> bool:
+        try:
+            self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            self._nkg_dirty = False
+            logger.info("^NKG integer index rebuilt successfully")
+            return True
+        except Exception as e:
+            logger.warning("rebuild_nkg failed: %s", e)
+            return False
+
+    def bulk_ingest_edges(
+        self,
+        edges: List[Dict[str, Any]],
+        predicate: str = "R",
+    ) -> int:
+        if not edges:
+            return 0
+        import json as _json
+        import warnings as _warnings
+        from iris_vector_graph.schema import _call_classmethod_large
+        iris_obj = self._iris_obj()
+        normalized = []
+        for e in edges:
+            if isinstance(e, (list, tuple)):
+                s, o = str(e[0]), str(e[1])
+                p = str(e[2]) if len(e) > 2 else predicate
+            else:
+                s = str(e["s"])
+                p = str(e.get("p", predicate))
+                o = str(e["o"])
+            normalized.append({"s": s, "p": p, "o": o})
+        n = int(_call_classmethod_large(
+            iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdges",
+            _json.dumps(normalized), predicate,
+        ))
+        self._nkg_dirty = True
+        _warnings.warn(
+            f"bulk_ingest_edges() wrote {n} edges directly to ^KG. "
+            "^NKG is now stale — call engine.rebuild_nkg() before using "
+            "Arno-accelerated BFS or variable-length Cypher path queries.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return n
 
     def load_networkx(
         self,
@@ -3005,7 +3350,6 @@ class IRISGraphEngine:
                     batch_props.append((s_id, f"{key}_lang", lang))
                 else:
                     batch_props.append((s_id, key, val))
-                props_inserted += 0
             elif isinstance(o, (URIRef, BNode)):
                 o_id = _node_id(o)
                 batch_nodes.add(o_id)
@@ -3388,49 +3732,6 @@ class IRISGraphEngine:
                 logger.warning(
                     "Snapshot: global export failed (globals layer skipped): %s", e
                 )
-                size_raw = _call_classmethod(
-                    self.conn, "Graph.KG.Snapshot", "GetFileSize", tmp_xml
-                )
-                file_size = int(size_raw or 0)
-                if file_size > 0:
-                    chunks = []
-                    chunk_size = 512 * 1024
-                    offset = 0
-                    while offset < file_size:
-                        chunk = _call_classmethod(
-                            self.conn,
-                            "Graph.KG.Snapshot",
-                            "ReadFileChunk",
-                            tmp_xml,
-                            offset,
-                            chunk_size,
-                        )
-                        if not chunk:
-                            break
-                        chunks.append(str(chunk).encode("utf-8"))
-                        offset += chunk_size
-                    xml_bytes = b"".join(chunks)
-                    globals_data["_all_globals"] = xml_bytes
-                    metadata["globals"]["_all_globals"] = {
-                        "format": "iris-xml",
-                        "size": len(xml_bytes),
-                        "globals": GLOBALS_TO_EXPORT,
-                    }
-                    try:
-                        _call_classmethod(
-                            self.conn,
-                            "Graph.KG.Snapshot",
-                            "DeleteDir",
-                            f"/tmp/ivg_snap_{run_id}_globals.xml",
-                        )
-                    except Exception:
-                        pass
-                else:
-                    logger.debug("Snapshot: globals XML export produced empty file")
-            except Exception as e:
-                logger.warning(
-                    "Snapshot: XML global export failed (globals layer skipped): %s", e
-                )
         with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("metadata.json", _json.dumps(metadata, indent=2))
             for table, content in sql_data.items():
@@ -3550,10 +3851,6 @@ class IRISGraphEngine:
                 return True
             except Exception:
                 return False
-
-        sql_order = [
-            f for f in TABLE_ORDER if f"sql/{f}" in sql_files or f in sql_files
-        ]
 
         for fname_short in TABLE_ORDER:
             fname = f"sql/{fname_short}"
@@ -4536,21 +4833,6 @@ class IRISGraphEngine:
             return False
         finally:
             cursor.close()
-        """
-        Delete embedding for a node.
-        
-        Args:
-            node_id: The node ID
-            
-        Returns:
-            True if deleted, False if not found
-        """
-        cursor = self.conn.cursor()
-        cursor.execute(
-            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
-        )
-        self.conn.commit()
-        return cursor.rowcount > 0
 
     def _validate_k(self, k: Any) -> int:
         """
@@ -4610,6 +4892,23 @@ class IRISGraphEngine:
             )
             # Fallback to Python implementation
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
+
+    def search_nodes_by_vector(
+        self,
+        query: "Union[List[float], str]",
+        k: int = 10,
+        label_filter: Optional[str] = None,
+        ivf_name: Optional[str] = None,
+        nprobe: int = 8,
+    ) -> List[Tuple[str, float]]:
+        if self._probe_native_vec():
+            query_json = json.dumps([float(v) for v in query]) if not isinstance(query, str) else query
+            return self.kg_KNN_VEC(query_json, k=k, label_filter=label_filter)
+        if ivf_name is not None:
+            query_list = json.loads(query) if isinstance(query, str) else query
+            return self.ivf_search(ivf_name, query_list, k=k, nprobe=nprobe)
+        query_list = json.loads(query) if isinstance(query, str) else query
+        return self.ivf_search("default", query_list, k=k, nprobe=nprobe)
 
     def _kg_KNN_VEC_python_optimized(
         self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
@@ -5319,7 +5618,16 @@ class IRISGraphEngine:
         return self._arno_available
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
-        return str(self._iris_obj().classMethodValue(cls, method, *args))
+        iris_obj = self._iris_obj()
+        raw = str(iris_obj.classMethodValue(cls, method, *args))
+        if not raw.startswith("CHUNKED:"):
+            return raw
+        _, tag, n_str = raw.split(":", 2)
+        n = int(n_str)
+        return "".join(
+            str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
+            for i in range(1, n + 1)
+        )
 
     def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
         if self._detect_arno() and "khop" in self._arno_capabilities.get(
@@ -5397,14 +5705,8 @@ class IRISGraphEngine:
     # ── VecIndex: lightweight ANN vector search in globals ──
 
     def _iris_obj(self):
-        try:
-            import iris
-
-            return iris.createIRIS(self.conn)
-        except (TypeError, AttributeError):
-            import iris
-
-            return iris.createIRIS(self.conn)
+        import iris
+        return iris.createIRIS(self.conn)
 
     def vec_create_index(
         self,
@@ -5982,6 +6284,7 @@ class IRISGraphEngine:
         nlist: int = 256,
         metric: str = "cosine",
         batch_size: int = 10000,
+        build_batch_size: int = 500,
     ) -> dict:
         try:
             import numpy as np
@@ -6031,27 +6334,31 @@ class IRISGraphEngine:
         centroids = km.cluster_centers_.tolist()
         labels = km.labels_.tolist()
 
-        assignments = []
-        for i, (nid, label) in enumerate(zip(node_ids, labels)):
-            assignments.append(
-                {"nodeId": nid, "cellIdx": int(label), "vec": _json.dumps(vecs[i])}
-            )
+        iris_obj = self._iris_obj()
 
-        nlist_json = _json.dumps(effective_nlist)
-        metric_json = _json.dumps(metric)
-        centroids_json = _json.dumps(centroids)
-        assignments_json = _json.dumps(assignments)
-
-        result = self._iris_obj().classMethodValue(
+        result = iris_obj.classMethodValue(
             "Graph.KG.IVFIndex",
             "Build",
             name,
-            nlist_json,
-            metric_json,
-            centroids_json,
-            assignments_json,
+            _json.dumps(effective_nlist),
+            _json.dumps(metric),
+            _json.dumps(centroids),
+            "[]",
         )
-        return _json.loads(str(result))
+
+        for batch_start in range(0, n_nodes, build_batch_size):
+            batch = []
+            for i in range(batch_start, min(batch_start + build_batch_size, n_nodes)):
+                batch.append(
+                    {"nodeId": node_ids[i], "cellIdx": int(labels[i]), "vec": vecs[i]}
+                )
+            iris_obj.classMethodValue(
+                "Graph.KG.IVFIndex", "AddBatch", name, _json.dumps(batch)
+            )
+
+        iris_obj.classMethodValue("Graph.KG.IVFIndex", "FinalizeIndex", name)
+        info = iris_obj.classMethodValue("Graph.KG.IVFIndex", "Info", name)
+        return _json.loads(str(info))
 
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
         query_json = json.dumps([float(v) for v in query])

@@ -81,4 +81,30 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 	Kill ^KG("in", 0, o, p, s)
 }
 
+
+/// Bulk ingest edges directly to ^KG globals via embedded Python.
+/// edges_json: JSON array of [s, p, o] triples or {"s":..,"p":..,"o":..} objects.
+/// predicate: default predicate if using [s, o] pair format.
+/// Returns count of edges written.
+ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Language = python ]
+{
+    import iris, json, warnings
+    data = json.loads(edgesJson)
+    kg = iris.gref("^KG")
+    n = 0
+    for edge in data:
+        if isinstance(edge, (list, tuple)):
+            s, o = str(edge[0]), str(edge[1])
+            p = str(edge[2]) if len(edge) > 2 else predicate
+        else:
+            s, p, o = str(edge["s"]), str(edge.get("p", predicate)), str(edge["o"])
+        if s == o:
+            continue
+        kg["out", 0, s, p, o] = 1
+        kg["in", 0, o, p, s] = 1
+        n += 1
+    kg["$bie_dirty"] = 1
+    return n
+}
+
 }

@@ -310,14 +310,7 @@ class Parser:
                     self.peek().kind == TokenType.CALL
                     and self.lexer.peek_ahead(1).kind == TokenType.LBRACE
                 ):
-                    subq = self.parse_subquery_call()
-                    subq_optional = ast.SubqueryCall(
-                        inner_query=subq.inner_query,
-                        import_variables=subq.import_variables,
-                        in_transactions=subq.in_transactions,
-                        transactions_batch_size=subq.transactions_batch_size,
-                    )
-                    clauses.append(subq_optional)
+                    clauses.append(self.parse_subquery_call())
                 else:
                     self.expect(TokenType.MATCH)
                     clauses.append(self.parse_match_clause(optional=True))
@@ -431,9 +424,7 @@ class Parser:
 
         inner_parts = [self.parse_query_part()]
 
-        while (
-            self.peek().kind == TokenType.WITH and self.peek().kind != TokenType.RBRACE
-        ):
+        while self.peek().kind == TokenType.WITH:
             with_clause = self.parse_with_clause()
             part = self.parse_query_part()
             inner_parts[-1].with_clause = with_clause
@@ -643,7 +634,7 @@ class Parser:
             self.expect(TokenType.SET)
             items = self.parse_set_items()
             # Convert list of SetItem to list of UpdateItem for typing
-            action = ast.MergeAction(items=[i for i in items])
+            action = ast.MergeAction(items=list(items))
             if action_type == "CREATE":
                 on_create = action
             elif action_type == "MATCH":
@@ -795,16 +786,19 @@ class Parser:
         var_len = None
         if self.matches(TokenType.STAR):
             min_h = 1
-            max_h = 1
+            max_h = 10
             if self.peek().kind == TokenType.INTEGER_LITERAL:
                 min_tok = self.eat()
                 if min_tok.value:
                     min_h = int(min_tok.value)
-                if self.matches(TokenType.DOT):
+                if self.peek().kind == TokenType.DOT:
+                    self.eat()
                     self.expect(TokenType.DOT)
                     max_tok = self.expect(TokenType.INTEGER_LITERAL)
                     if max_tok.value:
                         max_h = int(max_tok.value)
+                else:
+                    max_h = min_h
             elif self.peek().kind == TokenType.DOT:
                 self.eat()
                 self.expect(TokenType.DOT)
@@ -925,12 +919,8 @@ class Parser:
     def parse_multiplicative_expression(self) -> Any:
         left = self.parse_power_expression()
         while self.peek().kind in (TokenType.STAR, TokenType.SLASH, TokenType.PERCENT):
-            if self.peek().kind == TokenType.STAR:
-                op = "*"
-            elif self.peek().kind == TokenType.SLASH:
-                op = "/"
-            else:
-                op = "%"
+            kind = self.peek().kind
+            op = "*" if kind == TokenType.STAR else "/" if kind == TokenType.SLASH else "%"
             self.eat()
             right = self.parse_power_expression()
             left = ast.FunctionCall(
@@ -983,9 +973,7 @@ class Parser:
         # Binary comparisons
         tok = self.peek()
         op = None
-        already_consumed = (
-            False  # Track if operator tokens were consumed in the match block
-        )
+        already_consumed = False
         match tok.kind:
             case TokenType.EQUALS:
                 op = ast.BooleanOperator.EQUALS
