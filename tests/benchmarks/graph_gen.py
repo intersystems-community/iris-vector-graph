@@ -7,7 +7,9 @@ class RMATGenerator:
     R-MAT (Recursive Matrix) Graph Generator
     Produces scale-free graphs with power-law degree distributions.
     """
-    def __init__(self, a=0.57, b=0.19, c=0.19, d=0.05):
+    def __init__(self, a=0.57, b=0.19, c=0.19, d=0.05, seed=None):
+        if seed is not None:
+            random.seed(seed)
         # Default Kronecker parameters from Graph500
         self.a = a
         self.b = b

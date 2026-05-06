@@ -17,15 +17,25 @@ logger = logging.getLogger(__name__)
 
 
 def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) -> Any:
-    if hasattr(conn_or_cursor, "cursor"):
-        conn = conn_or_cursor
-    elif hasattr(conn_or_cursor, "_connection"):
+    if hasattr(conn_or_cursor, "_connection"):
         conn = conn_or_cursor._connection
     else:
         conn = conn_or_cursor
     import iris as _iris_pkg
     iris_obj = _iris_pkg.createIRIS(conn)
     return iris_obj.classMethodValue(class_name, method_name, *args)
+
+
+def _call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
+    raw = str(iris_obj.classMethodValue(cls, method, *args))
+    if not raw.startswith("CHUNKED:"):
+        return raw
+    _, tag, n_str = raw.split(":", 2)
+    n = int(n_str)
+    return "".join(
+        str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
+        for i in range(1, n + 1)
+    )
 
 
 
@@ -808,47 +818,6 @@ LANGUAGE OBJECTSCRIPT
                 break
             except Exception:
                 continue
-            try:
-                result = _call_classmethod(
-                    _native, "%Library.File", "FileExists", candidate_dir
-                )
-                if not result:
-                    continue
-                rs_result = _call_classmethod(
-                    _native,
-                    "%Library.File",
-                    "FileSetExecute",
-                    candidate_dir,
-                    "*.cls",
-                    "",
-                    1,
-                )
-                files_loaded = 0
-                for candidate_dir2 in [candidate_dir]:
-                    import_result = _call_classmethod(
-                        _native,
-                        "%SYSTEM.OBJ",
-                        "ImportDir",
-                        candidate_dir,
-                        "*.cls",
-                        "ck",
-                        "",
-                        1,
-                    )
-                    files_loaded += 1
-                if files_loaded > 0:
-                    deployed = True
-                    break
-            except Exception:
-                try:
-                    _call_classmethod(
-                        _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
-                    )
-                    logger.debug("ObjectScript classes loaded from %s", candidate_dir)
-                    deployed = True
-                    break
-                except Exception:
-                    continue
 
         if not deployed:
             logger.warning(

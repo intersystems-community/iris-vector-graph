@@ -114,6 +114,7 @@ dist/
 
 # Benchmark caches
 .benchmarks/
+tests/benchmarks/results/*.json
 .ruff_cache/
 *.crt
 deploy/certs/

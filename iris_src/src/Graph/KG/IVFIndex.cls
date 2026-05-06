@@ -8,7 +8,6 @@ ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, 
 	Set nlist = +nlistJSON
 	Set metric = $Extract(metricJSON, 2, $Length(metricJSON)-1)
 	Set centroids = ##class(%DynamicArray).%FromJSON(centroidsJSON)
-	Set assignments = ##class(%DynamicArray).%FromJSON(assignmentsJSON)
 
 	Set nC = centroids.%Size()
 	Set dim = 0
@@ -24,28 +23,30 @@ ClassMethod Build(name As %String, nlistJSON As %String, metricJSON As %String, 
 		Set ^IVF(name, "centroid", k) = vec
 	}
 
-	Set nAssign = assignments.%Size()
-	For i = 0:1:(nAssign-1) {
-		Set item = assignments.%Get(i)
-		Set nodeId = item.%Get("nodeId")
-		Set cellIdx = +item.%Get("cellIdx")
-		Set b64 = item.%Get("vec")
-		Set floatList = ##class(%DynamicArray).%FromJSON(b64)
-		Set fDim = floatList.%Size()
-		Set vec = ""
-		For j = 0:1:(fDim-1) {
-			Set $vector(vec, j+1, "double") = +floatList.%Get(j)
-		}
-		Set ^IVF(name, "list", cellIdx, nodeId) = vec
-	}
-
 	Set ^IVF(name, "cfg", "nlist") = nlist
 	Set ^IVF(name, "cfg", "dim") = dim
 	Set ^IVF(name, "cfg", "metric") = metric
+	Set ^IVF(name, "cfg", "indexed") = 0
+
+	If assignmentsJSON '= "" && (assignmentsJSON '= "[]") {
+		Do ..AddBatch(name, assignmentsJSON)
+	}
+
+	Set nAssign = 0
+	Set c = ""
+	For {
+		Set c = $Order(^IVF(name, "list", c))
+		Quit:c=""
+		Set nodeId = ""
+		For {
+			Set nodeId = $Order(^IVF(name, "list", c, nodeId))
+			Quit:nodeId=""
+			Set nAssign = nAssign + 1
+		}
+	}
 	Set ^IVF(name, "cfg", "indexed") = nAssign
 
-	Set result = "{""nlist"":"_nlist_",""dim"":"_dim_",""metric"":"""_metric_""",""indexed"":"_nAssign_"}"
-	Quit result
+	Quit "{""nlist"":"_nlist_",""dim"":"_dim_",""metric"":"""_metric_""",""indexed"":"_nAssign_"}"
 }
 
 ClassMethod Search(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String
@@ -171,6 +172,50 @@ ClassMethod Info(name As %String) As %String
 ClassMethod SearchProc(name As %String, queryVecB64 As %String, k As %Integer = 10, nprobe As %Integer = 8) As %String [ SqlProc, SqlName = kg_IVF ]
 {
 	Quit ..Search(name, queryVecB64, k, nprobe)
+}
+
+/// Append a batch of assignments to an existing IVF index (used by ivf_build batching).
+/// assignmentsJSON: [{nodeId, cellIdx, vec:[f,f,...]}]
+/// Returns number of items written.
+ClassMethod AddBatch(name As %String, assignmentsJSON As %String) As %Integer
+{
+	Set assignments = ##class(%DynamicArray).%FromJSON(assignmentsJSON)
+	Set n = assignments.%Size()
+	For i = 0:1:(n-1) {
+		Set item = assignments.%Get(i)
+		Set nodeId = item.%Get("nodeId")
+		Set cellIdx = +item.%Get("cellIdx")
+		Set floatList = item.%Get("vec")
+		If '$IsObject(floatList) {
+			Set floatList = ##class(%DynamicArray).%FromJSON(floatList)
+		}
+		Set fDim = floatList.%Size()
+		Set vec = ""
+		For j = 0:1:(fDim-1) {
+			Set $vector(vec, j+1, "double") = +floatList.%Get(j)
+		}
+		Set ^IVF(name, "list", cellIdx, nodeId) = vec
+	}
+	Quit n
+}
+
+/// Recount all indexed vectors and update the cfg. Call after all AddBatch calls complete.
+ClassMethod FinalizeIndex(name As %String) As %Integer
+{
+	Set nAssign = 0
+	Set c = ""
+	For {
+		Set c = $Order(^IVF(name, "list", c))
+		Quit:c=""
+		Set nodeId = ""
+		For {
+			Set nodeId = $Order(^IVF(name, "list", c, nodeId))
+			Quit:nodeId=""
+			Set nAssign = nAssign + 1
+		}
+	}
+	Set ^IVF(name, "cfg", "indexed") = nAssign
+	Quit nAssign
 }
 
 }
