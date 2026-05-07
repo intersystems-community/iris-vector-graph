@@ -5,6 +5,7 @@ IRIS Graph Core - Domain-Agnostic Graph Engine
 from .engine import IRISGraphEngine
 from .status import EngineStatus
 from .schema import GraphSchema
+from .index_protocol import IVGIndex, IndexHandle
 from .capabilities import IRISCapabilities
 from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
@@ -37,4 +38,6 @@ __all__ = [
     "RRFFusion",
     "EmbeddedConnection",
     "EmbeddedCursor",
+    "IVGIndex",
+    "IndexHandle",
 ]
