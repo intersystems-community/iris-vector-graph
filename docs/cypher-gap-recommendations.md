@@ -14,14 +14,16 @@
 | #2 | UNION / UNION ALL | ✅ **DONE** — parser + translator |
 | #3 | CASE WHEN | ✅ **DONE** — parser + translator |
 | #4 | EXISTS {} | ✅ **DONE** — correlated subquery |
-| #5 | Pattern Comprehension | ❌ Not yet |
+| #5 | Pattern Comprehension | ✅ **DONE** — `[(n)-[:R]->(m) \| m.prop]` translates to correlated `JSON_ARRAYAGG` subquery. `m.node_id` uses direct column reference; properties use inline scalar subquery to avoid leaking JOINs into outer context. |
 | #6 | Quantified Paths `->+` | ✅ **DONE** — desugared to VariableLength (depends on #1) |
-| #7 | REDUCE() | ❌ Not yet |
+| #7 | REDUCE() | ✅ **DONE** — `reduce(acc=N, x IN collect(prop) \| acc + x)` translates to `(N + SUM(CAST(prop AS DOUBLE)))`. Pure SQL — no Python post-processing. Works from ObjectScript surface. |
 | #8 | COUNT(DISTINCT) | ✅ **DONE** — was already working |
 | #9 | FOREACH | ✅ **DONE** — desugared to UNWIND |
 | #10 | Type Coercion / CAST fixes | ✅ **DONE** — CAST functions fixed in translator |
 
-Remaining open gaps: **#5 Pattern Comprehension**, **#7 REDUCE()**. Both have workarounds (multi-stage WITH for #5, Python post-processing for #7).
+Remaining open gaps: **none** — all 10 original gaps are now implemented.
+
+**Design note on REDUCE:** IRIS SQL does not support `JSON_TABLE` with `?` parameters inside its first argument, and `JSON_ARRAYAGG` cannot be used as an argument to `JSON_TABLE` in the same query level. Both would break the ObjectScript caller surface. The correct pattern for `reduce(acc, x IN collect(prop) | acc + x)` is `SUM(CAST(prop AS DOUBLE))` directly in the aggregate query — no JSON round-trip needed. See `AGENTS.md` § "IRIS SQL Design Constraints" for the full rules.
 
 ---
 
