@@ -39,21 +39,15 @@ Progress through v1.88.0:
 
 ### P1 — Performance
 
-- [ ] **Spec 152 follow-up: `Build2HopExactStats` build time (arno)**
-  **Root cause identified**: `zf_global` `ns.set()` for non-sequential writes to a new global is
-  ~1500× slower than sequential writes into freshly-killed global space. `^NKG` writes = 1.58µs
-  each (sequential into pre-killed space). `^ArnoKG(42, ...)` writes = ~2.4ms each (random-access
-  into newly-created global pages). 125K writes × 2.4ms = 305s.
-  
-  Bitvec computation (arno) and integer subscripts both deployed and confirmed working.
-  The bottleneck is NOT the algorithm or subscript type — it's the global write protocol.
-  
-  **Fix belongs in arno**: Return all results as a compact serialized string from the Rust function,
-  then have ObjectScript parse and write `^KG("deg2p_exact")` directly in a single `$Order` loop.
-  This avoids the `zf_global` per-entry round-trip entirely.
-  
-  **IVG status**: `Traversal.cls` already calls bitvec first. `KHop2CountExact` query = **0.12ms ✅**.
-  Build time = ~5 min (acceptable as deployment-time operation).
+- [x] **Spec 152 / Build2HopExactStats build time: 323s → 33s** — Root cause was `zf_global`
+  non-sequential write overhead (~2.4ms/write into new global pages). Fix: arno ships
+  `kg_build_2hop_exact_stream` which serializes all results into `sName\x1fpName\x1fcount\n`
+  records, chunks at 9KB into `^ArnoKG("2hs", N)`, returns `CHUNKED:2HS:N`.
+  IVG's `NKGAccel.Build2HopExact()` reads chunks with ObjectScript `$Get` (fast sequential)
+  and writes `^KG("deg2p_exact")` directly. API boundary cleaned up:
+  - `Traversal.Build2HopExactStats` delegates to `NKGAccel.Build2HopExact()` — one call
+  - `DecodeBuildResults` removed (arno internals no longer in IVG)
+  - Build: **33s** (was 323s, 10× speedup) | Query: **0.108ms** ✅
 
 ### P2 — Accuracy
 
