@@ -1559,13 +1559,16 @@ class IRISGraphEngine:
                 ))
                 if resp.startswith("SORTED:") and resp != "SORTED:0":
                     tag = resp.split(":")[1]
-                    try:
-                        results_str = str(_call_classmethod(
-                            self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
-                        ))
-                        bfs_results = _json.loads(results_str)
-                    except Exception:
+                    if max_results == 0:
                         bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                    else:
+                        try:
+                            results_str = str(_call_classmethod(
+                                self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                            ))
+                            bfs_results = _json.loads(results_str)
+                        except Exception:
+                            bfs_results = list(_bfs_stream_pages(self.conn, tag))
                 else:
                     bfs_results = []
             except Exception as e:

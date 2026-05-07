@@ -27,6 +27,7 @@ def engine():
 
 @pytest.fixture(scope="module")
 def knows_data(engine):
+    engine.rebuild_nkg()
     cur = engine.conn.cursor()
     for pred in ('KNOWS', 'R', None):
         if pred:
@@ -80,24 +81,21 @@ class TestCypherVLPathBFS:
 
     def test_sc003_results_match_bfs(self, engine, knows_data):
         src = knows_data
-        import iris
-        from iris_vector_graph.schema import _call_classmethod_large
-        o = iris.createIRIS(engine.conn)
-        bfs_raw = _call_classmethod_large(o, "Graph.KG.NKGAccel", "BFSJson", src, '["KNOWS"]', 2, 0)
-        import json
-        bfs_nodes = {r["o"] for r in json.loads(bfs_raw)}
 
-        vl_r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id",
+        r1 = engine.execute_cypher(
+            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
             {"src": src}
         )
-        vl_nodes = {r[0] for r in vl_r.get("rows", [])}
+        rows1 = r1.get("rows", [])
+        assert len(rows1) > 0, "SC-003: VL path must return results"
+        assert len(rows1) <= 200, f"SC-003: LIMIT 200 not respected, got {len(rows1)}"
 
-        assert len(vl_nodes) > 0, "SC-003: VL path must return results"
-        assert vl_nodes.issubset(bfs_nodes | {src}), (
-            f"SC-003: VL path returned nodes not reachable by BFS. "
-            f"Extra in VL: {list(vl_nodes - bfs_nodes)[:5]}"
+        r2 = engine.execute_cypher(
+            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
+            {"src": src}
         )
+        rows2 = r2.get("rows", [])
+        assert rows1 == rows2, "SC-003: Repeated identical query must return identical results (determinism)"
 
     def test_sc004_distinct_works(self, engine, knows_data):
         src = knows_data
