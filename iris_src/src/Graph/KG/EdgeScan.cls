@@ -102,6 +102,8 @@ ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As
             continue
         kg["out", 0, s, p, o] = 1
         kg["in", 0, o, p, s] = 1
+        kg["degp", s, p] = (kg.get(["degp", s, p]) or 0) + 1
+        kg["deg", s] = (kg.get(["deg", s]) or 0) + 1
         n += 1
     kg["$bie_dirty"] = 1
     return n

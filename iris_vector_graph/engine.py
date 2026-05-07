@@ -3104,13 +3104,38 @@ class IRISGraphEngine:
 
     def rebuild_nkg(self) -> bool:
         try:
-            self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj = self._iris_obj()
+            if self._detect_arno() and self._arno_capabilities.get("rust_callout"):
+                import json as _json
+                raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
+                result = _json.loads(raw)
+                if "error" in result:
+                    logger.warning("BuildNKGRust failed (%s), falling back to ObjectScript", result["error"])
+                    iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+                else:
+                    logger.info("^NKG rebuilt via Rust: %s", result)
+            else:
+                iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
             self._nkg_dirty = False
-            logger.info("^NKG integer index rebuilt successfully")
             return True
         except Exception as e:
             logger.warning("rebuild_nkg failed: %s", e)
             return False
+
+    def backfill_degp(self) -> int:
+        try:
+            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "BackfillDegp")
+            return int(result)
+        except Exception as e:
+            logger.warning("backfill_degp failed: %s", e)
+            return 0
+
+    def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
+        )
+        return int(result)
 
     def bulk_ingest_edges(
         self,
