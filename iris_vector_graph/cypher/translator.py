@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import List, Any, Dict, Optional, Union
 import logging
 import json
+from pydantic import BaseModel, Field
 from . import ast
 from iris_vector_graph.security import (
     validate_table_name,
@@ -79,15 +80,14 @@ def properties_subquery(node_expr: str) -> str:
     )
 
 
-@dataclass
-class QueryMetadata:
-    """Query execution metadata tracking."""
-
+class QueryMetadata(BaseModel):
     estimated_rows: Optional[int] = None
-    index_usage: List[str] = field(default_factory=list)
-    optimization_applied: List[str] = field(default_factory=list)
+    index_usage: List[str] = Field(default_factory=list)
+    optimization_applied: List[str] = Field(default_factory=list)
     complexity_score: Optional[float] = None
-    warnings: List[str] = field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 @dataclass
@@ -103,15 +103,14 @@ class TemporalQueryRequiresEngine(ValueError):
     pass
 
 
-@dataclass
-class SQLQuery:
-    """Generated SQL query with parameters and metadata."""
-
+class SQLQuery(BaseModel):
     sql: Union[str, List[str]]
-    parameters: List[List[Any]] = field(default_factory=list)
-    query_metadata: QueryMetadata = field(default_factory=QueryMetadata)
+    parameters: List[List[Any]] = Field(default_factory=list)
+    query_metadata: QueryMetadata = Field(default_factory=QueryMetadata)
     is_transactional: bool = False
     var_length_paths: Optional[List[dict]] = None
+
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class TranslationContext:
@@ -2559,7 +2558,6 @@ def translate_expression(expr, context, segment="select") -> str:
         tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
         rel = pat.relationships[0] if pat.relationships else None
 
-        n_alias = context.next_alias("pcn")
         e_alias = context.next_alias("pce")
         t_alias = context.next_alias("pct")
 
@@ -2577,16 +2575,31 @@ def translate_expression(expr, context, segment="select") -> str:
             src_id = f"{context.variable_aliases[src_node.variable]}.node_id"
             src_bind = f" AND {e_alias}.s = {src_id}"
 
-        if expr.projection:
+        tgt_var = tgt_node.variable if tgt_node else None
+
+        if (
+            expr.projection
+            and isinstance(expr.projection, ast.PropertyReference)
+            and expr.projection.variable == tgt_var
+        ):
+            if expr.projection.property_name == "node_id":
+                proj_sql = f"{t_alias}.node_id"
+            else:
+                safe_key = expr.projection.property_name.replace("'", "''")
+                proj_sql = (
+                    f"(SELECT val FROM {_table('rdf_props')} "
+                    f"WHERE s = {t_alias}.node_id AND \"key\" = '{safe_key}')"
+                )
+        elif expr.projection:
+            if tgt_var:
+                context.variable_aliases[tgt_var] = t_alias
             if rel and rel.variable:
                 context.variable_aliases[rel.variable] = e_alias
-            if tgt_node and tgt_node.variable:
-                context.variable_aliases[tgt_node.variable] = t_alias
             proj_sql = translate_expression(expr.projection, context, segment="select")
-            if rel and rel.variable:
+            if tgt_var and tgt_var in context.variable_aliases:
+                del context.variable_aliases[tgt_var]
+            if rel and rel.variable and rel.variable in context.variable_aliases:
                 del context.variable_aliases[rel.variable]
-            if tgt_node and tgt_node.variable:
-                del context.variable_aliases[tgt_node.variable]
         else:
             proj_sql = f"{t_alias}.node_id"
 
@@ -2685,11 +2698,25 @@ def translate_expression(expr, context, segment="select") -> str:
         )
 
     if isinstance(expr, ast.ReduceExpression):
-        source_sql = translate_expression(expr.source, context, segment=segment)
-        init_sql = translate_expression(expr.init, context, segment=segment)
         var = sanitize_identifier(expr.variable)
-        alias = context.next_alias("re")
         acc = expr.accumulator
+
+        try:
+            init_val = float(expr.init.value) if hasattr(expr.init, "value") else 0.0
+        except Exception:
+            init_val = 0.0
+
+        if (
+            isinstance(expr.source, ast.AggregationFunction)
+            and expr.source.function_name.lower() == "collect"
+            and expr.source.argument is not None
+        ):
+            collect_arg = expr.source.argument
+            collect_sql = translate_expression(collect_arg, context, segment=segment)
+            return f"({init_val} + SUM(CAST({collect_sql} AS DOUBLE)))"
+
+        source_sql = translate_expression(expr.source, context, segment=segment)
+        alias = context.next_alias("re")
         context.variable_aliases[expr.variable] = alias
         context.variable_aliases[acc] = "__acc__"
         body_sql = translate_expression(expr.body, context, segment=segment)
@@ -2698,10 +2725,12 @@ def translate_expression(expr, context, segment="select") -> str:
         body_sql = body_sql.replace("__acc__.node_id", "0").replace("__acc__", "0")
         del context.variable_aliases[expr.variable]
         del context.variable_aliases[acc]
+        init_sql = translate_expression(expr.init, context, segment=segment)
         return (
             f"({init_sql} + (SELECT SUM({body_sql}) FROM "
             f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} DOUBLE PATH '$')) {alias}))"
         )
+
         count_alias = context.next_alias("lpc")
         all_count = f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {count_alias}"
         if expr.quantifier == "all":
