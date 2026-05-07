@@ -7,33 +7,31 @@ Review at the start of each IVG session.
 
 ## LONG-TERM ARCHITECTURAL DIRECTION
 
-### Pydantic-typed Public API (P1 — incremental)
+### Pydantic-typed Public API (incremental — in progress)
 
-**Progress so far (v1.84–v1.86):**
+Progress through v1.88.0:
 - `SQLQuery` + `QueryMetadata` → Pydantic BaseModel (`translator.py`)
-- `IndexHandle` → Pydantic BaseModel with `Literal[type]` validation (`index_protocol.py`)
-- `IVGResult` → Pydantic BaseModel for `execute_cypher` return type (v1.86.0)
-  - Backward-compatible: `__getitem__`, `__contains__`, `.get()` overrides
-  - `bool(result)` = True on success, False on error
+- `IndexHandle` → Pydantic BaseModel, `Literal[type]` validation (`index_protocol.py`)
+- `IVGResult` → Pydantic BaseModel for `execute_cypher` return (v1.86.0)
+- `_validate.py` → 10 input schemas on high-risk engine methods (v1.87.0)
 
-**Next increment:** Input validation at boundary — `node_id: NonEmptyStr`, `k: PositiveInt` on key engine methods.
+**Next increment:** `IVGResult` warnings surface through callers; boundary validation on remaining methods.
 
 ---
 
-## RESOLVED
+## RESOLVED (session 2026-05-07)
 
-- [x] **IC2 1-hop fast path** — `KHopCount` + `KHopNeighborIds`: COUNT 0.29ms (was 2.8ms)
-- [x] **IC3 2-hop fast path** — `KHop2Count` + `KHop2NeighborIds`: LIMIT 1000 = 1.2ms (was 14–22ms, 3.5× faster than GES 4.19ms)
-- [x] **Streaming BFS for unbounded queries** — v1.85.0. `max_results==0` → `_bfs_stream_pages`; bounded → `ReadBFSResults` fast path. 5/5 tests.
-- [x] **IVGResult Pydantic model** — v1.86.0. `execute_cypher` returns `IVGResult` not `Dict[str,Any]`.
-- [x] **Spec 094: Arno BFSJson chunk-read loop** — T006 fixed; cross-build with `arno-builder`; `_detect_arno` calls `ArnoAccel.Load()`. 5/5 e2e tests on `iris-enterprise-2026`.
-- [x] **Spec 105: Index Protocol Unification** — `engine.index(name)` → `IndexHandle` (Pydantic), `IVGIndex` Protocol, PLAID renames, all `*_info` return `"type"` key. v1.84.0.
-- [x] **IVFIndex.Insert() + Delete()** — nearest-centroid single-pass; 5/5 e2e tests.
-- [x] **IVF `<STRINGSTACK>` on 768-dim** — `AddBatch` + `FinalizeIndex`; `build_batch_size=500`.
-- [x] **Pattern Comprehension + REDUCE** — all 10 openCypher gaps closed. AGENTS.md SQL constraints added.
-- [x] **bulk_ingest_edges() / rebuild_nkg()** — engine wrappers with `_nkg_dirty` flag.
-- [x] **Open Exchange readiness** — Docker-first README, unified QUICKSTART with working demo, root cleaned, module.xml v1.86.0.
-- [x] **test_sc003 VL path test** — replaced raw `NKGAccel.BFSJson` call with engine-only determinism check; fixture calls `rebuild_nkg()` for sync guarantee.
+- [x] **BuildNKG 422s → 19s via Rust** — `BuildNKGRust()` / `KG_BUILD_NKG_WRAPPER`. `engine.rebuild_nkg()` auto-picks Rust when `rust_callout=True`.
+- [x] **IC3 2-hop COUNT upper bound** — `KHop2CountFast` = 0.07ms O(1) via `^KG("deg2p")`.
+- [x] **Spec 152: IC3 2-hop COUNT exact** — `KHop2CountExact` = 0.095ms O(1) via `^KG("deg2p_exact")`. `Build2HopExactStats` Rust+ObjScript. `execute_cypher [:P*2] RETURN count(n)` routes here. Correctness verified (37276 on SF10). Known gap: Rust `HashSet<String>` too slow for SF10-scale build → see follow-up below.
+- [x] **Spec 105: Index Protocol Unification** — `engine.index(name)` → `IndexHandle` (Pydantic), `IVGIndex` Protocol, PLAID renames. v1.84.0.
+- [x] **All 10 openCypher gaps closed** — Pattern Comprehension + REDUCE. AGENTS.md SQL constraints locked in.
+- [x] **Streaming BFS** — unbounded VL path → `_bfs_stream_pages`; no `<MAXSTRING>`. v1.85.0.
+- [x] **IVGResult Pydantic model** — `execute_cypher` returns typed `IVGResult`. v1.86.0.
+- [x] **Input validation at boundary** — `_validate.py`: 10 Pydantic schemas, 44 tests. v1.87.0.
+- [x] **100% public engine method coverage** — 113/113 methods tested. `test_untested_methods.py`.
+- [x] **BulkIngestEdges `[Internal]`** — marked in `EdgeScan.cls`.
+- [x] **Open Exchange readiness** — Docker-first README, QUICKSTART with working demo.
 
 ---
 
@@ -41,75 +39,30 @@ Review at the start of each IVG session.
 
 ### P1 — Performance
 
-- [x] **BuildNKG 422s → 19s via Rust** — `BuildNKGRust()` uses `KG_BUILD_NKG_WRAPPER` from
-  `libarno_callout.so`. `engine.rebuild_nkg()` auto-uses Rust path when `rust_callout=True`.
-  `ArnoAccel.Load()` now called in `_detect_arno()` so `rust_callout` is correctly detected.
-  Requires `libarno_callout.so` deployed to `/tmp/` on the IRIS container.
-
-- [x] **IC3 2-hop COUNT pre-aggregation** — `BackfillDegp()` + `Build2HopStats()` added.
-  `^KG("deg2p", src, pred)` = sum of 1-hop neighbor degrees (upper bound for 2-hop count).
-  `KHop2CountFast(src, pred)` = **0.07ms** (O(1) `$Get` on `^KG("deg2p")`).
-  Upper bound: ~3.7× overcount on LDBC KNOWS (136K vs 37K exact). Suitable for threshold
-  detection, NOT for exact reporting. Use `KHop2Count` (70ms) for exact.
-  Engine: `engine.khop2_count_fast(node_id, pred)` + `engine.backfill_degp()` + `rebuild_nkg()`
-  now calls `Build2HopStats` automatically.
-  `BulkIngestEdges` now also writes `^KG("degp")` and `^KG("deg")` so future bulk loads
-  don't need `BackfillDegp`.
-
-- [x] **IC3 2-hop COUNT exact — Spec 152**
-  - `KHop2CountExact(src, pred)`: O(1) `$Get(^KG("deg2p_exact",src,pred),-1)`, fallback to `KHop2Count` when not populated
-  - `Build2HopExactStats()`: populates `^KG("deg2p_exact")` — Rust path via `kg_build_2hop_exact`, ObjectScript fallback
-  - `engine.khop2_count_exact()`, `engine.backfill_deg2p_exact()` public methods
-  - `execute_cypher` `[:P*2] RETURN count(n)` routes to `KHop2CountExact`
-  - **Performance on small graphs: 0.095ms** ✅ — target <1ms met
-  - **Correctness: verified** — matches `KHop2Count` exactly on SF10 (37276)
-  - **Known gap**: `Build2HopExactStats` Rust path uses `HashSet<String>` which is slow on SF10
-    (O(nodes × degree²) with string allocation). Fix: use integer node indices from `^NKG` for O(1) hash operations.
-    Tracked as: **Spec 152 follow-up: ffi_kg_build_2hop_exact_int** (integer-indexed version).
-
-
+- [ ] **Spec 152 follow-up: `ffi_kg_build_2hop_exact_int`**
+  Rust `HashSet<String>` approach is too slow for SF10 (`Build2HopExactStats` times out).
+  Fix: integer-indexed version using `^NKG` node indices — same approach as `ffi_kg_build_nkg`.
+  `HashMap<i32, HashSet<i32>>` instead of `HashMap<String, HashSet<String>>` → 10-20× faster.
+  Expected total `Build2HopExactStats` time on SF10: ~5-8s.
 
 ### P2 — Accuracy
 
 - [ ] **HLL union bias ~89% on LDBC social graphs**
   `approx_count_distinct` systematically under-estimates for correlated friend-of-friend sets.
   Fix: HyperMinHash or KMV sketches in `UpdateStructuralHLL`.
-  Low urgency — approximate is fine for threshold detection; exact path is `KHop2Count`.
+  Low urgency — exact path is `KHop2CountExact` (0.095ms); approximate is fine for threshold detection.
 
 ### P3 — API / DX
 
-- [x] **Input validation at boundary** — `iris_vector_graph/_validate.py`: Pydantic `BaseModel`
-  input schemas for 10 high-risk engine methods. Validates at call entry:
-  - `NodeIdInput`: `node_id` NonEmpty
-  - `EdgeInput`: `source_id`, `predicate`, `target_id` all NonEmpty
-  - `CypherInput`: `cypher_query` NonEmpty
-  - `IVFBuildInput`: `name` NonEmpty, `nlist≥1`, `metric` ∈ {cosine/dot/euclidean/l2}, `batch_size≥1`
-  - `VectorSearchInput`: `query` NonEmpty+FiniteFloats, `k≥1`, `nprobe≥1`
-  - `BM25BuildInput`: `name`+`text_props` NonEmpty, `k1∈[0,10]`, `b∈[0,1]`
-  - `BM25SearchInput`: `name`+`query` NonEmpty, `k≥1`
-  - `KHop2Input`: `node_id` NonEmpty
-  - `TemporalEdgeInput`: `source`/`predicate`/`target` NonEmpty, `timestamp≥0`, `weight≥0`
-  - `VecSearchInput`: `query` NonEmpty+FiniteFloats, `k≥1`, `nprobe≥1`
-  - 44/44 unit tests in `test_validation.py`; exported from `iris_vector_graph.__init__`
-
-- [ ] **Remaining untested public methods** (was 37, now lower after this session).
-  Highest risk remaining: `vec_*` full lifecycle, `run_pagerank`, `restore_snapshot`.
-
-- [ ] **BulkIngestEdges `[ Internal ]` in ObjectScript**
-  `engine.bulk_ingest_edges()` is battle-tested. Mark raw `BulkIngestEdges` in `EdgeScan.cls`
-  as `[ Internal ]` so it stops appearing in external callers' autocomplete.
-
-- [ ] **37 untested public engine methods**
-  Highest risk: `vec_*` full lifecycle (9 methods), `khop`, `ppr`, `random_walk`,
-  `materialize_inference`, `retract_inference`, `restore_snapshot`.
-
 - [ ] **`kg_KNN_VEC` in `engine.index()` protocol**
-  Native HNSW available on Community + Advanced Server is not yet in `_index_registry`.
-  Low priority — IVF covers the same tier as fallback.
+  Native HNSW (Community + Advanced Server) not yet in `_index_registry`.
+  Low priority — IVF is the fallback for those tiers.
 
-- [ ] **NKGAccel `bfs_result` chunks → `bfs_r` sorted global**
-  BFS in `NKGAccel.cls` still uses the older `^ArnoKG("bfs_result", chunkNum)` pattern.
-  KHop is done with the sorted global approach; BFS should follow (spec needed).
+- [ ] **NKGAccel BFS → sorted global (`bfs_r` pattern)**
+  `NKGAccel.cls` BFS still uses `^ArnoKG("bfs_result", chunkNum)` chunk pattern.
+  KHop already uses `^ArnoKG("khop_r", tag, dist, nodeStr)` sorted global.
+  BFS should follow the same pattern for consistency and to eliminate chunking overhead.
+  Needs a new spec.
 
 ---
 
@@ -125,8 +78,10 @@ Comparison: GES/GraphScope published SF1000 numbers on large server cluster.
 | IC2 1-hop COUNT (`KHopCount`) | 0.29ms | 0.14ms | Competitive (was 2.8ms) |
 | IC2 1-hop IDs (`KHopNeighborIds`) | 0.9ms | — | Fast path |
 | IC3 2-hop LIMIT 1000 (`KHop2NeighborIds`) | **1.2ms** | 4.19ms | 3.5× faster than GES |
-| IC3 2-hop COUNT (`KHop2Count`) | 70ms | — | Was 195ms; <10ms target needs pre-agg |
+| IC3 2-hop COUNT exact (`KHop2CountExact`) | **0.095ms** | — | O(1); was 70ms. Requires `Build2HopExactStats` at `BuildNKG` time |
+| IC3 2-hop COUNT upper bound (`KHop2CountFast`) | 0.07ms | — | 3.67× overcount; threshold detection only |
 | approx_count_distinct 2-hop | 5.3ms | — | 74× vs exact; ~89% accuracy on social graphs |
 | BulkIngestEdges | 190–312K edges/s | — | Fast; `^NKG` stale until `rebuild_nkg()` |
-| BuildNKG (SF10) | 422s | — | Rust fix ready, needs Linux build + deploy |
-| Arno BFSJson 2-hop (no MAXSTRING) | ~3.5s | — | SF10 15K results; chunk-read loop working |
+| BuildNKG (SF10, Rust) | **19s** | — | Was 422s; 22× speedup via `ffi_kg_build_nkg` |
+| Build2HopExactStats (SF10) | timeout | — | `HashSet<String>` too slow; integer-indexed version needed |
+| Arno BFSJson 2-hop (SF10, no MAXSTRING) | ~3.5s | — | Chunk-read loop working; `HashSet<String>` bottleneck |
