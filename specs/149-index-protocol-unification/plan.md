@@ -117,19 +117,28 @@ class IVGIndex(Protocol):
     def info(self) -> dict: ...
 ```
 
-**IndexHandle**
+**IndexHandle** (`pydantic.BaseModel` — consistent with `SQLQuery`/`QueryMetadata` in `translator.py`)
 ```python
-@dataclass
-class IndexHandle:
-    name: str
-    type: str        # "ivf" | "bm25" | "vec" | "plaid"
-    _engine: Any     # IRISGraphEngine ref
+from pydantic import BaseModel, Field
+from typing import Literal, Any
+
+class IndexHandle(BaseModel):
+    name: str = Field(min_length=1)
+    type: Literal["ivf", "bm25", "vec", "plaid"]
+    engine: Any
+
+    model_config = {"arbitrary_types_allowed": True}
 
     def search(self, query, k=10, **kwargs) -> list: ...
     def insert(self, id: str, vector) -> None: ...
     def drop(self) -> None: ...
     def info(self) -> dict: ...
 ```
+
+Validation on construction:
+- `name` must be non-empty (Pydantic `min_length=1`)
+- `type` must be one of the 4 known strings (Pydantic `Literal`)
+- Construction fails fast rather than dispatching to a wrong method silently
 
 **IndexRegistry** (in `IRISGraphEngine`)
 ```python

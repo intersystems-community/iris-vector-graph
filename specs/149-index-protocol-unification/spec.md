@@ -92,14 +92,14 @@ passing e2e tests in `tests/e2e/test_plaid.py`.
 - **FR-005**: `PLAIDSearch.cls` public ClassMethods MUST be renamed: `Build`, `Search`, `Insert`, `Drop`, `Info`. `StoreCentroids`, `BuildInvertedIndex`, `StoreDocTokens`, `StoreDocTokensBatch` become Private ClassMethods called internally by `Build`.
 - **FR-006**: `plaid_build` Python wrapper MUST call `PLAIDSearch.Build`. Existing behavior preserved.
 - **FR-007**: `plaid_info` MUST return `{"type": "plaid", "indexed": N, "dim": D, "nlist": L}`.
-- **FR-008**: A `typing.Protocol` named `IVGIndex` MUST be defined in `iris_vector_graph/index_protocol.py` with `search`, `insert`, `drop`, `info` methods. `runtime_checkable` decorator required.
+- **FR-008**: A `typing.Protocol` named `IVGIndex` MUST be defined in `iris_vector_graph/index_protocol.py` with `search`, `insert`, `drop`, `info` methods. `runtime_checkable` decorator required. `IndexHandle` MUST be a Pydantic `BaseModel` with `name: str` (non-empty), `type: Literal["ivf","bm25","vec","plaid"]`, consistent with `SQLQuery`/`QueryMetadata` pattern.
 - **FR-009**: `tests/e2e/test_plaid.py` MUST cover build, search, insert, drop with passing assertions.
 - **FR-010**: `engine.index(name)` MUST raise `ValueError` with descriptive message for names not found in any global.
 
 ### Key Entities
 
 - **IVGIndex (Protocol)**: Structural type contract — `search(query, k) → list`, `insert(id, vec) → None`, `drop() → None`, `info() → dict`. Not a base class.
-- **IndexHandle**: Returned by `engine.index(name)`. Wraps name + type string + engine reference. Dispatches to correct `*_search`, `*_insert`, etc.
+- **IndexHandle**: Returned by `engine.index(name)`. Pydantic `BaseModel` with validated `name: str` (non-empty), `type: Literal["ivf","bm25","vec","plaid"]`, `engine: Any`. Dispatches to correct `*_search`, `*_insert`, etc. Consistent with `SQLQuery`/`QueryMetadata` Pydantic pattern in `translator.py`.
 - **IndexRegistry**: In-process dict `{name → type_string}` populated by `*_build`/`*_create_index` calls.
 
 ## Success Criteria *(mandatory)*

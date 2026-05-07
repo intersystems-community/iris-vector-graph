@@ -31,7 +31,7 @@
 All user story phases depend on this.
 
 - [ ] T006 [US1] Implement `IVGIndex` `@runtime_checkable` Protocol in `iris_vector_graph/index_protocol.py` with methods: `search(query, k, **kwargs) -> list`, `insert(id, vector) -> None`, `drop() -> None`, `info() -> dict`
-- [ ] T007 [US1] Implement `IndexHandle` dataclass in `iris_vector_graph/index_protocol.py` with fields `name: str`, `type: str`, `_engine: Any` and dispatch methods that call the corresponding `*_search`, `*_insert`, `*_drop`, `*_info` engine methods
+- [ ] T007 [US1] Implement `IndexHandle` as a `pydantic.BaseModel` (not `@dataclass`) in `iris_vector_graph/index_protocol.py` — fields: `name: str` (non-empty), `type: Literal["ivf","bm25","vec","plaid"]`, `engine: Any`; `model_config = {"arbitrary_types_allowed": True}`; dispatch methods call corresponding `*_search`, `*_insert`, `*_drop`, `*_info` engine methods. Consistent with `SQLQuery`/`QueryMetadata` Pydantic pattern already in `translator.py`.
 - [ ] T008 [US1] Export `IVGIndex` and `IndexHandle` from `iris_vector_graph/__init__.py`
 - [ ] T009 [US1] Write unit tests for `IndexHandle` dispatch with a mock engine in `tests/unit/test_index_handle.py` — verify each method dispatches to the correct engine method for all 4 index types
 
@@ -51,9 +51,10 @@ All user story phases depend on this.
 - [ ] T011 [US4] Write e2e test `test_plaid_search_returns_ranked_results` in `tests/e2e/test_plaid.py` — search with query tokens, assert top result has highest MaxSim score, k results returned
 - [ ] T012 [US4] Write e2e test `test_plaid_insert_appears_in_search` in `tests/e2e/test_plaid.py` — insert new doc, assert `info["indexed"]` increments and doc appears in search
 - [ ] T013 [US4] Write e2e test `test_plaid_drop_removes_all_data` in `tests/e2e/test_plaid.py` — drop index, assert `plaid_info` returns `{}`
-- [ ] T014 [US4] Confirm all 4 PLAID tests currently FAIL (no `PLAIDSearch.Build` exists yet)
+- [ ] T013a [US4] Write e2e test `test_plaid_info_returns_type_and_counts` in `tests/e2e/test_plaid.py` — after build, assert `plaid_info(name)` contains `"type": "plaid"`, `"indexed"`, `"dim"`, `"nlist"` keys with correct values
+- [ ] T014 [US4] Confirm all 5 PLAID tests currently FAIL (no `PLAIDSearch.Build` exists yet)
 
-**Checkpoint**: 4 failing PLAID tests committed.
+**Checkpoint**: 5 failing PLAID tests committed.
 
 ---
 
@@ -73,7 +74,7 @@ All user story phases depend on this.
 
 ---
 
-## Phase 5: User Story 5 — `*_info` methods include `"type"` key (P2)
+## Phase 5: User Story 3 — `*_info` methods include `"type"` key (P2)
 
 **Goal**: All `*_info` methods return `{"type": "...", ...}` — enables `IndexHandle.info()` to identify type.
 
@@ -84,8 +85,9 @@ All user story phases depend on this.
 - [ ] T022 [P] [US3] Update `vec_info` in `iris_vector_graph/engine.py` to include `"type": "vec"` in returned dict
 - [ ] T023 [US3] Update `plaid_info` in `iris_vector_graph/engine.py` to include `"type": "plaid"`, `"indexed"`, `"dim"`, `"nlist"` in returned dict
 - [ ] T024 [US3] Verify existing tests that call `*_info` still pass (additive change only)
+- [ ] T024a [US3] Write unit test `test_all_info_methods_return_type_key` in `tests/unit/test_index_protocol.py` — for each of ivf/bm25/vec/plaid, mock the `*_info` return and assert `"type"` key present with correct value
 
-**Checkpoint**: All 4 index types return `"type"` key from `info()`.
+**Checkpoint**: All 4 index types return `"type"` key from `info()`. Unit test passes.
 
 ---
 
