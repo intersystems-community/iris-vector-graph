@@ -10,13 +10,15 @@ Review at the start of each IVG session.
 
 ### Pydantic-typed Public API (P1 — incremental)
 
-`execute_cypher` returns `Dict[str, Any]`. Intended shape:
-- `IVGResult(columns, rows, metadata, warnings)` Pydantic model
-- Input validation at boundary: `node_id: NonEmptyStr`, `k: PositiveInt`
-- Engine surface split into `IVGReadAPI` / `IVGAdminAPI`
+**Progress so far:**
+- `SQLQuery` + `QueryMetadata` → Pydantic BaseModel (translator.py)
+- `IndexHandle` → Pydantic BaseModel with `Literal[type]` validation (index_protocol.py)
+- **`IVGResult` → Pydantic BaseModel for `execute_cypher` return type (v1.86.0)** ← NEW
+  - Backward-compatible via `__getitem__`, `__contains__`, `.get()` overrides
+  - `bool(result)` = True on success, False on error
+  - 23/23 unit tests pass, all existing call sites unchanged
 
-**Progress so far:** `SQLQuery`, `QueryMetadata`, `IndexHandle` all Pydantic `BaseModel`.
-**Next increment:** `IVGResult` for `execute_cypher`.
+**Next increment:** Input validation at boundary — `node_id: NonEmptyStr`, `k: PositiveInt` on key engine methods.
 
 ---
 

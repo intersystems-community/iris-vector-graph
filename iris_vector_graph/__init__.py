@@ -6,6 +6,7 @@ from .engine import IRISGraphEngine
 from .status import EngineStatus
 from .schema import GraphSchema
 from .index_protocol import IVGIndex, IndexHandle
+from .result import IVGResult
 from .capabilities import IRISCapabilities
 from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
@@ -40,4 +41,5 @@ __all__ = [
     "EmbeddedCursor",
     "IVGIndex",
     "IndexHandle",
+    "IVGResult",
 ]
