@@ -1182,10 +1182,14 @@ ClassMethod Build2HopExactStats() As %Integer
     If ##class(Graph.KG.ArnoAccel).IsAvailable() {
         Set dllid = $Get(^||ArnoAccel("dllid"), 0)
         If dllid > 0 {
-            Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact")
+            Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact_int")
             If fid > 0 {
                 Set result = $ZF(-5, dllid, fid)
-                Return +$Piece($Piece(result, "entries", 2), "}", 1)
+                Set entries = +$Piece($Piece(result, "entries", 2), "}", 1)
+                If entries > 0 {
+                    Do ..DecodeBuildResults()
+                }
+                Return entries
             }
         }
     }
@@ -1229,6 +1233,28 @@ ClassMethod Build2HopExactStats() As %Integer
         }
     }
     Return cnt
+}
+
+ClassMethod DecodeBuildResults() [ Private ]
+{
+    Set sIdx = ""
+    For {
+        Set sIdx = $Order(^ArnoKG("2h", sIdx))
+        Quit:sIdx=""
+        Set sName = $Get(^ArnoKG("2hN", sIdx))
+        If sName = "" Continue
+        Set pIdx = ""
+        For {
+            Set pIdx = $Order(^ArnoKG("2h", sIdx, pIdx))
+            Quit:pIdx=""
+            Set cnt = +$Get(^ArnoKG("2h", sIdx, pIdx))
+            If cnt <= 0 Continue
+            Set pName = $Get(^ArnoKG("2hP", pIdx))
+            If pName = "" Continue
+            Set ^KG("deg2p_exact", sName, pName) = cnt
+        }
+    }
+    Kill ^ArnoKG("2h"), ^ArnoKG("2hN"), ^ArnoKG("2hP")
 }
 
 }
