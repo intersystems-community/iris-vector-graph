@@ -872,10 +872,16 @@ ClassMethod ExportAdjacencyWithPreds() As %String [ Private ]
 ClassMethod BuildNKGRust() As %String
 {
     Try {
-        Set result = $ZF(-5, "libarno_callout.so", "kg_build_nkg")
-        Return result
+        If '##class(Graph.KG.ArnoAccel).IsAvailable() {
+            Return "{""error"":""Rust callout not available — load ArnoAccel first""}"
+        }
+        Set dllid = $Get(^||ArnoAccel("dllid"), 0)
+        If dllid = 0 Return "{""error"":""ArnoAccel DLL not loaded""}"
+        Set fid = $ZF(-4, 3, dllid, "kg_build_nkg")
+        If fid = 0 Return "{""error"":""kg_build_nkg not found in DLL""}"
+        Return $ZF(-5, dllid, fid)
     } Catch ex {
-        Return "{""error"":""Rust callout unavailable: "_ex.DisplayString()_"""}"
+        Return "{""error"":""Rust callout failed: "_ex.DisplayString()_"""}"
     }
 }
 

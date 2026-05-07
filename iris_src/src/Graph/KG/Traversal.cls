@@ -111,6 +111,7 @@ ClassMethod BuildNKG() As %Status
 	Set tmp = $Increment(^NKG("$meta", "version"))
 
 	Do ..Build2HopStats()
+	Do ..Build2HopExactStats()
 
 	Return $$$OK
 }
@@ -1164,6 +1165,70 @@ ClassMethod KHop2CountFast(srcId As %String, pred As %String = "") As %Integer
         If cnt >= 0 Return +cnt
     }
     Return ..KHop2Count(srcId, pred)
+}
+
+ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
+{
+    If pred '= "" {
+        Set cnt = $Get(^KG("deg2p_exact", srcId, pred), -1)
+        If cnt >= 0 Return +cnt
+    }
+    Return ..KHop2Count(srcId, pred)
+}
+
+ClassMethod Build2HopExactStats() As %Integer
+{
+    Kill ^KG("deg2p_exact")
+    If ##class(Graph.KG.ArnoAccel).IsAvailable() {
+        Set dllid = $Get(^||ArnoAccel("dllid"), 0)
+        If dllid > 0 {
+            Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact")
+            If fid > 0 {
+                Set result = $ZF(-5, dllid, fid)
+                Return +$Piece($Piece(result, "entries", 2), "}", 1)
+            }
+        }
+    }
+    Set src = ""
+    Set cnt = 0
+    For {
+        Set src = $Order(^KG("out", 0, src))
+        Quit:src=""
+        Set pred = ""
+        For {
+            Set pred = $Order(^KG("out", 0, src, pred))
+            Quit:pred=""
+            Kill ^||h2s
+            Set ^||h2s(src) = ""
+            Set mid = ""
+            For {
+                Set mid = $Order(^KG("out", 0, src, pred, mid))
+                Quit:mid=""
+                Set ^||h2s(mid) = ""
+            }
+            Set exact = 0
+            Set mid = ""
+            For {
+                Set mid = $Order(^KG("out", 0, src, pred, mid))
+                Quit:mid=""
+                Set o2 = ""
+                For {
+                    Set o2 = $Order(^KG("out", 0, mid, pred, o2))
+                    Quit:o2=""
+                    If '$Data(^||h2s(o2)) {
+                        Set ^||h2s(o2) = ""
+                        Set exact = exact + 1
+                    }
+                }
+            }
+            Kill ^||h2s
+            If exact > 0 {
+                Set ^KG("deg2p_exact", src, pred) = exact
+                Set cnt = cnt + 1
+            }
+        }
+    }
+    Return cnt
 }
 
 }

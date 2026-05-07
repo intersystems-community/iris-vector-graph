@@ -1743,7 +1743,7 @@ class IRISGraphEngine:
                 return None
             try:
                 cnt = int(self._iris_obj().classMethodValue(
-                    "Graph.KG.Traversal", "KHop2Count", str(src_id), pred
+                    "Graph.KG.Traversal", "KHop2CountExact", str(src_id), pred
                 ))
                 return IVGResult(columns=[col], rows=[(cnt,)])
             except Exception:
@@ -3126,6 +3126,7 @@ class IRISGraphEngine:
             else:
                 iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
             self._nkg_dirty = False
             return True
         except Exception as e:
@@ -3140,10 +3141,25 @@ class IRISGraphEngine:
             logger.warning("backfill_degp failed: %s", e)
             return 0
 
+    def backfill_deg2p_exact(self) -> int:
+        try:
+            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            return int(result)
+        except Exception as e:
+            logger.warning("backfill_deg2p_exact failed: %s", e)
+            return 0
+
     def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
         KHop2Input(node_id=node_id)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
+        )
+        return int(result)
+
+    def khop2_count_exact(self, node_id: str, predicate: str = "") -> int:
+        KHop2Input(node_id=node_id)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.Traversal", "KHop2CountExact", node_id, predicate
         )
         return int(result)
 
