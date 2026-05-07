@@ -45,10 +45,11 @@ Review at the start of each IVG session.
 
 ### P0 — Correctness
 
-- [ ] **Streaming BFS for unbounded queries**
-  `BFSFastJsonSorted` still hits `<MAXSTRING>` for 93K+ results with no LIMIT.
-  `ReadBFSPage` exists but integration is incomplete for the unbounded path.
-  Fix: cursor-based `$Order` resumption — `ReadBFSPage(tag, cursor) → (json, next_cursor)` loop from Python.
+- [x] **Streaming BFS for unbounded queries** — Fixed in v1.85.0. Unbounded VL path queries
+  (`max_results == 0`) now always use `_bfs_stream_pages` (cursor-based paging) instead of
+  `ReadBFSResults` (single JSON string that hits `<MAXSTRING>` at 93K+ results).
+  Bounded queries (LIMIT present) continue using the fast single-call `ReadBFSResults` path.
+  5/5 tests pass (3 e2e + 2 routing unit tests).
 
 ### P1 — Performance
 
