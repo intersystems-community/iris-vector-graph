@@ -62,11 +62,13 @@ Progress through v1.88.0:
   Native HNSW (Community + Advanced Server) not yet in `_index_registry`.
   Low priority — IVF is the fallback for those tiers.
 
-- [ ] **NKGAccel BFS → sorted global (`bfs_r` pattern)**
-  `NKGAccel.cls` BFS still uses `^ArnoKG("bfs_result", chunkNum)` chunk pattern.
-  KHop already uses `^ArnoKG("khop_r", tag, dist, nodeStr)` sorted global.
-  BFS should follow the same pattern for consistency and to eliminate chunking overhead.
-  Needs a new spec.
+- [x] **Spec 153: NKGAccel BFS unified output** — `NKGAccel.BFSJson` now writes to
+  `^ArnoKG("bfs_r", tag, step, o)` and returns `"SORTED:tag"` (same as `BFSFastJsonSorted`).
+  Engine routes Rust BFS through `ReadBFSResults`/`_bfs_stream_pages` identically to ObjectScript path.
+  `BFSFastJsonChunked` legacy branch removed from engine. v1.89.0.
+  **Benchmark gates deferred** (enterprise container unavailable during implementation).
+  Note: `NKGAccel.BFSJson` fallback now calls `BFSFastJsonSorted` (not `BFSFastJson`) for consistency.
+
 
 ---
 
