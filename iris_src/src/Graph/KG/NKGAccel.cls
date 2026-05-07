@@ -1035,4 +1035,41 @@ ClassMethod CountDistinctKHop(srcId As %String, predsJson As %String = "", maxHo
     Return "{""estimate"":"_estimate_",""registers"":256,""std_error"":0.065}"
 }
 
+ClassMethod Build2HopExact() As %Boolean
+{
+    If '..IsLoaded() {
+        Do ..Load("/tmp/libarno_callout.so")
+        If '..IsLoaded() {
+            If ##class(Graph.KG.ArnoAccel).IsAvailable() {
+                Set ^||NKGAccel("dllid") = $Get(^||ArnoAccel("dllid"), 0)
+            }
+        }
+    }
+    If '..IsLoaded() Return 0
+    Set dllid = $Get(^||NKGAccel("dllid"), 0)
+    If dllid = 0 Return 0
+    Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact_stream")
+    If fid = 0 Return 0
+    Kill ^ArnoKG("2hs")
+    Set raw = $ZF(-5, dllid, fid)
+    If $Extract(raw, 1, 8) '= "CHUNKED:" Return 0
+    Set n = +$Piece(raw, ":", 3)
+    Set data = ""
+    For i = 1:1:n {
+        Set data = data _ $Get(^ArnoKG("2hs", i), "")
+    }
+    Kill ^ArnoKG("2hs")
+    For pos = 1:1:$Length(data, $Char(10)) {
+        Set line = $Piece(data, $Char(10), pos)
+        If line = "" Continue
+        Set s    = $Piece(line, $Char(31), 1)
+        Set p    = $Piece(line, $Char(31), 2)
+        Set cnt  = +$Piece(line, $Char(31), 3)
+        If (s '= "") && (p '= "") && (cnt > 0) {
+            Set ^KG("deg2p_exact", s, p) = cnt
+        }
+    }
+    Return 1
+}
+
 }
