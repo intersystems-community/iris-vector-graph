@@ -26,6 +26,12 @@ from iris_vector_graph.status import (
 )
 from iris_vector_graph.security import validate_table_name
 from iris_vector_graph.result import IVGResult
+from iris_vector_graph._validate import (
+    NodeIdInput, EdgeInput, CypherInput,
+    IVFBuildInput, VectorSearchInput,
+    BM25BuildInput, BM25SearchInput,
+    KHop2Input, TemporalEdgeInput, VecSearchInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -904,6 +910,7 @@ class IRISGraphEngine:
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
+        CypherInput(cypher_query=cypher_query)
         import re as _re_ec
         _APPROX_RE = _re_ec.compile(
             r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
@@ -2772,6 +2779,7 @@ class IRISGraphEngine:
         self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
+        NodeIdInput(node_id=node_id)
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
@@ -2823,6 +2831,7 @@ class IRISGraphEngine:
         qualifiers: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
+        EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
@@ -3132,6 +3141,7 @@ class IRISGraphEngine:
             return 0
 
     def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
+        KHop2Input(node_id=node_id)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
         )
@@ -4929,6 +4939,8 @@ class IRISGraphEngine:
         ivf_name: Optional[str] = None,
         nprobe: int = 8,
     ) -> List[Tuple[str, float]]:
+        if not isinstance(query, str):
+            VecSearchInput(query=list(query), k=k, nprobe=nprobe)
         if self._probe_native_vec():
             query_json = json.dumps([float(v) for v in query]) if not isinstance(query, str) else query
             return self.kg_KNN_VEC(query_json, k=k, label_filter=label_filter)
@@ -5907,6 +5919,9 @@ class IRISGraphEngine:
         upsert: bool = False,
         graph: Optional[str] = None,
     ) -> bool:
+        if timestamp is not None:
+            TemporalEdgeInput(source=source, predicate=predicate, target=target,
+                              timestamp=int(timestamp), weight=weight)
         try:
             ts = int(timestamp) if timestamp is not None else ""
             attrs_json = json.dumps(attrs) if attrs else ""
@@ -6273,6 +6288,7 @@ class IRISGraphEngine:
     def bm25_build(
         self, name: str, text_props: list, k1: float = 1.5, b: float = 0.75
     ) -> dict:
+        BM25BuildInput(name=name, text_props=text_props, k1=k1, b=b)
         props_csv = ",".join(text_props)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Build", name, props_csv, k1, b
@@ -6282,6 +6298,7 @@ class IRISGraphEngine:
         return info
 
     def bm25_search(self, name: str, query: str, k: int = 10) -> list:
+        BM25SearchInput(name=name, query=query, k=k)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Search", name, query, k
         )
@@ -6311,6 +6328,7 @@ class IRISGraphEngine:
         batch_size: int = 10000,
         build_batch_size: int = 500,
     ) -> dict:
+        IVFBuildInput(name=name, nlist=nlist, metric=metric, batch_size=batch_size, build_batch_size=build_batch_size)
         try:
             import numpy as np
             from sklearn.cluster import MiniBatchKMeans
@@ -6388,6 +6406,7 @@ class IRISGraphEngine:
         return result
 
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
+        VectorSearchInput(name=name, query=query, k=k, nprobe=nprobe)
         query_json = json.dumps([float(v) for v in query])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe

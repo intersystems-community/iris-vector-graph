@@ -8,6 +8,12 @@ from .schema import GraphSchema
 from .index_protocol import IVGIndex, IndexHandle
 from .result import IVGResult
 from .capabilities import IRISCapabilities
+from ._validate import (
+    NodeIdInput, EdgeInput, CypherInput,
+    IVFBuildInput, VectorSearchInput,
+    BM25BuildInput, BM25SearchInput,
+    KHop2Input, TemporalEdgeInput, VecSearchInput,
+)
 from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine
 from .fusion import RRFFusion
@@ -42,4 +48,14 @@ __all__ = [
     "IVGIndex",
     "IndexHandle",
     "IVGResult",
+    "NodeIdInput",
+    "EdgeInput",
+    "CypherInput",
+    "IVFBuildInput",
+    "VectorSearchInput",
+    "BM25BuildInput",
+    "BM25SearchInput",
+    "KHop2Input",
+    "TemporalEdgeInput",
+    "VecSearchInput",
 ]

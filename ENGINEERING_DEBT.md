@@ -71,9 +71,22 @@ Review at the start of each IVG session.
 
 ### P3 — API / DX
 
-- [ ] **Input validation at boundary** — next Pydantic increment.
-  `node_id: NonEmptyStr`, `k: PositiveInt` on `create_node`, `ivf_search`, `bm25_search`, etc.
-  Catches footguns early rather than getting ObjectScript errors at call time.
+- [x] **Input validation at boundary** — `iris_vector_graph/_validate.py`: Pydantic `BaseModel`
+  input schemas for 10 high-risk engine methods. Validates at call entry:
+  - `NodeIdInput`: `node_id` NonEmpty
+  - `EdgeInput`: `source_id`, `predicate`, `target_id` all NonEmpty
+  - `CypherInput`: `cypher_query` NonEmpty
+  - `IVFBuildInput`: `name` NonEmpty, `nlist≥1`, `metric` ∈ {cosine/dot/euclidean/l2}, `batch_size≥1`
+  - `VectorSearchInput`: `query` NonEmpty+FiniteFloats, `k≥1`, `nprobe≥1`
+  - `BM25BuildInput`: `name`+`text_props` NonEmpty, `k1∈[0,10]`, `b∈[0,1]`
+  - `BM25SearchInput`: `name`+`query` NonEmpty, `k≥1`
+  - `KHop2Input`: `node_id` NonEmpty
+  - `TemporalEdgeInput`: `source`/`predicate`/`target` NonEmpty, `timestamp≥0`, `weight≥0`
+  - `VecSearchInput`: `query` NonEmpty+FiniteFloats, `k≥1`, `nprobe≥1`
+  - 44/44 unit tests in `test_validation.py`; exported from `iris_vector_graph.__init__`
+
+- [ ] **Remaining untested public methods** (was 37, now lower after this session).
+  Highest risk remaining: `vec_*` full lifecycle, `run_pagerank`, `restore_snapshot`.
 
 - [ ] **BulkIngestEdges `[ Internal ]` in ObjectScript**
   `engine.bulk_ingest_edges()` is battle-tested. Mark raw `BulkIngestEdges` in `EdgeScan.cls`
