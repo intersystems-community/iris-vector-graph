@@ -160,7 +160,14 @@ A `pytest_runtest_setup` hook in `tests/conftest.py` enforces marker-fixture con
 
 ## Unified Test Runner
 
-The project provides a single, authoritative command for running all test categories.
+The project's standard test command is `pytest`. The `run-tests` entry point described below is a project-specific CLI wrapper that may or may not be present depending on how the package was installed.
+
+> **Current recommended commands:**
+> ```bash
+> pytest tests/unit/ -q                  # unit tests (no IRIS required)
+> pytest tests/e2e/ -q                   # e2e tests (requires IRIS container)
+> pytest tests/ -q -m "not e2e"          # all non-e2e tests
+> ```
 
 > **DEPRECATED**: `tests/python/run_all_tests.py` is deprecated. Use `run-tests` instead.
 

@@ -2,6 +2,9 @@
 """
 Full benchmark: iris-vector-graph v1.40.0 against 535M-edge KGBENCH dataset.
 
+NOTE: This script uses a local dataset path and is not runnable out-of-the-box.
+Set DATASET_PATH to point to your local copy of the KGBENCH dataset.
+
 Two modes:
   --query-only   Query benchmarks only — never purges production data (default after full ingest)
   --ingest-only  Ingest benchmark only — uses isolated namespace prefix, no purge of real data

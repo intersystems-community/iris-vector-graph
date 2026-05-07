@@ -88,14 +88,20 @@ Note: `%EXACT` preserves case (IRIS VARCHAR uppercases by default).
 ### ^KG — Temporal + Structural Graph
 
 ```
-^KG("out", s, p, o) = weight              — structural outbound edges
-^KG("in",  o, p, s) = weight              — structural inbound edges
-^KG("tout", ts, s, p, o) = weight         — temporal outbound (time-ordered)
-^KG("tin",  ts, o, p, s) = weight         — temporal inbound
-^KG("bucket", bucket, s) = count          — 5-min pre-aggregated edge count
-^KG("tagg", bucket, s, p, key) = value    — COUNT/SUM/AVG/MIN/MAX/HLL per bucket
-^KG("edgeprop", ts, s, p, o, key) = value — rich edge attributes
+^KG("out", 0, s, p, o) = weight              — structural outbound edges (shard 0)
+^KG("in",  0, o, p, s) = weight              — structural inbound edges (shard 0)
+^KG("tout", ts, s, p, o) = weight            — temporal outbound (time-ordered)
+^KG("tin",  ts, o, p, s) = weight            — temporal inbound
+^KG("bucket", bucket, s) = count             — 5-min pre-aggregated edge count
+^KG("tagg", bucket, s, p, key) = value       — COUNT/SUM/AVG/MIN/MAX/HLL per bucket
+^KG("edgeprop", ts, s, p, o, key) = value    — rich edge attributes
+^KG("deg", s) = total_degree                 — pre-aggregated total degree
+^KG("degp", s, p) = degree_for_predicate    — pre-aggregated per-predicate degree (for KHopCount O(1))
 ```
+
+Note: The `"out"` and `"in"` subscripts use shard 0 (i.e., `^KG("out", 0, s, p, o)`).
+The shard subscript reserves space for future horizontal partitioning.
+`^KG("degp", s, p)` powers the `KHopCount` fast path — O(1) lookup instead of `$Order` scan.
 
 ### ^BM25Idx — BM25 Lexical Search
 

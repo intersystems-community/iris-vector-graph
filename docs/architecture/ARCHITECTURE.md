@@ -109,13 +109,16 @@ All classes in `Graph.KG` package. Pure ObjectScript + `$vectorop` — no `Langu
 |-------|---------|-------------|
 | **BM25Index** | Okapi BM25 lexical search | Build, Search, Insert, Drop, Info, SearchProc (`kg_BM25`) |
 | **VecIndex** | RP-tree ANN vector search | Create, Search, SearchJSON, SearchMultiJSON, InsertJSON, InsertBatchJSON, Build, Drop |
+| **IVFIndex** | IVFFlat vector search (k-means quantized) | Build, AddBatch, FinalizeIndex, Search, Drop, Info, SearchProc (`kg_IVF`) |
 | **PLAIDSearch** | PLAID multi-vector retrieval | StoreCentroids, StoreDocTokens, BuildInvertedIndex, Search, Insert, Info, Drop |
 | **TemporalIndex** | Time-indexed edge store | InsertEdge, BulkInsert, QueryWindow, QueryWindowInbound, GetAggregate, GetBucketGroups, GetDistinctCount, PurgeBefore |
 | **PageRank** | Personalized + Global PageRank | RunJson, PageRankGlobalJson |
 | **Algorithms** | Graph analytics | WCCJson, CDLPJson |
 | **Subgraph** | Bounded subgraph extraction | SubgraphJson, PPRGuidedJson |
-| **Traversal** | Graph build + BFS | BuildKG, BuildNKG, BFSFastJson |
-| **GraphIndex** | Functional index for ^NKG | InternNode, InternLabel, InsertIndex, DeleteIndex |
+| **Traversal** | Graph build + BFS + fast-path traversal | BuildKG, BuildNKG, BFSFastJson, BFSFastJsonSorted, ReadBFSResults, ReadBFSPage, KHopCount, KHopNeighborIds, KHop2Count, KHop2NeighborIds, ShortestPathJson, DijkstraJson |
+| **EdgeScan** | Bulk edge ingestion | BulkIngestEdges, MatchEdges, WriteAdjacency, DeleteAdjacency |
+| **GraphIndex** | Functional index for ^NKG | InternNode, InternLabel, InsertIndex, DeleteIndex, UpdateStructuralHLL, EstimateHLL |
+| **NKGAccel** | Arno/integer-index BFS acceleration | BFSJson, BFSFastCountDistinct, KHopNeighborsSorted, CountDistinctKHop, BuildNKGRust |
 
 ### Call Context Rule
 

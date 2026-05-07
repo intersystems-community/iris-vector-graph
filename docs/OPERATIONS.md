@@ -1,88 +1,119 @@
 # Operations Guide: IRIS Vector Graph
 
-This guide provides instructions for deploying, configuring, and maintaining the IRIS Vector Graph system in a production environment.
+## Deployment
 
-## Installation and Deployment
+IVG deploys via the Python engine's `initialize_schema()` method. There is no separate deployment script — the engine handles SQL schema creation, ObjectScript class installation, and index setup in one idempotent call.
 
-The primary deployment mechanism is the `scripts/deploy_production.py` script. This script handles the initialization of the SQL schema, deployment of stored procedures (operators), configuration of security roles, and loading of ObjectScript classes.
+### Quick start
 
-### Deployment Modes
+```python
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
 
-1.  **Docker Mode (Recommended)**: Best for full deployments where you have access to the IRIS container. It handles both SQL and ObjectScript assets.
-    ```bash
-    python scripts/deploy_production.py --mode docker --container my-iris-container --schema App
-    ```
+conn = iris.connect(hostname="localhost", port=1972, namespace="USER",
+                    username="_SYSTEM", password="SYS")
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+engine.initialize_schema()   # idempotent — safe to call repeatedly
+```
 
-2.  **SQL Mode**: Use this if you only have a network connection to IRIS and cannot execute commands on the host/container. Note that this mode **cannot** deploy ObjectScript classes.
-    ```bash
-    python scripts/deploy_production.py --mode sql --host iris-prod.example.com --user deploy_user --password secret
-    ```
+`initialize_schema()` creates the SQL tables (`nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `kg_NodeEmbeddings`, `fhir_bridges`), compiles and loads all ObjectScript classes (`Graph.KG.*`), and creates the HNSW vector index if supported by the IRIS tier.
 
-### Deployment Steps
+### Docker-based setup (development)
 
-1.  **Clone and Setup**:
-    ```bash
-    git clone https://github.com/isc-tdyar/iris-vector-graph.git
-    cd iris-vector-graph
-    uv sync
-    ```
-2.  **Configure Environment**: (See [Environment Variables](#environment-variables))
-3.  **Execute Deployment**:
-    ```bash
-    uv run python scripts/deploy_production.py --mode docker
-    ```
+```bash
+git clone https://github.com/intersystems-community/iris-vector-graph
+cd iris-vector-graph
+docker compose up -d    # starts IRIS Community on port 1972
+conda run -n py312 python -c "
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
+conn = iris.connect('localhost', 1972, 'USER', '_SYSTEM', 'SYS')
+IRISGraphEngine(conn).initialize_schema()
+print('ready')
+"
+```
+
+### Connecting to an existing IRIS instance
+
+```bash
+IRIS_HOST=iris.example.com
+IRIS_PORT=1972
+IRIS_NAMESPACE=MYNAMESPACE
+IRIS_USERNAME=myuser
+IRIS_PASSWORD=secret
+```
+
+Pass these to `iris.connect()` directly, or use the environment-variable helpers in `iris_vector_graph.schema`.
 
 ---
 
 ## Environment Variables
 
-The deployment script and the application use the following environment variables for configuration:
-
 | Variable | Default | Description |
-| :--- | :--- | :--- |
-| `IRIS_HOST` | `localhost` | Hostname of the IRIS server. |
-| `IRIS_PORT` | `1972` | SuperServer port of the IRIS instance. |
-| `IRIS_NAMESPACE` | `USER` | Target namespace for deployment. |
-| `IRIS_USER` | `_SYSTEM` | Username for deployment/connection. |
-| `IRIS_PASSWORD` | `SYS` | Password for deployment/connection. |
-| `IRIS_SCHEMA` | `User` | Target SQL schema for the graph tables. |
-| `IRIS_CONTAINER` | `iris-vector-graph` | Name of the Docker container (Docker mode only). |
+|---|---|---|
+| `IRIS_HOST` | `localhost` | IRIS SuperServer hostname |
+| `IRIS_PORT` | `1972` | IRIS SuperServer port |
+| `IRIS_NAMESPACE` | `USER` | Target namespace |
+| `IRIS_USERNAME` | `_SYSTEM` | Connection user |
+| `IRIS_PASSWORD` | `SYS` | Connection password |
+| `IRIS_CONTAINER` | — | Docker container name (used by `iris-devtester` in tests) |
 
 ---
 
-## Production Security Guide
+## Index Management
 
-IRIS Vector Graph uses Role-Based Access Control (RBAC) to secure graph data. The deployment script automatically creates the following roles:
+### HNSW vector index
 
-### `graph_reader`
--   **Permissions**: `SELECT` access on all graph tables (`nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `kg_NodeEmbeddings`, `docs`).
--   **Usage**: Assign to application users or API services that only need to query the graph.
+The HNSW index on `kg_NodeEmbeddings` is created automatically by `initialize_schema()` on IRIS tiers that support it (Community and Advanced Server). On Standard/HealthConnect tiers it is skipped silently; `ivf_build` / IVFFlat is used instead.
 
-### `graph_writer`
--   **Permissions**: `SELECT`, `INSERT`, `UPDATE`, `DELETE` access on all graph tables.
--   **Usage**: Assign to data ingestion pipelines and administrative tools.
+To rebuild the HNSW index after large data changes:
 
-### Best Practices
-1.  **Disable `_SYSTEM` Account**: In production, create dedicated service accounts and assign them the appropriate roles.
-2.  **Audit Logging**: Enable IRIS System Auditing for SQL operations on graph tables.
-
----
-
-## Maintenance Tasks
-
-### Rebuilding HNSW Indexes
-As data grows and changes, you may need to rebuild the HNSW index to optimize search performance.
-
-**SQL Command**:
 ```sql
-ALTER INDEX HNSW_NodeEmb ON kg_NodeEmbeddings REBUILD;
+-- In IRIS SQL / Management Portal
+ALTER INDEX kg_emb_hnsw ON Graph_KG.kg_NodeEmbeddings REBUILD;
 ```
 
-### Monitoring Performance
-Monitor the following metrics in IRIS:
--   **Global Buffers**: Ensure sufficient memory is allocated for `rdf_edges` and `kg_NodeEmbeddings`.
--   **Query Latency**: Track the execution time of `kg_KNN_VEC` and `kg_GRAPH_PATH` procedures.
--   **Journal Space**: Large-scale ingestion can generate significant journal volume.
+### `^KG` and `^NKG` adjacency indexes
+
+The graph adjacency index (`^KG`) is maintained automatically for individual writes (`create_edge`, `create_node`). After bulk loads via `bulk_ingest_edges()`, rebuild manually:
+
+```python
+engine.rebuild_kg()    # rebuilds ^KG from rdf_edges SQL table
+engine.rebuild_nkg()   # rebuilds ^NKG integer index (needed for Arno/BFS acceleration)
+```
+
+`rebuild_nkg()` is slow on large graphs (422s for LDBC SF10). Only required when using Arno-accelerated BFS or variable-length Cypher path queries. The engine emits a `RuntimeWarning` if you attempt a BFS query with a stale `^NKG`.
+
+---
+
+## Maintenance
+
+### Monitoring
+
+Key metrics to track in IRIS System Management Portal:
+
+- **Global buffer hits** for `^KG`, `^NKG`, `^BM25Idx` — high hit rate means hot data is cached
+- **Query latency** for `kg_KNN_VEC` (HNSW vector search) and traversal procedures
+- **Journal space** — large bulk loads generate significant journal volume; monitor `^KG` write amplification
 
 ### Backups
-Standard IRIS backup procedures (External Backup or Online Backup) cover all graph data stored in the database. Ensure the database file containing the graph namespace is included in the backup set.
+
+Standard IRIS backup (External Backup or Online Backup) covers all graph data. The `Graph_KG.*` SQL tables, `^KG`, `^NKG`, `^BM25Idx`, `^VecIdx`, `^PLAID`, and `^IVF` globals are all in the configured namespace database file.
+
+### Rebuilding after restore
+
+After restoring from backup, verify adjacency index consistency:
+
+```python
+status = engine.status()
+print(status.adjacency.kg_populated, status.adjacency.nkg_populated)
+# If False, run engine.rebuild_kg() and/or engine.rebuild_nkg()
+```
+
+---
+
+## Security
+
+IVG uses standard IRIS SQL permissions. No custom RBAC roles are created automatically — use IRIS Management Portal to assign SQL table privileges as appropriate for your deployment.
+
+**Development defaults** (`_SYSTEM` / `SYS`) should be replaced with dedicated service accounts in production. Refer to IRIS Security documentation for user/role management.
