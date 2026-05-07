@@ -39,20 +39,21 @@ Progress through v1.88.0:
 
 ### P1 — Performance
 
-- [ ] **Spec 152 follow-up: `Build2HopExactStats` build time**
-  `ffi_kg_build_2hop_exact_int` (integer-indexed, single-pass from `^KG`) now exists and is deployed.
-  Computation is fast (~18s for SF10 read + ~5s 2-hop dedup). But `zf_global` API write overhead
-  (~0.5ms per `ns.set()`) dominates: 62K results × 0.5ms = 31s. Total: ~5 min on SF10.
-  Query after build: **0.14ms** (target met).
-  Build time root cause: `zf_global` per-call xDBC protocol overhead. Fix requires either:
-  (a) journal-bypass or batch-write API in `zf_global`, or
-  (b) keep the temp integer global (`^ArnoKG("2h")`) and have ObjectScript do a single `$Order`
-      loop to write `^KG("deg2p_exact", ...)` — this is already implemented via `DecodeBuildResults()`.
-  Current state: **5 min build, 0.14ms query** — acceptable as a deployment-time operation.
+- [ ] **Spec 152 follow-up: `Build2HopExactStats` build time (arno)**
+  **Root cause identified**: `zf_global` `ns.set()` for non-sequential writes to a new global is
+  ~1500× slower than sequential writes into freshly-killed global space. `^NKG` writes = 1.58µs
+  each (sequential into pre-killed space). `^ArnoKG(42, ...)` writes = ~2.4ms each (random-access
+  into newly-created global pages). 125K writes × 2.4ms = 305s.
   
-  **Remaining gap:** The `^ArnoKG("2h")` integer write (the new approach) also hits the same
-  `zf_global` overhead. True fix: stream results as a compact binary through a single large
-  string return value instead of individual `ns.set()` calls.
+  Bitvec computation (arno) and integer subscripts both deployed and confirmed working.
+  The bottleneck is NOT the algorithm or subscript type — it's the global write protocol.
+  
+  **Fix belongs in arno**: Return all results as a compact serialized string from the Rust function,
+  then have ObjectScript parse and write `^KG("deg2p_exact")` directly in a single `$Order` loop.
+  This avoids the `zf_global` per-entry round-trip entirely.
+  
+  **IVG status**: `Traversal.cls` already calls bitvec first. `KHop2CountExact` query = **0.12ms ✅**.
+  Build time = ~5 min (acceptable as deployment-time operation).
 
 ### P2 — Accuracy
 
