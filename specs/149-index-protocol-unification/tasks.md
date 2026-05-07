@@ -15,11 +15,11 @@
 
 **Purpose**: Verify environment and create new file stubs before implementation begins.
 
-- [ ] T001 Verify container name `iris_vector_graph` in `docker-compose.yml` matches all test fixtures
-- [ ] T002 Verify `iris-devtester` resolves via `IRISContainer.attach("iris_vector_graph")`
-- [ ] T003 [P] Create empty `iris_vector_graph/index_protocol.py`
-- [ ] T004 [P] Create empty `tests/e2e/test_plaid.py`
-- [ ] T005 [P] Create empty `tests/e2e/test_index_protocol.py`
+- [x] T001 Verify container name `iris_vector_graph` in `docker-compose.yml` matches all test fixtures
+- [x] T002 Verify `iris-devtester` resolves via `IRISContainer.attach("iris_vector_graph")`
+- [x] T003 [P] Create empty `iris_vector_graph/index_protocol.py`
+- [x] T004 [P] Create empty `tests/e2e/test_plaid.py`
+- [x] T005 [P] Create empty `tests/e2e/test_index_protocol.py`
 
 **Checkpoint**: Files stubbed, environment verified.
 
@@ -30,10 +30,10 @@
 **Purpose**: `IVGIndex` Protocol and `IndexHandle` — pure Python, no IRIS dependency.
 All user story phases depend on this.
 
-- [ ] T006 [US1] Implement `IVGIndex` `@runtime_checkable` Protocol in `iris_vector_graph/index_protocol.py` with methods: `search(query, k, **kwargs) -> list`, `insert(id, vector) -> None`, `drop() -> None`, `info() -> dict`
-- [ ] T007 [US1] Implement `IndexHandle` as a `pydantic.BaseModel` (not `@dataclass`) in `iris_vector_graph/index_protocol.py` — fields: `name: str` (non-empty), `type: Literal["ivf","bm25","vec","plaid"]`, `engine: Any`; `model_config = {"arbitrary_types_allowed": True}`; dispatch methods call corresponding `*_search`, `*_insert`, `*_drop`, `*_info` engine methods. Consistent with `SQLQuery`/`QueryMetadata` Pydantic pattern already in `translator.py`.
-- [ ] T008 [US1] Export `IVGIndex` and `IndexHandle` from `iris_vector_graph/__init__.py`
-- [ ] T009 [US1] Write unit tests for `IndexHandle` dispatch with a mock engine in `tests/unit/test_index_handle.py` — verify each method dispatches to the correct engine method for all 4 index types
+- [x] T006 [US1] Implement `IVGIndex` `@runtime_checkable` Protocol in `iris_vector_graph/index_protocol.py` with methods: `search(query, k, **kwargs) -> list`, `insert(id, vector) -> None`, `drop() -> None`, `info() -> dict`
+- [x] T007 [US1] Implement `IndexHandle` as a `pydantic.BaseModel` (not `@dataclass`) in `iris_vector_graph/index_protocol.py` — fields: `name: str` (non-empty), `type: Literal["ivf","bm25","vec","plaid"]`, `engine: Any`; `model_config = {"arbitrary_types_allowed": True}`; dispatch methods call corresponding `*_search`, `*_insert`, `*_drop`, `*_info` engine methods. Consistent with `SQLQuery`/`QueryMetadata` Pydantic pattern already in `translator.py`.
+- [x] T008 [US1] Export `IVGIndex` and `IndexHandle` from `iris_vector_graph/__init__.py`
+- [x] T009 [US1] Write unit tests for `IndexHandle` dispatch with a mock engine in `tests/unit/test_index_handle.py` — verify each method dispatches to the correct engine method for all 4 index types
 
 **Checkpoint**: `IVGIndex` importable, `IndexHandle` dispatchable without IRIS. Unit tests pass.
 
@@ -47,12 +47,12 @@ All user story phases depend on this.
 
 > **WRITE THESE TESTS FIRST — they should FAIL until Phase 4 is complete.**
 
-- [ ] T010 [US4] Write e2e test `test_plaid_build_and_search` in `tests/e2e/test_plaid.py` — build PLAID index from synthetic 32-dim token embeddings (4 docs, 8 tokens each), assert `plaid_info["indexed"] == 4`
-- [ ] T011 [US4] Write e2e test `test_plaid_search_returns_ranked_results` in `tests/e2e/test_plaid.py` — search with query tokens, assert top result has highest MaxSim score, k results returned
-- [ ] T012 [US4] Write e2e test `test_plaid_insert_appears_in_search` in `tests/e2e/test_plaid.py` — insert new doc, assert `info["indexed"]` increments and doc appears in search
-- [ ] T013 [US4] Write e2e test `test_plaid_drop_removes_all_data` in `tests/e2e/test_plaid.py` — drop index, assert `plaid_info` returns `{}`
-- [ ] T013a [US4] Write e2e test `test_plaid_info_returns_type_and_counts` in `tests/e2e/test_plaid.py` — after build, assert `plaid_info(name)` contains `"type": "plaid"`, `"indexed"`, `"dim"`, `"nlist"` keys with correct values
-- [ ] T014 [US4] Confirm all 5 PLAID tests currently FAIL (no `PLAIDSearch.Build` exists yet)
+- [x] T010 [US4] Write e2e test `test_plaid_build_and_search` in `tests/e2e/test_plaid.py` — build PLAID index from synthetic 32-dim token embeddings (4 docs, 8 tokens each), assert `plaid_info["indexed"] == 4`
+- [x] T011 [US4] Write e2e test `test_plaid_search_returns_ranked_results` in `tests/e2e/test_plaid.py` — search with query tokens, assert top result has highest MaxSim score, k results returned
+- [x] T012 [US4] Write e2e test `test_plaid_insert_appears_in_search` in `tests/e2e/test_plaid.py` — insert new doc, assert `info["indexed"]` increments and doc appears in search
+- [x] T013 [US4] Write e2e test `test_plaid_drop_removes_all_data` in `tests/e2e/test_plaid.py` — drop index, assert `plaid_info` returns `{}`
+- [x] T013a [US4] Write e2e test `test_plaid_info_returns_type_and_counts` in `tests/e2e/test_plaid.py` — after build, assert `plaid_info(name)` contains `"type": "plaid"`, `"indexed"`, `"dim"`, `"nlist"` keys with correct values
+- [x] T014 [US4] Confirm all 5 PLAID tests currently FAIL (no `PLAIDSearch.Build` exists yet)
 
 **Checkpoint**: 5 failing PLAID tests committed.
 
@@ -64,11 +64,11 @@ All user story phases depend on this.
 
 **Independent Test**: `pytest tests/e2e/test_plaid.py` passes 4/4.
 
-- [ ] T015 [US2] Add `Build(name, docs_json, n_clusters, dim)` ClassMethod to `iris_src/src/Graph/KG/PLAIDSearch.cls` — calls `StoreCentroids`, `StoreDocTokensBatch`, `BuildInvertedIndex` in sequence, returns `Info(name)` JSON
-- [ ] T016 [US2] Mark `StoreCentroids`, `StoreDocTokens`, `StoreDocTokensBatch`, `BuildInvertedIndex`, `JsonToVector` as `[ Private ]` in `PLAIDSearch.cls`
-- [ ] T017 [US2] Compile `PLAIDSearch.cls` on containers `gqs-ivg-test`, `iris-community-2026`, `iris-enterprise-2026` — confirm no compile errors
-- [ ] T018 [US2] Update `plaid_build` in `iris_vector_graph/engine.py` to call `PLAIDSearch.Build` (single call) instead of `StoreCentroids` + `BuildInvertedIndex` sequence
-- [ ] T019 [US2] Verify `pytest tests/e2e/test_plaid.py` now passes 4/4
+- [x] T015 [US2] Add `Build(name, docs_json, n_clusters, dim)` ClassMethod to `iris_src/src/Graph/KG/PLAIDSearch.cls` — calls `StoreCentroids`, `StoreDocTokensBatch`, `BuildInvertedIndex` in sequence, returns `Info(name)` JSON
+- [x] T016 [US2] Mark `StoreCentroids`, `StoreDocTokens`, `StoreDocTokensBatch`, `BuildInvertedIndex`, `JsonToVector` as `[ Private ]` in `PLAIDSearch.cls`
+- [x] T017 [US2] Compile `PLAIDSearch.cls` on containers `gqs-ivg-test`, `iris-community-2026`, `iris-enterprise-2026` — confirm no compile errors
+- [x] T018 [US2] Update `plaid_build` in `iris_vector_graph/engine.py` to call `PLAIDSearch.Build` (single call) instead of `StoreCentroids` + `BuildInvertedIndex` sequence
+- [x] T019 [US2] Verify `pytest tests/e2e/test_plaid.py` now passes 4/4
 
 **Checkpoint**: PLAID lifecycle works end-to-end, `StoreCentroids`/`BuildInvertedIndex` no longer in public error messages.
 
@@ -80,12 +80,12 @@ All user story phases depend on this.
 
 **Independent Test**: Each `*_info` call returns dict with `"type"` key.
 
-- [ ] T020 [P] [US3] Update `ivf_info` in `iris_vector_graph/engine.py` to include `"type": "ivf"` in returned dict
-- [ ] T021 [P] [US3] Update `bm25_info` in `iris_vector_graph/engine.py` to include `"type": "bm25"` in returned dict
-- [ ] T022 [P] [US3] Update `vec_info` in `iris_vector_graph/engine.py` to include `"type": "vec"` in returned dict
-- [ ] T023 [US3] Update `plaid_info` in `iris_vector_graph/engine.py` to include `"type": "plaid"`, `"indexed"`, `"dim"`, `"nlist"` in returned dict
-- [ ] T024 [US3] Verify existing tests that call `*_info` still pass (additive change only)
-- [ ] T024a [US3] Write unit test `test_all_info_methods_return_type_key` in `tests/unit/test_index_protocol.py` — for each of ivf/bm25/vec/plaid, mock the `*_info` return and assert `"type"` key present with correct value
+- [x] T020 [P] [US3] Update `ivf_info` in `iris_vector_graph/engine.py` to include `"type": "ivf"` in returned dict
+- [x] T021 [P] [US3] Update `bm25_info` in `iris_vector_graph/engine.py` to include `"type": "bm25"` in returned dict
+- [x] T022 [P] [US3] Update `vec_info` in `iris_vector_graph/engine.py` to include `"type": "vec"` in returned dict
+- [x] T023 [US3] Update `plaid_info` in `iris_vector_graph/engine.py` to include `"type": "plaid"`, `"indexed"`, `"dim"`, `"nlist"` in returned dict
+- [x] T024 [US3] Verify existing tests that call `*_info` still pass (additive change only)
+- [x] T024a [US3] Write unit test `test_all_info_methods_return_type_key` in `tests/unit/test_index_protocol.py` — for each of ivf/bm25/vec/plaid, mock the `*_info` return and assert `"type"` key present with correct value
 
 **Checkpoint**: All 4 index types return `"type"` key from `info()`. Unit test passes.
 
@@ -99,15 +99,15 @@ All user story phases depend on this.
 
 > **WRITE TESTS FIRST — they should FAIL until implementation is complete.**
 
-- [ ] T025 [US1] Write e2e test `test_engine_index_ivf_dispatch` in `tests/e2e/test_index_protocol.py` — build IVF index, call `engine.index(name).search(vec, k=3)`, assert results match `ivf_search`
-- [ ] T026 [US1] Write e2e test `test_engine_index_bm25_dispatch` in `tests/e2e/test_index_protocol.py` — build BM25 index, call `engine.index(name).search("query", k=3)`, assert results match `bm25_search`
-- [ ] T027 [US1] Write e2e test `test_engine_index_registry_persists_across_reconnect` in `tests/e2e/test_index_protocol.py` — build IVF index, create new `IRISGraphEngine(conn)`, call `engine.index(name)` without rebuilding, assert works
-- [ ] T028 [US1] Write e2e test `test_engine_index_raises_for_unknown_name` in `tests/e2e/test_index_protocol.py` — call `engine.index("nonexistent")`, assert `ValueError` raised
-- [ ] T029 [US1] Implement `_build_index_registry()` in `iris_vector_graph/engine.py` — probe `^IVF`, `^VecIdx`, `^BM25Idx`, `^PLAID` globals via `$Order` ObjectScript calls, return `{name: type_str}` dict
-- [ ] T030 [US1] Call `_build_index_registry()` at end of `IRISGraphEngine.__init__`, store result in `self._index_registry`
-- [ ] T031 [US1] Update `ivf_build`, `bm25_build`, `vec_create_index`, `plaid_build` in `iris_vector_graph/engine.py` to register name in `self._index_registry` after successful build
-- [ ] T032 [US1] Implement `engine.index(name) -> IndexHandle` in `iris_vector_graph/engine.py` — raises `ValueError` if name not in `_index_registry`, returns `IndexHandle(name, type, self)`
-- [ ] T033 [US1] Verify `pytest tests/e2e/test_index_protocol.py` passes all 4 tests
+- [x] T025 [US1] Write e2e test `test_engine_index_ivf_dispatch` in `tests/e2e/test_index_protocol.py` — build IVF index, call `engine.index(name).search(vec, k=3)`, assert results match `ivf_search`
+- [x] T026 [US1] Write e2e test `test_engine_index_bm25_dispatch` in `tests/e2e/test_index_protocol.py` — build BM25 index, call `engine.index(name).search("query", k=3)`, assert results match `bm25_search`
+- [x] T027 [US1] Write e2e test `test_engine_index_registry_persists_across_reconnect` in `tests/e2e/test_index_protocol.py` — build IVF index, create new `IRISGraphEngine(conn)`, call `engine.index(name)` without rebuilding, assert works
+- [x] T028 [US1] Write e2e test `test_engine_index_raises_for_unknown_name` in `tests/e2e/test_index_protocol.py` — call `engine.index("nonexistent")`, assert `ValueError` raised
+- [x] T029 [US1] Implement `_build_index_registry()` in `iris_vector_graph/engine.py` — probe `^IVF`, `^VecIdx`, `^BM25Idx`, `^PLAID` globals via `$Order` ObjectScript calls, return `{name: type_str}` dict
+- [x] T030 [US1] Call `_build_index_registry()` at end of `IRISGraphEngine.__init__`, store result in `self._index_registry`
+- [x] T031 [US1] Update `ivf_build`, `bm25_build`, `vec_create_index`, `plaid_build` in `iris_vector_graph/engine.py` to register name in `self._index_registry` after successful build
+- [x] T032 [US1] Implement `engine.index(name) -> IndexHandle` in `iris_vector_graph/engine.py` — raises `ValueError` if name not in `_index_registry`, returns `IndexHandle(name, type, self)`
+- [x] T033 [US1] Verify `pytest tests/e2e/test_index_protocol.py` passes all 4 tests
 
 **Checkpoint**: `engine.index(name)` works for all registered index types, registry survives reconnect.
 
@@ -117,11 +117,11 @@ All user story phases depend on this.
 
 **Purpose**: Full acceptance criteria pass against live `iris_vector_graph` container.
 
-- [ ] T034 [US1] Run `pytest tests/e2e/test_index_protocol.py` — all 4 tests pass
-- [ ] T035 [US2] Run `pytest tests/e2e/test_plaid.py` — all 4 tests pass
-- [ ] T036 Run `pytest tests/unit/test_index_handle.py` — all unit tests pass
-- [ ] T037 [P] Run full regression: `pytest tests/unit/ tests/e2e/ -q --tb=short` — zero regressions vs pre-feature baseline
-- [ ] T038 Verify `from iris_vector_graph import IVGIndex, IndexHandle` works and `isinstance(handle, IVGIndex)` returns `True`
+- [x] T034 [US1] Run `pytest tests/e2e/test_index_protocol.py` — all 4 tests pass
+- [x] T035 [US2] Run `pytest tests/e2e/test_plaid.py` — all 4 tests pass
+- [x] T036 Run `pytest tests/unit/test_index_handle.py` — all unit tests pass
+- [x] T037 [P] Run full regression: `pytest tests/unit/ tests/e2e/ -q --tb=short` — zero regressions vs pre-feature baseline
+- [x] T038 Verify `from iris_vector_graph import IVGIndex, IndexHandle` works and `isinstance(handle, IVGIndex)` returns `True`
 
 **Checkpoint**: All acceptance scenarios from spec.md pass. Zero regressions.
 
@@ -129,9 +129,9 @@ All user story phases depend on this.
 
 ## Phase 8: Polish
 
-- [ ] T039 Update `ENGINEERING_DEBT.md` — mark Spec 105 Index Protocol Unification complete
-- [ ] T040 [P] Update `docs/python/PYTHON_SDK.md` deprecation notice to list `engine.index()` as new unified API
-- [ ] T041 Bump version to `1.84.0` in `pyproject.toml` and publish
+- [x] T039 Update `ENGINEERING_DEBT.md` — mark Spec 105 Index Protocol Unification complete
+- [x] T040 [P] Update `docs/python/PYTHON_SDK.md` deprecation notice to list `engine.index()` as new unified API
+- [x] T041 Bump version to `1.84.0` in `pyproject.toml` and publish
 
 ---
 

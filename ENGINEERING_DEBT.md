@@ -151,7 +151,13 @@ most-called method and where typed contracts pay off immediately.
       Standard/HealthConnect editions do NOT. NOT Enterprise-only.
   
   The real problems:
-  1. ~~IVFIndex is MISSING Insert()~~ — **DONE** (`ivf_insert` + `ivf_delete`)
+- [x] **Spec 105 phase 2: Index Protocol Unification** — `engine.index(name)` unified entry point,
+      `IVGIndex` `runtime_checkable` Protocol, `IndexHandle` Pydantic BaseModel dispatch wrapper.
+      `PLAIDSearch.Build` public method; `StoreCentroids`/`BuildInvertedIndex` marked `[ Private ]`.
+      All `*_info` methods return `"type"` key. Full PLAID e2e test coverage.
+      34 tests pass, 1 skipped (gref reconnect probe). Published v1.84.0.
+
+
   2. PLAIDSearch method names (StoreCentroids, BuildInvertedIndex) don't match the
      Create/Build/Search/Drop pattern established by VecIndex and BM25Index
   3. kg_KNN_VEC is wedged in as an escape hatch — not discoverable or composable

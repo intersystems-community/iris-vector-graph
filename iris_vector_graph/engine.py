@@ -99,6 +99,7 @@ class IRISGraphEngine:
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
+        self._index_registry: Dict[str, str] = self._build_index_registry()
         logger.debug("IRISGraphEngine initialized (dim=%s)", embedding_dimension or "auto")
 
     @classmethod
@@ -3087,6 +3088,38 @@ class IRISGraphEngine:
                         f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
                     )
 
+    def _build_index_registry(self) -> Dict[str, str]:
+        registry: Dict[str, str] = {}
+        try:
+            import iris as _iris_pkg
+            for global_name, type_str in (
+                ("^IVF",      "ivf"),
+                ("^VecIdx",   "vec"),
+                ("^BM25Idx",  "bm25"),
+                ("^PLAID",    "plaid"),
+            ):
+                gref = _iris_pkg.gref(global_name)
+                name = ""
+                while True:
+                    name = gref.order([name])
+                    if name is None or name == "":
+                        break
+                    name_str = str(name)
+                    if name_str:
+                        registry[name_str] = type_str
+        except Exception:
+            pass
+        return registry
+
+    def index(self, name: str) -> "IndexHandle":
+        from iris_vector_graph.index_protocol import IndexHandle
+        if name not in self._index_registry:
+            raise ValueError(
+                f"Index '{name}' not found. Known indexes: {sorted(self._index_registry)}. "
+                "Call ivf_build/bm25_build/vec_create_index/plaid_build first."
+            )
+        return IndexHandle(name=name, type=self._index_registry[name], engine=self)
+
     def rebuild_kg(self) -> bool:
         from iris_vector_graph.schema import _call_classmethod
         try:
@@ -5725,7 +5758,9 @@ class IRISGraphEngine:
             str(num_trees),
             str(leaf_size),
         )
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        self._index_registry[name] = "vec"
+        return info
 
     def vec_insert(self, index_name: str, doc_id: str, embedding) -> None:
         vec_json = json.dumps([float(v) for v in embedding])
@@ -5772,7 +5807,9 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "Info", index_name
         )
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        info.setdefault("type", "vec")
+        return info
 
     def vec_drop(self, index_name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.VecIndex", "Drop", index_name)
@@ -5818,38 +5855,23 @@ class IRISGraphEngine:
         for i, label in enumerate(labels):
             doc_token_map[i]["centroid"] = int(label)
 
-        iris_obj = self._iris_obj()
         centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
-        iris_obj.classMethodVoid(
-            "Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json
+        docs_json = json.dumps([
+            {
+                "id": doc["id"],
+                "tokens": [[float(v) for v in tok] for tok in doc["tokens"]],
+            }
+            for doc in docs
+        ])
+        assignments_json = json.dumps(doc_token_map)
+
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.PLAIDSearch", "Build", name,
+            centroids_json, docs_json, assignments_json
         )
-
-        BATCH_SIZE = 10
-        for i in range(0, len(docs), BATCH_SIZE):
-            batch = docs[i : i + BATCH_SIZE]
-            batch_json = json.dumps(
-                [
-                    {
-                        "id": doc["id"],
-                        "tokens": [[float(v) for v in tok] for tok in doc["tokens"]],
-                    }
-                    for doc in batch
-                ]
-            )
-            iris_obj.classMethodVoid(
-                "Graph.KG.PLAIDSearch", "StoreDocTokensBatch", name, batch_json
-            )
-
-        ASSIGN_CHUNK = 5000
-        for i in range(0, len(doc_token_map), ASSIGN_CHUNK):
-            chunk_json = json.dumps(doc_token_map[i : i + ASSIGN_CHUNK])
-            iris_obj.classMethodVoid(
-                "Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, chunk_json
-            )
-
-        return json.loads(
-            str(iris_obj.classMethodValue("Graph.KG.PLAIDSearch", "Info", name))
-        )
+        info = json.loads(str(result))
+        self._index_registry[name] = "plaid"
+        return info
 
     def plaid_search(
         self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4
@@ -6256,7 +6278,9 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Build", name, props_csv, k1, b
         )
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        self._index_registry[name] = "bm25"
+        return info
 
     def bm25_search(self, name: str, query: str, k: int = 10) -> list:
         result = self._iris_obj().classMethodValue(
@@ -6276,7 +6300,9 @@ class IRISGraphEngine:
 
     def bm25_info(self, name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Info", name)
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        info.setdefault("type", "bm25")
+        return info
 
     def ivf_build(
         self,
@@ -6358,7 +6384,9 @@ class IRISGraphEngine:
 
         iris_obj.classMethodValue("Graph.KG.IVFIndex", "FinalizeIndex", name)
         info = iris_obj.classMethodValue("Graph.KG.IVFIndex", "Info", name)
-        return _json.loads(str(info))
+        result = _json.loads(str(info))
+        self._index_registry[name] = "ivf"
+        return result
 
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
         query_json = json.dumps([float(v) for v in query])
@@ -6388,4 +6416,7 @@ class IRISGraphEngine:
 
     def ivf_info(self, name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.IVFIndex", "Info", name)
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        if info:
+            info.setdefault("type", "ivf")
+        return info
