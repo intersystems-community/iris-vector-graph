@@ -5608,6 +5608,10 @@ class IRISGraphEngine:
             return self._arno_available
         try:
             iris_obj = self._iris_obj()
+            try:
+                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
+            except Exception:
+                pass
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True

@@ -580,9 +580,18 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     If $Extract(raw, 1, 8) '= "CHUNKED:" {
         Return raw
     }
-    Set n = $Piece(raw, ":", 3)
+    Set n = +$Piece(raw, ":", 3)
     Set readFn = ^||NKGAccel("read_fn")
-    Return raw
+    If readFn = 0 {
+        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+    }
+    Set result = ""
+    For i = 1:1:n {
+        Set chunk = $ZF(-5, dllid, readFn, "^ArnoKG", i)
+        Set result = result _ chunk
+    }
+    Kill ^ArnoKG("bfs_result")
+    Return result
 }
 
 ClassMethod InvalidateAdjCache()
