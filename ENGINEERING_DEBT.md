@@ -56,11 +56,18 @@ Review at the start of each IVG session.
   `BulkIngestEdges` now also writes `^KG("degp")` and `^KG("deg")` so future bulk loads
   don't need `BackfillDegp`.
 
-- [ ] **IC3 2-hop COUNT: 70ms exact (target <10ms)**
-  `KHop2Count` exact scan still 70ms. Pre-aggregated upper bound (`KHop2CountFast`) is
-  0.07ms but ~3.7× overcount. For exact: needs dedup at `Build2HopStats` time — only
-  feasible if `^NKG` data is available (store deduplicated 2-hop counts per node).
-  Alternative: expose `approx_count_2hop(n)` in Cypher alongside `approx_count_distinct`.
+- [x] **IC3 2-hop COUNT exact — Spec 152**
+  - `KHop2CountExact(src, pred)`: O(1) `$Get(^KG("deg2p_exact",src,pred),-1)`, fallback to `KHop2Count` when not populated
+  - `Build2HopExactStats()`: populates `^KG("deg2p_exact")` — Rust path via `kg_build_2hop_exact`, ObjectScript fallback
+  - `engine.khop2_count_exact()`, `engine.backfill_deg2p_exact()` public methods
+  - `execute_cypher` `[:P*2] RETURN count(n)` routes to `KHop2CountExact`
+  - **Performance on small graphs: 0.095ms** ✅ — target <1ms met
+  - **Correctness: verified** — matches `KHop2Count` exactly on SF10 (37276)
+  - **Known gap**: `Build2HopExactStats` Rust path uses `HashSet<String>` which is slow on SF10
+    (O(nodes × degree²) with string allocation). Fix: use integer node indices from `^NKG` for O(1) hash operations.
+    Tracked as: **Spec 152 follow-up: ffi_kg_build_2hop_exact_int** (integer-indexed version).
+
+
 
 ### P2 — Accuracy
 
