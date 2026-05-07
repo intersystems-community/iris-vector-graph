@@ -109,7 +109,69 @@ ClassMethod BuildNKG() As %Status
 	}
 	Set ^NKG("$meta", "edgeCount") = edgeCount
 	Set tmp = $Increment(^NKG("$meta", "version"))
+
+	Do ..Build2HopStats()
+
 	Return $$$OK
+}
+
+ClassMethod BackfillDegp() As %Integer
+{
+	Kill ^KG("deg")
+	Kill ^KG("degp")
+	Set src = ""
+	Set cnt = 0
+	For {
+		Set src = $Order(^KG("out", 0, src))
+		Quit:src=""
+		Set pred = ""
+		For {
+			Set pred = $Order(^KG("out", 0, src, pred))
+			Quit:pred=""
+			Set deg = 0
+			Set o = ""
+			For {
+				Set o = $Order(^KG("out", 0, src, pred, o))
+				Quit:o=""
+				Set deg = deg + 1
+			}
+			Set tmp = $Increment(^KG("deg", src), deg)
+			Set ^KG("degp", src, pred) = deg
+			Set cnt = cnt + 1
+		}
+	}
+	Return cnt
+}
+
+ClassMethod Build2HopStats() As %Integer
+{
+	Kill ^KG("deg2p")
+	Set src = ""
+	For {
+		Set src = $Order(^KG("out", 0, src))
+		Quit:src=""
+		Set pred = ""
+		For {
+			Set pred = $Order(^KG("out", 0, src, pred))
+			Quit:pred=""
+			Set sum = 0
+			Set mid = ""
+			For {
+				Set mid = $Order(^KG("out", 0, src, pred, mid))
+				Quit:mid=""
+				Set sum = sum + $Get(^KG("degp", mid, pred), 0)
+			}
+			If sum > 0 Set ^KG("deg2p", src, pred) = sum
+		}
+	}
+	Set n = ""
+	Set cnt = 0
+	For {
+		Set n = $Order(^KG("deg2p", n))
+		Quit:n=""
+		Set cnt = cnt + 1
+	}
+	Return cnt
 }
 
 /// Helper for single predicate traversal
@@ -1093,6 +1155,15 @@ ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults 
     }
     Kill ^||kh2s, ^||kh2all
     Return result
+}
+
+ClassMethod KHop2CountFast(srcId As %String, pred As %String = "") As %Integer
+{
+    If pred '= "" {
+        Set cnt = $Get(^KG("deg2p", srcId, pred), -1)
+        If cnt >= 0 Return +cnt
+    }
+    Return ..KHop2Count(srcId, pred)
 }
 
 }

@@ -41,18 +41,26 @@ Review at the start of each IVG session.
 
 ### P1 — Performance
 
-- [ ] **IC3 2-hop COUNT: 70ms → <10ms**
-  `KHop2Count` bottlenecked by 38K-node `$Order` dedup walk in ObjectScript (~60ms).
-  Fix: `BuildNKG2HopStats` pre-aggregation at `BuildNKG` time, or accept `approx_count_distinct` (5.3ms, ~89% accuracy on social graphs — good enough for threshold detection).
+- [x] **BuildNKG 422s → 19s via Rust** — `BuildNKGRust()` uses `KG_BUILD_NKG_WRAPPER` from
+  `libarno_callout.so`. `engine.rebuild_nkg()` auto-uses Rust path when `rust_callout=True`.
+  `ArnoAccel.Load()` now called in `_detect_arno()` so `rust_callout` is correctly detected.
+  Requires `libarno_callout.so` deployed to `/tmp/` on the IRIS container.
 
-- [ ] **BuildNKG 422s on SF10**
-  Rust `ffi_kg_build_nkg` written and compiles clean. Needs Linux build deployed to enterprise container.
-  Also need: `BuildNKGIncremental` (only processes edges added since last version number).
+- [x] **IC3 2-hop COUNT pre-aggregation** — `BackfillDegp()` + `Build2HopStats()` added.
+  `^KG("deg2p", src, pred)` = sum of 1-hop neighbor degrees (upper bound for 2-hop count).
+  `KHop2CountFast(src, pred)` = **0.07ms** (O(1) `$Get` on `^KG("deg2p")`).
+  Upper bound: ~3.7× overcount on LDBC KNOWS (136K vs 37K exact). Suitable for threshold
+  detection, NOT for exact reporting. Use `KHop2Count` (70ms) for exact.
+  Engine: `engine.khop2_count_fast(node_id, pred)` + `engine.backfill_degp()` + `rebuild_nkg()`
+  now calls `Build2HopStats` automatically.
+  `BulkIngestEdges` now also writes `^KG("degp")` and `^KG("deg")` so future bulk loads
+  don't need `BackfillDegp`.
 
-- [ ] **Spec 094 benchmark numbers still missing**
-  `^NKG` not populated on enterprise container — needs `BuildNKG` after LDBC reload.
-  From previous sessions: Arno BFSJson ~3.5s for 15K results (no `<MAXSTRING>`); BFSFastJson ~4.3s.
-  Need formal numbers in `specs/093-arno-acceleration-benchmark/results.md`.
+- [ ] **IC3 2-hop COUNT: 70ms exact (target <10ms)**
+  `KHop2Count` exact scan still 70ms. Pre-aggregated upper bound (`KHop2CountFast`) is
+  0.07ms but ~3.7× overcount. For exact: needs dedup at `Build2HopStats` time — only
+  feasible if `^NKG` data is available (store deduplicated 2-hop counts per node).
+  Alternative: expose `approx_count_2hop(n)` in Cypher alongside `approx_count_distinct`.
 
 ### P2 — Accuracy
 
