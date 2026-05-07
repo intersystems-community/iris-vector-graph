@@ -2,9 +2,10 @@
 node_modules
 dist
 
-# Environment files
+# Environment files — never commit credentials
 .env
 .env.local
+.env.test
 .env.*.local
 
 # Logs
@@ -126,9 +127,41 @@ deploy/certs/
 browser-*.png
 playwright-*.png
 
-# Browser static assets (distributed separately, not in git)
-iris_vector_graph/browser_static/
-iris.key
-libarno_callout.so
-docker/enterprise/iris.key
-docker/enterprise/libarno_callout.so
+# LDBC benchmark data (large, machine-specific)
+person_knows_person_0_0.csv
+social_network-sf10-*/
+social_network-sf100-*/
+social_network-*/
+
+# Benchmark/profiling outputs
+results/
+outputs/
+benchmarks/results/
+tests/benchmarks/results/*.json
+bench_output.txt
+bench_results.txt
+
+# Internal agent/tool configs (not user-facing)
+CLAUDE.md
+CODEX.md
+TABNINE.md
+DOCS_IRIS_PYTHON_ISSUES.md
+
+# Speckit planning artifacts (internal dev workflow)
+.specify/
+.sisyphus/
+specs/
+
+# Internal audits and pain-point docs
+API_AUDIT.md
+IVG_CONSUMER_PAIN_POINTS.md
+ENGINEERING_DEBT.md
+NEO4J_BENCHMARK_2026.md
+
+# Developer-specific docker-compose variants
+docker-compose.enterprise.yml
+docker-compose.enterprise-2026.yml
+docker-compose.yaml
+
+# Playwright MCP session artifacts
+.playwright-mcp/
