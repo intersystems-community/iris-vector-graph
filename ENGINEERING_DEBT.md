@@ -39,11 +39,20 @@ Progress through v1.88.0:
 
 ### P1 — Performance
 
-- [ ] **Spec 152 follow-up: `ffi_kg_build_2hop_exact_int`**
-  Rust `HashSet<String>` approach is too slow for SF10 (`Build2HopExactStats` times out).
-  Fix: integer-indexed version using `^NKG` node indices — same approach as `ffi_kg_build_nkg`.
-  `HashMap<i32, HashSet<i32>>` instead of `HashMap<String, HashSet<String>>` → 10-20× faster.
-  Expected total `Build2HopExactStats` time on SF10: ~5-8s.
+- [ ] **Spec 152 follow-up: `Build2HopExactStats` build time**
+  `ffi_kg_build_2hop_exact_int` (integer-indexed, single-pass from `^KG`) now exists and is deployed.
+  Computation is fast (~18s for SF10 read + ~5s 2-hop dedup). But `zf_global` API write overhead
+  (~0.5ms per `ns.set()`) dominates: 62K results × 0.5ms = 31s. Total: ~5 min on SF10.
+  Query after build: **0.14ms** (target met).
+  Build time root cause: `zf_global` per-call xDBC protocol overhead. Fix requires either:
+  (a) journal-bypass or batch-write API in `zf_global`, or
+  (b) keep the temp integer global (`^ArnoKG("2h")`) and have ObjectScript do a single `$Order`
+      loop to write `^KG("deg2p_exact", ...)` — this is already implemented via `DecodeBuildResults()`.
+  Current state: **5 min build, 0.14ms query** — acceptable as a deployment-time operation.
+  
+  **Remaining gap:** The `^ArnoKG("2h")` integer write (the new approach) also hits the same
+  `zf_global` overhead. True fix: stream results as a compact binary through a single large
+  string return value instead of individual `ns.set()` calls.
 
 ### P2 — Accuracy
 
