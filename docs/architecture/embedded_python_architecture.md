@@ -1,9 +1,11 @@
 # IRIS Embedded Python Architecture - Critical Design Constraints
 
-**Date**: 2025-10-02
-**Context**: NodePK PageRank optimization using embedded Python
-**Reference**: ../rag-templates HybridGraphRAG implementation
-**Setup Guide**: https://github.com/intersystems-community/iris-embedded-python-template
+**Date**: 2025-10-02 (updated 2026-05-06)
+**Context**: Design constraints for methods callable from external Python via `classMethodValue()`
+
+> **Note**: References to `../rag-templates` and `PageRankEmbedded.cls` in this document
+> are from an earlier prototype. The current codebase uses pure ObjectScript throughout
+> `Graph.KG.*` — the constraints documented here are why.
 
 ---
 
@@ -456,24 +458,13 @@ class IRISGraphEngine:
 
 ### Enabling the Optimized Path
 
-To enable IRIS embedded Python for PageRank (10-50x speedup):
+All `Graph.KG.*` ObjectScript classes are deployed automatically by `engine.initialize_schema()`. The embedded Python constraint described in this document is why all these classes are pure ObjectScript — `Language = python` methods that use `iris.gref()` fail when called via `classMethodValue()` from an external Python process.
 
-```bash
-# 1. Load ObjectScript class into IRIS
-IRIS> Do $system.OBJ.Load("/path/to/iris_src/src/PageRankEmbedded.cls", "ck")
+To rebuild adjacency indexes after bulk loads:
 
-# 2. Create SQL function (run in IRIS SQL tool)
-\i sql/operators.sql
-```
-
-To enable HNSW vector search (2900x speedup):
-
-```bash
-# 1. Create optimized embeddings table with VECTOR type
-\i sql/schema.sql  # Creates kg_NodeEmbeddings with HNSW index
-
-# 2. Migrate embeddings from CSV to VECTOR format
-# (Use migration script or re-ingest data)
+```python
+engine.rebuild_kg()     # rebuilds ^KG from rdf_edges
+engine.rebuild_nkg()    # rebuilds ^NKG integer index for Arno acceleration
 ```
 
 ### Testing Fallback Behavior

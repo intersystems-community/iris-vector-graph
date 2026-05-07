@@ -1,295 +1,182 @@
-# Supported Data Formats for IRIS Graph-AI
+# Data Formats: Loading Data into IRIS Vector Graph
 
 ## Overview
 
-IRIS Graph-AI focuses on the **core biomedical data formats** that represent 80% of real-world usage, ensuring robust ingestion without format proliferation complexity.
+IVG supports several ingestion paths depending on data source and volume. All paths ultimately write to the same `Graph_KG` SQL tables and `^KG` global adjacency index.
 
-## Priority 1: Essential Formats (Implement First)
+---
 
-### 1. **Tab-Separated Values (TSV)** ⭐⭐⭐
-**Why Essential**: Universal standard, human-readable, tool-agnostic
-```tsv
-# Relationships (edges.tsv)
-source	predicate	target	confidence	evidence_type	pubmed_id
-GENE:BRCA1	encodes	PROTEIN:BRCA1	0.99	experimental	12345678
-PROTEIN:BRCA1	interacts_with	PROTEIN:TP53	0.85	computational	23456789
+## Ingestion Methods
 
-# Entities (nodes.tsv)
-entity_id	type	name	description
-GENE:BRCA1	gene	BRCA1	Breast cancer gene 1
-PROTEIN:BRCA1	protein	BRCA1 protein	Tumor suppressor protein
+### 1. Python API — individual writes
+
+Best for: small datasets, incremental updates, application-level ingestion.
+
+```python
+# Single node
+engine.create_node("gene:BRCA1", labels=["Gene"], properties={"name": "BRCA1"})
+
+# Single edge
+engine.create_edge("gene:BRCA1", "INTERACTS_WITH", "gene:TP53")
+
+# With named graph context
+engine.create_node("gene:BRCA1", labels=["Gene"], graph="brca_study")
+engine.create_edge("gene:BRCA1", "TARGETS", "drug:Olaparib", graph="brca_study")
 ```
 
-**Biomedical Usage**:
-- **STRING database**: Protein interactions
-- **Gene Ontology**: Term relationships
-- **DrugBank**: Drug-target interactions
-- **Custom research**: Laboratory datasets
+### 2. Bulk Python API — batch writes
 
-### 2. **JSON Lines** ⭐⭐⭐
-**Why Essential**: API standard, rich metadata, streaming-friendly
+Best for: initial data loads, 10K+ entities, ETL pipelines.
+
+```python
+# Bulk nodes — 5,000+ nodes/sec
+created_ids = engine.bulk_create_nodes([
+    {"id": "gene:BRCA1", "labels": ["Gene"], "properties": {"name": "BRCA1"}},
+    {"id": "drug:Olaparib", "labels": ["Drug"], "properties": {"name": "Olaparib"}},
+])
+
+# Bulk edges — ~50K edges/sec (includes ^KG rebuild)
+n = engine.bulk_create_edges([
+    {"source_id": "gene:BRCA1", "predicate": "TARGETS", "target_id": "drug:Olaparib"},
+])
+
+# High-throughput direct ^KG write — 190-312K edges/sec
+# NOTE: bypasses rdf_edges SQL table; call rebuild_nkg() afterward
+n = engine.bulk_ingest_edges([
+    {"s": "gene:BRCA1", "p": "TARGETS", "o": "drug:Olaparib"},
+], predicate="TARGETS")
+engine.rebuild_nkg()   # required before BFS/variable-length path queries
+```
+
+### 3. NDJSON import/export
+
+Best for: graph snapshots, cross-system transfer, backup/restore of subgraphs.
+
+Format: newline-delimited JSON, one record per line.
+
 ```jsonl
-{"source": "GENE:BRCA1", "predicate": "encodes", "target": "PROTEIN:BRCA1", "confidence": 0.99, "evidence": {"type": "experimental", "pubmed": "12345678", "method": "western_blot"}}
-{"source": "PROTEIN:BRCA1", "predicate": "interacts_with", "target": "PROTEIN:TP53", "confidence": 0.85, "evidence": {"type": "computational", "pubmed": "23456789", "score": 0.92}}
+{"type":"node","id":"gene:BRCA1","labels":["Gene"],"props":{"name":"BRCA1"}}
+{"type":"edge","s":"gene:BRCA1","p":"TARGETS","o":"drug:Olaparib","qualifiers":{"confidence":0.95}}
 ```
 
-**Biomedical Usage**:
-- **PubMed APIs**: Literature data
-- **NCBI datasets**: Genomic annotations
-- **ChEMBL**: Bioactivity data
-- **Modern pipelines**: Streaming ingestion
-
-### 3. **RDF Turtle (TTL)** ⭐⭐
-**Why Important**: Semantic web standard, ontology integration
-```turtle
-@prefix gene: <http://example.org/gene/> .
-@prefix protein: <http://example.org/protein/> .
-@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
-
-gene:BRCA1 rdf:type gene:Gene ;
-           gene:encodes protein:BRCA1 ;
-           gene:name "BRCA1" .
-
-protein:BRCA1 protein:interacts_with protein:TP53 ;
-              protein:confidence "0.85"^^xsd:decimal .
-```
-
-**Biomedical Usage**:
-- **Gene Ontology**: Official distribution format
-- **UniProt**: Protein annotations
-- **ChEBI**: Chemical ontology
-- **FAIR data**: Semantic interoperability
-
-## Priority 2: Common Formats (Implement Second)
-
-### 4. **GraphML** ⭐⭐
-**Why Useful**: Cytoscape standard, visualization tool format
-```xml
-<graphml>
-  <key id="confidence" for="edge" attr.name="confidence" attr.type="double"/>
-  <key id="type" for="node" attr.name="type" attr.type="string"/>
-  <graph id="protein_network">
-    <node id="GENE:BRCA1">
-      <data key="type">gene</data>
-    </node>
-    <edge source="GENE:BRCA1" target="PROTEIN:BRCA1">
-      <data key="confidence">0.99</data>
-    </edge>
-  </graph>
-</graphml>
-```
-
-**Biomedical Usage**:
-- **Cytoscape**: Network visualization exports
-- **NetworkX**: Python graph analysis
-- **Gephi**: Network analysis tool
-- **Research publications**: Supplementary data
-
-### 5. **CSV with Headers** ⭐⭐
-**Why Practical**: Excel compatibility, non-technical user friendly
-```csv
-source,predicate,target,confidence,evidence_type,pubmed_id
-GENE:BRCA1,encodes,PROTEIN:BRCA1,0.99,experimental,12345678
-PROTEIN:BRCA1,interacts_with,PROTEIN:TP53,0.85,computational,23456789
-```
-
-**Biomedical Usage**:
-- **Excel exports**: Laboratory data
-- **R/Bioconductor**: Statistical analysis
-- **Simple pipelines**: Basic data exchange
-- **Manual curation**: Researcher-generated data
-
-## Formats to Avoid (Too Niche)
-
-### ❌ **GML** (Graph Modeling Language)
-- **Why Skip**: Limited biomedical adoption
-- **Alternative**: GraphML serves same use cases better
-
-### ❌ **DOT/Graphviz**
-- **Why Skip**: Primarily visualization, not data exchange
-- **Alternative**: Generate DOT for visualization, don't ingest it
-
-### ❌ **GEXF** (Graph Exchange XML Format)
-- **Why Skip**: Gephi-specific, limited biomedical usage
-- **Alternative**: GraphML for XML-based exchange
-
-### ❌ **Pajek NET**
-- **Why Skip**: Academic tool specific
-- **Alternative**: TSV for simple edge lists
-
-### ❌ **Custom Binary Formats**
-- **Why Skip**: Tool-specific, not interoperable
-- **Alternative**: JSON for rich metadata, TSV for simple data
-
-## Implementation Strategy
-
-### Phase 1: Core Ingestion (Week 1-2)
 ```python
-# Priority implementation order
-formats = [
-    'tsv',        # Most common biomedical format
-    'jsonl',      # API and streaming standard
-    'csv'         # Excel compatibility
-]
+# Export
+engine.export_graph_ndjson("output.ndjson")
+engine.export_temporal_edges_ndjson("temporal_edges.ndjson")
+
+# Import
+engine.import_graph_ndjson("output.ndjson")
 ```
 
-### Phase 2: Advanced Support (Week 3-4)
+### 4. OBO ontology files
+
+Best for: Gene Ontology, NCI Thesaurus, ChEBI, MeSH, and any OBO-format ontology.
+
 ```python
-# Secondary formats for broader compatibility
-advanced_formats = [
-    'ttl',        # Semantic web integration
-    'graphml'     # Visualization tool compatibility
-]
+engine.load_obo("path/to/ncit.obo")
+# Nodes = ontology terms, edges = IS_A / part_of / relationship types
 ```
 
-## Format-Specific Optimizations
+### 5. RDF import
 
-### 1. **TSV Optimization**
+Best for: existing RDF triples, Turtle/N-Triples format.
+
 ```python
-def ingest_tsv(file_path, batch_size=10000):
-    """
-    Optimized TSV ingestion with:
-    - Streaming processing for large files
-    - Automatic type detection
-    - Batch insertions for performance
-    - Memory-efficient parsing
-    """
-    pass
+engine.import_rdf("path/to/triples.ttl")
 ```
 
-### 2. **JSON Lines Streaming**
+### 6. SQL table mapping
+
+Best for: joining IVG graph queries with existing IRIS SQL tables without physically moving data.
+
 ```python
-def ingest_jsonl(file_path, schema_validation=True):
-    """
-    Streaming JSONL ingestion with:
-    - Schema validation against biomedical standards
-    - Incremental processing
-    - Error handling and recovery
-    - Progress tracking
-    """
-    pass
+engine.map_sql_table(
+    label="Patient",
+    table="App.Patient",
+    id_column="PatientID",
+    property_columns=["Name", "DOB", "Diagnosis"]
+)
+engine.map_sql_relationship(
+    predicate="TREATED_WITH",
+    table="App.Treatment",
+    source_column="PatientID",
+    target_column="DrugCode"
+)
+# Now MATCH (p:Patient)-[:TREATED_WITH]->(d) works against live App.* tables
 ```
 
-### 3. **RDF Turtle Processing**
+---
+
+## Embedding Ingestion
+
+Vector embeddings are stored in `kg_NodeEmbeddings` and indexed via HNSW (where available).
+
 ```python
-def ingest_turtle(file_path, namespace_mapping=None):
-    """
-    RDF Turtle ingestion with:
-    - Namespace resolution
-    - Ontology integration
-    - SPARQL-compatible output
-    - Semantic validation
-    """
-    pass
+# Embed nodes using a configured embedder
+engine.embed_nodes(label="Gene")        # embeds all Gene nodes
+engine.embed_nodes(node_ids=["gene:BRCA1", "gene:TP53"])   # specific nodes
+
+# Store a pre-computed embedding
+engine.store_embedding("gene:BRCA1", [0.1, -0.3, ...])   # list[float]
+
+# Bulk store pre-computed embeddings
+engine.store_embeddings([
+    {"id": "gene:BRCA1", "embedding": [0.1, -0.3, ...]},
+    {"id": "gene:TP53",  "embedding": [0.2,  0.1, ...]},
+])
 ```
 
-## Biomedical-Specific Considerations
+---
 
-### 1. **Identifier Mapping**
+## Temporal Edges
+
+Temporal edges are time-stamped and stored in `^KG("tout"/"tin")` globals alongside the structural graph.
+
 ```python
-# Handle common biomedical identifiers
-identifier_patterns = {
-    'ensembl': r'ENSG\d{11}',
-    'uniprot': r'[A-Z][0-9][A-Z0-9]{3}[0-9]',
-    'pubmed': r'PMID:\d+',
-    'go_term': r'GO:\d{7}',
-    'chebi': r'CHEBI:\d+',
-    'mesh': r'D\d{6}'
-}
+import time
+
+engine.create_edge_temporal(
+    "sensor:A", "READS", "sensor:B",
+    timestamp=int(time.time()),
+    weight=42.7
+)
+
+# Bulk temporal ingest
+engine.bulk_create_edges_temporal([
+    {"s": "sensor:A", "p": "READS", "o": "sensor:B", "ts": 1746000000, "w": 42.7},
+])
+
+# Query a time window
+results = engine.get_edges_in_window("sensor:A", "READS", ts_start=1746000000, ts_end=1746003600)
 ```
 
-### 2. **Evidence Integration**
-```python
-# Standard evidence handling across formats
-evidence_schema = {
-    'type': ['experimental', 'computational', 'literature'],
-    'confidence': 'float[0,1]',
-    'source': 'pubmed_id|doi|database',
-    'method': 'experimental_method|algorithm_name',
-    'date': 'iso_date'
-}
-```
+---
 
-### 3. **Quality Validation**
-```python
-# Biomedical data quality checks
-quality_checks = [
-    'identifier_format_validation',
-    'relationship_type_validation',
-    'confidence_range_validation',
-    'evidence_completeness_check',
-    'circular_reference_detection'
-]
-```
+## Identifier Conventions
 
-## Integration Examples
+IVG node IDs are arbitrary strings (up to 256 chars). Common patterns:
 
-### 1. **STRING Database Integration**
-```bash
-# Download and convert STRING interactions
-wget https://stringdb-static.org/download/protein.links.v11.5/9606.protein.links.v11.5.txt.gz
-python scripts/converters/string_to_tsv.py --species 9606 --confidence 400
-```
+| Domain | Example IDs |
+|---|---|
+| Gene | `gene:BRCA1`, `ENSG00000012048` |
+| Protein | `uniprot:P38398` |
+| Drug | `drug:Olaparib`, `CHEMBL:CHEMBL2107776` |
+| Disease | `MESH:D001943`, `OMIM:604370` |
+| Ontology term | `NCIT:C84564`, `GO:0007049` |
 
-### 2. **Gene Ontology Integration**
-```bash
-# Download and convert GO annotations
-wget http://geneontology.org/gene-associations/goa_human.gaf.gz
-python scripts/converters/gaf_to_jsonl.py --evidence experimental
-```
+IVG does not enforce a namespace — use whatever convention is consistent within your dataset. IDs are case-sensitive (`NCIT:C84564` ≠ `ncit:c84564`) and stored using IRIS `%EXACT` collation.
 
-### 3. **PubMed Literature Integration**
-```bash
-# Process PubMed abstracts
-python scripts/converters/pubmed_to_jsonl.py --query "cancer AND protein" --max_results 10000
-```
+---
 
-## Performance Characteristics
+## Format Selection Guide
 
-### Ingestion Speed by Format
-
-| Format | File Size | Processing Speed | Memory Usage | Best Use |
-|--------|-----------|------------------|--------------|----------|
-| **TSV** | 1GB | 50MB/s | 256MB | Large static datasets |
-| **CSV** | 1GB | 45MB/s | 256MB | Excel compatibility |
-| **JSONL** | 1GB | 35MB/s | 512MB | Rich metadata |
-| **TTL** | 1GB | 25MB/s | 1GB | Ontology integration |
-| **GraphML** | 1GB | 20MB/s | 2GB | Visualization tools |
-
-### Recommended Format Selection
-
-| Use Case | Primary Format | Secondary Format | Reason |
-|----------|---------------|------------------|--------|
-| **Protein interactions** | TSV | JSONL | Performance + metadata |
-| **Literature mining** | JSONL | TSV | Rich annotations |
-| **Ontology integration** | TTL | JSONL | Semantic standards |
-| **Laboratory data** | CSV | TSV | Excel compatibility |
-| **Visualization** | GraphML | TSV | Tool compatibility |
-
-## Conversion Utilities
-
-### Built-in Converters
-```bash
-# Format conversion utilities
-python scripts/converters/csv_to_tsv.py input.csv output.tsv
-python scripts/converters/graphml_to_jsonl.py network.graphml edges.jsonl
-python scripts/converters/ttl_to_tsv.py ontology.ttl relationships.tsv
-```
-
-### Validation Tools
-```bash
-# Format validation before ingestion
-python scripts/validators/validate_tsv.py --schema biomedical edges.tsv
-python scripts/validators/validate_jsonl.py --biomedical-ids annotations.jsonl
-```
-
-## Conclusion
-
-**Recommendation**: Implement the **top 3 formats (TSV, JSONL, CSV)** first to cover 80% of biomedical use cases, then add TTL and GraphML for specialized needs. This focused approach ensures:
-
-1. **Broad compatibility** with existing biomedical tools
-2. **High performance** through format-optimized ingestion
-3. **Manageable complexity** without format proliferation
-4. **Future flexibility** for emerging standards
-
-The 80/20 rule applies perfectly here - these 5 formats will handle virtually all real-world biomedical graph ingestion scenarios while keeping the codebase maintainable.
+| Data Source | Recommended Method |
+|---|---|
+| OBO ontology (GO, NCI Thesaurus, ChEBI) | `engine.load_obo()` |
+| RDF triples | `engine.import_rdf()` |
+| CSV/TSV edge list | Parse in Python → `bulk_create_edges()` |
+| JSONL graph snapshot | `engine.import_graph_ndjson()` |
+| Existing IRIS SQL tables | `engine.map_sql_table()` / `map_sql_relationship()` |
+| Pre-computed embeddings | `engine.store_embeddings()` |
+| High-throughput streaming edges | `engine.bulk_ingest_edges()` + `rebuild_nkg()` |
+| Temporal time-series edges | `engine.bulk_create_edges_temporal()` |

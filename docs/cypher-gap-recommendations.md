@@ -2,8 +2,26 @@
 
 **From**: arno team (Steve-and-Dan perspective)
 **Date**: 2026-03-31
+**Updated**: 2026-05-06 — implementation status added
 **Audience**: IVG team (Steve, Dan)
 **Context**: 10 missing Cypher features ranked by biomedical impact
+
+## Implementation Status (as of v1.83.0)
+
+| Gap | Feature | Status |
+|---|---|---|
+| #1 | Variable-Length Paths `[*1..3]` | ✅ **DONE** — spec 100. BFSFast CTE bridge. `execute_cypher` routes `[:PRED*2]` patterns to `KHop2NeighborIds` fast path. |
+| #2 | UNION / UNION ALL | ✅ **DONE** — parser + translator |
+| #3 | CASE WHEN | ✅ **DONE** — parser + translator |
+| #4 | EXISTS {} | ✅ **DONE** — correlated subquery |
+| #5 | Pattern Comprehension | ❌ Not yet |
+| #6 | Quantified Paths `->+` | ✅ **DONE** — desugared to VariableLength (depends on #1) |
+| #7 | REDUCE() | ❌ Not yet |
+| #8 | COUNT(DISTINCT) | ✅ **DONE** — was already working |
+| #9 | FOREACH | ✅ **DONE** — desugared to UNWIND |
+| #10 | Type Coercion / CAST fixes | ✅ **DONE** — CAST functions fixed in translator |
+
+Remaining open gaps: **#5 Pattern Comprehension**, **#7 REDUCE()**. Both have workarounds (multi-stage WITH for #5, Python post-processing for #7).
 
 ---
 

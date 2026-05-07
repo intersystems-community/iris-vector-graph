@@ -25,7 +25,7 @@ LDBC SNB uses scale factors (SF) to control dataset size. We benchmarked at SF10
 - SF1000 (used by GES) is 100× larger, run on large server clusters
 
 **Hardware comparison caveat:** GES numbers reflect SF1000 on a large server cluster.
-IVG numbers are SF10 on a MacBook M3 Ultra (128GB RAM, local Docker). Direct numeric
+IVG numbers are SF10 on a MacBook Pro (M3 Ultra, 128GB RAM, local Docker). Direct numeric
 comparison is suggestive, not definitive — the important signal is order-of-magnitude
 positioning, not exact ratios.
 
@@ -35,7 +35,7 @@ positioning, not exact ratios.
 
 ### Test Environment
 
-- **Hardware**: MacBook Pro M3 Ultra, 128GB RAM, macOS
+- **Hardware**: MacBook Pro (M3 Ultra, 128GB RAM), macOS, local Docker
 - **IRIS**: 2025.1 Enterprise (Build 230), Docker
 - **Dataset**: LDBC SNB SF10
 - **Comparison**: GES/GraphScope published LDBC SNB Interactive numbers

@@ -105,9 +105,11 @@ The pattern generalizes: any IRIS application with a compute-heavy inner loop (g
 |---------|---------|-------|
 | `^NKG` integer index | v1.19.0 | Foundation for Rust data access |
 | `khop()`, `ppr()`, `random_walk()` | v1.20.0 | Live with Arno acceleration when available |
-| `embed_edges()`, `edge_vector_search()` | v1.59.0 | Pure Python/ObjectScript today; Arno acceleration path is the natural next step for large graphs |
+| `embed_edges()`, `edge_vector_search()` | v1.59.0 | Pure Python/ObjectScript; Arno acceleration path natural next step |
+| `KHop2Count`, `KHop2NeighborIds` | v1.83.0 | Pure ObjectScript 2-hop fast paths; Arno Rust acceleration would give another 10-50x for large graphs |
+| `ffi_kg_build_nkg` Rust impl | in arno workspace | Rust bulk ^NKG rebuild; requires Linux build of `libarno_callout.so` |
 
-The `rzf` crate and `arno-callout` library are in active development in the separate `arno` workspace (`~/ws/arno/`).
+The `rzf` crate and `arno-callout` library are in active development in a separate private `arno` repository.
 
 ---
 
