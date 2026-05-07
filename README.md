@@ -9,6 +9,53 @@
 
 ---
 
+## Getting Started
+
+**5 minutes from zero to running graph queries.**
+
+### 1. Start IRIS
+
+```bash
+docker compose up -d
+```
+
+This starts IRIS Community Edition on `localhost:1972`. No license required. Default credentials: `_SYSTEM` / `SYS`.
+
+Management Portal: http://localhost:52773/csp/sys/UtilHome.csp
+
+### 2. Install the library
+
+```bash
+pip install iris-vector-graph
+```
+
+### 3. Run your first query
+
+```python
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
+
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn)
+engine.initialize_schema()
+
+engine.create_node("alice", labels=["Person"], properties={"name": "Alice"})
+engine.create_node("bob",   labels=["Person"], properties={"name": "Bob"})
+engine.create_edge("alice", "KNOWS", "bob")
+
+result = engine.execute_cypher(
+    "MATCH (a {node_id:$id})-[:KNOWS]->(b) RETURN b.name AS name",
+    {"id": "alice"}
+)
+print(result.rows)
+```
+
+Expected output: `[['Bob']]`
+
+**That's it.** See the rest of this README for temporal graphs, vector search, Cypher, and graph analytics.
+
+---
+
 ## Install
 
 ```bash
