@@ -91,7 +91,7 @@ Adding 2-hop dedup to `BuildNKG` should not make it unusably slow. Current Rust:
 
 - Rust `libarno_callout.so` is available on the target container (already deployed in spec 094).
 - The 2-hop dedup uses the same predicate for both hops (`[:P*2]`). Mixed-predicate 2-hop is out of scope.
-- `^KG("deg2p_exact")` is invalidated by `Kill ^KG("deg2p")` in `Build2HopStats` — both are rebuilt together.
+- `^KG("deg2p_exact")` is killed at the start of `Build2HopExactStats` (both Rust and ObjectScript paths) before writing new values. It is NOT automatically invalidated by `Build2HopStats` — callers must call `Build2HopExactStats` explicitly to refresh.
 - ObjectScript fallback for `Build2HopExactStats` is acceptable to be slow (minutes on SF10) since it's a build-time operation, not a query-time operation.
 
 ## Implementation Notes

@@ -79,6 +79,7 @@ ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
 
 ClassMethod Build2HopExactStats() As %Integer
 {
+    Kill ^KG("deg2p_exact")
     // Try Rust path first
     If ##class(Graph.KG.ArnoAccel).IsAvailable() {
         Set dllid = $Get(^||ArnoAccel("dllid"), 0)
@@ -91,8 +92,7 @@ ClassMethod Build2HopExactStats() As %Integer
             }
         }
     }
-    // ObjectScript fallback (slow)
-    Kill ^KG("deg2p_exact")
+    // ObjectScript fallback (slow — O(n×d²), acceptable at build time)
     Set src = ""
     Set cnt = 0
     For {
