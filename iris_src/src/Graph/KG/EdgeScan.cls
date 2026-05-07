@@ -86,7 +86,7 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 /// edges_json: JSON array of [s, p, o] triples or {"s":..,"p":..,"o":..} objects.
 /// predicate: default predicate if using [s, o] pair format.
 /// Returns count of edges written.
-ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Language = python ]
+ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Internal, Language = python ]
 {
     import iris, json, warnings
     data = json.loads(edgesJson)
