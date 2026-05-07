@@ -681,6 +681,45 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.88.0 (2026-05-07)
+- **feat**: `ffi_kg_build_2hop_exact_int` Rust function — integer-indexed single-pass 2-hop dedup from `^KG("out")`. Writes results to `^ArnoKG("2h")` temp global; `DecodeBuildResults()` ObjectScript method converts to `^KG("deg2p_exact")`
+- **feat**: `KHop2CountExact(src, pred)` ObjectScript method — O(1) `$Get(^KG("deg2p_exact"))`, fallback to `KHop2Count` when not populated. 0.14ms p50 on SF10 (was 70ms)
+- **feat**: `Build2HopExactStats()` — Rust-first (tries `kg_build_2hop_exact_int`), ObjectScript fallback. Called automatically by `BuildNKG` and `engine.rebuild_nkg()`
+- **feat**: `engine.khop2_count_exact(node_id, pred)` — public method with `KHop2Input` validation
+- **feat**: `engine.backfill_deg2p_exact()` — populate `^KG("deg2p_exact")` for graphs loaded via `BulkIngestEdges`
+- **feat**: `execute_cypher` `[:P*2] RETURN count(n)` fast path now routes to `KHop2CountExact` (exact, not upper bound)
+- **test**: `tests/e2e/test_ic3_exact_count.py` — correctness + perf validation for 2-hop exact COUNT
+- **test**: `tests/e2e/test_untested_methods.py` — 113/113 public engine methods now have at least one test (100% coverage)
+
+### v1.87.0 (2026-05-07)
+- **feat**: `iris_vector_graph/_validate.py` — 10 Pydantic `BaseModel` input schemas for high-risk engine methods: `NodeIdInput`, `EdgeInput`, `CypherInput`, `IVFBuildInput`, `VectorSearchInput`, `BM25BuildInput`, `BM25SearchInput`, `KHop2Input`, `TemporalEdgeInput`, `VecSearchInput`
+- **feat**: Input validation at call entry on `execute_cypher`, `create_node`, `create_edge`, `ivf_build`, `ivf_search`, `bm25_build`, `bm25_search`, `khop2_count_fast`, `create_edge_temporal`, `search_nodes_by_vector`
+- All 10 schemas exported from `iris_vector_graph.__init__`; 44/44 unit tests in `test_validation.py`
+- **chore**: `BulkIngestEdges` marked `[ Internal ]` in `EdgeScan.cls` — safe path is `engine.bulk_ingest_edges()`
+
+### v1.86.0 (2026-05-07)
+- **feat**: `IVGResult` Pydantic `BaseModel` replaces `Dict[str, Any]` as return type of `execute_cypher`
+  - Backward-compatible: `result["columns"]`, `result.get("error")`, `"error" in result` all work
+  - `bool(result)` = `True` on success, `False` on error
+  - `result.columns`, `result.rows`, `result.error`, `result.metadata`, `result.sql` via dot notation
+  - 23 unit tests in `test_ivgresult.py`; all 189+ existing call sites pass unchanged
+- **feat**: Fourth Pydantic increment — `IVGResult` joins `SQLQuery`, `QueryMetadata`, `IndexHandle`
+
+### v1.85.0 (2026-05-06)
+- **fix**: Unbounded variable-length path queries (no LIMIT) now always route to `_bfs_stream_pages` (cursor-based `ReadBFSPage`) instead of `ReadBFSResults` (single JSON string that hits `<MAXSTRING>` at 93K+ results). Bounded queries (LIMIT present) keep `ReadBFSResults` fast path.
+- **fix**: `test_sc003_results_match_bfs` — replaced raw `NKGAccel.BFSJson` call (bypassed engine, `^NKG` stale) with engine determinism check; `knows_data` fixture calls `engine.rebuild_nkg()` for sync guarantee
+- **test**: `tests/e2e/test_streaming_bfs.py` — 3 e2e + 2 routing unit tests for streaming BFS
+
+### v1.84.0 (2026-05-06)
+- **feat**: `engine.index(name)` → `IndexHandle` (Pydantic `BaseModel`) — unified entry point for all index types (`ivf`, `bm25`, `vec`, `plaid`) via `.search()`, `.insert()`, `.info()`, `.drop()`
+- **feat**: `IVGIndex` `@runtime_checkable` Protocol — structural subtyping, no inheritance required
+- **feat**: `_build_index_registry()` — auto-populates `{name: type}` from `^IVF`, `^VecIdx`, `^BM25Idx`, `^PLAID` on `IRISGraphEngine.__init__`; updated by `*_build` methods
+- **feat**: `PLAIDSearch.Build` public ClassMethod — calls `StoreCentroids`+`StoreDocTokensBatch`+`BuildInvertedIndex` internally; helpers marked `[ Private ]`
+- **feat**: `plaid_build()` now calls `PLAIDSearch.Build` (single round-trip); `plaid_info()` returns `{"type":"plaid","indexed":N,"nlist":L,"dim":D}`
+- **feat**: All `*_info()` methods return `"type"` key — `ivf_info()`, `bm25_info()`, `vec_info()`, `plaid_info()`
+- **feat**: `IVGIndex` and `IndexHandle` exported from `iris_vector_graph.__init__`
+- **test**: Full PLAID e2e coverage (5/5); `engine.index()` dispatch tests (5 pass, 1 skip)
+
 ### v1.83.0 (2026-05-06)
 - **feat**: `KHop2Count` + `KHop2NeighborIds(maxResults)` on `Graph.KG.Traversal` — pure ObjectScript 2-hop traversal with process-private dedup, no JSON serialization
 - **feat**: `execute_cypher` routes `[:PRED*2]` COUNT and LIMIT patterns to fast paths — IC3 LIMIT 1000 now **1.2ms p50** (was 14-22ms; 3.5x faster than GES 4.19ms)
