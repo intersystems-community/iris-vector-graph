@@ -559,7 +559,7 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     If '$Data(^||NKGAccel("compute_fn")) {
         Set dllid = $ZF(-4, 1, dllPath)
         If dllid = 0 {
-            Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
         }
         Set ^||NKGAccel("dllid") = dllid
         Set ^||NKGAccel("compute_fn") = $ZF(-4, 3, dllid, "kg_bfs_compute")
@@ -569,11 +569,11 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     Set dllid = ^||NKGAccel("dllid")
     Set computeFn = ^||NKGAccel("compute_fn")
     If computeFn = 0 {
-        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
     Do ..CacheNKGAdj()
     If '$Data(^ArnoKG("KG", "nkg_adj")) {
-        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
     Kill ^ArnoKG("bfs_result")
     Set raw = $ZF(-5, dllid, computeFn, "^ArnoKG", "^ArnoKG", seed, predicatesJson, maxHops, maxResults)
@@ -583,15 +583,27 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     Set n = +$Piece(raw, ":", 3)
     Set readFn = ^||NKGAccel("read_fn")
     If readFn = 0 {
-        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
-    Set result = ""
+    Set assembled = ""
     For i = 1:1:n {
-        Set chunk = $ZF(-5, dllid, readFn, "^ArnoKG", i)
-        Set result = result _ chunk
+        Set assembled = assembled _ $ZF(-5, dllid, readFn, "^ArnoKG", i)
     }
     Kill ^ArnoKG("bfs_result")
-    Return result
+    Set tag = $Job _ "_bfs"
+    Kill ^ArnoKG("bfs_r", tag)
+    Set arr = ##class(%DynamicArray).%FromJSON(assembled)
+    Set sz = arr.%Size()
+    For i = 0:1:(sz-1) {
+        Set item = arr.%Get(i)
+        Set step = +item.%Get("step")
+        Set o    = item.%Get("o")
+        Set s    = item.%Get("s")
+        Set p    = item.%Get("p")
+        Set w    = +item.%Get("w")
+        Set ^ArnoKG("bfs_r", tag, step, o) = $ListBuild(s, p, w)
+    }
+    Return "SORTED:" _ tag
 }
 
 ClassMethod InvalidateAdjCache()

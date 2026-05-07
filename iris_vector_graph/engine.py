@@ -1536,12 +1536,26 @@ class IRISGraphEngine:
                     max_hops,
                     max_results,
                 )
-                bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
+                bfs_str = str(bfs_json) if bfs_json else ""
+                if bfs_str.startswith("SORTED:") and bfs_str != "SORTED:0":
+                    tag = bfs_str.split(":")[1]
+                    if max_results == 0:
+                        bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                    else:
+                        try:
+                            results_str = str(_call_classmethod(
+                                self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                            ))
+                            bfs_results = _json.loads(results_str)
+                        except Exception:
+                            bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                elif bfs_str:
+                    bfs_results = _json.loads(bfs_str)
+                else:
+                    bfs_results = []
                 logger.debug("Arno BFSJson: %d results for %s", len(bfs_results), source_id)
-                if not bfs_results and not self._arno_capabilities.get("rust_callout"):
-                    bfs_results = None
             except Exception as e:
-                logger.warning(f"Arno BFSJson failed, falling back to BFSFastJson: {e}")
+                logger.warning(f"Arno BFSJson failed, falling back to BFSFastJsonSorted: {e}")
                 bfs_results = None
 
         if bfs_results is None:
@@ -1566,21 +1580,8 @@ class IRISGraphEngine:
                 else:
                     bfs_results = []
             except Exception as e:
-                logger.warning(f"BFSFastJsonSorted failed ({e}), falling back to chunked")
-                try:
-                    resp = str(_call_classmethod(
-                        self.conn, "Graph.KG.Traversal", "BFSFastJsonChunked",
-                        source_id, predicates_json, max_hops, "", direction, max_results,
-                    ))
-                    if resp.startswith("CHUNKED:") and resp != "CHUNKED:0":
-                        tag, n_chunks = resp.split(":")[1], int(resp.split(":")[2])
-                        parts = [str(_call_classmethod(self.conn, "Graph.KG.Traversal", "ReadBFSChunk", tag, str(i))) for i in range(1, n_chunks + 1)]
-                        bfs_results = _json.loads("[" + "".join(parts) + "]")
-                    else:
-                        bfs_results = []
-                except Exception as e2:
-                    logger.warning(f"BFSFastJsonChunked also failed: {e2}")
-                    return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
+                logger.warning(f"BFSFastJsonSorted failed: {e}")
+                return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
 
 
         if min_hops > 1:
