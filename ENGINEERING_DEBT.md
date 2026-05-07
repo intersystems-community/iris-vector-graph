@@ -57,9 +57,32 @@ most-called method and where typed contracts pay off immediately.
       `ivf_build()` parameter `build_batch_size=500` (default) controls chunk size.
       Verified: 400 × 768-dim vectors, no crash, correct indexed count, search works.
 
+- [x] **Pattern Comprehension (Gap #5)** — `[(n)-[:R]->(m) | m.prop]` fully working.
+      Correlated `JSON_ARRAYAGG` subquery, self-contained (no JOIN leak to outer context).
+      `m.node_id` uses direct column reference; properties use inline scalar subquery.
+
+- [x] **REDUCE (Gap #7)** — `reduce(acc=N, x IN collect(prop) | acc + x)` → pure SQL
+      `(N + SUM(CAST(prop AS DOUBLE)))`. No `JSON_ARRAYAGG`, no `JSON_TABLE`, no Python
+      postprocessing. Works identically from ObjectScript, embedded Python, external Python.
+
+- [x] **IVFIndex.Insert() + Delete()** — `IVFIndex.Insert(name, nodeId, vecJSON)` finds the
+      nearest centroid via a single scan and writes to `^IVF(name,"list",cellIdx,nodeId)`.
+      `IVFIndex.Delete(name, nodeId)` removes from whichever cell it's in.
+      Engine: `ivf_insert(name, node_id, vector) → cell_idx`,
+      `ivf_delete(name, node_id) → bool`.
+      5/5 e2e tests pass: insert/search/delete/error-guard/multi-accumulate.
+
+
+
+- [x] **AGENTS.md SQL Design Constraints** — four hard rules locked into every agent session:
+      no Python postprocessing, Language=python bridge limits, JSON_TABLE restrictions,
+      ObjectScript-first test requirement.
+
+- [x] **`create_node` graph param** — RESOLVED (was listed as open debt above).
+
 ---
 
-## IN PROGRESS (specs being written now)
+
 
 - [x] **Spec 103: Streaming cursor BFS** — DONE. ReadBFSPage(tag, cursorStep, cursorO, pageSize)
       eliminates <MAXSTRING>. Unbounded 93K results: 360ms, no overflow.
@@ -128,7 +151,7 @@ most-called method and where typed contracts pay off immediately.
       Standard/HealthConnect editions do NOT. NOT Enterprise-only.
   
   The real problems:
-  1. IVFIndex is MISSING Insert() — can't add docs without full rebuild
+  1. ~~IVFIndex is MISSING Insert()~~ — **DONE** (`ivf_insert` + `ivf_delete`)
   2. PLAIDSearch method names (StoreCentroids, BuildInvertedIndex) don't match the
      Create/Build/Search/Drop pattern established by VecIndex and BM25Index
   3. kg_KNN_VEC is wedged in as an escape hatch — not discoverable or composable
@@ -148,9 +171,7 @@ most-called method and where typed contracts pay off immediately.
   Longer-term fix: mark `BulkIngestEdges` as `[ Internal ]` in ObjectScript once
   the engine wrapper is battle-tested.
 
-- [ ] **`create_node` has no `graph` parameter**
-  Named graph support requires passing graph_id separately or using raw SQL.
-  Should be: create_node(nid, labels, properties, graph_id=None)
+- [ ] **`create_node` has no `graph` parameter** — RESOLVED (added in this session, see above).
 
 - [ ] **37 of 103 public engine methods are untested**
   Audit in API_AUDIT.md. Highest risk gaps:

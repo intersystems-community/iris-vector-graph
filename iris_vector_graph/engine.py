@@ -6368,6 +6368,21 @@ class IRISGraphEngine:
         rows = json.loads(str(result))
         return [(r["id"], float(r["score"])) for r in rows]
 
+    def ivf_insert(self, name: str, node_id: str, vector: list) -> int:
+        vec_json = json.dumps([float(v) for v in vector])
+        cell = int(self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Insert", name, node_id, vec_json
+        ))
+        if cell < 0:
+            raise ValueError(f"ivf_insert: index '{name}' not found — call ivf_build first")
+        return cell
+
+    def ivf_delete(self, name: str, node_id: str) -> bool:
+        removed = int(self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Delete", name, node_id
+        ))
+        return bool(removed)
+
     def ivf_drop(self, name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.IVFIndex", "Drop", name)
 

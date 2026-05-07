@@ -174,6 +174,60 @@ ClassMethod SearchProc(name As %String, queryVecB64 As %String, k As %Integer = 
 	Quit ..Search(name, queryVecB64, k, nprobe)
 }
 
+ClassMethod Insert(name As %String, nodeId As %String, vecJSON As %String) As %Integer
+{
+	Set nlist = +$Get(^IVF(name, "cfg", "nlist"), 0)
+	If nlist = 0 Quit -1
+
+	Set metric = $Get(^IVF(name, "cfg", "metric"), "cosine")
+	Set dim = +$Get(^IVF(name, "cfg", "dim"), 0)
+
+	Set floatList = ##class(%DynamicArray).%FromJSON(vecJSON)
+	Set fDim = floatList.%Size()
+	Set vec = ""
+	For i = 0:1:(fDim-1) {
+		Set $vector(vec, i+1, "double") = +floatList.%Get(i)
+	}
+
+	Set bestCell = 0
+	Set bestScore = ""
+	For c = 0:1:(nlist-1) {
+		Set cVec = $Get(^IVF(name, "centroid", c))
+		If cVec = "" Continue
+		If metric = "cosine" || (metric = "dot") {
+			Set sc = $vectorop("sum", $vectorop("v*", vec, cVec))
+		} Else {
+			Set diff = $vectorop("v-", vec, cVec)
+			Set sc = -$vectorop("sum", $vectorop("v*", diff, diff))
+		}
+		If (bestScore = "") || (sc > bestScore) {
+			Set bestScore = sc
+			Set bestCell = c
+		}
+	}
+
+	Set ^IVF(name, "list", bestCell, nodeId) = vec
+	Set ^IVF(name, "cfg", "indexed") = $Get(^IVF(name, "cfg", "indexed"), 0) + 1
+	Quit bestCell
+}
+
+ClassMethod Delete(name As %String, nodeId As %String) As %Integer
+{
+	Set removed = 0
+	Set c = ""
+	For {
+		Set c = $Order(^IVF(name, "list", c))
+		Quit:c=""
+		If $Data(^IVF(name, "list", c, nodeId)) {
+			Kill ^IVF(name, "list", c, nodeId)
+			Set ^IVF(name, "cfg", "indexed") = $Get(^IVF(name, "cfg", "indexed"), 1) - 1
+			Set removed = 1
+			Quit
+		}
+	}
+	Quit removed
+}
+
 /// Append a batch of assignments to an existing IVF index (used by ivf_build batching).
 /// assignmentsJSON: [{nodeId, cellIdx, vec:[f,f,...]}]
 /// Returns number of items written.
