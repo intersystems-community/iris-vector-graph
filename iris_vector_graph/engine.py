@@ -6346,6 +6346,7 @@ class IRISGraphEngine:
         metric: str = "cosine",
         batch_size: int = 10000,
         build_batch_size: int = 500,
+        node_ids: Optional[List[str]] = None,
     ) -> dict:
         IVFBuildInput(name=name, nlist=nlist, metric=metric, batch_size=batch_size, build_batch_size=build_batch_size)
         try:
@@ -6361,7 +6362,16 @@ class IRISGraphEngine:
         import struct
 
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings")
+        if node_ids is not None:
+            if not node_ids:
+                raise ValueError("ivf_build: node_ids list is empty")
+            placeholders = ",".join(["?"] * len(node_ids))
+            cursor.execute(
+                f"SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings WHERE id IN ({placeholders})",
+                node_ids,
+            )
+        else:
+            cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings")
         rows = cursor.fetchall()
         if not rows:
             raise ValueError("ivf_build: no vectors found in kg_NodeEmbeddings")

@@ -262,8 +262,15 @@ class TestCypherNewFeaturesE2E:
         assert n1 in ids
         assert n2 not in ids
 
+    @pytest.mark.xfail(reason="WITH * followed by a new MATCH clause has a known FROM-clause generation issue in the translator", strict=False)
     def test_072_with_star_chained_match(self):
-        pytest.skip("WITH * followed by a new MATCH clause has a known FROM-clause generation issue; simple passthrough cases work")
+        # Test the actual broken case so it shows as xfail not as a silent skip
+        # This documents the known bug and will PASS when fixed
+        result = self._cypher(
+            "MATCH (a {node_id: $id}) WITH * MATCH (b) WHERE b.node_id <> a.node_id RETURN b.node_id LIMIT 1",
+            {"id": self._n1}
+        )
+        assert result is not None
 
     # ── 073: Multi-pattern CREATE ─────────────────────────────────
 
