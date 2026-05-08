@@ -60,10 +60,13 @@ Progress through v1.88.0:
 
 - [x] **`kg_KNN_VEC` in `engine.index()` protocol** — `"hnsw"` type added to `IndexHandle`
   and dispatch tables. `_build_index_registry` registers `"hnsw"` → `"hnsw"` when
-  `_probe_native_vec()` is True (Community + Advanced Server tiers). `engine.index("hnsw")`
-  returns an `IndexHandle` that dispatches `.search()` to `search_nodes_by_vector`,
-  `.insert()` to `store_embedding`, `.info()` returns `{"type": "hnsw", "available": True}`.
-  `.drop()` is a no-op (HNSW index is managed by IRIS, not user-controlled).
+  `_probe_native_vec()` is True (**Community + Advanced Server tiers** — NOT IRIS Server,
+  Enterprise, Elite, or Entree which lack SQL vector search).
+  **Note: Community Edition explicitly includes Vector Search** — `VECTOR_COSINE`, `EMBEDDING()`,
+  HNSW index all work on Community. `engine.index("hnsw")` dispatches `.search()` to
+  `search_nodes_by_vector`, `.insert()` to `store_embedding`, `.info()` returns
+  `{"type": "hnsw", "available": True}`. `.drop()` is a no-op (IRIS manages HNSW lifecycle).
+  **7/7 e2e tests pass on Community Edition.**
 
 - [x] **Spec 153: NKGAccel BFS unified output** — `NKGAccel.BFSJson` now writes to
   `^ArnoKG("bfs_r", tag, step, o)` and returns `"SORTED:tag"` (same as `BFSFastJsonSorted`).
