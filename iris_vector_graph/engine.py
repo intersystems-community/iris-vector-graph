@@ -3089,6 +3089,8 @@ class IRISGraphEngine:
                         registry[name_str] = type_str
         except Exception:
             pass
+        if self._probe_native_vec():
+            registry["hnsw"] = "hnsw"
         return registry
 
     def index(self, name: str) -> "IndexHandle":

@@ -58,9 +58,12 @@ Progress through v1.88.0:
 
 ### P3 — API / DX
 
-- [ ] **`kg_KNN_VEC` in `engine.index()` protocol**
-  Native HNSW (Community + Advanced Server) not yet in `_index_registry`.
-  Low priority — IVF is the fallback for those tiers.
+- [x] **`kg_KNN_VEC` in `engine.index()` protocol** — `"hnsw"` type added to `IndexHandle`
+  and dispatch tables. `_build_index_registry` registers `"hnsw"` → `"hnsw"` when
+  `_probe_native_vec()` is True (Community + Advanced Server tiers). `engine.index("hnsw")`
+  returns an `IndexHandle` that dispatches `.search()` to `search_nodes_by_vector`,
+  `.insert()` to `store_embedding`, `.info()` returns `{"type": "hnsw", "available": True}`.
+  `.drop()` is a no-op (HNSW index is managed by IRIS, not user-controlled).
 
 - [x] **Spec 153: NKGAccel BFS unified output** — `NKGAccel.BFSJson` now writes to
   `^ArnoKG("bfs_r", tag, step, o)` and returns `"SORTED:tag"` (same as `BFSFastJsonSorted`).
