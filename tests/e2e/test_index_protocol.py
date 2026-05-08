@@ -6,11 +6,18 @@ from iris_vector_graph.index_protocol import IVGIndex, IndexHandle
 
 
 DIM = 16
+EMBED_DIM = 768
 
 
 @pytest.fixture(scope="module")
 def engine(iris_connection):
     return IRISGraphEngine(iris_connection)
+
+
+@pytest.fixture(scope="module")
+def engine_with_embeddings(iris_connection):
+    eng = IRISGraphEngine(iris_connection, embedding_dimension=EMBED_DIM)
+    return eng
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +47,29 @@ def bm25_index(engine):
     engine.bm25_insert("idx_proto_bm25", "doc2", "vector search engine")
     yield
     engine.bm25_drop("idx_proto_bm25")
+
+
+@pytest.fixture(scope="module")
+def hnsw_data(engine_with_embeddings):
+    eng = engine_with_embeddings
+    rng = random.Random(55)
+    cur = eng.conn.cursor()
+    nodes = [f"hnsw_e2e_{i}" for i in range(10)]
+    for nid in nodes:
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id=?", [nid])
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+    eng.conn.commit()
+    for nid in nodes:
+        vec = [rng.gauss(0, 1) for _ in range(EMBED_DIM)]
+        eng.store_embedding(nid, vec)
+    if not eng._probe_native_vec():
+        pytest.skip("Native HNSW (kg_KNN_VEC) not available on this IRIS tier")
+    yield nodes
+    cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'hnsw_e2e_%'")
+    for nid in nodes:
+        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
+    eng.conn.commit()
 
 
 @pytest.mark.requires_database
@@ -81,3 +111,85 @@ class TestEngineIndex:
     def test_engine_index_info_has_type(self, engine, ivf_index):
         info = engine.index("idx_proto_ivf").info()
         assert info.get("type") == "ivf"
+
+
+@pytest.mark.requires_database
+@pytest.mark.e2e
+class TestEngineIndexHNSW:
+    def test_hnsw_in_registry_when_native_vec_available(self, engine_with_embeddings):
+        eng = engine_with_embeddings
+        if not eng._probe_native_vec():
+            pytest.skip("Native HNSW not available on this IRIS tier")
+        assert "hnsw" in eng._index_registry
+        assert eng._index_registry["hnsw"] == "hnsw"
+
+    def test_hnsw_handle_type(self, engine_with_embeddings):
+        eng = engine_with_embeddings
+        if not eng._probe_native_vec():
+            pytest.skip("Native HNSW not available on this IRIS tier")
+        handle = eng.index("hnsw")
+        assert isinstance(handle, IndexHandle)
+        assert isinstance(handle, IVGIndex)
+        assert handle.type == "hnsw"
+
+    def test_hnsw_info_returns_type(self, engine_with_embeddings):
+        eng = engine_with_embeddings
+        if not eng._probe_native_vec():
+            pytest.skip("Native HNSW not available on this IRIS tier")
+        info = eng.index("hnsw").info()
+        assert info["type"] == "hnsw"
+        assert info["available"] is True
+
+    def test_hnsw_insert_stores_embedding(self, engine_with_embeddings, hnsw_data):
+        eng = engine_with_embeddings
+        rng = random.Random(99)
+        new_id = "hnsw_e2e_new"
+        vec = [rng.gauss(0, 1) for _ in range(EMBED_DIM)]
+        cur = eng.conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id=?", [new_id])
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [new_id])
+            eng.conn.commit()
+        eng.index("hnsw").insert(new_id, vec)
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [new_id])
+        assert cur.fetchone()[0] == 1
+        cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [new_id])
+        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [new_id])
+        eng.conn.commit()
+
+    def test_hnsw_search_returns_results(self, engine_with_embeddings, hnsw_data):
+        eng = engine_with_embeddings
+        rng = random.Random(77)
+        query = [rng.gauss(0, 1) for _ in range(EMBED_DIM)]
+        results = eng.index("hnsw").search(query, k=5)
+        assert isinstance(results, list)
+        assert len(results) > 0
+        assert len(results) <= 5
+
+    def test_hnsw_search_matches_search_nodes_by_vector(self, engine_with_embeddings, hnsw_data):
+        eng = engine_with_embeddings
+        rng = random.Random(88)
+        query = [rng.gauss(0, 1) for _ in range(EMBED_DIM)]
+        via_handle = eng.index("hnsw").search(query, k=5)
+        via_direct = eng.search_nodes_by_vector(query, k=5)
+        assert len(via_handle) == len(via_direct)
+
+    def test_hnsw_not_in_registry_when_native_vec_unavailable(self):
+        from unittest.mock import patch, MagicMock
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.execute.side_effect = Exception("no VECTOR")
+        mock_conn.cursor.return_value.fetchone.return_value = None
+        from iris_vector_graph.engine import IRISGraphEngine
+        eng = object.__new__(IRISGraphEngine)
+        eng.conn = mock_conn
+        eng._arno_available = None
+        eng._arno_capabilities = {}
+        eng._nkg_dirty = False
+        eng._connection_params = None
+        eng._table_mapping_cache = None
+        eng._rel_mapping_cache = None
+        eng._native_vec_available = None
+        with patch.object(eng, "_probe_native_vec", return_value=False):
+            registry = eng._build_index_registry()
+        assert "hnsw" not in registry
+
