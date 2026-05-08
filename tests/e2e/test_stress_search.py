@@ -58,16 +58,17 @@ def nodes_with_vecs(engine):
     dim = engine.embedding_dimension
     pfx = f"vec_{uuid.uuid4().hex[:6]}"
     n = 200
-    for i in range(n):
-        engine.create_node(f"{pfx}:{i}", labels=["VecNode"], properties={"idx": i})
-        engine.store_embedding(f"{pfx}:{i}", _rand_vec(dim))
-    return pfx, n, dim
+    node_ids = [f"{pfx}:{i}" for i in range(n)]
+    for nid in node_ids:
+        engine.create_node(nid, labels=["VecNode"], properties={"idx": int(nid.split(":")[1])})
+        engine.store_embedding(nid, _rand_vec(dim))
+    return pfx, n, dim, node_ids
 
 
 class TestVecIndex:
 
     def test_vec_create_and_search(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
             engine.vec_drop(VEC_INDEX)
         except Exception:
@@ -80,7 +81,7 @@ class TestVecIndex:
         assert len(results) >= 1
 
     def test_vec_build_required_before_search(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         engine.vec_drop(VEC_INDEX)
         engine.vec_create_index(VEC_INDEX, dim=dim)
         for i in range(10):
@@ -90,24 +91,24 @@ class TestVecIndex:
         assert len(results) >= 1
 
     def test_vec_info_returns_metadata(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         engine.vec_create_index(VEC_INDEX, dim=dim)
         info = engine.vec_info(VEC_INDEX)
         assert info is not None
 
     def test_vec_insert_single(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         engine.vec_create_index(VEC_INDEX, dim=dim)
         engine.vec_insert(VEC_INDEX, f"{pfx}:new_single", _rand_vec(dim))
 
     def test_vec_bulk_insert(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         engine.vec_create_index(VEC_INDEX, dim=dim)
         items = [{"id": f"{pfx}:vbi{i}", "embedding": _rand_vec(dim)} for i in range(20)]
         engine.vec_bulk_insert(VEC_INDEX, items)
 
     def test_vec_lifecycle_create_build_search_drop(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         idx = f"{VEC_INDEX}_lifecycle"
         engine.vec_create_index(idx, dim=dim)
         for i in range(10):
@@ -121,31 +122,31 @@ class TestVecIndex:
 class TestIVFIndex:
 
     def test_ivf_build_and_search(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
             engine.ivf_drop(IVF_NAME)
         except Exception:
             pass
         try:
-            engine.ivf_build(IVF_NAME, nlist=8)
+            engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
             results = engine.ivf_search(IVF_NAME, _rand_vec(dim), k=5)
             assert len(results) >= 1
         except RuntimeError as e:
             pytest.skip(f"IVF build failed (may be IRIS stack limit on large dims): {e}")
 
     def test_ivf_info_after_build(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
-            engine.ivf_build(IVF_NAME, nlist=8)
+            engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
             info = engine.ivf_info(IVF_NAME)
             assert info is not None
         except RuntimeError as e:
             pytest.skip(f"IVF build failed: {e}")
 
     def test_ivf_search_nprobe_parameter(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
-            engine.ivf_build(IVF_NAME, nlist=8)
+            engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
         except RuntimeError as e:
             pytest.skip(f"IVF build failed: {e}")
         r1 = engine.ivf_search(IVF_NAME, _rand_vec(dim), k=5, nprobe=1)
@@ -154,9 +155,9 @@ class TestIVFIndex:
         assert len(r2) >= 1
 
     def test_ivf_drop_and_rebuild(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
-            engine.ivf_build(IVF_NAME, nlist=8)
+            engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
             engine.ivf_drop(IVF_NAME)
             engine.ivf_build(IVF_NAME, nlist=4)
             results = engine.ivf_search(IVF_NAME, _rand_vec(dim), k=3)
@@ -165,9 +166,9 @@ class TestIVFIndex:
             pytest.skip(f"IVF build failed: {e}")
 
     def test_ivf_search_latency(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
-            engine.ivf_build(IVF_NAME, nlist=8)
+            engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
         except RuntimeError as e:
             pytest.skip(f"IVF build failed: {e}")
         times = []
@@ -233,16 +234,16 @@ class TestBM25:
 class TestNodeEmbeddings:
 
     def test_store_embedding_single(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         engine.store_embedding(f"{pfx}:0", _rand_vec(dim))
 
     def test_store_embeddings_batch(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         batch = [{"node_id": f"{pfx}:{i}", "embedding": _rand_vec(dim)} for i in range(10)]
         engine.store_embeddings(batch)
 
     def test_get_embedding_roundtrip(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         original_vec = _rand_vec(dim)
         engine.store_embedding(f"{pfx}:42", original_vec)
         try:
@@ -254,7 +255,7 @@ class TestNodeEmbeddings:
             pytest.skip("get_embedding not implemented")
 
     def test_embed_nodes_by_label(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
             count = engine.embed_nodes(
                 label="VecNode",
@@ -269,7 +270,7 @@ class TestNodeEmbeddings:
 class TestHybridSearch:
 
     def test_rrf_fusion_no_crash(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
             engine.ivf_build(IVF_NAME, nlist=4)
         except Exception:
@@ -290,7 +291,7 @@ class TestHybridSearch:
             pytest.skip(f"kg_RRF_FUSE not available: {ex}")
 
     def test_vector_graph_search(self, engine, nodes_with_vecs):
-        pfx, n, dim = nodes_with_vecs
+        pfx, n, dim, node_ids = nodes_with_vecs
         try:
             engine.ivf_build(IVF_NAME, nlist=4)
         except Exception:

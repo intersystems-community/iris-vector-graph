@@ -6,6 +6,7 @@ IVG execution context tests — three contexts must work equally:
 """
 import re
 import pytest
+from iris_vector_graph.result import IVGResult
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql, set_schema_prefix
 from iris_vector_graph.engine import IRISGraphEngine
@@ -160,7 +161,7 @@ class TestGracefulErrorReturn:
 
     def test_always_returns_dict(self, engine):
         r = engine.execute_cypher("MATCH (n) RETURN n.id LIMIT 1")
-        assert isinstance(r, dict)
+        assert isinstance(r, (dict, IVGResult))
 
     def test_has_required_keys(self, engine):
         r = engine.execute_cypher("MATCH (n) RETURN n.id LIMIT 1")
@@ -170,7 +171,7 @@ class TestGracefulErrorReturn:
     def test_no_exception_on_sql_error(self, engine):
         try:
             r = engine.execute_cypher("MATCH (n) RETURN n.name / 0 AS x LIMIT 1")
-            assert isinstance(r, dict)
+            assert isinstance(r, (dict, IVGResult))
         except Exception as exc:
             pytest.fail(f"execute_cypher raised: {exc}")
 
@@ -179,7 +180,7 @@ class TestGracefulErrorReturn:
             "MATCH (a)-[r1]-(b)-[r2]-(c)-[r3]-(d)-[r4]-(e)-[r5]-(f)"
             "-[r6]-(g)-[r7]-(h)-[r8]-(i)-[r9]-(j)-[r10]-(k)-[r11]-(l) RETURN count(*)"
         )
-        assert isinstance(r, dict)
+        assert isinstance(r, (dict, IVGResult))
 
 
 class TestObjectScriptContext:

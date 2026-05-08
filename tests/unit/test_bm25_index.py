@@ -18,6 +18,11 @@ def _make_engine():
 
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine.conn = MagicMock()
+    engine._index_registry = {}
+    engine._arno_available = None
+    engine._arno_capabilities = {}
+    engine._nkg_dirty = False
+    engine._native_vec_available = None
     return engine
 
 
@@ -102,15 +107,12 @@ class TestBM25IndexUnit:
         assert scores == sorted(scores, reverse=True)
 
     # T015 ─────────────────────────────────────────────────────────
-    def test_bm25_search_empty_query_returns_empty(self):
-        """bm25_search with empty response returns [] without error."""
+    def test_bm25_search_empty_query_raises_validation_error(self):
+        """bm25_search with empty query raises ValidationError — validated behavior."""
+        from pydantic import ValidationError
         engine = _make_engine()
-        iris_mock = MagicMock()
-        iris_mock.classMethodValue.return_value = "[]"
-        engine._iris_obj = lambda: iris_mock
-
-        results = engine.bm25_search("ncit", "", 5)
-        assert results == []
+        with pytest.raises(ValidationError, match="query"):
+            engine.bm25_search("ncit", "", 5)
 
     # T022 ─────────────────────────────────────────────────────────
     def test_bm25_insert_calls_classmethod(self):
@@ -157,15 +159,16 @@ class TestBM25IndexUnit:
         assert result["avgdl"] == 4.0
         assert result["vocab_size"] == 20
 
-    def test_bm25_info_returns_empty_dict_when_not_found(self):
-        """bm25_info returns {} when index not found (ObjectScript returns '{}')."""
+    def test_bm25_info_not_found_returns_type_key(self):
+        """bm25_info for non-existent index returns dict with type key set.
+        The 'type' key is always added by bm25_info for protocol consistency."""
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "{}"
         engine._iris_obj = lambda: iris_mock
 
         result = engine.bm25_info("nonexistent")
-        assert result == {}
+        assert result.get("type") == "bm25"
 
     # T032 ─────────────────────────────────────────────────────────
     def test_kgtxt_uses_bm25_when_default_exists(self):
@@ -344,13 +347,14 @@ class TestBM25IndexE2E:
         self.engine.bm25_drop(idx)
 
     # T019 ─────────────────────────────────────────────────────────
-    def test_search_empty_returns_empty(self):
-        """bm25_search with empty query string returns []."""
+    def test_search_empty_query_raises(self):
+        """bm25_search with empty query raises ValidationError."""
         self._create_node_with_name("bm25test:C", "some node text")
         idx = f"test44c_{self._test_run_id}"
         self.engine.bm25_build(idx, ["name"])
-        results = self.engine.bm25_search(idx, "", 5)
-        assert results == []
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="query"):
+            self.engine.bm25_search(idx, "", 5)
         self.engine.bm25_drop(idx)
 
     # T020 ─────────────────────────────────────────────────────────
@@ -411,7 +415,7 @@ class TestBM25IndexE2E:
         self.engine.bm25_drop(idx)
 
         info_after = self.engine.bm25_info(idx)
-        assert info_after == {}
+        assert info_after.get("type") == "bm25"  # type key always present
 
         results_after = self.engine.bm25_search(idx, "some", 3)
         assert results_after == []

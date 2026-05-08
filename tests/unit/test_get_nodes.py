@@ -59,9 +59,9 @@ def test_get_nodes_batching(engine, mock_conn):
     # Actually, the implementation calls fetchall() for labels, then for properties.
     assert cursor.execute.call_count >= 2
     
-    # Verify the SQL used batching
-    last_query = cursor.execute.call_args_list[0][0][0]
-    assert "IN (?,?)" in last_query
+    # Verify the SQL used batching (search all calls, not just first — _probe_native_vec runs first)
+    all_queries = [call[0][0] for call in cursor.execute.call_args_list if call[0]]
+    assert any("IN (?,?)" in q for q in all_queries), f"No IN batching found in: {all_queries}"
 
 def test_get_nodes_handles_missing_nodes(engine, mock_conn):
     cursor = mock_conn.cursor.return_value
