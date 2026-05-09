@@ -1,1 +1,0 @@
-/Users/tdyar/ws/iris-vector-graph-private/examples/expanded_mindwalk_KG_10000.vectors.ids.txt
