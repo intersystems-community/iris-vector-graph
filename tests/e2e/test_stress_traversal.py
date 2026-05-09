@@ -1,29 +1,16 @@
-import os
 import time
 import uuid
 import random
 
 import pytest
 
-IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "1972"))
-IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.environ.get("IRIS_USERNAME", "test")
-IRIS_PASS = os.environ.get("IRIS_PASSWORD", "test")
-
 
 @pytest.fixture(scope="module")
-def engine():
-    try:
-        import iris
-        from iris_vector_graph.engine import IRISGraphEngine
-        c = iris.connect(IRIS_HOST, IRIS_PORT, IRIS_NS, IRIS_USER, IRIS_PASS)
-        e = IRISGraphEngine(c, embedding_dimension=4)
-        e.initialize_schema()
-        yield e
-        c.close()
-    except Exception as ex:
-        pytest.skip(f"IRIS unavailable: {ex}")
+def engine(iris_connection):
+    from iris_vector_graph.engine import IRISGraphEngine
+    e = IRISGraphEngine(iris_connection, embedding_dimension=4)
+    e.initialize_schema()
+    return e
 
 
 @pytest.fixture(scope="module")

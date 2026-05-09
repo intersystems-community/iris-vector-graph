@@ -245,4 +245,11 @@ ClassMethod Drop(name As %String)
 	Kill ^PLAID(name)
 }
 
+ClassMethod List() As %String
+{
+	Set result = "", name = ""
+	For { Set name = $Order(^PLAID(name)) Quit:name=""  Set result = result _ $Select(result="":"", 1:",") _ name }
+	Return result
+}
+
 }

@@ -75,11 +75,8 @@ class TestVarLengthE2E:
             self.engine.create_node(nid)
         for i in range(4):
             self.engine.create_edge(nodes[i], "NEXT", nodes[i+1])
-        try:
-            irispy = self._irispy()
-            irispy.classMethodVoid("Graph.KG.Traversal", "BuildKG")
-        except Exception as e:
-            pytest.skip(f"BuildKG failed: {e}")
+        self.engine.rebuild_kg()
+        self.engine.rebuild_nkg()
         self.nodes = nodes
         yield
         p = f"{self.PREFIX}%"
@@ -91,12 +88,8 @@ class TestVarLengthE2E:
         iris_connection.commit()
 
     def _irispy(self):
-        try:
-            import iris
-            return iris.createIRIS(self.conn)
-        except TypeError:
-            import intersystems_iris
-            return intersystems_iris.createIRIS(self.conn)
+        import iris
+        return iris.createIRIS(self.conn)
 
     def test_var_length_returns_reachable_nodes(self):
         result = self.engine.execute_cypher(

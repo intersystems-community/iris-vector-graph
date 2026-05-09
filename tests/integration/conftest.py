@@ -3,6 +3,27 @@ import os
 import uuid
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.engine import IRISGraphEngine
+
+
+def _cleanup_prefix(engine, prefix: str) -> None:
+    cursor = engine.conn.cursor()
+    pattern = f"{prefix}%"
+    cursor.execute(f"DELETE FROM {engine._table('rdf_reifications')} WHERE edge_id IN (SELECT edge_id FROM {engine._table('rdf_edges')} WHERE s LIKE ? OR o_id LIKE ?)", [pattern, pattern])
+    cursor.execute(f"DELETE FROM {engine._table('rdf_edges')} WHERE s LIKE ? OR o_id LIKE ?", [pattern, pattern])
+    cursor.execute(f"DELETE FROM {engine._table('rdf_props')} WHERE s LIKE ?", [pattern])
+    cursor.execute(f"DELETE FROM {engine._table('rdf_labels')} WHERE s LIKE ?", [pattern])
+    cursor.execute(f"DELETE FROM {engine._table('nodes')} WHERE node_id LIKE ?", [pattern])
+    engine.conn.commit()
+    cursor.close()
+
+
+@pytest.fixture
+def engine(iris_connection):
+    """Create and initialize an IRISGraphEngine for testing."""
+    engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
+    engine.initialize_schema(auto_deploy_objectscript=True)
+    yield engine
 
 
 @pytest.fixture

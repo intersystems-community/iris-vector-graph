@@ -25,7 +25,7 @@ _conn = None
 def get_conn():
     global _conn
     if _conn is None:
-        import intersystems_iris as irispy
+        import iris as irispy
         _conn = irispy.connect(IRIS_HOST, IRIS_PORT, IRIS_NAMESPACE, IRIS_USER, IRIS_PASS)
     return _conn
 

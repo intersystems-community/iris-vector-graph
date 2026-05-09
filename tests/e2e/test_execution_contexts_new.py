@@ -187,10 +187,10 @@ class TestEmbeddedConnectionUnit:
 
 @pytest.mark.skipif(
     __import__('subprocess').run(
-        ['docker', 'inspect', 'iris-enterprise-2026'],
+        ['docker', 'inspect', 'iris-vector-graph-enterprise'],
         capture_output=True
     ).returncode != 0,
-    reason="iris-enterprise-2026 container not running"
+    reason="iris-vector-graph-enterprise container not running"
 )
 class TestObjectScriptCypherEngine:
 
@@ -203,7 +203,7 @@ class TestObjectScriptCypherEngine:
             EOF
         ''').strip()
         result = subprocess.run(
-            ['docker', 'exec', 'iris-enterprise-2026', 'bash', '-c', shell_script],
+            ['docker', 'exec', 'iris-vector-graph-enterprise', 'bash', '-c', shell_script],
             capture_output=True, timeout=60
         )
         return result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace')

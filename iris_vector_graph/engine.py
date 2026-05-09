@@ -1526,7 +1526,14 @@ class IRISGraphEngine:
             )
 
         bfs_results = None
-        if self._detect_arno() and self._arno_capabilities.get("bfs") and self._arno_capabilities.get("rust_callout"):
+        direction = vl.get("direction", "out")
+        arno_usable = (
+            self._detect_arno()
+            and self._arno_capabilities.get("bfs")
+            and self._arno_capabilities.get("rust_callout")
+            and direction == "out"
+        )
+        if arno_usable:
             try:
                 bfs_json = self._arno_call(
                     "Graph.KG.NKGAccel",
@@ -1727,7 +1734,7 @@ class IRISGraphEngine:
             if src_id is None:
                 return None
             try:
-                raw = str(self._iris_obj().classMethodString(
+                raw = str(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHopNeighborIds", str(src_id), pred
                 ))
                 ids = [x for x in raw.split("\n") if x]
@@ -1760,7 +1767,7 @@ class IRISGraphEngine:
                 return None
             limit = int(limit_str) if limit_str else 0
             try:
-                raw = str(self._iris_obj().classMethodString(
+                raw = str(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
                 ))
                 ids = [x for x in raw.split("\n") if x]
@@ -2441,11 +2448,20 @@ class IRISGraphEngine:
         try:
             results = []
             for s, p, o in edges:
-                cursor.execute(
-                    f"SELECT qualifiers FROM {_table('rdf_edges')} "
-                    "WHERE s=? AND p=? AND o_id=?",
-                    [s, p, o],
-                )
+                # arno 1d75d97 bug: predicate is written as "R" placeholder.
+                # Fall back to matching by (s, o) only when p is the sentinel.
+                if p == "R":
+                    cursor.execute(
+                        f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                        "WHERE s=? AND o_id=?",
+                        [s, o],
+                    )
+                else:
+                    cursor.execute(
+                        f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                        "WHERE s=? AND p=? AND o_id=?",
+                        [s, p, o],
+                    )
                 row = cursor.fetchone()
                 qual_json = row[0] if row else None
                 try:
@@ -3089,6 +3105,32 @@ class IRISGraphEngine:
                         registry[name_str] = type_str
         except Exception:
             pass
+        if not registry:
+            try:
+                from iris_vector_graph.schema import _call_classmethod
+                for cls_name, type_str in (
+                    ("Graph.KG.IVFIndex",   "ivf"),
+                    ("Graph.KG.BM25Index",  "bm25"),
+                    ("Graph.KG.PLAIDSearch", "plaid"),
+                ):
+                    raw = str(_call_classmethod(self.conn, cls_name, "List"))
+                    for name in (n.strip() for n in raw.split(",") if n.strip()):
+                        registry[name] = type_str
+            except Exception:
+                pass
+                for sql_query, type_str in (
+                    ("SELECT DISTINCT name FROM Graph_KG.ivf_indexes", "ivf"),
+                    ("SELECT DISTINCT name FROM Graph_KG.bm25_indexes", "bm25"),
+                    ("SELECT DISTINCT name FROM Graph_KG.plaid_indexes", "plaid"),
+                ):
+                    try:
+                        cur.execute(sql_query)
+                        for row in cur.fetchall():
+                            registry[str(row[0])] = type_str
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         if self._probe_native_vec():
             registry["hnsw"] = "hnsw"
         return registry
@@ -3130,6 +3172,10 @@ class IRISGraphEngine:
                 iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            try:
+                iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
+            except Exception:
+                pass
             self._nkg_dirty = False
             return True
         except Exception as e:
@@ -3465,7 +3511,7 @@ class IRISGraphEngine:
         def _fetch_edges(predicate):
             cursor.execute(
                 "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ? "
-                "AND (qualifiers IS NULL OR JSON_VALUE(qualifiers, '$.inferred') IS NULL)"
+                "AND (qualifiers IS NULL OR qualifiers NOT LIKE '%\"inferred\"%')"
                 + graph_filter_sql,
                 [predicate] + graph_filter_params,
             )
@@ -3604,12 +3650,12 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         if graph:
             cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true' AND graph_id = ?",
+                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%' AND graph_id = ?",
                 [graph],
             )
         else:
             cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true'"
+                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%'"
             )
         deleted = cursor.rowcount or 0
         try:
@@ -4768,6 +4814,38 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
+    def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = 200) -> int:
+        deleted = 0
+        for i in range(0, len(node_ids), batch_size):
+            batch = node_ids[i : i + batch_size]
+            phs = ",".join(["?"] * len(batch))
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    f"DELETE FROM {_table('rdf_reifications')} WHERE edge_id IN "
+                    f"(SELECT edge_id FROM {_table('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs}))",
+                    batch + batch,
+                )
+                cursor.execute(
+                    f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({phs})", batch
+                )
+                cursor.execute(
+                    f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs})",
+                    batch + batch,
+                )
+                cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({phs})", batch)
+                cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({phs})", batch)
+                cursor.execute(
+                    f"DELETE FROM {_table('nodes')} WHERE node_id IN ({phs})", batch
+                )
+                self.conn.commit()
+                deleted += len(batch)
+            except Exception as e:
+                logger.warning(f"bulk_delete_nodes batch failed: {e}")
+            finally:
+                cursor.close()
+        return deleted
+
     def get_kg_anchors(
         self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
     ) -> List[str]:
@@ -4906,26 +4984,33 @@ class IRISGraphEngine:
     def kg_KNN_VEC(
         self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
     ) -> List[Tuple[str, float]]:
-        """
-        K-Nearest Neighbors vector search using server-side SQL procedure.
-        Leverages native IRIS EMBEDDING() if embedding_config is set.
-
-        Args:
-            query_vector: JSON array string OR raw text (if embedding_config is set)
-            k: Number of top results to return
-            label_filter: Optional label to filter by
-
-        Returns:
-            List of (entity_id, similarity_score) tuples
-        """
         cursor = self.conn.cursor()
         try:
-            # Direct SQL vector search — IRIS HNSW index is used automatically
-            # via TOP k + ORDER BY VECTOR_COSINE DESC pattern.
-            # (CALL proc(?, ...) is broken in IRIS Python dbapi for result-set procedures)
             emb_table = _table("kg_NodeEmbeddings")
             labels_table = _table("rdf_labels")
-            if label_filter:
+
+            qv = query_vector.strip() if isinstance(query_vector, str) else query_vector
+            exclude_id: Optional[str] = None
+            if isinstance(qv, str) and not qv.startswith("["):
+                exclude_id = qv
+                cursor.execute(
+                    f"SELECT emb FROM {emb_table} WHERE id = ?", [exclude_id]
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return []
+                query_vector = f"[{str(row[0])}]"
+
+            if label_filter and exclude_id:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f" FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE L.label = ? AND n.id != ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, label_filter, exclude_id],
+                )
+            elif label_filter:
                 cursor.execute(
                     f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
                     f" FROM {emb_table} n"
@@ -4933,6 +5018,14 @@ class IRISGraphEngine:
                     f" WHERE L.label = ?"
                     f" ORDER BY score DESC",
                     [k, query_vector, label_filter],
+                )
+            elif exclude_id:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f" FROM {emb_table} n"
+                    f" WHERE n.id != ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, exclude_id],
                 )
             else:
                 cursor.execute(
@@ -4947,7 +5040,6 @@ class IRISGraphEngine:
             logger.warning(
                 f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic."
             )
-            # Fallback to Python implementation
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
 
     def search_nodes_by_vector(
@@ -5325,39 +5417,40 @@ class IRISGraphEngine:
     def kg_RRF_FUSE(
         self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str
     ) -> List[Tuple[str, float, float, float]]:
-        """
-        Reciprocal Rank Fusion using server-side SQL procedure
+        vec_results: List[Tuple[str, float]] = []
+        txt_results: List[Tuple[str, float]] = []
 
-        Args:
-            k: Final number of results to return
-            k1: Number of vector search results to retrieve
-            k2: Number of text search results to retrieve
-            c: RRF parameter (typically 60)
-            query_vector: Vector query as JSON string
-            query_text: Text query string
+        import json as _json
+        vec_list = _json.loads(query_vector) if isinstance(query_vector, str) else query_vector
 
-        Returns:
-            List of (entity_id, rrf_score, vector_score, text_score) tuples
-        """
-        cursor = self.conn.cursor()
         try:
-            # Call server-side procedure for unified logic
-            # Signature: (k, k1, k2, c, queryVector, queryText)
-            cursor.execute(
-                "CALL iris_vector_graph.kg_RRF_FUSE(?, ?, ?, ?, ?, ?)",
-                [k, k1, k2, c, query_vector, query_text],
-            )
-            results = cursor.fetchall()
-            return [
-                (entity_id, float(rrf), float(v), float(t))
-                for entity_id, rrf, v, t in results
-            ]
-
+            for idx_name in self._index_registry:
+                if self._index_registry[idx_name] == "ivf":
+                    raw = self.ivf_search(idx_name, vec_list, k=k1)
+                    vec_results = [(r["id"], float(r.get("score", 0))) for r in raw]
+                    break
+            for idx_name in self._index_registry:
+                if self._index_registry[idx_name] == "bm25":
+                    txt_results = self.bm25_search(idx_name, query_text, k=k2)
+                    break
         except Exception as e:
-            logger.error(f"kg_RRF_FUSE failed: {e}")
-            raise
-        finally:
-            cursor.close()
+            logger.error(f"kg_RRF_FUSE index search failed: {e}")
+
+        vec_rank = {nid: i + 1 for i, (nid, _) in enumerate(vec_results)}
+        txt_rank = {nid: i + 1 for i, (nid, _) in enumerate(txt_results)}
+        all_ids = set(vec_rank) | set(txt_rank)
+
+        fused = []
+        for nid in all_ids:
+            v_r = vec_rank.get(nid, len(vec_results) + c)
+            t_r = txt_rank.get(nid, len(txt_results) + c)
+            rrf = 1.0 / (c + v_r) + 1.0 / (c + t_r)
+            v_score = dict(vec_results).get(nid, 0.0)
+            t_score = dict(txt_results).get(nid, 0.0)
+            fused.append((nid, rrf, v_score, t_score))
+
+        fused.sort(key=lambda x: -x[1])
+        return fused[:k]
 
     def kg_VECTOR_GRAPH_SEARCH(
         self,
@@ -5666,6 +5759,10 @@ class IRISGraphEngine:
             iris_obj = self._iris_obj()
             try:
                 iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
+            except Exception:
+                pass
+            try:
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
             except Exception:
                 pass
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
@@ -5990,7 +6087,18 @@ class IRISGraphEngine:
     def bulk_create_edges_temporal(
         self, edges: list, upsert: bool = False, graph: Optional[str] = None
     ) -> int:
-        batch_json = json.dumps(edges)
+        normalized = [
+            {
+                "s": e.get("s") or e.get("source_id", ""),
+                "p": e.get("p") or e.get("predicate", ""),
+                "o": e.get("o") or e.get("target_id", ""),
+                "ts": e.get("ts") or e.get("timestamp", 0),
+                "w": e.get("w") or e.get("weight", 1),
+                **({"attrs": e["attrs"]} if "attrs" in e else {}),
+            }
+            for e in edges
+        ]
+        batch_json = json.dumps(normalized)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0
         )
@@ -6321,7 +6429,10 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Search", name, query, k
         )
-        rows = json.loads(str(result))
+        import re as _re
+        raw = str(result)
+        raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', raw)
+        rows = json.loads(raw)
         return [(r["id"], float(r["score"])) for r in rows]
 
     def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
@@ -6467,3 +6578,185 @@ class IRISGraphEngine:
         if info:
             info.setdefault("type", "ivf")
         return info
+
+    def kg_GRAPH_PATH(self, src_id: str, pred1: str, pred2: str, max_hops: int = 2):
+        result = self.execute_cypher(
+            "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
+            "WHERE type(r1) = $p1 AND type(r2) = $p2 "
+            "RETURN 1 AS path_id, 1 AS step, a.node_id, type(r1), b.node_id "
+            "UNION ALL "
+            "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
+            "WHERE type(r1) = $p1 AND type(r2) = $p2 "
+            "RETURN 1 AS path_id, 2 AS step, b.node_id, type(r2), c.node_id",
+            {"src": src_id, "p1": pred1, "p2": pred2},
+        )
+        return [(int(r[0]), int(r[1]), r[2], r[3], r[4]) for r in (result.get("rows") or [])]
+
+    def kg_GRAPH_WALK(self, start_entity: str, max_depth: int = 3,
+                      edge_types: Optional[List[str]] = None,
+                      max_results: int = 100):
+        preds_json = json.dumps(edge_types) if edge_types else "[]"
+        from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
+        raw = str(_call_classmethod(
+            self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
+            start_entity, preds_json, max_depth, "", "out", max_results
+        ))
+        if raw.startswith("SORTED:") and raw != "SORTED:0":
+            tag = raw.split(":")[1]
+            json_str = str(_call_classmethod_large(
+                self._iris_obj(), "Graph.KG.Traversal", "ReadBFSResults", tag))
+            rows = json.loads(json_str) if json_str else []
+            return [(r.get("s", ""), r.get("p", ""), r.get("o", ""), r.get("step", 1))
+                    for r in rows]
+        return []
+
+    def kg_GRAPH_WALK_TVF(self, start_entity: str, max_depth: int = 3,
+                           edge_types: Optional[List[str]] = None,
+                           max_results: int = 100):
+        return self.kg_GRAPH_WALK(start_entity, max_depth, edge_types, max_results)
+
+    def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
+                    damping: float = 0.85, max_iterations: int = 20,
+                    bidirectional: bool = False, reverse_weight: float = 1.0):
+        if seed_entities is not None:
+            return self.kg_PERSONALIZED_PAGERANK(
+                seed_entities, damping_factor=damping, max_iterations=max_iterations,
+            )
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.PageRank", "PageRankGlobalJson",
+                                    damping, max_iterations))
+        parsed = json.loads(raw) if raw else []
+        return [(item["id"], float(item["score"])) for item in parsed]
+
+    def kg_WCC(self, max_iterations: int = 100) -> Dict[str, Any]:
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", max_iterations))
+        return json.loads(raw) if raw else {}
+
+    def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "CDLPJson", max_iterations))
+        return json.loads(raw) if raw else {}
+
+    def kg_SUBGRAPH(self, seed_ids: List[str], k_hops: int = 2,
+                    edge_types: Optional[List[str]] = None,
+                    include_properties: bool = True,
+                    include_embeddings: bool = False,
+                    max_nodes: int = 10000):
+        from iris_vector_graph.models import SubgraphData
+        from iris_vector_graph.schema import _call_classmethod
+        if not seed_ids:
+            return SubgraphData(seed_ids=list(seed_ids))
+        seed_json = json.dumps(seed_ids)
+        edge_types_json = json.dumps(edge_types) if edge_types else ""
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Subgraph", "SubgraphJson",
+                                    seed_json, k_hops, edge_types_json, max_nodes))
+        if raw:
+            parsed = json.loads(raw)
+            nodes = parsed.get("nodes", [])
+            edges = [(e["s"], e["p"], e["o"]) for e in parsed.get("edges", [])]
+            node_properties = parsed.get("properties", {})
+            node_labels = parsed.get("labels", {})
+            node_embeddings: Dict[str, Any] = {}
+            if include_embeddings and nodes:
+                emb_table = _table("kg_NodeEmbeddings")
+                cursor = self.conn.cursor()
+                phs = ",".join(["?"] * len(nodes))
+                cursor.execute(
+                    f"SELECT id, emb FROM {emb_table} WHERE id IN ({phs})", nodes
+                )
+                for row in cursor.fetchall():
+                    nid, emb_csv = row[0], str(row[1])
+                    try:
+                        import numpy as _np
+                        node_embeddings[nid] = list(_np.fromstring(emb_csv, dtype=float, sep=","))
+                    except Exception:
+                        pass
+                cursor.close()
+            return SubgraphData(
+                seed_ids=seed_ids, nodes=nodes, edges=edges,
+                node_properties=node_properties, node_labels=node_labels,
+                node_embeddings=node_embeddings,
+            )
+        return SubgraphData(seed_ids=seed_ids)
+
+    def kg_PPR_GUIDED_SUBGRAPH(self, seed_ids: List[str], ppr_top_k: int = 50,
+                                k_hops: int = 1, damping: float = 0.85,
+                                max_iterations: int = 10,
+                                edge_types: Optional[List[str]] = None,
+                                max_nodes: int = 5000):
+        from iris_vector_graph.models import PprGuidedSubgraphData
+        if not seed_ids:
+            return PprGuidedSubgraphData(seed_ids=[], nodes=[], edges=[], ppr_scores=[])
+        ppr_scores = self.kg_PERSONALIZED_PAGERANK(seed_ids, damping_factor=damping,
+                                                     max_iterations=max_iterations)
+        if isinstance(ppr_scores, dict):
+            sorted_scores = sorted(ppr_scores.items(), key=lambda x: -x[1])
+            top_ids = [k for k, _ in sorted_scores[:ppr_top_k]]
+        else:
+            sorted_scores = sorted(ppr_scores, key=lambda x: -x[1])
+            top_ids = [item[0] for item in sorted_scores[:ppr_top_k]]
+        all_seeds = list(dict.fromkeys(seed_ids + top_ids))
+        subgraph = self.kg_SUBGRAPH(all_seeds, k_hops=k_hops, edge_types=edge_types,
+                                    max_nodes=min(max_nodes, ppr_top_k))
+        return PprGuidedSubgraphData(
+            seed_ids=seed_ids,
+            nodes=subgraph.nodes,
+            edges=[{"src": e[0], "dst": e[2], "type": e[1]} for e in subgraph.edges if isinstance(e, (list, tuple)) and len(e) == 3]
+                  if subgraph.edges and isinstance(subgraph.edges[0], (list, tuple))
+                  else subgraph.edges,
+            ppr_scores=sorted_scores[:ppr_top_k],
+            nodes_before_pruning=len(subgraph.nodes),
+            nodes_after_pruning=len(subgraph.nodes),
+        )
+
+    def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,
+                     direction: str = "out", distinct: bool = True,
+                     chunk_size: int = 500) -> List[str]:
+        if not source_ids:
+            return []
+        if direction not in ("out", "in", "both"):
+            raise ValueError(f"direction must be 'out', 'in', or 'both', got {direction!r}")
+        all_targets: List[str] = []
+        seen: set = set()
+        for i in range(0, len(source_ids), chunk_size):
+            chunk = source_ids[i:i + chunk_size]
+            for src in chunk:
+                dirs = ["out", "in"] if direction == "both" else [direction]
+                for d in dirs:
+                    if d == "out":
+                        q = ("MATCH (s {node_id: $id})-[r]->(t) " +
+                             ("WHERE type(r)=$p " if predicate else "") +
+                             "RETURN t.node_id")
+                    else:
+                        q = ("MATCH (t)-[r]->(s {node_id: $id}) " +
+                             ("WHERE type(r)=$p " if predicate else "") +
+                             "RETURN t.node_id")
+                    params: Dict[str, Any] = {"id": src}
+                    if predicate:
+                        params["p"] = predicate
+                    r = self.execute_cypher(q, params)
+                    for row in (r.get("rows") or []):
+                        t = row[0]
+                        if t and (not distinct or t not in seen):
+                            all_targets.append(t)
+                            seen.add(t)
+        return all_targets
+
+    def kg_MENTIONS(self, source_ids: List[str], predicate: str = "MENTIONS",
+                    direction: str = "out") -> List[str]:
+        return self.kg_NEIGHBORS(source_ids, predicate=predicate, direction=direction)
+
+    def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
+               max_iterations: int = 20) -> List[Tuple[str, float]]:
+        if not seed_entities:
+            return []
+        result = self.kg_PERSONALIZED_PAGERANK(seed_entities, damping_factor=damping,
+                                                max_iterations=max_iterations)
+        if isinstance(result, dict):
+            return sorted(result.items(), key=lambda x: -x[1])
+        return result
+
+    def kg_RERANK(self, top_n: int, query_vector: str, query_text: str):
+        return self.kg_RRF_FUSE(k=top_n, k1=top_n * 2, k2=top_n * 2, c=60,
+                                 query_vector=query_vector, query_text=query_text)

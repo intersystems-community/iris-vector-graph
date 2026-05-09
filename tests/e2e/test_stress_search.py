@@ -1,44 +1,22 @@
-import os
 import time
 import uuid
 import random
 
 import pytest
 
-IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "1972"))
-IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.environ.get("IRIS_USERNAME", "test")
-IRIS_PASS = os.environ.get("IRIS_PASSWORD", "test")
-
 
 @pytest.fixture(scope="module")
-def engine():
+def engine(iris_connection):
+    from iris_vector_graph.engine import IRISGraphEngine
+    from iris_vector_graph.schema import GraphSchema
+    cur = iris_connection.cursor()
     try:
-        import iris
-        from iris_vector_graph.engine import IRISGraphEngine
-        c = iris.connect(IRIS_HOST, IRIS_PORT, IRIS_NS, IRIS_USER, IRIS_PASS)
-        cur = c.cursor()
-        try:
-            cur.execute("SELECT TOP 1 vector FROM Graph_KG.kg_NodeEmbeddings")
-        except Exception:
-            pass
-        try:
-            cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
-            db_dim = 4
-        except Exception:
-            db_dim = 4
-        try:
-            from iris_vector_graph.schema import GraphSchema
-            db_dim = GraphSchema.get_embedding_dimension(cur) or 4
-        except Exception:
-            db_dim = 4
-        e = IRISGraphEngine(c, embedding_dimension=db_dim)
-        e.initialize_schema()
-        yield e
-        c.close()
-    except Exception as ex:
-        pytest.skip(f"IRIS unavailable: {ex}")
+        db_dim = GraphSchema.get_embedding_dimension(cur) or 4
+    except Exception:
+        db_dim = 4
+    e = IRISGraphEngine(iris_connection, embedding_dimension=db_dim)
+    e.initialize_schema()
+    return e
 
 
 IVF_NAME = "stress_ivf"
@@ -156,14 +134,11 @@ class TestIVFIndex:
 
     def test_ivf_drop_and_rebuild(self, engine, nodes_with_vecs):
         pfx, n, dim, node_ids = nodes_with_vecs
-        try:
-            engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
-            engine.ivf_drop(IVF_NAME)
-            engine.ivf_build(IVF_NAME, nlist=4)
-            results = engine.ivf_search(IVF_NAME, _rand_vec(dim), k=3)
-            assert len(results) >= 1
-        except RuntimeError as e:
-            pytest.skip(f"IVF build failed: {e}")
+        engine.ivf_build(IVF_NAME, nlist=8, node_ids=node_ids)
+        engine.ivf_drop(IVF_NAME)
+        engine.ivf_build(IVF_NAME, nlist=4, node_ids=node_ids)
+        results = engine.ivf_search(IVF_NAME, _rand_vec(dim), k=3)
+        assert len(results) >= 1
 
     def test_ivf_search_latency(self, engine, nodes_with_vecs):
         pfx, n, dim, node_ids = nodes_with_vecs
@@ -257,14 +232,17 @@ class TestNodeEmbeddings:
     def test_embed_nodes_by_label(self, engine, nodes_with_vecs):
         pfx, n, dim, node_ids = nodes_with_vecs
         try:
-            count = engine.embed_nodes(
+            from unittest.mock import MagicMock
+            mock_model = MagicMock()
+            mock_model.encode.return_value = [_rand_vec(dim)]
+            result = engine.embed_nodes(
+                model=mock_model,
                 label="VecNode",
-                embedding_fn=lambda text: _rand_vec(dim),
                 text_fn=lambda node: f"node {node.get('idx', '')}",
             )
-            assert count >= 0
-        except (AttributeError, TypeError):
-            pytest.skip("embed_nodes signature mismatch or not implemented")
+            assert isinstance(result, dict)
+        except (AttributeError, TypeError) as ex:
+            pytest.skip(f"embed_nodes not available: {ex}")
 
 
 class TestHybridSearch:
@@ -297,9 +275,10 @@ class TestHybridSearch:
         except Exception:
             pass
         try:
+            import json as _json
             results = engine.kg_VECTOR_GRAPH_SEARCH(
-                query_vec=_rand_vec(dim),
-                hops=1,
+                query_vector=_json.dumps(_rand_vec(dim)),
+                expansion_depth=1,
                 k=5,
             )
             assert results is not None

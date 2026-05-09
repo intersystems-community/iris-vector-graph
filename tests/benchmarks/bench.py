@@ -174,7 +174,7 @@ def main():
 
     version_info = ""
     try:
-        version_info = str(iris_obj.classMethodString("%SYSTEM.Version", "GetVersion"))
+        version_info = str(iris_obj.classMethodValue("%SYSTEM.Version", "GetVersion"))
     except Exception:
         pass
 
@@ -195,16 +195,16 @@ def main():
             print(f"  Load complete: ^KG built in {load_info['kg_build_ms']}ms, ^NKG: {load_info['nkg_build_ms']}ms")
             try:
                 iris_obj.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
-                iris_obj.classMethodString("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
                 iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
             except Exception:
                 pass
         else:
             print("  Skipping data load (--skip-load)")
             try:
-                iris_obj.classMethodString("Graph.KG.Traversal", "BuildNKG")
+                iris_obj.classMethodValue("Graph.KG.Traversal", "BuildNKG")
                 iris_obj.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
-                iris_obj.classMethodString("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
                 print("  ^NKG rebuilt, arno reloaded")
             except Exception as e:
                 print(f"  NKG rebuild skipped: {e}")
@@ -235,7 +235,7 @@ def main():
                     print(f"    ivg-os  MAXSTRING (result set exceeds IRIS 3.6MB string limit at depth={depth})")
                 else:
                     try:
-                        raw = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson", seed_node, "", depth)
+                        raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed_node, "", depth)
                         os_raw = json.loads(str(raw))
                     except Exception:
                         pass
@@ -251,7 +251,7 @@ def main():
                     arno_stats = run_timed(lambda d=depth: run_bfs_arno(iris_obj, seed_node, d),
                                            warmup=args.warmup, runs=args.runs)
                     try:
-                        raw = iris_obj.classMethodString("Graph.KG.NKGAccel", "BFSJson", seed_node, "[]", depth, 0)
+                        raw = iris_obj.classMethodValue("Graph.KG.NKGAccel", "BFSJson", seed_node, "[]", depth, 0)
                         arno_raw = json.loads(str(raw))
                     except Exception:
                         pass

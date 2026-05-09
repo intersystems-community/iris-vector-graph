@@ -327,4 +327,11 @@ ClassMethod SearchProc(name As %String, queryText As %String, k As %Integer) As 
     Return ..Search(name, queryText, k)
 }
 
+ClassMethod List() As %String
+{
+	Set result = "", name = ""
+	For { Set name = $Order(^BM25Idx(name)) Quit:name=""  Set result = result _ $Select(result="":"", 1:",") _ name }
+	Return result
+}
+
 }

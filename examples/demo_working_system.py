@@ -34,14 +34,16 @@ def main():
 
         # Step 2: System status report
         with runner.step("Gathering system status"):
-            cursor.execute("SELECT COUNT(*) FROM rdf_edges")
-            edges = cursor.fetchone()[0]
-
-            cursor.execute("SELECT COUNT(*) FROM rdf_labels")
-            labels = cursor.fetchone()[0]
-
-            cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings")
-            embeddings = cursor.fetchone()[0]
+            from iris_vector_graph.engine import IRISGraphEngine
+            engine = IRISGraphEngine(conn)
+            
+            edges_result = engine.execute_cypher("MATCH ()-[r]->() RETURN COUNT(r) AS count")
+            edges = edges_result.rows[0][0] if edges_result.rows else 0
+            
+            labels_result = engine.execute_cypher("MATCH (n) RETURN COUNT(DISTINCT n) AS count")
+            labels = labels_result.rows[0][0] if labels_result.rows else 0
+            
+            embeddings = engine.status().properties.node_embeddings if hasattr(engine.status(), 'properties') else 0
 
         print()
         print(Colors.bold("System Status Report:"))
@@ -128,8 +130,11 @@ def main():
         if vector_results:
             print(Colors.bold("Graph Traversal Demo:"))
             test_entity = vector_results[0][0]
-            cursor.execute("SELECT p, o_id FROM rdf_edges WHERE s = ? LIMIT 3", [test_entity])
-            direct_rels = cursor.fetchall()
+            rel_result = engine.execute_cypher(
+                "MATCH (n {node_id:$id})-[r]->(m) RETURN type(r), m.node_id LIMIT 3",
+                {"id": test_entity}
+            )
+            direct_rels = rel_result.rows if rel_result.rows else []
 
             print(f"  Entity: {test_entity}")
             if direct_rels:

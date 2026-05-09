@@ -1,17 +1,20 @@
 # iris-dev workspace configuration
-# Commit this file to share connection settings with your team.
+#
+# TWO CONTAINERS — use the right one:
+#
+#   gqs-ivg-test                 Community 2025.1    port 1972 / 52773
+#     - Primary dev/test container for IVG
+#     - Arno BFS disabled (Community — IRISGLOBALORDER not available from $ZF callout)
+#     - iris-dev MCP: IRIS_WEB_PORT=52773
+#
+#   iris-vector-graph-enterprise  Enterprise 2026.2.0AI.161  port 2972 / webgateway 64780
+#     - Enterprise container for validating Arno BFS (rzf global reads work here)
+#     - iris-dev-enterprise MCP: IRIS_WEB_PORT=64780
+#     - Start if stopped: docker start iris-vector-graph-enterprise
+#     - After start: docker network connect iris-vector-graph_ivg-enterprise-net
+#                    --alias iris iris-vector-graph-enterprise
 
-# Docker container name (for local development)
-container = "iris-enterprise-2026"
-
-# Default IRIS namespace
+# Active connection for iris-dev MCP (Community)
+container = "iris-vector-graph-enterprise"
 namespace = "USER"
-
-# Alternative: direct host connection (for remote or CI IRIS)
-# host = "iris.example.com"
-# web_port = 52773
-
-# Credentials (optional)
-# Use IRIS_USERNAME / IRIS_PASSWORD env vars instead of committing credentials.
 username = "_SYSTEM"
-# password = "..."  # not recommended in committed files

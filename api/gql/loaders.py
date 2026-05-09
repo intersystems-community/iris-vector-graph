@@ -2,15 +2,7 @@
 GraphQL DataLoaders for IRIS Vector Graph API
 
 DataLoaders implement batch loading and caching to prevent N+1 queries.
-All loaders use SQL IN batching to fetch data for multiple keys in a single query.
-
-Architecture:
-- ProteinLoader: Batch load proteins by ID (from rdf_labels + rdf_props)
-- EdgeLoader: Batch load edges by source node ID (from rdf_edges)
-- PropertyLoader: Batch load properties by node ID (from rdf_props)
-- LabelLoader: Batch load labels by node ID (from rdf_labels)
-
-Performance: Reduces N+1 queries to ≤2 queries per nested GraphQL query.
+Uses engine methods for efficient batch loading.
 """
 
 from strawberry.dataloader import DataLoader
@@ -21,83 +13,177 @@ from datetime import datetime
 class ProteinLoader(DataLoader):
     """Batch load proteins by ID"""
 
-    def __init__(self, db_connection: Any) -> None:
-        self.db = db_connection
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
         super().__init__(load_fn=self.batch_load_fn)
 
     async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
-        """
-        Batch load proteins for given IDs using single SQL query.
-
-        Args:
-            keys: List of protein IDs (e.g., ["PROTEIN:TP53", "PROTEIN:MDM2"])
-
-        Returns:
-            List of protein data dicts in same order as keys (None for missing IDs)
-        """
+        """Batch load proteins for given IDs using engine.get_nodes"""
         if not keys:
             return []
 
-        cursor = self.db.cursor()
-
-        # Query nodes with Protein label and get created_at
-        placeholders = ",".join(["?" for _ in keys])
-        query = f"""
-            SELECT l.s as id, n.created_at
-            FROM rdf_labels l
-            JOIN nodes n ON l.s = n.node_id
-            WHERE l.s IN ({placeholders})
-              AND l.label = 'Protein'
-        """
-
-        cursor.execute(query, keys)
-        rows = cursor.fetchall()
-
-        # Create dict of existing protein IDs and their created_at
-        existing_nodes = {row[0]: row[1] for row in rows}
-        existing_ids = list(existing_nodes.keys())
-
-        # Load properties for all proteins in batch
-        if existing_ids:
-            property_loader = PropertyLoader(self.db)
-            label_loader = LabelLoader(self.db)
-
-            # Batch load properties and labels
-            props_list = await property_loader.load_many(existing_ids)
-            labels_list = await label_loader.load_many(existing_ids)
-
-            # Build protein data dicts
-            protein_dict: Dict[str, Dict[str, Any]] = {}
-            for i, protein_id in enumerate(existing_ids):
-                props = props_list[i]
-                labels = labels_list[i]
-
-                protein_dict[protein_id] = {
-                    "id": protein_id,
-                    "labels": labels,
+        nodes_data = self.engine.get_nodes(keys)
+        
+        protein_dict: Dict[str, Dict[str, Any]] = {}
+        for node in nodes_data:
+            if node and "Protein" in node.get("labels", []):
+                props = node.get("properties", {})
+                protein_dict[node["id"]] = {
+                    "id": node["id"],
+                    "labels": node.get("labels", []),
                     "properties": props,
-                    "created_at": existing_nodes[protein_id],
+                    "created_at": node.get("created_at"),
                     "name": props.get("name", ""),
                     "function": props.get("function"),
                     "organism": props.get("organism"),
                     "confidence": float(props["confidence"]) if "confidence" in props and props["confidence"] else None
                 }
-        else:
-            protein_dict = {}
-
-        # Return in same order as keys
+        
         return [protein_dict.get(key) for key in keys]
 
 
 class GeneLoader(DataLoader):
     """Batch load genes by ID"""
 
-    def __init__(self, db_connection: Any) -> None:
-        self.db = db_connection
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
         super().__init__(load_fn=self.batch_load_fn)
 
     async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
-        """Batch load genes for given IDs using single SQL query"""
+        """Batch load genes for given IDs using engine.get_nodes"""
+        if not keys:
+            return []
+
+        nodes_data = self.engine.get_nodes(keys)
+        
+        gene_dict: Dict[str, Dict[str, Any]] = {}
+        for node in nodes_data:
+            if node and "Gene" in node.get("labels", []):
+                props = node.get("properties", {})
+                gene_dict[node["id"]] = {
+                    "id": node["id"],
+                    "labels": node.get("labels", []),
+                    "properties": props,
+                    "created_at": node.get("created_at"),
+                    "name": props.get("name", ""),
+                    "chromosome": props.get("chromosome"),
+                    "position": int(props["position"]) if "position" in props and props["position"] else None,
+                }
+        
+        return [gene_dict.get(key) for key in keys]
+
+
+class PathwayLoader(DataLoader):
+    """Batch load pathways by ID"""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[Optional[Dict[str, Any]]]:
+        """Batch load pathways for given IDs using engine.get_nodes"""
+        if not keys:
+            return []
+
+        nodes_data = self.engine.get_nodes(keys)
+        
+        pathway_dict: Dict[str, Dict[str, Any]] = {}
+        for node in nodes_data:
+            if node and "Pathway" in node.get("labels", []):
+                props = node.get("properties", {})
+                pathway_dict[node["id"]] = {
+                    "id": node["id"],
+                    "labels": node.get("labels", []),
+                    "properties": props,
+                    "created_at": node.get("created_at"),
+                    "name": props.get("name", ""),
+                    "source": props.get("source"),
+                    "external_id": props.get("external_id"),
+                }
+        
+        return [pathway_dict.get(key) for key in keys]
+
+
+class EdgeLoader(DataLoader):
+    """Batch load edges by source node ID"""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[List[Dict[str, Any]]]:
+        """Batch load edges for source nodes using Cypher"""
+        if not keys:
+            return []
+
+        edges_by_source: Dict[str, List[Dict[str, Any]]] = {key: [] for key in keys}
+        
+        placeholders = ",".join(["$n" + str(i) for i in range(len(keys))])
+        cypher = f"MATCH (s)-[r]->(t) WHERE s.id IN [{placeholders}] RETURN s.id, type(r), t.id, r"
+        
+        params = {f"n{i}": key for i, key in enumerate(keys)}
+        
+        try:
+            result = self.engine.execute_cypher(cypher, params)
+            if result.rows:
+                for row in result.rows:
+                    source_id = row[0]
+                    edge = {
+                        "source_id": source_id,
+                        "type": row[1],
+                        "target_id": row[2],
+                        "qualifiers": None
+                    }
+                    if source_id in edges_by_source:
+                        edges_by_source[source_id].append(edge)
+        except Exception:
+            pass
+        
+        return [edges_by_source[key] for key in keys]
+
+
+class PropertyLoader(DataLoader):
+    """Batch load properties by node ID"""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[Dict[str, str]]:
+        """Batch load properties using engine.get_nodes"""
+        if not keys:
+            return []
+
+        nodes_data = self.engine.get_nodes(keys)
+        
+        props_by_node: Dict[str, Dict[str, str]] = {}
+        for node in nodes_data:
+            if node:
+                props_by_node[node["id"]] = node.get("properties", {})
+        
+        return [props_by_node.get(key, {}) for key in keys]
+
+
+class LabelLoader(DataLoader):
+    """Batch load labels by node ID"""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[List[str]]:
+        """Batch load labels using engine.get_nodes"""
+        if not keys:
+            return []
+
+        nodes_data = self.engine.get_nodes(keys)
+        
+        labels_by_node: Dict[str, List[str]] = {}
+        for node in nodes_data:
+            if node:
+                labels_by_node[node["id"]] = node.get("labels", [])
+        
+        return [labels_by_node.get(key, []) for key in keys]
         if not keys:
             return []
 
