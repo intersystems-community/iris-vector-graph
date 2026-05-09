@@ -33,52 +33,34 @@ class ProteinLoader(DataLoader):
         if not keys:
             return []
 
-        cursor = self.db.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        engine = IRISGraphEngine(self.db)
 
-        # Query nodes with Protein label
         placeholders = ",".join(["?" for _ in keys])
-        query = f"""
-            SELECT DISTINCT l.s as id
-            FROM rdf_labels l
-            WHERE l.s IN ({placeholders})
-              AND l.label = 'Protein'
-        """
+        result = engine.execute_cypher(f"""
+            MATCH (n:Protein)
+            WHERE n.node_id IN ({placeholders})
+            RETURN n.node_id
+        """, keys)
 
-        cursor.execute(query, keys)
-        rows = cursor.fetchall()
+        existing_ids = {row[0] for row in result.rows} if result.rows else set()
 
-        # Create dict of existing protein IDs
-        existing_ids = {row[0] for row in rows}
-
-        # Load properties for all proteins in batch
-        if existing_ids:
-            property_loader = PropertyLoader(self.db)
-            label_loader = LabelLoader(self.db)
-
-            # Batch load properties and labels
-            props_list = await property_loader.load_many(list(existing_ids))
-            labels_list = await label_loader.load_many(list(existing_ids))
-
-            # Build protein data dicts
-            protein_dict: Dict[str, Dict[str, Any]] = {}
-            for i, protein_id in enumerate(list(existing_ids)):
-                props = props_list[i]
-                labels = labels_list[i]
-
+        protein_dict: Dict[str, Dict[str, Any]] = {}
+        for protein_id in existing_ids:
+            node_result = engine.get_node(protein_id)
+            if node_result:
+                props = node_result.get("properties", {})
                 protein_dict[protein_id] = {
                     "id": protein_id,
-                    "labels": labels,
+                    "labels": ["Protein"],
                     "properties": props,
-                    "created_at": datetime.now(),  # TODO: Get from nodes.created_at
+                    "created_at": node_result.get("created_at"),
                     "name": props.get("name", ""),
                     "function": props.get("function"),
                     "organism": props.get("organism"),
                     "confidence": float(props["confidence"]) if "confidence" in props else None
                 }
-        else:
-            protein_dict = {}
 
-        # Return in same order as keys
         return [protein_dict.get(key) for key in keys]
 
 
@@ -94,45 +76,32 @@ class GeneLoader(DataLoader):
         if not keys:
             return []
 
-        cursor = self.db.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        engine = IRISGraphEngine(self.db)
 
-        # Query nodes with Gene label
         placeholders = ",".join(["?" for _ in keys])
-        query = f"""
-            SELECT DISTINCT l.s as id
-            FROM rdf_labels l
-            WHERE l.s IN ({placeholders})
-              AND l.label = 'Gene'
-        """
+        result = engine.execute_cypher(f"""
+            MATCH (n:Gene)
+            WHERE n.node_id IN ({placeholders})
+            RETURN n.node_id
+        """, keys)
 
-        cursor.execute(query, keys)
-        rows = cursor.fetchall()
-        existing_ids = {row[0] for row in rows}
+        existing_ids = {row[0] for row in result.rows} if result.rows else set()
 
-        # Load properties and labels for all genes in batch
-        if existing_ids:
-            property_loader = PropertyLoader(self.db)
-            label_loader = LabelLoader(self.db)
-
-            props_list = await property_loader.load_many(list(existing_ids))
-            labels_list = await label_loader.load_many(list(existing_ids))
-
-            gene_dict: Dict[str, Dict[str, Any]] = {}
-            for i, gene_id in enumerate(list(existing_ids)):
-                props = props_list[i]
-                labels = labels_list[i]
-
+        gene_dict: Dict[str, Dict[str, Any]] = {}
+        for gene_id in existing_ids:
+            node_result = engine.get_node(gene_id)
+            if node_result:
+                props = node_result.get("properties", {})
                 gene_dict[gene_id] = {
                     "id": gene_id,
-                    "labels": labels,
+                    "labels": ["Gene"],
                     "properties": props,
-                    "created_at": datetime.now(),
+                    "created_at": node_result.get("created_at"),
                     "name": props.get("name", ""),
                     "chromosome": props.get("chromosome"),
                     "position": int(props["position"]) if "position" in props else None
                 }
-        else:
-            gene_dict = {}
 
         return [gene_dict.get(key) for key in keys]
 
@@ -149,43 +118,30 @@ class PathwayLoader(DataLoader):
         if not keys:
             return []
 
-        cursor = self.db.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        engine = IRISGraphEngine(self.db)
 
-        # Query nodes with Pathway label
         placeholders = ",".join(["?" for _ in keys])
-        query = f"""
-            SELECT DISTINCT l.s as id
-            FROM rdf_labels l
-            WHERE l.s IN ({placeholders})
-              AND l.label = 'Pathway'
-        """
+        result = engine.execute_cypher(f"""
+            MATCH (n:Pathway)
+            WHERE n.node_id IN ({placeholders})
+            RETURN n.node_id
+        """, keys)
 
-        cursor.execute(query, keys)
-        rows = cursor.fetchall()
-        existing_ids = {row[0] for row in rows}
+        existing_ids = {row[0] for row in result.rows} if result.rows else set()
 
-        # Load properties and labels for all pathways in batch
-        if existing_ids:
-            property_loader = PropertyLoader(self.db)
-            label_loader = LabelLoader(self.db)
-
-            props_list = await property_loader.load_many(list(existing_ids))
-            labels_list = await label_loader.load_many(list(existing_ids))
-
-            pathway_dict: Dict[str, Dict[str, Any]] = {}
-            for i, pathway_id in enumerate(list(existing_ids)):
-                props = props_list[i]
-                labels = labels_list[i]
-
+        pathway_dict: Dict[str, Dict[str, Any]] = {}
+        for pathway_id in existing_ids:
+            node_result = engine.get_node(pathway_id)
+            if node_result:
+                props = node_result.get("properties", {})
                 pathway_dict[pathway_id] = {
                     "id": pathway_id,
-                    "labels": labels,
+                    "labels": ["Pathway"],
                     "properties": props,
-                    "created_at": datetime.now(),
+                    "created_at": node_result.get("created_at"),
                     "name": props.get("name", ""),
                     "description": props.get("description")
                 }
-        else:
-            pathway_dict = {}
 
         return [pathway_dict.get(key) for key in keys]

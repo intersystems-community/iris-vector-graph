@@ -73,12 +73,27 @@ ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %Strin
 {
 	Set ^KG("out", 0, s, p, o) = +w
 	Set ^KG("in", 0, o, p, s) = +w
+	Set tmp = $Increment(^KG("deg", s))
+	Set tmp = $Increment(^KG("degp", s, p))
+	If $Data(^NKG("$meta", "nodeCount")) {
+		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
+		Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(o)
+		Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(p)
+		Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = +w
+		Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = +w
+		Set tmp = $Increment(^NKG(-3, sIdx))
+		Set tmp = $Increment(^NKG("$meta", "version"))
+		Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
+	}
 }
 
 ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 {
 	Kill ^KG("out", 0, s, p, o)
 	Kill ^KG("in", 0, o, p, s)
+	If $Data(^NKG("$meta", "nodeCount")) {
+		Do ##class(Graph.KG.GraphIndex).DeleteIndex("", s, p, o, "")
+	}
 }
 
 
@@ -86,7 +101,7 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 /// edges_json: JSON array of [s, p, o] triples or {"s":..,"p":..,"o":..} objects.
 /// predicate: default predicate if using [s, o] pair format.
 /// Returns count of edges written.
-ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Language = python ]
+ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Internal, Language = python ]
 {
     import iris, json, warnings
     data = json.loads(edgesJson)
@@ -102,6 +117,8 @@ ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As
             continue
         kg["out", 0, s, p, o] = 1
         kg["in", 0, o, p, s] = 1
+        kg["degp", s, p] = (kg.get(["degp", s, p]) or 0) + 1
+        kg["deg", s] = (kg.get(["deg", s]) or 0) + 1
         n += 1
     kg["$bie_dirty"] = 1
     return n

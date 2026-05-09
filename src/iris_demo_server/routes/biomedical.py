@@ -266,6 +266,9 @@ def register_biomedical_routes(app):
                     Div(cls="header")(
                         H1("IRIS Biomedical Research"),
                         P("Protein similarity search with vector embeddings, network visualization, and pathway analysis"),
+                        Button("View Architecture", cls="arch-btn",
+                               hx_get="/arch/bio", hx_target="#bio-arch-modal", hx_swap="innerHTML"),
+                        Div(id="bio-arch-modal"),
                         Div(cls="stats")(
                             Div(cls="stat-card")(
                                 Div(cls="label")("Protein Database"),

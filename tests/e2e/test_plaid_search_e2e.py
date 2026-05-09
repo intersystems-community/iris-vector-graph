@@ -50,8 +50,8 @@ class TestPLAIDSearchE2E:
         """T029"""
         docs = _make_docs(50, 10, DIM)
         result = self.engine.plaid_build(INDEX, docs, dim=DIM)
-        assert result["nDocs"] == 50
-        assert result["nCentroids"] > 0
+        assert result["indexed"] == 50
+        assert result["nlist"] > 0
         assert result["totalTokens"] == 500
 
     def test_search_returns_expected_top_result(self):

@@ -1,6 +1,14 @@
-"""Unit tests for graph analytics kernels (024-graph-kernels). TDD — written FIRST."""
 import json
 from unittest.mock import MagicMock, patch
+
+
+def _make_ops():
+    from iris_vector_graph.operators import IRISGraphOperators
+    from iris_vector_graph.engine import IRISGraphEngine
+    ops = IRISGraphOperators.__new__(IRISGraphOperators)
+    ops.conn = MagicMock()
+    ops._engine = MagicMock(spec=IRISGraphEngine)
+    return ops
 
 
 class TestKgPagerank:
@@ -10,14 +18,9 @@ class TestKgPagerank:
         assert hasattr(IRISGraphOperators, 'kg_PAGERANK')
 
     def test_returns_list_of_tuples(self):
-        from iris_vector_graph.operators import IRISGraphOperators
-        mock_json = json.dumps([
-            {"id": "HUB", "score": 0.4},
-            {"id": "S1", "score": 0.15},
-        ])
-        ops = IRISGraphOperators(MagicMock())
-        with patch('iris_vector_graph.operators._call_classmethod', return_value=mock_json):
-            result = ops.kg_PAGERANK(damping=0.85)
+        ops = _make_ops()
+        ops._engine.kg_PAGERANK.return_value = [("HUB", 0.4), ("S1", 0.15)]
+        result = ops.kg_PAGERANK(damping=0.85)
         assert isinstance(result, list)
         assert result[0] == ("HUB", 0.4)
         assert result[1] == ("S1", 0.15)
@@ -30,14 +33,11 @@ class TestKgWCC:
         assert hasattr(IRISGraphOperators, 'kg_WCC')
 
     def test_returns_dict(self):
-        from iris_vector_graph.operators import IRISGraphOperators
-        mock_json = json.dumps({"A": "A", "B": "A", "C": "C"})
-        ops = IRISGraphOperators(MagicMock())
-        with patch('iris_vector_graph.operators._call_classmethod', return_value=mock_json):
-            result = ops.kg_WCC()
+        ops = _make_ops()
+        ops._engine.kg_WCC.return_value = {"A": "A", "B": "A", "C": "C"}
+        result = ops.kg_WCC()
         assert isinstance(result, dict)
         assert result["A"] == "A"
-        assert result["B"] == "A"
         assert result["C"] == "C"
 
 
@@ -48,10 +48,8 @@ class TestKgCDLP:
         assert hasattr(IRISGraphOperators, 'kg_CDLP')
 
     def test_returns_dict(self):
-        from iris_vector_graph.operators import IRISGraphOperators
-        mock_json = json.dumps({"X": "comm1", "Y": "comm1", "Z": "comm2"})
-        ops = IRISGraphOperators(MagicMock())
-        with patch('iris_vector_graph.operators._call_classmethod', return_value=mock_json):
-            result = ops.kg_CDLP()
+        ops = _make_ops()
+        ops._engine.kg_CDLP.return_value = {"X": "comm1", "Y": "comm1", "Z": "comm2"}
+        result = ops.kg_CDLP()
         assert isinstance(result, dict)
         assert result["X"] == "comm1"

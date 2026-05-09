@@ -1,10 +1,20 @@
+# iris-vector-graph — IRIS Community Edition
+#
+# Starts IRIS Community on port 1972 (SuperServer) and 52773 (Management Portal).
+# No license required. Default credentials: _SYSTEM / SYS
+#
+# Usage:
+#   docker compose up -d        # Start IRIS in the background
+#   docker compose down         # Stop and remove container (data is preserved in iris_data volume)
+#   docker compose down -v      # Stop and wipe all data
+
 services:
   iris:
     image: intersystemsdc/iris-community:latest-em
     container_name: iris_vector_graph
     ports:
-      - "1972:1972"   # IRIS SuperServer port
-      - "52773:52773" # IRIS Management Portal
+      - "1972:1972"   # IRIS SuperServer — used by iris_vector_graph Python SDK
+      - "52773:52773" # IRIS Management Portal — http://localhost:52773/csp/sys/UtilHome.csp
     environment:
       - IRISNAMESPACE=USER
       - ISC_DEFAULT_PASSWORD=SYS

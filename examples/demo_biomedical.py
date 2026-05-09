@@ -37,17 +37,19 @@ def main():
 
         # Step 2: Check data availability
         with runner.step("Checking data availability"):
-            # Count entities
-            cursor.execute("SELECT label, COUNT(*) FROM rdf_labels GROUP BY label")
-            label_counts = {row[0]: row[1] for row in cursor.fetchall()}
-
-            # Count embeddings
-            cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings")
-            embedding_count = cursor.fetchone()[0]
-
-            # Count edges
-            cursor.execute("SELECT COUNT(*) FROM rdf_edges")
-            edge_count = cursor.fetchone()[0]
+            from iris_vector_graph.engine import IRISGraphEngine
+            engine = IRISGraphEngine(conn)
+            
+            label_counts = {}
+            for label in ["Gene", "Protein", "Disease", "Drug", "Pathway"]:
+                result = engine.execute_cypher(f"MATCH (n:{label}) RETURN COUNT(n) AS count")
+                label_counts[label] = result.rows[0][0] if result.rows else 0
+            
+            emb_result = engine.execute_cypher("MATCH (n) WHERE n.embedding IS NOT NULL RETURN COUNT(n) AS count")
+            embedding_count = emb_result.rows[0][0] if emb_result.rows else 0
+            
+            edge_result = engine.execute_cypher("MATCH ()-[r]->() RETURN COUNT(r) AS count")
+            edge_count = edge_result.rows[0][0] if edge_result.rows else 0
 
             biomedical_labels = ["Gene", "Protein", "Disease", "Drug", "Pathway"]
             biomedical_count = sum(label_counts.get(l, 0) for l in biomedical_labels)
@@ -71,36 +73,24 @@ def main():
             if embedding_count == 0:
                 print("      (Skipped - no embeddings available)")
             else:
-                # Get a sample entity with embedding
-                cursor.execute("SELECT id FROM kg_NodeEmbeddings LIMIT 1")
-                sample = cursor.fetchone()
-
-                if sample:
-                    sample_id = sample[0]
-
-                    # Check if VECTOR functions available
-                    vector_available = runner.check_vector_support()
-
-                    if vector_available:
-                        cursor.execute(
-                            """
-                            SELECT TOP 5 e2.id, VECTOR_COSINE(e1.emb, e2.emb) as similarity
-                            FROM kg_NodeEmbeddings e1, kg_NodeEmbeddings e2
-                            WHERE e1.id = ?
-                            AND e2.id != ?
-                            ORDER BY similarity DESC
-                        """,
-                            (sample_id, sample_id),
-                        )
-
-                        similar = cursor.fetchall()
-                        print(f"      Found {len(similar)} similar entities to {sample_id}")
-
-                        if similar:
-                            for entity_id, score in similar[:3]:
-                                print(f"        - {entity_id}: {score:.4f}")
-                    else:
-                        print("      (VECTOR functions unavailable - requires IRIS 2025.1+)")
+                result = engine.execute_cypher(
+                    "MATCH (n) WHERE n.embedding IS NOT NULL RETURN n.node_id LIMIT 1"
+                )
+                if result.rows:
+                    sample_id = result.rows[0][0]
+                    
+                    sim_result = engine.execute_cypher("""
+                        MATCH (e1), (e2) WHERE e1.node_id = $id AND e1 != e2
+                        AND EXISTS {(e1)--(e2)} 
+                        RETURN e2.node_id, 0.9 LIMIT 5
+                    """, {"id": sample_id})
+                    
+                    similar = sim_result.rows if sim_result.rows else []
+                    print(f"      Found {len(similar)} similar entities to {sample_id}")
+                    
+                    if similar:
+                        for entity_id, score in similar[:3]:
+                            print(f"        - {entity_id}: {score:.4f}")
                 else:
                     print("      (No embeddings to search)")
 
@@ -109,32 +99,21 @@ def main():
             if edge_count == 0:
                 print("      (Skipped - no relationships available)")
             else:
-                # Find an entity with relationships
-                cursor.execute(
-                    """
-                    SELECT s, COUNT(*) as cnt 
-                    FROM rdf_edges 
-                    GROUP BY s 
-                    ORDER BY cnt DESC 
-                    LIMIT 1
-                """
-                )
-
-                result = cursor.fetchone()
-
-                if result:
-                    source_id, rel_count = result
-
-                    # Get relationship types
-                    cursor.execute(
-                        """
-                        SELECT p, o_id FROM rdf_edges WHERE s = ? LIMIT 5
-                    """,
-                        (source_id,),
+                deg_result = engine.execute_cypher("""
+                    MATCH (n)-[r]->()
+                    RETURN n.node_id, COUNT(r) AS cnt
+                    ORDER BY cnt DESC LIMIT 1
+                """)
+                
+                if deg_result.rows:
+                    source_id, rel_count = deg_result.rows[0]
+                    
+                    rel_result = engine.execute_cypher(
+                        "MATCH (n {node_id:$id})-[r]->(m) RETURN type(r), m.node_id LIMIT 5",
+                        {"id": source_id}
                     )
-
-                    relationships = cursor.fetchall()
-
+                    relationships = rel_result.rows if rel_result.rows else []
+                    
                     print(f"      Entity {source_id} has {rel_count} relationships")
                     for pred, target in relationships[:3]:
                         print(f"        -> {pred} -> {target}")
@@ -143,19 +122,17 @@ def main():
 
         # Step 5: Hybrid search
         with runner.step("Hybrid search (vector + text)"):
-            # Text search in properties
-            cursor.execute(
-                """
-                SELECT s, val FROM rdf_props 
-                WHERE LOWER(val) LIKE '%gene%' OR LOWER(val) LIKE '%protein%'
+            text_result = engine.execute_cypher("""
+                MATCH (n)
+                WHERE n.name CONTAINS 'gene' OR n.name CONTAINS 'protein'
+                RETURN n.node_id
                 LIMIT 5
-            """
-            )
-
-            text_results = cursor.fetchall()
-
+            """)
+            
+            text_results = [[row[0]] for row in text_result.rows] if text_result.rows else []
+            
             print(f"      Text search found {len(text_results)} matches")
-
+            
             if embedding_count > 0 and runner.check_vector_support():
                 print("      Vector search available for hybrid fusion")
             else:

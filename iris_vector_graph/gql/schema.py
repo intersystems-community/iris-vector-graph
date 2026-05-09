@@ -16,6 +16,13 @@ class Property:
     value: Optional[str]
 
 @strawberry.type
+class GraphStats:
+    node_count: int = strawberry.field(name="nodeCount")
+    edge_count: int = strawberry.field(name="edgeCount")
+    label_count: int = strawberry.field(name="labelCount")
+
+
+@strawberry.type
 class CypherResult:
     columns: List[str]
     rows: List[JSON]
@@ -79,9 +86,14 @@ def create_dynamic_node_type(label: str, properties: List[str]) -> Type:
         if prop.lower() in EXCLUDED_PROPERTIES:
             continue
             
-        field_name = prop
-        if prop.lower() in RESERVED_KEYWORDS:
-            field_name = f"p_{prop}"
+        field_name = prop.replace(" ", "_").replace("-", "_").replace(".", "_")
+        field_name = "".join(c if c.isalnum() or c == "_" else "_" for c in field_name)
+        if field_name and field_name[0].isdigit():
+            field_name = f"p_{field_name}"
+        if not field_name:
+            continue
+        if field_name.lower() in RESERVED_KEYWORDS:
+            field_name = f"p_{field_name}"
         
         annotations[field_name] = Optional[str]
         defaults[field_name] = None
@@ -110,6 +122,11 @@ def build_schema(engine: GQLGraphEngine) -> strawberry.Schema:
 
     @strawberry.type
     class Query:
+        @strawberry.field
+        async def stats(self, info: strawberry.Info) -> GraphStats:
+            from .resolvers import resolve_stats
+            return await resolve_stats(info)
+
         @strawberry.field
         async def node(self, info: strawberry.Info, id: strawberry.ID) -> Optional[Node]:
             from .resolvers import resolve_node

@@ -25,6 +25,13 @@ from iris_vector_graph.status import (
     ObjectScriptStatus, ArnoStatus, IndexInventory,
 )
 from iris_vector_graph.security import validate_table_name
+from iris_vector_graph.result import IVGResult
+from iris_vector_graph._validate import (
+    NodeIdInput, EdgeInput, CypherInput,
+    IVFBuildInput, VectorSearchInput,
+    BM25BuildInput, BM25SearchInput,
+    KHop2Input, TemporalEdgeInput, VecSearchInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +106,7 @@ class IRISGraphEngine:
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
+        self._index_registry: Dict[str, str] = self._build_index_registry()
         logger.debug("IRISGraphEngine initialized (dim=%s)", embedding_dimension or "auto")
 
     @classmethod
@@ -890,7 +898,7 @@ class IRISGraphEngine:
     def execute_cypher(
         self, cypher_query: str, parameters: Dict[str, Any] = None,
         read_only: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> "IVGResult":
         """
         Execute a Cypher query by translating it to IRIS SQL.
 
@@ -902,6 +910,7 @@ class IRISGraphEngine:
         Returns:
             Dict containing 'columns', 'rows', and 'metadata'
         """
+        CypherInput(cypher_query=cypher_query)
         import re as _re_ec
         _APPROX_RE = _re_ec.compile(
             r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
@@ -929,14 +938,13 @@ class IRISGraphEngine:
                 'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
             )
             prop_keys = [r[0] for r in cursor.fetchall()]
-            return {
-                "columns": ["result"],
-                "rows": [
+            return IVGResult(                columns= ["result"],
+                rows= [
                     [{"name": "labels", "data": [r[0] for r in labels]}],
                     [{"name": "relationshipTypes", "data": [r[0] for r in rels]}],
                     [{"name": "propertyKeys", "data": prop_keys}],
-                ],
-            }
+                ]
+            )
 
         if (
             "RETURN DISTINCT" in stripped
@@ -948,7 +956,7 @@ class IRISGraphEngine:
             node_rows = [["node", r[0]] for r in cursor.fetchall()]
             cursor.execute("SELECT DISTINCT TOP 25 p FROM Graph_KG.rdf_edges")
             rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
-            return {"columns": ["entity", "id"], "rows": node_rows + rel_rows}
+            return IVGResult(columns=["entity", "id"], rows=node_rows + rel_rows)
 
         if (
             "MATCH ()" in stripped
@@ -960,13 +968,12 @@ class IRISGraphEngine:
             node_count = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
             edge_count = cursor.fetchone()[0]
-            return {
-                "columns": ["result"],
-                "rows": [
+            return IVGResult(                columns= ["result"],
+                rows= [
                     [{"name": "nodes", "data": node_count}],
                     [{"name": "relationships", "data": edge_count}],
-                ],
-            }
+                ]
+            )
 
         if ";" in cypher_query and "CALL " in cypher_query.upper():
             parts = [p.strip() for p in cypher_query.split(";") if p.strip()]
@@ -981,13 +988,12 @@ class IRISGraphEngine:
                         all_rows.extend(sub.get("rows", []))
                     except Exception:
                         pass
-                return {"columns": all_cols or ["result"], "rows": all_rows}
+                return IVGResult(columns=all_cols or ["result"], rows=all_rows)
 
         if stripped.startswith("EXPLAIN "):
-            return {
-                "columns": ["Plan"],
-                "rows": [["No execution plan available (IRIS backend)"]],
-            }
+            return IVGResult(                columns= ["Plan"],
+                rows= [["No execution plan available (IRIS backend)"]]
+            )
 
         if stripped.startswith("SHOW "):
             return self._handle_show_command(stripped)
@@ -1001,7 +1007,7 @@ class IRISGraphEngine:
                 or stripped.startswith("DROP INDEX")
                 or stripped.startswith("CREATE FULLTEXT")
                 or stripped.startswith("CREATE LOOKUP")):
-            return {"columns": [], "rows": [], "sql": cypher_query, "params": []}
+            return IVGResult(columns=[], rows=[], sql=cypher_query, params=[])
 
         parsed = parse_query(cypher_query)
 
@@ -1106,13 +1112,12 @@ class IRISGraphEngine:
                     )
                 else:
                     columns = []
-                return {
-                    "columns": columns,
-                    "rows": rows,
-                    "sql": stmts[-1] if stmts else "",
-                    "params": all_params[-1] if all_params else [],
-                    "metadata": metadata,
-                }
+                return IVGResult(                    columns= columns,
+                    rows= rows,
+                    sql= stmts[-1] if stmts else "",
+                    params= all_params[-1] if all_params else [],
+                    metadata= metadata
+                )
             except Exception:
                 cursor.execute("ROLLBACK")
                 raise
@@ -1146,13 +1151,12 @@ class IRISGraphEngine:
                 else:
                     columns = []
 
-                return {
-                    "columns": columns,
-                    "rows": rows,
-                    "sql": sql_str,
-                    "params": p,
-                    "metadata": metadata,
-                }
+                return IVGResult(                    columns= columns,
+                    rows= rows,
+                    sql= sql_str,
+                    params= p,
+                    metadata= metadata
+                )
             except Exception as _exec_err:
                 err_str = str(_exec_err)
                 import logging as _log
@@ -1163,8 +1167,8 @@ class IRISGraphEngine:
                     self.conn.rollback()
                 except Exception:
                     pass
-                return {"columns": [], "rows": [], "sql": sql_str, "params": p,
-                        "metadata": metadata, "error": err_str[:200]}
+                return IVGResult(columns=[], rows=[], sql=sql_str, params=p,
+                        metadata=metadata, error=err_str[:200])
 
     def _execute_parsed(self, parsed, parameters):
         if parsed.procedure_call is not None:
@@ -1194,8 +1198,8 @@ class IRISGraphEngine:
                         rows = cursor.fetchall()
                 self.conn.commit()
                 cols = [d[0] for d in cursor.description] if cursor.description else []
-                return {"columns": cols, "rows": [list(r) for r in rows],
-                        "sql": str(stmts), "params": all_params, "metadata": metadata}
+                return IVGResult(columns=cols, rows=[list(r) for r in rows],
+                        sql=str(stmts), params=all_params, metadata=metadata)
             except Exception:
                 self.conn.rollback()
                 raise
@@ -1205,8 +1209,8 @@ class IRISGraphEngine:
             cursor.execute(sql_str, p)
             cols = [d[0] for d in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
-            return {"columns": cols, "rows": [list(r) for r in rows],
-                    "sql": sql_str, "params": p, "metadata": metadata}
+            return IVGResult(columns=cols, rows=[list(r) for r in rows],
+                    sql=sql_str, params=p, metadata=metadata)
         except Exception as _exec_err:
             err_str = str(_exec_err)
             import logging as _log
@@ -1217,8 +1221,8 @@ class IRISGraphEngine:
                 self.conn.rollback()
             except Exception:
                 pass
-            return {"columns": [], "rows": [], "sql": sql_str, "params": p,
-                    "metadata": metadata, "error": err_str[:200]}
+            return IVGResult(columns=[], rows=[], sql=sql_str, params=p,
+                    metadata=metadata, error=err_str[:200])
 
 
     def _execute_weighted_shortest_path(
@@ -1269,33 +1273,30 @@ class IRISGraphEngine:
             result_str = str(raw) if raw else "{}"
         except Exception as e:
             logger.warning(f"DijkstraJson failed: {e}")
-            return {
-                "columns": ["path", "totalCost"],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= ["path", "totalCost"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         if not result_str or result_str == "{}":
-            return {
-                "columns": ["path", "totalCost"],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= ["path", "totalCost"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         try:
             path_obj = _json.loads(result_str)
         except Exception:
-            return {
-                "columns": ["path", "totalCost"],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= ["path", "totalCost"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         total_cost = float(path_obj.get("totalCost", 0))
         return_funcs = vl.get("return_path_funcs", [])
@@ -1316,13 +1317,12 @@ class IRISGraphEngine:
             row = [result_str, total_cost]
             cols = ["path", "totalCost"]
 
-        return {
-            "columns": cols,
-            "rows": [row],
-            "sql": f"DijkstraJson({source_id}, {target_id})",
-            "params": [],
-            "metadata": sql_query.query_metadata,
-        }
+        return IVGResult(            columns= cols,
+            rows= [row],
+            sql= f"DijkstraJson({source_id}, {target_id})",
+            params= [],
+            metadata= sql_query.query_metadata
+        )
 
     def _execute_shortest_path_cypher(
         self, sql_query, parameters=None
@@ -1394,22 +1394,20 @@ class IRISGraphEngine:
             paths = _json.loads(str(path_json)) if path_json else []
         except Exception as e:
             logger.warning(f"ShortestPathJson failed: {e}")
-            return {
-                "columns": ["p"],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= ["p"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         if not paths:
-            return {
-                "columns": ["p"],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= ["p"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         return_funcs = vl.get("return_path_funcs", [])
         rows = []
@@ -1455,13 +1453,12 @@ class IRISGraphEngine:
         if not columns:
             columns = ["p"]
 
-        return {
-            "columns": columns,
-            "rows": rows,
-            "sql": f"ShortestPathJson({source_id}, {target_id}, {max_hops})",
-            "params": [],
-            "metadata": sql_query.query_metadata,
-        }
+        return IVGResult(            columns= columns,
+            rows= rows,
+            sql= f"ShortestPathJson({source_id}, {target_id}, {max_hops})",
+            params= [],
+            metadata= sql_query.query_metadata
+        )
 
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
@@ -1496,13 +1493,12 @@ class IRISGraphEngine:
                 source_id = next(iter(parameters.values()), None)
 
         if source_id is None:
-            return {
-                "columns": [],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= [],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         max_results = 0
         import re as _re
@@ -1522,16 +1518,22 @@ class IRISGraphEngine:
                 )))
             except Exception:
                 cnt = 0
-            return {
-                "columns": [col_name],
-                "rows": [[cnt]],
-                "sql": f"BFSFastCountDistinct({source_id}, {predicates_json}, {max_hops})",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= [col_name],
+                rows= [[cnt]],
+                sql= f"BFSFastCountDistinct({source_id}, {predicates_json}, {max_hops})",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         bfs_results = None
-        if self._detect_arno() and self._arno_capabilities.get("bfs") and self._arno_capabilities.get("rust_callout"):
+        direction = vl.get("direction", "out")
+        arno_usable = (
+            self._detect_arno()
+            and self._arno_capabilities.get("bfs")
+            and self._arno_capabilities.get("rust_callout")
+            and direction == "out"
+        )
+        if arno_usable:
             try:
                 bfs_json = self._arno_call(
                     "Graph.KG.NKGAccel",
@@ -1541,12 +1543,26 @@ class IRISGraphEngine:
                     max_hops,
                     max_results,
                 )
-                bfs_results = _json.loads(str(bfs_json)) if bfs_json else []
+                bfs_str = str(bfs_json) if bfs_json else ""
+                if bfs_str.startswith("SORTED:") and bfs_str != "SORTED:0":
+                    tag = bfs_str.split(":")[1]
+                    if max_results == 0:
+                        bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                    else:
+                        try:
+                            results_str = str(_call_classmethod(
+                                self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                            ))
+                            bfs_results = _json.loads(results_str)
+                        except Exception:
+                            bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                elif bfs_str:
+                    bfs_results = _json.loads(bfs_str)
+                else:
+                    bfs_results = []
                 logger.debug("Arno BFSJson: %d results for %s", len(bfs_results), source_id)
-                if not bfs_results and not self._arno_capabilities.get("rust_callout"):
-                    bfs_results = None
             except Exception as e:
-                logger.warning(f"Arno BFSJson failed, falling back to BFSFastJson: {e}")
+                logger.warning(f"Arno BFSJson failed, falling back to BFSFastJsonSorted: {e}")
                 bfs_results = None
 
         if bfs_results is None:
@@ -1558,31 +1574,21 @@ class IRISGraphEngine:
                 ))
                 if resp.startswith("SORTED:") and resp != "SORTED:0":
                     tag = resp.split(":")[1]
-                    try:
-                        results_str = str(_call_classmethod(
-                            self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
-                        ))
-                        bfs_results = _json.loads(results_str)
-                    except Exception:
+                    if max_results == 0:
                         bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                    else:
+                        try:
+                            results_str = str(_call_classmethod(
+                                self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                            ))
+                            bfs_results = _json.loads(results_str)
+                        except Exception:
+                            bfs_results = list(_bfs_stream_pages(self.conn, tag))
                 else:
                     bfs_results = []
             except Exception as e:
-                logger.warning(f"BFSFastJsonSorted failed ({e}), falling back to chunked")
-                try:
-                    resp = str(_call_classmethod(
-                        self.conn, "Graph.KG.Traversal", "BFSFastJsonChunked",
-                        source_id, predicates_json, max_hops, "", direction, max_results,
-                    ))
-                    if resp.startswith("CHUNKED:") and resp != "CHUNKED:0":
-                        tag, n_chunks = resp.split(":")[1], int(resp.split(":")[2])
-                        parts = [str(_call_classmethod(self.conn, "Graph.KG.Traversal", "ReadBFSChunk", tag, str(i))) for i in range(1, n_chunks + 1)]
-                        bfs_results = _json.loads("[" + "".join(parts) + "]")
-                    else:
-                        bfs_results = []
-                except Exception as e2:
-                    logger.warning(f"BFSFastJsonChunked also failed: {e2}")
-                    return {"columns": [], "rows": [], "sql": "", "params": [], "metadata": sql_query.query_metadata}
+                logger.warning(f"BFSFastJsonSorted failed: {e}")
+                return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
 
 
         if min_hops > 1:
@@ -1626,13 +1632,12 @@ class IRISGraphEngine:
 
         if count_match:
             col_name = count_match.group(1)
-            return {
-                "columns": [col_name],
-                "rows": [[len(target_ids)]],
-                "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= [col_name],
+                rows= [[len(target_ids)]],
+                sql= f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         if id_only_match:
             col_name = id_only_match.group(1)
@@ -1640,26 +1645,24 @@ class IRISGraphEngine:
             limit_match = _re.search(r'\bLIMIT\s+(\d+)', sql_str, _re.IGNORECASE)
             limit = int(limit_match.group(1)) if limit_match else None
             result_ids = target_ids[:limit] if limit else target_ids
-            return {
-                "columns": [col_name],
-                "rows": [[nid] for nid in result_ids],
-                "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= [col_name],
+                rows= [[nid] for nid in result_ids],
+                sql= f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         # Full path: caller wants labels/props — fall through to get_nodes()
         alias_match = _re.search(r'SELECT\s+DISTINCT\s+\S+\s+AS\s+(\w+)|SELECT\s+\S+\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
         col_name = (alias_match.group(1) or alias_match.group(2)) if alias_match else "b_id"
 
         if not target_ids:
-            return {
-                "columns": [col_name, "b_labels", "b_props"],
-                "rows": [],
-                "sql": "",
-                "params": [],
-                "metadata": sql_query.query_metadata,
-            }
+            return IVGResult(                columns= [col_name, "b_labels", "b_props"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
 
         nodes = self.get_nodes(target_ids)
         rows = []
@@ -1673,13 +1676,12 @@ class IRISGraphEngine:
                 )
             )
 
-        return {
-            "columns": [col_name, "b_labels", "b_props"],
-            "rows": [list(r) for r in rows],
-            "sql": f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
-            "params": [],
-            "metadata": sql_query.query_metadata,
-        }
+        return IVGResult(            columns= [col_name, "b_labels", "b_props"],
+            rows= [list(r) for r in rows],
+            sql= f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+            params= [],
+            metadata= sql_query.query_metadata
+        )
 
     def _try_khop_fast_path(self, cypher_query: str, parameters) -> Optional[Dict[str, Any]]:
         import re as _re
@@ -1721,7 +1723,7 @@ class IRISGraphEngine:
                 cnt = int(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHopCount", str(src_id), pred
                 ))
-                return {"columns": [col], "rows": [(cnt,)], "metadata": None}
+                return IVGResult(columns=[col], rows=[(cnt,)])
             except Exception:
                 return None
 
@@ -1732,12 +1734,12 @@ class IRISGraphEngine:
             if src_id is None:
                 return None
             try:
-                raw = str(self._iris_obj().classMethodString(
+                raw = str(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHopNeighborIds", str(src_id), pred
                 ))
                 ids = [x for x in raw.split("\n") if x]
                 col = alias or "node_id"
-                return {"columns": [col], "rows": [(nid,) for nid in ids], "metadata": None}
+                return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
             except Exception:
                 return None
 
@@ -1749,9 +1751,9 @@ class IRISGraphEngine:
                 return None
             try:
                 cnt = int(self._iris_obj().classMethodValue(
-                    "Graph.KG.Traversal", "KHop2Count", str(src_id), pred
+                    "Graph.KG.Traversal", "KHop2CountExact", str(src_id), pred
                 ))
-                return {"columns": [col], "rows": [(cnt,)], "metadata": None}
+                return IVGResult(columns=[col], rows=[(cnt,)])
             except Exception:
                 return None
 
@@ -1765,12 +1767,12 @@ class IRISGraphEngine:
                 return None
             limit = int(limit_str) if limit_str else 0
             try:
-                raw = str(self._iris_obj().classMethodString(
+                raw = str(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
                 ))
                 ids = [x for x in raw.split("\n") if x]
                 col = alias or "node_id"
-                return {"columns": [col], "rows": [(nid,) for nid in ids], "metadata": None}
+                return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
             except Exception:
                 return None
 
@@ -1791,10 +1793,10 @@ class IRISGraphEngine:
             q = parse_query(cypher_query)
             sql_query = translate_to_sql(q, params=parameters or {})
         except Exception:
-            return {"columns": [col_name], "rows": [[0]], "sql": "", "params": [], "metadata": None}
+            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
 
         if not sql_query.var_length_paths:
-            return {"columns": [col_name], "rows": [[0]], "sql": "", "params": [], "metadata": None}
+            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
 
         vl = sql_query.var_length_paths[0]
         predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
@@ -1815,7 +1817,7 @@ class IRISGraphEngine:
                 source_id = next(iter(parameters.values()), None) if parameters else None
 
         if not source_id:
-            return {"columns": [col_name], "rows": [[0]], "sql": "", "params": [], "metadata": None}
+            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
 
         try:
             raw = str(_call_classmethod(
@@ -1839,18 +1841,16 @@ class IRISGraphEngine:
                 f"std_error={std_error*100:.1f}%, registers={registers}"
             ]
         )
-        return {
-            "columns": [col_name],
-            "rows": [[estimate]],
-            "sql": f"CountDistinctKHop({source_id}, {predicates_json}, {max_hops})",
-            "params": [],
-            "metadata": meta,
-        }
+        return IVGResult(            columns= [col_name],
+            rows= [[estimate]],
+            sql= f"CountDistinctKHop({source_id}, {predicates_json}, {max_hops})",
+            params= [],
+            metadata= meta
+        )
 
     def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
         if "DATABASES" in cmd:
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "name",
                     "type",
                     "aliases",
@@ -1865,7 +1865,7 @@ class IRISGraphEngine:
                     "home",
                     "constituents",
                 ],
-                "rows": [
+                rows= [
                     [
                         "neo4j",
                         "standard",
@@ -1881,51 +1881,47 @@ class IRISGraphEngine:
                         True,
                         [],
                     ]
-                ],
-            }
+                ]
+            )
         if "PROCEDURES" in cmd:
             procs = self._try_system_procedure(
                 type("P", (), {"procedure_name": "dbms.procedures"})()
             )
             if procs:
-                return {
-                    "columns": ["name", "description", "signature"],
-                    "rows": [[r[0], r[2], r[1]] for r in procs.get("rows", [])],
-                }
-            return {"columns": ["name", "description", "signature"], "rows": []}
+                return IVGResult(                    columns= ["name", "description", "signature"],
+                    rows= [[r[0], r[2], r[1]] for r in procs.get("rows", [])]
+                )
+            return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "FUNCTIONS" in cmd:
             fns = self._try_system_procedure(
                 type("P", (), {"procedure_name": "dbms.functions"})()
             )
             if fns:
-                return {
-                    "columns": ["name", "description", "signature"],
-                    "rows": [[r[0], r[2], r[1]] for r in fns.get("rows", [])],
-                }
-            return {"columns": ["name", "description", "signature"], "rows": []}
+                return IVGResult(                    columns= ["name", "description", "signature"],
+                    rows= [[r[0], r[2], r[1]] for r in fns.get("rows", [])]
+                )
+            return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "INDEXES" in cmd:
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "name",
                     "type",
                     "entityType",
                     "labelsOrTypes",
                     "properties",
                 ],
-                "rows": [],
-            }
+                rows= []
+            )
         if "CONSTRAINTS" in cmd:
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "name",
                     "type",
                     "entityType",
                     "labelsOrTypes",
                     "properties",
                 ],
-                "rows": [],
-            }
-        return {"columns": ["value"], "rows": []}
+                rows= []
+            )
+        return IVGResult(columns=["value"], rows=[])
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
@@ -1951,7 +1947,7 @@ class IRISGraphEngine:
             direction = _arg_str(args[5]) if len(args) > 5 else "out"
 
             if not source_id or not target_id:
-                return {"columns": ["path", "totalCost"], "rows": []}
+                return IVGResult(columns=["path", "totalCost"], rows=[])
 
             import json as _json
 
@@ -1970,21 +1966,20 @@ class IRISGraphEngine:
                 result_str = str(raw) if raw else "{}"
             except Exception as e:
                 logger.warning(f"DijkstraJson failed: {e}")
-                return {"columns": ["path", "totalCost"], "rows": []}
+                return IVGResult(columns=["path", "totalCost"], rows=[])
 
             if not result_str or result_str == "{}":
-                return {"columns": ["path", "totalCost"], "rows": []}
+                return IVGResult(columns=["path", "totalCost"], rows=[])
 
             try:
                 path_obj = _json.loads(result_str)
             except Exception:
-                return {"columns": ["path", "totalCost"], "rows": []}
+                return IVGResult(columns=["path", "totalCost"], rows=[])
 
             total_cost = float(path_obj.get("totalCost", 0))
-            return {
-                "columns": ["path", "totalCost"],
-                "rows": [[result_str, total_cost]],
-            }
+            return IVGResult(                columns= ["path", "totalCost"],
+                rows= [[result_str, total_cost]]
+            )
 
         if name == "db.labels":
             cursor = self.conn.cursor()
@@ -1992,19 +1987,19 @@ class IRISGraphEngine:
                 "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
             )
             labels = [row[0] for row in cursor.fetchall()]
-            return {"columns": ["label"], "rows": [[l] for l in labels]}
+            return IVGResult(columns=["label"], rows=[[l] for l in labels])
 
         if name == "db.relationshiptypes":
             cursor = self.conn.cursor()
             cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
             types = [row[0] for row in cursor.fetchall()]
-            return {"columns": ["relationshipType"], "rows": [[t] for t in types]}
+            return IVGResult(columns=["relationshipType"], rows=[[t] for t in types])
 
         if name == "db.schema.visualization":
             schema = self.get_schema_visualization()
             nodes = schema.get("nodes", [])
             rels = schema.get("relationships", [])
-            return {"columns": ["nodes", "relationships"], "rows": [[nodes, rels]]}
+            return IVGResult(columns=["nodes", "relationships"], rows=[[nodes, rels]])
 
         if name == "db.schema.nodetypeproperties":
             cursor = self.conn.cursor()
@@ -2035,16 +2030,15 @@ class IRISGraphEngine:
                                 False,
                             ]
                         )
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "nodeType",
                     "nodeLabels",
                     "propertyName",
                     "propertyTypes",
                     "mandatory",
                 ],
-                "rows": rows,
-            }
+                rows= rows
+            )
 
         if name == "db.schema.reltypeproperties":
             cursor = self.conn.cursor()
@@ -2071,16 +2065,14 @@ class IRISGraphEngine:
                         rows.append([rel_type, prop, ["STRING"], False])
             except Exception as e:
                 logger.debug("relTypeProperties query failed: %s", e)
-            return {
-                "columns": ["relType", "propertyName", "propertyTypes", "mandatory"],
-                "rows": rows,
-            }
+            return IVGResult(                columns= ["relType", "propertyName", "propertyTypes", "mandatory"],
+                rows= rows
+            )
 
         if name == "dbms.components":
-            return {
-                "columns": ["name", "versions", "edition"],
-                "rows": [["iris-vector-graph", ["5.0.0"], "community"]],
-            }
+            return IVGResult(                columns= ["name", "versions", "edition"],
+                rows= [["iris-vector-graph", ["5.0.0"], "community"]]
+            )
 
         if name == "dbms.procedures":
 
@@ -2148,8 +2140,7 @@ class IRISGraphEngine:
                     "DBMS",
                 ),
             ]
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "name",
                     "signature",
                     "description",
@@ -2161,8 +2152,8 @@ class IRISGraphEngine:
                     "worksOnSystem",
                     "argumentDescription",
                 ],
-                "rows": procs,
-            }
+                rows= procs
+            )
 
         if name == "db.propertykeys":
             cursor = self.conn.cursor()
@@ -2170,30 +2161,27 @@ class IRISGraphEngine:
                 'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
             )
             keys = [row[0] for row in cursor.fetchall()]
-            return {"columns": ["propertyKey"], "rows": [[k] for k in keys]}
+            return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
 
         if name == "dbms.clientconfig":
-            return {
-                "columns": ["key", "value"],
-                "rows": [
+            return IVGResult(                columns= ["key", "value"],
+                rows= [
                     ["browser.allow_outgoing_connections", "false"],
                     ["browser.credential_timeout", "0"],
                     ["browser.retain_connection_credentials", "true"],
                     ["browser.retain_editor_history", "true"],
                     ["browser.post_connect_cmd", ""],
                     ["dbms.security.auth_enabled", "false"],
-                ],
-            }
+                ]
+            )
 
         if name == "dbms.security.showcurrentuser" or name == "dbms.showcurrentuser":
-            return {
-                "columns": ["username", "roles", "flags"],
-                "rows": [["neo4j", [], []]],
-            }
+            return IVGResult(                columns= ["username", "roles", "flags"],
+                rows= [["neo4j", [], []]]
+            )
 
         if name == "dbms.functions":
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "name",
                     "signature",
                     "description",
@@ -2204,8 +2192,8 @@ class IRISGraphEngine:
                     "returnDescription",
                     "category",
                 ],
-                "rows": [],
-            }
+                rows= []
+            )
 
         if name == "dbms.queryjmx":
             cursor = self.conn.cursor()
@@ -2214,9 +2202,8 @@ class IRISGraphEngine:
             cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
             edge_count = cursor.fetchone()[0]
             pfx = "org.neo4j:instance=kernel#0"
-            return {
-                "columns": ["name", "description", "attributes"],
-                "rows": [
+            return IVGResult(                columns= ["name", "description", "attributes"],
+                rows= [
                     [
                         f"{pfx},name=Store file sizes",
                         "Store file sizes",
@@ -2294,8 +2281,8 @@ class IRISGraphEngine:
                             "dbms.logs.native.size": {"value": "20m"},
                         },
                     ],
-                ],
-            }
+                ]
+            )
 
         if name == "apoc.meta.data":
             cursor = self.conn.cursor()
@@ -2332,8 +2319,7 @@ class IRISGraphEngine:
                         False,
                     ]
                 )
-            return {
-                "columns": [
+            return IVGResult(                columns= [
                     "label",
                     "property",
                     "type",
@@ -2342,20 +2328,20 @@ class IRISGraphEngine:
                     "index",
                     "existence",
                 ],
-                "rows": rows,
-            }
+                rows= rows
+            )
 
         if name == "apoc.meta.schema":
             result = self._try_system_procedure(
                 type("P", (), {"procedure_name": "apoc.meta.data"})()
             )
-            return {"columns": ["value"], "rows": [[result or {}]]}
+            return IVGResult(columns=["value"], rows=[[result or {}]])
 
         if name.startswith("apoc."):
-            return {"columns": ["value"], "rows": []}
+            return IVGResult(columns=["value"], rows=[])
 
         if name.startswith("dbms.") or name.startswith("db."):
-            return {"columns": ["value"], "rows": []}
+            return IVGResult(columns=["value"], rows=[])
 
         return None
 
@@ -2462,11 +2448,20 @@ class IRISGraphEngine:
         try:
             results = []
             for s, p, o in edges:
-                cursor.execute(
-                    f"SELECT qualifiers FROM {_table('rdf_edges')} "
-                    "WHERE s=? AND p=? AND o_id=?",
-                    [s, p, o],
-                )
+                # arno 1d75d97 bug: predicate is written as "R" placeholder.
+                # Fall back to matching by (s, o) only when p is the sentinel.
+                if p == "R":
+                    cursor.execute(
+                        f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                        "WHERE s=? AND o_id=?",
+                        [s, o],
+                    )
+                else:
+                    cursor.execute(
+                        f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                        "WHERE s=? AND p=? AND o_id=?",
+                        [s, p, o],
+                    )
                 row = cursor.fetchone()
                 qual_json = row[0] if row else None
                 try:
@@ -2801,6 +2796,7 @@ class IRISGraphEngine:
         self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
+        NodeIdInput(node_id=node_id)
         cursor = self.conn.cursor()
         try:
             cursor.execute("START TRANSACTION")
@@ -2852,6 +2848,7 @@ class IRISGraphEngine:
         qualifiers: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
+        EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
@@ -3087,6 +3084,66 @@ class IRISGraphEngine:
                         f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
                     )
 
+    def _build_index_registry(self) -> Dict[str, str]:
+        registry: Dict[str, str] = {}
+        try:
+            import iris as _iris_pkg
+            for global_name, type_str in (
+                ("^IVF",      "ivf"),
+                ("^VecIdx",   "vec"),
+                ("^BM25Idx",  "bm25"),
+                ("^PLAID",    "plaid"),
+            ):
+                gref = _iris_pkg.gref(global_name)
+                name = ""
+                while True:
+                    name = gref.order([name])
+                    if name is None or name == "":
+                        break
+                    name_str = str(name)
+                    if name_str:
+                        registry[name_str] = type_str
+        except Exception:
+            pass
+        if not registry:
+            try:
+                from iris_vector_graph.schema import _call_classmethod
+                for cls_name, type_str in (
+                    ("Graph.KG.IVFIndex",   "ivf"),
+                    ("Graph.KG.BM25Index",  "bm25"),
+                    ("Graph.KG.PLAIDSearch", "plaid"),
+                ):
+                    raw = str(_call_classmethod(self.conn, cls_name, "List"))
+                    for name in (n.strip() for n in raw.split(",") if n.strip()):
+                        registry[name] = type_str
+            except Exception:
+                pass
+                for sql_query, type_str in (
+                    ("SELECT DISTINCT name FROM Graph_KG.ivf_indexes", "ivf"),
+                    ("SELECT DISTINCT name FROM Graph_KG.bm25_indexes", "bm25"),
+                    ("SELECT DISTINCT name FROM Graph_KG.plaid_indexes", "plaid"),
+                ):
+                    try:
+                        cur.execute(sql_query)
+                        for row in cur.fetchall():
+                            registry[str(row[0])] = type_str
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        if self._probe_native_vec():
+            registry["hnsw"] = "hnsw"
+        return registry
+
+    def index(self, name: str) -> "IndexHandle":
+        from iris_vector_graph.index_protocol import IndexHandle
+        if name not in self._index_registry:
+            raise ValueError(
+                f"Index '{name}' not found. Known indexes: {sorted(self._index_registry)}. "
+                "Call ivf_build/bm25_build/vec_create_index/plaid_build first."
+            )
+        return IndexHandle(name=name, type=self._index_registry[name], engine=self)
+
     def rebuild_kg(self) -> bool:
         from iris_vector_graph.schema import _call_classmethod
         try:
@@ -3101,13 +3158,59 @@ class IRISGraphEngine:
 
     def rebuild_nkg(self) -> bool:
         try:
-            self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj = self._iris_obj()
+            if self._detect_arno() and self._arno_capabilities.get("rust_callout"):
+                import json as _json
+                raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
+                result = _json.loads(raw)
+                if "error" in result:
+                    logger.warning("BuildNKGRust failed (%s), falling back to ObjectScript", result["error"])
+                    iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+                else:
+                    logger.info("^NKG rebuilt via Rust: %s", result)
+            else:
+                iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            try:
+                iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
+            except Exception:
+                pass
             self._nkg_dirty = False
-            logger.info("^NKG integer index rebuilt successfully")
             return True
         except Exception as e:
             logger.warning("rebuild_nkg failed: %s", e)
             return False
+
+    def backfill_degp(self) -> int:
+        try:
+            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "BackfillDegp")
+            return int(result)
+        except Exception as e:
+            logger.warning("backfill_degp failed: %s", e)
+            return 0
+
+    def backfill_deg2p_exact(self) -> int:
+        try:
+            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            return int(result)
+        except Exception as e:
+            logger.warning("backfill_deg2p_exact failed: %s", e)
+            return 0
+
+    def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
+        KHop2Input(node_id=node_id)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
+        )
+        return int(result)
+
+    def khop2_count_exact(self, node_id: str, predicate: str = "") -> int:
+        KHop2Input(node_id=node_id)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.Traversal", "KHop2CountExact", node_id, predicate
+        )
+        return int(result)
 
     def bulk_ingest_edges(
         self,
@@ -3408,7 +3511,7 @@ class IRISGraphEngine:
         def _fetch_edges(predicate):
             cursor.execute(
                 "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ? "
-                "AND (qualifiers IS NULL OR JSON_VALUE(qualifiers, '$.inferred') IS NULL)"
+                "AND (qualifiers IS NULL OR qualifiers NOT LIKE '%\"inferred\"%')"
                 + graph_filter_sql,
                 [predicate] + graph_filter_params,
             )
@@ -3547,12 +3650,12 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         if graph:
             cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true' AND graph_id = ?",
+                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%' AND graph_id = ?",
                 [graph],
             )
         else:
             cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE JSON_VALUE(qualifiers, '$.inferred') = 'true'"
+                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%'"
             )
         deleted = cursor.rowcount or 0
         try:
@@ -4711,6 +4814,38 @@ class IRISGraphEngine:
         finally:
             cursor.close()
 
+    def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = 200) -> int:
+        deleted = 0
+        for i in range(0, len(node_ids), batch_size):
+            batch = node_ids[i : i + batch_size]
+            phs = ",".join(["?"] * len(batch))
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    f"DELETE FROM {_table('rdf_reifications')} WHERE edge_id IN "
+                    f"(SELECT edge_id FROM {_table('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs}))",
+                    batch + batch,
+                )
+                cursor.execute(
+                    f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({phs})", batch
+                )
+                cursor.execute(
+                    f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs})",
+                    batch + batch,
+                )
+                cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({phs})", batch)
+                cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({phs})", batch)
+                cursor.execute(
+                    f"DELETE FROM {_table('nodes')} WHERE node_id IN ({phs})", batch
+                )
+                self.conn.commit()
+                deleted += len(batch)
+            except Exception as e:
+                logger.warning(f"bulk_delete_nodes batch failed: {e}")
+            finally:
+                cursor.close()
+        return deleted
+
     def get_kg_anchors(
         self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
     ) -> List[str]:
@@ -4849,26 +4984,33 @@ class IRISGraphEngine:
     def kg_KNN_VEC(
         self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
     ) -> List[Tuple[str, float]]:
-        """
-        K-Nearest Neighbors vector search using server-side SQL procedure.
-        Leverages native IRIS EMBEDDING() if embedding_config is set.
-
-        Args:
-            query_vector: JSON array string OR raw text (if embedding_config is set)
-            k: Number of top results to return
-            label_filter: Optional label to filter by
-
-        Returns:
-            List of (entity_id, similarity_score) tuples
-        """
         cursor = self.conn.cursor()
         try:
-            # Direct SQL vector search — IRIS HNSW index is used automatically
-            # via TOP k + ORDER BY VECTOR_COSINE DESC pattern.
-            # (CALL proc(?, ...) is broken in IRIS Python dbapi for result-set procedures)
             emb_table = _table("kg_NodeEmbeddings")
             labels_table = _table("rdf_labels")
-            if label_filter:
+
+            qv = query_vector.strip() if isinstance(query_vector, str) else query_vector
+            exclude_id: Optional[str] = None
+            if isinstance(qv, str) and not qv.startswith("["):
+                exclude_id = qv
+                cursor.execute(
+                    f"SELECT emb FROM {emb_table} WHERE id = ?", [exclude_id]
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return []
+                query_vector = f"[{str(row[0])}]"
+
+            if label_filter and exclude_id:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f" FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE L.label = ? AND n.id != ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, label_filter, exclude_id],
+                )
+            elif label_filter:
                 cursor.execute(
                     f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
                     f" FROM {emb_table} n"
@@ -4876,6 +5018,14 @@ class IRISGraphEngine:
                     f" WHERE L.label = ?"
                     f" ORDER BY score DESC",
                     [k, query_vector, label_filter],
+                )
+            elif exclude_id:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f" FROM {emb_table} n"
+                    f" WHERE n.id != ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, exclude_id],
                 )
             else:
                 cursor.execute(
@@ -4890,7 +5040,6 @@ class IRISGraphEngine:
             logger.warning(
                 f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic."
             )
-            # Fallback to Python implementation
             return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
 
     def search_nodes_by_vector(
@@ -4901,6 +5050,8 @@ class IRISGraphEngine:
         ivf_name: Optional[str] = None,
         nprobe: int = 8,
     ) -> List[Tuple[str, float]]:
+        if not isinstance(query, str):
+            VecSearchInput(query=list(query), k=k, nprobe=nprobe)
         if self._probe_native_vec():
             query_json = json.dumps([float(v) for v in query]) if not isinstance(query, str) else query
             return self.kg_KNN_VEC(query_json, k=k, label_filter=label_filter)
@@ -5266,39 +5417,40 @@ class IRISGraphEngine:
     def kg_RRF_FUSE(
         self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str
     ) -> List[Tuple[str, float, float, float]]:
-        """
-        Reciprocal Rank Fusion using server-side SQL procedure
+        vec_results: List[Tuple[str, float]] = []
+        txt_results: List[Tuple[str, float]] = []
 
-        Args:
-            k: Final number of results to return
-            k1: Number of vector search results to retrieve
-            k2: Number of text search results to retrieve
-            c: RRF parameter (typically 60)
-            query_vector: Vector query as JSON string
-            query_text: Text query string
+        import json as _json
+        vec_list = _json.loads(query_vector) if isinstance(query_vector, str) else query_vector
 
-        Returns:
-            List of (entity_id, rrf_score, vector_score, text_score) tuples
-        """
-        cursor = self.conn.cursor()
         try:
-            # Call server-side procedure for unified logic
-            # Signature: (k, k1, k2, c, queryVector, queryText)
-            cursor.execute(
-                "CALL iris_vector_graph.kg_RRF_FUSE(?, ?, ?, ?, ?, ?)",
-                [k, k1, k2, c, query_vector, query_text],
-            )
-            results = cursor.fetchall()
-            return [
-                (entity_id, float(rrf), float(v), float(t))
-                for entity_id, rrf, v, t in results
-            ]
-
+            for idx_name in self._index_registry:
+                if self._index_registry[idx_name] == "ivf":
+                    raw = self.ivf_search(idx_name, vec_list, k=k1)
+                    vec_results = [(r["id"], float(r.get("score", 0))) for r in raw]
+                    break
+            for idx_name in self._index_registry:
+                if self._index_registry[idx_name] == "bm25":
+                    txt_results = self.bm25_search(idx_name, query_text, k=k2)
+                    break
         except Exception as e:
-            logger.error(f"kg_RRF_FUSE failed: {e}")
-            raise
-        finally:
-            cursor.close()
+            logger.error(f"kg_RRF_FUSE index search failed: {e}")
+
+        vec_rank = {nid: i + 1 for i, (nid, _) in enumerate(vec_results)}
+        txt_rank = {nid: i + 1 for i, (nid, _) in enumerate(txt_results)}
+        all_ids = set(vec_rank) | set(txt_rank)
+
+        fused = []
+        for nid in all_ids:
+            v_r = vec_rank.get(nid, len(vec_results) + c)
+            t_r = txt_rank.get(nid, len(txt_results) + c)
+            rrf = 1.0 / (c + v_r) + 1.0 / (c + t_r)
+            v_score = dict(vec_results).get(nid, 0.0)
+            t_score = dict(txt_results).get(nid, 0.0)
+            fused.append((nid, rrf, v_score, t_score))
+
+        fused.sort(key=lambda x: -x[1])
+        return fused[:k]
 
     def kg_VECTOR_GRAPH_SEARCH(
         self,
@@ -5605,6 +5757,14 @@ class IRISGraphEngine:
             return self._arno_available
         try:
             iris_obj = self._iris_obj()
+            try:
+                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
+            except Exception:
+                pass
+            try:
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
+            except Exception:
+                pass
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True
@@ -5725,7 +5885,9 @@ class IRISGraphEngine:
             str(num_trees),
             str(leaf_size),
         )
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        self._index_registry[name] = "vec"
+        return info
 
     def vec_insert(self, index_name: str, doc_id: str, embedding) -> None:
         vec_json = json.dumps([float(v) for v in embedding])
@@ -5772,7 +5934,9 @@ class IRISGraphEngine:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "Info", index_name
         )
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        info.setdefault("type", "vec")
+        return info
 
     def vec_drop(self, index_name: str) -> None:
         self._iris_obj().classMethodVoid("Graph.KG.VecIndex", "Drop", index_name)
@@ -5818,38 +5982,23 @@ class IRISGraphEngine:
         for i, label in enumerate(labels):
             doc_token_map[i]["centroid"] = int(label)
 
-        iris_obj = self._iris_obj()
         centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
-        iris_obj.classMethodVoid(
-            "Graph.KG.PLAIDSearch", "StoreCentroids", name, centroids_json
+        docs_json = json.dumps([
+            {
+                "id": doc["id"],
+                "tokens": [[float(v) for v in tok] for tok in doc["tokens"]],
+            }
+            for doc in docs
+        ])
+        assignments_json = json.dumps(doc_token_map)
+
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.PLAIDSearch", "Build", name,
+            centroids_json, docs_json, assignments_json
         )
-
-        BATCH_SIZE = 10
-        for i in range(0, len(docs), BATCH_SIZE):
-            batch = docs[i : i + BATCH_SIZE]
-            batch_json = json.dumps(
-                [
-                    {
-                        "id": doc["id"],
-                        "tokens": [[float(v) for v in tok] for tok in doc["tokens"]],
-                    }
-                    for doc in batch
-                ]
-            )
-            iris_obj.classMethodVoid(
-                "Graph.KG.PLAIDSearch", "StoreDocTokensBatch", name, batch_json
-            )
-
-        ASSIGN_CHUNK = 5000
-        for i in range(0, len(doc_token_map), ASSIGN_CHUNK):
-            chunk_json = json.dumps(doc_token_map[i : i + ASSIGN_CHUNK])
-            iris_obj.classMethodVoid(
-                "Graph.KG.PLAIDSearch", "BuildInvertedIndex", name, chunk_json
-            )
-
-        return json.loads(
-            str(iris_obj.classMethodValue("Graph.KG.PLAIDSearch", "Info", name))
-        )
+        info = json.loads(str(result))
+        self._index_registry[name] = "plaid"
+        return info
 
     def plaid_search(
         self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4
@@ -5886,6 +6035,9 @@ class IRISGraphEngine:
         upsert: bool = False,
         graph: Optional[str] = None,
     ) -> bool:
+        if timestamp is not None:
+            TemporalEdgeInput(source=source, predicate=predicate, target=target,
+                              timestamp=int(timestamp), weight=weight)
         try:
             ts = int(timestamp) if timestamp is not None else ""
             attrs_json = json.dumps(attrs) if attrs else ""
@@ -5935,7 +6087,18 @@ class IRISGraphEngine:
     def bulk_create_edges_temporal(
         self, edges: list, upsert: bool = False, graph: Optional[str] = None
     ) -> int:
-        batch_json = json.dumps(edges)
+        normalized = [
+            {
+                "s": e.get("s") or e.get("source_id", ""),
+                "p": e.get("p") or e.get("predicate", ""),
+                "o": e.get("o") or e.get("target_id", ""),
+                "ts": e.get("ts") or e.get("timestamp", 0),
+                "w": e.get("w") or e.get("weight", 1),
+                **({"attrs": e["attrs"]} if "attrs" in e else {}),
+            }
+            for e in edges
+        ]
+        batch_json = json.dumps(normalized)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0
         )
@@ -6252,17 +6415,24 @@ class IRISGraphEngine:
     def bm25_build(
         self, name: str, text_props: list, k1: float = 1.5, b: float = 0.75
     ) -> dict:
+        BM25BuildInput(name=name, text_props=text_props, k1=k1, b=b)
         props_csv = ",".join(text_props)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Build", name, props_csv, k1, b
         )
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        self._index_registry[name] = "bm25"
+        return info
 
     def bm25_search(self, name: str, query: str, k: int = 10) -> list:
+        BM25SearchInput(name=name, query=query, k=k)
         result = self._iris_obj().classMethodValue(
             "Graph.KG.BM25Index", "Search", name, query, k
         )
-        rows = json.loads(str(result))
+        import re as _re
+        raw = str(result)
+        raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', raw)
+        rows = json.loads(raw)
         return [(r["id"], float(r["score"])) for r in rows]
 
     def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
@@ -6276,7 +6446,9 @@ class IRISGraphEngine:
 
     def bm25_info(self, name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Info", name)
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        info.setdefault("type", "bm25")
+        return info
 
     def ivf_build(
         self,
@@ -6285,7 +6457,9 @@ class IRISGraphEngine:
         metric: str = "cosine",
         batch_size: int = 10000,
         build_batch_size: int = 500,
+        node_ids: Optional[List[str]] = None,
     ) -> dict:
+        IVFBuildInput(name=name, nlist=nlist, metric=metric, batch_size=batch_size, build_batch_size=build_batch_size)
         try:
             import numpy as np
             from sklearn.cluster import MiniBatchKMeans
@@ -6299,7 +6473,16 @@ class IRISGraphEngine:
         import struct
 
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings")
+        if node_ids is not None:
+            if not node_ids:
+                raise ValueError("ivf_build: node_ids list is empty")
+            placeholders = ",".join(["?"] * len(node_ids))
+            cursor.execute(
+                f"SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings WHERE id IN ({placeholders})",
+                node_ids,
+            )
+        else:
+            cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings")
         rows = cursor.fetchall()
         if not rows:
             raise ValueError("ivf_build: no vectors found in kg_NodeEmbeddings")
@@ -6358,9 +6541,12 @@ class IRISGraphEngine:
 
         iris_obj.classMethodValue("Graph.KG.IVFIndex", "FinalizeIndex", name)
         info = iris_obj.classMethodValue("Graph.KG.IVFIndex", "Info", name)
-        return _json.loads(str(info))
+        result = _json.loads(str(info))
+        self._index_registry[name] = "ivf"
+        return result
 
     def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
+        VectorSearchInput(name=name, query=query, k=k, nprobe=nprobe)
         query_json = json.dumps([float(v) for v in query])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe
@@ -6388,4 +6574,189 @@ class IRISGraphEngine:
 
     def ivf_info(self, name: str) -> dict:
         result = self._iris_obj().classMethodValue("Graph.KG.IVFIndex", "Info", name)
-        return json.loads(str(result))
+        info = json.loads(str(result))
+        if info:
+            info.setdefault("type", "ivf")
+        return info
+
+    def kg_GRAPH_PATH(self, src_id: str, pred1: str, pred2: str, max_hops: int = 2):
+        result = self.execute_cypher(
+            "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
+            "WHERE type(r1) = $p1 AND type(r2) = $p2 "
+            "RETURN 1 AS path_id, 1 AS step, a.node_id, type(r1), b.node_id "
+            "UNION ALL "
+            "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
+            "WHERE type(r1) = $p1 AND type(r2) = $p2 "
+            "RETURN 1 AS path_id, 2 AS step, b.node_id, type(r2), c.node_id",
+            {"src": src_id, "p1": pred1, "p2": pred2},
+        )
+        return [(int(r[0]), int(r[1]), r[2], r[3], r[4]) for r in (result.get("rows") or [])]
+
+    def kg_GRAPH_WALK(self, start_entity: str, max_depth: int = 3,
+                      edge_types: Optional[List[str]] = None,
+                      max_results: int = 100):
+        preds_json = json.dumps(edge_types) if edge_types else "[]"
+        from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
+        raw = str(_call_classmethod(
+            self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
+            start_entity, preds_json, max_depth, "", "out", max_results
+        ))
+        if raw.startswith("SORTED:") and raw != "SORTED:0":
+            tag = raw.split(":")[1]
+            json_str = str(_call_classmethod_large(
+                self._iris_obj(), "Graph.KG.Traversal", "ReadBFSResults", tag))
+            rows = json.loads(json_str) if json_str else []
+            return [(r.get("s", ""), r.get("p", ""), r.get("o", ""), r.get("step", 1))
+                    for r in rows]
+        return []
+
+    def kg_GRAPH_WALK_TVF(self, start_entity: str, max_depth: int = 3,
+                           edge_types: Optional[List[str]] = None,
+                           max_results: int = 100):
+        return self.kg_GRAPH_WALK(start_entity, max_depth, edge_types, max_results)
+
+    def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
+                    damping: float = 0.85, max_iterations: int = 20,
+                    bidirectional: bool = False, reverse_weight: float = 1.0):
+        if seed_entities is not None:
+            return self.kg_PERSONALIZED_PAGERANK(
+                seed_entities, damping_factor=damping, max_iterations=max_iterations,
+            )
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.PageRank", "PageRankGlobalJson",
+                                    damping, max_iterations))
+        parsed = json.loads(raw) if raw else []
+        return [(item["id"], float(item["score"])) for item in parsed]
+
+    def kg_WCC(self, max_iterations: int = 100) -> Dict[str, Any]:
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", max_iterations))
+        return json.loads(raw) if raw else {}
+
+    def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "CDLPJson", max_iterations))
+        return json.loads(raw) if raw else {}
+
+    def kg_SUBGRAPH(self, seed_ids: List[str], k_hops: int = 2,
+                    edge_types: Optional[List[str]] = None,
+                    include_properties: bool = True,
+                    include_embeddings: bool = False,
+                    max_nodes: int = 10000):
+        from iris_vector_graph.models import SubgraphData
+        from iris_vector_graph.schema import _call_classmethod
+        if not seed_ids:
+            return SubgraphData(seed_ids=list(seed_ids))
+        seed_json = json.dumps(seed_ids)
+        edge_types_json = json.dumps(edge_types) if edge_types else ""
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Subgraph", "SubgraphJson",
+                                    seed_json, k_hops, edge_types_json, max_nodes))
+        if raw:
+            parsed = json.loads(raw)
+            nodes = parsed.get("nodes", [])
+            edges = [(e["s"], e["p"], e["o"]) for e in parsed.get("edges", [])]
+            node_properties = parsed.get("properties", {})
+            node_labels = parsed.get("labels", {})
+            node_embeddings: Dict[str, Any] = {}
+            if include_embeddings and nodes:
+                emb_table = _table("kg_NodeEmbeddings")
+                cursor = self.conn.cursor()
+                phs = ",".join(["?"] * len(nodes))
+                cursor.execute(
+                    f"SELECT id, emb FROM {emb_table} WHERE id IN ({phs})", nodes
+                )
+                for row in cursor.fetchall():
+                    nid, emb_csv = row[0], str(row[1])
+                    try:
+                        import numpy as _np
+                        node_embeddings[nid] = list(_np.fromstring(emb_csv, dtype=float, sep=","))
+                    except Exception:
+                        pass
+                cursor.close()
+            return SubgraphData(
+                seed_ids=seed_ids, nodes=nodes, edges=edges,
+                node_properties=node_properties, node_labels=node_labels,
+                node_embeddings=node_embeddings,
+            )
+        return SubgraphData(seed_ids=seed_ids)
+
+    def kg_PPR_GUIDED_SUBGRAPH(self, seed_ids: List[str], ppr_top_k: int = 50,
+                                k_hops: int = 1, damping: float = 0.85,
+                                max_iterations: int = 10,
+                                edge_types: Optional[List[str]] = None,
+                                max_nodes: int = 5000):
+        from iris_vector_graph.models import PprGuidedSubgraphData
+        if not seed_ids:
+            return PprGuidedSubgraphData(seed_ids=[], nodes=[], edges=[], ppr_scores=[])
+        ppr_scores = self.kg_PERSONALIZED_PAGERANK(seed_ids, damping_factor=damping,
+                                                     max_iterations=max_iterations)
+        if isinstance(ppr_scores, dict):
+            sorted_scores = sorted(ppr_scores.items(), key=lambda x: -x[1])
+            top_ids = [k for k, _ in sorted_scores[:ppr_top_k]]
+        else:
+            sorted_scores = sorted(ppr_scores, key=lambda x: -x[1])
+            top_ids = [item[0] for item in sorted_scores[:ppr_top_k]]
+        all_seeds = list(dict.fromkeys(seed_ids + top_ids))
+        subgraph = self.kg_SUBGRAPH(all_seeds, k_hops=k_hops, edge_types=edge_types,
+                                    max_nodes=min(max_nodes, ppr_top_k))
+        return PprGuidedSubgraphData(
+            seed_ids=seed_ids,
+            nodes=subgraph.nodes,
+            edges=[{"src": e[0], "dst": e[2], "type": e[1]} for e in subgraph.edges if isinstance(e, (list, tuple)) and len(e) == 3]
+                  if subgraph.edges and isinstance(subgraph.edges[0], (list, tuple))
+                  else subgraph.edges,
+            ppr_scores=sorted_scores[:ppr_top_k],
+            nodes_before_pruning=len(subgraph.nodes),
+            nodes_after_pruning=len(subgraph.nodes),
+        )
+
+    def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,
+                     direction: str = "out", distinct: bool = True,
+                     chunk_size: int = 500) -> List[str]:
+        if not source_ids:
+            return []
+        if direction not in ("out", "in", "both"):
+            raise ValueError(f"direction must be 'out', 'in', or 'both', got {direction!r}")
+        all_targets: List[str] = []
+        seen: set = set()
+        for i in range(0, len(source_ids), chunk_size):
+            chunk = source_ids[i:i + chunk_size]
+            for src in chunk:
+                dirs = ["out", "in"] if direction == "both" else [direction]
+                for d in dirs:
+                    if d == "out":
+                        q = ("MATCH (s {node_id: $id})-[r]->(t) " +
+                             ("WHERE type(r)=$p " if predicate else "") +
+                             "RETURN t.node_id")
+                    else:
+                        q = ("MATCH (t)-[r]->(s {node_id: $id}) " +
+                             ("WHERE type(r)=$p " if predicate else "") +
+                             "RETURN t.node_id")
+                    params: Dict[str, Any] = {"id": src}
+                    if predicate:
+                        params["p"] = predicate
+                    r = self.execute_cypher(q, params)
+                    for row in (r.get("rows") or []):
+                        t = row[0]
+                        if t and (not distinct or t not in seen):
+                            all_targets.append(t)
+                            seen.add(t)
+        return all_targets
+
+    def kg_MENTIONS(self, source_ids: List[str], predicate: str = "MENTIONS",
+                    direction: str = "out") -> List[str]:
+        return self.kg_NEIGHBORS(source_ids, predicate=predicate, direction=direction)
+
+    def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
+               max_iterations: int = 20) -> List[Tuple[str, float]]:
+        if not seed_entities:
+            return []
+        result = self.kg_PERSONALIZED_PAGERANK(seed_entities, damping_factor=damping,
+                                                max_iterations=max_iterations)
+        if isinstance(result, dict):
+            return sorted(result.items(), key=lambda x: -x[1])
+        return result
+
+    def kg_RERANK(self, top_n: int, query_vector: str, query_text: str):
+        return self.kg_RRF_FUSE(k=top_n, k1=top_n * 2, k2=top_n * 2, c=60,
+                                 query_vector=query_vector, query_text=query_text)

@@ -263,7 +263,14 @@ class TestCypherNewFeaturesE2E:
         assert n2 not in ids
 
     def test_072_with_star_chained_match(self):
-        pytest.skip("WITH * followed by a new MATCH clause has a known FROM-clause generation issue; simple passthrough cases work")
+        n1 = self._node("ChainedA", "cm1")
+        self._node("ChainedB", "cm2")
+        result = self._cypher(
+            "MATCH (a {node_id: $id}) WITH * MATCH (b) WHERE b.node_id <> a.node_id RETURN b.node_id LIMIT 1",
+            {"id": n1}
+        )
+        assert result is not None
+        assert len(result["rows"]) >= 1
 
     # ── 073: Multi-pattern CREATE ─────────────────────────────────
 
@@ -319,7 +326,7 @@ class TestCypherNewFeaturesE2E:
         )
         assert cursor.fetchone()[0] == 3
 
-    # ── 074: Var-length rel property filter ───────────────────────
+     # ── 074: Var-length rel property filter ───────────────────────
 
     def test_074_varlength_rel_prop_filter_matches(self):
         src = self._node("Gene", "vl_src")

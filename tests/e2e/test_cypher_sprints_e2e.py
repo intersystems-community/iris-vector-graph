@@ -14,7 +14,6 @@ class TestCypherSprintE2E:
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
         self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
         from iris_vector_graph.engine import IRISGraphEngine
         self.engine = IRISGraphEngine(iris_connection)
         nodes = [
@@ -24,23 +23,16 @@ class TestCypherSprintE2E:
             (f"{PREFIX}:D2", "Drug",  [("name", "Ibuprofen"),("active", "false")]),
         ]
         for nid, label, props in nodes:
-            try: self.cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
-            except: pass
-            try: self.cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [nid, label])
-            except: pass
-            for k, v in props:
-                try: self.cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, ?, ?)", [nid, k, v])
-                except: pass
-        try: self.cursor.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, 'TARGETS', ?)", [f"{PREFIX}:D1", f"{PREFIX}:G1"])
-        except: pass
-        iris_connection.commit()
+            self.engine.create_node(nid, labels=[label], properties=dict(props))
+        self.engine.create_edge(f"{PREFIX}:D1", "TARGETS", f"{PREFIX}:G1")
         yield
         p = f"{PREFIX}%"
-        self.cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [p, p])
-        self.cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [p])
-        self.cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [p])
-        self.cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
-        iris_connection.commit()
+        cursor = iris_connection.cursor()
+        cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+        node_ids = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        if node_ids:
+            self.engine.bulk_delete_nodes(node_ids)
 
     def test_sprint1_to_integer_filter(self):
         result = self.engine.execute_cypher(

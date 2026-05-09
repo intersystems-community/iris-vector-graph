@@ -24,43 +24,24 @@ async def load_accounts(keys: List[str], connection) -> List[Optional[Dict[str, 
     if not keys:
         return []
 
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    # Build placeholders for IN clause
     placeholders = ",".join(["?" for _ in keys])
+    result = engine.execute_cypher(f"""
+        MATCH (n:Account)
+        WHERE n.node_id IN ({placeholders})
+        RETURN n.node_id
+    """, keys)
 
-    # Query accounts
-    cursor.execute(
-        f"""
-        SELECT l.s as id, l.label
-        FROM rdf_labels l
-        WHERE l.s IN ({placeholders})
-        AND l.label = 'Account'
-    """,
-        keys,
-    )
+    account_ids = {row[0] for row in result.rows} if result.rows else set()
 
-    account_ids = {row[0] for row in cursor.fetchall()}
+    props_by_id: Dict[str, Dict[str, str]] = {}
+    for account_id in account_ids:
+        node_result = engine.get_node(account_id)
+        if node_result:
+            props_by_id[account_id] = node_result.get("properties", {})
 
-    # Get properties for found accounts
-    if account_ids:
-        cursor.execute(
-            f"""
-            SELECT s, key, val FROM rdf_props
-            WHERE s IN ({placeholders})
-        """,
-            list(account_ids),
-        )
-
-        props_by_id: Dict[str, Dict[str, str]] = {}
-        for s, key, val in cursor.fetchall():
-            if s not in props_by_id:
-                props_by_id[s] = {}
-            props_by_id[s][key] = val
-    else:
-        props_by_id = {}
-
-    # Build result list in key order
     results = []
     for key in keys:
         if key in account_ids:
@@ -89,41 +70,24 @@ async def load_transactions(keys: List[str], connection) -> List[Optional[Dict[s
     if not keys:
         return []
 
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
+
     placeholders = ",".join(["?" for _ in keys])
+    result = engine.execute_cypher(f"""
+        MATCH (n:Transaction)
+        WHERE n.node_id IN ({placeholders})
+        RETURN n.node_id
+    """, keys)
 
-    # Query transactions
-    cursor.execute(
-        f"""
-        SELECT l.s as id
-        FROM rdf_labels l
-        WHERE l.s IN ({placeholders})
-        AND l.label = 'Transaction'
-    """,
-        keys,
-    )
+    txn_ids = {row[0] for row in result.rows} if result.rows else set()
 
-    txn_ids = {row[0] for row in cursor.fetchall()}
+    props_by_id: Dict[str, Dict[str, str]] = {}
+    for txn_id in txn_ids:
+        node_result = engine.get_node(txn_id)
+        if node_result:
+            props_by_id[txn_id] = node_result.get("properties", {})
 
-    # Get properties
-    if txn_ids:
-        cursor.execute(
-            f"""
-            SELECT s, key, val FROM rdf_props
-            WHERE s IN ({placeholders})
-        """,
-            list(txn_ids),
-        )
-
-        props_by_id: Dict[str, Dict[str, str]] = {}
-        for s, key, val in cursor.fetchall():
-            if s not in props_by_id:
-                props_by_id[s] = {}
-            props_by_id[s][key] = val
-    else:
-        props_by_id = {}
-
-    # Build results
     results = []
     for key in keys:
         if key in txn_ids:
@@ -152,41 +116,24 @@ async def load_alerts(keys: List[str], connection) -> List[Optional[Dict[str, An
     if not keys:
         return []
 
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
+
     placeholders = ",".join(["?" for _ in keys])
+    result = engine.execute_cypher(f"""
+        MATCH (n:Alert)
+        WHERE n.node_id IN ({placeholders})
+        RETURN n.node_id
+    """, keys)
 
-    # Query alerts
-    cursor.execute(
-        f"""
-        SELECT l.s as id
-        FROM rdf_labels l
-        WHERE l.s IN ({placeholders})
-        AND l.label = 'Alert'
-    """,
-        keys,
-    )
+    alert_ids = {row[0] for row in result.rows} if result.rows else set()
 
-    alert_ids = {row[0] for row in cursor.fetchall()}
+    props_by_id: Dict[str, Dict[str, str]] = {}
+    for alert_id in alert_ids:
+        node_result = engine.get_node(alert_id)
+        if node_result:
+            props_by_id[alert_id] = node_result.get("properties", {})
 
-    # Get properties
-    if alert_ids:
-        cursor.execute(
-            f"""
-            SELECT s, key, val FROM rdf_props
-            WHERE s IN ({placeholders})
-        """,
-            list(alert_ids),
-        )
-
-        props_by_id: Dict[str, Dict[str, str]] = {}
-        for s, key, val in cursor.fetchall():
-            if s not in props_by_id:
-                props_by_id[s] = {}
-            props_by_id[s][key] = val
-    else:
-        props_by_id = {}
-
-    # Build results
     results = []
     for key in keys:
         if key in alert_ids:
@@ -222,26 +169,22 @@ async def load_account_edges(keys: List[str], connection) -> List[List[Dict[str,
     if not keys:
         return []
 
-    cursor = connection.cursor()
-    placeholders = ",".join(["?" for _ in keys])
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    # Find transactions where these accounts are source or destination
-    cursor.execute(
-        f"""
-        SELECT e.s as txn_id, e.p as predicate, e.o_id as account_id
-        FROM rdf_edges e
-        WHERE e.o_id IN ({placeholders})
-        AND e.p IN ('FROM_ACCOUNT', 'TO_ACCOUNT')
-    """,
-        keys,
-    )
+    placeholders = ",".join(["?" for _ in keys])
+    result = engine.execute_cypher(f"""
+        MATCH (t:Transaction)-[r:FROM_ACCOUNT|:TO_ACCOUNT]->(a:Account)
+        WHERE a.node_id IN ({placeholders})
+        RETURN t.node_id as txn_id, type(r) as rel_type, a.node_id as account_id
+    """, keys)
 
     edges_by_account: Dict[str, List[Dict[str, Any]]] = {k: [] for k in keys}
 
-    for txn_id, predicate, account_id in cursor.fetchall():
+    for txn_id, rel_type, account_id in result.rows if result.rows else []:
         edge = {
             "transaction_id": txn_id,
-            "type": predicate,
+            "type": rel_type,
             "account_id": account_id,
         }
         edges_by_account[account_id].append(edge)

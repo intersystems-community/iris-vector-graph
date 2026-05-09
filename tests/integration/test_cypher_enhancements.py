@@ -3,12 +3,15 @@ import json
 import pytest
 
 
-def _cleanup_test_nodes(cursor, conn=None):
-    cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'TEST_NODE:%'")
-    cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'TEST_NODE:%'")
-    cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_NODE:%'")
-    if conn is not None:
-        conn.commit()
+def _cleanup_test_nodes(engine):
+    cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_NODE:%", "TEST_NODE:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_NODE:%", "TEST_NODE:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_NODE:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_NODE:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_NODE:%"])
+    engine.conn.commit()
+    cursor.close()
 
 
 def _parse_labels(raw):
@@ -22,22 +25,16 @@ def _parse_props(raw):
     return {item["key"]: item["value"] for item in items}
 
 
-def test_return_node_includes_labels_and_properties(iris_connection, execute_cypher):
-    cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor, iris_connection)
+def test_return_node_includes_labels_and_properties(engine):
+    _cleanup_test_nodes(engine)
 
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:1')")
-    cursor.execute("INSERT INTO rdf_labels (s, label) VALUES ('TEST_NODE:1', 'Label1')")
-    cursor.execute("INSERT INTO rdf_labels (s, label) VALUES ('TEST_NODE:1', 'Label2')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:1', 'prop1', 'val1')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:1', 'prop2', 'val2')")
-    iris_connection.commit()
+    engine.create_node('TEST_NODE:1', labels=['Label1', 'Label2'], properties={'prop1': 'val1', 'prop2': 'val2'})
 
-    result = execute_cypher("MATCH (n) WHERE n.id = 'TEST_NODE:1' RETURN n")
+    result = engine.execute_cypher("MATCH (n) WHERE n.id = $id RETURN n", {"id": "TEST_NODE:1"})
 
-    assert result["rows"], "Expected at least one row"
-    row = result["rows"][0]
-    cols = result["columns"]
+    assert result.rows, "Expected at least one row"
+    row = result.rows[0]
+    cols = result.columns
     row_map = dict(zip(cols, row))
 
     assert "n_id" in row_map
@@ -52,21 +49,18 @@ def test_return_node_includes_labels_and_properties(iris_connection, execute_cyp
     assert props.get("prop2") == "val2"
 
 
-def test_labels_and_properties_functions(iris_connection, execute_cypher):
-    cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor, iris_connection)
+def test_labels_and_properties_functions(engine):
+    _cleanup_test_nodes(engine)
 
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:2')")
-    cursor.execute("INSERT INTO rdf_labels (s, label) VALUES ('TEST_NODE:2', 'Solo')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:2', 'only', 'one')")
-    iris_connection.commit()
+    engine.create_node('TEST_NODE:2', labels=['Solo'], properties={'only': 'one'})
 
-    result = execute_cypher(
-        "MATCH (n) WHERE n.id = 'TEST_NODE:2' RETURN labels(n) AS labels, properties(n) AS props"
+    result = engine.execute_cypher(
+        "MATCH (n) WHERE n.id = $id RETURN labels(n) AS labels, properties(n) AS props",
+        {"id": "TEST_NODE:2"}
     )
 
-    row = result["rows"][0]
-    cols = result["columns"]
+    row = result.rows[0]
+    cols = result.columns
     row_map = dict(zip(cols, row))
 
     labels = _parse_labels(row_map.get("labels"))
@@ -76,61 +70,47 @@ def test_labels_and_properties_functions(iris_connection, execute_cypher):
     assert props.get("only") == "one"
 
 
-def test_order_by_limit(iris_connection, execute_cypher):
-    cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor, iris_connection)
+def test_order_by_limit(engine):
+    _cleanup_test_nodes(engine)
 
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:order_1')")
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:order_2')")
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:order_3')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:order_1', 'created_at', '2025-01-01')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:order_2', 'created_at', '2025-01-03')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:order_3', 'created_at', '2025-01-02')")
-    iris_connection.commit()
+    engine.create_node('TEST_NODE:order_1', properties={'created_at': '2025-01-01'})
+    engine.create_node('TEST_NODE:order_2', properties={'created_at': '2025-01-03'})
+    engine.create_node('TEST_NODE:order_3', properties={'created_at': '2025-01-02'})
 
-    result = execute_cypher(
+    result = engine.execute_cypher(
         "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:order_' RETURN n.id AS id ORDER BY n.created_at DESC LIMIT 2"
     )
 
-    rows = result["rows"]
+    rows = result.rows
     assert len(rows) == 2
-    ids = [row[result["columns"].index("id")] for row in rows]
+    ids = [row[result.columns.index("id")] for row in rows]
     assert ids == ["TEST_NODE:order_2", "TEST_NODE:order_3"]
 
 
-def test_numeric_comparison_filtering(iris_connection, execute_cypher):
-    cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor, iris_connection)
+def test_numeric_comparison_filtering(engine):
+    _cleanup_test_nodes(engine)
 
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_1')")
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_2')")
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_3')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:cmp_1', 'confidence', '0.3')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:cmp_2', 'confidence', '0.7')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:cmp_3', 'confidence', '0.9')")
-    iris_connection.commit()
+    engine.create_node('TEST_NODE:cmp_1', properties={'confidence': '0.3'})
+    engine.create_node('TEST_NODE:cmp_2', properties={'confidence': '0.7'})
+    engine.create_node('TEST_NODE:cmp_3', properties={'confidence': '0.9'})
 
-    result = execute_cypher(
+    result = engine.execute_cypher(
         "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:cmp_' AND n.confidence >= 0.7 RETURN n.id AS id"
     )
 
-    ids = {row[result["columns"].index("id")] for row in result["rows"]}
+    ids = {row[result.columns.index("id")] for row in result.rows}
     assert ids == {"TEST_NODE:cmp_2", "TEST_NODE:cmp_3"}
 
 
-def test_numeric_comparison_skips_non_numeric(iris_connection, execute_cypher):
-    cursor = iris_connection.cursor()
-    _cleanup_test_nodes(cursor, iris_connection)
+def test_numeric_comparison_skips_non_numeric(engine):
+    _cleanup_test_nodes(engine)
 
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_n1')")
-    cursor.execute("INSERT INTO nodes (node_id) VALUES ('TEST_NODE:cmp_n2')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:cmp_n1', 'confidence', 'abc')")
-    cursor.execute("INSERT INTO rdf_props (s, key, val) VALUES ('TEST_NODE:cmp_n2', 'confidence', '0.9')")
-    iris_connection.commit()
+    engine.create_node('TEST_NODE:cmp_n1', properties={'confidence': 'abc'})
+    engine.create_node('TEST_NODE:cmp_n2', properties={'confidence': '0.9'})
 
-    result = execute_cypher(
+    result = engine.execute_cypher(
         "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:cmp_' AND n.confidence >= 0.7 RETURN n.id AS id"
     )
 
-    ids = {row[result["columns"].index("id")] for row in result["rows"]}
+    ids = {row[result.columns.index("id")] for row in result.rows}
     assert ids == {"TEST_NODE:cmp_n2"}

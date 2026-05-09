@@ -26,11 +26,12 @@ class TestReificationE2E:
         self.edge_id = self.cursor.fetchone()[0]
         yield
         p = f"{PREFIX}%"
-        self.cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE reifier_id LIKE ?", [p])
-        self.cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [p])
-        self.cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [p])
+        edge_reif = f"reif:{self.edge_id}"
+        self.cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE reifier_id LIKE ? OR reifier_id = ?", [p, edge_reif])
+        self.cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ? OR s = ?", [p, edge_reif])
+        self.cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ? OR s = ?", [p, edge_reif])
         self.cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [p, p])
-        self.cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
+        self.cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ? OR node_id = ?", [p, edge_reif])
         iris_connection.commit()
 
     def test_reify_edge_creates_node_and_junction_under_5ms(self):

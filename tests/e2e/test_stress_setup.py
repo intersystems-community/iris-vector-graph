@@ -13,14 +13,8 @@ IRIS_PASS = os.environ.get("IRIS_PASSWORD", "test")
 
 
 @pytest.fixture(scope="module")
-def raw_conn():
-    try:
-        import iris
-        c = iris.connect(IRIS_HOST, IRIS_PORT, IRIS_NS, IRIS_USER, IRIS_PASS)
-        yield c
-        c.close()
-    except Exception as e:
-        pytest.skip(f"IRIS unavailable: {e}")
+def raw_conn(iris_connection):
+    return iris_connection
 
 
 @pytest.fixture
@@ -83,7 +77,7 @@ class TestConnectionModes:
         from iris_vector_graph.engine import IRISGraphEngine
         try:
             e = IRISGraphEngine.from_connect(
-                host=IRIS_HOST, port=IRIS_PORT,
+                hostname=IRIS_HOST, port=IRIS_PORT,
                 namespace=IRIS_NS, username=IRIS_USER, password=IRIS_PASS,
                 embedding_dimension=4,
             )

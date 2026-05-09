@@ -26,14 +26,14 @@ def load_graph_to_iris(conn, iris_obj, nodes: int, edges_list: list, dataset_lab
 
     print(f"  [{dataset_label}] Building ^KG...")
     t0 = time.perf_counter()
-    iris_obj.classMethodString("Graph.KG.Traversal", "BuildKG")
+    iris_obj.classMethodValue("Graph.KG.Traversal", "BuildKG")
     kg_ms = round((time.perf_counter() - t0) * 1000, 1)
 
     print(f"  [{dataset_label}] Building ^NKG...")
     nkg_ms = None
     t0 = time.perf_counter()
     try:
-        iris_obj.classMethodString("Graph.KG.Traversal", "BuildNKG")
+        iris_obj.classMethodValue("Graph.KG.Traversal", "BuildNKG")
         nkg_ms = round((time.perf_counter() - t0) * 1000, 1)
     except Exception as e:
         print(f"  [{dataset_label}] ^NKG build skipped: {e}")
@@ -43,7 +43,7 @@ def load_graph_to_iris(conn, iris_obj, nodes: int, edges_list: list, dataset_lab
 
 def detect_arno(iris_obj) -> dict:
     try:
-        caps_json = iris_obj.classMethodString("Graph.KG.NKGAccel", "Capabilities")
+        caps_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
         caps = json.loads(str(caps_json))
         bfs_ready = bool(caps.get("bfs", False)) and bool(caps.get("nkg_data", False))
         return {"available": True, "bfs": bfs_ready, "ppr": bool(caps.get("ppr", False)), "raw": str(caps_json)}
@@ -53,7 +53,7 @@ def detect_arno(iris_obj) -> dict:
 
 def get_highest_degree_seed(iris_obj) -> str:
     try:
-        seed = str(iris_obj.classMethodString("Graph.KG.NKGAccel", "GetFirstNKGNode"))
+        seed = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode"))
         if seed and seed != "0":
             return seed
     except Exception:
@@ -63,7 +63,7 @@ def get_highest_degree_seed(iris_obj) -> str:
 
 def pick_shortest_path_pair(iris_obj, seed: str, target_distance: int = 4):
     try:
-        raw = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson", seed, "", min(target_distance, 3))
+        raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", seed, "", min(target_distance, 3))
         results = json.loads(str(raw))
         candidates = [r for r in results if r.get("step") == target_distance]
         if candidates:
@@ -118,12 +118,12 @@ def run_timed(fn, warmup: int = 3, runs: int = 10) -> dict:
 
 
 def call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
-    raw = str(iris_obj.classMethodString(cls, method, *args))
+    raw = str(iris_obj.classMethodValue(cls, method, *args))
     if not raw.startswith("CHUNKED:"):
         return raw
     _, tag, n_str = raw.split(":", 2)
     n = int(n_str)
     return "".join(
-        str(iris_obj.classMethodString(cls, "ReadLargeOutChunk", tag, i))
+        str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
         for i in range(1, n + 1)
     )

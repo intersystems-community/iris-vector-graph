@@ -26,10 +26,8 @@ except ImportError as e:
 class TestVectorSimilarityResolver:
     """Integration tests for Protein.similar() field resolver with HNSW"""
 
-    async def test_protein_similar_basic_search(self, iris_connection):
+    async def test_protein_similar_basic_search(self, engine):
         """Test protein.similar() returns semantically similar proteins"""
-        cursor = iris_connection.cursor()
-
         # Cleanup any existing test data first
         test_nodes = ["PROTEIN:TP53", "PROTEIN:MDM2", "PROTEIN:P21"]
         for node_id in test_nodes:
@@ -95,7 +93,6 @@ class TestVectorSimilarityResolver:
                 pass
 
         # Commit nodes before inserting embeddings (FK constraint requires nodes to exist)
-        iris_connection.commit()
 
         # Insert embeddings into kg_NodeEmbeddings with VECTOR type
         for protein_id, emb in embeddings:
@@ -106,7 +103,6 @@ class TestVectorSimilarityResolver:
                 (protein_id, emb_str)
             )
 
-        iris_connection.commit()
 
         # Execute GraphQL query for similar proteins
         query = """
@@ -168,10 +164,8 @@ class TestVectorSimilarityResolver:
         for sp in similar_proteins:
             assert sp["similarity"] >= 0.0, f"Similarity should be >= threshold"
 
-    async def test_protein_similar_with_threshold(self, iris_connection):
+    async def test_protein_similar_with_threshold(self, engine):
         """Test similar() respects similarity threshold parameter"""
-        cursor = iris_connection.cursor()
-
         # Cleanup any existing test data first
         try:
             cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", ("PROTEIN:TEST_THRESHOLD",))
@@ -199,7 +193,6 @@ class TestVectorSimilarityResolver:
             pass
 
         # Commit nodes before inserting embeddings
-        iris_connection.commit()
 
         # Create random embedding
         import numpy as np
@@ -216,7 +209,6 @@ class TestVectorSimilarityResolver:
             print(f"Error inserting test embedding: {e}")
             pass
 
-        iris_connection.commit()
 
         # Query with high threshold (should return fewer results)
         query = """
@@ -250,7 +242,7 @@ class TestVectorSimilarityResolver:
         for item in similar:
             assert item["similarity"] >= 0.95, "All results should meet threshold"
 
-    async def test_protein_similar_limit_parameter(self, iris_connection):
+    async def test_protein_similar_limit_parameter(self, engine):
         """Test similar() respects limit parameter"""
         query = """
             query GetSimilarProteins($id: ID!, $limit: Int!) {

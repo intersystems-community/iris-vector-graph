@@ -1,203 +1,284 @@
-# IVG Benchmark Retrospective — Open Engineering Debt
-Last updated: 2026-05-06
+# IVG Engineering Debt
+Last updated: 2026-05-09
 
-This file is the persistent reminder list from the session where we benchmarked
-IVG against LDBC SF10/SF100 and GES/GraphScope published numbers.
-Review this at the start of each IVG development session.
+Review at the start of each IVG session.
 
 ---
 
 ## LONG-TERM ARCHITECTURAL DIRECTION
 
-### Pydantic-typed Public API (P1 — multi-day, do it incrementally)
+### Pydantic-typed Public API (incremental — in progress)
 
-**Intended direction.** IVG currently has 105 public methods with `Dict[str, Any]` return
-types, no input validation, and no schema enforcement. The intended long-term shape is:
+Progress through v1.88.0:
+- `SQLQuery` + `QueryMetadata` → Pydantic BaseModel (`translator.py`)
+- `IndexHandle` → Pydantic BaseModel, `Literal[type]` validation (`index_protocol.py`)
+- `IVGResult` → Pydantic BaseModel for `execute_cypher` return (v1.86.0)
+- `_validate.py` → 10 input schemas on high-risk engine methods (v1.87.0)
 
-- `execute_cypher` returns `IVGResult(columns, rows, metadata, warnings)` — a Pydantic model
-- Key input types validated at boundary: `node_id: NonEmptyStr`, `k: PositiveInt`, etc.
-- Engine surface split into `IVGReadAPI` (safe, validated) and `IVGAdminAPI` (explicit, dangerous)
-- `status.py` dataclasses migrated to Pydantic models (already have Pydantic as dep)
-
-**Why:** Footgun prevention. Users calling raw ObjectScript via `_iris_obj()` or
-`_call_classmethod` can corrupt `^KG`/`^NKG` integrity with no warning. Typed boundaries
-make the safe path obvious.
-
-**Start point when ready:** `IVGResult` model for `execute_cypher` — that's the single
-most-called method and where typed contracts pay off immediately.
+**Next increment:** `IVGResult` warnings surface through callers; boundary validation on remaining methods.
 
 ---
 
-## RESOLVED THIS SESSION (2026-05-06)
+## RESOLVED (session 2026-05-07)
 
-- [x] **IC2 1-hop fast path** — `KHopCount` + `KHopNeighborIds` on `Graph.KG.Traversal`.
-      `execute_cypher` now routes single-hop COUNT and ID-list queries through these
-      instead of BFSFastJson. Result: COUNT 0.29ms p50 (was 2.8ms), IDs 0.9ms (was 3.6ms).
-      The 15x gap vs GES was a comparison mismatch: GES measured COUNT on a cluster;
-      IVG was measuring full JSON roundtrip. On equal footing IVG is now competitive.
-
-- [x] **IC3 2-hop fast path** — `KHop2Count` + `KHop2NeighborIds(maxResults)` on `Graph.KG.Traversal`.
-      Pure `$Order` walk with process-private dedup globals — no JSON, single round-trip.
-      `execute_cypher` routes `[:PRED*2]` COUNT and LIMIT patterns to these methods.
-      Result: LIMIT 1000 = **1.2ms p50** (was 14-22ms, now 3.5x *faster* than GES 4.19ms).
-      COUNT = 70ms (was 195ms via BFSFastJsonSorted). COUNT gap remains — see P1 below.
-
-- [x] **`create_node` graph param** — Added `graph: Optional[str] = None`.
-      Stored as `__graph` property in `rdf_props`. Also propagated to `bulk_create_nodes`
-      via per-node `graph` key. Completes the named graph API surface.
-
-- [x] **BulkIngestEdges wrapper** — `engine.bulk_ingest_edges()` is now the proper engine
-      entry point. Sets `_nkg_dirty = True`, emits `RuntimeWarning` immediately.
-      `rebuild_nkg()` added as the corresponding recovery call.
-      `_execute_var_length_cypher` warns at BFS time if `_nkg_dirty` is set.
-
-- [x] **IVF `<STRINGSTACK>` on 768-dim** — Fixed. `IVFIndex.Build` now takes centroids only
-      (no assignments). New `IVFIndex.AddBatch(name, json)` writes vectors in chunks.
-      `IVFIndex.FinalizeIndex(name)` recounts and updates `cfg.indexed` after all batches.
-      `ivf_build()` parameter `build_batch_size=500` (default) controls chunk size.
-      Verified: 400 × 768-dim vectors, no crash, correct indexed count, search works.
-
-- [x] **Pattern Comprehension (Gap #5)** — `[(n)-[:R]->(m) | m.prop]` fully working.
-      Correlated `JSON_ARRAYAGG` subquery, self-contained (no JOIN leak to outer context).
-      `m.node_id` uses direct column reference; properties use inline scalar subquery.
-
-- [x] **REDUCE (Gap #7)** — `reduce(acc=N, x IN collect(prop) | acc + x)` → pure SQL
-      `(N + SUM(CAST(prop AS DOUBLE)))`. No `JSON_ARRAYAGG`, no `JSON_TABLE`, no Python
-      postprocessing. Works identically from ObjectScript, embedded Python, external Python.
-
-- [x] **IVFIndex.Insert() + Delete()** — `IVFIndex.Insert(name, nodeId, vecJSON)` finds the
-      nearest centroid via a single scan and writes to `^IVF(name,"list",cellIdx,nodeId)`.
-      `IVFIndex.Delete(name, nodeId)` removes from whichever cell it's in.
-      Engine: `ivf_insert(name, node_id, vector) → cell_idx`,
-      `ivf_delete(name, node_id) → bool`.
-      5/5 e2e tests pass: insert/search/delete/error-guard/multi-accumulate.
-
-
-
-- [x] **AGENTS.md SQL Design Constraints** — four hard rules locked into every agent session:
-      no Python postprocessing, Language=python bridge limits, JSON_TABLE restrictions,
-      ObjectScript-first test requirement.
-
-- [x] **`create_node` graph param** — RESOLVED (was listed as open debt above).
+- [x] **BuildNKG 422s → 19s via Rust** — `BuildNKGRust()` / `KG_BUILD_NKG_WRAPPER`. `engine.rebuild_nkg()` auto-picks Rust when `rust_callout=True`.
+- [x] **IC3 2-hop COUNT upper bound** — `KHop2CountFast` = 0.07ms O(1) via `^KG("deg2p")`.
+- [x] **Spec 152: IC3 2-hop COUNT exact** — `KHop2CountExact` = 0.095ms O(1) via `^KG("deg2p_exact")`. `Build2HopExactStats` Rust+ObjScript. `execute_cypher [:P*2] RETURN count(n)` routes here. Correctness verified (37276 on SF10). Known gap: Rust `HashSet<String>` too slow for SF10-scale build → see follow-up below.
+- [x] **Spec 105: Index Protocol Unification** — `engine.index(name)` → `IndexHandle` (Pydantic), `IVGIndex` Protocol, PLAID renames. v1.84.0.
+- [x] **All 10 openCypher gaps closed** — Pattern Comprehension + REDUCE. AGENTS.md SQL constraints locked in.
+- [x] **Streaming BFS** — unbounded VL path → `_bfs_stream_pages`; no `<MAXSTRING>`. v1.85.0.
+- [x] **IVGResult Pydantic model** — `execute_cypher` returns typed `IVGResult`. v1.86.0.
+- [x] **Input validation at boundary** — `_validate.py`: 10 Pydantic schemas, 44 tests. v1.87.0.
+- [x] **100% public engine method coverage** — 113/113 methods tested. `test_untested_methods.py`.
+- [x] **BulkIngestEdges `[Internal]`** — marked in `EdgeScan.cls`.
+- [x] **Open Exchange readiness** — Docker-first README, QUICKSTART with working demo.
 
 ---
 
-
-
-- [x] **Spec 103: Streaming cursor BFS** — DONE. ReadBFSPage(tag, cursorStep, cursorO, pageSize)
-      eliminates <MAXSTRING>. Unbounded 93K results: 360ms, no overflow.
-      LIMIT 1000: 30ms. Falls back to chunked if needed.
-
-- [x] **Spec 104: ffi_kg_build_nkg** — DONE. Rust bulk write to ^NKG via kg_ffi.rs.
-      ffi_kg_build_nkg() + kg_build_nkg() ObjectScript wrapper in NKGAccel.cls.
-      Requires building libarno_callout.so on Linux (linker flag issue on macOS).
-      ObjectScript wrapper: ##class(Graph.KG.NKGAccel).BuildNKGRust()
-
-- [ ] **Spec 105 (revised): Index Protocol Unification**
-      NOT a facade. Real work: IVGIndex protocol/ABC, IVFIndex.Insert(), PLAID rename.
-      See OPEN DEBT section for full analysis.
-
----
-
-## OPEN DEBT (not yet specced)
-
-### P0 — Correctness / Crashes
-
-- [ ] **Streaming global read for unbounded BFS**
-  BFSFastJsonSorted still hits <MAXSTRING> for 93K+ results with no LIMIT.
-  BFSFastJsonChunked requires N round-trips (800 for SF10 high-degree nodes).
-  Real fix: cursor-based $Order resumption from Python — read chunks lazily until
-  Python signals done. One ObjectScript method: ReadBFSPage(tag, cursor) -> (json, next_cursor)
+## OPEN DEBT
 
 ### P1 — Performance
 
-- [ ] **IC3 2-hop COUNT: 70ms (target <10ms)**
-  `KHop2Count` reduced from 195ms to 70ms but is still bottlenecked by the 38K-node
-  dedup walk in ObjectScript. The `$Order` over a 38K-entry local array is ~60ms.
-  Fix path: pre-aggregate 2-hop counts using `^KG("degp")` sum at build time,
-  or use HLL sketch for approximate count (already have approx_count_distinct at 5.3ms).
-  Exact fast-path requires storing per-node 2-hop counts at build time — a new `BuildNKG2HopStats` step.
-
-- [ ] **BuildNKG 422 seconds on SF10+**
-  Full ^NKG rebuild from scratch after any bulk load.
-  Council verdict: replace with ffi_kg_build_nkg in Rust (kg_ffi.rs), 3-5x speedup.
-  Also need: BuildNKGIncremental that only processes edges since last version number.
-
-- [ ] **IC2 1-hop gap — remaining (IC3 2-hop LIMIT)**
-  ~~1-hop COUNT is now 0.29ms (competitive with GES 0.14ms on cluster).~~
-  ~~IC3 2-hop LIMIT 1000: 14-22ms vs GES 4.19ms — 4x gap remains.~~
-  **RESOLVED**: 2-hop LIMIT 1000 is now 1.2ms — 3.5x *faster* than GES 4.19ms.
-  Remaining: 2-hop COUNT 70ms — see separate item above.
+- [x] **Spec 152 / Build2HopExactStats build time: 323s → 33s** — Root cause was `zf_global`
+  non-sequential write overhead (~2.4ms/write into new global pages). Fix: arno ships
+  `kg_build_2hop_exact_stream` which serializes all results into `sName\x1fpName\x1fcount\n`
+  records, chunks at 9KB into `^ArnoKG("2hs", N)`, returns `CHUNKED:2HS:N`.
+  IVG's `NKGAccel.Build2HopExact()` reads chunks with ObjectScript `$Get` (fast sequential)
+  and writes `^KG("deg2p_exact")` directly. API boundary cleaned up:
+  - `Traversal.Build2HopExactStats` delegates to `NKGAccel.Build2HopExact()` — one call
+  - `DecodeBuildResults` removed (arno internals no longer in IVG)
+  - Build: **33s** (was 323s, 10× speedup) | Query: **0.108ms** ✅
 
 ### P2 — Accuracy
 
-- [ ] **HLL union bias ~89% on LDBC small-world graphs**
-  HLL-256 gives 1-3% error for individual counts but 89% systematic under-estimate for unions.
-  Root cause: LDBC friend-of-friend sets have very high overlap -> HLL union underestimates.
-  Fix: implement HyperMinHash or KMV (K-Minimum Values) sketches in UpdateStructuralHLL.
-  Reference: compare approx_count_distinct accuracy on Erdos-Renyi vs LDBC to confirm.
+- [ ] **HLL union bias ~89% on LDBC social graphs**
+  `approx_count_distinct` systematically under-estimates for correlated friend-of-friend sets.
+  Fix: HyperMinHash or KMV sketches in `UpdateStructuralHLL`.
+  Low urgency — exact path is `KHop2CountExact` (0.095ms); approximate is fine for threshold detection.
+
+### P2 — Cypher Translator Gaps (discovered 2026-05-09)
+
+- [ ] **MATCH + aggregation + ORDER BY generates `<UNDEFINED>ma` error (`SQLCODE: -400`)**
+  Queries like `MATCH (n)-[r]->() RETURN n.id, count(r) AS deg ORDER BY deg DESC` fail with
+  a fatal SQL compilation error. The translator emits an invalid CTE alias (`ma`) when combining
+  per-node aggregation with ORDER BY. Workaround: split into separate queries or aggregate
+  at a different scope. Affects `test_hla_kg_e2e::TestCypherTraversal::test_aggregation_degree`
+  and `test_multi_label_query` (reverted to simpler queries that work).
+
+- [ ] **`CALL ivg.bm25.search(...) YIELD node` maps column name wrong**
+  `YIELD node` expects a column named `NODE` but the BM25 SQL procedure returns `node_id`.
+  The Cypher translator YIELD clause does not alias the column name correctly.
+  Workaround: use `engine.bm25_search()` directly instead of the Cypher procedure.
+  Affects `test_bm25_cypher_procedure`, `test_bm25_cypher_then_graph_join`,
+  `test_full_hla_disease_pathway_cypher` (all reverted to engine method calls).
+
+- [ ] **`CALL ivg.ppr(...) YIELD node` same column name mismatch**
+  Same issue as BM25: `YIELD node` expects `NODE` but PPR procedure returns `node_id`.
+  Workaround: use `engine.kg_PERSONALIZED_PAGERANK()` directly.
+
+- [ ] **`MATCH p = (...) RETURN p, length(p)` not supported**
+  Named path binding with `length(p)` returns 0 rows — either `length()` is not implemented
+  for named paths, or the path variable `p` is not being resolved.
+  Workaround: rewrite as explicit hop queries.
+
+- [ ] **arno BFS `IRISGLOBALORDER` from `$ZF(-5)` DLL callout doesn't iterate globals**
+  Root cause confirmed (2026-05-09): `ns.keys()` in rzf cannot iterate globals from a
+  `$ZF(-5)` DLL callout because `iris_global_order` (callin API) is not accessible in that
+  execution context. Workaround: `1d75d97` string-passing design — ObjectScript serializes
+  adjacency via `ExportAdjacencyWithPreds()`, passes to Rust as adj_str, Rust parses in memory.
+  Deployed and working. rzf team has repro snippet for the fix:
+  ```
+  Set dllid = $ZF(-4, 1, "/usr/irissys/mgr/libarno_callout.so")
+  Set fnid  = $ZF(-4, 3, dllid, "test_neg_int_keys")
+  Write $ZF(-5, dllid, fnid, "RZFTest"), !
+  Expected: {"neg_int_keys_count":1,"bug":false}
+  Actual:   {"neg_int_keys_count":0,"bug":true}
+  ```
+  Note: `ns.get()` works (confirmed), only `ns.keys()` / `iris_global_order` fails.
+
 
 ### P3 — API / DX
 
-- [ ] **Pydantic-typed Public API** — see LONG-TERM ARCHITECTURAL DIRECTION above.
+- [x] **`kg_KNN_VEC` in `engine.index()` protocol** — `"hnsw"` type added to `IndexHandle`
+  and dispatch tables. `_build_index_registry` registers `"hnsw"` → `"hnsw"` when
+  `_probe_native_vec()` is True (**Community + Advanced Server tiers** — NOT IRIS Server,
+  Enterprise, Elite, or Entree which lack SQL vector search).
+  **Note: Community Edition explicitly includes Vector Search** — `VECTOR_COSINE`, `EMBEDDING()`,
+  HNSW index all work on Community. `engine.index("hnsw")` dispatches `.search()` to
+  `search_nodes_by_vector`, `.insert()` to `store_embedding`, `.info()` returns
+  `{"type": "hnsw", "available": True}`. `.drop()` is a no-op (IRIS manages HNSW lifecycle).
+  **7/7 e2e tests pass on Community Edition.**
 
-- [ ] **Inconsistent vector index API surface**
-  5 genuinely different index types — NOT naming accidents. Each solves a real problem:
-    - vec_* (RP-tree): Community IRIS, small-medium scale, O(insert) no rebuild
-    - ivf_* (IVFFlat): nprobe recall dial, scales to 1M+, needs Python k-means build
-    - bm25_*: LEXICAL search (different domain), no Enterprise license, incremental
-    - plaid_*: Multi-vector per doc (ColBERT/RAG), MaxSim scoring
-    - kg_KNN_VEC: Native IRIS HNSW — Community AND Advanced Server have it;
-      Standard/HealthConnect editions do NOT. NOT Enterprise-only.
-  
-  The real problems:
-  1. ~~IVFIndex is MISSING Insert()~~ — **DONE** (`ivf_insert` + `ivf_delete`)
-  2. PLAIDSearch method names (StoreCentroids, BuildInvertedIndex) don't match the
-     Create/Build/Search/Drop pattern established by VecIndex and BM25Index
-  3. kg_KNN_VEC is wedged in as an escape hatch — not discoverable or composable
-  4. No shared protocol/ABC — callers must know which prefix to use
-  5. ivf_* and kg_KNN_VEC are REDUNDANT on Community + Advanced Server tiers.
-  
-  Right fix (NOT a facade):
-  - Define an IVGIndex protocol/ABC with build/search/insert/drop/info
-  - Each index class implements it (adding missing IVFIndex.Insert)
-  - Rename PLAIDSearch methods to align (Build/Search not StoreCentroids)
-  - Move kg_KNN_VEC into the protocol as "hnsw" variant with a capability gate
-  - Spec: "Index Protocol Unification" — separate from Graph.KG→IVG.Core rename
+- [x] **Spec 153: NKGAccel BFS unified output** — `NKGAccel.BFSJson` now writes to
+  `^ArnoKG("bfs_r", tag, step, o)` and returns `"SORTED:tag"` (same as `BFSFastJsonSorted`).
+  Engine routes Rust BFS through `ReadBFSResults`/`_bfs_stream_pages` identically to ObjectScript path.
+  `BFSFastJsonChunked` legacy branch removed from engine. v1.89.0.
+  **Benchmark T010a/T010b verified on enterprise (synthetic 1500-node graph):**
+    - Baseline (BFSFastJsonSorted, ObjectScript): **0.6ms p50**
+    - New path (NKGAccel.BFSJson SORTED conversion, Rust+ObjectScript): **0.4ms p50**
+    - Overhead: **-41% (faster than baseline)** — PASS (threshold ≤20%)
+  Note: `NKGAccel.BFSJson` fallback now calls `BFSFastJsonSorted` (not `BFSFastJson`) for consistency.
 
-- [ ] **BulkIngestEdges ^NKG contract now enforced — but callers can still bypass engine**
-  `engine.bulk_ingest_edges()` is the safe path. `_call_classmethod(conn, "Graph.KG.EdgeScan",
-  "BulkIngestEdges", ...)` still works and bypasses the dirty flag.
-  Longer-term fix: mark `BulkIngestEdges` as `[ Internal ]` in ObjectScript once
-  the engine wrapper is battle-tested.
-
-- [ ] **`create_node` has no `graph` parameter** — RESOLVED (added in this session, see above).
-
-- [ ] **37 of 103 public engine methods are untested**
-  Audit in API_AUDIT.md. Highest risk gaps:
-  - vec_* full lifecycle (9 methods)
-  - Graph algorithms: khop, ppr, random_walk
-  - Inference: materialize_inference, retract_inference
-  - Snapshot: restore_snapshot (save works, restore untested)
 
 ---
 
-## BENCHMARK NUMBERS (for reference)
+## AUDIT: Raw SQL and Non-Engine Patterns (2026-05-09)
 
-Measured on LDBC SF10 (54M+ edges, 62K persons) on MacBook M3 Ultra:
+Full codebase scan. Every item below bypasses the engine API.
+Fix = replace with `engine.create_node()`, `engine.create_edge()`, `engine.delete_node()`,
+`engine.execute_cypher()`, `engine.bulk_create_edges()`, etc.
 
-| Query                          | IVG p50   | GES SF1000 p50 | Notes                                      |
-|-------------------------------|-----------|----------------|--------------------------------------------|
-| IC13 ShortestPath (SF1)       | 0.22ms    | 2.69ms         | IVG faster                                 |
-| IC13 ShortestPath (SF10)      | 2.1-3.2ms | 2.69ms         | Comparable                                 |
-| IC2 1-hop COUNT (KHopCount)    | 0.29ms    | 0.14ms         | Now competitive (was 2.8ms via Cypher)     |
-| IC2 1-hop IDs (KHopNeighborIds)| 0.9ms    | —              | New fast path                              |
-| IC3 2-hop LIMIT 1000           | **1.2ms** | 4.19ms         | 3.5x faster than GES (was 14-22ms)        |
-| IC3 2-hop COUNT (KHop2Count)   | 70ms      | —              | Was 195ms; 10ms target needs pre-agg       |
-| approx_count_distinct 2-hop   | 5.3ms     | —              | 74x vs exact; 89% bias                     |
-| BulkIngestEdges throughput    | 190-312K e/s | —           | Fast, but bypasses ^NKG                    |
-| BuildNKG (SF10)               | 422s      | —              | Blocking for deployment                    |
+### CRITICAL — `intersystems_iris` imports (must use `iris.createIRIS(conn)`)
 
-GES comparison hardware: large server/cluster vs MacBook M3 Ultra.
-At similar scale and hardware IVG IC13 is competitive or faster.
+| File | Lines | Fix |
+|------|-------|-----|
+| `tests/integration/test_cls_layer.py` | 12 | `import iris; iris.createIRIS(conn)` |
+| `tests/integration/test_objectscript_classes.py` | 19 | same |
+| `tests/e2e/test_ppr_cls_fast_path.py` | 22 | already has `iris` fallback, remove `intersystems_iris` branch |
+| `scripts/mcp/ivg_mcp_server.py` | 28 | `import iris as irispy` |
 
+### CRITICAL — `classMethodString()` (must use `classMethodValue()`)
+
+| File | Lines |
+|------|-------|
+| `tests/benchmarks/bench_utils.py` | 29, 36, 46, 56, 66, 121, 127 |
+| `tests/benchmarks/bench.py` | 177, 198, 205, 207, 238, 254 |
+| `tests/benchmarks/ic2_profile.py` | 36, 44, 51, 63, 84, 93 |
+| `tests/e2e/test_large_output_chunked.py` | 37, 39, 51, 69, 152, 155, 159, 175, 192, 201 |
+| `tests/e2e/test_lazy_node_resolution.py` | 23, 39, 41, 43, 49 |
+
+### HIGH — Unqualified table names (missing `Graph_KG.` prefix)
+
+All `INSERT/DELETE/SELECT FROM rdf_edges/nodes/rdf_labels/rdf_props/kg_NodeEmbeddings` without `Graph_KG.`:
+
+| File | Count | Category |
+|------|-------|----------|
+| `tests/integration/test_cls_layer.py` | ~20 | Replace with `engine.create_node/edge/delete_node` |
+| `tests/integration/test_objectscript_classes.py` | ~30 | same |
+| `tests/integration/test_bidirectional_ppr.py` | ~30 | same |
+| `tests/integration/test_cypher_enhancements.py` | ~25 | same |
+| `tests/integration/test_pagerank_sql_optimization.py` | ~20 | same |
+| `tests/integration/test_nodepk_migration.py` | ~60 | migration-specific, add `Graph_KG.` prefix |
+| `tests/integration/test_nodepk_constraints.py` | ~5 | engine methods |
+| `tests/integration/test_nodepk_advanced_benchmarks.py` | ~10 | engine methods |
+| `tests/integration/test_embeddings_api.py` | ~5 | engine methods |
+| `tests/integration/gql/test_graphql_queries.py` | ~35 | engine methods |
+| `tests/integration/gql/test_graphql_vector_search.py` | ~20 | engine methods |
+| `tests/integration/gql/test_graphql_mutations.py` | ~30 | engine methods |
+| `tests/contract/test_ppr_api.py` | ~30 | engine methods |
+| `tests/python/test_python_operators.py` | ~5 | engine methods |
+| `tests/e2e/test_ppr_cls_fast_path.py` | ~20 | engine methods |
+| `tests/e2e/test_streaming_bfs.py` | 98 | engine.execute_cypher() |
+| `tests/e2e/test_execution_contexts_new.py` | 158 | engine.execute_cypher() |
+| `examples/domains/fraud/loaders.py` | ~10 | engine methods |
+| `examples/domains/fraud/resolver.py` | ~20 | engine methods |
+| `examples/domains/biomedical/loaders.py` | ~5 | engine methods |
+| `examples/domains/biomedical/types.py` | ~5 | engine methods |
+| `examples/domains/biomedical/resolver.py` | ~20 | engine methods |
+| `examples/domains/biomedical_legacy/legacy_wrapper.py` | ~5 | engine methods |
+| `examples/demo_working_system.py` | ~5 | engine methods |
+| `examples/demo_biomedical.py` | ~10 | engine methods |
+| `examples/demo_utils.py` | ~5 | engine methods |
+| `scripts/demo/end_to_end_workflow.py` | ~40 | engine methods |
+| `scripts/migrations/migrate_to_nodepk.py` | ~30 | keep as-is (migration script, needs raw SQL) |
+
+### MEDIUM — Hardcoded ports in test code
+
+| File | Line | Fix |
+|------|------|-----|
+| `tests/python/test_python_sdk.py` | 32 | `int(os.environ.get("IVG_TEST_PORT", "1972"))` |
+| `tests/benchmarks/bfs_benchmark.py` | 29 | env var |
+| `tests/benchmarks/establish_baseline.py` | 40 | env var |
+
+### MEDIUM — Direct `iris.connect()` in non-conftest test files
+
+| File | Fix |
+|------|-----|
+| `tests/python/test_python_sdk.py` | use `iris_connection` fixture |
+| `tests/e2e/test_stress_setup.py` | use `iris_connection` fixture (partially done) |
+| `tests/e2e/test_stress_api.py` | use `iris_connection` fixture (partially done) |
+| `tests/benchmarks/*.py` | benchmarks legitimately need own connections — acceptable |
+| `scripts/*.py` | scripts legitimately need own connections — acceptable |
+
+### LOW — `IRISGraphOperators(conn)` should be `engine.kg_*()` methods
+
+| File | Count |
+|------|-------|
+| `tests/e2e/test_graph_kernels_e2e.py` | ~15 instances |
+| `tests/e2e/test_operator_wiring_e2e.py` | ~20 instances |
+| `tests/e2e/test_subgraph_e2e.py` | ~20 instances |
+| `tests/e2e/test_ppr_guided_e2e.py` | 1 |
+| `tests/unit/test_bm25_index.py` | 1 |
+| `tests/unit/test_subgraph.py` | ~5 |
+| `tests/unit/test_graph_kernels.py` | ~3 |
+| `tests/unit/test_operators_wiring.py` | ~15 |
+| `tests/python/test_python_operators.py` | 1 |
+| `examples/demo_working_system.py` | 1 |
+
+### LOW — Raw SQL in library files (not engine.py)
+
+| File | Notes |
+|------|-------|
+| `iris_vector_graph/bulk_loader.py` | Performance-critical batch loader — raw SQL acceptable, ensure `Graph_KG.` prefix |
+| `iris_vector_graph/cypher_api.py:179` | Should use `engine.execute_cypher("MATCH (n) RETURN count(n)")` |
+| `iris_vector_graph/gql/resolvers.py:13-18` | `resolve_stats` already uses raw SQL — acceptable for GQL stats resolver |
+| `iris_vector_graph/gql/resolvers.py:35,98` | GQL resolvers — acceptable, uses `Graph_KG.` prefix |
+
+### Additional findings from deep scan
+
+**`iris_vector_graph/engine.py` itself — `classMethodString()` at lines 1737, 1770**
+These should be `classMethodValue()` per the API contract.
+
+**`iris_vector_graph/operators.py`** — ~50+ raw SQL violations throughout.
+The entire `IRISGraphOperators` class contains raw SQL on unqualified tables.
+These should be thin wrappers over engine `kg_*` methods. The class is effectively
+a pre-engine legacy layer that was never migrated.
+
+**`api/gql/resolvers/mutation.py`, `api/gql/core/resolvers.py`, `api/gql/schema.py`** —
+GraphQL resolvers bypass engine, hitting tables directly. Critical because
+ObjectScript callers via `IVG.CypherEngine` will see inconsistent behavior.
+
+**`api/gql/loaders.py`, `api/gql/core/loaders.py`** — raw cursor on unqualified
+`rdf_labels`, `rdf_edges`. Should use `engine.get_node_labels()` etc.
+
+**`iris_vector_graph/cypher_api.py:180`** — raw cursor for node count. Use
+`engine.execute_cypher("MATCH (n) RETURN count(n)")`.
+
+**`src/iris_demo_server/services/iris_biomedical_client.py:24`** —
+hardcodes port 1972; also raw cursor throughout. Use env var + engine.
+
+**`tests/e2e/test_lazy_node_resolution.py:8`, `test_large_output_chunked.py:8,21,143`** —
+hardcoded port 2972. Fix: `int(os.getenv("IRIS_TEST_PORT", "1972"))`.
+
+**`iris_vector_graph/cypher/algorithms/paths.py`** — raw cursor on
+unqualified tables (lines 110, 113, 190, 192).
+
+
+|----------|-------|-----------------|
+| CRITICAL (`intersystems_iris`, `classMethodString`) | 9 files | ~50 |
+| HIGH (unqualified tables) | 27 files | ~400 |
+| MEDIUM (hardcoded ports, bare `iris.connect`) | 5 files | ~10 |
+| LOW (`IRISGraphOperators`, lib raw SQL) | 13 files | ~90 |
+| **Total** | **54 files** | **~550** |
+
+**Priority order**: CRITICAL → HIGH integration tests → HIGH examples → MEDIUM → LOW
+
+
+
+Hardware: MacBook Pro (M3 Ultra, 128GB RAM), LDBC SF10, IRIS 2025.1 Enterprise in Docker.
+Comparison: GES/GraphScope published SF1000 numbers on large server cluster.
+
+| Query | IVG p50 | GES SF1000 p50 | Notes |
+|---|---|---|---|
+| IC13 ShortestPath (SF1) | 0.22ms | 2.69ms | IVG faster |
+| IC13 ShortestPath (SF10) | 2.1–3.2ms | 2.69ms | Comparable |
+| IC2 1-hop COUNT (`KHopCount`) | 0.29ms | 0.14ms | Competitive (was 2.8ms) |
+| IC2 1-hop IDs (`KHopNeighborIds`) | 0.9ms | — | Fast path |
+| IC3 2-hop LIMIT 1000 (`KHop2NeighborIds`) | **1.2ms** | 4.19ms | 3.5× faster than GES |
+| IC3 2-hop COUNT exact (`KHop2CountExact`) | **0.095ms** | — | O(1); was 70ms. Requires `Build2HopExactStats` at `BuildNKG` time |
+| IC3 2-hop COUNT upper bound (`KHop2CountFast`) | 0.07ms | — | 3.67× overcount; threshold detection only |
+| approx_count_distinct 2-hop | 5.3ms | — | 74× vs exact; ~89% accuracy on social graphs |
+| BulkIngestEdges | 190–312K edges/s | — | Fast; `^NKG` stale until `rebuild_nkg()` |
+| BuildNKG (SF10, Rust) | **19s** | — | Was 422s; 22× speedup via `ffi_kg_build_nkg` |
+| Build2HopExactStats (SF10) | timeout | — | `HashSet<String>` too slow; integer-indexed version needed |
+| Arno BFSJson 2-hop (SF10, no MAXSTRING) | ~3.5s | — | Chunk-read loop working; `HashSet<String>` bottleneck |
