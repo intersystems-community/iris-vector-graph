@@ -165,3 +165,5 @@ docker-compose.yaml
 
 # Playwright MCP session artifacts
 .playwright-mcp/
+examples/expanded_mindwalk_KG_10000.*
+.sesskey
