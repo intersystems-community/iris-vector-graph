@@ -50,9 +50,11 @@ result = engine.execute_cypher(
 print(result["rows"])  # [('Bob',)]
 ```
 
-> **Note:** On IRIS Community Edition, `initialize_schema()` prints warnings about
-> `Graph.KG.MCPService` and `Graph.KG.MCPToolSet`. These are Enterprise-only MCP classes
-> and safe to ignore — the engine works fully on Community.
+> **Note:** On IRIS Community Edition, `initialize_schema()` prints some compile
+> warnings. These are safe to ignore:
+> - `Graph.KG.MCPService` / `Graph.KG.MCPToolSet` — Enterprise-only MCP classes, not needed
+> - `Graph.KG.Meta` / `User.PageRankEmbedded` — optional classes, engine works without them
+> - `Graph.KG.Edge` "Table name not unique" — schema already deployed, idempotent
 
 **That's it.**
 
