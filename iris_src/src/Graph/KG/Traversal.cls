@@ -78,6 +78,12 @@ ClassMethod BuildKG() As %Status
 
 ClassMethod BuildNKG() As %Status
 {
+	// Invalidate the Arno adjacency cache BEFORE killing ^NKG.
+	// CacheNKGAdj() compares ^NKG("$meta","version") to ^ArnoKG("KG","nkg_adj_ver").
+	// Kill ^NKG resets the version to 0; $Increment makes it 1.
+	// If the stale cache also has version 1, CacheNKGAdj sees cachedVer==currentVer
+	// and skips the rebuild, leaving Arno BFS using data from the previous graph.
+	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch {}
 	Kill ^NKG
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	
@@ -229,8 +235,25 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
     For hop = 1:1:maxHops {
         Kill nextFrontier
         Set s = ""
-        Set fixedP = $Select($IsObject(preds):preds.%Get(hop-1), 1:"")
-        Set nextP = $Select($IsObject(preds):preds.%Get(hop), 1:"")
+        // Reuse last predicate when preds has fewer entries than hops.
+        // [:BINDS*1..3] passes preds=["BINDS"] — apply "BINDS" at every hop.
+        If $IsObject(preds) && (preds.%Size()>0) {
+            Set predIdx = hop-1
+            If predIdx >= preds.%Size() Set predIdx = preds.%Size()-1
+            Set fixedP = preds.%Get(predIdx)
+            // nextP is only used as a lookahead for hops before the last.
+            // At the last hop, nextP="" disables the lookahead filter.
+            If hop < maxHops {
+                Set nextPredIdx = hop
+                If nextPredIdx >= preds.%Size() Set nextPredIdx = preds.%Size()-1
+                Set nextP = preds.%Get(nextPredIdx)
+            } Else {
+                Set nextP = ""
+            }
+        } Else {
+            Set fixedP = ""
+            Set nextP = ""
+        }
         
         For {
             Set s = $Order(frontier(s))
@@ -274,12 +297,21 @@ ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Intege
         Set o = $Order(^KG("out", 0, s, p, o))
         If o = "" Quit
         If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
-        If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) Continue
         
+        // Always record this hop's result — leaf nodes at hop N are valid results
+        // even when hop N < maxHops.
         Set count = count + 1
         Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", 0, s, p, o), 1.0), hop)
         
-        If '$Data(seen(o)) Set nextFrontier(o) = ""
+        // Only add to nextFrontier if the node can continue on the next hop.
+        // The nextP lookahead prunes the frontier, not the result set.
+        If '$Data(seen(o)) {
+            If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) {
+                // Node has no next-hop edges — don't add to frontier, but result was recorded.
+            } Else {
+                Set nextFrontier(o) = ""
+            }
+        }
     }
 }
 
@@ -330,8 +362,22 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
     For hop = 1:1:maxHops {
         Kill nextFrontier
         Set s = ""
-        Set fixedP = $Select($IsObject(preds):preds.%Get(hop-1), 1:"")
-        Set nextP = $Select($IsObject(preds):preds.%Get(hop), 1:"")
+        // Reuse last predicate when preds has fewer entries than hops.
+        If $IsObject(preds) && (preds.%Size()>0) {
+            Set predIdx = hop-1
+            If predIdx >= preds.%Size() Set predIdx = preds.%Size()-1
+            Set fixedP = preds.%Get(predIdx)
+            If hop < maxHops {
+                Set nextPredIdx = hop
+                If nextPredIdx >= preds.%Size() Set nextPredIdx = preds.%Size()-1
+                Set nextP = preds.%Get(nextPredIdx)
+            } Else {
+                Set nextP = ""
+            }
+        } Else {
+            Set fixedP = ""
+            Set nextP = ""
+        }
         
         For {
             Set s = $Order(frontier(s))

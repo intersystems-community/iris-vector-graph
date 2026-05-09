@@ -35,6 +35,8 @@ class TestFhirBridgesE2E:
             self.conn.commit()
         except Exception:
             pass
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self._setup_test_data()
         yield
         self._cleanup()
@@ -42,7 +44,7 @@ class TestFhirBridgesE2E:
     def _setup_test_data(self):
         nodes = [f"{PREFIX}:MeSH:D011014", f"{PREFIX}:MeSH:D003924"]
         for nid in nodes:
-            self.cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+            self.engine.create_node(nid)
         bridges = [
             (f"{PREFIX}_J18.9", f"{PREFIX}:MeSH:D011014", "ICD10CM", "icd10_to_mesh", 1.0, "C0032285"),
             (f"{PREFIX}_E11.9", f"{PREFIX}:MeSH:D003924", "ICD10CM", "icd10_to_mesh", 1.0, "C0011849"),
@@ -61,7 +63,12 @@ class TestFhirBridgesE2E:
     def _cleanup(self):
         p = f"{PREFIX}%"
         self.cursor.execute("DELETE FROM Graph_KG.fhir_bridges WHERE fhir_code LIKE ?", [p])
-        self.cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
+        cursor2 = self.conn.cursor()
+        cursor2.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+        node_ids = [row[0] for row in cursor2.fetchall()]
+        cursor2.close()
+        if node_ids:
+            self.engine.bulk_delete_nodes(node_ids)
         self.conn.commit()
 
     def test_bridge_rows_persist_and_queryable(self):

@@ -73,12 +73,27 @@ ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %Strin
 {
 	Set ^KG("out", 0, s, p, o) = +w
 	Set ^KG("in", 0, o, p, s) = +w
+	Set tmp = $Increment(^KG("deg", s))
+	Set tmp = $Increment(^KG("degp", s, p))
+	If $Data(^NKG("$meta", "nodeCount")) {
+		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
+		Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(o)
+		Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(p)
+		Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = +w
+		Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = +w
+		Set tmp = $Increment(^NKG(-3, sIdx))
+		Set tmp = $Increment(^NKG("$meta", "version"))
+		Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
+	}
 }
 
 ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 {
 	Kill ^KG("out", 0, s, p, o)
 	Kill ^KG("in", 0, o, p, s)
+	If $Data(^NKG("$meta", "nodeCount")) {
+		Do ##class(Graph.KG.GraphIndex).DeleteIndex("", s, p, o, "")
+	}
 }
 
 

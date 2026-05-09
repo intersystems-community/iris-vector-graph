@@ -9,7 +9,7 @@ pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 PREFIX = f"SQ_{uuid.uuid4().hex[:6]}"
 
 
-def _setup_data(cursor, conn):
+def _setup_data(engine, conn):
     nodes = {
         "drug1": f"{PREFIX}:Drug1",
         "drug2": f"{PREFIX}:Drug2",
@@ -18,31 +18,28 @@ def _setup_data(cursor, conn):
         "partner1": f"{PREFIX}:Partner1",
         "partner2": f"{PREFIX}:Partner2",
     }
-    for nid in nodes.values():
-        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+    
+    engine.create_node(nodes["drug1"], labels=["Drug"], properties={"name": "Aspirin"})
+    engine.create_node(nodes["drug2"], labels=["Drug"], properties={"name": "Ibuprofen"})
+    engine.create_node(nodes["prot1"], labels=["Protein"])
+    engine.create_node(nodes["prot2"], labels=["Protein"])
+    engine.create_node(nodes["partner1"])
+    engine.create_node(nodes["partner2"])
 
-    cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, 'Drug')", [nodes["drug1"]])
-    cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, 'Drug')", [nodes["drug2"]])
-    cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, 'Protein')", [nodes["prot1"]])
-    cursor.execute("INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, 'Protein')", [nodes["prot2"]])
+    engine.create_edge(nodes["prot1"], "INTERACTS_WITH", nodes["partner1"])
+    engine.create_edge(nodes["prot1"], "INTERACTS_WITH", nodes["partner2"])
 
-    cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, 'name', 'Aspirin')", [nodes["drug1"]])
-    cursor.execute("INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, 'name', 'Ibuprofen')", [nodes["drug2"]])
-
-    cursor.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, 'INTERACTS_WITH', ?)", [nodes["prot1"], nodes["partner1"]])
-    cursor.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, 'INTERACTS_WITH', ?)", [nodes["prot1"], nodes["partner2"]])
-
-    conn.commit()
     return nodes
 
 
-def _cleanup(cursor, conn):
-    p = f"{PREFIX}:%"
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [p, p])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [p])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [p])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
-    conn.commit()
+def _cleanup(engine, conn):
+    p = f"{PREFIX}%"
+    cursor = conn.cursor()
+    cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+    node_ids = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    if node_ids:
+        engine.bulk_delete_nodes(node_ids)
 
 
 def _row_dict(result, row_idx):
@@ -55,16 +52,16 @@ class TestSubqueryCallE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
-        _cleanup(self.cursor, self.conn)
-        self.nodes = _setup_data(self.cursor, self.conn)
+        _cleanup(self.engine, self.conn)
+        self.nodes = _setup_data(self.engine, self.conn)
         yield
-        _cleanup(self.cursor, self.conn)
+        _cleanup(self.engine, self.conn)
 
     def _engine(self):
-        from iris_vector_graph.engine import IRISGraphEngine
-        return IRISGraphEngine(self.conn)
+        return self.engine
 
     def test_independent_subquery_projection(self):
         """T025"""

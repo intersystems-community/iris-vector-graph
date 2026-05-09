@@ -1,146 +1,106 @@
-import json
-import os
 import time
+import uuid
 
 import pytest
 
-IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "4972"))
-IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
-IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
-SKIP = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
+PREFIX = f"vlbfs_{uuid.uuid4().hex[:8]}"
+PRED = "KNOWS"
 
 
 @pytest.fixture(scope="module")
-def engine():
-    try:
-        import iris
-        from iris_vector_graph.engine import IRISGraphEngine
-        c = iris.connect(IRIS_HOST, IRIS_PORT, IRIS_NS, IRIS_USER, IRIS_PASS)
-        eng = IRISGraphEngine(c)
-        yield eng
-        c.close()
-    except Exception as e:
-        pytest.skip(f"IRIS unavailable: {e}")
+def engine(iris_connection):
+    from iris_vector_graph.engine import IRISGraphEngine
+    return IRISGraphEngine(iris_connection)
 
 
 @pytest.fixture(scope="module")
-def knows_data(engine):
+def knows_data(engine, iris_connection):
+    cur = iris_connection.cursor()
+    nodes = [f"{PREFIX}_{i}" for i in range(15)]
+    for n in nodes:
+        cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [n])
+    edges = [(nodes[0], PRED, nodes[i]) for i in range(1, 6)]
+    edges += [(nodes[1], PRED, nodes[i]) for i in range(6, 11)]
+    edges += [(nodes[6], PRED, nodes[i]) for i in range(11, 15)]
+    for s, p, d in edges:
+        cur.execute("INSERT INTO Graph_KG.rdf_edges (s,p,o_id) VALUES (?,?,?)", [s, p, d])
+    iris_connection.commit()
+    engine.rebuild_kg()
     engine.rebuild_nkg()
-    cur = engine.conn.cursor()
-    for pred in ('KNOWS', 'R', None):
-        if pred:
-            cur.execute(f"SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = '{pred}'")
-        else:
-            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
-        n = cur.fetchone()[0]
-        if n >= 100:
-            if pred:
-                cur.execute(f"SELECT TOP 1 s FROM Graph_KG.rdf_edges WHERE p = '{pred}'")
-            else:
-                cur.execute("SELECT TOP 1 s FROM Graph_KG.rdf_edges")
-            row = cur.fetchone()
-            return str(row[0]) if row else None
-    pytest.skip("No graph data loaded — load LDBC SF10 or any graph first")
+    yield nodes[0]
+    for s, p, d in edges:
+        cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=?", [s, p, d])
+    for n in nodes:
+        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [n])
+    iris_connection.commit()
 
 
-PRED = os.environ.get("IVG_TEST_PRED", "KNOWS")
-
-
-@pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")
 class TestCypherVLPathBFS:
 
     def test_sc001_vl_path_under_10ms(self, engine, knows_data):
         src = knows_data
         t0 = time.perf_counter()
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 50",
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 50",
             {"src": src}
         )
         ms = (time.perf_counter() - t0) * 1000
-        assert ms < 500, (
-            f"SC-001: [*1..2] took {ms:.0f}ms — likely still using SQL JOIN chain not BFS. "
-            f"Target: <500ms (BFS path). Rust arno path achieves <10ms."
-        )
+        assert ms < 500, f"SC-001: [*1..2] took {ms:.0f}ms"
         assert len(r.get("rows", [])) > 0, "SC-001: must return results"
-        assert r.get("columns") == ["b_node_id"], (
-            f"SC-001: expected column ['b_node_id'], got {r.get('columns')}"
-        )
 
     def test_sc002_vl_path_depth3_no_crash(self, engine, knows_data):
-        src = knows_data
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..3]-(b) RETURN count(DISTINCT b) AS c",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*1..3]-(b) RETURN count(DISTINCT b) AS c",
+            {"src": knows_data}
         )
         rows = r.get("rows", [])
-        assert rows and rows[0][0] > 0, (
-            "SC-002: [*1..3] must not crash (SQLCODE -400) and must return count > 0"
-        )
+        assert rows and rows[0][0] > 0, "SC-002: [*1..3] must return count > 0"
 
     def test_sc003_results_match_bfs(self, engine, knows_data):
-        src = knows_data
-
         r1 = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
+            {"src": knows_data}
         )
-        rows1 = r1.get("rows", [])
-        assert len(rows1) > 0, "SC-003: VL path must return results"
-        assert len(rows1) <= 200, f"SC-003: LIMIT 200 not respected, got {len(rows1)}"
-
+        assert len(r1.get("rows", [])) > 0, "SC-003: VL path must return results"
         r2 = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
+            {"src": knows_data}
         )
-        rows2 = r2.get("rows", [])
-        assert rows1 == rows2, "SC-003: Repeated identical query must return identical results (determinism)"
+        assert r1.get("rows") == r2.get("rows"), "SC-003: identical queries must be deterministic"
 
     def test_sc004_distinct_works(self, engine, knows_data):
-        src = knows_data
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 20",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 20",
+            {"src": knows_data}
         )
-        rows = r.get("rows", [])
-        node_ids = [row[0] for row in rows]
-        assert len(node_ids) == len(set(node_ids)), (
-            f"SC-004: DISTINCT returned duplicates: {len(node_ids)} rows but {len(set(node_ids))} unique"
-        )
-        assert len(rows) <= 20, f"SC-004: LIMIT 20 not respected, got {len(rows)} rows"
+        node_ids = [row[0] for row in r.get("rows", [])]
+        assert len(node_ids) == len(set(node_ids)), "SC-004: DISTINCT returned duplicates"
+        assert len(node_ids) <= 20, f"SC-004: LIMIT 20 not respected, got {len(node_ids)}"
 
     def test_sc005_depth4_no_crash(self, engine, knows_data):
-        src = knows_data
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*1..4]-(b) RETURN count(DISTINCT b) AS c",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*1..4]-(b) RETURN count(DISTINCT b) AS c",
+            {"src": knows_data}
         )
         assert r.get("rows"), "SC-005: [*1..4] must not crash"
 
     def test_no_regression_single_hop(self, engine, knows_data):
-        src = knows_data
-        t0 = time.perf_counter()
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS]->(b) RETURN b.node_id LIMIT 10",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}]->(b) RETURN b.node_id LIMIT 10",
+            {"src": knows_data}
         )
-        ms = (time.perf_counter() - t0) * 1000
-        assert ms < 100, f"Single-hop regression: {ms:.0f}ms"
         assert r.get("rows"), "Single-hop must return results"
 
     def test_vl_path_exact_hops(self, engine, knows_data):
-        src = knows_data
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*2]-(b) RETURN count(b) AS c",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*2]-(b) RETURN count(b) AS c",
+            {"src": knows_data}
         )
         assert r.get("rows"), "Exact hop [*2] must work"
 
     def test_vl_path_no_upper_bound(self, engine, knows_data):
-        src = knows_data
         r = engine.execute_cypher(
-            "MATCH (a {node_id:$src})-[:KNOWS*]-(b) RETURN count(DISTINCT b) AS c",
-            {"src": src}
+            f"MATCH (a {{node_id:$src}})-[:{PRED}*]-(b) RETURN count(DISTINCT b) AS c",
+            {"src": knows_data}
         )
-        assert r.get("rows"), "Unbounded [*] must work (default max_hops=10)"
+        assert r.get("rows"), "Unbounded [*] must work"

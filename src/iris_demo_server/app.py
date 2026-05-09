@@ -4,6 +4,7 @@ import os
 
 # Import routes
 from .routes.fraud import register_fraud_routes
+from .routes.biomedical import register_biomedical_routes
 
 # Create FastHTML app
 app = FastHTML(
@@ -16,6 +17,7 @@ app = FastHTML(
 
 # Register routes
 register_fraud_routes(app)
+register_biomedical_routes(app)
 
 
 # Homepage
@@ -39,6 +41,34 @@ def homepage():
                 P("Vector similarity search, pathway queries, network visualization."),
                 A("View biomedical demo", href="/bio"),
             ),
+        )
+    )
+
+
+@app.get("/arch/fraud")
+def arch_fraud():
+    return Div(
+        H2("Fraud Detection Architecture"),
+        P("Real-time SQL Trigger Loop: transactions → IRIS SQL → fraud score → ^KG graph"),
+        Ul(
+            Li("Transaction ingest via REST API"),
+            Li("Real-time SQL Trigger Loop scores each transaction"),
+            Li("^KG temporal graph tracks 130M transaction history"),
+            Li("Bitemporal audit trail via ^KG('tout'/'tin') indexes"),
+        )
+    )
+
+
+@app.get("/arch/bio")
+def arch_bio():
+    return Div(
+        H2("Biomedical Graph Architecture"),
+        P("Research UI (FastHTML) → IRIS vector search → protein knowledge graph"),
+        Ul(
+            Li("Research UI (FastHTML) serves interactive protein search"),
+            Li("Vector embeddings (768-dim) stored in kg_NodeEmbeddings"),
+            Li("HNSW index enables sub-millisecond similarity search"),
+            Li("Multi-hop Cypher traversal explores protein interaction networks"),
         )
     )
 
@@ -245,6 +275,9 @@ def fraud_page():
                 Div(cls="header")(
                     H1("IRIS Fraud Detection"),
                     P("Real-time fraud scoring powered by 130M transaction graph with bitemporal audit trails"),
+                    Button("View Architecture", cls="arch-btn",
+                           hx_get="/arch/fraud", hx_target="#arch-modal", hx_swap="innerHTML"),
+                    Div(id="arch-modal"),
                     Div(cls="stats")(
                         Div(cls="stat-card")(
                             Div(cls="label")("Total Transactions"),

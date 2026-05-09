@@ -25,7 +25,7 @@ except ImportError as e:
 class TestProteinQueryResolver:
     """Integration tests for protein query resolver"""
 
-    async def test_protein_query_simple_lookup(self, iris_connection):
+    async def test_protein_query_simple_lookup(self, engine):
         """Test protein(id) query returns correct fields"""
         # Setup: Create test protein in database
         cursor = iris_connection.cursor()
@@ -60,7 +60,6 @@ class TestProteinQueryResolver:
             )
         except:
             pass
-        iris_connection.commit()
 
         # Execute GraphQL query
         query = """
@@ -95,7 +94,7 @@ class TestProteinQueryResolver:
         assert protein["function"] == "Tumor suppressor protein"
         assert "Protein" in protein["labels"]
 
-    async def test_protein_query_not_found(self, iris_connection):
+    async def test_protein_query_not_found(self, engine):
         """Test protein(id) query returns None for non-existent protein"""
         query = """
             query GetProtein($id: ID!) {
@@ -120,7 +119,7 @@ class TestProteinQueryResolver:
         assert result.errors is None
         assert result.data["protein"] is None
 
-    async def test_protein_query_optional_fields(self, iris_connection):
+    async def test_protein_query_optional_fields(self, engine):
         """Test protein query handles missing optional fields gracefully"""
         cursor = iris_connection.cursor()
 
@@ -143,7 +142,6 @@ class TestProteinQueryResolver:
             )
         except:
             pass
-        iris_connection.commit()
 
         query = """
             query GetProtein($id: ID!) {
@@ -182,7 +180,7 @@ class TestProteinQueryResolver:
 class TestGeneQueryResolver:
     """Integration tests for gene query resolver"""
 
-    async def test_gene_query_simple_lookup(self, iris_connection):
+    async def test_gene_query_simple_lookup(self, engine):
         """Test gene(id) query returns correct fields"""
         cursor = iris_connection.cursor()
 
@@ -212,7 +210,6 @@ class TestGeneQueryResolver:
             )
         except:
             pass
-        iris_connection.commit()
 
         query = """
             query GetGene($id: ID!) {
@@ -250,7 +247,7 @@ class TestGeneQueryResolver:
 class TestPathwayQueryResolver:
     """Integration tests for pathway query resolver"""
 
-    async def test_pathway_query_simple_lookup(self, iris_connection):
+    async def test_pathway_query_simple_lookup(self, engine):
         """Test pathway(id) query returns correct fields"""
         cursor = iris_connection.cursor()
 
@@ -280,7 +277,6 @@ class TestPathwayQueryResolver:
             )
         except:
             pass
-        iris_connection.commit()
 
         query = """
             query GetPathway($id: ID!) {

@@ -27,7 +27,7 @@ class TestCreateProteinMutation:
     """Integration tests for createProtein mutation with FK validation"""
 
     @pytest.fixture(autouse=True)
-    def cleanup_test_data(self, iris_connection):
+    def cleanup_test_data(self, engine):
         """Delete any leftover test nodes before and after each test."""
         test_ids = ["PROTEIN:TEST_CREATE", "PROTEIN:TEST_WITH_EMB", "PROTEIN:DUPLICATE", "PROTEIN:MINIMAL"]
         cursor = iris_connection.cursor()
@@ -49,7 +49,7 @@ class TestCreateProteinMutation:
         yield
         _delete(test_ids)
 
-    async def test_create_protein_basic(self, iris_connection):
+    async def test_create_protein_basic(self, engine):
         """Test createProtein mutation creates node with properties"""
         query = """
             mutation CreateProtein($input: CreateProteinInput!) {
@@ -101,7 +101,7 @@ class TestCreateProteinMutation:
         assert cursor.fetchone()[0] == "Test Protein"
 
     @pytest.mark.skip(reason="kg_NodeEmbeddings requires VECTOR type support not available in test environment")
-    async def test_create_protein_with_embedding(self, iris_connection):
+    async def test_create_protein_with_embedding(self, engine):
         """Test createProtein with 768-dimensional embedding vector"""
         # Cleanup any existing test data first
         cursor = iris_connection.cursor()
@@ -161,7 +161,7 @@ class TestCreateProteinMutation:
                       ("PROTEIN:TEST_WITH_EMB",))
         assert cursor.fetchone()[0] == 1
 
-    async def test_create_protein_duplicate_id_error(self, iris_connection):
+    async def test_create_protein_duplicate_id_error(self, engine):
         """Test createProtein returns error for duplicate ID"""
         # First create
         cursor = iris_connection.cursor()
@@ -200,7 +200,7 @@ class TestCreateProteinMutation:
         assert result.errors is not None
         assert "already exists" in str(result.errors[0]).lower() or "duplicate" in str(result.errors[0]).lower()
 
-    async def test_create_protein_minimal_required_fields(self, iris_connection):
+    async def test_create_protein_minimal_required_fields(self, engine):
         """Test createProtein with only required fields (id, name)"""
         query = """
             mutation CreateProtein($input: CreateProteinInput!) {
@@ -245,7 +245,7 @@ class TestCreateProteinMutation:
 class TestUpdateProteinMutation:
     """Integration tests for updateProtein mutation"""
 
-    async def test_update_protein_fields(self, iris_connection):
+    async def test_update_protein_fields(self, engine):
         """Test updateProtein modifies existing protein fields"""
         # Setup: Create protein
         cursor = iris_connection.cursor()
@@ -302,7 +302,7 @@ class TestUpdateProteinMutation:
                       ("PROTEIN:UPDATE_TEST", "name"))
         assert cursor.fetchone()[0] == "Updated Name"
 
-    async def test_update_protein_partial_fields(self, iris_connection):
+    async def test_update_protein_partial_fields(self, engine):
         """Test updateProtein with partial field update"""
         # Setup
         cursor = iris_connection.cursor()
@@ -351,7 +351,7 @@ class TestUpdateProteinMutation:
         assert protein["name"] == "Original Name"  # Unchanged
         assert protein["function"] == "New Function Only"  # Changed
 
-    async def test_update_protein_not_found(self, iris_connection):
+    async def test_update_protein_not_found(self, engine):
         """Test updateProtein returns error for non-existent protein"""
         query = """
             mutation UpdateProtein($id: ID!, $input: UpdateProteinInput!) {
@@ -390,7 +390,7 @@ class TestUpdateProteinMutation:
 class TestDeleteProteinMutation:
     """Integration tests for deleteProtein mutation with FK cascade"""
 
-    async def test_delete_protein_basic(self, iris_connection):
+    async def test_delete_protein_basic(self, engine):
         """Test deleteProtein removes node and properties"""
         # Setup
         cursor = iris_connection.cursor()
@@ -433,7 +433,7 @@ class TestDeleteProteinMutation:
         assert cursor.fetchone()[0] == 0
 
     @pytest.mark.skip(reason="kg_NodeEmbeddings requires VECTOR type support not available in test environment")
-    async def test_delete_protein_with_embedding(self, iris_connection):
+    async def test_delete_protein_with_embedding(self, engine):
         """Test deleteProtein removes embedding (FK cascade)"""
         # Setup with embedding
         cursor = iris_connection.cursor()
@@ -482,7 +482,7 @@ class TestDeleteProteinMutation:
                       ("PROTEIN:DELETE_WITH_EMB",))
         assert cursor.fetchone()[0] == 0
 
-    async def test_delete_protein_not_found(self, iris_connection):
+    async def test_delete_protein_not_found(self, engine):
         """Test deleteProtein returns error for non-existent protein"""
         query = """
             mutation DeleteProtein($id: ID!) {

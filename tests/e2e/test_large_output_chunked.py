@@ -5,7 +5,7 @@ import time
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "2972"))
+IRIS_PORT = int(os.environ.get("IVG_TEST_PORT", "2972"))
 IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
 IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
 IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
@@ -34,9 +34,9 @@ def graph_seed(iris_conn):
     count = cur.fetchone()[0]
     if count < 1000:
         pytest.skip("insufficient graph data — load at least 1K before running")
-    o.classMethodString("Graph.KG.Traversal", "BuildNKG")
+    o.classMethodValue("Graph.KG.Traversal", "BuildNKG")
     kill_arno_cache(o)
-    seed = str(o.classMethodString("Graph.KG.NKGAccel", "GetFirstNKGNode"))
+    seed = str(o.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode"))
     if not seed or seed == "0":
         seed = "node_0"
     return seed
@@ -48,7 +48,7 @@ def kill_arno_cache(o):
     except Exception:
         pass
     try:
-        o.classMethodString("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+        o.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
     except Exception:
         pass
 
@@ -66,7 +66,7 @@ class TestLargeOutputChunked:
         seed = graph_seed
         o.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
         try:
-            o.classMethodString("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+            o.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
         except Exception:
             pass
         try:
@@ -149,14 +149,14 @@ class TestLargeOutputChunked:
 
             o1.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
             try:
-                o1.classMethodString("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+                o1.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
             except Exception:
                 pass
-            raw1 = str(o1.classMethodString("Graph.KG.NKGAccel", "BFSJson", seed, "[]", 3, 0))
+            raw1 = str(o1.classMethodValue("Graph.KG.NKGAccel", "BFSJson", seed, "[]", 3, 0))
 
             if raw1.startswith("CHUNKED:"):
                 _, tag, _ = raw1.split(":", 2)
-                chunk_from_c2 = str(o2.classMethodString("Graph.KG.NKGAccel", "ReadLargeOutChunk", tag, 1))
+                chunk_from_c2 = str(o2.classMethodValue("Graph.KG.NKGAccel", "ReadLargeOutChunk", tag, 1))
                 assert chunk_from_c2 == "", (
                     f"SC-006 fail: ^||LargeOut visible across connections — "
                     f"not process-private! Got: {chunk_from_c2[:50]}"
@@ -172,7 +172,7 @@ class TestLargeOutputChunked:
         seed = graph_seed
         o.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
         try:
-            o.classMethodString("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+            o.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
         except Exception:
             pass
         try:
@@ -189,7 +189,7 @@ class TestLargeOutputChunked:
 
     def test_store_large_out_method_exists(self, iris_conn):
         c, o = iris_conn
-        exists = str(o.classMethodString(
+        exists = str(o.classMethodValue(
             "%Dictionary.CompiledMethod",
             "%ExistsId",
             "Graph.KG.NKGAccel||StoreLargeOut"
@@ -198,7 +198,7 @@ class TestLargeOutputChunked:
 
     def test_read_large_out_chunk_method_exists(self, iris_conn):
         c, o = iris_conn
-        exists = str(o.classMethodString(
+        exists = str(o.classMethodValue(
             "%Dictionary.CompiledMethod",
             "%ExistsId",
             "Graph.KG.NKGAccel||ReadLargeOutChunk"

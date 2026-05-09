@@ -12,37 +12,22 @@ SKIP = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 
 @pytest.fixture
-def engine():
-    try:
-        import iris
-        from iris_vector_graph.engine import IRISGraphEngine
-        conn = iris.connect(IRIS_HOST, IRIS_PORT, "USER", "_SYSTEM", "SYS")
-        eng = IRISGraphEngine(conn)
-        yield eng
-        conn.close()
-    except Exception as e:
-        pytest.skip(f"IRIS unavailable: {e}")
+def engine(iris_connection):
+    from iris_vector_graph.engine import IRISGraphEngine
+    return IRISGraphEngine(iris_connection)
 
 
 @pytest.fixture
 def demo_nodes(engine):
-    cur = engine.conn.cursor()
     for nid, lbl, props in [
         ("un_a", "Animal", {"name": "cat"}),
         ("un_b", "Animal", {"name": "dog"}),
         ("un_c", "Plant",  {"name": "rose"}),
     ]:
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id=?", [nid])
-        if cur.fetchone()[0] == 0:
-            engine.create_node(nid, labels=[lbl], properties=props)
-    engine.conn.commit()
+        engine.create_node(nid, labels=[lbl], properties=props)
     yield
     for nid in ("un_a", "un_b", "un_c"):
-        cur.execute("DELETE FROM Graph_KG.rdf_props WHERE s=?", [nid])
-        cur.execute("DELETE FROM Graph_KG.rdf_labels WHERE s=?", [nid])
-        cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE s=? OR o_id=?", [nid, nid])
-        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
-    engine.conn.commit()
+        engine.delete_node(nid)
 
 
 def test_is_ready_false_on_broken_connection():
@@ -114,7 +99,7 @@ def test_get_schema_visualization_structure(engine, demo_nodes):
     try:
         schema = engine.get_schema_visualization()
         assert isinstance(schema, dict)
-        assert "nodes" in schema and "edges" in schema
+        assert "nodes" in schema and "relationships" in schema
     except Exception as e:
         if "Message out of order" in str(e) or "COMMUNICATION" in str(e):
             pytest.skip(f"Transient connection issue: {e}")

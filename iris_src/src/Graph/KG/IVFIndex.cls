@@ -272,4 +272,11 @@ ClassMethod FinalizeIndex(name As %String) As %Integer
 	Quit nAssign
 }
 
+ClassMethod List() As %String
+{
+	Set result = "", name = ""
+	For { Set name = $Order(^IVF(name)) Quit:name=""  Set result = result _ $Select(result="":"", 1:",") _ name }
+	Return result
+}
+
 }

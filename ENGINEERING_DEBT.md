@@ -1,5 +1,5 @@
 # IVG Engineering Debt
-Last updated: 2026-05-07
+Last updated: 2026-05-09
 
 Review at the start of each IVG session.
 
@@ -56,6 +56,47 @@ Progress through v1.88.0:
   Fix: HyperMinHash or KMV sketches in `UpdateStructuralHLL`.
   Low urgency — exact path is `KHop2CountExact` (0.095ms); approximate is fine for threshold detection.
 
+### P2 — Cypher Translator Gaps (discovered 2026-05-09)
+
+- [ ] **MATCH + aggregation + ORDER BY generates `<UNDEFINED>ma` error (`SQLCODE: -400`)**
+  Queries like `MATCH (n)-[r]->() RETURN n.id, count(r) AS deg ORDER BY deg DESC` fail with
+  a fatal SQL compilation error. The translator emits an invalid CTE alias (`ma`) when combining
+  per-node aggregation with ORDER BY. Workaround: split into separate queries or aggregate
+  at a different scope. Affects `test_hla_kg_e2e::TestCypherTraversal::test_aggregation_degree`
+  and `test_multi_label_query` (reverted to simpler queries that work).
+
+- [ ] **`CALL ivg.bm25.search(...) YIELD node` maps column name wrong**
+  `YIELD node` expects a column named `NODE` but the BM25 SQL procedure returns `node_id`.
+  The Cypher translator YIELD clause does not alias the column name correctly.
+  Workaround: use `engine.bm25_search()` directly instead of the Cypher procedure.
+  Affects `test_bm25_cypher_procedure`, `test_bm25_cypher_then_graph_join`,
+  `test_full_hla_disease_pathway_cypher` (all reverted to engine method calls).
+
+- [ ] **`CALL ivg.ppr(...) YIELD node` same column name mismatch**
+  Same issue as BM25: `YIELD node` expects `NODE` but PPR procedure returns `node_id`.
+  Workaround: use `engine.kg_PERSONALIZED_PAGERANK()` directly.
+
+- [ ] **`MATCH p = (...) RETURN p, length(p)` not supported**
+  Named path binding with `length(p)` returns 0 rows — either `length()` is not implemented
+  for named paths, or the path variable `p` is not being resolved.
+  Workaround: rewrite as explicit hop queries.
+
+- [ ] **arno BFS `IRISGLOBALORDER` from `$ZF(-5)` DLL callout doesn't iterate globals**
+  Root cause confirmed (2026-05-09): `ns.keys()` in rzf cannot iterate globals from a
+  `$ZF(-5)` DLL callout because `iris_global_order` (callin API) is not accessible in that
+  execution context. Workaround: `1d75d97` string-passing design — ObjectScript serializes
+  adjacency via `ExportAdjacencyWithPreds()`, passes to Rust as adj_str, Rust parses in memory.
+  Deployed and working. rzf team has repro snippet for the fix:
+  ```
+  Set dllid = $ZF(-4, 1, "/usr/irissys/mgr/libarno_callout.so")
+  Set fnid  = $ZF(-4, 3, dllid, "test_neg_int_keys")
+  Write $ZF(-5, dllid, fnid, "RZFTest"), !
+  Expected: {"neg_int_keys_count":1,"bug":false}
+  Actual:   {"neg_int_keys_count":0,"bug":true}
+  ```
+  Note: `ns.get()` works (confirmed), only `ns.keys()` / `iris_global_order` fails.
+
+
 ### P3 — API / DX
 
 - [x] **`kg_KNN_VEC` in `engine.index()` protocol** — `"hnsw"` type added to `IndexHandle`
@@ -81,7 +122,148 @@ Progress through v1.88.0:
 
 ---
 
-## BENCHMARK NUMBERS (for reference)
+## AUDIT: Raw SQL and Non-Engine Patterns (2026-05-09)
+
+Full codebase scan. Every item below bypasses the engine API.
+Fix = replace with `engine.create_node()`, `engine.create_edge()`, `engine.delete_node()`,
+`engine.execute_cypher()`, `engine.bulk_create_edges()`, etc.
+
+### CRITICAL — `intersystems_iris` imports (must use `iris.createIRIS(conn)`)
+
+| File | Lines | Fix |
+|------|-------|-----|
+| `tests/integration/test_cls_layer.py` | 12 | `import iris; iris.createIRIS(conn)` |
+| `tests/integration/test_objectscript_classes.py` | 19 | same |
+| `tests/e2e/test_ppr_cls_fast_path.py` | 22 | already has `iris` fallback, remove `intersystems_iris` branch |
+| `scripts/mcp/ivg_mcp_server.py` | 28 | `import iris as irispy` |
+
+### CRITICAL — `classMethodString()` (must use `classMethodValue()`)
+
+| File | Lines |
+|------|-------|
+| `tests/benchmarks/bench_utils.py` | 29, 36, 46, 56, 66, 121, 127 |
+| `tests/benchmarks/bench.py` | 177, 198, 205, 207, 238, 254 |
+| `tests/benchmarks/ic2_profile.py` | 36, 44, 51, 63, 84, 93 |
+| `tests/e2e/test_large_output_chunked.py` | 37, 39, 51, 69, 152, 155, 159, 175, 192, 201 |
+| `tests/e2e/test_lazy_node_resolution.py` | 23, 39, 41, 43, 49 |
+
+### HIGH — Unqualified table names (missing `Graph_KG.` prefix)
+
+All `INSERT/DELETE/SELECT FROM rdf_edges/nodes/rdf_labels/rdf_props/kg_NodeEmbeddings` without `Graph_KG.`:
+
+| File | Count | Category |
+|------|-------|----------|
+| `tests/integration/test_cls_layer.py` | ~20 | Replace with `engine.create_node/edge/delete_node` |
+| `tests/integration/test_objectscript_classes.py` | ~30 | same |
+| `tests/integration/test_bidirectional_ppr.py` | ~30 | same |
+| `tests/integration/test_cypher_enhancements.py` | ~25 | same |
+| `tests/integration/test_pagerank_sql_optimization.py` | ~20 | same |
+| `tests/integration/test_nodepk_migration.py` | ~60 | migration-specific, add `Graph_KG.` prefix |
+| `tests/integration/test_nodepk_constraints.py` | ~5 | engine methods |
+| `tests/integration/test_nodepk_advanced_benchmarks.py` | ~10 | engine methods |
+| `tests/integration/test_embeddings_api.py` | ~5 | engine methods |
+| `tests/integration/gql/test_graphql_queries.py` | ~35 | engine methods |
+| `tests/integration/gql/test_graphql_vector_search.py` | ~20 | engine methods |
+| `tests/integration/gql/test_graphql_mutations.py` | ~30 | engine methods |
+| `tests/contract/test_ppr_api.py` | ~30 | engine methods |
+| `tests/python/test_python_operators.py` | ~5 | engine methods |
+| `tests/e2e/test_ppr_cls_fast_path.py` | ~20 | engine methods |
+| `tests/e2e/test_streaming_bfs.py` | 98 | engine.execute_cypher() |
+| `tests/e2e/test_execution_contexts_new.py` | 158 | engine.execute_cypher() |
+| `examples/domains/fraud/loaders.py` | ~10 | engine methods |
+| `examples/domains/fraud/resolver.py` | ~20 | engine methods |
+| `examples/domains/biomedical/loaders.py` | ~5 | engine methods |
+| `examples/domains/biomedical/types.py` | ~5 | engine methods |
+| `examples/domains/biomedical/resolver.py` | ~20 | engine methods |
+| `examples/domains/biomedical_legacy/legacy_wrapper.py` | ~5 | engine methods |
+| `examples/demo_working_system.py` | ~5 | engine methods |
+| `examples/demo_biomedical.py` | ~10 | engine methods |
+| `examples/demo_utils.py` | ~5 | engine methods |
+| `scripts/demo/end_to_end_workflow.py` | ~40 | engine methods |
+| `scripts/migrations/migrate_to_nodepk.py` | ~30 | keep as-is (migration script, needs raw SQL) |
+
+### MEDIUM — Hardcoded ports in test code
+
+| File | Line | Fix |
+|------|------|-----|
+| `tests/python/test_python_sdk.py` | 32 | `int(os.environ.get("IVG_TEST_PORT", "1972"))` |
+| `tests/benchmarks/bfs_benchmark.py` | 29 | env var |
+| `tests/benchmarks/establish_baseline.py` | 40 | env var |
+
+### MEDIUM — Direct `iris.connect()` in non-conftest test files
+
+| File | Fix |
+|------|-----|
+| `tests/python/test_python_sdk.py` | use `iris_connection` fixture |
+| `tests/e2e/test_stress_setup.py` | use `iris_connection` fixture (partially done) |
+| `tests/e2e/test_stress_api.py` | use `iris_connection` fixture (partially done) |
+| `tests/benchmarks/*.py` | benchmarks legitimately need own connections — acceptable |
+| `scripts/*.py` | scripts legitimately need own connections — acceptable |
+
+### LOW — `IRISGraphOperators(conn)` should be `engine.kg_*()` methods
+
+| File | Count |
+|------|-------|
+| `tests/e2e/test_graph_kernels_e2e.py` | ~15 instances |
+| `tests/e2e/test_operator_wiring_e2e.py` | ~20 instances |
+| `tests/e2e/test_subgraph_e2e.py` | ~20 instances |
+| `tests/e2e/test_ppr_guided_e2e.py` | 1 |
+| `tests/unit/test_bm25_index.py` | 1 |
+| `tests/unit/test_subgraph.py` | ~5 |
+| `tests/unit/test_graph_kernels.py` | ~3 |
+| `tests/unit/test_operators_wiring.py` | ~15 |
+| `tests/python/test_python_operators.py` | 1 |
+| `examples/demo_working_system.py` | 1 |
+
+### LOW — Raw SQL in library files (not engine.py)
+
+| File | Notes |
+|------|-------|
+| `iris_vector_graph/bulk_loader.py` | Performance-critical batch loader — raw SQL acceptable, ensure `Graph_KG.` prefix |
+| `iris_vector_graph/cypher_api.py:179` | Should use `engine.execute_cypher("MATCH (n) RETURN count(n)")` |
+| `iris_vector_graph/gql/resolvers.py:13-18` | `resolve_stats` already uses raw SQL — acceptable for GQL stats resolver |
+| `iris_vector_graph/gql/resolvers.py:35,98` | GQL resolvers — acceptable, uses `Graph_KG.` prefix |
+
+### Additional findings from deep scan
+
+**`iris_vector_graph/engine.py` itself — `classMethodString()` at lines 1737, 1770**
+These should be `classMethodValue()` per the API contract.
+
+**`iris_vector_graph/operators.py`** — ~50+ raw SQL violations throughout.
+The entire `IRISGraphOperators` class contains raw SQL on unqualified tables.
+These should be thin wrappers over engine `kg_*` methods. The class is effectively
+a pre-engine legacy layer that was never migrated.
+
+**`api/gql/resolvers/mutation.py`, `api/gql/core/resolvers.py`, `api/gql/schema.py`** —
+GraphQL resolvers bypass engine, hitting tables directly. Critical because
+ObjectScript callers via `IVG.CypherEngine` will see inconsistent behavior.
+
+**`api/gql/loaders.py`, `api/gql/core/loaders.py`** — raw cursor on unqualified
+`rdf_labels`, `rdf_edges`. Should use `engine.get_node_labels()` etc.
+
+**`iris_vector_graph/cypher_api.py:180`** — raw cursor for node count. Use
+`engine.execute_cypher("MATCH (n) RETURN count(n)")`.
+
+**`src/iris_demo_server/services/iris_biomedical_client.py:24`** —
+hardcodes port 1972; also raw cursor throughout. Use env var + engine.
+
+**`tests/e2e/test_lazy_node_resolution.py:8`, `test_large_output_chunked.py:8,21,143`** —
+hardcoded port 2972. Fix: `int(os.getenv("IRIS_TEST_PORT", "1972"))`.
+
+**`iris_vector_graph/cypher/algorithms/paths.py`** — raw cursor on
+unqualified tables (lines 110, 113, 190, 192).
+
+
+|----------|-------|-----------------|
+| CRITICAL (`intersystems_iris`, `classMethodString`) | 9 files | ~50 |
+| HIGH (unqualified tables) | 27 files | ~400 |
+| MEDIUM (hardcoded ports, bare `iris.connect`) | 5 files | ~10 |
+| LOW (`IRISGraphOperators`, lib raw SQL) | 13 files | ~90 |
+| **Total** | **54 files** | **~550** |
+
+**Priority order**: CRITICAL → HIGH integration tests → HIGH examples → MEDIUM → LOW
+
+
 
 Hardware: MacBook Pro (M3 Ultra, 128GB RAM), LDBC SF10, IRIS 2025.1 Enterprise in Docker.
 Comparison: GES/GraphScope published SF1000 numbers on large server cluster.

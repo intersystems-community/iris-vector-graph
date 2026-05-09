@@ -1007,15 +1007,27 @@ wheels = [
 ]
 
 [[package]]
+name = "intersystems-iris"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "intersystems-irispython" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/45/bd/ad71e3a80abb56fba9eaf4327395cea933fbe4551e52457807d71c4f175c/intersystems_iris-1.0.0.tar.gz", hash = "sha256:7fd1da538a16fb2f60118ea74e04e0899dc568ef43d8e5d98790f0d4ec0def12", size = 1978, upload-time = "2026-04-25T16:27:53.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/66/dad2bd2802920e29284982dc572c66faaf6afa9869c465f95c5f7529fb36/intersystems_iris-1.0.0-py3-none-any.whl", hash = "sha256:8161db6d15a4cff340b252f6fa1813f7bbdf350ad04c43d50589f04aef0f0754", size = 2086, upload-time = "2026-04-25T16:27:52.785Z" },
+]
+
+[[package]]
 name = "intersystems-irispython"
-version = "5.2.1"
+version = "5.3.2"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cf/31/2954eece9dc48ae084f7f244cea81eb116b851bdadd587a3d6ada0b2e5b0/intersystems_irispython-5.2.1-cp38.cp39.cp310.cp311.cp312.cp313-cp38.cp39.cp310.cp311.cp312.cp313-macosx_10_9_universal2.whl", hash = "sha256:592c45b55d3df53dbc7df5a208cf301b52e320ad487aab9a12109bdffc07c5cd", size = 6592980, upload-time = "2025-08-26T15:08:13.447Z" },
-    { url = "https://files.pythonhosted.org/packages/89/60/59cf11ded13efa5f4a10ec2e17f60d808a08e804ed72e29af077a16aecfd/intersystems_irispython-5.2.1-cp38.cp39.cp310.cp311.cp312.cp313-cp38.cp39.cp310.cp311.cp312.cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6052b3bde843e3e08b9af2a67f8c06c2d5ad1390d76006dd328c1718e2666062", size = 14755853, upload-time = "2025-08-26T15:08:15.011Z" },
-    { url = "https://files.pythonhosted.org/packages/d3/5b/37ad1596df33885d6b5e5896d8373843a573b721c8a5b69d9b69ba500b24/intersystems_irispython-5.2.1-cp38.cp39.cp310.cp311.cp312.cp313-cp38.cp39.cp310.cp311.cp312.cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:97df46193d7adcaa7e4f93872e7ff88a05187fe7addf4fa3a3e32358e1c9c0b4", size = 14394248, upload-time = "2025-08-26T15:08:16.953Z" },
-    { url = "https://files.pythonhosted.org/packages/01/11/771447d4a0447287b2c515585bc5bf6c3214dcde064c331e5f2b7e91b4cf/intersystems_irispython-5.2.1-cp38.cp39.cp310.cp311.cp312.cp313-cp38.cp39.cp310.cp311.cp312.cp313-win32.whl", hash = "sha256:581f2e908ba58852ddadf3086988a90a7638a143b3f05929e8026c1d9f56c504", size = 2824011, upload-time = "2025-08-26T15:08:18.721Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/58/e9cad7939d9ac04c6552a4bf460b0fb87c5c13a0a492358a096aec047028/intersystems_irispython-5.2.1-cp38.cp39.cp310.cp311.cp312.cp313-cp38.cp39.cp310.cp311.cp312.cp313-win_amd64.whl", hash = "sha256:d550d9ee3e1f3bdccfa6646118394fd1d15898f7b90768b683f93c7f8212b49b", size = 3450606, upload-time = "2025-08-26T15:08:19.912Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/23/0a7bc92e68480d523015eb454aa0ec73a33320975d10d5500ba54ccd124e/intersystems_irispython-5.3.2-cp38.cp39.cp310.cp311.cp312.cp313.cp314-cp38.cp39.cp310.cp311.cp312.cp313.cp314-macosx_10_9_universal2.whl", hash = "sha256:8af5e31273ad97c391141111630e8303d510272360b609990a8c85e56a7850ac", size = 7121915, upload-time = "2026-03-31T18:53:12.205Z" },
+    { url = "https://files.pythonhosted.org/packages/22/cc/2f066a0dc82fae884b655d2f862bd51dd21a4322d4b9f898117f74c010b4/intersystems_irispython-5.3.2-cp38.cp39.cp310.cp311.cp312.cp313.cp314-cp38.cp39.cp310.cp311.cp312.cp313.cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:25663d3cce7b414451a781ffaeb785e8f8439d0275920ffd4f05add2c056abfd", size = 16247974, upload-time = "2026-03-31T18:53:13.798Z" },
+    { url = "https://files.pythonhosted.org/packages/27/cd/cef09a8310541d99fdbe89b2eccc21a6d776384325a9a6e740ad01e8461f/intersystems_irispython-5.3.2-cp38.cp39.cp310.cp311.cp312.cp313.cp314-cp38.cp39.cp310.cp311.cp312.cp313.cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:d5cb6efc3e2b9651f1c37539a3f69a823e80c32210d11d745cffad1eca4c7995", size = 15900577, upload-time = "2026-03-31T18:53:15.958Z" },
+    { url = "https://files.pythonhosted.org/packages/37/91/0e08555834de10f59810ef6c615af72c3f234920c70cc0421d455ba9c359/intersystems_irispython-5.3.2-cp38.cp39.cp310.cp311.cp312.cp313.cp314-cp38.cp39.cp310.cp311.cp312.cp313.cp314-win32.whl", hash = "sha256:a250b21067c9e8275232ca798dcfe0719a970cd6ec9f2023923c810fffa46f41", size = 3046761, upload-time = "2026-03-31T18:53:09.151Z" },
+    { url = "https://files.pythonhosted.org/packages/21/28/00b6b03b648005cb9c14dc75943e7cccce83eb5fd8fdba502028c25c7fc4/intersystems_irispython-5.3.2-cp38.cp39.cp310.cp311.cp312.cp313.cp314-cp38.cp39.cp310.cp311.cp312.cp313.cp314-win_amd64.whl", hash = "sha256:43feb7e23bc9f77db7bb140d1b55c22090b0c46691b570b1faaf6875baa6452d", size = 3742519, upload-time = "2026-03-31T18:53:10.597Z" },
 ]
 
 [[package]]
@@ -1039,10 +1051,10 @@ wheels = [
 
 [[package]]
 name = "iris-vector-graph"
-version = "1.63.0"
+version = "1.90.0"
 source = { editable = "." }
 dependencies = [
-    { name = "intersystems-irispython" },
+    { name = "intersystems-iris" },
 ]
 
 [package.optional-dependencies]
@@ -1053,7 +1065,7 @@ biodata = [
     { name = "obonet" },
 ]
 core = [
-    { name = "intersystems-irispython" },
+    { name = "intersystems-iris" },
 ]
 demo = [
     { name = "python-fasthtml" },
@@ -1113,8 +1125,8 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "graphviz", marker = "extra == 'visualization'", specifier = ">=0.20.0" },
     { name = "httpx", marker = "extra == 'full'", specifier = ">=0.28.1" },
-    { name = "intersystems-irispython", specifier = ">=3.2.0" },
-    { name = "intersystems-irispython", marker = "extra == 'core'", specifier = ">=3.2.0" },
+    { name = "intersystems-iris", specifier = ">=1.0.0" },
+    { name = "intersystems-iris", marker = "extra == 'core'", specifier = ">=1.0.0" },
     { name = "iris-devtester", marker = "extra == 'dev'", specifier = ">=1.14.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "matplotlib", marker = "extra == 'visualization'", specifier = ">=3.7.0" },

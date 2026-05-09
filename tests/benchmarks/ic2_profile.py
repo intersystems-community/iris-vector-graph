@@ -33,22 +33,22 @@ n_knows = cur.fetchone()[0]
 print(f"IRIS port {PORT}: {n_nodes} nodes, {n_knows} KNOWS edges")
 
 # Check ^KG state via ObjectScript
-raw_kg = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson",
-                                    "P_28587302384882", "KNOWS", 1)
+raw_kg = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson",
+                                     "P_28587302384882", "KNOWS", 1)
 bfs_results = json.loads(str(raw_kg)) if raw_kg else []
 print(f"BFSFastJson(P_28587302384882, KNOWS, 1) -> {len(bfs_results)} results")
 
 # if BFS is empty but SQL has data, ^KG is stale
 if len(bfs_results) == 0 and n_knows > 0:
     print("WARNING: ^KG appears stale vs rdf_edges. Checking ^KG directly...")
-    raw_kg_all = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson",
-                                            "P_28587302384882", "", 1)
+    raw_kg_all = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson",
+                                             "P_28587302384882", "", 1)
     bfs_all = json.loads(str(raw_kg_all)) if raw_kg_all else []
     print(f"BFSFastJson(P_28587302384882, '', 1) -> {len(bfs_all)} results (all predicates)")
 
 # Pick seed with confirmed ^KG data
 # Find a seed that actually has ^KG entries
-result_code = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson",
+result_code = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson",
                                          "P_28587302384882", "", 1)
 bfs_check = json.loads(str(result_code)) if result_code else []
 if bfs_check:
@@ -60,7 +60,7 @@ else:
     print("\nSearching for node with ^KG data...")
     cur.execute("SELECT TOP 5 s, COUNT(*) AS cnt FROM Graph_KG.rdf_edges GROUP BY s ORDER BY cnt DESC")
     for row in cur.fetchall():
-        test_raw = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson", row[0], "", 1)
+        test_raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", row[0], "", 1)
         test_r = json.loads(str(test_raw)) if test_raw else []
         if test_r:
             SEED = row[0]
@@ -81,7 +81,7 @@ engine = IRISGraphEngine(conn)
 
 # 1. Raw ObjectScript BFSFastJson — pure IRIS, 1 round-trip
 def bfs_raw_all():
-    raw = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson", SEED, "", 1)
+    raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", SEED, "", 1)
     return json.loads(str(raw))
 
 p50, mn, mx, r = timeit(bfs_raw_all)
@@ -90,7 +90,7 @@ print(f"   p50={p50:.3f}ms  min={mn:.3f}ms  max={mx:.3f}ms  results={len(r)}")
 
 # 2. BFSFastJson with predicate filter
 def bfs_raw_pred():
-    raw = iris_obj.classMethodString("Graph.KG.Traversal", "BFSFastJson", SEED, "KNOWS", 1)
+    raw = iris_obj.classMethodValue("Graph.KG.Traversal", "BFSFastJson", SEED, "KNOWS", 1)
     return json.loads(str(raw))
 
 p50, mn, mx, r = timeit(bfs_raw_pred)

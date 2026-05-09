@@ -3,6 +3,7 @@ import json
 import time
 import random
 import math
+import os
 from typing import List, Tuple, Dict
 
 class RMATGenerator:
@@ -37,7 +38,8 @@ def setup_data(num_nodes, num_edges):
     
     # Use iris module for SQL
     try:
-        conn = iris.connect(hostname='localhost', port=1972, namespace='USER', username='_SYSTEM', password='SYS')
+        port = int(os.environ.get("IRIS_PORT", "1972"))
+        conn = iris.connect(hostname='localhost', port=port, namespace='USER', username='_SYSTEM', password='SYS')
         cursor = conn.cursor()
         
         cursor.execute("DELETE FROM SQLUser.rdf_edges")

@@ -130,11 +130,7 @@ class TestTemporalEdgeE2E:
         ])
         try:
             import iris
-            try:
-                irispy = iris.createIRIS(self.conn)
-            except TypeError:
-                import intersystems_iris
-                irispy = intersystems_iris.createIRIS(self.conn)
+            irispy = iris.createIRIS(self.conn)
             val = irispy.get("^KG", "out", 0, f"{self.PREFIX}:BC", "COMPAT", f"{self.PREFIX}:BC2")
             assert val is not None
         except ImportError:

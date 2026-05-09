@@ -6,6 +6,20 @@ from datetime import datetime, date
 from .pooling import connection_context
 from .constants import DYNAMIC_TYPES, RESERVED_KEYWORDS
 
+
+async def resolve_stats(info: strawberry.Info) -> Any:
+    from .schema import GraphStats
+    engine = info.context["engine"]
+    cursor = engine.conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+    node_count = cursor.fetchone()[0] or 0
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+    edge_count = cursor.fetchone()[0] or 0
+    cursor.execute("SELECT COUNT(DISTINCT label) FROM Graph_KG.rdf_labels")
+    label_count = cursor.fetchone()[0] or 0
+    return GraphStats(node_count=node_count, edge_count=edge_count, label_count=label_count)
+
+
 async def resolve_node(info: strawberry.Info, id: strawberry.ID) -> Optional[Any]:
     """Resolves a single node by ID."""
     engine = info.context["engine"]

@@ -262,15 +262,15 @@ class TestCypherNewFeaturesE2E:
         assert n1 in ids
         assert n2 not in ids
 
-    @pytest.mark.xfail(reason="WITH * followed by a new MATCH clause has a known FROM-clause generation issue in the translator", strict=False)
     def test_072_with_star_chained_match(self):
-        # Test the actual broken case so it shows as xfail not as a silent skip
-        # This documents the known bug and will PASS when fixed
+        n1 = self._node("ChainedA", "cm1")
+        self._node("ChainedB", "cm2")
         result = self._cypher(
             "MATCH (a {node_id: $id}) WITH * MATCH (b) WHERE b.node_id <> a.node_id RETURN b.node_id LIMIT 1",
-            {"id": self._n1}
+            {"id": n1}
         )
         assert result is not None
+        assert len(result["rows"]) >= 1
 
     # ── 073: Multi-pattern CREATE ─────────────────────────────────
 
@@ -326,7 +326,7 @@ class TestCypherNewFeaturesE2E:
         )
         assert cursor.fetchone()[0] == 3
 
-    # ── 074: Var-length rel property filter ───────────────────────
+     # ── 074: Var-length rel property filter ───────────────────────
 
     def test_074_varlength_rel_prop_filter_matches(self):
         src = self._node("Gene", "vl_src")

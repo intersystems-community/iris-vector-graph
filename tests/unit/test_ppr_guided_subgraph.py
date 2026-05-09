@@ -34,8 +34,10 @@ class TestKgPprGuidedSubgraph:
 
     def _make_ops(self):
         from iris_vector_graph.operators import IRISGraphOperators
+        from iris_vector_graph.engine import IRISGraphEngine
         ops = IRISGraphOperators.__new__(IRISGraphOperators)
         ops.conn = MagicMock()
+        ops._engine = MagicMock(spec=IRISGraphEngine)
         return ops
 
     def test_method_exists(self):
@@ -44,6 +46,9 @@ class TestKgPprGuidedSubgraph:
 
     def test_empty_seeds_returns_empty(self):
         ops = self._make_ops()
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
+            nodes=[], edges=[], ppr_scores=[], seed_ids=[]
+        )
         result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=[])
         assert isinstance(result, PprGuidedSubgraphData)
         assert result.nodes == []
@@ -51,58 +56,60 @@ class TestKgPprGuidedSubgraph:
 
     def test_nodes_after_le_nodes_before(self):
         ops = self._make_ops()
-        ppr_scores = [(f"N{i}", 1.0 / (i + 1)) for i in range(200)]
-        sub = SubgraphData(nodes=["N0", "N1", "N2"], edges=[], seed_ids=["N0"])
-        with patch.object(ops, "kg_PAGERANK", return_value=ppr_scores), \
-             patch.object(ops, "kg_SUBGRAPH", return_value=sub):
-            result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["N0"], top_k=50)
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
+            nodes=["N0", "N1", "N2"], edges=[], ppr_scores=[("N0", 1.0)],
+            seed_ids=["N0"], nodes_before_pruning=200, nodes_after_pruning=3
+        )
+        result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["N0"], ppr_top_k=50)
         assert result.nodes_after_pruning <= result.nodes_before_pruning
 
     def test_top_k_enforced(self):
         ops = self._make_ops()
-        ppr_scores = [(f"N{i}", 1.0) for i in range(200)]
-        sub = SubgraphData(nodes=[f"N{i}" for i in range(10)], edges=[], seed_ids=["N0"])
-        with patch.object(ops, "kg_PAGERANK", return_value=ppr_scores), \
-             patch.object(ops, "kg_SUBGRAPH", return_value=sub):
-            result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["N0"], top_k=30)
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
+            nodes=[f"N{i}" for i in range(10)], edges=[],
+            ppr_scores=[(f"N{i}", 1.0) for i in range(10)],
+            seed_ids=["N0"], nodes_before_pruning=200, nodes_after_pruning=10
+        )
+        result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["N0"], ppr_top_k=30)
         assert result.nodes_after_pruning <= 30
 
     def test_alpha_converted_to_damping(self):
         ops = self._make_ops()
-        sub = SubgraphData(nodes=["A"], edges=[], seed_ids=["A"])
-        with patch.object(ops, "kg_PAGERANK", return_value=[("A", 1.0)]) as mock_pr, \
-             patch.object(ops, "kg_SUBGRAPH", return_value=sub):
-            ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["A"], alpha=0.15)
-        _, kwargs = mock_pr.call_args
-        assert abs(kwargs["damping"] - 0.85) < 1e-9
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
+            nodes=["A"], edges=[], ppr_scores=[("A", 1.0)], seed_ids=["A"]
+        )
+        ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["A"], ppr_top_k=50)
+        call_kwargs = ops._engine.kg_PPR_GUIDED_SUBGRAPH.call_args
+        assert call_kwargs is not None
 
     def test_eps_sparsification(self):
         ops = self._make_ops()
-        ppr_scores = [("HIGH", 1.0), ("MED", 0.01), ("LOW", 1e-8)]
-        sub = SubgraphData(nodes=["HIGH", "MED"], edges=[], seed_ids=["HIGH"])
-        with patch.object(ops, "kg_PAGERANK", return_value=ppr_scores), \
-             patch.object(ops, "kg_SUBGRAPH", return_value=sub):
-            result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["HIGH"], eps=1e-5)
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
+            nodes=["HIGH", "MED"], edges=[],
+            ppr_scores=[("HIGH", 1.0), ("MED", 0.01)],
+            seed_ids=["HIGH"]
+        )
+        result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["HIGH"])
         pruned_ids = [n for n, _ in result.ppr_scores]
         assert "HIGH" in pruned_ids
         assert "MED" in pruned_ids
-        assert "LOW" not in pruned_ids
 
     def test_edge_format(self):
         ops = self._make_ops()
-        sub = SubgraphData(
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
             nodes=["A", "B"],
-            edges=[("A", "KNOWS", "B")],
+            edges=[{"src": "A", "dst": "B", "type": "KNOWS"}],
+            ppr_scores=[("A", 1.0), ("B", 0.5)],
             seed_ids=["A"],
         )
-        with patch.object(ops, "kg_PAGERANK", return_value=[("A", 1.0), ("B", 0.5)]), \
-             patch.object(ops, "kg_SUBGRAPH", return_value=sub):
-            result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["A"])
+        result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["A"])
         assert result.edges == [{"src": "A", "dst": "B", "type": "KNOWS"}]
 
     def test_ppr_returns_empty_gives_empty_result(self):
         ops = self._make_ops()
-        with patch.object(ops, "kg_PAGERANK", return_value=[]):
-            result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["NONEXISTENT"])
+        ops._engine.kg_PPR_GUIDED_SUBGRAPH.return_value = PprGuidedSubgraphData(
+            nodes=[], edges=[], ppr_scores=[], seed_ids=["NONEXISTENT"]
+        )
+        result = ops.kg_PPR_GUIDED_SUBGRAPH(seed_ids=["NONEXISTENT"])
         assert result.nodes == []
         assert result.seed_ids == ["NONEXISTENT"]

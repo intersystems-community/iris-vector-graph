@@ -10,79 +10,68 @@ SKIP_IRIS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS, reason="SKIP_IRIS_TESTS=true")
 
 
-def _insert_chain(cursor, conn, prefix):
+def _insert_chain(engine, prefix):
+    """Insert a chain of nodes A->B->C using engine methods."""
     nodes = [f"{prefix}A", f"{prefix}B", f"{prefix}C"]
     for n in nodes:
-        cursor.execute(
-            "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS "
-            "(SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)", [n, n])
-        cursor.execute(
-            "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, 'Entity' WHERE NOT EXISTS "
-            "(SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = 'Entity')", [n, n])
+        engine.create_node(n, labels=["Entity"])
     for s, o in [(f"{prefix}A", f"{prefix}B"), (f"{prefix}B", f"{prefix}C")]:
-        cursor.execute(
-            "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, 'REL', ? WHERE NOT EXISTS "
-            "(SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = 'REL' AND o_id = ?)",
-            [s, o, s, o])
-    conn.commit()
+        engine.create_edge(s, "REL", o)
     return nodes
 
 
-def _insert_star(cursor, conn, prefix, n_spokes=4):
+def _insert_star(engine, prefix, n_spokes=4):
+    """Insert a star graph with hub and spokes using engine methods."""
     hub = f"{prefix}HUB"
     spokes = [f"{prefix}S{i}" for i in range(1, n_spokes + 1)]
     for n in [hub] + spokes:
-        cursor.execute(
-            "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS "
-            "(SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)", [n, n])
+        engine.create_node(n)
     for spoke in spokes:
         for s, o in [(hub, spoke), (spoke, hub)]:
-            cursor.execute(
-                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, 'CONN', ? WHERE NOT EXISTS "
-                "(SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = 'CONN' AND o_id = ?)",
-                [s, o, s, o])
-    conn.commit()
+            engine.create_edge(s, "CONN", o)
     return hub, spokes
 
 
-def _build_kg(conn):
+def _build_kg(engine):
+    """Build KG globals using engine method."""
     try:
-        from iris_vector_graph.schema import _call_classmethod
-        _call_classmethod(conn, 'Graph.KG.Traversal', 'BuildKG')
+        engine.rebuild_kg()
     except Exception as e:
         pytest.skip(f"BuildKG failed (ObjectScript may not be deployed): {e}")
 
 
-def _cleanup(cursor, conn, prefix):
+def _cleanup(engine, prefix):
+    """Clean up test data using engine methods."""
+    cursor = engine.conn.cursor()
+    all_node_ids = []
     for table, col in [
-        ("Graph_KG.kg_NodeEmbeddings", "id"),
-        ("Graph_KG.rdf_edges", "s"),
-        ("Graph_KG.rdf_labels", "s"),
-        ("Graph_KG.rdf_props", "s"),
         ("Graph_KG.nodes", "node_id"),
     ]:
         try:
-            cursor.execute(f"DELETE FROM {table} WHERE {col} LIKE ?", [f"{prefix}%"])
+            cursor.execute(f"SELECT {col} FROM {table} WHERE {col} LIKE ?", [f"{prefix}%"])
+            for row in cursor.fetchall():
+                all_node_ids.append(row[0])
         except Exception:
             pass
-    conn.commit()
+    if all_node_ids:
+        engine.bulk_delete_nodes(all_node_ids)
 
 
 class TestKgGraphWalkE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
-        self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self.prefix = f"GW_{uuid.uuid4().hex[:6]}_"
-        _insert_chain(self.cursor, self.conn, self.prefix)
-        _build_kg(self.conn)
+        _insert_chain(self.engine, self.prefix)
+        _build_kg(self.engine)
         yield
-        _cleanup(self.cursor, self.conn, self.prefix)
+        _cleanup(self.engine, self.prefix)
 
     def test_returns_multihop_results(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         results = ops.kg_GRAPH_WALK(f"{self.prefix}A", max_depth=2)
         targets = {r[2] for r in results}
         assert f"{self.prefix}B" in targets, f"B not reached: {results}"
@@ -90,13 +79,13 @@ class TestKgGraphWalkE2E:
 
     def test_sql_fallback_works(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         results = ops.kg_GRAPH_WALK(f"{self.prefix}A", max_depth=1)
         assert len(results) >= 1
 
     def test_nonexistent_entity_returns_empty(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         assert ops.kg_GRAPH_WALK(f"{self.prefix}NOPE", max_depth=2) == []
 
 
@@ -104,17 +93,17 @@ class TestKgPPRE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
-        self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self.prefix = f"PPR_{uuid.uuid4().hex[:6]}_"
-        self.hub, self.spokes = _insert_star(self.cursor, self.conn, self.prefix)
-        _build_kg(self.conn)
+        self.hub, self.spokes = _insert_star(self.engine, self.prefix)
+        _build_kg(self.engine)
         yield
-        _cleanup(self.cursor, self.conn, self.prefix)
+        _cleanup(self.engine, self.prefix)
 
     def test_hub_highest_score(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         results = ops.kg_PPR(seed_entities=[self.spokes[0]], damping=0.85)
         if not results:
             pytest.skip("PPR returned no results (ObjectScript may not be deployed)")
@@ -128,12 +117,12 @@ class TestKgPPRE2E:
 
     def test_empty_seeds(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         assert ops.kg_PPR(seed_entities=[]) == []
 
     def test_completes_under_5s(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         t0 = time.monotonic()
         ops.kg_PPR(seed_entities=[self.spokes[0]])
         assert (time.monotonic() - t0) < 5.0
@@ -143,13 +132,15 @@ class TestKgPPRSqlFunction:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self.conn = iris_connection
         self.cursor = iris_connection.cursor()
         self.prefix = f"PSQL_{uuid.uuid4().hex[:6]}_"
-        self.hub, self.spokes = _insert_star(self.cursor, self.conn, self.prefix, n_spokes=3)
-        _build_kg(self.conn)
+        self.hub, self.spokes = _insert_star(self.engine, self.prefix, n_spokes=3)
+        _build_kg(self.engine)
         yield
-        _cleanup(self.cursor, self.conn, self.prefix)
+        _cleanup(self.engine, self.prefix)
 
     def test_returns_valid_json(self):
         seed_json = json.dumps([self.spokes[0]])
@@ -169,33 +160,26 @@ class TestKgKNNVECE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
-        self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.prefix = f"VEC_{uuid.uuid4().hex[:6]}_"
         self._insert_embeddings()
         yield
-        _cleanup(self.cursor, self.conn, self.prefix)
+        _cleanup(self.engine, self.prefix)
 
     def _insert_embeddings(self):
         import numpy as np
         rng = np.random.default_rng(42)
         for i in range(5):
             nid = f"{self.prefix}N{i}"
-            self.cursor.execute(
-                "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS "
-                "(SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)", [nid, nid])
+            self.engine.create_node(nid)
             vec = rng.normal(0, 1, 768).tolist()
-            vec_str = ",".join(f"{v:.6f}" for v in vec)
-            self.cursor.execute(
-                "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) SELECT ?, TO_VECTOR(?, DOUBLE) "
-                "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
-                [nid, vec_str, nid])
-        self.conn.commit()
+            self.engine.store_embedding(nid, vec)
 
     def test_returns_results(self):
         import numpy as np
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         query = json.dumps(np.random.default_rng(42).normal(0, 1, 768).tolist())
         results = ops.kg_KNN_VEC(query, k=3)
         assert len(results) > 0
@@ -204,9 +188,10 @@ class TestKgKNNVECE2E:
 
     def test_node_id_input(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         node_id = f"{self.prefix}N0"
         results = ops.kg_KNN_VEC(node_id, k=3)
+        assert isinstance(results, list)
         assert len(results) > 0
         assert all(nid != node_id for nid, _ in results)
         assert all(isinstance(sim, float) for _, sim in results)
@@ -215,7 +200,7 @@ class TestKgKNNVECE2E:
         import logging
         import numpy as np
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         query = json.dumps(np.random.default_rng(99).normal(0, 1, 768).tolist())
         with caplog.at_level(logging.WARNING, logger="iris_vector_graph.operators"):
             ops.kg_KNN_VEC(query, k=3)
@@ -223,25 +208,22 @@ class TestKgKNNVECE2E:
         assert len(fallbacks) == 0, f"HNSW fell back: {[r.message for r in fallbacks]}"
 
 
+
 class TestKgNeighborsE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
-        self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self.prefix = f"NBR_{uuid.uuid4().hex[:6]}_"
         self._insert_data()
         yield
-        _cleanup(self.cursor, self.conn, self.prefix)
+        _cleanup(self.engine, self.prefix)
 
     def _insert_data(self):
         for n in ["A1", "A2", "E1", "E2", "E3", "X1"]:
             nid = f"{self.prefix}{n}"
-            try:
-                self.cursor.execute(
-                    "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
-            except Exception:
-                pass
+            self.engine.create_node(nid)
         edges = [
             ("A1", "MENTIONS", "E1"), ("A1", "MENTIONS", "E2"),
             ("A2", "MENTIONS", "E2"), ("A2", "MENTIONS", "E3"),
@@ -249,17 +231,11 @@ class TestKgNeighborsE2E:
             ("X1", "CITES", "A2"),
         ]
         for s, p, o in edges:
-            try:
-                self.cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                    [f"{self.prefix}{s}", p, f"{self.prefix}{o}"])
-            except Exception:
-                pass
-        self.conn.commit()
+            self.engine.create_edge(f"{self.prefix}{s}", p, f"{self.prefix}{o}")
 
     def test_out_mentions(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         result = ops.kg_NEIGHBORS(
             [f"{self.prefix}A1", f"{self.prefix}A2"], predicate="MENTIONS")
         assert f"{self.prefix}E1" in result
@@ -268,34 +244,34 @@ class TestKgNeighborsE2E:
 
     def test_in_direction(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         result = ops.kg_NEIGHBORS(
             [f"{self.prefix}A2"], predicate="CITES", direction="in")
         assert f"{self.prefix}X1" in result
 
     def test_both_direction(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         result = ops.kg_NEIGHBORS(
             [f"{self.prefix}X1"], predicate="CITES", direction="both")
         assert f"{self.prefix}A1" in result or f"{self.prefix}A2" in result
 
     def test_no_predicate_returns_all(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         result = ops.kg_NEIGHBORS([f"{self.prefix}A1"], predicate=None)
         assert len(result) >= 3
 
     def test_mentions_alias(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         result = ops.kg_MENTIONS([f"{self.prefix}A1", f"{self.prefix}A2"])
         assert f"{self.prefix}E1" in result
         assert f"{self.prefix}E2" in result
 
     def test_empty_source(self):
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         assert ops.kg_NEIGHBORS([]) == []
 
 
@@ -303,40 +279,30 @@ class TestVectorGraphSearchE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, iris_connection):
-        self.conn = iris_connection
-        self.cursor = iris_connection.cursor()
+        from iris_vector_graph.engine import IRISGraphEngine
+        self.engine = IRISGraphEngine(iris_connection)
         self.prefix = f"VGS_{uuid.uuid4().hex[:6]}_"
         self._insert_graph_with_embeddings()
         yield
-        _cleanup(self.cursor, self.conn, self.prefix)
+        _cleanup(self.engine, self.prefix)
 
     def _insert_graph_with_embeddings(self):
         import numpy as np
         rng = np.random.default_rng(42)
         for suffix in ["A", "B", "C", "D", "E"]:
             nid = f"{self.prefix}{suffix}"
-            self.cursor.execute(
-                "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS "
-                "(SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)", [nid, nid])
+            self.engine.create_node(nid)
             if suffix in ("A", "B"):
                 vec = rng.normal(0, 1, 768).tolist()
-                vec_str = ",".join(f"{v:.6f}" for v in vec)
-                self.cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) SELECT ?, TO_VECTOR(?, DOUBLE) "
-                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
-                    [nid, vec_str, nid])
+                self.engine.store_embedding(nid, vec)
         for s, o in [("A", "C"), ("A", "D"), ("B", "E")]:
             sid, oid = f"{self.prefix}{s}", f"{self.prefix}{o}"
-            self.cursor.execute(
-                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, 'CONN', ? "
-                "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND o_id = ?)",
-                [sid, oid, sid, oid])
-        self.conn.commit()
+            self.engine.create_edge(sid, "CONN", oid)
 
     def test_returns_results(self):
         import numpy as np
         from iris_vector_graph.operators import IRISGraphOperators
-        ops = IRISGraphOperators(self.conn)
+        ops = IRISGraphOperators(self.engine.conn)
         query = json.dumps(np.random.default_rng(42).normal(0, 1, 768).tolist())
         results = ops.kg_VECTOR_GRAPH_SEARCH(
             query_vector=query, k_vector=2, k_final=10,
