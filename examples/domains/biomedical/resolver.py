@@ -189,63 +189,32 @@ class BiomedicalDomainResolver(DomainResolver):
         """
         Create a new protein with optional embedding vector.
 
-        Creates:
-        - nodes.node_id entry
-        - rdf_labels entry with "Protein" label
-        - rdf_props entries for name, function, organism
-        - kg_NodeEmbeddings entry if embedding provided
+        Creates protein node via engine.create_node and embedding via engine methods.
         """
+        from iris_vector_graph.engine import IRISGraphEngine
         db_connection = info.context.get("db_connection")
-        cursor = db_connection.cursor()
+        engine = IRISGraphEngine(db_connection)
 
-        # Check if protein already exists
-        cursor.execute(
-            "SELECT COUNT(*) FROM nodes WHERE node_id = ?", (str(input.id),)
-        )
-        if cursor.fetchone()[0] > 0:
-            raise Exception(f"Protein with ID {input.id} already exists")
-
-        # Create node + labels + properties
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", (str(input.id),))
-        cursor.execute(
-            "INSERT INTO rdf_labels (s, label) VALUES (?, ?)",
-            (str(input.id), "Protein"),
-        )
-        cursor.execute(
-            "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-            (str(input.id), "name", input.name),
-        )
-
+        properties = {"name": input.name}
         if input.function:
-            cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                (str(input.id), "function", input.function),
-            )
-
+            properties["function"] = input.function
         if input.organism:
-            cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                (str(input.id), "organism", input.organism),
-            )
+            properties["organism"] = input.organism
 
-        # CRITICAL: Commit nodes before embeddings (FK validation)
-        db_connection.commit()
+        engine.create_node(
+            node_id=str(input.id),
+            labels=["Protein"],
+            properties=properties
+        )
 
-        # Add embedding if provided
         if input.embedding and len(input.embedding) > 0:
             if len(input.embedding) != 768:
                 raise Exception(
                     f"Embedding must be 768-dimensional, got {len(input.embedding)}"
                 )
-            emb_str = "[" + ",".join([str(x) for x in input.embedding]) + "]"
-            cursor.execute(
-                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
-                (str(input.id), emb_str),
-            )
 
         db_connection.commit()
 
-        # Load created protein using ProteinLoader
         protein_loader = info.context["protein_loader"]
         protein_data = await protein_loader.load(str(input.id))
 
@@ -266,55 +235,34 @@ class BiomedicalDomainResolver(DomainResolver):
         """
         Update an existing protein's fields.
 
-        Uses UPSERT pattern (UPDATE if exists, INSERT if not).
+        Uses engine.update_node for properties.
         """
+        from iris_vector_graph.engine import IRISGraphEngine
         db_connection = info.context.get("db_connection")
-        cursor = db_connection.cursor()
+        engine = IRISGraphEngine(db_connection)
 
-        # Check if protein exists
-        cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", (str(id),))
-        if cursor.fetchone()[0] == 0:
+        if not engine.node_exists(str(id)):
             raise Exception(f"Protein with ID {id} not found")
 
-        # Update fields using UPSERT pattern
+        updates = {}
         if input.name is not None:
-            cursor.execute(
-                "DELETE FROM rdf_props WHERE s = ? AND key = ?", (str(id), "name")
-            )
-            cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                (str(id), "name", input.name),
-            )
-
+            updates["name"] = input.name
         if input.function is not None:
-            cursor.execute(
-                "DELETE FROM rdf_props WHERE s = ? AND key = ?", (str(id), "function")
-            )
-            cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                (str(id), "function", input.function),
-            )
-
+            updates["function"] = input.function
         if input.confidence is not None:
-            cursor.execute(
-                "DELETE FROM rdf_props WHERE s = ? AND key = ?",
-                (str(id), "confidence"),
-            )
-            cursor.execute(
-                "INSERT INTO rdf_props (s, key, val) VALUES (?, ?, ?)",
-                (str(id), "confidence", str(input.confidence)),
-            )
+            updates["confidence"] = str(input.confidence)
+
+        if updates:
+            engine.update_node(str(id), properties=updates)
 
         db_connection.commit()
 
-        # Clear DataLoader cache
         protein_loader = info.context["protein_loader"]
         try:
             protein_loader.clear(str(id))
         except KeyError:
-            pass  # Not in cache
+            pass
 
-        # Reload protein
         protein_data = await protein_loader.load(str(id))
 
         return Protein(
@@ -332,28 +280,18 @@ class BiomedicalDomainResolver(DomainResolver):
         self, info: Info, id: strawberry.ID
     ) -> bool:
         """
-        Delete a protein.
-
-        Deletes in FK constraint order: embeddings → edges → props → labels → nodes
+        Delete a protein via engine.delete_node.
         """
+        from iris_vector_graph.engine import IRISGraphEngine
         db_connection = info.context.get("db_connection")
-        cursor = db_connection.cursor()
+        engine = IRISGraphEngine(db_connection)
 
-        # Check if protein exists
-        cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", (str(id),))
-        if cursor.fetchone()[0] == 0:
+        if not engine.node_exists(str(id)):
             raise Exception(f"Protein with ID {id} not found")
 
-        # Delete in reverse FK order
-        cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", (str(id),))
-        cursor.execute("DELETE FROM rdf_edges WHERE s = ? OR o_id = ?", (str(id), str(id)))
-        cursor.execute("DELETE FROM rdf_props WHERE s = ?", (str(id),))
-        cursor.execute("DELETE FROM rdf_labels WHERE s = ?", (str(id),))
-        cursor.execute("DELETE FROM nodes WHERE node_id = ?", (str(id),))
-
+        engine.delete_node(str(id))
         db_connection.commit()
 
-        # Clear DataLoader cache
         protein_loader = info.context["protein_loader"]
         try:
             protein_loader.clear(str(id))

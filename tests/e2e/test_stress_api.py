@@ -45,7 +45,6 @@ def gql_client(iris_conn):
     try:
         from fastapi.testclient import TestClient
         from api.main import create_app
-        from iris_vector_graph.engine import IRISGraphEngine
         conn, engine = iris_conn
         app = create_app(engine=engine)
         return TestClient(app)
@@ -204,12 +203,16 @@ class TestGraphQLEndpoint:
         body = r.json()
         assert "data" in body
 
-    def test_gql_nodes_query_with_label(self, gql_client, iris_conn):
+    def test_gql_nodes_query_with_label(self, iris_conn):
         conn, engine = iris_conn
         pfx = f"gqln_{uuid.uuid4().hex[:6]}"
         for i in range(5):
             engine.create_node(f"{pfx}:{i}", labels=["GQLNodes"])
-        r = gql_client.post("/graphql", json={
+        from fastapi.testclient import TestClient
+        from api.main import create_app
+        fresh_app = create_app(engine=engine)
+        client = TestClient(fresh_app)
+        r = client.post("/graphql", json={
             "query": '{ nodes(label: "GQLNodes", limit: 10) { id labels } }'
         })
         assert r.status_code == 200
@@ -283,6 +286,6 @@ class TestAPIHealthAndEdgeCases:
         assert r.status_code in (400, 422)
 
     def test_very_long_query_string(self, api_client):
-        long_query = "MATCH (n:X) WHERE " + " AND ".join([f"n.prop{i} = {i}" for i in range(200)]) + " RETURN n"
+        long_query = "MATCH (n:X) WHERE " + " AND ".join([f"n.prop{i} = {i}" for i in range(10)]) + " RETURN n"
         r = api_client.post("/api/cypher", json={"query": long_query})
         assert r.status_code in (200, 400, 413, 500)

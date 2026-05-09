@@ -9,7 +9,7 @@ from iris_vector_graph.engine import IRISGraphEngine
 try:
     from iris import createIRIS as _createIRIS  # type: ignore[import]
 except ImportError:
-    from intersystems_iris import createIRIS as _createIRIS  # type: ignore[import]
+    from iris import createIRIS as _createIRIS  # type: ignore[import]
 
 SKIP = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = [
@@ -18,10 +18,16 @@ pytestmark = [
 ]
 
 
-def _cleanup_graph_prefix(cursor, prefix: str) -> None:
+def _cleanup_graph_prefix(engine, prefix: str) -> None:
+    cursor = engine.conn.cursor()
     pattern = f"{prefix}:%"
-    cursor.execute("DELETE FROM rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [pattern, pattern])
-    cursor.execute("DELETE FROM nodes WHERE node_id LIKE ?", [pattern])
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", [pattern, pattern])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [pattern, pattern])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", [pattern])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", [pattern])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [pattern])
+    engine.conn.commit()
+    cursor.close()
 
 
 def _native(iris_connection):
@@ -37,13 +43,12 @@ def engine(iris_connection):
 
 
 @pytest.fixture
-def star_graph(iris_connection):
-    cursor = iris_connection.cursor()
+def star_graph(engine):
     prefix = "PPR_CLS_TEST"
-    _cleanup_graph_prefix(cursor, prefix)
+    _cleanup_graph_prefix(engine, prefix)
     nodes = [f"{prefix}:{label}" for label in ["A", "B", "C", "D", "E"]]
     for node in nodes:
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node])
+        engine.create_node(node)
 
     edges = [
         (nodes[0], "links_to", nodes[1]),
@@ -51,33 +56,26 @@ def star_graph(iris_connection):
         (nodes[3], "links_to", nodes[1]),
         (nodes[1], "links_to", nodes[4]),
     ]
-    for edge in edges:
-        cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)", list(edge))
+    for src, pred, tgt in edges:
+        engine.create_edge(src, pred, tgt)
 
-    iris_connection.commit()
     yield nodes
-    _cleanup_graph_prefix(cursor, prefix)
-    iris_connection.commit()
-    cursor.close()
+    _cleanup_graph_prefix(engine, prefix)
 
 
 @pytest.fixture
-def chain_graph(iris_connection):
-    cursor = iris_connection.cursor()
+def chain_graph(engine):
     prefix = "CHAIN_TEST"
-    _cleanup_graph_prefix(cursor, prefix)
+    _cleanup_graph_prefix(engine, prefix)
     node_a = f"{prefix}:A"
     node_b = f"{prefix}:B"
     node_c = f"{prefix}:C"
     for node in (node_a, node_b, node_c):
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node])
-    cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)", [node_a, "chain", node_b])
-    cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)", [node_b, "chain", node_c])
-    iris_connection.commit()
+        engine.create_node(node)
+    engine.create_edge(node_a, "chain", node_b)
+    engine.create_edge(node_b, "chain", node_c)
     yield [node_a, node_b, node_c]
-    _cleanup_graph_prefix(cursor, prefix)
-    iris_connection.commit()
-    cursor.close()
+    _cleanup_graph_prefix(engine, prefix)
 
 
 class TestObjectScriptDeployment:

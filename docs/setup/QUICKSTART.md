@@ -1,159 +1,149 @@
-# IRIS Vector Graph Quickstart
+# Quickstart Guide
+
+This guide gets you from zero to a working graph in 5 minutes using IRIS Community Edition (free, no license required).
+
+---
 
 ## Prerequisites
 
-- Docker + Docker Compose
+- Docker (any recent version)
 - Python 3.10+
+- `pip install iris-vector-graph`
 
 ---
 
-## 1. Start the IRIS container
+## Step 1: Start IRIS
+
+From the repository root:
 
 ```bash
-git clone https://github.com/intersystems-community/iris-vector-graph
-cd iris-vector-graph
 docker compose up -d
 ```
 
-The container `iris-vector-graph-iris-1` starts on port 1972 (mapped dynamically by docker-compose).
+Wait about 30 seconds for IRIS to be ready. You can check:
+
+```bash
+docker compose ps       # Should show "healthy"
+```
+
+IRIS is now running on:
+- **Port 1972** — SuperServer (used by the Python SDK)
+- **Port 52773** — Management Portal at http://localhost:52773/csp/sys/UtilHome.csp
+
+Default credentials: `_SYSTEM` / `SYS`
 
 ---
 
-## 2. Install the package
+## Step 2: Install the library
 
 ```bash
-pip install iris-vector-graph              # core only
-pip install iris-vector-graph[full]        # + FastAPI/GraphQL
-pip install iris-vector-graph[plaid]       # + numpy/sklearn for PLAID
+pip install iris-vector-graph
 ```
 
 ---
 
-## 3. Connect and initialize
+## Step 3: Initialize the schema
 
 ```python
 import iris
 from iris_vector_graph.engine import IRISGraphEngine
 
-conn = iris.connect(hostname="localhost", port=1972, namespace="USER",
-                    username="_SYSTEM", password="SYS")
-engine = IRISGraphEngine(conn, embedding_dimension=768)
-engine.initialize_schema()   # idempotent — installs SQL schema + ObjectScript classes
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn)
+engine.initialize_schema()
+print("Schema ready.")
 ```
+
+This creates all SQL tables and compiles the ObjectScript classes. It's idempotent — safe to run multiple times.
 
 ---
 
-## 4. Load data
+## Step 4: Load a demo graph
+
+This demo builds a small knowledge graph of biomedical entities:
 
 ```python
-engine.create_node("gene:BRCA1", labels=["Gene"], properties={"name": "BRCA1"})
-engine.create_node("drug:Olaparib", labels=["Drug"], properties={"name": "Olaparib"})
-engine.create_edge("gene:BRCA1", "TARGETS", "drug:Olaparib")
+nodes = [
+    {"id": "gene:BRCA1",      "labels": ["Gene"],    "properties": {"name": "BRCA1",    "type": "tumor_suppressor"}},
+    {"id": "gene:TP53",       "labels": ["Gene"],    "properties": {"name": "TP53",     "type": "tumor_suppressor"}},
+    {"id": "drug:Olaparib",   "labels": ["Drug"],    "properties": {"name": "Olaparib", "mechanism": "PARP_inhibitor"}},
+    {"id": "disease:BRCA",    "labels": ["Disease"], "properties": {"name": "Breast cancer"}},
+    {"id": "disease:Ovarian", "labels": ["Disease"], "properties": {"name": "Ovarian cancer"}},
+]
+engine.bulk_create_nodes(nodes)
 
-# OBO ontology (e.g. NCI Thesaurus)
-engine.load_obo("path/to/Thesaurus.obo")
+edges = [
+    {"source_id": "gene:BRCA1",    "predicate": "TARGETS",      "target_id": "drug:Olaparib"},
+    {"source_id": "drug:Olaparib", "predicate": "TREATS",        "target_id": "disease:BRCA"},
+    {"source_id": "drug:Olaparib", "predicate": "TREATS",        "target_id": "disease:Ovarian"},
+    {"source_id": "gene:BRCA1",    "predicate": "ASSOCIATED_WITH","target_id": "disease:BRCA"},
+    {"source_id": "gene:TP53",     "predicate": "INTERACTS_WITH", "target_id": "gene:BRCA1"},
+]
+engine.bulk_create_edges(edges)
+print(f"Loaded {len(nodes)} nodes and {len(edges)} edges.")
 ```
 
 ---
 
-## 5. Query
+## Step 5: Query the graph
 
-### Cypher
-
+**Cypher — find what Olaparib treats:**
 ```python
 result = engine.execute_cypher(
-    "MATCH (g:Gene)-[:TARGETS]->(d:Drug) RETURN g.id, d.id LIMIT 10"
+    "MATCH (d:Drug {node_id:$id})-[:TREATS]->(dis) RETURN d.name AS drug, dis.name AS disease",
+    {"id": "drug:Olaparib"}
 )
-print(result["rows"])
+for row in result.rows:
+    print(f"{row[0]} → {row[1]}")
+```
+Output:
+```
+Olaparib → Breast cancer
+Olaparib → Ovarian cancer
 ```
 
-### BM25 lexical search
-
+**Find genes that target a drug:**
 ```python
-engine.bm25_build("ncit", text_props=["name", "definition"])
-hits = engine.bm25_search("ncit", "ankylosing spondylitis HLA-B27", k=10)
-# [("NCIT:C34718", 8.4), ...]
+result = engine.execute_cypher(
+    "MATCH (g:Gene)-[:TARGETS]->(d:Drug) RETURN g.name AS gene, d.name AS drug"
+)
+print(result.rows)
+```
+Output:
+```
+[['BRCA1', 'Olaparib']]
 ```
 
-### Vector search
-
+**2-hop path — find diseases reachable from BRCA1:**
 ```python
-engine.vec_create_index("genes", dim=384, metric="cosine")
-engine.vec_insert("genes", "gene:BRCA1", embedding_vector)
-engine.vec_build("genes")
-hits = engine.vec_search("genes", query_vector, k=5)
+result = engine.execute_cypher(
+    "MATCH (g {node_id:$id})-[*1..2]->(target) RETURN DISTINCT target.name LIMIT 10",
+    {"id": "gene:BRCA1"}
+)
+print([row[0] for row in result.rows])
 ```
-
-### `ivg` Cypher procedures
-
-```python
-# BM25 in Cypher
-engine.execute_cypher(
-    "CALL ivg.bm25.search('ncit', $q, 5) YIELD node, score RETURN node, score",
-    {"q": "diabetes"}
-)
-
-# Personalized PageRank
-engine.execute_cypher(
-    "CALL ivg.ppr(['gene:BRCA1'], 0.85, 20) YIELD node, score RETURN node, score"
-)
+Output:
+```
+['Olaparib', 'Breast cancer', 'Ovarian cancer']
 ```
 
 ---
 
-## 6. Neo4j Browser + Bolt Server
+## Step 6: Explore further
+
+| Feature | Method | Guide |
+|---|---|---|
+| Vector search | `engine.ivf_build()`, `engine.search_nodes_by_vector()` | [Python SDK](../python/PYTHON_SDK.md) |
+| Temporal edges | `engine.create_edge_temporal()`, `engine.get_edges_in_window()` | [Architecture](../architecture/ARCHITECTURE.md) |
+| Graph analytics | `engine.run_pagerank()`, `engine.run_khop()` | [Python SDK](../python/PYTHON_SDK.md) |
+| REST / Bolt API | `uvicorn api.main:app` | [Operations](../OPERATIONS.md) |
+| IRIS Management Portal | http://localhost:52773 | (browser) |
+
+---
+
+## Stopping IRIS
 
 ```bash
-IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER \
-IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
-python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
+docker compose down        # Stop container, keep data
+docker compose down -v     # Stop and wipe all data
 ```
-
-Open **http://localhost:8000/browser/** → select "No authentication" → Connect.
-
-Bolt TCP on port 7687:
-```python
-from neo4j import GraphDatabase
-driver = GraphDatabase.driver("bolt://localhost:7687", auth=("", ""))
-with driver.session() as s:
-    print(s.run("MATCH (n) RETURN count(n) AS c").single()["c"])
-```
-
----
-
-## 7. Run tests
-
-```bash
-pytest tests/unit/ -q
-```
-
-E2E tests require the container to be running. They attach to `iris-vector-graph-main` via `IRISContainer.attach()`.
-
----
-
-## Directory structure
-
-```
-iris-vector-graph/
-├── iris_src/src/Graph/KG/    # ObjectScript classes
-├── iris_vector_graph/         # Python package
-│   ├── engine.py              # IRISGraphEngine (all Python wrappers)
-│   ├── operators.py           # IRISGraphOperators (kg_TXT, PPR, etc.)
-│   ├── cypher/                # Cypher parser + translator
-│   ├── cypher_api.py          # HTTP + Bolt server (uvicorn)
-│   ├── bolt_server.py         # Bolt 5.4 protocol (PackStream, sessions)
-│   ├── browser_static/        # Bundled Neo4j Browser
-│   └── embedded.py            # EmbeddedConnection for in-IRIS Python
-├── tests/unit/                # All tests (unit + E2E)
-├── specs/                     # Feature specifications
-└── docs/                      # Documentation
-```
-
----
-
-## Further reading
-
-- [Python SDK Reference](../python/PYTHON_SDK.md)
-- [Architecture](../architecture/ARCHITECTURE.md)
-- [Schema Reference](../architecture/ACTUAL_SCHEMA.md)
-- [Testing Policy](../TESTING_POLICY.md)

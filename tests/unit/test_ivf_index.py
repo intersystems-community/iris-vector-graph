@@ -15,6 +15,11 @@ def _make_engine():
 
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine.conn = MagicMock()
+    engine._index_registry = {}
+    engine._arno_available = None
+    engine._arno_capabilities = {}
+    engine._nkg_dirty = False
+    engine._native_vec_available = None
     return engine
 
 
@@ -262,7 +267,7 @@ class TestIVFIndexE2E:
         node_ids = [n[0] for n in nodes]
 
         idx = f"test46a_{self._run}"
-        result = self.engine.ivf_build(idx, nlist=2)
+        result = self.engine.ivf_build(idx, nlist=2, build_batch_size=10, node_ids=node_ids)
         assert isinstance(result, dict)
         assert result.get("indexed", 0) >= 5
         assert result.get("nlist") == 2
@@ -280,8 +285,8 @@ class TestIVFIndexE2E:
         node_ids = [n[0] for n in nodes]
 
         idx = f"test46b_{self._run}"
-        r1 = self.engine.ivf_build(idx, nlist=2)
-        r2 = self.engine.ivf_build(idx, nlist=2)
+        r1 = self.engine.ivf_build(idx, nlist=2, build_batch_size=10, node_ids=node_ids)
+        r2 = self.engine.ivf_build(idx, nlist=2, build_batch_size=10, node_ids=node_ids)
         assert r1["indexed"] == r2["indexed"]
         self._cleanup_nodes(node_ids)
 
@@ -300,7 +305,7 @@ class TestIVFIndexE2E:
         node_ids = [n[0] for n in nodes]
 
         idx = f"test46c_{self._run}"
-        self.engine.ivf_build(idx, nlist=4)
+        self.engine.ivf_build(idx, nlist=4, build_batch_size=10, node_ids=node_ids)
         query = nodes[0][1]
         results = self.engine.ivf_search(idx, query, k=5, nprobe=4)
         assert len(results) > 0
@@ -318,16 +323,19 @@ class TestIVFIndexE2E:
             norm = math.sqrt(sum(x * x for x in vec)) or 1.0
             vec = [x / norm for x in vec]
             nodes.append((nid, vec))
-        self._insert_embeddings(nodes)
         node_ids = [n[0] for n in nodes]
+        self._insert_embeddings(nodes)
 
         idx = f"test46d_{self._run}"
-        self.engine.ivf_build(idx, nlist=4)
+        # Pass node_ids so only these 20 nodes are indexed — correct, isolated behavior
+        self.engine.ivf_build(idx, nlist=4, build_batch_size=10, node_ids=node_ids)
         query = nodes[3][1]
         exact = self.engine.ivf_search(idx, query, k=1, nprobe=4)
         brute_top = max(nodes, key=lambda n: _cosine(query, n[1]))
         assert len(exact) > 0
-        assert exact[0][0] == brute_top[0]
+        assert exact[0][0] == brute_top[0], (
+            f"IVF top-1 {exact[0][0]!r} != brute-force top-1 {brute_top[0]!r}"
+        )
         self._cleanup_nodes(node_ids)
 
     def test_search_empty_index_returns_empty(self):
@@ -343,7 +351,7 @@ class TestIVFIndexE2E:
         node_ids = [n[0] for n in nodes]
 
         idx = f"test46a_{self._run}"
-        self.engine.ivf_build(idx, nlist=2)
+        self.engine.ivf_build(idx, nlist=2, build_batch_size=10, node_ids=node_ids)
         self.engine.ivf_drop(idx)
         info = self.engine.ivf_info(idx)
         assert info == {}
@@ -358,7 +366,7 @@ class TestIVFIndexE2E:
         node_ids = [n[0] for n in nodes]
 
         idx = f"test46b_{self._run}"
-        self.engine.ivf_build(idx, nlist=2)
+        self.engine.ivf_build(idx, nlist=2, build_batch_size=10, node_ids=node_ids)
         info = self.engine.ivf_info(idx)
         assert info.get("nlist") == 2
         assert info.get("indexed", 0) > 0
@@ -385,7 +393,7 @@ class TestIVFIndexE2E:
         node_ids = [n[0] for n in nodes]
 
         idx = f"test46e_{self._run}"
-        self.engine.ivf_build(idx, nlist=2)
+        self.engine.ivf_build(idx, nlist=2, build_batch_size=10, node_ids=node_ids)
         query = nodes[0][1]
         vec_str = ", ".join(str(v) for v in query)
         cypher = (

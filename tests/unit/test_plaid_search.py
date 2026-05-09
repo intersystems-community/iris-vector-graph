@@ -20,6 +20,11 @@ class TestPlaidBuild:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._index_registry = {}
+        engine._arno_available = None
+        engine._arno_capabilities = {}
+        engine._nkg_dirty = False
+        engine._native_vec_available = None
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '{"name":"test","nCentroids":5,"nDocs":10,"dim":32,"totalTokens":50}'
         engine._iris_obj = lambda: iris_mock
@@ -45,6 +50,11 @@ class TestPlaidBuild:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._index_registry = {}
+        engine._arno_available = None
+        engine._arno_capabilities = {}
+        engine._nkg_dirty = False
+        engine._native_vec_available = None
         engine._iris_obj = lambda: MagicMock()
         try:
             import numpy as np
@@ -61,6 +71,11 @@ class TestPlaidSearch:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._index_registry = {}
+        engine._arno_available = None
+        engine._arno_capabilities = {}
+        engine._nkg_dirty = False
+        engine._native_vec_available = None
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"id":"doc_0","score":0.95},{"id":"doc_1","score":0.80}]'
         engine._iris_obj = lambda: iris_mock
@@ -73,6 +88,11 @@ class TestPlaidSearch:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._index_registry = {}
+        engine._arno_available = None
+        engine._arno_capabilities = {}
+        engine._nkg_dirty = False
+        engine._native_vec_available = None
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = '[{"id":"a","score":0.95},{"id":"b","score":0.80},{"id":"c","score":0.60}]'
         engine._iris_obj = lambda: iris_mock
@@ -88,6 +108,11 @@ class TestPlaidInsert:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._index_registry = {}
+        engine._arno_available = None
+        engine._arno_capabilities = {}
+        engine._nkg_dirty = False
+        engine._native_vec_available = None
         iris_mock = MagicMock()
         engine._iris_obj = lambda: iris_mock
         engine.plaid_insert("test", "new_doc", _rand_vecs(10, 32))

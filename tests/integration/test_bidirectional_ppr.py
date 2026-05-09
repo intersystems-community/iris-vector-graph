@@ -17,13 +17,7 @@ class TestBidirectionalPageRank:
     """User Story 1: Bidirectional Graph Traversal (P1)"""
 
     @pytest.fixture
-    def engine(self, iris_connection):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
-    @pytest.fixture
-    def setup_asymmetric_graph(self, iris_connection):
+    def setup_asymmetric_graph(self, engine):
         """Create a test graph with asymmetric edges for bidirectional testing.
 
         Graph structure:
@@ -35,16 +29,21 @@ class TestBidirectionalPageRank:
             - Should find D (via reverse edge B <- D)
             - Should find C (via forward edge B -> C)
         """
-        cursor = iris_connection.cursor()
-
         # Clean up any existing test data
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_PPR:%' OR o_id LIKE 'TEST_PPR:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_PPR:%'")
+        cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PPR:%", "TEST_PPR:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PPR:%", "TEST_PPR:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PPR:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PPR:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PPR:%"])
+    engine.conn.commit()
+    cursor.close()
+
 
         # Create test nodes
         nodes = ['TEST_PPR:A', 'TEST_PPR:B', 'TEST_PPR:C', 'TEST_PPR:D']
         for node_id in nodes:
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
+            engine.create_node(node_id)
 
         # Create edges: A->B, B->C, D->B
         edges = [
@@ -53,19 +52,14 @@ class TestBidirectionalPageRank:
             ('TEST_PPR:D', 'connects_to', 'TEST_PPR:B'),
         ]
         for s, p, o_id in edges:
-            cursor.execute(
-                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                [s, p, o_id]
-            )
+            engine.create_edge(s, p, o_id)
 
-        iris_connection.commit()
 
         yield nodes, edges
 
         # Cleanup
         cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_PPR:%' OR o_id LIKE 'TEST_PPR:%'")
         cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_PPR:%'")
-        iris_connection.commit()
 
     def test_bidirectional_discovers_incoming_edges(self, engine, setup_asymmetric_graph):
         """
@@ -130,18 +124,18 @@ class TestWeightedReverseEdges:
     """User Story 2: Weighted Reverse Edge Control (P2)"""
 
     @pytest.fixture
-    def engine(self, iris_connection):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
-    @pytest.fixture
     def setup_simple_edge(self, iris_connection):
         """Create a simple A->B edge for weight testing."""
         cursor = iris_connection.cursor()
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_WEIGHT:%' OR o_id LIKE 'TEST_WEIGHT:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_WEIGHT:%'")
+        cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_WEIGHT:%"])
+    engine.conn.commit()
+    cursor.close()
 
         nodes = ['TEST_WEIGHT:A', 'TEST_WEIGHT:B']
         for node_id in nodes:
@@ -152,13 +146,17 @@ class TestWeightedReverseEdges:
             ['TEST_WEIGHT:A', 'connects_to', 'TEST_WEIGHT:B']
         )
 
-        iris_connection.commit()
 
         yield nodes
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_WEIGHT:%' OR o_id LIKE 'TEST_WEIGHT:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_WEIGHT:%'")
-        iris_connection.commit()
+        cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_WEIGHT:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_WEIGHT:%"])
+    engine.conn.commit()
+    cursor.close()
 
     def test_weight_1_0_full_contribution(self, engine, setup_simple_edge):
         """
@@ -242,24 +240,22 @@ class TestPerformance:
     """User Story 3: Performance Within Acceptable Bounds (P3)"""
 
     @pytest.fixture
-    def engine(self, iris_connection):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
-    @pytest.fixture
     def setup_large_graph(self, iris_connection):
         """Create a graph with ~1000 nodes for performance testing."""
-        cursor = iris_connection.cursor()
-
         # Clean up
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_PERF:%' OR o_id LIKE 'TEST_PERF:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_PERF:%'")
+        cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PERF:%", "TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PERF:%", "TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PERF:%"])
+    engine.conn.commit()
+    cursor.close()
 
         # Create 1000 nodes
         num_nodes = 1000
         for i in range(num_nodes):
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [f"TEST_PERF:N{i}"])
+            engine.create_node(f"TEST_PERF:N{i}")
 
         # Create ~5000 edges (5 per node on average)
         import random
@@ -276,13 +272,17 @@ class TestPerformance:
                     except Exception:
                         pass  # Skip duplicate edges (UNIQUE constraint on s,p,o_id)
 
-        iris_connection.commit()
 
         yield num_nodes
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_PERF:%' OR o_id LIKE 'TEST_PERF:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_PERF:%'")
-        iris_connection.commit()
+        cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PERF:%", "TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PERF:%", "TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PERF:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PERF:%"])
+    engine.conn.commit()
+    cursor.close()
 
     @pytest.mark.slow
     def test_bidirectional_performance_acceptable(self, engine, setup_large_graph):
@@ -335,12 +335,6 @@ class TestPerformance:
 class TestIndexOptimization:
     """User Story 3: Index optimization verification (P3)"""
 
-    @pytest.fixture
-    def engine(self, iris_connection):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
     def test_idx_edges_oid_exists(self, iris_connection):
         """
         T032: Verify idx_edges_oid index exists for reverse edge lookups.
@@ -380,13 +374,19 @@ class TestIndexOptimization:
         cursor = iris_connection.cursor()
 
         # Setup: Create test data
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_FALLBACK:%' OR o_id LIKE 'TEST_FALLBACK:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_FALLBACK:%'")
+        cursor = engine.conn.cursor()
+    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_FALLBACK:%", "TEST_FALLBACK:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_FALLBACK:%", "TEST_FALLBACK:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_FALLBACK:%"])
+    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_FALLBACK:%"])
+    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_FALLBACK:%"])
+    engine.conn.commit()
+    cursor.close()
 
         # Create 500 nodes (smaller set for fallback test)
         num_nodes = 500
         for i in range(num_nodes):
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [f"TEST_FALLBACK:N{i}"])
+            engine.create_node(f"TEST_FALLBACK:N{i}")
 
         # Create ~2500 edges
         import random
@@ -403,7 +403,6 @@ class TestIndexOptimization:
                     except Exception:
                         pass  # Skip duplicate edges (UNIQUE constraint on s,p,o_id)
 
-        iris_connection.commit()
 
         try:
             # Run bidirectional PageRank

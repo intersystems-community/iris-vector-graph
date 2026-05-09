@@ -5,7 +5,7 @@ import time
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "2972"))
+IRIS_PORT = int(os.environ.get("IVG_TEST_PORT", "2972"))
 IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
 IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
 IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
@@ -20,7 +20,7 @@ def iris_conn():
         c = iris_mod.connect(IRIS_HOST, IRIS_PORT, IRIS_NS, IRIS_USER, IRIS_PASS)
         o = iris_mod.createIRIS(c)
         o.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
-        o.classMethodString("Graph.KG.NKGAccel", "Load", ARNO_LIB)
+        o.classMethodValue("Graph.KG.NKGAccel", "Load", ARNO_LIB)
         o.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
         yield c, o
         c.close()
@@ -36,17 +36,17 @@ def xl_seed(iris_conn):
     count = cur.fetchone()[0]
     if count < 1_000_000:
         pytest.skip(f"XL data not loaded ({count} edges) — need >= 1M edges")
-    o.classMethodString("Graph.KG.Traversal", "BuildNKG")
+    o.classMethodValue("Graph.KG.Traversal", "BuildNKG")
     o.classMethodVoid("Graph.KG.NKGAccel", "ResetCache")
-    o.classMethodString("Graph.KG.NKGAccel", "Load", ARNO_LIB)
+    o.classMethodValue("Graph.KG.NKGAccel", "Load", ARNO_LIB)
     o.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
-    return str(o.classMethodString("Graph.KG.NKGAccel", "GetFirstNKGNode"))
+    return str(o.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode"))
 
 
 @pytest.fixture(scope="module")
 def m_seed(iris_conn):
     c, o = iris_conn
-    seed = str(o.classMethodString("Graph.KG.NKGAccel", "GetFirstNKGNode"))
+    seed = str(o.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode"))
     if not seed or seed == "0" or seed == "":
         pytest.skip("no NKG data loaded — run BulkIngestEdges + BuildNKG first")
     return seed

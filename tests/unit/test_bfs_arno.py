@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
-SKIP_ARNO_TESTS = os.environ.get("SKIP_ARNO_TESTS", "true").lower() == "true"
+# SKIP_ARNO_TESTS removed — tests now check Arno availability at runtime via setup fixture
 
 
 class TestBFSArnoUnit:
@@ -115,7 +115,6 @@ class TestBFSArnoUnit:
 
 
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
-@pytest.mark.skipif(SKIP_ARNO_TESTS, reason="SKIP_ARNO_TESTS=true — Arno .so not loaded")
 class TestBFSArnoE2E:
 
     @pytest.fixture(autouse=True)
@@ -125,6 +124,19 @@ class TestBFSArnoE2E:
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
+        # Check Arno is actually available — fail explicitly if not, do not silently skip
+        self.engine._detect_arno()
+        if not self.engine._arno_capabilities.get("rust_callout"):
+            # FLAG: If Community Edition ships rzf/$ZF callout support in the future,
+            # this check needs updating — currently Community does NOT support rzf
+            # despite having VECTOR_COSINE. Monitor ISC release notes for rzf availability
+            # on Community and update the test infrastructure accordingly.
+            pytest.fail(
+                "Arno rust_callout not available — deploy libarno_callout.so to /tmp/ "
+                "on the test container and ensure ArnoAccel.Load() succeeds. "
+                "If on Community Edition: rzf/ callout is not currently available on Community. "
+                "This is a real infrastructure failure, not an expected skip."
+            )
         yield
         cursor = self.conn.cursor()
         try:
@@ -145,6 +157,11 @@ class TestBFSArnoE2E:
     def _edge(self, s, p, o):
         self.engine.create_edge(s, p, o)
 
+    def _rebuild_indexes(self):
+        # Use engine API only — no direct ObjectScript calls
+        self.engine.rebuild_kg()
+        self.engine.rebuild_nkg()
+
     def test_bfs_arno_correctness(self):
         a = self._node("A")
         b = self._node("B")
@@ -153,6 +170,7 @@ class TestBFSArnoE2E:
         self._edge(a, "BINDS", b)
         self._edge(b, "BINDS", c)
         self._edge(c, "BINDS", d)
+        self._rebuild_indexes()
 
         result_arno = self.engine.execute_cypher(
             "MATCH (x)-[r*1..3]->(y) WHERE x.id = $id RETURN y.id",
@@ -179,6 +197,7 @@ class TestBFSArnoE2E:
             leaf = self._node(f"leaf{i}")
             self._edge(hub, "BINDS", mid)
             self._edge(mid, "BINDS", leaf)
+        self._rebuild_indexes()
 
         times = []
         for _ in range(10):
@@ -198,19 +217,21 @@ class TestBFSArnoE2E:
         b_regs = self._node("pred_b_regs")
         self._edge(a, "BINDS", b_binds)
         self._edge(a, "REGULATES", b_regs)
+        self._rebuild_indexes()
 
         result = self.engine.execute_cypher(
             "MATCH (x)-[r:BINDS*1..2]->(y) WHERE x.id = $id RETURN y.id",
             {"id": a},
         )
         ids = {row[0] for row in result["rows"]}
-        assert b_binds in ids
-        assert b_regs not in ids
+        assert b_binds in ids, f"Expected BINDS neighbor {b_binds} in {ids}"
+        assert b_regs not in ids, f"REGULATES neighbor {b_regs} should not be in {ids} — arno predicate filter not working"
 
     def test_bfs_arno_fallback(self):
         a = self._node("fb_a")
         b = self._node("fb_b")
         self._edge(a, "BINDS", b)
+        self._rebuild_indexes()
 
         self.engine._arno_available = False
         self.engine._arno_capabilities = {}
@@ -227,6 +248,7 @@ class TestBFSArnoE2E:
         for i in range(20):
             n = self._node(f"max_leaf{i}")
             self._edge(hub, "BINDS", n)
+        self._rebuild_indexes()
 
         result = self.engine.execute_cypher(
             "MATCH (x)-[r*1..1]->(y) WHERE x.id = $id RETURN y.id LIMIT 5",

@@ -78,6 +78,12 @@ ClassMethod BuildKG() As %Status
 
 ClassMethod BuildNKG() As %Status
 {
+	// Invalidate the Arno adjacency cache BEFORE killing ^NKG.
+	// CacheNKGAdj() compares ^NKG("$meta","version") to ^ArnoKG("KG","nkg_adj_ver").
+	// Kill ^NKG resets the version to 0; $Increment makes it 1.
+	// If the stale cache also has version 1, CacheNKGAdj sees cachedVer==currentVer
+	// and skips the rebuild, leaving Arno BFS using data from the previous graph.
+	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch {}
 	Kill ^NKG
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	
@@ -109,7 +115,70 @@ ClassMethod BuildNKG() As %Status
 	}
 	Set ^NKG("$meta", "edgeCount") = edgeCount
 	Set tmp = $Increment(^NKG("$meta", "version"))
+
+	Do ..Build2HopStats()
+	Do ..Build2HopExactStats()
+
 	Return $$$OK
+}
+
+ClassMethod BackfillDegp() As %Integer
+{
+	Kill ^KG("deg")
+	Kill ^KG("degp")
+	Set src = ""
+	Set cnt = 0
+	For {
+		Set src = $Order(^KG("out", 0, src))
+		Quit:src=""
+		Set pred = ""
+		For {
+			Set pred = $Order(^KG("out", 0, src, pred))
+			Quit:pred=""
+			Set deg = 0
+			Set o = ""
+			For {
+				Set o = $Order(^KG("out", 0, src, pred, o))
+				Quit:o=""
+				Set deg = deg + 1
+			}
+			Set tmp = $Increment(^KG("deg", src), deg)
+			Set ^KG("degp", src, pred) = deg
+			Set cnt = cnt + 1
+		}
+	}
+	Return cnt
+}
+
+ClassMethod Build2HopStats() As %Integer
+{
+	Kill ^KG("deg2p")
+	Set src = ""
+	For {
+		Set src = $Order(^KG("out", 0, src))
+		Quit:src=""
+		Set pred = ""
+		For {
+			Set pred = $Order(^KG("out", 0, src, pred))
+			Quit:pred=""
+			Set sum = 0
+			Set mid = ""
+			For {
+				Set mid = $Order(^KG("out", 0, src, pred, mid))
+				Quit:mid=""
+				Set sum = sum + $Get(^KG("degp", mid, pred), 0)
+			}
+			If sum > 0 Set ^KG("deg2p", src, pred) = sum
+		}
+	}
+	Set n = ""
+	Set cnt = 0
+	For {
+		Set n = $Order(^KG("deg2p", n))
+		Quit:n=""
+		Set cnt = cnt + 1
+	}
+	Return cnt
 }
 
 /// Helper for single predicate traversal
@@ -166,8 +235,25 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
     For hop = 1:1:maxHops {
         Kill nextFrontier
         Set s = ""
-        Set fixedP = $Select($IsObject(preds):preds.%Get(hop-1), 1:"")
-        Set nextP = $Select($IsObject(preds):preds.%Get(hop), 1:"")
+        // Reuse last predicate when preds has fewer entries than hops.
+        // [:BINDS*1..3] passes preds=["BINDS"] — apply "BINDS" at every hop.
+        If $IsObject(preds) && (preds.%Size()>0) {
+            Set predIdx = hop-1
+            If predIdx >= preds.%Size() Set predIdx = preds.%Size()-1
+            Set fixedP = preds.%Get(predIdx)
+            // nextP is only used as a lookahead for hops before the last.
+            // At the last hop, nextP="" disables the lookahead filter.
+            If hop < maxHops {
+                Set nextPredIdx = hop
+                If nextPredIdx >= preds.%Size() Set nextPredIdx = preds.%Size()-1
+                Set nextP = preds.%Get(nextPredIdx)
+            } Else {
+                Set nextP = ""
+            }
+        } Else {
+            Set fixedP = ""
+            Set nextP = ""
+        }
         
         For {
             Set s = $Order(frontier(s))
@@ -211,12 +297,21 @@ ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Intege
         Set o = $Order(^KG("out", 0, s, p, o))
         If o = "" Quit
         If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
-        If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) Continue
         
+        // Always record this hop's result — leaf nodes at hop N are valid results
+        // even when hop N < maxHops.
         Set count = count + 1
         Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", 0, s, p, o), 1.0), hop)
         
-        If '$Data(seen(o)) Set nextFrontier(o) = ""
+        // Only add to nextFrontier if the node can continue on the next hop.
+        // The nextP lookahead prunes the frontier, not the result set.
+        If '$Data(seen(o)) {
+            If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) {
+                // Node has no next-hop edges — don't add to frontier, but result was recorded.
+            } Else {
+                Set nextFrontier(o) = ""
+            }
+        }
     }
 }
 
@@ -267,8 +362,22 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
     For hop = 1:1:maxHops {
         Kill nextFrontier
         Set s = ""
-        Set fixedP = $Select($IsObject(preds):preds.%Get(hop-1), 1:"")
-        Set nextP = $Select($IsObject(preds):preds.%Get(hop), 1:"")
+        // Reuse last predicate when preds has fewer entries than hops.
+        If $IsObject(preds) && (preds.%Size()>0) {
+            Set predIdx = hop-1
+            If predIdx >= preds.%Size() Set predIdx = preds.%Size()-1
+            Set fixedP = preds.%Get(predIdx)
+            If hop < maxHops {
+                Set nextPredIdx = hop
+                If nextPredIdx >= preds.%Size() Set nextPredIdx = preds.%Size()-1
+                Set nextP = preds.%Get(nextPredIdx)
+            } Else {
+                Set nextP = ""
+            }
+        } Else {
+            Set fixedP = ""
+            Set nextP = ""
+        }
         
         For {
             Set s = $Order(frontier(s))
@@ -1093,6 +1202,79 @@ ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults 
     }
     Kill ^||kh2s, ^||kh2all
     Return result
+}
+
+ClassMethod KHop2CountFast(srcId As %String, pred As %String = "") As %Integer
+{
+    If pred '= "" {
+        Set cnt = $Get(^KG("deg2p", srcId, pred), -1)
+        If cnt >= 0 Return +cnt
+    }
+    Return ..KHop2Count(srcId, pred)
+}
+
+ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
+{
+    If pred '= "" {
+        Set cnt = $Get(^KG("deg2p_exact", srcId, pred), -1)
+        If cnt >= 0 Return +cnt
+    }
+    Return ..KHop2Count(srcId, pred)
+}
+
+ClassMethod Build2HopExactStats() As %Integer
+{
+    Kill ^KG("deg2p_exact")
+    If ##class(Graph.KG.NKGAccel).Build2HopExact() {
+        Set n = ""
+        Set cnt = 0
+        For {
+            Set n = $Order(^KG("deg2p_exact", n))
+            Quit:n=""
+            Set cnt = cnt + 1
+        }
+        Return cnt
+    }
+    Set src = ""
+    Set cnt = 0
+    For {
+        Set src = $Order(^KG("out", 0, src))
+        Quit:src=""
+        Set pred = ""
+        For {
+            Set pred = $Order(^KG("out", 0, src, pred))
+            Quit:pred=""
+            Kill ^||h2s
+            Set ^||h2s(src) = ""
+            Set mid = ""
+            For {
+                Set mid = $Order(^KG("out", 0, src, pred, mid))
+                Quit:mid=""
+                Set ^||h2s(mid) = ""
+            }
+            Set exact = 0
+            Set mid = ""
+            For {
+                Set mid = $Order(^KG("out", 0, src, pred, mid))
+                Quit:mid=""
+                Set o2 = ""
+                For {
+                    Set o2 = $Order(^KG("out", 0, mid, pred, o2))
+                    Quit:o2=""
+                    If '$Data(^||h2s(o2)) {
+                        Set ^||h2s(o2) = ""
+                        Set exact = exact + 1
+                    }
+                }
+            }
+            Kill ^||h2s
+            If exact > 0 {
+                Set ^KG("deg2p_exact", src, pred) = exact
+                Set cnt = cnt + 1
+            }
+        }
+    }
+    Return cnt
 }
 
 }

@@ -18,7 +18,7 @@ class TestPPRContractSignature:
     """Test API contract signature compliance."""
 
     @pytest.fixture
-    def engine(self, iris_connection):
+    def engine(self, engine):
         """Get IRISGraphEngine instance."""
         from iris_vector_graph import IRISGraphEngine
         return IRISGraphEngine(iris_connection)
@@ -36,8 +36,8 @@ class TestPPRContractSignature:
         try:
             cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_TEST:%' OR o_id LIKE 'CONTRACT_TEST:%'")
             cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_TEST:%'")
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_TEST:A'])
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_TEST:B'])
+            engine.create_node('CONTRACT_TEST:A')
+            engine.create_node('CONTRACT_TEST:B')
             cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                           ['CONTRACT_TEST:A', 'connects', 'CONTRACT_TEST:B'])
             iris_connection.commit()
@@ -61,7 +61,7 @@ class TestPPRContractParameters:
     """Test API contract parameter handling."""
 
     @pytest.fixture
-    def engine(self, iris_connection):
+    def engine(self, engine):
         """Get IRISGraphEngine instance."""
         from iris_vector_graph import IRISGraphEngine
         return IRISGraphEngine(iris_connection)
@@ -82,7 +82,7 @@ class TestPPRContractParameters:
         cursor = iris_connection.cursor()
         try:
             cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_TEST:%'")
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_TEST:A'])
+            engine.create_node('CONTRACT_TEST:A')
             iris_connection.commit()
 
             with pytest.raises(ValueError, match="non-negative"):
@@ -101,7 +101,7 @@ class TestPPRContractParameters:
         cursor = iris_connection.cursor()
         try:
             cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_TEST:%'")
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_TEST:A'])
+            engine.create_node('CONTRACT_TEST:A')
             iris_connection.commit()
 
             # Should not raise with only seed_entities
@@ -117,30 +117,26 @@ class TestPPRContractBidirectional:
     """Test bidirectional parameter contract."""
 
     @pytest.fixture
-    def engine(self, iris_connection):
+    def engine(self, engine):
         """Get IRISGraphEngine instance."""
         from iris_vector_graph import IRISGraphEngine
         return IRISGraphEngine(iris_connection)
 
     @pytest.fixture
-    def setup_directional_graph(self, iris_connection):
+    def setup_directional_graph(self, engine):
         """Create graph: A -> B (unidirectional)."""
         cursor = iris_connection.cursor()
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_DIR:%' OR o_id LIKE 'CONTRACT_DIR:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_DIR:%'")
+        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_DIR:%\' DELETE n")
 
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_DIR:A'])
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_DIR:B'])
+        engine.create_node('CONTRACT_DIR:A')
+        engine.create_node('CONTRACT_DIR:B')
         cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                       ['CONTRACT_DIR:A', 'connects', 'CONTRACT_DIR:B'])
-        iris_connection.commit()
 
         yield
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_DIR:%' OR o_id LIKE 'CONTRACT_DIR:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_DIR:%'")
-        iris_connection.commit()
+        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_DIR:%\' DELETE n")
 
     def test_bidirectional_false_is_default(self, engine, setup_directional_graph):
         """Contract: bidirectional=False is the default (backward compatible)."""
@@ -169,30 +165,26 @@ class TestPPRContractReverseWeight:
     """Test reverse_edge_weight parameter contract."""
 
     @pytest.fixture
-    def engine(self, iris_connection):
+    def engine(self, engine):
         """Get IRISGraphEngine instance."""
         from iris_vector_graph import IRISGraphEngine
         return IRISGraphEngine(iris_connection)
 
     @pytest.fixture
-    def setup_weighted_graph(self, iris_connection):
+    def setup_weighted_graph(self, engine):
         """Create simple A -> B graph for weight testing."""
         cursor = iris_connection.cursor()
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_WT:%' OR o_id LIKE 'CONTRACT_WT:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_WT:%'")
+        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_WT:%\' DELETE n")
 
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_WT:A'])
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_WT:B'])
+        engine.create_node('CONTRACT_WT:A')
+        engine.create_node('CONTRACT_WT:B')
         cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                       ['CONTRACT_WT:A', 'connects', 'CONTRACT_WT:B'])
-        iris_connection.commit()
 
         yield
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_WT:%' OR o_id LIKE 'CONTRACT_WT:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_WT:%'")
-        iris_connection.commit()
+        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_WT:%\' DELETE n")
 
     def test_weight_1_0_full_contribution(self, engine, setup_weighted_graph):
         """Contract: reverse_edge_weight=1.0 gives full reverse edge contribution."""
@@ -243,30 +235,26 @@ class TestPPRContractBackwardCompatibility:
     """Test backward compatibility with existing code."""
 
     @pytest.fixture
-    def engine(self, iris_connection):
+    def engine(self, engine):
         """Get IRISGraphEngine instance."""
         from iris_vector_graph import IRISGraphEngine
         return IRISGraphEngine(iris_connection)
 
     @pytest.fixture
-    def setup_simple_graph(self, iris_connection):
+    def setup_simple_graph(self, engine):
         """Create simple graph for backward compatibility testing."""
         cursor = iris_connection.cursor()
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_BC:%' OR o_id LIKE 'CONTRACT_BC:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_BC:%'")
+        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_BC:%\' DELETE n")
 
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_BC:A'])
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['CONTRACT_BC:B'])
+        engine.create_node('CONTRACT_BC:A')
+        engine.create_node('CONTRACT_BC:B')
         cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                       ['CONTRACT_BC:A', 'connects', 'CONTRACT_BC:B'])
-        iris_connection.commit()
 
         yield
 
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'CONTRACT_BC:%' OR o_id LIKE 'CONTRACT_BC:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'CONTRACT_BC:%'")
-        iris_connection.commit()
+        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_BC:%\' DELETE n")
 
     def test_works_without_new_parameters(self, engine, setup_simple_graph):
         """Contract: Existing code without bidirectional/reverse_edge_weight still works."""

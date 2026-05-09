@@ -51,39 +51,17 @@ class CoreQuery:
         Returns:
             Node object if found, None otherwise
         """
-        db_connection = info.context.get("db_connection")
-        if not db_connection:
+        engine = info.context.get("engine")
+        if not engine:
             return None
 
-        node_loader = info.context.get("node_loader")
-        if node_loader:
-            node_data = await node_loader.load(str(id))
-            if not node_data:
-                return None
-            
-            labels = node_data.get("labels", [])
-            properties = node_data.get("properties", {})
-            created_at = node_data.get("created_at")
-        else:
-            # Fallback to direct SQL if loader not available
-            cursor = db_connection.cursor()
-
-            # Query nodes table directly
-            cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id = ?", (str(id),))
-            if cursor.fetchone()[0] == 0:
-                return None
-
-            # Load labels
-            cursor.execute("SELECT label FROM rdf_labels WHERE s = ?", (str(id),))
-            labels = [row[0] for row in cursor.fetchall()]
-
-            # Load properties
-            cursor.execute("SELECT key, val FROM rdf_props WHERE s = ?", (str(id),))
-            properties = {row[0]: row[1] for row in cursor.fetchall()}
-
-            # Load created_at
-            cursor.execute("SELECT created_at FROM nodes WHERE node_id = ?", (str(id),))
-            created_at = cursor.fetchone()[0]
+        node_data = engine.get_node(str(id))
+        if not node_data:
+            return None
+        
+        labels = node_data.get("labels", [])
+        properties = node_data.get("properties", {})
+        created_at = node_data.get("created_at")
 
         # Try to resolve to domain-specific type using domain resolvers
         domain_resolver = info.context.get("domain_resolver")
@@ -142,9 +120,11 @@ class CoreQuery:
         Returns:
             List of Node objects
         """
-        db_connection = info.context.get("db_connection")
-        if not db_connection:
+        engine = info.context.get("engine")
+        if not engine:
             return []
+        
+        db_connection = engine.conn
 
         # Validate and sanitize sort direction
         direction = "DESC" if order_direction not in ("ASC", "DESC") else order_direction
@@ -187,9 +167,9 @@ class CoreQuery:
         if labels and where:
             query = """
                 SELECT DISTINCT n.node_id
-                FROM nodes n
-                JOIN rdf_labels l ON l.s = n.node_id
-                JOIN rdf_props p ON p.s = n.node_id AND p.key = ?
+                FROM Graph_KG.nodes n
+                JOIN Graph_KG.rdf_labels l ON l.s = n.node_id
+                JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.key = ?
                 {order_join}
                 WHERE l.label IN ({placeholders})
                   AND {where_cond}
@@ -205,8 +185,8 @@ class CoreQuery:
         elif labels:
             query = """
                 SELECT DISTINCT n.node_id
-                FROM nodes n
-                JOIN rdf_labels l ON l.s = n.node_id
+                FROM Graph_KG.nodes n
+                JOIN Graph_KG.rdf_labels l ON l.s = n.node_id
                 {order_join}
                 WHERE l.label IN ({placeholders})
                 {order_clause}
@@ -220,8 +200,8 @@ class CoreQuery:
         elif where:
             query = """
                 SELECT DISTINCT n.node_id
-                FROM nodes n
-                JOIN rdf_props p ON p.s = n.node_id AND p.key = ?
+                FROM Graph_KG.nodes n
+                JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.key = ?
                 {order_join}
                 WHERE {where_cond}
                 {order_clause}
@@ -235,7 +215,7 @@ class CoreQuery:
         else:
             query = """
                 SELECT n.node_id
-                FROM nodes n
+                FROM Graph_KG.nodes n
                 {order_join}
                 {order_clause}
                 LIMIT ? OFFSET ?
@@ -308,8 +288,8 @@ class CoreQuery:
               }
             }
         """
-        db_connection = info.context.get("db_connection")
-        if not db_connection:
+        engine = info.context.get("engine")
+        if not engine:
             return GraphStats(
                 total_nodes=0,
                 total_edges=0,
@@ -317,27 +297,39 @@ class CoreQuery:
                 edges_by_type={},
             )
 
-        cursor = db_connection.cursor()
+        try:
+            result_nodes = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
+            total_nodes = result_nodes.rows[0][0] if result_nodes.rows else 0
 
-        # Total nodes
-        cursor.execute("SELECT COUNT(*) FROM nodes")
-        total_nodes = cursor.fetchone()[0]
+            result_edges = engine.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+            total_edges = result_edges.rows[0][0] if result_edges.rows else 0
 
-        # Total edges
-        cursor.execute("SELECT COUNT(*) FROM rdf_edges")
-        total_edges = cursor.fetchone()[0]
+            result_labels = engine.execute_cypher("MATCH (n) RETURN distinct labels(n) AS label, count(n) AS cnt")
+            nodes_by_label = {}
+            if result_labels.rows:
+                for row in result_labels.rows:
+                    label = row[0]
+                    count = row[1]
+                    if label and isinstance(label, list):
+                        for l in label:
+                            nodes_by_label[l] = nodes_by_label.get(l, 0) + count
 
-        # Nodes by label
-        cursor.execute("SELECT label, COUNT(*) FROM rdf_labels GROUP BY label")
-        nodes_by_label = {row[0]: row[1] for row in cursor.fetchall()}
+            result_types = engine.execute_cypher("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt")
+            edges_by_type = {}
+            if result_types.rows:
+                for row in result_types.rows:
+                    edges_by_type[row[0]] = row[1]
 
-        # Edges by type
-        cursor.execute("SELECT p, COUNT(*) FROM rdf_edges GROUP BY p")
-        edges_by_type = {row[0]: row[1] for row in cursor.fetchall()}
-
-        return GraphStats(
-            total_nodes=total_nodes,
-            total_edges=total_edges,
-            nodes_by_label=nodes_by_label,
-            edges_by_type=edges_by_type,
-        )
+            return GraphStats(
+                total_nodes=total_nodes,
+                total_edges=total_edges,
+                nodes_by_label=nodes_by_label,
+                edges_by_type=edges_by_type,
+            )
+        except Exception:
+            return GraphStats(
+                total_nodes=0,
+                total_edges=0,
+                nodes_by_label={},
+                edges_by_type={},
+            )

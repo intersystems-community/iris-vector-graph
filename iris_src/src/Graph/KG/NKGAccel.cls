@@ -555,34 +555,42 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
 
 ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops As %Integer = 3, maxResults As %Integer = 0) As %String
 {
+    // arno 1d75d97: kg_bfs_global takes pre-serialized adjacency string as first arg.
+    // ExportAdjacencyWithPreds() builds srcStr\x1fpredStr\x1fdstStr\n wire format;
+    // Rust parses it entirely in memory — no global reads needed from $ZF(-5).
     Set dllPath = $Get(^||NKGAccel("libPath"), "/usr/irissys/mgr/libarno_callout.so")
-    If '$Data(^||NKGAccel("compute_fn")) {
+    If '$Data(^||NKGAccel("bfs_fn")) {
         Set dllid = $ZF(-4, 1, dllPath)
         If dllid = 0 {
-            Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+            Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
         }
         Set ^||NKGAccel("dllid") = dllid
-        Set ^||NKGAccel("compute_fn") = $ZF(-4, 3, dllid, "kg_bfs_compute")
-        Set ^||NKGAccel("read_fn") = $ZF(-4, 3, dllid, "kg_bfs_read_chunk")
         Set ^||NKGAccel("bfs_fn") = $ZF(-4, 3, dllid, "kg_bfs_global")
     }
     Set dllid = ^||NKGAccel("dllid")
-    Set computeFn = ^||NKGAccel("compute_fn")
-    If computeFn = 0 {
-        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+    Set fnid  = ^||NKGAccel("bfs_fn")
+    If fnid = 0 {
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
-    Do ..CacheNKGAdj()
-    If '$Data(^ArnoKG("KG", "nkg_adj")) {
-        Return ##class(Graph.KG.Traversal).BFSFastJson(seed, predicatesJson, maxHops, "")
+    Set adjStr = ..ExportAdjacencyWithPreds()
+    Set raw = $ZF(-5, dllid, fnid, adjStr, seed, predicatesJson, maxHops, maxResults)
+    If raw = "" || $Extract(raw, 1, 6) = "DEBUG:" {
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
-    Kill ^ArnoKG("bfs_result")
-    Set raw = $ZF(-5, dllid, computeFn, "^ArnoKG", "^ArnoKG", seed, predicatesJson, maxHops, maxResults)
-    If $Extract(raw, 1, 8) '= "CHUNKED:" {
-        Return raw
+    Set tag = $Job _ "_bfs"
+    Kill ^ArnoKG("bfs_r", tag)
+    Set arr = ##class(%DynamicArray).%FromJSON(raw)
+    Set sz = arr.%Size()
+    For i = 0:1:(sz-1) {
+        Set item = arr.%Get(i)
+        Set step = +item.%Get("step")
+        Set o    = item.%Get("o")
+        Set s    = item.%Get("s")
+        Set p    = item.%Get("p")
+        Set w    = +item.%Get("w")
+        Set ^ArnoKG("bfs_r", tag, step, o) = $ListBuild(s, p, w)
     }
-    Set n = $Piece(raw, ":", 3)
-    Set readFn = ^||NKGAccel("read_fn")
-    Return raw
+    Return "SORTED:" _ tag
 }
 
 ClassMethod InvalidateAdjCache()
@@ -863,10 +871,16 @@ ClassMethod ExportAdjacencyWithPreds() As %String [ Private ]
 ClassMethod BuildNKGRust() As %String
 {
     Try {
-        Set result = $ZF(-5, "libarno_callout.so", "kg_build_nkg")
-        Return result
+        If '##class(Graph.KG.ArnoAccel).IsAvailable() {
+            Return "{""error"":""Rust callout not available — load ArnoAccel first""}"
+        }
+        Set dllid = $Get(^||ArnoAccel("dllid"), 0)
+        If dllid = 0 Return "{""error"":""ArnoAccel DLL not loaded""}"
+        Set fid = $ZF(-4, 3, dllid, "kg_build_nkg")
+        If fid = 0 Return "{""error"":""kg_build_nkg not found in DLL""}"
+        Return $ZF(-5, dllid, fid)
     } Catch ex {
-        Return "{""error"":""Rust callout unavailable: "_ex.DisplayString()_"""}"
+        Return "{""error"":""Rust callout failed: "_ex.DisplayString()_"""}"
     }
 }
 
@@ -883,7 +897,7 @@ ClassMethod Capabilities() As %String
         If ##class(Graph.KG.ArnoAccel).IsAvailable() Set hasRust = 1
     } Catch {}
     Do cap.%Set("rust_callout", hasRust, "boolean")
-    Set algos = ["khop", "ppr", "random_walk", "export_adjacency", "bfs"]
+    Set algos = ["khop", "ppr", "random_walk", "export_adjacency"]
     Do cap.%Set("algorithms", algos)
     Set rustAlgos = []
     If hasRust {
@@ -893,7 +907,7 @@ ClassMethod Capabilities() As %String
         Do rustAlgos.%Push("bfs")
     }
     Do cap.%Set("rust_algorithms", rustAlgos)
-    Do cap.%Set("bfs", 1, "boolean")
+    Do cap.%Set("bfs", hasRust, "boolean")
     Do cap.%Set("count_distinct_khop", 1, "boolean")
     Return cap.%ToJSON()
 }
@@ -1018,6 +1032,43 @@ ClassMethod CountDistinctKHop(srcId As %String, predsJson As %String = "", maxHo
 
     Set estimate = ##class(Graph.KG.GraphIndex).EstimateHLL(merged)
     Return "{""estimate"":"_estimate_",""registers"":256,""std_error"":0.065}"
+}
+
+ClassMethod Build2HopExact() As %Boolean
+{
+    If '..IsLoaded() {
+        Do ..Load("/tmp/libarno_callout.so")
+        If '..IsLoaded() {
+            If ##class(Graph.KG.ArnoAccel).IsAvailable() {
+                Set ^||NKGAccel("dllid") = $Get(^||ArnoAccel("dllid"), 0)
+            }
+        }
+    }
+    If '..IsLoaded() Return 0
+    Set dllid = $Get(^||NKGAccel("dllid"), 0)
+    If dllid = 0 Return 0
+    Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact_stream")
+    If fid = 0 Return 0
+    Kill ^ArnoKG("2hs")
+    Set raw = $ZF(-5, dllid, fid)
+    If $Extract(raw, 1, 8) '= "CHUNKED:" Return 0
+    Set n = +$Piece(raw, ":", 3)
+    Set data = ""
+    For i = 1:1:n {
+        Set data = data _ $Get(^ArnoKG("2hs", i), "")
+    }
+    Kill ^ArnoKG("2hs")
+    For pos = 1:1:$Length(data, $Char(10)) {
+        Set line = $Piece(data, $Char(10), pos)
+        If line = "" Continue
+        Set s    = $Piece(line, $Char(31), 1)
+        Set p    = $Piece(line, $Char(31), 2)
+        Set cnt  = +$Piece(line, $Char(31), 3)
+        If (s '= "") && (p '= "") && (cnt > 0) {
+            Set ^KG("deg2p_exact", s, p) = cnt
+        }
+    }
+    Return 1
 }
 
 }

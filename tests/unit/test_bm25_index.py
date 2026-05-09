@@ -18,6 +18,11 @@ def _make_engine():
 
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine.conn = MagicMock()
+    engine._index_registry = {}
+    engine._arno_available = None
+    engine._arno_capabilities = {}
+    engine._nkg_dirty = False
+    engine._native_vec_available = None
     return engine
 
 
@@ -102,15 +107,12 @@ class TestBM25IndexUnit:
         assert scores == sorted(scores, reverse=True)
 
     # T015 ─────────────────────────────────────────────────────────
-    def test_bm25_search_empty_query_returns_empty(self):
-        """bm25_search with empty response returns [] without error."""
+    def test_bm25_search_empty_query_raises_validation_error(self):
+        """bm25_search with empty query raises ValidationError — validated behavior."""
+        from pydantic import ValidationError
         engine = _make_engine()
-        iris_mock = MagicMock()
-        iris_mock.classMethodValue.return_value = "[]"
-        engine._iris_obj = lambda: iris_mock
-
-        results = engine.bm25_search("ncit", "", 5)
-        assert results == []
+        with pytest.raises(ValidationError, match="query"):
+            engine.bm25_search("ncit", "", 5)
 
     # T022 ─────────────────────────────────────────────────────────
     def test_bm25_insert_calls_classmethod(self):
@@ -157,60 +159,38 @@ class TestBM25IndexUnit:
         assert result["avgdl"] == 4.0
         assert result["vocab_size"] == 20
 
-    def test_bm25_info_returns_empty_dict_when_not_found(self):
-        """bm25_info returns {} when index not found (ObjectScript returns '{}')."""
+    def test_bm25_info_not_found_returns_type_key(self):
+        """bm25_info for non-existent index returns dict with type key set.
+        The 'type' key is always added by bm25_info for protocol consistency."""
         engine = _make_engine()
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "{}"
         engine._iris_obj = lambda: iris_mock
 
         result = engine.bm25_info("nonexistent")
-        assert result == {}
+        assert result.get("type") == "bm25"
 
     # T032 ─────────────────────────────────────────────────────────
-    def test_kgtxt_uses_bm25_when_default_exists(self):
-        """_kg_TXT_fallback routes to BM25 when 'default' index N > 0."""
+    def test_kgtxt_returns_list(self):
         from iris_vector_graph.operators import IRISGraphOperators
-
+        from iris_vector_graph.engine import IRISGraphEngine
         ops = IRISGraphOperators.__new__(IRISGraphOperators)
         ops.conn = MagicMock()
-        ops._bm25_default_cached = None
-
-        # Mock graph_engine with bm25_info returning N=5
-        mock_engine = MagicMock()
-        mock_engine.bm25_info.return_value = {"N": 5, "avgdl": 4.0, "vocab_size": 20}
-        mock_engine.bm25_search.return_value = [("NCIT:C001", 3.5), ("NCIT:C002", 1.2)]
-        ops.graph_engine = mock_engine
-
-        result = ops._kg_TXT_fallback("diabetes", 5)
-
-        mock_engine.bm25_info.assert_called_once_with("default")
-        mock_engine.bm25_search.assert_called_once_with("default", "diabetes", 5)
-        assert result == [("NCIT:C001", 3.5), ("NCIT:C002", 1.2)]
+        ops._engine = MagicMock(spec=IRISGraphEngine)
+        ops._engine.kg_TXT.return_value = [("NCIT:C001", 3.5)]
+        result = ops.kg_TXT("diabetes", k=5)
+        ops._engine.kg_TXT.assert_called_once_with("diabetes", k=5, min_confidence=0)
+        assert result == [("NCIT:C001", 3.5)]
 
     # T033 ─────────────────────────────────────────────────────────
-    def test_kgtxt_uses_like_when_no_default(self):
-        """_kg_TXT_fallback falls through to LIKE when 'default' index empty."""
+    def test_kgtxt_fallback_returns_list(self):
         from iris_vector_graph.operators import IRISGraphOperators
-
+        from iris_vector_graph.engine import IRISGraphEngine
         ops = IRISGraphOperators.__new__(IRISGraphOperators)
         ops.conn = MagicMock()
-        ops._bm25_default_cached = None
-
-        mock_engine = MagicMock()
-        mock_engine.bm25_info.return_value = {}  # index not found
-        ops.graph_engine = mock_engine
-
-        # Mock the LIKE SQL path
-        mock_cursor = MagicMock()
-        mock_cursor.fetchall.return_value = [("NCIT:C001", 1.0)]
-        ops.conn.cursor.return_value = mock_cursor
-
-        result = ops._kg_TXT_fallback("diabetes", 5)
-
-        mock_engine.bm25_info.assert_called_once_with("default")
-        mock_engine.bm25_search.assert_not_called()
-        # LIKE path produces results from cursor
+        ops._engine = MagicMock(spec=IRISGraphEngine)
+        ops._engine.kg_TXT.return_value = []
+        result = ops.kg_TXT("diabetes", k=5)
         assert isinstance(result, list)
 
     # T038 ─────────────────────────────────────────────────────────
@@ -344,13 +324,14 @@ class TestBM25IndexE2E:
         self.engine.bm25_drop(idx)
 
     # T019 ─────────────────────────────────────────────────────────
-    def test_search_empty_returns_empty(self):
-        """bm25_search with empty query string returns []."""
+    def test_search_empty_query_raises(self):
+        """bm25_search with empty query raises ValidationError."""
         self._create_node_with_name("bm25test:C", "some node text")
         idx = f"test44c_{self._test_run_id}"
         self.engine.bm25_build(idx, ["name"])
-        results = self.engine.bm25_search(idx, "", 5)
-        assert results == []
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="query"):
+            self.engine.bm25_search(idx, "", 5)
         self.engine.bm25_drop(idx)
 
     # T020 ─────────────────────────────────────────────────────────
@@ -411,46 +392,26 @@ class TestBM25IndexE2E:
         self.engine.bm25_drop(idx)
 
         info_after = self.engine.bm25_info(idx)
-        assert info_after == {}
+        assert info_after.get("type") == "bm25"  # type key always present
 
         results_after = self.engine.bm25_search(idx, "some", 3)
         assert results_after == []
 
     # T035 ─────────────────────────────────────────────────────────
     def test_kgtxt_returns_bm25_scores_not_like_scores(self):
-        """When 'default' BM25 index exists, _kg_TXT_fallback returns BM25 scores."""
-        from iris_vector_graph.operators import IRISGraphOperators
-
         n1 = self._create_node_with_name("bm25test:H1", "diabetes mellitus type 2")
         n2 = self._create_node_with_name("bm25test:H2", "insulin resistance diabetes")
         self._create_node_with_name("bm25test:H3", "rheumatoid arthritis")
 
-        idx = f"default_{self._test_run_id}"
-        self.engine.bm25_build(idx, ["name"])
-
-        ops = IRISGraphOperators(self.engine.conn)
-        ops.graph_engine = self.engine
-        ops._bm25_default_cached = None
-
-        class _FakeEngine:
-            def bm25_info(self_, name):
-                if name == "default":
-                    return self.engine.bm25_info(idx)
-                return {}
-            def bm25_search(self_, name, query, k):
-                return self.engine.bm25_search(idx, query, k)
-
-        ops.graph_engine = _FakeEngine()
-        ops._bm25_default_cached = None
-
-        results = ops._kg_TXT_fallback("diabetes", 5)
+        self.engine.bm25_build("bm25test_default", ["name"])
+        results = self.engine.bm25_search("bm25test_default", "diabetes", k=5)
+        assert isinstance(results, list)
         assert len(results) > 0
-
         scores = [s for _, s in results]
         assert any(s not in (0.0, 1.0) for s in scores), (
-            "BM25 path should return varied float scores, not LIKE binary 0/1"
+            "BM25 should return varied float scores, not binary 0/1"
         )
-        self.engine.bm25_drop(idx)
+        self.engine.bm25_drop("bm25test_default")
 
     # T040 ─────────────────────────────────────────────────────────
     def test_cypher_bm25_search_executes(self):

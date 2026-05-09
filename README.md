@@ -9,6 +9,55 @@
 
 ---
 
+## Getting Started
+
+**5 minutes from zero to running graph queries.**
+
+### 1. Start IRIS
+
+```bash
+docker compose up -d
+```
+
+This starts IRIS Community Edition on `localhost:1972`. No license required. Default credentials: `_SYSTEM` / `SYS`.
+
+Management Portal: http://localhost:52773/csp/sys/UtilHome.csp
+
+### 2. Install the library
+
+```bash
+pip install iris-vector-graph
+```
+
+### 3. Run your first query
+
+```python
+import iris
+from iris_vector_graph.engine import IRISGraphEngine
+
+conn = iris.connect("localhost", 1972, "USER", "_SYSTEM", "SYS")
+engine = IRISGraphEngine(conn, embedding_dimension=768)
+engine.initialize_schema()
+
+engine.create_node("alice", labels=["Person"], properties={"name": "Alice"})
+engine.create_node("bob",   labels=["Person"], properties={"name": "Bob"})
+engine.create_edge("alice", "KNOWS", "bob")
+
+result = engine.execute_cypher(
+    "MATCH (a {node_id:$id})-[:KNOWS]->(b) RETURN b.name AS name",
+    {"id": "alice"}
+)
+print(result["rows"])  # [('Bob',)]
+```
+
+> **Note:** On IRIS Community Edition, `initialize_schema()` prints warnings about
+> `Graph.KG.MCPService` and `Graph.KG.MCPToolSet`. These are Enterprise-only MCP classes
+> and safe to ignore — the engine works fully on Community.
+
+**That's it.**
+
+---
+
 ## Install
 
 ```bash
@@ -61,6 +110,34 @@ The single 2025.1 failure: `SKIP` clause uses `ORDER BY + OFFSET` on JSON_TABLE-
 
 ---
 
+## Interactive Demo
+
+Two live demos ship in `src/iris_demo_server/`:
+
+| Demo | URL | What it shows |
+|------|-----|--------------|
+| **Fraud Detection** | `http://localhost:8200/fraud` | Real-time fraud scoring, bitemporal audit trails, ring pattern detection |
+| **Biomedical Research** | `http://localhost:8200/bio` | Protein similarity search, pathway traversal, D3 network visualization |
+
+```bash
+# 1. Start IRIS
+docker compose up -d
+
+# 2. Install deps (once)
+pip install iris-vector-graph[full]
+
+# 3. Start demo server
+python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1 \
+  --app-dir src
+
+# 4. Open browser
+open http://localhost:8200
+```
+
+The demos use the generic IVG graph engine — no separate backend required. All data is created by the demo on first run.
+
+---
+
 ## Quick Start
 
 ### Python
@@ -70,7 +147,7 @@ import iris
 from iris_vector_graph.engine import IRISGraphEngine
 
 conn = iris.connect(hostname='localhost', port=1972, namespace='USER', username='_SYSTEM', password='SYS')
-engine = IRISGraphEngine(conn)
+engine = IRISGraphEngine(conn, embedding_dimension=768)
 engine.initialize_schema()
 ```
 
@@ -80,7 +157,7 @@ engine.initialize_schema()
 from iris_vector_graph.embedded import EmbeddedConnection
 from iris_vector_graph.engine import IRISGraphEngine
 
-engine = IRISGraphEngine(EmbeddedConnection())
+engine = IRISGraphEngine(EmbeddedConnection(), embedding_dimension=768)
 engine.initialize_schema()
 ```
 
@@ -634,6 +711,45 @@ anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 
  ## Changelog
 
+### v1.88.0 (2026-05-07)
+- **feat**: `ffi_kg_build_2hop_exact_int` Rust function — integer-indexed single-pass 2-hop dedup from `^KG("out")`. Writes results to `^ArnoKG("2h")` temp global; `DecodeBuildResults()` ObjectScript method converts to `^KG("deg2p_exact")`
+- **feat**: `KHop2CountExact(src, pred)` ObjectScript method — O(1) `$Get(^KG("deg2p_exact"))`, fallback to `KHop2Count` when not populated. 0.14ms p50 on SF10 (was 70ms)
+- **feat**: `Build2HopExactStats()` — Rust-first (tries `kg_build_2hop_exact_int`), ObjectScript fallback. Called automatically by `BuildNKG` and `engine.rebuild_nkg()`
+- **feat**: `engine.khop2_count_exact(node_id, pred)` — public method with `KHop2Input` validation
+- **feat**: `engine.backfill_deg2p_exact()` — populate `^KG("deg2p_exact")` for graphs loaded via `BulkIngestEdges`
+- **feat**: `execute_cypher` `[:P*2] RETURN count(n)` fast path now routes to `KHop2CountExact` (exact, not upper bound)
+- **test**: `tests/e2e/test_ic3_exact_count.py` — correctness + perf validation for 2-hop exact COUNT
+- **test**: `tests/e2e/test_untested_methods.py` — 113/113 public engine methods now have at least one test (100% coverage)
+
+### v1.87.0 (2026-05-07)
+- **feat**: `iris_vector_graph/_validate.py` — 10 Pydantic `BaseModel` input schemas for high-risk engine methods: `NodeIdInput`, `EdgeInput`, `CypherInput`, `IVFBuildInput`, `VectorSearchInput`, `BM25BuildInput`, `BM25SearchInput`, `KHop2Input`, `TemporalEdgeInput`, `VecSearchInput`
+- **feat**: Input validation at call entry on `execute_cypher`, `create_node`, `create_edge`, `ivf_build`, `ivf_search`, `bm25_build`, `bm25_search`, `khop2_count_fast`, `create_edge_temporal`, `search_nodes_by_vector`
+- All 10 schemas exported from `iris_vector_graph.__init__`; 44/44 unit tests in `test_validation.py`
+- **chore**: `BulkIngestEdges` marked `[ Internal ]` in `EdgeScan.cls` — safe path is `engine.bulk_ingest_edges()`
+
+### v1.86.0 (2026-05-07)
+- **feat**: `IVGResult` Pydantic `BaseModel` replaces `Dict[str, Any]` as return type of `execute_cypher`
+  - Backward-compatible: `result["columns"]`, `result.get("error")`, `"error" in result` all work
+  - `bool(result)` = `True` on success, `False` on error
+  - `result.columns`, `result.rows`, `result.error`, `result.metadata`, `result.sql` via dot notation
+  - 23 unit tests in `test_ivgresult.py`; all 189+ existing call sites pass unchanged
+- **feat**: Fourth Pydantic increment — `IVGResult` joins `SQLQuery`, `QueryMetadata`, `IndexHandle`
+
+### v1.85.0 (2026-05-06)
+- **fix**: Unbounded variable-length path queries (no LIMIT) now always route to `_bfs_stream_pages` (cursor-based `ReadBFSPage`) instead of `ReadBFSResults` (single JSON string that hits `<MAXSTRING>` at 93K+ results). Bounded queries (LIMIT present) keep `ReadBFSResults` fast path.
+- **fix**: `test_sc003_results_match_bfs` — replaced raw `NKGAccel.BFSJson` call (bypassed engine, `^NKG` stale) with engine determinism check; `knows_data` fixture calls `engine.rebuild_nkg()` for sync guarantee
+- **test**: `tests/e2e/test_streaming_bfs.py` — 3 e2e + 2 routing unit tests for streaming BFS
+
+### v1.84.0 (2026-05-06)
+- **feat**: `engine.index(name)` → `IndexHandle` (Pydantic `BaseModel`) — unified entry point for all index types (`ivf`, `bm25`, `vec`, `plaid`) via `.search()`, `.insert()`, `.info()`, `.drop()`
+- **feat**: `IVGIndex` `@runtime_checkable` Protocol — structural subtyping, no inheritance required
+- **feat**: `_build_index_registry()` — auto-populates `{name: type}` from `^IVF`, `^VecIdx`, `^BM25Idx`, `^PLAID` on `IRISGraphEngine.__init__`; updated by `*_build` methods
+- **feat**: `PLAIDSearch.Build` public ClassMethod — calls `StoreCentroids`+`StoreDocTokensBatch`+`BuildInvertedIndex` internally; helpers marked `[ Private ]`
+- **feat**: `plaid_build()` now calls `PLAIDSearch.Build` (single round-trip); `plaid_info()` returns `{"type":"plaid","indexed":N,"nlist":L,"dim":D}`
+- **feat**: All `*_info()` methods return `"type"` key — `ivf_info()`, `bm25_info()`, `vec_info()`, `plaid_info()`
+- **feat**: `IVGIndex` and `IndexHandle` exported from `iris_vector_graph.__init__`
+- **test**: Full PLAID e2e coverage (5/5); `engine.index()` dispatch tests (5 pass, 1 skip)
+
 ### v1.83.0 (2026-05-06)
 - **feat**: `KHop2Count` + `KHop2NeighborIds(maxResults)` on `Graph.KG.Traversal` — pure ObjectScript 2-hop traversal with process-private dedup, no JSON serialization
 - **feat**: `execute_cypher` routes `[:PRED*2]` COUNT and LIMIT patterns to fast paths — IC3 LIMIT 1000 now **1.2ms p50** (was 14-22ms; 3.5x faster than GES 4.19ms)
@@ -1041,6 +1157,41 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - Mixed queries: `MATCH (p:MappedPatient)-[:HAS_DOC]->(d:NativeDocument)` spans both mapped and native nodes seamlessly
 - SQL mapping wins over native `Graph_KG.nodes` rows for the same label (FR-016)
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
+
+## Changelog
+
+### v1.91.0 (2026-05-09)
+
+**Engine-first architecture** — `IRISGraphOperators` is now a thin shim over `IRISGraphEngine`.
+All 17 `kg_*` operators are implemented directly on the engine.
+
+- `kg_KNN_VEC`: node-ID input path works correctly (looks up stored embedding, excludes self)
+- `kg_SUBGRAPH`: populates `node_labels`, `node_properties`, `node_embeddings` from `SubgraphJson`
+- `kg_PPR_GUIDED_SUBGRAPH`: returns `PprGuidedSubgraphData`; backward-compat `top_k`/`max_hops` params
+- `kg_NEIGHBORS`: uses `node_id` field, validates direction parameter
+- `kg_GRAPH_WALK`: multi-hop traversal via `BFSFastJsonSorted`
+- `kg_PAGERANK` / `kg_PPR`: empty seeds return `[]` gracefully
+- `bulk_delete_nodes(ids)`: new engine method — FK-safe batch delete
+
+**ObjectScript fixes:**
+- `NKGAccel.BFSJson`: 1d75d97 string-passing approach (`ExportAdjacencyWithPreds`)
+- `Traversal.BFSFast`: predicate filter applied to all hops, result/frontier logic separated
+- `TraverseWithPredicateFast`: records results before applying `nextP` frontier filter
+- `BuildNKG`: calls `InvalidateAdjCache()` before rebuild to prevent stale arno cache
+- `IVFIndex` / `BM25Index` / `PLAIDSearch`: added `List()` ClassMethod
+- `_build_index_registry`: ObjectScript fallback via `List()` when `gref` unavailable
+
+**GQL / Demo:**
+- GQL `stats` field added: `{ stats { nodeCount edgeCount labelCount } }`
+- Dynamic GQL type creation: sanitize property names with spaces to valid Python identifiers
+- Demo server: `/bio`, `/fraud`, `/arch/fraud`, `/arch/bio` routes all live
+- `iris_demo_server`: Biomedical routes registered
+
+**Test infrastructure:**
+- 524 e2e / 768 unit — **0 failures, 0 unjustified skips**
+- All test fixtures use engine methods — no raw `cursor.execute()` in test data setup
+- All `classMethodString` → `classMethodValue`, all `intersystems_iris` → `iris`
+- All hardcoded ports → `os.environ.get()`
 
 ### v1.43.0 (2026-04-03)
 - `EmbeddedConnection` and `EmbeddedCursor` now importable directly from `iris_vector_graph` (top-level)

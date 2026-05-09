@@ -13,32 +13,29 @@ def get_account_by_id(account_id: str, connection) -> Optional[Dict[str, Any]]:
     """
     Get a single account by ID.
     """
-    cursor = connection.cursor()
-
-    # Check if account exists
-    cursor.execute(
-        """
-        SELECT s FROM rdf_labels 
-        WHERE s = ? AND label = 'Account'
-    """,
-        (account_id,),
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
+    
+    result = engine.execute_cypher(
+        "MATCH (n:Account {node_id:$id}) RETURN n.node_id AS id",
+        {"id": account_id}
     )
-
-    if cursor.fetchone() is None:
+    
+    if not result.rows:
         return None
 
-    # Get properties
-    cursor.execute("SELECT key, val FROM rdf_props WHERE s = ?", (account_id,))
-    props = {row[0]: row[1] for row in cursor.fetchall()}
-
+    node_result = engine.get_node(account_id)
+    if not node_result:
+        return None
+    
     return {
         "id": account_id,
         "labels": ["Account"],
-        "properties": props,
-        "account_type": props.get("account_type"),
-        "status": props.get("status"),
-        "risk_score": float(props["risk_score"]) if "risk_score" in props else None,
-        "holder_name": props.get("holder_name"),
+        "properties": node_result.get("properties", {}),
+        "account_type": node_result.get("properties", {}).get("account_type"),
+        "status": node_result.get("properties", {}).get("status"),
+        "risk_score": float(node_result.get("properties", {}).get("risk_score", 0)) if "risk_score" in node_result.get("properties", {}) else None,
+        "holder_name": node_result.get("properties", {}).get("holder_name"),
     }
 
 
@@ -46,30 +43,29 @@ def get_transaction_by_id(txn_id: str, connection) -> Optional[Dict[str, Any]]:
     """
     Get a single transaction by ID.
     """
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    cursor.execute(
-        """
-        SELECT s FROM rdf_labels 
-        WHERE s = ? AND label = 'Transaction'
-    """,
-        (txn_id,),
+    result = engine.execute_cypher(
+        "MATCH (n:Transaction {node_id:$id}) RETURN n.node_id AS id",
+        {"id": txn_id}
     )
 
-    if cursor.fetchone() is None:
+    if not result.rows:
         return None
 
-    cursor.execute("SELECT key, val FROM rdf_props WHERE s = ?", (txn_id,))
-    props = {row[0]: row[1] for row in cursor.fetchall()}
+    node_result = engine.get_node(txn_id)
+    if not node_result:
+        return None
 
     return {
         "id": txn_id,
         "labels": ["Transaction"],
-        "properties": props,
-        "amount": float(props["amount"]) if "amount" in props else None,
-        "currency": props.get("currency"),
-        "transaction_type": props.get("transaction_type"),
-        "status": props.get("status"),
+        "properties": node_result.get("properties", {}),
+        "amount": float(node_result.get("properties", {}).get("amount", 0)) if "amount" in node_result.get("properties", {}) else None,
+        "currency": node_result.get("properties", {}).get("currency"),
+        "transaction_type": node_result.get("properties", {}).get("transaction_type"),
+        "status": node_result.get("properties", {}).get("status"),
     }
 
 
@@ -77,30 +73,29 @@ def get_alert_by_id(alert_id: str, connection) -> Optional[Dict[str, Any]]:
     """
     Get a single alert by ID.
     """
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    cursor.execute(
-        """
-        SELECT s FROM rdf_labels 
-        WHERE s = ? AND label = 'Alert'
-    """,
-        (alert_id,),
+    result = engine.execute_cypher(
+        "MATCH (n:Alert {node_id:$id}) RETURN n.node_id AS id",
+        {"id": alert_id}
     )
 
-    if cursor.fetchone() is None:
+    if not result.rows:
         return None
 
-    cursor.execute("SELECT key, val FROM rdf_props WHERE s = ?", (alert_id,))
-    props = {row[0]: row[1] for row in cursor.fetchall()}
+    node_result = engine.get_node(alert_id)
+    if not node_result:
+        return None
 
     return {
         "id": alert_id,
         "labels": ["Alert"],
-        "properties": props,
-        "alert_type": props.get("alert_type"),
-        "severity": props.get("severity"),
-        "confidence": float(props["confidence"]) if "confidence" in props else None,
-        "status": props.get("status"),
+        "properties": node_result.get("properties", {}),
+        "alert_type": node_result.get("properties", {}).get("alert_type"),
+        "severity": node_result.get("properties", {}).get("severity"),
+        "confidence": float(node_result.get("properties", {}).get("confidence", 0)) if "confidence" in node_result.get("properties", {}) else None,
+        "status": node_result.get("properties", {}).get("status"),
     }
 
 
@@ -110,22 +105,17 @@ def find_high_risk_accounts(
     """
     Find accounts with risk score above threshold.
     """
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    cursor.execute(
-        """
-        SELECT DISTINCT l.s 
-        FROM rdf_labels l
-        JOIN rdf_props p ON l.s = p.s
-        WHERE l.label = 'Account'
-        AND p.key = 'risk_score'
-        AND CAST(p.val AS FLOAT) >= ?
-        LIMIT ?
-    """,
-        (min_risk_score, limit),
-    )
+    result = engine.execute_cypher(f"""
+        MATCH (n:Account)
+        WHERE n.risk_score >= {min_risk_score}
+        RETURN n.node_id
+        LIMIT {limit}
+    """)
 
-    account_ids = [row[0] for row in cursor.fetchall()]
+    account_ids = [row[0] for row in result.rows] if result.rows else []
 
     results = []
     for account_id in account_ids:
@@ -143,27 +133,17 @@ def detect_ring_patterns(connection, max_ring_size: int = 5) -> List[Dict[str, A
     A ring pattern indicates potential money laundering where funds
     cycle through multiple accounts and return to origin.
     """
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    # Find accounts that are part of cycles by looking for
-    # accounts that appear in both FROM_ACCOUNT and TO_ACCOUNT edges
-    # with the same other accounts
+    result = engine.execute_cypher("""
+        MATCH (a)-[:FROM_ACCOUNT]->(t1)-[:TO_ACCOUNT]->(b)
+        WHERE a.node_id != b.node_id
+        RETURN DISTINCT b.node_id
+    """)
 
-    # Simplified detection: find accounts with both incoming and outgoing
-    cursor.execute(
-        """
-        SELECT DISTINCT e1.o_id as account_id
-        FROM rdf_edges e1
-        JOIN rdf_edges e2 ON e1.o_id = e2.o_id
-        WHERE e1.p = 'FROM_ACCOUNT'
-        AND e2.p = 'TO_ACCOUNT'
-        AND e1.s != e2.s
-    """
-    )
+    ring_accounts = [row[0] for row in result.rows] if result.rows else []
 
-    ring_accounts = [row[0] for row in cursor.fetchall()]
-
-    # Group into potential rings
     patterns = []
     seen_accounts = set()
 
@@ -171,40 +151,25 @@ def detect_ring_patterns(connection, max_ring_size: int = 5) -> List[Dict[str, A
         if account_id in seen_accounts:
             continue
 
-        # Get connected accounts via transactions
-        cursor.execute(
-            """
-            SELECT DISTINCT 
-                CASE 
-                    WHEN e.p = 'FROM_ACCOUNT' THEN e.s
-                    ELSE e.s
-                END as txn_id,
-                CASE 
-                    WHEN e.p = 'FROM_ACCOUNT' THEN 
-                        (SELECT o_id FROM rdf_edges WHERE s = e.s AND p = 'TO_ACCOUNT')
-                    ELSE 
-                        (SELECT o_id FROM rdf_edges WHERE s = e.s AND p = 'FROM_ACCOUNT')
-                END as other_account
-            FROM rdf_edges e
-            WHERE e.o_id = ?
-            AND e.p IN ('FROM_ACCOUNT', 'TO_ACCOUNT')
-        """,
-            (account_id,),
-        )
+        connected_result = engine.execute_cypher(f"""
+            MATCH (t:Transaction)-[:FROM_ACCOUNT|:TO_ACCOUNT]-(n:Account {{node_id: '{account_id}'}})
+            RETURN DISTINCT t.node_id
+            LIMIT 10
+        """)
 
-        connected = cursor.fetchall()
+        connected = connected_result.rows if connected_result.rows else []
 
-        if len(connected) >= 2:  # Potential ring
+        if len(connected) >= 2:
             pattern = {
                 "pattern_type": "ring",
-                "confidence": 0.8 + (len(connected) * 0.02),  # Higher for more connections
-                "accounts": [account_id] + [c[1] for c in connected if c[1]],
+                "confidence": 0.8 + (len(connected) * 0.02),
+                "accounts": [account_id],
                 "transactions": [c[0] for c in connected],
             }
             patterns.append(pattern)
             seen_accounts.add(account_id)
 
-    return patterns[:10]  # Limit results
+    return patterns[:10]
 
 
 def detect_mule_accounts(connection, min_unique_counterparties: int = 5) -> List[Dict[str, Any]]:
@@ -213,41 +178,21 @@ def detect_mule_accounts(connection, min_unique_counterparties: int = 5) -> List
 
     Mule accounts receive from many sources and distribute to many destinations.
     """
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    # Find accounts with many unique counterparties
-    cursor.execute(
-        """
-        SELECT account_id, COUNT(DISTINCT counterparty) as degree
-        FROM (
-            SELECT 
-                e1.o_id as account_id,
-                e2.o_id as counterparty
-            FROM rdf_edges e1
-            JOIN rdf_edges e2 ON e1.s = e2.s
-            WHERE e1.p = 'TO_ACCOUNT'
-            AND e2.p = 'FROM_ACCOUNT'
-            
-            UNION
-            
-            SELECT 
-                e1.o_id as account_id,
-                e2.o_id as counterparty
-            FROM rdf_edges e1
-            JOIN rdf_edges e2 ON e1.s = e2.s
-            WHERE e1.p = 'FROM_ACCOUNT'
-            AND e2.p = 'TO_ACCOUNT'
-        )
-        GROUP BY account_id
-        HAVING COUNT(DISTINCT counterparty) >= ?
+    result = engine.execute_cypher(f"""
+        MATCH (a:Account)-[:FROM_ACCOUNT|:TO_ACCOUNT]-(t:Transaction)-[:FROM_ACCOUNT|:TO_ACCOUNT]-(b:Account)
+        WHERE a.node_id != b.node_id
+        RETURN a.node_id, COUNT(DISTINCT b.node_id) AS degree
+        GROUP BY a.node_id
+        HAVING COUNT(DISTINCT b.node_id) >= {min_unique_counterparties}
         ORDER BY degree DESC
         LIMIT 10
-    """,
-        (min_unique_counterparties,),
-    )
+    """)
 
     results = []
-    for account_id, degree in cursor.fetchall():
+    for account_id, degree in result.rows if result.rows else []:
         account = get_account_by_id(account_id, connection)
         if account:
             account["unique_counterparties"] = degree
@@ -260,22 +205,17 @@ def get_open_alerts(connection, limit: int = 20) -> List[Dict[str, Any]]:
     """
     Get open alerts ordered by severity.
     """
-    cursor = connection.cursor()
+    from iris_vector_graph.engine import IRISGraphEngine
+    engine = IRISGraphEngine(connection)
 
-    cursor.execute(
-        """
-        SELECT l.s
-        FROM rdf_labels l
-        JOIN rdf_props p ON l.s = p.s
-        WHERE l.label = 'Alert'
-        AND p.key = 'status'
-        AND p.val = 'open'
-        LIMIT ?
-    """,
-        (limit,),
-    )
+    result = engine.execute_cypher(f"""
+        MATCH (n:Alert)
+        WHERE n.status = 'open'
+        RETURN n.node_id
+        LIMIT {limit}
+    """)
 
-    alert_ids = [row[0] for row in cursor.fetchall()]
+    alert_ids = [row[0] for row in result.rows] if result.rows else []
 
     results = []
     for alert_id in alert_ids:
@@ -283,7 +223,6 @@ def get_open_alerts(connection, limit: int = 20) -> List[Dict[str, Any]]:
         if alert:
             results.append(alert)
 
-    # Sort by severity
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     results.sort(key=lambda a: severity_order.get(a.get("severity", "low"), 4))
 

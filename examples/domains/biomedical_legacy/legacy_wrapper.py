@@ -71,32 +71,19 @@ class IRISGraphOperators(BiomedicalGraphEngine):
         """
         Legacy graph path method - basic implementation
         """
-        cursor = self.conn.cursor()
-        try:
-            sql = """
-                SELECT 1 AS path_id, 1 AS step, e1.s, e1.p, e1.o_id
-                FROM rdf_edges e1
-                WHERE e1.s = ? AND e1.p = ?
-                UNION ALL
-                SELECT 1 AS path_id, 2 AS step, e2.s, e2.p, e2.o_id
-                FROM rdf_edges e2
-                WHERE e2.p = ?
-                  AND EXISTS (
-                    SELECT 1 FROM rdf_edges e1
-                    WHERE e1.s = ? AND e1.p = ? AND e1.o_id = e2.s
-                  )
-                ORDER BY step
-            """
-
-            cursor.execute(sql, [src_id, pred1, pred2, src_id, pred1])
-            results = cursor.fetchall()
-            return [(int(row[0]), int(row[1]), row[2], row[3], row[4]) for row in results]
-
-        except Exception as e:
-            logger.error(f"kg_GRAPH_PATH failed: {e}")
-            return []
-        finally:
-            cursor.close()
+        from iris_vector_graph.engine import IRISGraphEngine
+        engine = IRISGraphEngine(self.conn)
+        
+        result = engine.execute_cypher(f"""
+            MATCH (a {{{src_id}}})-[r1:{pred1}]-(b)-[r2:{pred2}]-(c)
+            RETURN 1 AS path_id, 1 AS step, a.node_id, type(r1), b.node_id
+            UNION
+            MATCH (b)-[r2:{pred2}]-(c)
+            RETURN 1 AS path_id, 2 AS step, b.node_id, type(r2), c.node_id
+            ORDER BY step
+        """)
+        
+        return [(int(row[0]), int(row[1]), row[2], row[3], row[4]) for row in result.rows] if result.rows else []
 
     def kg_GRAPH_WALK(
         self,

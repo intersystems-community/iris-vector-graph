@@ -13,10 +13,12 @@ import pytest
 import json
 import time
 
+from iris_vector_graph.engine import IRISGraphEngine
+
 try:
     from iris import createIRIS as _createIRIS  # type: ignore[import]
 except ImportError:
-    from intersystems_iris import createIRIS as _createIRIS  # type: ignore[import]
+    from iris import createIRIS as _createIRIS  # type: ignore[import]
 
 # Mark all tests as requiring live database
 pytestmark = pytest.mark.requires_database
@@ -26,7 +28,7 @@ class TestPageRankEmbedded:
     """Tests for PageRankEmbedded ObjectScript class"""
 
     @pytest.fixture
-    def setup_pagerank_graph(self, iris_connection):
+    def setup_pagerank_graph(self, engine):
         """Create a test graph for PageRank testing.
         
         Graph structure (star pattern centered on B):
@@ -35,16 +37,20 @@ class TestPageRankEmbedded:
             D -> B
             B -> E
         """
-        cursor = iris_connection.cursor()
-        
         # Clean up any existing test data
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'PR_TEST:%' OR o_id LIKE 'PR_TEST:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'PR_TEST:%'")
+        cursor = engine.conn.cursor()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["PR_TEST:%", "PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["PR_TEST:%", "PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["PR_TEST:%"])
+        engine.conn.commit()
+        cursor.close()
         
         # Create test nodes
         nodes = ['PR_TEST:A', 'PR_TEST:B', 'PR_TEST:C', 'PR_TEST:D', 'PR_TEST:E']
         for node_id in nodes:
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
+            engine.create_node(node_id)
         
         # Create edges (star pattern)
         edges = [
@@ -54,18 +60,18 @@ class TestPageRankEmbedded:
             ('PR_TEST:B', 'links_to', 'PR_TEST:E'),
         ]
         for s, p, o_id in edges:
-            cursor.execute(
-                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                [s, p, o_id]
-            )
+            engine.create_edge(s, p, o_id)
         
-        iris_connection.commit()
         yield nodes
         
         # Cleanup
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'PR_TEST:%' OR o_id LIKE 'PR_TEST:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'PR_TEST:%'")
-        iris_connection.commit()
+        cursor = engine.conn.cursor()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["PR_TEST:%", "PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["PR_TEST:%", "PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["PR_TEST:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["PR_TEST:%"])
+        engine.conn.commit()
         cursor.close()
 
     def test_compute_pagerank_basic(self, iris_connection, setup_pagerank_graph):

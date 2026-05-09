@@ -176,10 +176,8 @@ def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -
 def health():
     try:
         engine = _get_engine()
-        cursor = engine.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
-        row = cursor.fetchone()
-        node_count = row[0] if row else 0
+        result = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
+        node_count = result["rows"][0][0] if result.get("rows") else 0
         return {"status": "ok", "engine": True, "nodes": node_count}
     except Exception as e:
         return {"status": "ok", "engine": False, "error": str(e)}

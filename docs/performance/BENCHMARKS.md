@@ -57,7 +57,8 @@ positioning, not exact ratios.
 | IC2 1-hop COUNT | **0.29ms** | 0.14ms | Competitive; was 2.8ms before `KHopCount` fast path |
 | IC2 1-hop IDs | **0.9ms** | — | `KHopNeighborIds` newline-delimited, no JSON overhead |
 | IC3 2-hop LIMIT 1000 | **1.2ms** | 4.19ms | **3.5× faster than GES**; was 14–22ms before `KHop2NeighborIds` |
-| IC3 2-hop COUNT DISTINCT | 70ms | — | `KHop2Count`; was 195ms. 10ms target needs pre-aggregation |
+| IC3 2-hop COUNT exact (`KHop2CountExact`) | **0.1ms** | — | O(1) `$Get` on `^KG("deg2p_exact")`; was 70ms. Requires `Build2HopExactStats` at `BuildNKG` time |
+| IC3 2-hop COUNT DISTINCT (fallback) | 70ms | — | `KHop2Count`; used when `^KG("deg2p_exact")` not populated |
 | IC3 approx COUNT DISTINCT | 5.3ms | — | HLL sketch; 74× vs exact but ~89% accuracy on social graphs |
 
 ### Key Takeaways
@@ -78,7 +79,7 @@ them to optimized ObjectScript methods that bypass the SQL translator entirely:
 |---|---|---|
 | `MATCH (s {node_id:$x})-[:P]->(n) RETURN count(n)` | `KHopCount` | O(1) lookup of `^KG("degp",s,p)` |
 | `MATCH (s {node_id:$x})-[:P]->(n) RETURN n.node_id` | `KHopNeighborIds` | `$Order` scan, no JSON |
-| `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN count(n)` | `KHop2Count` | 2-pass `$Order` with process-private dedup |
+| `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN count(n)` | `KHop2CountExact` | O(1) `$Get(^KG("deg2p_exact",s,p))`; fallback to `KHop2Count` scan |
 | `MATCH (s {node_id:$x})-[:P*2]->(n) RETURN n.node_id LIMIT k` | `KHop2NeighborIds(k)` | Early-exit on `maxResults` |
 
 All other Cypher goes through the normal parse → translate → SQL path.

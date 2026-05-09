@@ -23,13 +23,14 @@ def get_iris_interface():
 def setup_iris():
     """Establish connection to IRIS (for Client SDK)"""
     import iris
+    import os
     try:
         conn = iris.connect(
-            hostname='localhost',
-            port=1972,
-            namespace='USER',
-            username='_SYSTEM',
-            password='SYS'
+            hostname=os.environ.get("IRIS_HOST", "localhost"),
+            port=int(os.environ.get("IRIS_PORT", "1972")),
+            namespace=os.environ.get("IRIS_NAMESPACE", "USER"),
+            username=os.environ.get("IRIS_USERNAME", "_SYSTEM"),
+            password=os.environ.get("IRIS_PASSWORD", "SYS"),
         )
         return conn
     except Exception:

@@ -223,10 +223,11 @@ class DemoRunner:
         Raises DemoError if count < min_count.
         """
         conn = self.get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT COUNT(*) FROM rdf_labels WHERE label = ?", (label,))
-        count = cursor.fetchone()[0]
+        from iris_vector_graph.engine import IRISGraphEngine
+        engine = IRISGraphEngine(conn)
+        
+        result = engine.execute_cypher(f"MATCH (n:{label}) RETURN COUNT(n) AS count")
+        count = result.rows[0][0] if result.rows else 0
 
         if count < min_count:
             raise DemoError(
@@ -293,10 +294,15 @@ class DemoRunner:
         try:
             conn = self.get_connection()
             state["connected"] = True
-            cursor = conn.cursor()
-
-            cursor.execute("SELECT label, COUNT(*) FROM rdf_labels GROUP BY label")
-            state["entity_counts"] = {row[0]: row[1] for row in cursor.fetchall()}
+            from iris_vector_graph.engine import IRISGraphEngine
+            engine = IRISGraphEngine(conn)
+            
+            labels_result = engine.execute_cypher("""
+                MATCH (n)
+                WITH DISTINCT n UNWIND labels(n) AS lbl
+                RETURN lbl, COUNT(n)
+            """)
+            state["entity_counts"] = {row[0]: row[1] for row in labels_result.rows} if labels_result.rows else {}
 
             biomedical_labels = ["Gene", "Protein", "Disease", "Drug", "Pathway"]
             state["has_biomedical_data"] = any(
@@ -308,8 +314,8 @@ class DemoRunner:
                 state["entity_counts"].get(label, 0) > 0 for label in fraud_labels
             )
 
-            cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings")
-            state["has_embeddings"] = cursor.fetchone()[0] > 0
+            emb_result = engine.execute_cypher("MATCH (n) WHERE n.embedding IS NOT NULL RETURN COUNT(n)")
+            state["has_embeddings"] = emb_result.rows[0][0] > 0 if emb_result.rows else False
 
             state["vector_support"] = self.check_vector_support()
             state["iris_version"] = self.check_iris_version()

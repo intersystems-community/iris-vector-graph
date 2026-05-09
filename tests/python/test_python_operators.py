@@ -20,7 +20,7 @@ class TestPythonGraphOperators:
     """Test suite for Python-based graph operators using managed container"""
 
     @pytest.fixture(autouse=True)
-    def setup_operators(self, iris_connection):
+    def setup_operators(self, engine):
         """Initialize operators with managed connection"""
         self.operators = IRISGraphOperators(iris_connection)
         self.conn = iris_connection
