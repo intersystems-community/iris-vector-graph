@@ -43,9 +43,40 @@ __all__ = ["EmbeddedConnection", "EmbeddedCursor"]
 import sys as _sys
 
 
+def _inline_params(sql: str, params: list) -> str:
+    result = []
+    param_idx = 0
+    i = 0
+    while i < len(sql):
+        if sql[i] == '?' and (i == 0 or sql[i-1] != "'"):
+            if param_idx >= len(params):
+                raise IndexError(
+                    f"Not enough params: need >{param_idx} but got {len(params)}"
+                )
+            v = params[param_idx]
+            param_idx += 1
+            if v is None:
+                result.append("NULL")
+            elif isinstance(v, bool):
+                result.append("1" if v else "0")
+            elif isinstance(v, int):
+                result.append(str(v))
+            elif isinstance(v, float):
+                result.append(repr(v))
+            else:
+                result.append("'" + str(v).replace("'", "''") + "'")
+        else:
+            result.append(sql[i])
+        i += 1
+    return "".join(result)
+
+
 def _ensure_embedded_iris_first():
     embedded_path = '/usr/irissys/lib/python'
     mgr_path = '/usr/irissys/mgr/python'
+    iris_mod = _sys.modules.get('iris')
+    if iris_mod is not None and hasattr(iris_mod, 'sql') and iris_mod.sql is not None:
+        return
     changed = False
     for p in [mgr_path, embedded_path]:
         if p in _sys.path and _sys.path[0] != p:
@@ -97,9 +128,6 @@ class EmbeddedCursor:
 
     def execute(self, sql, params=None):
         iris_sql = self._get_iris_sql()
-        # START TRANSACTION / COMMIT / ROLLBACK are no-ops in embedded context:
-        # IRIS manages transactions automatically in Language=python methods.
-        # Calling iris.tstart() / tcommit() from inside a wgproto job raises <COMMAND>.
         lowered = sql.strip().upper()
         if lowered in ("START TRANSACTION", "COMMIT", "ROLLBACK",
                        "BEGIN", "BEGIN TRANSACTION"):
@@ -109,11 +137,16 @@ class EmbeddedCursor:
             self.rowcount = -1
             return
 
-        stmt = iris_sql.prepare(sql)
-        if params:
-            self._rs = stmt.execute(*params)
-        else:
-            self._rs = stmt.execute()
+        try:
+            stmt = iris_sql.prepare(sql)
+            if params:
+                self._rs = stmt.execute(*params)
+            else:
+                self._rs = stmt.execute()
+        except Exception as exc:
+            if "<UNIMPLEMENTED>" not in str(exc) and "ddtab" not in str(exc):
+                raise
+            self._rs = iris_sql.exec(_inline_params(sql, params or []))
 
         self._rows = None
         self._pos = 0
@@ -134,11 +167,19 @@ class EmbeddedCursor:
 
     def executemany(self, sql, seq):
         iris_sql = self._get_iris_sql()
-        stmt = iris_sql.prepare(sql)
-        count = 0
-        for params in seq:
-            stmt.execute(*params)
-            count += 1
+        try:
+            stmt = iris_sql.prepare(sql)
+            count = 0
+            for params in seq:
+                stmt.execute(*params)
+                count += 1
+        except Exception as exc:
+            if "<UNIMPLEMENTED>" not in str(exc) and "ddtab" not in str(exc):
+                raise
+            count = 0
+            for params in seq:
+                iris_sql.exec(_inline_params(sql, list(params)))
+                count += 1
         self.rowcount = count
         self._rs = None
         self._rows = None
