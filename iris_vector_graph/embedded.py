@@ -111,6 +111,64 @@ def _require_iris_sql():
         ) from exc
 
 
+def _is_ddtab_error(exc: Exception) -> bool:
+    s = str(exc)
+    return "<UNIMPLEMENTED>" in s or "ddtab" in s
+
+
+def _sql_statement_execute(sql: str, params=None):
+    import iris
+    stmt = iris.cls("%SQL.Statement")._New()
+    sc = stmt._Prepare(sql)
+    if not sc:
+        raise RuntimeError(f"%%SQL.Statement._Prepare failed sc={sc}")
+    if params:
+        rs = stmt._Execute(*params)
+    else:
+        rs = stmt._Execute()
+    return _SqlStatementResultSet(rs)
+
+
+class _SqlStatementResultSet:
+
+    def __init__(self, rs):
+        self._rs = rs
+        self._done = False
+
+    def columnCount(self):
+        try:
+            return int(self._rs._GetProperty("ColCount")) if self._rs else 0
+        except Exception:
+            return 0
+
+    def columnName(self, i):
+        try:
+            return str(self._rs._GetProperty("MetaData")._GetProperty("columns")._GetAt(i)._GetProperty("colName"))
+        except Exception:
+            return f"col{i}"
+
+    def __iter__(self):
+        if self._rs is None or self._done:
+            return
+        try:
+            while True:
+                sc = int(str(self._rs._Next()))
+                if sc == 0:
+                    break
+                row = []
+                col_count = self.columnCount()
+                for i in range(1, col_count + 1):
+                    try:
+                        val = self._rs._GetData(i)
+                        row.append(None if val is None else val)
+                    except Exception:
+                        row.append(None)
+                yield tuple(row)
+        except Exception:
+            pass
+        self._done = True
+
+
 class EmbeddedCursor:
 
     def __init__(self, iris_sql=None):
@@ -143,10 +201,23 @@ class EmbeddedCursor:
                 self._rs = stmt.execute(*params)
             else:
                 self._rs = stmt.execute()
-        except Exception as exc:
-            if "<UNIMPLEMENTED>" not in str(exc) and "ddtab" not in str(exc):
+        except Exception as exc1:
+            if not _is_ddtab_error(exc1):
                 raise
-            self._rs = iris_sql.exec(_inline_params(sql, params or []))
+            try:
+                self._rs = iris_sql.exec(_inline_params(sql, params or []))
+            except Exception as exc2:
+                if not _is_ddtab_error(exc2):
+                    raise
+                try:
+                    self._rs = _sql_statement_execute(sql, params)
+                except Exception as exc3:
+                    raise RuntimeError(
+                        f"All three embedded SQL paths failed.\n"
+                        f"  prepare: {exc1}\n"
+                        f"  exec: {exc2}\n"
+                        f"  %%SQL.Statement: {exc3}"
+                    ) from exc3
 
         self._rows = None
         self._pos = 0
@@ -174,11 +245,16 @@ class EmbeddedCursor:
                 stmt.execute(*params)
                 count += 1
         except Exception as exc:
-            if "<UNIMPLEMENTED>" not in str(exc) and "ddtab" not in str(exc):
+            if not _is_ddtab_error(exc):
                 raise
             count = 0
             for params in seq:
-                iris_sql.exec(_inline_params(sql, list(params)))
+                try:
+                    iris_sql.exec(_inline_params(sql, list(params)))
+                except Exception as exc2:
+                    if not _is_ddtab_error(exc2):
+                        raise
+                    _sql_statement_execute(sql, list(params))
                 count += 1
         self.rowcount = count
         self._rs = None

@@ -97,7 +97,10 @@ class IRISGraphEngine:
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
         self._index_registry: Dict[str, str] = self._build_index_registry()
-        logger.debug("IRISGraphEngine initialized (dim=%s)", embedding_dimension or "auto")
+        if vector_dtype == "DOUBLE":
+            self.vector_dtype = self._detect_stored_vector_dtype()
+        logger.debug("IRISGraphEngine initialized (dim=%s dtype=%s)",
+                     embedding_dimension or "auto", self.vector_dtype)
 
     @classmethod
     def from_connect(
@@ -3073,6 +3076,35 @@ class IRISGraphEngine:
                     logger.warning(
                         f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
                     )
+
+    def _detect_stored_vector_dtype(self) -> str:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                f"SELECT TOP 1 emb FROM {_table('kg_NodeEmbeddings')} WHERE emb IS NOT NULL"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            if row is None:
+                return "DOUBLE"
+            emb_csv = str(row[0])
+            sample = ",".join(emb_csv.split(",")[:2])
+            for dtype in ("FLOAT", "DOUBLE"):
+                try:
+                    c2 = self.conn.cursor()
+                    c2.execute(
+                        f"SELECT VECTOR_COSINE(emb, TO_VECTOR(?, {dtype})) FROM {_table('kg_NodeEmbeddings')} WHERE emb IS NOT NULL LIMIT 1",
+                        [sample],
+                    )
+                    c2.fetchone()
+                    c2.close()
+                    logger.info("Auto-detected stored vector dtype: %s", dtype)
+                    return dtype
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return "DOUBLE"
 
     def _build_index_registry(self) -> Dict[str, str]:
         registry: Dict[str, str] = {}
@@ -6755,3 +6787,78 @@ class IRISGraphEngine:
     def kg_RERANK(self, top_n: int, query_vector: str, query_text: str):
         return self.kg_RRF_FUSE(k=top_n, k1=top_n * 2, k2=top_n * 2, c=60,
                                  query_vector=query_vector, query_text=query_text)
+
+    def get_node_properties(self, node_id: str) -> Dict[str, Any]:
+        node = self.get_node(node_id)
+        return node.get("properties", {}) if node else {}
+
+    def get_node_name(self, node_id: str) -> Optional[str]:
+        props = self.get_node_properties(node_id)
+        return props.get("name") or props.get("label") or props.get("title")
+
+    def get_nodes_by_ids(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        if not node_ids:
+            return []
+        return self.get_nodes(node_ids)
+
+    def node_count(self) -> int:
+        result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
+        rows = result.get("rows") or []
+        return int(rows[0][0]) if rows else 0
+
+    def edge_count(self) -> int:
+        result = self.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+        rows = result.get("rows") or []
+        return int(rows[0][0]) if rows else 0
+
+    def embedding_count(self) -> int:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings')}")
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+        finally:
+            cursor.close()
+
+    def store_node(self, node_id: str, properties: Optional[Dict[str, Any]] = None,
+                   labels: Optional[List[str]] = None) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"INSERT OR IGNORE INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
+            )
+            self.conn.commit()
+        except Exception:
+            pass
+        finally:
+            cursor.close()
+        if properties:
+            for k, v in (properties or {}).items():
+                val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                cursor2 = self.conn.cursor()
+                try:
+                    cursor2.execute(
+                        f"INSERT OR REPLACE INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)",
+                        [node_id, k, val_str]
+                    )
+                    self.conn.commit()
+                except Exception:
+                    pass
+                finally:
+                    cursor2.close()
+        if labels:
+            for lbl in labels:
+                cursor3 = self.conn.cursor()
+                try:
+                    cursor3.execute(
+                        f"INSERT OR IGNORE INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
+                        [node_id, lbl]
+                    )
+                    self.conn.commit()
+                except Exception:
+                    pass
+                finally:
+                    cursor3.close()
+        return True
