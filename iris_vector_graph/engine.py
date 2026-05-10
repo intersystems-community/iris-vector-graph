@@ -5091,69 +5091,89 @@ class IRISGraphEngine:
     def _kg_KNN_VEC_python_optimized(
         self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
     ) -> List[Tuple[str, float]]:
-        """
-        Fallback Python implementation using CSV parsing
-        Performance: ~5.8s for 20K vectors (when HNSW not available)
-        """
+        _dtype = getattr(self, 'vector_dtype', 'DOUBLE')
+        emb_table = _table("kg_NodeEmbeddings")
+        labels_table = _table("rdf_labels")
+
+        if label_filter:
+            sql = (
+                f"SELECT TOP {int(k)} n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                f" FROM {emb_table} n"
+                f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                f" WHERE L.label = ?"
+                f" ORDER BY score DESC"
+            )
+            params = [query_vector, label_filter]
+        else:
+            sql = (
+                f"SELECT TOP {int(k)} n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                f" FROM {emb_table} n"
+                f" ORDER BY score DESC"
+            )
+            params = [query_vector]
+
+        try:
+            from iris_vector_graph.embedded import _sql_statement_execute, _is_ddtab_error
+            rs = _sql_statement_execute(sql, params)
+            results = [(row[0], float(row[1])) for row in rs if row[0] is not None]
+            return results
+        except Exception:
+            pass
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, params)
+            results = [(row[0], float(row[1])) for row in cursor.fetchall()]
+            cursor.close()
+            return results
+        except Exception:
+            pass
+
+        return self._kg_KNN_VEC_client_side(query_vector, k, label_filter)
+
+    def _kg_KNN_VEC_client_side(
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
+    ) -> List[Tuple[str, float]]:
         cursor = self.conn.cursor()
         try:
             import numpy as np
 
             query_array = np.array(json.loads(query_vector))
 
-            # Get embeddings with optional label filter (optimized query)
             emb_table = _table("kg_NodeEmbeddings")
             labels_table = _table("rdf_labels")
             if label_filter is None:
-                sql = f"""
-                    SELECT n.id, n.emb
-                    FROM {emb_table} n
-                    WHERE n.emb IS NOT NULL
-                """
-                cursor.execute(sql)
+                cursor.execute(f"SELECT n.id, n.emb FROM {emb_table} n WHERE n.emb IS NOT NULL")
             else:
-                sql = f"""
-                    SELECT n.id, n.emb
-                    FROM {emb_table} n
-                    LEFT JOIN {labels_table} L ON L.s = n.id
-                    WHERE n.emb IS NOT NULL
-                      AND L.label = ?
-                """
-                cursor.execute(sql, [label_filter])
+                cursor.execute(
+                    f"SELECT n.id, n.emb FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE n.emb IS NOT NULL AND L.label = ?",
+                    [label_filter],
+                )
 
-            # Compute similarities efficiently
             similarities = []
-            batch_size = 1000  # Process in batches for memory efficiency
-
             while True:
-                batch = cursor.fetchmany(batch_size)
+                batch = cursor.fetchmany(1000)
                 if not batch:
                     break
-
                 for entity_id, emb_csv in batch:
                     try:
-                        # Fast CSV parsing to numpy array
-                        emb_array = np.fromstring(emb_csv, dtype=float, sep=",")
-
-                        # Compute cosine similarity efficiently
+                        emb_array = np.fromstring(str(emb_csv), dtype=float, sep=",")
                         dot_product = np.dot(query_array, emb_array)
                         query_norm = np.linalg.norm(query_array)
                         emb_norm = np.linalg.norm(emb_array)
-
                         if query_norm > 0 and emb_norm > 0:
                             cos_sim = dot_product / (query_norm * emb_norm)
                             similarities.append((entity_id, float(cos_sim)))
-
                     except Exception:
-                        # Skip problematic embeddings
                         continue
 
-            # Sort by similarity and return top k
             similarities.sort(key=lambda x: x[1], reverse=True)
             return similarities[:k]
 
         except Exception as e:
-            logger.error(f"Python optimized kg_KNN_VEC failed: {e}")
+            logger.error(f"Client-side kg_KNN_VEC failed: {e}")
             raise
         finally:
             cursor.close()
