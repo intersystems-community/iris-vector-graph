@@ -443,3 +443,212 @@ class TestWgprotoJobSimulation:
         calls = [c[0][0] for c in mock_sql.exec.call_args_list]
         assert "1" in calls[0]
         assert "2" in calls[1]
+
+
+class TestSqlStatementFallback:
+
+    def _make_ddtab(self):
+        return RuntimeError("<UNIMPLEMENTED>ddtab+83^%qaqpsq")
+
+    def test_third_level_fallback_triggered_when_exec_also_fails(self):
+        from iris_vector_graph.embedded import EmbeddedCursor
+        cursor = EmbeddedCursor()
+        mock_sql = MagicMock()
+        mock_sql.prepare.side_effect = self._make_ddtab()
+        mock_sql.exec.side_effect = self._make_ddtab()
+
+        mock_rs = MagicMock()
+        mock_rs.__iter__ = MagicMock(return_value=iter([(42,)]))
+        mock_rs.columnCount.return_value = 1
+        mock_rs.columnName.side_effect = lambda i: "n"
+
+        with patch("iris_vector_graph.embedded._require_iris_sql", return_value=mock_sql), \
+             patch("iris_vector_graph.embedded._sql_statement_execute", return_value=mock_rs) as mock_stmt:
+            cursor.execute("SELECT node_id FROM Graph_KG.nodes WHERE node_id = ?", ["abc"])
+
+        mock_stmt.assert_called_once_with(
+            "SELECT node_id FROM Graph_KG.nodes WHERE node_id = ?", ["abc"]
+        )
+
+    def test_all_three_fail_raises_runtime_error(self):
+        from iris_vector_graph.embedded import EmbeddedCursor
+        cursor = EmbeddedCursor()
+        mock_sql = MagicMock()
+        mock_sql.prepare.side_effect = self._make_ddtab()
+        mock_sql.exec.side_effect = self._make_ddtab()
+
+        with patch("iris_vector_graph.embedded._require_iris_sql", return_value=mock_sql), \
+             patch("iris_vector_graph.embedded._sql_statement_execute",
+                   side_effect=RuntimeError("stmt also failed")):
+            with pytest.raises(RuntimeError, match="All three embedded SQL paths failed"):
+                cursor.execute("SELECT * FROM t", [])
+
+    def test_sql_statement_result_set_iterable(self):
+        from iris_vector_graph.embedded import _SqlStatementResultSet
+        mock_rs = MagicMock()
+        mock_rs._Next.side_effect = ["1", "1", "0"]
+        mock_rs._GetProperty.side_effect = lambda k: (
+            2 if k == "ColCount" else MagicMock()
+        )
+        mock_rs._GetData.side_effect = lambda i: "val_a" if i == 1 else "val_b"
+
+        rs = _SqlStatementResultSet(mock_rs)
+        rows = list(rs)
+        assert len(rows) == 2
+        assert rows[0] == ("val_a", "val_b")
+
+    def test_second_level_exec_failure_escalates_to_third(self):
+        from iris_vector_graph.embedded import EmbeddedCursor
+        cursor = EmbeddedCursor()
+        mock_sql = MagicMock()
+        mock_sql.prepare.side_effect = self._make_ddtab()
+        mock_sql.exec.side_effect = self._make_ddtab()
+
+        mock_rs = MagicMock()
+        mock_rs.__iter__ = MagicMock(return_value=iter([]))
+        mock_rs.columnCount.return_value = 0
+
+        with patch("iris_vector_graph.embedded._require_iris_sql", return_value=mock_sql), \
+             patch("iris_vector_graph.embedded._sql_statement_execute",
+                   return_value=mock_rs) as mock_stmt:
+            cursor.execute("SELECT s, o_id FROM Graph_KG.rdf_edges")
+
+        mock_stmt.assert_called_once()
+
+    def test_non_ddtab_on_exec_propagates_not_escalates(self):
+        from iris_vector_graph.embedded import EmbeddedCursor
+        cursor = EmbeddedCursor()
+        mock_sql = MagicMock()
+        mock_sql.prepare.side_effect = self._make_ddtab()
+        mock_sql.exec.side_effect = RuntimeError("permission denied")
+
+        with patch("iris_vector_graph.embedded._require_iris_sql", return_value=mock_sql), \
+             patch("iris_vector_graph.embedded._sql_statement_execute") as mock_stmt:
+            with pytest.raises(RuntimeError, match="permission denied"):
+                cursor.execute("SELECT 1")
+
+        mock_stmt.assert_not_called()
+
+
+class TestNewEngineAPIs:
+
+    def _make_engine(self):
+        from iris_vector_graph.engine import IRISGraphEngine
+        from iris_vector_graph.engine import IRISCapabilities
+        eng = IRISGraphEngine.__new__(IRISGraphEngine)
+        eng.conn = MagicMock()
+        eng.embedding_dimension = 4
+        eng._arno_available = False
+        eng._arno_capabilities = {}
+        eng._index_registry = {}
+        eng.vector_dtype = "DOUBLE"
+        eng.capabilities = IRISCapabilities()
+        return eng
+
+    def test_get_node_name_returns_name_property(self):
+        eng = self._make_engine()
+        eng.get_node = MagicMock(return_value={
+            "id": "n1", "labels": ["Gene"],
+            "properties": {"name": "TP53", "symbol": "tp53"}
+        })
+        assert eng.get_node_name("n1") == "TP53"
+
+    def test_get_node_name_falls_back_to_label(self):
+        eng = self._make_engine()
+        eng.get_node = MagicMock(return_value={
+            "id": "n1", "labels": [],
+            "properties": {"label": "MyLabel"}
+        })
+        assert eng.get_node_name("n1") == "MyLabel"
+
+    def test_get_node_name_none_when_missing(self):
+        eng = self._make_engine()
+        eng.get_node = MagicMock(return_value=None)
+        assert eng.get_node_name("nonexistent") is None
+
+    def test_get_node_properties_returns_dict(self):
+        eng = self._make_engine()
+        eng.get_node = MagicMock(return_value={
+            "id": "n1", "properties": {"name": "Alice", "age": "30"}
+        })
+        props = eng.get_node_properties("n1")
+        assert props == {"name": "Alice", "age": "30"}
+
+    def test_get_nodes_by_ids_delegates_to_get_nodes(self):
+        eng = self._make_engine()
+        expected = [{"id": "a"}, {"id": "b"}]
+        eng.get_nodes = MagicMock(return_value=expected)
+        result = eng.get_nodes_by_ids(["a", "b"])
+        eng.get_nodes.assert_called_once_with(["a", "b"])
+        assert result == expected
+
+    def test_get_nodes_by_ids_empty_returns_empty(self):
+        eng = self._make_engine()
+        eng.get_nodes = MagicMock()
+        assert eng.get_nodes_by_ids([]) == []
+        eng.get_nodes.assert_not_called()
+
+    def test_node_count_calls_execute_cypher(self):
+        eng = self._make_engine()
+        eng.execute_cypher = MagicMock(return_value={"rows": [(42,)]})
+        assert eng.node_count() == 42
+        eng.execute_cypher.assert_called_once()
+        assert "count" in eng.execute_cypher.call_args[0][0].lower()
+
+    def test_edge_count_calls_execute_cypher(self):
+        eng = self._make_engine()
+        eng.execute_cypher = MagicMock(return_value={"rows": [(100,)]})
+        assert eng.edge_count() == 100
+
+    def test_embedding_count_queries_table(self):
+        eng = self._make_engine()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = (205000,)
+        eng.conn.cursor.return_value = mock_cursor
+        assert eng.embedding_count() == 205000
+
+    def test_embedding_count_returns_zero_on_error(self):
+        eng = self._make_engine()
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = Exception("table not found")
+        eng.conn.cursor.return_value = mock_cursor
+        assert eng.embedding_count() == 0
+
+
+class TestDetectStoredVectorDtype:
+
+    def _make_engine(self):
+        from iris_vector_graph.engine import IRISGraphEngine, IRISCapabilities
+        eng = IRISGraphEngine.__new__(IRISGraphEngine)
+        eng.conn = MagicMock()
+        eng.embedding_dimension = 4
+        eng._arno_available = False
+        eng._arno_capabilities = {}
+        eng._index_registry = {}
+        eng.vector_dtype = "DOUBLE"
+        eng.capabilities = IRISCapabilities()
+        return eng
+
+    def test_returns_float_when_float_works(self):
+        eng = self._make_engine()
+        float_cursor = MagicMock()
+        float_cursor.fetchone.return_value = ("0.1,0.2",)
+        float_cursor2 = MagicMock()
+        float_cursor2.fetchone.return_value = (0.99,)
+        float_cursor3 = MagicMock()
+        float_cursor3.fetchone.return_value = (0.99,)
+        eng.conn.cursor.side_effect = [float_cursor, float_cursor2]
+        result = eng._detect_stored_vector_dtype()
+        assert result in ("FLOAT", "DOUBLE")
+
+    def test_returns_double_when_no_embeddings(self):
+        eng = self._make_engine()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None
+        eng.conn.cursor.return_value = mock_cursor
+        assert eng._detect_stored_vector_dtype() == "DOUBLE"
+
+    def test_returns_double_on_exception(self):
+        eng = self._make_engine()
+        eng.conn.cursor.side_effect = Exception("connection failed")
+        assert eng._detect_stored_vector_dtype() == "DOUBLE"

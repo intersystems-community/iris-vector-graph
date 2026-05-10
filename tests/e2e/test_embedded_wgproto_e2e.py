@@ -715,3 +715,152 @@ return f"OK inlined={inlined[:50]}"
 """)
         assert "OK inlined=" in out, f"Large param list failed: {out}"
         assert "?" not in out.split("OK inlined=")[-1].split("\n")[0], f"Unresolved ? in inlined: {out}"
+
+
+@requires_enterprise
+class TestNewEngineAPIsRealIRIS:
+
+    def test_node_count_returns_int(self):
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, """
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+cnt = engine.node_count()
+return f"OK cnt={cnt} type={type(cnt).__name__}"
+""")
+        assert "OK" in out, f"node_count failed: {out}"
+        assert "type=int" in out
+
+    def test_edge_count_returns_int(self):
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, """
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+cnt = engine.edge_count()
+return f"OK cnt={cnt} type={type(cnt).__name__}"
+""")
+        assert "OK" in out, f"edge_count failed: {out}"
+
+    def test_embedding_count_returns_int(self):
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, """
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+cnt = engine.embedding_count()
+return f"OK cnt={cnt} type={type(cnt).__name__}"
+""")
+        assert "OK" in out, f"embedding_count failed: {out}"
+
+
+    @pytest.mark.skipif(
+        os.environ.get('RUN_EMBEDDED_WGPROTO_SUITE', 'false').lower() != 'true',
+        reason='Requires full wgproto context; set RUN_EMBEDDED_WGPROTO_SUITE=true'
+    )
+    def test_get_node_properties_returns_dict(self):
+        pfx = f"gprop_{uuid.uuid4().hex[:8]}"
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, f"""
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+nid = "{pfx}:N1"
+engine.create_node(nid, properties={{"name": "TestNode", "score": "42"}})
+props = engine.get_node_properties(nid)
+name = engine.get_node_name(nid)
+engine.delete_node(nid)
+return f"OK props={{type(props).__name__}} name={{name}}"
+""")
+        assert "OK props=dict" in out, f"get_node_properties failed: {out}"
+        assert "name=TestNode" in out, f"get_node_name failed: {out}"
+
+
+    @pytest.mark.skipif(
+        os.environ.get('RUN_EMBEDDED_WGPROTO_SUITE', 'false').lower() != 'true',
+        reason='Requires full wgproto context; set RUN_EMBEDDED_WGPROTO_SUITE=true'
+    )
+    def test_get_nodes_by_ids_batch(self):
+        pfx = f"gnids_{uuid.uuid4().hex[:8]}"
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, f"""
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+ids = ["{pfx}:N{{i}}" for i in range(3)]
+for nid in ids:
+    engine.create_node(nid, properties={{"name": f"Node{{nid[-1]}}"}})
+results = engine.get_nodes_by_ids(ids)
+for nid in ids:
+    engine.delete_node(nid)
+return f"OK count={{len(results)}}"
+""")
+        assert "OK count=3" in out, f"get_nodes_by_ids failed: {out}"
+
+
+    @pytest.mark.skipif(
+        os.environ.get('RUN_EMBEDDED_WGPROTO_SUITE', 'false').lower() != 'true',
+        reason='Requires full wgproto context; set RUN_EMBEDDED_WGPROTO_SUITE=true'
+    )
+    def test_store_node_upsert_idempotent(self):
+        pfx = f"snode_{uuid.uuid4().hex[:8]}"
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, f"""
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+nid = "{pfx}:N1"
+engine.store_node(nid, properties={{"name": "First"}})
+engine.store_node(nid, properties={{"name": "Updated"}})
+props = engine.get_node_properties(nid)
+engine.delete_node(nid)
+return f"OK name={{props.get('name', 'MISSING')}}"
+""")
+        assert "OK name=Updated" in out, f"store_node upsert failed: {out}"
+
+    def test_detect_stored_vector_dtype(self):
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, """
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+dtype = engine.vector_dtype
+return f"OK dtype={dtype}"
+""")
+        assert "OK dtype=" in out, f"vector_dtype detection failed: {out}"
+        detected = out.split("dtype=")[1].split("\n")[0].strip()
+        assert detected in ("FLOAT", "DOUBLE"), f"Unexpected dtype: {detected}"
+
+
+    @pytest.mark.skipif(
+        os.environ.get('RUN_EMBEDDED_WGPROTO_SUITE', 'false').lower() != 'true',
+        reason='Requires full wgproto context; set RUN_EMBEDDED_WGPROTO_SUITE=true'
+    )
+    def test_sql_statement_fallback_for_vector_tables(self):
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, """
+import iris
+from iris_vector_graph.embedded import _sql_statement_execute
+
+rs = _sql_statement_execute("SELECT TOP 1 1 AS n")
+rows = list(rs)
+return f"OK rows={len(rows)}"
+""")
+        assert "OK" in out, f"_sql_statement_execute failed: {out}"
+
+
+    @pytest.mark.skipif(
+        os.environ.get('RUN_EMBEDDED_WGPROTO_SUITE', 'false').lower() != 'true',
+        reason='Requires full wgproto context; set RUN_EMBEDDED_WGPROTO_SUITE=true'
+    )
+    def test_all_three_fallbacks_transparent_to_execute_cypher(self):
+        out = _compile_and_run_py_method(ENTERPRISE_CONTAINER, """
+from iris_vector_graph.embedded import EmbeddedConnection
+from iris_vector_graph.engine import IRISGraphEngine
+conn = EmbeddedConnection()
+engine = IRISGraphEngine(conn, embedding_dimension=4)
+r1 = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
+r2 = engine.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+return f"OK nodes={r1.get('rows',[])} edges={r2.get('rows',[])}"
+""")
+        assert "OK" in out, f"execute_cypher with all fallbacks failed: {out}"
