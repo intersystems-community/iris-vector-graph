@@ -49,7 +49,44 @@ Progress through v1.88.0:
   - `DecodeBuildResults` removed (arno internals no longer in IVG)
   - Build: **33s** (was 323s, 10× speedup) | Query: **0.108ms** ✅
 
-### P2 — Accuracy
+### P1 — Vector Collection Architecture (spec needed before implementing)
+
+**Problem**: Single `kg_NodeEmbeddings` table with one engine-wide `vector_dtype`.
+Different use cases need different models, dtypes, and dimensions simultaneously.
+
+**Proposed design:**
+
+```python
+engine.register_embedding_collection(
+    name="protein_embeddings",
+    dim=768,
+    dtype="FLOAT",
+    model="nomic-embed-text",
+)
+engine.store_embedding(node_id, vec, collection="protein_embeddings")
+engine.kg_KNN_VEC(query_vec, k=10, collection="protein_embeddings")
+```
+
+**Storage**: `^IVG("collections", name) = {dim, dtype, model, created}`  
+Collection metadata persisted in IRIS global, retrieved by `_build_index_registry()`.  
+Default collection = existing `kg_NodeEmbeddings` with `engine.vector_dtype`.  
+Named collections can either:
+  - Partition `kg_NodeEmbeddings` by `collection` column (backward compat, no new table)
+  - Or use `vec_create_index` infrastructure (`^VecIdx`) for full isolation
+
+**Per-call dtype override** (simpler interim fix, no spec needed):
+```python
+engine.store_embedding(node_id, vec, dtype="FLOAT")  # overrides engine default
+engine.kg_KNN_VEC(query_vec, k=10, dtype="FLOAT")    # match stored dtype
+```
+This is a 2-line fix per method. Ship in v1.91.1 alongside the Bug A/B/C fixes.
+
+**Deeper named graph / multi-model design** — requires spec:
+- Each named graph (`USE graphname`) could have its own embedding collection
+- `engine.set_graph("protein_kg")` → uses `protein_embeddings` collection by convention
+- Multi-model hybrid search: `engine.kg_RRF_FUSE(..., collections=["protein_embeddings", "pathway_embeddings"])`
+
+
 
 - [ ] **HLL union bias ~89% on LDBC social graphs**
   `approx_count_distinct` systematically under-estimates for correlated friend-of-friend sets.

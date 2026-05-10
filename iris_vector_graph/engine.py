@@ -4196,7 +4196,9 @@ class IRISGraphEngine:
         node_id: str,
         embedding: List[float],
         metadata: Optional[Dict[str, Any]] = None,
+        dtype: Optional[str] = None,
     ) -> bool:
+        _dtype = (dtype or self.vector_dtype).upper()
         self._assert_node_exists(node_id)
 
         try:
@@ -4228,7 +4230,8 @@ class IRISGraphEngine:
         self.conn.commit()
         return True
 
-    def store_embeddings(self, items: List[Dict[str, Any]]) -> bool:
+    def store_embeddings(self, items: List[Dict[str, Any]], dtype: Optional[str] = None) -> bool:
+        _dtype = (dtype or self.vector_dtype).upper()
         if not items:
             return True
 
@@ -4266,7 +4269,7 @@ class IRISGraphEngine:
                     f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
                 )
                 cursor.execute(
-                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {self.vector_dtype}), ?)",
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {_dtype}), ?)",
                     [node_id, emb_str, meta_json],
                 )
             cursor.execute("COMMIT")
@@ -4972,8 +4975,10 @@ class IRISGraphEngine:
         return min(max(1, k), 1000)
 
     def kg_KNN_VEC(
-        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None,
+        dtype: Optional[str] = None,
     ) -> List[Tuple[str, float]]:
+        _dtype = (dtype or self.vector_dtype).upper()
         cursor = self.conn.cursor()
         try:
             emb_table = _table("kg_NodeEmbeddings")
@@ -4993,7 +4998,7 @@ class IRISGraphEngine:
 
             if label_filter and exclude_id:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" LEFT JOIN {labels_table} L ON L.s = n.id"
                     f" WHERE L.label = ? AND n.id != ?"
@@ -5002,7 +5007,7 @@ class IRISGraphEngine:
                 )
             elif label_filter:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" LEFT JOIN {labels_table} L ON L.s = n.id"
                     f" WHERE L.label = ?"
@@ -5011,7 +5016,7 @@ class IRISGraphEngine:
                 )
             elif exclude_id:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" WHERE n.id != ?"
                     f" ORDER BY score DESC",
@@ -5019,7 +5024,7 @@ class IRISGraphEngine:
                 )
             else:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" ORDER BY score DESC",
                     [k, query_vector],
