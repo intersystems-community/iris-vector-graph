@@ -73,19 +73,8 @@ class IRISGraphEngine:
         embedding_config: Optional[str] = None,
         embed_fn=None,
         use_iris_embedding: bool = False,
+        vector_dtype: str = "DOUBLE",
     ):
-        """
-        Initialize with IRIS database connection.
-
-        Args:
-            connection: IRIS database connection object
-            embedding_dimension: Optional fixed dimension for vector embeddings.
-                                 If not provided, it will be auto-detected from the schema.
-            embedder: Optional callable or object with .encode() or .embed() method
-                      for text-to-vector conversion.
-            embedding_config: Optional name of the IRIS embedding configuration
-                              (for native IRIS 2024.3+ embedding).
-        """
         self.conn = connection
         if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
             from .embedded import EmbeddedConnection
@@ -96,6 +85,7 @@ class IRISGraphEngine:
         self.embedding_config = embedding_config
         self._embed_fn = embed_fn
         self._use_iris_embedding = use_iris_embedding
+        self.vector_dtype = vector_dtype.upper()
         set_schema_prefix("Graph_KG")
         self._embedding_function_available: Optional[bool] = None
         self._native_vec_available: Optional[bool] = None
@@ -472,7 +462,7 @@ class IRISGraphEngine:
                         "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id]
                     )
                     cur.execute(
-                        "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                        f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
                         [node_id, emb_str],
                     )
                     embedded += 1
@@ -4009,14 +3999,14 @@ class IRISGraphEngine:
                             if merge:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
-                                    "SELECT ?, TO_VECTOR(?, DOUBLE) "
+                                    f"SELECT ?, TO_VECTOR(?, {self.vector_dtype}) "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
                                     [nid, emb_str, nid],
                                 )
                             else:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
-                                    "VALUES (?, TO_VECTOR(?, DOUBLE))",
+                                    f"VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
                                     [nid, emb_str],
                                 )
                             count += 1
@@ -4048,7 +4038,7 @@ class IRISGraphEngine:
                             if merge:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
-                                    "SELECT ?, ?, ?, TO_VECTOR(?, DOUBLE) "
+                                    f"SELECT ?, ?, ?, TO_VECTOR(?, {self.vector_dtype}) "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_EdgeEmbeddings "
                                     "WHERE s=? AND p=? AND o_id=?)",
                                     [s_val, p_val, o_val, emb_str, s_val, p_val, o_val],
@@ -4056,7 +4046,7 @@ class IRISGraphEngine:
                             else:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
-                                    "VALUES (?, ?, ?, TO_VECTOR(?, DOUBLE))",
+                                    f"VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
                                     [s_val, p_val, o_val, emb_str],
                                 )
                             count += 1
@@ -4232,7 +4222,7 @@ class IRISGraphEngine:
             f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
         )
         cursor.execute(
-            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {self.vector_dtype}), ?)",
             [node_id, emb_str, meta_json],
         )
         self.conn.commit()
@@ -4276,7 +4266,7 @@ class IRISGraphEngine:
                     f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
                 )
                 cursor.execute(
-                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?), ?)",
+                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {self.vector_dtype}), ?)",
                     [node_id, emb_str, meta_json],
                 )
             cursor.execute("COMMIT")
@@ -4459,7 +4449,7 @@ class IRISGraphEngine:
                         pass
                     try:
                         cursor.executemany(
-                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
+                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
                             insert_params,
                         )
                         embedded += len(insert_params)
@@ -4468,7 +4458,7 @@ class IRISGraphEngine:
                         for node_id, emb_str in insert_params:
                             try:
                                 cursor.execute(
-                                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?))",
+                                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
                                     [node_id, emb_str],
                                 )
                                 embedded += 1
@@ -4623,7 +4613,7 @@ class IRISGraphEngine:
                     try:
                         cursor.executemany(
                             f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
-                            "(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?))",
+                            f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
                             insert_params,
                         )
                         embedded += len(insert_params)
@@ -4633,7 +4623,7 @@ class IRISGraphEngine:
                             try:
                                 cursor.execute(
                                     f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
-                                    "(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?))",
+                                    f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
                                     [s, p, o_id, emb_str],
                                 )
                                 embedded += 1
@@ -4677,7 +4667,7 @@ class IRISGraphEngine:
             query_vec_str = query_embedding
             dim = str(query_embedding).count(",") + 1
 
-        query_cast = f"TO_VECTOR(?, DOUBLE, {dim})"
+        query_cast = f"TO_VECTOR(?, {self.vector_dtype}, {dim})"
 
         having = (
             f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
@@ -5003,7 +4993,7 @@ class IRISGraphEngine:
 
             if label_filter and exclude_id:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" LEFT JOIN {labels_table} L ON L.s = n.id"
                     f" WHERE L.label = ? AND n.id != ?"
@@ -5012,7 +5002,7 @@ class IRISGraphEngine:
                 )
             elif label_filter:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" LEFT JOIN {labels_table} L ON L.s = n.id"
                     f" WHERE L.label = ?"
@@ -5021,7 +5011,7 @@ class IRISGraphEngine:
                 )
             elif exclude_id:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" WHERE n.id != ?"
                     f" ORDER BY score DESC",
@@ -5029,7 +5019,7 @@ class IRISGraphEngine:
                 )
             else:
                 cursor.execute(
-                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, DOUBLE)) AS score"
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {self.vector_dtype})) AS score"
                     f" FROM {emb_table} n"
                     f" ORDER BY score DESC",
                     [k, query_vector],
@@ -5298,9 +5288,9 @@ class IRISGraphEngine:
             dim = query_embedding.count(",") + 1
 
         if dim:
-            query_cast = f"TO_VECTOR(?, DOUBLE, {dim})"
+            query_cast = f"TO_VECTOR(?, {self.vector_dtype}, {dim})"
         else:
-            query_cast = "TO_VECTOR(?, DOUBLE)"
+            query_cast = f"TO_VECTOR(?, {self.vector_dtype})"
 
         select_cols = (
             f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, {query_cast}) AS score"
