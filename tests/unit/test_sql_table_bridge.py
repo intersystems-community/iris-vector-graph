@@ -23,6 +23,7 @@ class TestSQLTableBridgeUnit:
         e.capabilities = MagicMock()
         e._arno_available = None
         e._arno_capabilities = {}
+        e.vector_dtype = "DOUBLE"
         return e
 
     def test_get_table_mapping_returns_none_for_unmapped(self):

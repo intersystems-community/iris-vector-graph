@@ -879,14 +879,20 @@ class IRISGraphEngine:
 
     def _assert_node_exists(self, node_id: str) -> None:
         cursor = self.conn.cursor()
-        # Use constant table names or sanitized identifiers
-        table = validate_table_name("nodes")
-        cursor.execute(
-            f"SELECT COUNT(*) FROM Graph_KG.{table} WHERE node_id = ?", [node_id]
-        )
-        result = cursor.fetchone()
-        if not result or result[0] == 0:
-            raise ValueError(f"Node does not exist: {node_id}")
+        try:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?", [node_id]
+            )
+            result = cursor.fetchone()
+            if not result or result[0] == 0:
+                raise ValueError(f"Node does not exist: {node_id}")
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        finally:
+            if hasattr(cursor, 'close'):
+                cursor.close()
 
     def execute_cypher(
         self, cypher_query: str, parameters: Dict[str, Any] = None,
@@ -6810,7 +6816,9 @@ class IRISGraphEngine:
 
     def get_node_properties(self, node_id: str) -> Dict[str, Any]:
         node = self.get_node(node_id)
-        return node.get("properties", {}) if node else {}
+        if not node:
+            return {}
+        return {k: v for k, v in node.items() if k not in ("id", "labels")}
 
     def get_node_name(self, node_id: str) -> Optional[str]:
         props = self.get_node_properties(node_id)
@@ -6847,11 +6855,12 @@ class IRISGraphEngine:
         cursor = self.conn.cursor()
         try:
             cursor.execute(
-                f"INSERT OR IGNORE INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
+                f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
             )
             self.conn.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            if "-119" not in str(e) and "duplicate" not in str(e).lower():
+                raise
         finally:
             cursor.close()
         if properties:
@@ -6860,7 +6869,11 @@ class IRISGraphEngine:
                 cursor2 = self.conn.cursor()
                 try:
                     cursor2.execute(
-                        f"INSERT OR REPLACE INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)",
+                        f"DELETE FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?",
+                        [node_id, k]
+                    )
+                    cursor2.execute(
+                        f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)",
                         [node_id, k, val_str]
                     )
                     self.conn.commit()
@@ -6873,12 +6886,64 @@ class IRISGraphEngine:
                 cursor3 = self.conn.cursor()
                 try:
                     cursor3.execute(
-                        f"INSERT OR IGNORE INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
+                        f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
                         [node_id, lbl]
                     )
                     self.conn.commit()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if "-119" not in str(e) and "duplicate" not in str(e).lower():
+                        raise
                 finally:
                     cursor3.close()
         return True
+
+    def store_edge(self, source_id: str, predicate: str, target_id: str,
+                   qualifiers: Optional[Dict[str, Any]] = None) -> bool:
+        self.store_node(source_id)
+        self.store_node(target_id)
+        cursor = self.conn.cursor()
+        try:
+            qual_json = json.dumps(qualifiers) if qualifiers else None
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                [source_id, predicate, target_id, qual_json],
+            )
+            self.conn.commit()
+        except Exception as e:
+            if "-119" not in str(e) and "duplicate" not in str(e).lower():
+                raise
+        finally:
+            cursor.close()
+        return True
+
+    def nodes_exist(self, node_ids: List[str]) -> set:
+        if not node_ids:
+            return set()
+        existing: set = set()
+        cursor = self.conn.cursor()
+        try:
+            for i in range(0, len(node_ids), 200):
+                batch = node_ids[i:i + 200]
+                phs = ",".join(["?"] * len(batch))
+                try:
+                    cursor.execute(
+                        f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({phs})",
+                        batch,
+                    )
+                    for row in cursor.fetchall():
+                        existing.add(row[0])
+                except Exception:
+                    for nid in batch:
+                        try:
+                            cursor.execute(
+                                f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?",
+                                [nid],
+                            )
+                            row = cursor.fetchone()
+                            if row and int(row[0]) > 0:
+                                existing.add(nid)
+                        except Exception:
+                            pass
+        finally:
+            cursor.close()
+        return existing

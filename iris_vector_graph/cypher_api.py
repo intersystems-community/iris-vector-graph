@@ -18,9 +18,11 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 try:
+    from iris_vector_graph.embedded import _ensure_embedded_iris_first
+    _ensure_embedded_iris_first()
     import iris
-    _EMBEDDED = True
-except ImportError:
+    _EMBEDDED = hasattr(iris, 'cls')
+except (ImportError, Exception):
     _EMBEDDED = False
 
 from contextlib import asynccontextmanager

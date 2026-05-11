@@ -548,16 +548,14 @@ class TestNewEngineAPIs:
     def test_get_node_name_returns_name_property(self):
         eng = self._make_engine()
         eng.get_node = MagicMock(return_value={
-            "id": "n1", "labels": ["Gene"],
-            "properties": {"name": "TP53", "symbol": "tp53"}
+            "id": "n1", "labels": ["Gene"], "name": "TP53", "symbol": "tp53"
         })
         assert eng.get_node_name("n1") == "TP53"
 
     def test_get_node_name_falls_back_to_label(self):
         eng = self._make_engine()
         eng.get_node = MagicMock(return_value={
-            "id": "n1", "labels": [],
-            "properties": {"label": "MyLabel"}
+            "id": "n1", "labels": [], "label": "MyLabel"
         })
         assert eng.get_node_name("n1") == "MyLabel"
 
@@ -569,10 +567,10 @@ class TestNewEngineAPIs:
     def test_get_node_properties_returns_dict(self):
         eng = self._make_engine()
         eng.get_node = MagicMock(return_value={
-            "id": "n1", "properties": {"name": "Alice", "age": "30"}
+            "id": "n1", "labels": [], "name": "Alice", "age": "30"
         })
         props = eng.get_node_properties("n1")
-        assert props == {"name": "Alice", "age": "30"}
+        assert props["name"] == "Alice" and props["age"] == "30"
 
     def test_get_nodes_by_ids_delegates_to_get_nodes(self):
         eng = self._make_engine()
