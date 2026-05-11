@@ -1,166 +1,113 @@
-# Tasks: FHIR-to-KG Bridge Layer
+# Tasks: FHIR-KG Clinical Bridge
 
-**Input**: Design documents from `/specs/027-fhir-kg-bridge/`
-**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
-
-**Tests**: Required (SC-005: ≥6 unit tests, ≥3 e2e tests; Constitution Principle IV: integration + e2e mandatory for schema changes)
-
-**Organization**: US1 (crosswalk ingest) and US2 (anchor extraction) are both P1 and independent after Phase 2. US3 (unified pipeline) is P2 and depends on US1+US2.
-
-## Format: `[ID] [P?] [Story] Description`
-
----
+**Branch**: `027-fhir-kg-bridge`
+**Generated**: 2026-05-10
+**Spec**: specs/027-fhir-kg-bridge/spec.md
+**Plan**: specs/027-fhir-kg-bridge/plan.md
 
 ## Phase 1: Setup
 
-- [X] T001 Verify all existing unit tests pass: `python3 -m pytest tests/unit/ -q`
-- [X] T002 Verify all existing e2e tests pass: `python3 -m pytest tests/e2e/ -q`
+- [ ] T001 Create iris_vector_graph/fhir_bridge.py with module imports (requests, json, logging, typing)
+- [ ] T002 Create tests/unit/test_fhir_bridge.py with synthetic patient fixtures and test class structure
+- [ ] T003 Create tests/e2e/test_fhir_bridge_e2e.py with iris_connection fixture and skip guard
 
-**Checkpoint**: Baseline green — zero regressions before any changes.
+## Phase 2: Foundational (blocking)
 
----
+- [ ] T004 Insert synthetic bridge entries for 3 demo patients into fhir_bridges table via test fixture in tests/e2e/test_fhir_bridge_e2e.py
+- [ ] T005 Insert synthetic KG nodes (mesh:D003924, mesh:D006973, mesh:D006333, mesh:D003866, mesh:D011247, mesh:D000740) via test fixture in tests/e2e/test_fhir_bridge_e2e.py
 
-## Phase 2: Foundational (Blocking Prerequisites)
+## Phase 3: User Story 1 — Load ICD-10 to MeSH Crosswalk (P1)
 
-- [X] T003 Create `sql/fhir_bridges.sql` with CREATE TABLE IF NOT EXISTS DDL for `Graph_KG.fhir_bridges` per data-model.md schema (fhir_code, kg_node_id, fhir_code_system, bridge_type, confidence, source_cui, composite PK)
-- [X] T004 Add `fhir_bridges` table creation to schema deployment in `iris_vector_graph/schema.py` — add the DDL to `get_schema_sql_list()` or equivalent schema init function
-- [X] T005 Deploy `fhir_bridges` table to live IRIS container and verify it exists: `SELECT COUNT(*) FROM Graph_KG.fhir_bridges`
+**Goal**: Bridge table populated with ICD-10→MeSH mappings from UMLS MRCONSO
+**Test**: Load crosswalk, query known ICD-10 code J18.9, verify MeSH D011014 returned
 
-**Checkpoint**: `Graph_KG.fhir_bridges` table exists in IRIS. All existing tests still pass.
+- [ ] T006 [US1] Verify scripts/ingest/load_umls_bridges.py handles idempotent re-run correctly
+- [ ] T007 [P] [US1] Write unit test: ingest script skips malformed rows (log + skip) in tests/unit/test_fhir_bridge.py
+- [ ] T008 [P] [US1] Write e2e test: verify known ICD-10 J18.9 maps to MeSH D011014 after synthetic insert in tests/e2e/test_fhir_bridge_e2e.py
 
----
+## Phase 4: User Story 2 — Query Patient KG Anchors (P1)
 
-## Phase 3: User Story 1 — Load ICD-10→MeSH Crosswalk (Priority: P1)
+**Goal**: get_kg_anchors(engine, icd_codes) returns KG node IDs that exist in Graph_KG.nodes
+**Test**: Call with ["E11.9", "I10"], verify mesh:D003924 and mesh:D006973 returned
 
-**Goal**: UMLS MRCONSO parser loads ICD-10-CM→MeSH mappings into `fhir_bridges`.
+- [ ] T009 [US2] Implement get_kg_anchors(engine, icd_codes) in iris_vector_graph/fhir_bridge.py
+- [ ] T010 [P] [US2] Write unit test: get_kg_anchors with valid ICD codes returns expected node IDs in tests/unit/test_fhir_bridge.py
+- [ ] T011 [P] [US2] Write unit test: get_kg_anchors with unknown codes returns empty list in tests/unit/test_fhir_bridge.py
+- [ ] T012 [P] [US2] Write unit test: get_kg_anchors with empty fhir_bridges table returns empty + log warning in tests/unit/test_fhir_bridge.py
+- [ ] T013 [US2] Write e2e test: get_kg_anchors against live IRIS returns correct anchors in tests/e2e/test_fhir_bridge_e2e.py
+- [ ] T014 [US2] Write e2e test: get_kg_anchors filters to only nodes present in Graph_KG.nodes in tests/e2e/test_fhir_bridge_e2e.py
 
-**Independent Test**: Run ingest script with MRCONSO file, verify ≥50K rows with correct ICD→MeSH mappings.
+## Phase 5: User Story 3 — Unified Clinical Pipeline (P2)
 
-### Tests for User Story 1
+**Goal**: unified_clinical_pipeline() chains FHIR search → anchors → PPR → results with provenance
+**Test**: Run pipeline with mock FHIR returning maria-gonzalez-001, verify anchors + PPR results
 
-- [X] T006 [P] [US1] Unit test: MRCONSO line parser extracts CUI, SAB, CODE, STR from pipe-delimited line in `tests/unit/test_fhir_bridges.py`
-- [X] T007 [P] [US1] Unit test: CUI join logic produces correct ICD10CM→MeSH pairs from two dictionaries in `tests/unit/test_fhir_bridges.py`
-- [X] T008 [P] [US1] Unit test: MeSH descriptor IDs are prefixed with `MeSH:` to match KG node_id format in `tests/unit/test_fhir_bridges.py`
-- [X] T009 [P] [US1] Unit test: malformed MRCONSO lines are skipped with warning (not abort) in `tests/unit/test_fhir_bridges.py`
-- [X] T009a [P] [US1] Unit test: inserting duplicate (fhir_code, kg_node_id) pair is silently skipped (idempotent — no error, no duplicate row) in `tests/unit/test_fhir_bridges.py`
+- [ ] T015 [US3] Implement FHIR client helper (GET, BasicAuth, configurable 10s timeout) in iris_vector_graph/fhir_bridge.py
+- [ ] T016 [US3] Implement ICD-10 code extraction from FHIR Condition resources in iris_vector_graph/fhir_bridge.py
+- [ ] T017 [US3] Implement unified_clinical_pipeline(engine, query, fhir_base_url, fhir_auth, top_k, ppr_top_k, vector_search_param) in iris_vector_graph/fhir_bridge.py
+- [ ] T018 [P] [US3] Write unit test: FHIR client handles BasicAuth and unauthenticated in tests/unit/test_fhir_bridge.py
+- [ ] T019 [P] [US3] Write unit test: FHIR client returns error within timeout when unreachable in tests/unit/test_fhir_bridge.py
+- [ ] T020 [P] [US3] Write unit test: ICD-10 extraction from Condition bundle returns correct codes in tests/unit/test_fhir_bridge.py
+- [ ] T021 [P] [US3] Write unit test: pipeline returns status=anchors_resolved_but_no_graph_connectivity when PPR empty in tests/unit/test_fhir_bridge.py
+- [ ] T022 [P] [US3] Write unit test: pipeline returns status=no_bridges_loaded when fhir_bridges empty in tests/unit/test_fhir_bridge.py
+- [ ] T023 [US3] Write e2e test: pipeline with mocked FHIR + live IRIS returns ranked results in tests/e2e/test_fhir_bridge_e2e.py
+- [ ] T024 [US3] Write e2e test: post-FHIR processing completes in under 500ms in tests/e2e/test_fhir_bridge_e2e.py
 
-### Implementation for User Story 1
+## Phase 6: User Story 4 — FHIR Search Tool (P2)
 
-- [X] T010 [US1] Create `scripts/ingest/load_umls_bridges.py` with two-pass MRCONSO parser: pass 1 collects CUI→ICD10CM (SAB='ICD10CM'), pass 2 collects CUI→MeSH (SAB='MSH', TTY='MH'), join on CUI, INSERT OR IGNORE into `Graph_KG.fhir_bridges` with `bridge_type='icd10_to_mesh'` and `MeSH:` prefix on descriptor IDs
-- [X] T011 [US1] Add CLI argument parsing to `load_umls_bridges.py`: `--mrconso PATH` (required), `--container NAME` (default iris-vector-graph-main), `--dry-run` flag for validation without insert
+**Goal**: MCP-compatible FHIRSearchTool wraps FHIR REST API
+**Test**: Tool searches Conditions for demo patient, returns structured summary with ICD codes
 
-**Checkpoint**: Ingest script loads MRCONSO data into `fhir_bridges`. Unit tests pass.
+- [ ] T025 [US4] Implement FHIRSearchTool class (MCP-compatible interface) in iris_vector_graph/fhir_bridge.py
+- [ ] T026 [P] [US4] Write unit test: FHIRSearchTool returns structured condition list in tests/unit/test_fhir_bridge.py
+- [ ] T027 [P] [US4] Write unit test: FHIRSearchTool handles auth failure gracefully in tests/unit/test_fhir_bridge.py
 
----
+## Phase 7: User Story 5 — Patient Graph Neighborhood Tool (P2)
 
-## Phase 4: User Story 2 — Query Patient KG Anchors (Priority: P1)
+**Goal**: MCP-compatible GetPatientKGNeighborhoodTool chains patient→conditions→anchors→PPR
+**Test**: Tool with maria-gonzalez-001 returns ranked KG concepts
 
-**Goal**: `get_kg_anchors(icd_codes)` returns KG node IDs linked through `fhir_bridges`, filtered to nodes existing in `Graph_KG.nodes`.
+- [ ] T028 [US5] Implement GetPatientKGNeighborhoodTool class in iris_vector_graph/fhir_bridge.py
+- [ ] T029 [P] [US5] Write unit test: tool returns neighborhood dict with anchors + ppr_results in tests/unit/test_fhir_bridge.py
+- [ ] T030 [P] [US5] Write unit test: tool returns empty neighborhood for patient with no conditions in tests/unit/test_fhir_bridge.py
+- [ ] T031 [US5] Write e2e test: tool against live IRIS with synthetic patient data in tests/e2e/test_fhir_bridge_e2e.py
 
-**Independent Test**: Insert test bridge rows, call `get_kg_anchors()`, verify returned node IDs.
+## Phase 8: User Story 6 — Patient Anchors in Cypher (P3)
 
-### Tests for User Story 2
+**Goal**: /api/cypher with fhir_patient_id parameter auto-resolves anchors
+**Test**: Cypher query with patient_anchors parameter returns graph results
 
-- [X] T012 [P] [US2] Unit test: `get_kg_anchors(["J18.9"])` with mocked cursor returns expected MeSH node IDs in `tests/unit/test_fhir_bridges.py`
-- [X] T013 [P] [US2] Unit test: `get_kg_anchors([])` returns empty list (no error) in `tests/unit/test_fhir_bridges.py`
-- [X] T014 [P] [US2] Unit test: `get_kg_anchors()` filters to only nodes present in `Graph_KG.nodes` (mock returns bridge row for non-existent node → filtered out) in `tests/unit/test_fhir_bridges.py`
+- [ ] T032 [US6] Add fhir_patient_id parameter handling in iris_vector_graph/cypher_api.py
+- [ ] T033 [US6] Implement patient_anchors resolution (patient_id → FHIR → ICD → get_kg_anchors) in iris_vector_graph/fhir_bridge.py
+- [ ] T034 [P] [US6] Write unit test: Cypher without fhir_patient_id unchanged in tests/unit/test_fhir_bridge.py
+- [ ] T035 [US6] Write e2e test: Cypher with fhir_patient_id resolves anchors in tests/e2e/test_fhir_bridge_e2e.py
 
-### Implementation for User Story 2
+## Phase 9: Polish
 
-- [X] T015 [US2] Add `get_kg_anchors(icd_codes, bridge_type='icd10_to_mesh')` method to `IRISGraphEngine` in `iris_vector_graph/engine.py`: parameterized SQL JOIN between `fhir_bridges` and `nodes` table, returns distinct `kg_node_id` list
+- [ ] T036 Export get_kg_anchors, unified_clinical_pipeline, FHIRSearchTool, GetPatientKGNeighborhoodTool from iris_vector_graph/__init__.py
+- [ ] T037 Add fhir_bridge module to docs/python/PYTHON_SDK.md with usage examples
+- [ ] T038 Run full test suite (unit + e2e) and verify 0 regressions
 
-**Checkpoint**: `get_kg_anchors()` works against live IRIS. Unit tests pass.
+## Dependencies
 
----
+```
+US1 (crosswalk) ─┐
+                  ├─→ US2 (anchors) ─┬─→ US3 (pipeline) ─→ US5 (neighborhood tool)
+                  │                   └─→ US6 (cypher hint)
+                  └─→ US4 (FHIR tool, independent)
+```
 
-## Phase 5: User Story 3 — Unified Clinical-to-Literature Pipeline (Priority: P2)
+## Parallel Execution
 
-**Goal**: Demo script chains FHIR vector search → anchor extraction → PPR walk → literature retrieval.
-
-**Independent Test**: Run pipeline with known clinical query against pre-loaded data, verify ranked results with provenance.
-
-### Implementation for User Story 3
-
-- [X] T016 [US3] Create `scripts/demo/unified_pipeline.py` with 6-step pipeline: (1) FHIR vector search via HTTP, (2) extract ICD codes from FHIR Condition results, (3) `get_kg_anchors(icd_codes)`, (4) `kg_PAGERANK(seed_entities=anchors)`, (5) `kg_KNN_VEC()` for literature, (6) RRF score fusion
-- [X] T017 [US3] Add graceful fallback: if FHIR endpoint unavailable, skip steps 1-2 and accept seed ICD codes as CLI argument for KG-only search in `scripts/demo/unified_pipeline.py`
-- [X] T018 [US3] Add provenance tracking: each result includes chain `[icd_code → mesh_term → kg_mechanism → paper_id]` in `scripts/demo/unified_pipeline.py`
-
-**Checkpoint**: Unified pipeline executes end-to-end. Provenance chains visible in output.
-
----
-
-## Phase 5.5: Integration Tests (SQL Layer — Principle IV)
-
-- [X] T019 [US1] Integration test: INSERT into `fhir_bridges` and SELECT back verifies round-trip with correct column values in `tests/integration/test_fhir_bridges_integration.py`
-- [X] T020 [US2] Integration test: `get_kg_anchors()` SQL JOIN produces correct results with test data in both `fhir_bridges` and `Graph_KG.nodes` in `tests/integration/test_fhir_bridges_integration.py`
-
-**Checkpoint**: SQL-layer behavior verified before live execution.
-
----
-
-## Phase 6: End-to-End Tests (IRIS — Principle IV, Non-Optional)
-
-- [X] T021 [US1] E2e test: insert 10 ICD→MeSH bridge rows into live IRIS, verify they persist and are queryable via SELECT in `tests/e2e/test_fhir_bridges_e2e.py`
-- [X] T022 [US1] E2e test: idempotent insert — re-inserting same bridge rows does not create duplicates in `tests/e2e/test_fhir_bridges_e2e.py`
-- [X] T023 [US2] E2e test: `get_kg_anchors(["J18.9", "E11.9"])` returns only MeSH node IDs that exist in `Graph_KG.nodes` against live IRIS in `tests/e2e/test_fhir_bridges_e2e.py`
-- [X] T024 [US2] E2e test: `get_kg_anchors([])` returns empty list against live IRIS in `tests/e2e/test_fhir_bridges_e2e.py`
-- [X] T025 [US2] E2e test: `get_kg_anchors()` with ICD codes that have no bridge mapping returns empty list in `tests/e2e/test_fhir_bridges_e2e.py`
-
-**Checkpoint**: All acceptance scenarios from spec.md pass against live IRIS.
-
----
-
-## Phase 7: Polish & Cross-Cutting Concerns
-
-- [X] T026 Run full regression: `python3 -m pytest tests/unit/ tests/e2e/ -q` — all 336+ existing tests pass
-- [X] T027 [P] Update `docs/python/PYTHON_SDK.md` with `get_kg_anchors()` API reference and bridge table documentation
-- [X] T028 [P] Update README.md changelog with v1.18.0 entry for FHIR-to-KG bridge
-
----
-
-## Dependencies & Execution Order
-
-### Phase Dependencies
-
-- **Setup (Phase 1)**: No dependencies
-- **Foundational (Phase 2)**: Depends on Phase 1 — creates the table that all stories need
-- **US1 (Phase 3)**: Depends on Phase 2 — needs `fhir_bridges` table
-- **US2 (Phase 4)**: Depends on Phase 2 — needs `fhir_bridges` table (independent of US1)
-- **US3 (Phase 5)**: Depends on US1 + US2 — needs bridge data loaded AND anchor function
-- **Integration (Phase 5.5)**: Depends on Phase 2
-- **E2E (Phase 6)**: Depends on Phases 3 + 4 completion
-- **Polish (Phase 7)**: Depends on Phase 6
-
-### User Story Dependencies
-
-- **US1 (P1)**: Independent after Phase 2 — ingest script only needs the table
-- **US2 (P1)**: Independent after Phase 2 — `get_kg_anchors()` only needs the table
-- **US3 (P2)**: Depends on US1 (data loaded) + US2 (anchor function exists)
-
-### Parallel Opportunities
-
-- T006-T009 (US1 unit tests) can all run in parallel
-- T012-T014 (US2 unit tests) can all run in parallel
-- US1 (Phase 3) and US2 (Phase 4) can run in parallel after Phase 2
-- T021-T025 (all e2e tests) are independent and can run in parallel
-- T027-T028 (docs) can run in parallel
-
----
+- Phase 4 (US2): T010, T011, T012 in parallel
+- Phase 5 (US3): T018, T019, T020, T021, T022 in parallel
+- Phase 6 (US4): T026, T027 in parallel
+- Phase 7 (US5): T029, T030 in parallel
+- Cross-phase: US4 has no dependency on US2/US3
 
 ## Implementation Strategy
 
-### MVP First (User Story 1 + 2)
-
-1. Complete Phase 1: Verify baseline
-2. Complete Phase 2: Create `fhir_bridges` table (T003-T005)
-3. Complete Phase 3 + 4 in parallel: Ingest script + `get_kg_anchors()`
-4. **STOP and VALIDATE**: Bridge data loads, anchors resolve correctly
-
-### Incremental Delivery
-
-1. Setup + Foundational → `fhir_bridges` table exists
-2. Add US1 → MRCONSO ingest works
-3. Add US2 → `get_kg_anchors()` works
-4. Add US3 → Unified pipeline orchestrates the full demo
-5. Integration + E2E → All stories validated against live IRIS
-6. Polish → Docs + full regression
+**MVP**: Phase 1–4 (Setup + US1 + US2) — get_kg_anchors() working end-to-end
+**V1**: + Phase 5 (US3) — unified pipeline matching CareConnect ObjectScript
+**V2**: + Phase 6–7 (US4 + US5) — MCP tools for Mindwalk/fhiragent
+**V3**: + Phase 8 (US6) — Cypher API integration
