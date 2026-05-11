@@ -70,8 +70,8 @@ class BulkLoader:
                 if commit_per_batch:
                     self.conn.rollback()
                 err_str = str(e)
-                # UNIQUE violation: fall back to row-by-row for this batch
-                if "-119" in err_str or "UNIQUE" in err_str:
+                err_lower = err_str.lower()
+                if "-119" in err_str or "unique" in err_lower:
                     for row in batch:
                         try:
                             cursor.execute(sql, row)
