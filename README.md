@@ -624,11 +624,29 @@ components  = ops.kg_WCC()
 ## FHIR Bridge
 
 ```python
+from iris_vector_graph import get_kg_anchors, unified_clinical_pipeline, FHIRSearchTool
+
 # Load ICD-10→MeSH mappings from UMLS MRCONSO
 # python scripts/ingest/load_umls_bridges.py --mrconso /path/to/MRCONSO.RRF
 
+# Resolve ICD-10 codes to KG node IDs
 anchors = engine.get_kg_anchors(icd_codes=["J18.0", "E11.9"])
 # → ["MeSH:D001996", "MeSH:D003924"]  (filtered to nodes in KG)
+
+# Full pipeline: FHIR patient → conditions → KG anchors → PPR → ranked results
+result = unified_clinical_pipeline(
+    engine=engine,
+    query="pneumonia elderly",
+    fhir_base_url="http://localhost:8080/fhir",
+    patient_id="maria-gonzalez-001",
+)
+# result["status"] → "ok"
+# result["anchors"] → ["MeSH:D011014", "MeSH:D003924"]
+# result["ppr_results"] → [{"node_id": "...", "score": 0.85}, ...]
+
+# MCP-compatible tool for AI agents
+tool = FHIRSearchTool(base_url="http://localhost:8080/fhir")
+conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 ```
 
 ---
@@ -1161,6 +1179,21 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v1.92.0 (2026-05-11)
+
+**FHIR-KG Clinical Bridge** — new `iris_vector_graph.fhir_bridge` module bridges clinical patient data to the biomedical knowledge graph.
+
+- `get_kg_anchors(engine, icd_codes)` — resolve ICD-10 codes to KG node IDs via `fhir_bridges` table
+- `extract_icd_codes(bundle)` — parse ICD-10 codes from FHIR Condition bundles
+- `fhir_search_conditions(url, patient_id)` — FHIR REST client (10s independent timeout, BasicAuth)
+- `unified_clinical_pipeline(engine, ...)` — full pipeline: FHIR → anchors → PPR → ranked results with provenance
+- `FHIRSearchTool` — MCP-compatible FHIR search wrapper for AI agents
+- `GetPatientKGNeighborhoodTool` — MCP-compatible patient → graph neighborhood tool
+- Cypher API: `POST /api/cypher` accepts optional `fhir_patient_id` + `fhir_base_url` — auto-resolves patient anchors into `$patient_anchors` parameter
+
+**Bug fix:**
+- Duplicate key detection now catches IRIS's actual "failed unique check" error message (previously only checked for SQLCODE -119 and "duplicate" substring, which don't match)
 
 ### v1.91.0 (2026-05-09)
 
