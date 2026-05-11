@@ -2829,10 +2829,11 @@ class IRISGraphEngine:
             return True
         except Exception as e:
             cursor.execute("ROLLBACK")
+            err_lower = str(e).lower()
             if (
-                "UNIQUE" in str(e)
+                "unique" in err_lower
                 or "-119" in str(e)
-                or "validation failed" in str(e).lower()
+                or "validation failed" in err_lower
             ):
                 logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
             else:
@@ -2864,7 +2865,8 @@ class IRISGraphEngine:
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
-            if "UNIQUE" in str(e) or "-119" in str(e):
+            err_lower = str(e).lower()
+            if "unique" in err_lower or "-119" in str(e):
                 logger.debug(
                     f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}"
                 )
@@ -6859,7 +6861,8 @@ class IRISGraphEngine:
             )
             self.conn.commit()
         except Exception as e:
-            if "-119" not in str(e) and "duplicate" not in str(e).lower():
+            err_lower = str(e).lower()
+            if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
                 raise
         finally:
             cursor.close()
@@ -6891,7 +6894,8 @@ class IRISGraphEngine:
                     )
                     self.conn.commit()
                 except Exception as e:
-                    if "-119" not in str(e) and "duplicate" not in str(e).lower():
+                    err_lower = str(e).lower()
+                    if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
                         raise
                 finally:
                     cursor3.close()
@@ -6910,7 +6914,8 @@ class IRISGraphEngine:
             )
             self.conn.commit()
         except Exception as e:
-            if "-119" not in str(e) and "duplicate" not in str(e).lower():
+            err_lower = str(e).lower()
+            if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
                 raise
         finally:
             cursor.close()

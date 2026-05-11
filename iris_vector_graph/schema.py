@@ -362,7 +362,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             )
             return True
         except Exception as e:
-            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+            err_lower = str(e).lower()
+            if "already exists" in err_lower or "duplicate" in err_lower or "unique" in err_lower:
                 return True
             return False
 
