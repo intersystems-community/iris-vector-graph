@@ -95,6 +95,9 @@ class CypherRequest(BaseModel):
     query: str
     parameters: dict[str, Any] = Field(default_factory=dict)
     limitRows: int = 1000
+    fhir_patient_id: str | None = None
+    fhir_base_url: str | None = None
+    fhir_auth: tuple[str, str] | list[str] | None = None
 
 
 @app.websocket("/")
@@ -185,12 +188,37 @@ def health():
         return {"status": "ok", "engine": False, "error": str(e)}
 
 
+def _resolve_patient_anchors(req: CypherRequest) -> list[str]:
+    from iris_vector_graph.fhir_bridge import fhir_search_conditions, get_kg_anchors
+
+    fhir_url = req.fhir_base_url or os.environ.get("FHIR_BASE_URL", "")
+    if not fhir_url:
+        return []
+    auth = tuple(req.fhir_auth) if req.fhir_auth else None
+    fhir_result = fhir_search_conditions(
+        fhir_base_url=fhir_url,
+        patient_id=req.fhir_patient_id,
+        auth=auth,
+    )
+    if fhir_result["error"] or not fhir_result["conditions"]:
+        return []
+    icd_codes = [c["code"] for c in fhir_result["conditions"] if c.get("code")]
+    if not icd_codes:
+        return []
+    engine = _get_engine()
+    return get_kg_anchors(engine, icd_codes)
+
+
 @app.post("/api/cypher")
 def cypher_query(req: CypherRequest):
     trace_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     try:
-        result = _run_cypher(req.query, req.parameters, req.limitRows)
+        params = dict(req.parameters)
+        if req.fhir_patient_id:
+            anchors = _resolve_patient_anchors(req)
+            params["patient_anchors"] = anchors
+        result = _run_cypher(req.query, params, req.limitRows)
         duration = int((time.time() - t0) * 1000)
         _log("POST", "/api/cypher", 200, duration, trace_id)
         return result

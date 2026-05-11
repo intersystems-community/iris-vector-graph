@@ -24,6 +24,14 @@ from .dbapi_utils import (
     create_ivfflat_index,
     vector_similarity_search,
 )
+from .fhir_bridge import (
+    get_kg_anchors,
+    extract_icd_codes,
+    fhir_search_conditions,
+    unified_clinical_pipeline,
+    FHIRSearchTool,
+    GetPatientKGNeighborhoodTool,
+)
 
 try:
     from .embedded import EmbeddedConnection, EmbeddedCursor
@@ -58,4 +66,10 @@ __all__ = [
     "KHop2Input",
     "TemporalEdgeInput",
     "VecSearchInput",
+    "get_kg_anchors",
+    "extract_icd_codes",
+    "fhir_search_conditions",
+    "unified_clinical_pipeline",
+    "FHIRSearchTool",
+    "GetPatientKGNeighborhoodTool",
 ]
