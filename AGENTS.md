@@ -50,6 +50,8 @@
 - Python 3.11 (wiring/tests) + ObjectScript (IRIS 2024.1+, BFS engine) + `intersystems-irispython`, `iris-devtester` (test only) (047-shortest-path)
 - `^KG("out")` / `^KG("in")` globals — no new schema, no new globals (047-shortest-path)
 - Python 3.11 + ObjectScript (IRIS 2024.1+) + `intersystems-irispython`, `iris-devtester` (test only) (048-unified-edge-store)
+- Python 3.11+ (project target per AGENTS.md) + `iris_vector_graph` (engine, schema), `requests` (FHIR REST client) (027-fhir-kg-bridge)
+- Existing `Graph_KG.fhir_bridges` table + `Graph_KG.nodes` (027-fhir-kg-bridge)
 
 ## Project Structure
 ```text
@@ -116,10 +118,9 @@ use these features. See `docs/architecture/embedded_python_architecture.md`.
 When adding a new Cypher feature: test the generated SQL from ObjectScript (`##class(IVG.CypherEngine).Execute(...)`) before testing from Python. If it works from ObjectScript, it works everywhere. If it only works from Python, the design is wrong.
 
 ## Recent Changes
+- 027-fhir-kg-bridge: Added Python 3.11+ (project target per AGENTS.md) + `iris_vector_graph` (engine, schema), `requests` (FHIR REST client)
 - 048-unified-edge-store PR-A: Graph.KG.EdgeScan (MatchEdges/WriteAdjacency/DeleteAdjacency), create_edge syncs to ^KG("out",0,...), translator EdgeScan CTE for MATCH, TemporalIndex + BFS/shortestPath updated to shard-0
 - 048-unified-edge-store: Added Python 3.11 + ObjectScript (IRIS 2024.1+) + `intersystems-irispython`, `iris-devtester` (test only)
-- 047-shortest-path: Added Python 3.11 (wiring/tests) + ObjectScript (IRIS 2024.1+, BFS engine) + `intersystems-irispython`, `iris-devtester` (test only)
-- 046-ivfflat-index: Added IVFFlat vector index — `ivf_build/search/drop/info` on `IRISGraphEngine`, `Graph.KG.IVFIndex` ObjectScript class, `CALL ivg.ivf.search(...)` Cypher procedure
 
 <!-- MANUAL ADDITIONS START -->
 ## Future: Rename `Graph.KG.*` internal package
