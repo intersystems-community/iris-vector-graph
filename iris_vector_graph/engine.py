@@ -4260,9 +4260,12 @@ class IRISGraphEngine:
         emb_str = ",".join(str(x) for x in embedding)
         meta_json = json.dumps(metadata) if metadata else None
 
-        cursor.execute(
-            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
-        )
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+            )
+        except Exception:
+            pass
         cursor.execute(
             f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {self.vector_dtype}), ?)",
             [node_id, emb_str, meta_json],
@@ -4305,9 +4308,12 @@ class IRISGraphEngine:
                 emb_str = ",".join(str(x) for x in embedding)
                 meta_json = json.dumps(metadata) if metadata else None
 
-                cursor.execute(
-                    f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
-                )
+                try:
+                    cursor.execute(
+                        f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+                    )
+                except Exception:
+                    pass
                 cursor.execute(
             f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {_dtype}), ?)",
                     [node_id, emb_str, meta_json],
