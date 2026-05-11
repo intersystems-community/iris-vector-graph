@@ -891,7 +891,8 @@ class IRISGraphEngine:
         except Exception:
             pass
         finally:
-            cursor.close()
+            if hasattr(cursor, 'close'):
+                cursor.close()
 
     def execute_cypher(
         self, cypher_query: str, parameters: Dict[str, Any] = None,
