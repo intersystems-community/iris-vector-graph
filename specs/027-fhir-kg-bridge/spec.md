@@ -113,6 +113,7 @@ A developer writing Cypher queries wants to reference a patient's KG anchors wit
 - What happens when a MeSH term from the bridge doesn't exist as a node in the KG? The anchor is silently filtered out — only nodes present in `Graph_KG.nodes` are returned.
 - What happens when the crosswalk file has malformed rows? The ingest script logs a warning and skips the row (no abort).
 - What happens when `fhir_bridges` already has data and the ingest is re-run? The ingest is idempotent — duplicate entries are skipped via the primary key constraint.
+- What happens when anchors resolve correctly but PPR walk returns empty (nodes have no graph edges)? The unified pipeline returns partial results: `anchors` populated, `ppr_results: []`, and `status: "anchors_resolved_but_no_graph_connectivity"`. The caller decides whether anchors alone are useful.
 
 ## Requirements *(mandatory)*
 
@@ -125,7 +126,7 @@ A developer writing Cypher queries wants to reference a patient's KG anchors wit
 - **FR-005**: System MUST provide a unified pipeline function that chains FHIR vector search → anchor extraction → PPR walk → literature retrieval.
 - **FR-006**: The bridge table MUST support multiple bridge types (e.g., `icd10_to_mesh`, `drug_to_chembl`, `gene_to_hgnc`) for future extensibility.
 - **FR-007**: The ingest script MUST handle malformed input rows gracefully (log and skip, no abort).
-- **FR-008**: System MUST provide a FHIR search tool that queries a FHIR R4 endpoint for patient resources (Condition, Observation, DocumentReference), handles BasicAuth and unauthenticated endpoints, and returns structured clinical summaries with extracted ICD-10 codes.
+- **FR-008**: System MUST provide a FHIR search tool that queries a FHIR R4 endpoint for patient resources (Condition, Observation, DocumentReference), handles BasicAuth and unauthenticated endpoints, and returns structured clinical summaries with extracted ICD-10 codes. The FHIR client MUST have a configurable request timeout (default 10 seconds) independent of the pipeline's post-FHIR processing latency target.
 - **FR-009**: System MUST provide a patient graph neighborhood tool that takes a patient ID, resolves their FHIR Conditions to KG anchors, runs PPR walk, and returns ranked graph concepts with full provenance chain (patient → condition → ICD code → KG node → PPR results).
 - **FR-010**: Both tools (FR-008, FR-009) MUST be usable as MCP-compatible tool definitions for AI agent frameworks.
 - **FR-011**: The Cypher query endpoint MUST accept an optional `fhir_patient_id` parameter that automatically resolves to anchor nodes before query execution.
@@ -143,7 +144,7 @@ A developer writing Cypher queries wants to reference a patient's KG anchors wit
 
 - **SC-001**: The ICD-10→MeSH crosswalk loads at least 50,000 mappings into the bridge table.
 - **SC-002**: Anchor extraction for a patient with 3 ICD codes completes in under 10ms.
-- **SC-003**: The unified pipeline (FHIR search → anchors → PPR → literature) completes in under 500ms end-to-end.
+- **SC-003**: The unified pipeline post-FHIR processing (anchors → PPR → results) completes in under 500ms. FHIR request latency is excluded from this target (governed by configurable client timeout, default 10s).
 - **SC-004**: 100% of existing tests continue to pass after the bridge table and functions are added (zero regressions).
 - **SC-005**: Bridge table ingest, anchor extraction, and unified pipeline are covered by at least 6 unit tests and 3 e2e tests.
 
@@ -201,3 +202,8 @@ Synthetic bridge entries map these ICD codes to mesh:* node IDs in the test `fhi
 
 - Q: How should get_kg_anchors() access ICD codes — cross-namespace SQL, ICD codes as input, or bridge-only lookup? → A: ICD codes as input (Option B). Caller extracts from FHIR; IVG stays decoupled from FHIR schema.
 - Q: What is the crosswalk source for ICD-10→MeSH mappings? → A: NLM UMLS Metathesaurus MRCONSO extract (user has UMLS access).
+
+### Session 2026-05-10
+
+- Q: What is the FHIR request timeout behavior in the unified pipeline? → A: FHIR client has independent configurable timeout (default 10s); SC-003's 500ms target applies to post-FHIR processing only.
+- Q: What happens when PPR walk returns empty despite valid anchors (disconnected nodes)? → A: Return partial results with anchors populated, ppr_results empty, and a status field indicating "anchors_resolved_but_no_graph_connectivity".
