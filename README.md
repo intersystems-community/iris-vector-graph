@@ -1180,6 +1180,12 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.92.2 (2026-05-12)
+
+**Bug K fix**: `EmbeddedConnection.commit()` and `rollback()` were no-ops, causing writes via `store_node()`/`store_edge()` to not persist across sessions in IRIS embedded Python (`Language=python` methods). Fixed by calling `iris.sql.exec("COMMIT"/"ROLLBACK")` directly.
+
+**Bug I fix** (v1.92.1): `store_embedding()` DELETE raises `SQLError('')` in embedded Python on VECTOR tables — wrapped in try/except, INSERT proceeds normally.
+
 ### v1.92.0 (2026-05-11)
 
 **FHIR-KG Clinical Bridge** — new `iris_vector_graph.fhir_bridge` module bridges clinical patient data to the biomedical knowledge graph.
