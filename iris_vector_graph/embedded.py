@@ -310,10 +310,16 @@ class EmbeddedConnection:
         return EmbeddedCursor(self._iris_sql)
 
     def commit(self):
-        pass  # auto-managed by IRIS in embedded context
+        try:
+            (_require_iris_sql() if self._iris_sql is None else self._iris_sql).exec("COMMIT")
+        except Exception:
+            pass
 
     def rollback(self):
-        pass  # auto-managed by IRIS in embedded context
+        try:
+            (_require_iris_sql() if self._iris_sql is None else self._iris_sql).exec("ROLLBACK")
+        except Exception:
+            pass
 
     def close(self):
         pass
