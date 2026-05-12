@@ -166,7 +166,7 @@ This is a 2-line fix per method. Ship in v1.91.1 alongside the Bug A/B/C fixes.
     - Overhead: **-41% (faster than baseline)** — PASS (threshold ≤20%)
   Note: `NKGAccel.BFSJson` fallback now calls `BFSFastJsonSorted` (not `BFSFastJson`) for consistency.
 
-- [ ] **Bug K: `store_node()` / `store_edge()` don't commit in embedded Python context**
+- [x] **Bug K: `store_node()` / `store_edge()` don't commit in embedded Python context** — Fixed v1.92.2.
   In IRIS embedded Python (Language=python methods inside IRIS), `engine.store_node()` and
   `engine.store_edge()` call `self.conn.commit()` but the commit does not persist across sessions.
   Writes appear to succeed (no exception) but are not visible to subsequent queries in a different
