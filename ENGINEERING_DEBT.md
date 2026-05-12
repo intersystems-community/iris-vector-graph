@@ -1,5 +1,5 @@
 # IVG Engineering Debt
-Last updated: 2026-05-09
+Last updated: 2026-05-12
 
 Review at the start of each IVG session.
 
@@ -95,6 +95,16 @@ This is a 2-line fix per method. Ship in v1.91.1 alongside the Bug A/B/C fixes.
 
 ### P2 — Cypher Translator Gaps (discovered 2026-05-09)
 
+- [ ] **`WHERE n.id IN [list]` with string values not supported**
+  Queries like `WHERE n.pmid IN ["38901234", "38765432"]` or `WHERE n.id IN $ids` with string
+  parameters fail in the Cypher translator. The `IN` clause with string literals/params generates
+  invalid SQL. Integer `IN` lists work fine.
+  **Workaround**: Use OR chaining (`WHERE n.pmid = "38901234" OR n.pmid = "38765432"`) or
+  query one value at a time and merge results in the caller. SonOfAnton uses this pattern for
+  PMID lookups and must use OR chains or single-value queries.
+  Fix: translator needs to emit `IN (?, ?, ...)` with proper string quoting for literal lists,
+  and `IN (SELECT value FROM JSON_TABLE($ids, ...))` for parameterized lists.
+
 - [ ] **MATCH + aggregation + ORDER BY generates `<UNDEFINED>ma` error (`SQLCODE: -400`)**
   Queries like `MATCH (n)-[r]->() RETURN n.id, count(r) AS deg ORDER BY deg DESC` fail with
   a fatal SQL compilation error. The translator emits an invalid CTE alias (`ma`) when combining
@@ -155,6 +165,19 @@ This is a 2-line fix per method. Ship in v1.91.1 alongside the Bug A/B/C fixes.
     - New path (NKGAccel.BFSJson SORTED conversion, Rust+ObjectScript): **0.4ms p50**
     - Overhead: **-41% (faster than baseline)** — PASS (threshold ≤20%)
   Note: `NKGAccel.BFSJson` fallback now calls `BFSFastJsonSorted` (not `BFSFastJson`) for consistency.
+
+- [ ] **Bug K: `store_node()` / `store_edge()` don't commit in embedded Python context**
+  In IRIS embedded Python (Language=python methods inside IRIS), `engine.store_node()` and
+  `engine.store_edge()` call `self.conn.commit()` but the commit does not persist across sessions.
+  Writes appear to succeed (no exception) but are not visible to subsequent queries in a different
+  embedded Python execution context.
+  **Confirmed workaround**: Use `iris.sql.exec("INSERT INTO rdf_edges ...")` with inlined literals
+  instead of parameterized `cursor.execute()`. Direct `iris.sql.exec` writes persist correctly.
+  **Root cause hypothesis**: `self.conn` in embedded context is not the same transaction context
+  as `iris.sql` — the embedded Python `EmbeddedConnection` wraps a separate connection object
+  that may not be auto-committed by IRIS on method exit.
+  **Fix**: Investigate whether `EmbeddedConnection.commit()` needs to call `iris.sql.exec("COMMIT")`
+  rather than the Python DB-API `conn.commit()`. See `iris_vector_graph/embedded.py`.
 
 
 ---
