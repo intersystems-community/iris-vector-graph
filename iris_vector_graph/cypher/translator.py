@@ -538,7 +538,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     ppr_fn = f"{_schema_prefix}.kg_PPR" if _schema_prefix else "kg_PPR"
 
     cte_sql = (
-        f"SELECT j.node_id, j.score\n"
+        f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {ppr_fn}(?, ?, ?, 0, 1.0),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -582,7 +582,7 @@ def _translate_bm25_search(
     safe_idx = idx_name.replace("'", "''")
     safe_query = str(query).replace("'", "''")
     cte_sql = (
-        f"SELECT j.node_id, j.score\n"
+        f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
         f"  {bm25_fn}('{safe_idx}', '{safe_query}', {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
@@ -3044,6 +3044,10 @@ def translate_expression(expr, context, segment="select") -> str:
             if isinstance(arg, ast.Variable) and arg.name in context.named_paths:
                 path_var = arg.name
                 if fn == "length":
+                    vl_names = {vl.get("path_var") for vl in (context.var_length_paths or [])}
+                    if path_var in vl_names:
+                        node_aliases = context.path_node_aliases.get(path_var, [])
+                        return str(max(0, len(node_aliases) - 1))
                     return str(len(context.named_paths[path_var].pattern.relationships))
                 elif fn == "nodes":
                     aliases = context.path_node_aliases[path_var]

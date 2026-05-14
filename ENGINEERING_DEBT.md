@@ -93,9 +93,19 @@ This is a 2-line fix per method. Ship in v1.91.1 alongside the Bug A/B/C fixes.
   Fix: HyperMinHash or KMV sketches in `UpdateStructuralHLL`.
   Low urgency — exact path is `KHop2CountExact` (0.095ms); approximate is fine for threshold detection.
 
-### P2 — Cypher Translator Gaps (discovered 2026-05-09)
+### P2 — Cypher Translator Gaps
 
-- [ ] **`WHERE n.id IN [list]` with string values not supported**
+- [x] **`WHERE n.id IN [list]` with string values** — Was already working correctly; translator emits `IN (?, ...)` with proper parameterization. Confirmed on live IRIS. Tests added.
+
+- [x] **MATCH + aggregation + ORDER BY generates `<UNDEFINED>ma` error** — Was already working in current codebase (SQLCODE -400 fixed in prior releases). Tests confirm DESC ordering and correct counts.
+
+- [x] **`CALL ivg.bm25.search(...) YIELD node` column name mismatch** — Fixed: BM25 CTE now emits `j.node_id AS node` matching VecSearch column convention. `SELECT node AS node_id` resolves correctly.
+
+- [x] **`CALL ivg.ppr(...) YIELD node` column name mismatch** — Fixed: PPR CTE now emits `j.node_id AS node` matching VecSearch column convention.
+
+- [x] **`MATCH p = (...) RETURN p, length(p)` static value** — Fixed: `length(p)` now returns the actual hop count from the pattern structure. 1-hop returns 1, 2-hop returns 2. Variable-length path support uses `path_node_aliases` count.
+
+All fixed in branch `cypher-gaps-complete`, gated by `tests/e2e/test_cypher_gaps_e2e.py` (9 tests, all pass).
   Queries like `WHERE n.pmid IN ["38901234", "38765432"]` or `WHERE n.id IN $ids` with string
   parameters fail in the Cypher translator. The `IN` clause with string literals/params generates
   invalid SQL. Integer `IN` lists work fine.
