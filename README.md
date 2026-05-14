@@ -1180,6 +1180,18 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.93.0 (2026-05-14)
+
+**All openCypher translator gaps closed:**
+
+- `CALL ivg.bm25.search(...) YIELD node, score` — fixed `Field 'NODE' not found` error. BM25/PPR CTEs now expose `node` column matching the VecSearch convention.
+- `CALL ivg.ppr(...) YIELD node, score` — same fix.
+- `MATCH p = (...) RETURN length(p)` — now returns actual hop count (1 for 1-hop, 2 for 2-hop, etc.) instead of static 1.
+- `WHERE n.id IN ["a", "b"]` — confirmed working; tests added.
+- `MATCH (n)-[r]->() RETURN count(r) ORDER BY ...` — confirmed working; tests added.
+
+9 new e2e tests in `tests/e2e/test_cypher_gaps_e2e.py` gate all fixes.
+
 ### v1.92.2 (2026-05-12)
 
 **Bug K fix**: `EmbeddedConnection.commit()` and `rollback()` were no-ops, causing writes via `store_node()`/`store_edge()` to not persist across sessions in IRIS embedded Python (`Language=python` methods). Fixed by calling `iris.sql.exec("COMMIT"/"ROLLBACK")` directly.
