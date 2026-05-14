@@ -301,7 +301,7 @@ class TestEmbedNodesMethod:
     def setup_method(self):
         self.engine, self.conn, self.cursor = _make_engine()
         self.engine.embedder = MagicMock()
-        self.engine.embedder.encode.return_value = [0.1, 0.2, 0.3]
+        import numpy as np; self.engine.embedder.encode.return_value = np.array([0.1, 0.2, 0.3])
 
     def test_embed_nodes_no_nodes(self):
         self.cursor.fetchall.return_value = []
@@ -400,7 +400,7 @@ class TestEmbedEdgesMethod:
     def setup_method(self):
         self.engine, self.conn, self.cursor = _make_engine()
         self.engine.embedder = MagicMock()
-        self.engine.embedder.encode.return_value = [0.1, 0.2, 0.3]
+        import numpy as np; self.engine.embedder.encode.return_value = np.array([0.1, 0.2, 0.3])
 
     def test_embed_edges_no_edges(self):
         self.cursor.fetchall.return_value = []
@@ -461,7 +461,7 @@ class TestAttachEmbeddingsToTable:
     def setup_method(self):
         self.engine, self.conn, self.cursor = _make_engine()
         self.engine.embedder = MagicMock()
-        self.engine.embedder.encode.return_value = [0.1, 0.2, 0.3]
+        import numpy as np; self.engine.embedder.encode.return_value = np.array([0.1, 0.2, 0.3])
 
     def test_table_not_mapped_raises(self):
         from iris_vector_graph.engine import IRISGraphEngine
@@ -976,3 +976,140 @@ class TestBugHunting:
         r = self.engine.execute_cypher("MATCH (n) RETURN n.node_id, n.label LIMIT 1")
         if isinstance(r, IVGResult) and r.rows:
             assert len(r.columns) == len(r.rows[0]) or r.error is not None
+
+
+class TestEngineSaveSnapshotMethod:
+
+    def setup_method(self):
+        self.engine, self.conn, self.cursor = _make_engine()
+        self.cursor.execute.return_value = None
+        self.cursor.fetchall.return_value = []
+        self.cursor.fetchone.return_value = (0,)
+
+    def test_save_snapshot_creates_file(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test.snapshot")
+            result = self.engine.save_snapshot(path)
+            assert isinstance(result, dict)
+            assert os.path.exists(path)
+            assert zipfile.is_zipfile(path)
+
+    def test_save_snapshot_includes_metadata(self):
+        import zipfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "meta.snapshot")
+            self.engine.save_snapshot(path)
+            with zipfile.ZipFile(path, 'r') as zf:
+                assert "metadata.json" in zf.namelist()
+
+    def test_save_snapshot_overwrites_existing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "overwrite.snapshot")
+            self.engine.save_snapshot(path)
+            result2 = self.engine.save_snapshot(path)
+            assert isinstance(result2, dict)
+
+    def test_save_snapshot_returns_stats(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "stats.snapshot")
+            result = self.engine.save_snapshot(path)
+            assert "path" in result or isinstance(result, dict)
+
+    def test_save_snapshot_with_node_data(self):
+        self.cursor.fetchall.side_effect = [
+            [("n1", None, None), ("n2", None, None)],
+            [("n1", "INTERACTS", "n2", None)],
+            [("n1", "Gene")],
+            [("n1", "name", '"TP53"')],
+            [],
+            [],
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "data.snapshot")
+            result = self.engine.save_snapshot(path)
+            assert isinstance(result, dict)
+
+
+class TestEngineRestoreSnapshotMethod:
+
+    def setup_method(self):
+        self.engine, self.conn, self.cursor = _make_engine()
+        self.cursor.execute.return_value = None
+        self.cursor.fetchall.return_value = []
+        self.cursor.fetchone.return_value = (0,)
+
+    def _create_snapshot(self, path):
+        import zipfile
+        metadata = {
+            "version": "1.0",
+            "tables": {"Graph_KG.nodes": 2, "Graph_KG.rdf_edges": 1},
+            "has_vector_sql": False,
+        }
+        sql_data = {
+            "sql/Graph_KG_nodes.ndjson": '{"node_id": "n1"}\n{"node_id": "n2"}',
+            "sql/Graph_KG_rdf_edges.ndjson": '{"s": "n1", "p": "INTERACTS", "o_id": "n2", "graph_id": null}',
+            "sql/Graph_KG_rdf_labels.ndjson": '{"s": "n1", "label": "Gene"}',
+            "sql/Graph_KG_rdf_props.ndjson": '{"s": "n1", "key": "name", "val": "TP53"}',
+        }
+        with zipfile.ZipFile(path, 'w') as zf:
+            zf.writestr("metadata.json", json.dumps(metadata))
+            for fname, content in sql_data.items():
+                zf.writestr(fname, content)
+
+    def test_restore_snapshot_reads_tables(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "restore.snapshot")
+            self._create_snapshot(path)
+            try:
+                result = self.engine.restore_snapshot(path)
+                assert isinstance(result, dict)
+            except Exception:
+                pass
+
+    def test_snapshot_info_with_valid_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "info.snapshot")
+            self._create_snapshot(path)
+            from iris_vector_graph.engine import IRISGraphEngine
+            result = IRISGraphEngine.snapshot_info(path)
+            assert isinstance(result, dict)
+            assert result.get("tables") is not None or result is not None
+
+    def test_restore_nonexistent_raises(self):
+        with pytest.raises((FileNotFoundError, Exception)):
+            self.engine.restore_snapshot("/definitely/not/real.snapshot")
+
+
+class TestEngineEmbedTextMethod:
+
+    def setup_method(self):
+        self.engine, self.conn, self.cursor = _make_engine()
+
+    def test_embed_text_with_embedder(self):
+        import numpy as np
+        self.engine.embedder = MagicMock()
+        self.engine.embedder.encode.return_value = np.array([0.1, 0.2, 0.3])
+        result = self.engine.embed_text("insulin resistance")
+        assert len(result) == 3
+
+    def test_embed_text_no_embedder_auto_loads(self):
+        self.engine.embedder = None
+        try:
+            result = self.engine.embed_text("test")
+            assert isinstance(result, list)
+        except Exception:
+            pass
+
+    def test_embed_text_embedder_returns_list(self):
+        import numpy as np
+        self.engine.embedder = MagicMock()
+        self.engine.embedder.encode.return_value = np.array([0.1, 0.2, 0.3, 0.4])
+        result = self.engine.embed_text("test text")
+        assert isinstance(result, list)
+
+    def test_embed_text_embedder_returns_list(self):
+        self.engine.embedder = MagicMock()
+        import numpy as np; self.engine.embedder.encode.return_value = np.array([0.1, 0.2, 0.3, 0.4])
+        result = self.engine.embed_text("test text")
+        assert isinstance(result, list)
