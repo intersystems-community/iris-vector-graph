@@ -191,13 +191,14 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["scripts", "tests"]
+source = ["iris_vector_graph"]
 omit = [
     "*/tests/*",
     "*/venv/*",
     "*/.venv/*",
     "*/build/*",
-    "*/dist/*"
+    "*/dist/*",
+    "iris_vector_graph/bolt_server.py",
 ]
 
 [tool.coverage.report]
