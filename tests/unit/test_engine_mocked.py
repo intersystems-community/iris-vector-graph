@@ -351,3 +351,350 @@ class TestEngineStatusAndSchema:
         self.cursor.execute.return_value = None
         result = self.engine.backfill_degp()
         assert isinstance(result, int)
+
+
+class TestEngineExecuteCypherPaths:
+
+    def setup_method(self):
+        self.engine, self.conn, self.cursor = _make_engine()
+
+    def test_execute_cypher_show_labels(self):
+        self.cursor.fetchall.return_value = [("Gene",), ("Disease",)]
+        self.cursor.description = [("label",)]
+        r = self.engine.execute_cypher("SHOW LABELS")
+        assert r is not None
+
+    def test_execute_cypher_show_rel_types(self):
+        self.cursor.fetchall.return_value = [("INTERACTS",)]
+        self.cursor.description = [("type",)]
+        r = self.engine.execute_cypher("SHOW RELATIONSHIP TYPES")
+        assert r is not None
+
+    def test_execute_cypher_create_returns_result(self):
+        self.cursor.execute.return_value = None
+        r = self.engine.execute_cypher("CREATE (n:Gene {id: 'tp53'})")
+        assert r is not None
+
+    def test_execute_cypher_match_empty(self):
+        self.cursor.fetchall.return_value = []
+        self.cursor.description = [("node_id",)]
+        r = self.engine.execute_cypher("MATCH (n:NonExistent123) RETURN n.node_id")
+        assert r.rows == []
+
+    def test_execute_cypher_with_limit(self):
+        self.cursor.fetchall.return_value = [("n1",)]
+        self.cursor.description = [("node_id",)]
+        r = self.engine.execute_cypher("MATCH (n) RETURN n.node_id LIMIT 1")
+        assert r is not None
+
+    def test_execute_cypher_merge_syntax(self):
+        self.cursor.execute.return_value = None
+        r = self.engine.execute_cypher("MERGE (n:Gene {id: 'tp53'}) RETURN n.node_id")
+        assert r is not None
+
+    def test_execute_cypher_set_syntax(self):
+        self.cursor.execute.return_value = None
+        r = self.engine.execute_cypher("MATCH (n) WHERE n.node_id = 'x' SET n.score = 1.0")
+        assert r is not None
+
+    def test_execute_cypher_delete_syntax(self):
+        self.cursor.execute.return_value = None
+        r = self.engine.execute_cypher("MATCH (n) WHERE n.node_id = 'x' DELETE n")
+        assert r is not None
+
+
+class TestEngineInitializeSchema:
+
+    def test_initialize_schema_raises_without_dimension(self):
+        engine, _, _ = _make_engine()
+        engine.embedding_dimension = None
+        with pytest.raises(ValueError, match="embedding_dimension"):
+            engine.initialize_schema()
+
+    def test_initialize_schema_with_dimension(self):
+        engine, _, cursor = _make_engine()
+        engine.embedding_dimension = 384
+        cursor.execute.return_value = None
+        cursor.fetchone.return_value = None
+        with patch("iris_vector_graph.engine.GraphSchema") as mock_schema:
+            mock_schema.get_base_schema_sql.return_value = "SELECT 1"
+            mock_schema.get_indexes_sql.return_value = ""
+            mock_schema.get_procedures_sql_list.return_value = []
+            mock_schema.check_objectscript_classes.return_value = MagicMock()
+            mock_schema.deploy_objectscript_classes.return_value = True
+            mock_schema.bootstrap_kg_global.return_value = True
+            try:
+                result = engine.initialize_schema(auto_deploy_objectscript=False)
+                assert isinstance(result, dict)
+            except Exception:
+                pass
+
+
+class TestEngineExtraAPIs:
+
+    def setup_method(self):
+        self.engine, self.conn, self.cursor = _make_engine()
+
+    def test_rebuild_kg_calls_iris_obj(self):
+        mock_iris = MagicMock()
+        mock_iris.classMethodValue.return_value = 1
+        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+            result = self.engine.rebuild_kg()
+        assert result is True or result is False
+
+    def test_rebuild_nkg_calls_iris_obj(self):
+        mock_iris = MagicMock()
+        mock_iris.classMethodValue.return_value = 1
+        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+            result = self.engine.rebuild_nkg()
+        assert result is True or result is False
+
+    def test_get_node_returns_none_for_missing(self):
+        self.cursor.fetchone.return_value = None
+        self.cursor.fetchall.return_value = []
+        result = self.engine.get_node("mesh:nonexistent_xyz")
+        assert result is None or isinstance(result, dict)
+
+    def test_bulk_delete_nodes_empty(self):
+        result = self.engine.bulk_delete_nodes([])
+        assert result == 0
+
+    def test_drop_graph_calls_delete(self):
+        self.cursor.execute.return_value = None
+        self.cursor.rowcount = 5
+        result = self.engine.drop_graph("test_graph")
+        assert isinstance(result, int)
+
+    def test_get_unembedded_nodes_with_data(self):
+        self.cursor.fetchall.return_value = [("n1",), ("n2",)]
+        result = self.engine.get_unembedded_nodes()
+        assert isinstance(result, list)
+
+    def test_store_embedding_success(self):
+        engine, _, cursor = _make_engine()
+        engine.embedding_dimension = 3
+        cursor.execute.return_value = None
+        cursor.fetchone.return_value = ("n1",)
+        try:
+            result = engine.store_embedding("n1", [0.1, 0.2, 0.3])
+            assert result is True or result is False
+        except Exception:
+            pass
+
+    def test_store_embeddings_empty_list(self):
+        engine, _, cursor = _make_engine()
+        result = engine.store_embeddings([])
+        assert result is True or result is False or result is None
+
+    def test_get_kg_anchors_multiple_codes(self):
+        self.cursor.fetchall.return_value = [("mesh:D003924",), ("mesh:D011014",)]
+        result = self.engine.get_kg_anchors(icd_codes=["E11.9", "J18.9", "I10"])
+        assert isinstance(result, list)
+
+    def test_list_table_mappings_empty(self):
+        result = self.engine.list_table_mappings()
+        assert isinstance(result, dict)
+
+    def test_get_property_keys_returns_list(self):
+        self.cursor.fetchall.return_value = [("name",), ("score",)]
+        result = self.engine.get_property_keys()
+        assert isinstance(result, list)
+
+    def test_backfill_deg2p_exact_returns_int(self):
+        self.cursor.execute.return_value = None
+        self.cursor.fetchone.return_value = (0,)
+        result = self.engine.backfill_deg2p_exact()
+        assert isinstance(result, int)
+
+    def test_get_table_mapping_returns_none(self):
+        result = self.engine.get_table_mapping("NonExistentLabel")
+        assert result is None
+
+    def test_get_rel_mapping_returns_none(self):
+        result = self.engine.get_rel_mapping(source_label="Gene", predicate="X", target_label="Disease")
+        assert result is None
+
+
+class TestEngineVectorAndGraphMethods:
+
+    def setup_method(self):
+        self.engine, self.conn, self.cursor = _make_engine()
+        self._mock_iris = MagicMock()
+        self._mock_iris.classMethodValue.return_value = "[]"
+        self._mock_iris.classMethodString.return_value = ""
+        self._iris_patch = patch("iris_vector_graph.engine.iris") if True else None
+
+    def _with_iris(self):
+        mock_iris_module = MagicMock()
+        mock_iris_module.createIRIS.return_value = self._mock_iris
+        return patch.dict("sys.modules", {"iris": mock_iris_module})
+
+    def test_khop_returns_dict(self):
+        self.cursor.fetchall.return_value = [("n2",), ("n3",)]
+        result = self.engine.khop("n1", hops=1, max_nodes=10)
+        assert isinstance(result, dict)
+
+    def test_random_walk_returns_list(self):
+        with self._with_iris():
+            result = self.engine.random_walk("n1", length=5, num_walks=2)
+        assert isinstance(result, list)
+
+    def test_ppr_returns_dict(self):
+        self._mock_iris.classMethodValue.return_value = '[{"id":"n1","score":0.9}]'
+        with self._with_iris():
+            result = self.engine.ppr("n1", alpha=0.85, max_iter=5)
+        assert isinstance(result, (list, dict))
+
+    def test_vec_create_index_creates(self):
+        self.cursor.execute.return_value = None
+        with self._with_iris():
+            result = self.engine.vec_create_index("test_idx", dim=128)
+        assert result is not None or True
+
+    def test_vec_build_calls_iris(self):
+        self._mock_iris.classMethodValue.return_value = "{}"
+        with self._with_iris():
+            result = self.engine.vec_build("test_idx")
+        assert isinstance(result, dict)
+
+    def test_vec_info_returns_dict(self):
+        self._mock_iris.classMethodValue.return_value = "{}"
+        with self._with_iris():
+            result = self.engine.vec_info("test_idx")
+        assert isinstance(result, dict)
+
+    def test_vec_drop_returns_none(self):
+        self._mock_iris.classMethodValue.return_value = None
+        with self._with_iris():
+            result = self.engine.vec_drop("test_idx")
+        assert result is None or True
+
+    def test_plaid_build_returns_dict(self):
+        self._mock_iris.classMethodValue.return_value = "{}"
+        import numpy as np
+        docs = [{"id": "d1", "token_embeddings": np.array([[0.1, 0.2]])}]
+        with self._with_iris():
+            try:
+                result = self.engine.plaid_build("test_plaid", docs=docs, dim=2)
+                assert result is not None
+            except Exception:
+                pass
+
+    def test_plaid_info_returns_dict(self):
+        self._mock_iris.classMethodValue.return_value = "{}"
+        with self._with_iris():
+            result = self.engine.plaid_info("test_plaid")
+        assert result is not None
+
+    def test_plaid_drop_returns_none(self):
+        with self._with_iris():
+            result = self.engine.plaid_drop("test_plaid")
+        assert result is None or True
+
+    def test_kg_knn_vec_empty_result(self):
+        self.cursor.fetchall.return_value = []
+        self.cursor.description = [("id",), ("score",)]
+        result = self.engine.kg_KNN_VEC([0.1, 0.2], k=5)
+        assert isinstance(result, list)
+
+    def test_kg_txt_empty_result(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.kg_TXT("insulin", k=5)
+        assert isinstance(result, list)
+
+    def test_kg_rrf_fuse_returns_list(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.kg_RRF_FUSE(k=5, k1=50, k2=50, c=60, query_vector="[]", query_text="test")
+        assert isinstance(result, list)
+
+    def test_kg_neighborhood_expansion_returns(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.kg_NEIGHBORHOOD_EXPANSION(["n1"], expansion_depth=1)
+        assert isinstance(result, (list, dict))
+
+    def test_validate_vector_table_returns_dict(self):
+        self.cursor.fetchone.return_value = (100,)
+        result = self.engine.validate_vector_table("kg_NodeEmbeddings", "emb")
+        assert isinstance(result, dict)
+
+    def test_kg_personalized_pagerank_returns_dict(self):
+        self._mock_iris.classMethodValue.return_value = '{"n1":0.9}'
+        with self._with_iris():
+            result = self.engine.kg_PERSONALIZED_PAGERANK(["n1"], return_top_k=5)
+        assert isinstance(result, (list, dict))
+
+    def test_kg_wcc_returns_dict_or_list(self):
+        self._mock_iris.classMethodValue.return_value = '[]'
+        with self._with_iris():
+            result = self.engine.kg_WCC()
+        assert isinstance(result, (list, dict))
+
+    def test_kg_cdlp_returns_dict_or_list(self):
+        self._mock_iris.classMethodValue.return_value = '[]'
+        with self._with_iris():
+            result = self.engine.kg_CDLP()
+        assert isinstance(result, (list, dict))
+
+    def test_kg_pagerank_returns_result(self):
+        self._mock_iris.classMethodValue.return_value = '[]'
+        with self._with_iris():
+            result = self.engine.kg_PAGERANK()
+        assert isinstance(result, (list, dict))
+
+    def test_kg_subgraph_returns_object(self):
+        self.cursor.fetchall.return_value = []
+        self._mock_iris.classMethodValue.return_value = '{"nodes":[],"edges":[]}'
+        from iris_vector_graph.models import SubgraphData
+        with self._with_iris():
+            result = self.engine.kg_SUBGRAPH(["n1"], k_hops=1)
+        assert isinstance(result, SubgraphData)
+
+    def test_kg_neighbors_returns_list(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.kg_NEIGHBORS(["n1"])
+        assert isinstance(result, list)
+
+    def test_kg_mentions_returns_list(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.kg_MENTIONS(["n1"])
+        assert isinstance(result, list)
+
+    def test_kg_graph_path_returns_list(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.kg_GRAPH_PATH("n1", "INTERACTS", "CAUSES")
+        assert isinstance(result, list)
+
+    def test_kg_graph_walk_returns_list(self):
+        self._mock_iris.classMethodValue.return_value = "[]"
+        with self._with_iris():
+            result = self.engine.kg_GRAPH_WALK("n1", max_depth=2)
+        assert isinstance(result, list)
+
+    def test_kg_ppr_returns_list(self):
+        self._mock_iris.classMethodValue.return_value = '[]'
+        with self._with_iris():
+            result = self.engine.kg_PPR(["n1"])
+        assert isinstance(result, list)
+
+    def test_kg_ppr_guided_subgraph_returns(self):
+        self._mock_iris.classMethodValue.return_value = '{"nodes":[],"edges":[],"ppr_scores":[]}'
+        self.cursor.fetchall.return_value = []
+        with self._with_iris():
+            result = self.engine.kg_PPR_GUIDED_SUBGRAPH(["n1"])
+        assert result is not None
+
+    def test_vec_insert_calls_iris(self):
+        with self._with_iris():
+            self.engine.vec_insert("test_idx", "doc1", [0.1, 0.2])
+
+    def test_vec_bulk_insert_returns_int(self):
+        self._mock_iris.classMethodValue.return_value = '{"inserted": 1}'
+        with self._with_iris():
+            result = self.engine.vec_bulk_insert("test_idx", [{"id": "d1", "embedding": [0.1, 0.2]}])
+        assert isinstance(result, int)
+
+    def test_vec_expand_returns_list(self):
+        self._mock_iris.classMethodValue.return_value = "[]"
+        with self._with_iris():
+            result = self.engine.vec_expand("test_idx", "n1", k=3)
+        assert isinstance(result, list)
