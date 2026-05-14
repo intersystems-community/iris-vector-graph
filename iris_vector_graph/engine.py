@@ -1390,7 +1390,12 @@ class IRISGraphEngine:
                 direction,
                 find_all,
             )
-            paths = _json.loads(str(path_json)) if path_json else []
+            paths_raw = _json.loads(str(path_json)) if path_json else []
+            # ShortestPathJson may return a single path dict or a list of paths
+            if isinstance(paths_raw, dict):
+                paths = [paths_raw]
+            else:
+                paths = paths_raw
         except Exception as e:
             logger.warning(f"ShortestPathJson failed: {e}")
             return IVGResult(                columns= ["p"],
@@ -6219,11 +6224,11 @@ class IRISGraphEngine:
             )
         edges = json.loads(str(result))
         for edge in edges:
-            edge["source"] = edge["s"]
-            edge["predicate"] = edge["p"]
-            edge["target"] = edge["o"]
-            edge["timestamp"] = edge["ts"]
-            edge["weight"] = edge["w"]
+            edge["source"] = edge.get("s", edge.get("source", ""))
+            edge["predicate"] = edge.get("p", edge.get("predicate", ""))
+            edge["target"] = edge.get("o", edge.get("target", ""))
+            edge["timestamp"] = edge.get("ts", edge.get("timestamp", 0))
+            edge["weight"] = edge.get("w", edge.get("weight", 1.0))
         return edges
 
     def purge_before(self, ts: int) -> None:
