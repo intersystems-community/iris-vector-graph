@@ -1180,6 +1180,22 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.94.0 (2026-05-15)
+
+**GraphStore Protocol** — `IRISGraphEngine` now has a pluggable storage backend (spec 156).
+
+- `GraphStore` Protocol (25 methods): reads, mutations, SQL, traversal, analytics, temporal, lifecycle
+- `IRISGraphStore`: existing behavior extracted verbatim — zero behavior change for current users
+- `IRISGraphEngine(conn, store=ArnoFjallStore(...))` — inject any `GraphStore` implementation
+- `from iris_vector_graph import GraphStore, IRISGraphStore`
+- Engine routing: `execute_cypher` dispatches BFS/shortest-path/PPR/WCC/temporal through the store
+- `capabilities()` dict: stores advertise what they support; engine falls back to Python implementations for unsupported operations
+- 175 new unit tests + 25 e2e tests (all pass)
+
+**Bug fixes:**
+- `ShortestPathJson` returned single dict instead of list — `path.get()` raised `AttributeError`; fixed by normalizing to list
+- `get_edges_in_window` `KeyError: 'w'` when temporal edge JSON omits weight field; fixed with `.get("w", 1.0)` fallback
+
 ### v1.93.0 (2026-05-14)
 
 **All openCypher translator gaps closed:**
