@@ -74,6 +74,7 @@ class IRISGraphEngine:
         embed_fn=None,
         use_iris_embedding: bool = False,
         vector_dtype: str = "DOUBLE",
+        store=None,
     ):
         self.conn = connection
         if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
@@ -99,6 +100,12 @@ class IRISGraphEngine:
         self._index_registry: Dict[str, str] = self._build_index_registry()
         if vector_dtype == "DOUBLE":
             self.vector_dtype = self._detect_stored_vector_dtype()
+        if store is None:
+            from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+            self._store = IRISGraphStore(self.conn)
+        else:
+            self._store = store
+        self._store_capabilities = self._store.capabilities()
         logger.debug("IRISGraphEngine initialized (dim=%s dtype=%s)",
                      embedding_dimension or "auto", self.vector_dtype)
 
@@ -1031,143 +1038,7 @@ class IRISGraphEngine:
                             current_params[col] = val
             return result
 
-        if parsed.procedure_call is not None:
-            result = self._try_system_procedure(parsed.procedure_call)
-            if result is not None:
-                return result
-
-        # Mode 2 guard: if CALL uses a string query_input, verify EMBEDDING() is available
-        if parsed.procedure_call is not None:
-            proc = parsed.procedure_call
-            if proc.procedure_name == "ivg.vector.search" and len(proc.arguments) >= 3:
-                query_input_arg = proc.arguments[2]
-                from iris_vector_graph.cypher.ast import (
-                    Literal as CypherLiteral,
-                    Variable as CypherVariable,
-                )
-
-                if isinstance(query_input_arg, CypherLiteral) and isinstance(
-                    query_input_arg.value, str
-                ):
-                    if not self._probe_embedding_support():
-                        raise RuntimeError(
-                            "ivg.vector.search Mode 2 (text input) requires the IRIS EMBEDDING() SQL function "
-                            "(available in IRIS 2024.3+). This IRIS instance does not support it. "
-                            "Pass a pre-computed list[float] vector instead."
-                        )
-                elif isinstance(query_input_arg, CypherVariable):
-                    param_val = (parameters or {}).get(query_input_arg.name)
-                    if (
-                        isinstance(param_val, str)
-                        and not self._probe_embedding_support()
-                    ):
-                        raise RuntimeError(
-                            "ivg.vector.search Mode 2 (text input) requires the IRIS EMBEDDING() SQL function "
-                            "(available in IRIS 2024.3+). This IRIS instance does not support it. "
-                            "Pass a pre-computed list[float] vector instead."
-                        )
-
-        sql_query = translate_to_sql(parsed, parameters, engine=self)
-
-        if sql_query.var_length_paths:
-            vl0 = sql_query.var_length_paths[0]
-            if vl0.get("weighted"):
-                return self._execute_weighted_shortest_path(sql_query, parameters)
-            if vl0.get("shortest") or vl0.get("all_shortest"):
-                return self._execute_shortest_path_cypher(sql_query, parameters)
-            return self._execute_var_length_cypher(sql_query, parameters)
-
-        cursor = self.conn.cursor()
-        metadata = sql_query.query_metadata
-
-        if sql_query.is_transactional:
-            stmts = sql_query.sql
-            all_params = sql_query.parameters
-
-            cursor.execute("START TRANSACTION")
-            try:
-                rows = []
-                for i, stmt in enumerate(stmts):
-                    p = all_params[i] if i < len(all_params) else []
-                    if p:
-                        cursor.execute(stmt, p)
-                    else:
-                        cursor.execute(stmt)
-                    if cursor.description:
-                        rows = cursor.fetchall()
-
-                cursor.execute("COMMIT")
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-                elif rows:
-                    import re as _re_dml
-                    as_aliases = _re_dml.findall(
-                        r'\bAS\s+"?([a-zA-Z_][a-zA-Z0-9_]*)"?',
-                        stmts[-1] if stmts else "", _re_dml.IGNORECASE
-                    )
-                    columns = (
-                        as_aliases if as_aliases and len(as_aliases) == len(rows[0])
-                        else [f"col{i}" for i in range(len(rows[0]))]
-                    )
-                else:
-                    columns = []
-                return IVGResult(                    columns= columns,
-                    rows= rows,
-                    sql= stmts[-1] if stmts else "",
-                    params= all_params[-1] if all_params else [],
-                    metadata= metadata
-                )
-            except Exception:
-                cursor.execute("ROLLBACK")
-                raise
-        else:
-            sql_str = (
-                sql_query.sql
-                if isinstance(sql_query.sql, str)
-                else "\n".join(sql_query.sql)
-            )
-            p = sql_query.parameters[0] if sql_query.parameters else []
-
-            try:
-                if p:
-                    cursor.execute(sql_str, p)
-                else:
-                    cursor.execute(sql_str)
-
-                rows = cursor.fetchall()
-                if cursor.description:
-                    columns = [desc[0] for desc in cursor.description]
-                elif rows:
-                    import re as _re_cols
-                    as_aliases = _re_cols.findall(
-                        r'\bAS\s+"?([a-zA-Z_][a-zA-Z0-9_]*)"?',
-                        sql_str, _re_cols.IGNORECASE
-                    )
-                    columns = (
-                        as_aliases if as_aliases and len(as_aliases) == len(rows[0])
-                        else [f"col{i}" for i in range(len(rows[0]))]
-                    )
-                else:
-                    columns = []
-
-                return IVGResult(                    columns= columns,
-                    rows= rows,
-                    sql= sql_str,
-                    params= p,
-                    metadata= metadata
-                )
-            except Exception as _exec_err:
-                err_str = str(_exec_err)
-                import logging as _log
-                _log.getLogger(__name__).warning(
-                    "IRIS SQL error: %s", err_str[:200]
-                )
-                try:
-                    self.conn.rollback()
-                except Exception:
-                    pass
-                return IVGResult(columns=[], rows=[], sql=sql_str, params=p,
-                        metadata=metadata, error=err_str[:200])
+        return self._execute_parsed(parsed, parameters)
 
     def _execute_parsed(self, parsed, parameters):
         if parsed.procedure_call is not None:
@@ -1176,52 +1047,118 @@ class IRISGraphEngine:
                 return result
         sql_query = translate_to_sql(parsed, parameters, engine=self)
         if sql_query.var_length_paths:
-            vl0 = sql_query.var_length_paths[0]
-            if vl0.get("weighted"):
-                return self._execute_weighted_shortest_path(sql_query, parameters)
-            if vl0.get("shortest") or vl0.get("all_shortest"):
-                return self._execute_shortest_path_cypher(sql_query, parameters)
-            return self._execute_var_length_cypher(sql_query, parameters)
-        cursor = self.conn.cursor()
+            return self._route_var_length(sql_query, parameters)
         metadata = sql_query.query_metadata
         if sql_query.is_transactional:
-            stmts = sql_query.sql
-            all_params = sql_query.parameters
-            cursor.execute("START TRANSACTION")
-            try:
-                rows = []
-                for i, stmt in enumerate(stmts):
-                    p = all_params[i] if i < len(all_params) else []
-                    cursor.execute(stmt, p)
-                    if cursor.description:
-                        rows = cursor.fetchall()
-                self.conn.commit()
-                cols = [d[0] for d in cursor.description] if cursor.description else []
-                return IVGResult(columns=cols, rows=[list(r) for r in rows],
-                        sql=str(stmts), params=all_params, metadata=metadata)
-            except Exception:
-                self.conn.rollback()
-                raise
-        sql_str = sql_query.sql
-        p = sql_query.parameters[0] if sql_query.parameters else []
+            result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
+            result.metadata = metadata
+            return result
+        if self._store_capabilities.get("native_sql", True):
+            sql_str = sql_query.sql
+            p = sql_query.parameters[0] if sql_query.parameters else []
+            result = self._store.execute_sql(sql_str, p)
+            result.metadata = metadata
+            return result
+        label_filter = None
+        return_props = None
+        limit = 0
         try:
-            cursor.execute(sql_str, p)
-            cols = [d[0] for d in cursor.description] if cursor.description else []
-            rows = cursor.fetchall()
-            return IVGResult(columns=cols, rows=[list(r) for r in rows],
-                    sql=sql_str, params=p, metadata=metadata)
-        except Exception as _exec_err:
-            err_str = str(_exec_err)
-            import logging as _log
-            _log.getLogger(__name__).warning(
-                "IRIS SQL error: %s", err_str[:200]
+            if parsed.query_parts:
+                clause = parsed.query_parts[0].clauses[0]
+                if hasattr(clause, "patterns") and clause.patterns:
+                    node = clause.patterns[0].nodes[0] if clause.patterns[0].nodes else None
+                    if node and node.labels:
+                        label_filter = node.labels[0]
+            if parsed.return_clause:
+                return_props = [
+                    item.expression.property_name
+                    for item in parsed.return_clause.items
+                    if hasattr(item.expression, "property_name")
+                ]
+            if parsed.limit:
+                limit = int(parsed.limit)
+        except Exception:
+            pass
+        return self._store.query_nodes(
+            label_filter=label_filter,
+            property_filters=None,
+            return_properties=return_props,
+            limit=limit,
+        )
+
+    def _route_var_length(self, sql_query, parameters):
+        vl0 = sql_query.var_length_paths[0]
+        if vl0.get("weighted"):
+            return self._execute_weighted_shortest_path(sql_query, parameters)
+        if vl0.get("shortest") or vl0.get("all_shortest"):
+            return self._execute_shortest_path_cypher(sql_query, parameters)
+
+        import re as _re
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
+        count_match = _re.search(r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
+
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        source_id = None
+        for item in params:
+            if isinstance(item, str) and not item.startswith("Graph_KG"):
+                source_id = item
+                break
+        if source_id is None and parameters:
+            src_var = vl0.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(iter(parameters.values()), None)
+
+        if source_id is None:
+            return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
+
+        predicates = vl0.get("types", [])
+        max_hops = vl0.get("max_hops", 5)
+        direction = vl0.get("direction", "out")
+        max_results = 0
+        if sql_str:
+            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            if m:
+                max_results = int(m.group(1))
+
+        if count_match:
+            col_name = count_match.group(1)
+            bfs_result = self._store.execute_bfs(source_id, predicates, max_hops, direction, 0)
+            cnt = len(bfs_result.rows) if not bfs_result.error else 0
+            return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
+        max_results = 0
+        if sql_str:
+            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            if m:
+                max_results = int(m.group(1))
+
+        direction = vl0.get("direction", "out")
+        predicates = vl0.get("types", [])
+        max_hops = vl0.get("max_hops", 5)
+
+        if vl0.get("temporal_window"):
+            ts_start = vl0.get("ts_start", 0)
+            ts_end = vl0.get("ts_end", 9999999999)
+            result = self._store.execute_temporal_cypher(
+                source_id, predicates, ts_start, ts_end, direction, max_hops
             )
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
-            return IVGResult(columns=[], rows=[], sql=sql_str, params=p,
-                    metadata=metadata, error=err_str[:200])
+        else:
+            result = self._store.execute_bfs(source_id, predicates, max_hops, direction, max_results)
+
+        return_properties = getattr(sql_query.query_metadata, "return_properties", None)
+        if return_properties and result.rows:
+            node_ids = [row[0] for row in result.rows if row]
+            if node_ids:
+                props_result = self._store.get_nodes(node_ids, return_properties)
+                props_by_id = {r[0]: r[2:] for r in props_result.rows}
+                enriched = [[r[0], r[1]] + list(props_by_id.get(r[0], [None] * len(return_properties))) for r in result.rows]
+                result = IVGResult(
+                    columns=result.columns + return_properties,
+                    rows=enriched,
+                    metadata=result.metadata,
+                )
+        return result
 
 
     def _execute_weighted_shortest_path(
@@ -1252,76 +1189,9 @@ class IRISGraphEngine:
                 "ivg.shortestPath.weighted requires both from and to to be bound IDs"
             )
 
-        weight_prop = vl.get("weight_prop", "weight") or "weight"
-        max_cost = float(vl.get("max_cost", 9999))
+        weight_prop = vl.get("weight_property", "weight")
         max_hops = int(vl.get("max_hops", 10))
-        direction = vl.get("direction", "out") or "out"
-
-        try:
-            raw = _call_classmethod(
-                self.conn,
-                "Graph.KG.Traversal",
-                "DijkstraJson",
-                source_id,
-                target_id,
-                weight_prop,
-                max_cost,
-                max_hops,
-                direction,
-            )
-            result_str = str(raw) if raw else "{}"
-        except Exception as e:
-            logger.warning(f"DijkstraJson failed: {e}")
-            return IVGResult(                columns= ["path", "totalCost"],
-                rows= [],
-                sql= "",
-                params= [],
-                metadata= sql_query.query_metadata
-            )
-
-        if not result_str or result_str == "{}":
-            return IVGResult(                columns= ["path", "totalCost"],
-                rows= [],
-                sql= "",
-                params= [],
-                metadata= sql_query.query_metadata
-            )
-
-        try:
-            path_obj = _json.loads(result_str)
-        except Exception:
-            return IVGResult(                columns= ["path", "totalCost"],
-                rows= [],
-                sql= "",
-                params= [],
-                metadata= sql_query.query_metadata
-            )
-
-        total_cost = float(path_obj.get("totalCost", 0))
-        return_funcs = vl.get("return_path_funcs", [])
-
-        row = []
-        cols = []
-        if not return_funcs or "path" in return_funcs:
-            row.append(result_str)
-            cols.append("path")
-        if "totalCost" in return_funcs or "totalcost" in return_funcs:
-            row.append(total_cost)
-            cols.append("totalCost")
-        if "node" in return_funcs:
-            nodes = path_obj.get("nodes", [])
-            row.append(nodes[-1] if nodes else None)
-            cols.append("node")
-        if not cols:
-            row = [result_str, total_cost]
-            cols = ["path", "totalCost"]
-
-        return IVGResult(            columns= cols,
-            rows= [row],
-            sql= f"DijkstraJson({source_id}, {target_id})",
-            params= [],
-            metadata= sql_query.query_metadata
-        )
+        return self._store.execute_weighted_shortest_path(source_id, target_id, weight_prop, max_hops)
 
     def _execute_shortest_path_cypher(
         self, sql_query, parameters=None
@@ -1378,32 +1248,10 @@ class IRISGraphEngine:
                 "Use {id: $from} / {id: $to} or {id: 'literal'} on both endpoints."
             )
 
-        try:
-            path_json = _call_classmethod(
-                self.conn,
-                "Graph.KG.Traversal",
-                "ShortestPathJson",
-                source_id,
-                target_id,
-                max_hops,
-                preds_json,
-                direction,
-                find_all,
-            )
-            paths_raw = _json.loads(str(path_json)) if path_json else []
-            # ShortestPathJson may return a single path dict or a list of paths
-            if isinstance(paths_raw, dict):
-                paths = [paths_raw]
-            else:
-                paths = paths_raw
-        except Exception as e:
-            logger.warning(f"ShortestPathJson failed: {e}")
-            return IVGResult(                columns= ["p"],
-                rows= [],
-                sql= "",
-                params= [],
-                metadata= sql_query.query_metadata
-            )
+        predicates = vl.get("types", [])
+        return self._store.execute_shortest_path(
+            source_id, target_id, predicates, max_hops, direction, bool(find_all)
+        )
 
         if not paths:
             return IVGResult(                columns= ["p"],
@@ -1929,6 +1777,17 @@ class IRISGraphEngine:
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
+
+        if name == "ivg.vector.search":
+            from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
+            args = proc.arguments
+            label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
+            k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
+            vec_arg = args[2] if len(args) > 2 else None
+            query_vector = None
+            if isinstance(vec_arg, CypherLiteral) and isinstance(vec_arg.value, list):
+                query_vector = vec_arg.value
+            return self._store.execute_knn_vec(query_vector or [], k, label_filter)
 
         if name == "ivg.shortestpath.weighted":
             args = proc.arguments
@@ -5648,6 +5507,15 @@ class IRISGraphEngine:
         if not seed_entities:
             raise ValueError("seed_entities must contain at least one entity")
 
+        if self._store_capabilities.get("ppr", True):
+            result = self._store.execute_ppr(seed_entities, damping_factor, max_iterations)
+            if not result.error:
+                top_k = return_top_k
+                rows = result.rows
+                if top_k:
+                    rows = rows[:top_k]
+                return {r[0]: float(r[1]) for r in rows if len(r) >= 2}
+
         # --- Fast path: Graph.KG.PageRank.RunJson() via .cls layer ---
         if self.capabilities.objectscript_deployed and self.capabilities.kg_built:
             try:
@@ -6104,102 +5972,29 @@ class IRISGraphEngine:
         if timestamp is not None:
             TemporalEdgeInput(source=source, predicate=predicate, target=target,
                               timestamp=int(timestamp), weight=weight)
-        try:
-            ts = int(timestamp) if timestamp is not None else ""
-            attrs_json = json.dumps(attrs) if attrs else ""
-            self._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndex",
-                "InsertEdge",
-                source,
-                predicate,
-                target,
-                str(ts),
-                weight,
-                attrs_json,
-                1 if upsert else 0,
-            )
-            if graph is not None:
-                cursor = self.conn.cursor()
-                for nid in [source, target]:
-                    try:
-                        cursor.execute(
-                            "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
-                            [nid, nid],
-                        )
-                    except Exception:
-                        pass
-                try:
-                    cursor.execute(
-                        "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
-                        [
-                            source,
-                            predicate,
-                            target,
-                            graph,
-                            source,
-                            predicate,
-                            target,
-                            graph,
-                        ],
-                    )
-                    self.conn.commit()
-                except Exception as e:
-                    logger.debug("create_edge_temporal rdf_edges insert skipped: %s", e)
-            return True
-        except Exception as e:
-            logger.warning(f"create_edge_temporal failed: {e}")
-            return False
+        result = self._store.write_temporal_edge(
+            source, predicate, target,
+            timestamp=int(timestamp) if timestamp is not None else 0,
+            weight=weight, attrs=attrs, upsert=upsert,
+        )
+        return result.error is None
 
     def bulk_create_edges_temporal(
         self, edges: list, upsert: bool = False, graph: Optional[str] = None
     ) -> int:
         normalized = [
             {
-                "s": e.get("s") or e.get("source_id", ""),
-                "p": e.get("p") or e.get("predicate", ""),
-                "o": e.get("o") or e.get("target_id", ""),
-                "ts": e.get("ts") or e.get("timestamp", 0),
-                "w": e.get("w") or e.get("weight", 1),
-                **({"attrs": e["attrs"]} if "attrs" in e else {}),
+                "source": e.get("s") or e.get("source_id") or e.get("source", ""),
+                "predicate": e.get("p") or e.get("predicate", ""),
+                "target": e.get("o") or e.get("target_id") or e.get("target", ""),
+                "timestamp": int(e.get("ts") or e.get("timestamp", 0)),
+                "weight": float(e.get("w") or e.get("weight", 1.0)),
+                "attrs": e.get("attrs") or {},
             }
             for e in edges
         ]
-        batch_json = json.dumps(normalized)
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "BulkInsert", batch_json, 1 if upsert else 0
-        )
-        count = int(result)
-        if graph is not None or any(e.get("graph") for e in edges):
-            cursor = self.conn.cursor()
-            for e in edges:
-                s = e.get("s") or e.get("source_id", "")
-                p = e.get("p") or e.get("predicate", "")
-                o = e.get("o") or e.get("target_id", "")
-                g = e.get("graph", graph)
-                if not (s and p and o and g):
-                    continue
-                for nid in [s, o]:
-                    try:
-                        cursor.execute(
-                            "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
-                            [nid, nid],
-                        )
-                    except Exception:
-                        pass
-                try:
-                    cursor.execute(
-                        "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
-                        [s, p, o, g, s, p, o, g],
-                    )
-                except Exception as e:
-                    logger.debug(
-                        "bulk_create_edges_temporal rdf_edges insert skipped: %s", e
-                    )
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
-        return count
+        result = self._store.bulk_write_temporal_edges(normalized, upsert=upsert)
+        return result.rows[0][0] if result.rows else 0
 
     def get_edges_in_window(
         self,
@@ -6209,28 +6004,8 @@ class IRISGraphEngine:
         end: int = 0,
         direction: str = "out",
     ) -> list:
-        if direction == "in":
-            result = self._iris_obj().classMethodValue(
-                "Graph.KG.TemporalIndex",
-                "QueryWindowInbound",
-                source,
-                predicate,
-                start,
-                end,
-            )
-        else:
-            result = self._iris_obj().classMethodValue(
-                "Graph.KG.TemporalIndex", "QueryWindow", source, predicate, start, end
-            )
-        edges = json.loads(str(result))
-        for edge in edges:
-            edge["source"] = edge.get("s", edge.get("source", ""))
-            edge["predicate"] = edge.get("p", edge.get("predicate", ""))
-            edge["target"] = edge.get("o", edge.get("target", ""))
-            edge["timestamp"] = edge.get("ts", edge.get("timestamp", 0))
-            edge["weight"] = edge.get("w", edge.get("weight", 1.0))
-        return edges
-
+        result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
+        return result.rows if not result.error else []
     def purge_before(self, ts: int) -> None:
         self._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
@@ -6264,19 +6039,11 @@ class IRISGraphEngine:
         ts_start: int,
         ts_end: int,
     ):
-        result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex",
-            "GetAggregate",
-            source,
-            predicate,
-            metric,
-            ts_start,
-            ts_end,
-        )
-        s = str(result)
-        if s == "":
-            return 0 if metric == "count" else None
-        return int(s) if metric == "count" else float(s)
+        result = self._store.get_temporal_aggregate(source, predicate, metric, ts_start, ts_end)
+        if result.rows:
+            val = result.rows[0][0]
+            return int(val) if metric == "count" else float(val)
+        return 0 if metric == "count" else None
 
     def get_bucket_groups(
         self,
@@ -6695,11 +6462,19 @@ class IRISGraphEngine:
         return [(item["id"], float(item["score"])) for item in parsed]
 
     def kg_WCC(self, max_iterations: int = 100) -> Dict[str, Any]:
+        if self._store_capabilities.get("wcc", True):
+            result = self._store.execute_wcc()
+            if not result.error:
+                return {r[0]: r[1] for r in result.rows if len(r) >= 2}
         from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", max_iterations))
         return json.loads(raw) if raw else {}
 
     def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
+        if self._store_capabilities.get("cdlp", True):
+            result = self._store.execute_cdlp(max_iterations)
+            if not result.error:
+                return {r[0]: r[1] for r in result.rows if len(r) >= 2}
         from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "CDLPJson", max_iterations))
         return json.loads(raw) if raw else {}
@@ -6710,9 +6485,19 @@ class IRISGraphEngine:
                     include_embeddings: bool = False,
                     max_nodes: int = 10000):
         from iris_vector_graph.models import SubgraphData
-        from iris_vector_graph.schema import _call_classmethod
         if not seed_ids:
             return SubgraphData(seed_ids=list(seed_ids))
+        if self._store_capabilities.get("subgraph", True):
+            result = self._store.execute_subgraph(seed_ids, k_hops, edge_types or [], max_nodes)
+            if result.error is None:
+                import json as _j
+                if result.rows:
+                    nodes = _j.loads(result.rows[0][0]) if result.rows[0][0] else []
+                    edges = _j.loads(result.rows[0][1]) if result.rows[0][1] else []
+                else:
+                    nodes, edges = [], []
+                return SubgraphData(nodes=nodes, edges=edges, seed_ids=list(seed_ids))
+        from iris_vector_graph.schema import _call_classmethod
         seed_json = json.dumps(seed_ids)
         edge_types_json = json.dumps(edge_types) if edge_types else ""
         raw = str(_call_classmethod(self.conn, "Graph.KG.Subgraph", "SubgraphJson",
