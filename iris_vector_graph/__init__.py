@@ -8,6 +8,8 @@ from .schema import GraphSchema
 from .index_protocol import IVGIndex, IndexHandle
 from .result import IVGResult
 from .capabilities import IRISCapabilities
+from .store_protocol import GraphStore
+from .stores import IRISGraphStore
 from ._validate import (
     NodeIdInput, EdgeInput, CypherInput,
     IVFBuildInput, VectorSearchInput,
@@ -72,4 +74,6 @@ __all__ = [
     "unified_clinical_pipeline",
     "FHIRSearchTool",
     "GetPatientKGNeighborhoodTool",
+    "GraphStore",
+    "IRISGraphStore",
 ]

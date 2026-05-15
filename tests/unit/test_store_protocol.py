@@ -1,5 +1,5 @@
 import os
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -412,3 +412,235 @@ class TestIRISGraphStoreUnit:
     def test_close_is_noop(self):
         store, conn, cursor = self._make_store()
         store.close()
+
+
+class TestIRISGraphStoreExtraCoverage:
+
+    def _make_store(self):
+        from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = (0,)
+        cursor.execute.return_value = None
+        conn.cursor.return_value = cursor
+        return IRISGraphStore(conn), conn, cursor
+
+    def test_get_nodes_with_properties(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1", "Gene")],
+            [("n1", "name", '"TP53"')],
+        ]
+        result = store.get_nodes(["n1"], properties=["name"])
+        assert result.columns == ["id", "labels", "name"]
+        assert result.rows[0][0] == "n1"
+
+    def test_get_nodes_with_json_parse_error(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1", "Gene")],
+            [("n1", "name", "NOT_JSON")],
+        ]
+        result = store.get_nodes(["n1"], properties=["name"])
+        assert result.rows[0][2] == "NOT_JSON"
+
+    def test_get_node_labels_with_data(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.return_value = [("n1", "Gene"), ("n1", "Protein")]
+        result = store.get_node_labels(["n1"])
+        assert result.columns == ["id", "labels"]
+
+    def test_query_nodes_with_label(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1",), ("n2",)],
+            [("n1", "Gene"), ("n2", "Gene")],
+            [],
+        ]
+        result = store.query_nodes(label_filter="Gene")
+        assert isinstance(result.rows, list)
+
+    def test_query_nodes_with_property_filter(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1",)],
+            [],
+        ]
+        cursor.fetchone.return_value = ('"human"',)
+        result = store.query_nodes(label_filter=None, property_filters={"organism": "human"})
+        assert isinstance(result.rows, list)
+
+    def test_write_nodes_with_properties(self):
+        store, conn, cursor = self._make_store()
+        result = store.write_nodes([
+            {"id": "n1", "labels": ["Gene"], "properties": {"name": "TP53", "score": 0.9}}
+        ])
+        assert result.columns == ["written"]
+        conn.commit.assert_called()
+
+    def test_delete_nodes_with_ids(self):
+        store, conn, cursor = self._make_store()
+        result = store.delete_nodes(["n1", "n2"])
+        assert result.columns == ["deleted"]
+        conn.commit.assert_called()
+
+    def test_delete_edges_with_tuples(self):
+        store, conn, cursor = self._make_store()
+        result = store.delete_edges([("n1", "INTERACTS", "n2")])
+        assert result.columns == ["deleted"]
+        conn.commit.assert_called()
+
+    def test_execute_ppr_with_arno_disabled(self):
+        store, conn, cursor = self._make_store()
+        store._arno_available = False
+        with patch.object(store, "_call_classmethod", return_value='[{"id":"n1","score":0.9}]'):
+            result = store.execute_ppr(["n1"], 0.85, 20)
+        assert result.rows[0] == ["n1", 0.9]
+
+    def test_execute_wcc_with_arno_disabled(self):
+        store, conn, cursor = self._make_store()
+        store._arno_available = False
+        with patch.object(store, "_call_classmethod", return_value='{"n1":0,"n2":0}'):
+            result = store.execute_wcc()
+        assert result.columns == ["id", "component_id"]
+
+    def test_execute_cdlp_returns_communities(self):
+        store, conn, cursor = self._make_store()
+        store._arno_available = False
+        with patch.object(store, "_call_classmethod", return_value='{"n1":1,"n2":2}'):
+            result = store.execute_cdlp(5)
+        assert result.columns == ["id", "community_id"]
+
+    def test_execute_subgraph_returns_nodes_edges(self):
+        store, conn, cursor = self._make_store()
+        store._arno_available = False
+        with patch.object(store, "_call_classmethod", return_value='{"nodes":["n1"],"edges":[]}'):
+            result = store.execute_subgraph(["n1"], 2, [], 100)
+        assert result.columns == ["nodes", "edges"]
+
+    def test_execute_knn_vec_sql_fallback(self):
+        store, conn, cursor = self._make_store()
+        store._arno_available = False
+        cursor.fetchall.return_value = [("n1", 0.95)]
+        with patch.object(store, "_call_classmethod", side_effect=Exception("no method")):
+            result = store.execute_knn_vec([0.1, 0.2], 5, None)
+        assert isinstance(result.rows, list)
+
+    def test_write_temporal_edge_success(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod", return_value="1"):
+            result = store.write_temporal_edge("n1", "CITED", "n2", 1700000000, 0.9)
+        assert result.error is None
+
+    def test_execute_temporal_window_query_with_data(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod",
+                          return_value='[{"s":"n1","p":"CITED","o":"n2","ts":1500,"w":0.9}]'):
+            result = store.execute_temporal_window_query("n1", "CITED", 1000, 2000)
+        assert result.rows[0] == ["n1", "CITED", "n2", 1500, 0.9]
+
+    def test_execute_temporal_cypher_returns_results(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod",
+                          return_value='[{"id":"n2","hops":1,"pred":"CITED","ts":1500}]'):
+            result = store.execute_temporal_cypher("n1", ["CITED"], 1000, 2000, "out", 3)
+        assert result.rows[0] == ["n2", 1, "CITED", 1500]
+
+    def test_bulk_write_temporal_edges_with_data(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod", return_value="1"):
+            result = store.bulk_write_temporal_edges([
+                {"source": "n1", "predicate": "CITED", "target": "n2", "timestamp": 1700000000}
+            ])
+        assert result.rows == [[1]]
+
+    def test_get_temporal_aggregate_success(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod", return_value="42.0"):
+            result = store.get_temporal_aggregate("n1", "CITED", "count", 0, 9999999)
+        assert result.rows == [[42.0]]
+
+    def test_execute_pagerank_returns_scores(self):
+        store, conn, cursor = self._make_store()
+        store._arno_available = False
+        with patch.object(store, "_call_classmethod", return_value='[{"id":"n1","score":0.85}]'):
+            result = store.execute_pagerank(0.85, 20)
+        assert result.rows[0] == ["n1", 0.85]
+
+    def test_execute_shortest_path_returns_path(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod",
+                          return_value='[{"nodes":["n1","n2"],"rels":["R"],"length":1}]'):
+            result = store.execute_shortest_path("n1", "n2", [], 5, "both", False)
+        assert result.columns == ["path", "length"]
+        assert result.rows[0][1] == 1
+
+    def test_execute_weighted_shortest_path_returns_path(self):
+        store, conn, cursor = self._make_store()
+        with patch.object(store, "_call_classmethod",
+                          return_value='{"nodes":["n1","n2"],"totalCost":1.5}'):
+            result = store.execute_weighted_shortest_path("n1", "n2", "weight", 5)
+        assert result.columns == ["path", "totalCost"]
+
+
+class TestIRISGraphStorePropertyFilterPaths:
+
+    def _make_store(self):
+        from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = (0,)
+        cursor.execute.return_value = None
+        conn.cursor.return_value = cursor
+        return IRISGraphStore(conn), conn, cursor
+
+    def test_query_nodes_property_mismatch_excludes_node(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1",)],
+            [],
+        ]
+        cursor.fetchone.return_value = ('"mouse"',)
+        result = store.query_nodes(property_filters={"organism": "human"})
+        assert result.rows == []
+
+    def test_query_nodes_property_not_found_excludes_node(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1",)],
+            [],
+        ]
+        cursor.fetchone.return_value = None
+        result = store.query_nodes(property_filters={"organism": "human"})
+        assert result.rows == []
+
+    def test_query_nodes_with_limit(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1",), ("n2",), ("n3",)],
+            [],
+        ]
+        result = store.query_nodes(limit=2)
+        assert len(result.rows) <= 2
+
+    def test_query_nodes_return_properties(self):
+        store, conn, cursor = self._make_store()
+        cursor.fetchall.side_effect = [
+            [("n1",)],
+            [("n1", "Gene")],
+            [("n1", "name", '"TP53"')],
+        ]
+        result = store.query_nodes(label_filter="Gene", return_properties=["name"])
+        assert "name" in result.columns
+
+    def test_write_nodes_empty_labels_and_props(self):
+        store, conn, cursor = self._make_store()
+        result = store.write_nodes([{"id": "n1"}])
+        assert result.rows == [[1]]
+
+    def test_write_edges_missing_fields_skips(self):
+        store, conn, cursor = self._make_store()
+        result = store.write_edges([{"source": "n1"}])
+        assert result.rows == [[0]]
