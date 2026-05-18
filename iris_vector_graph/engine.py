@@ -1059,6 +1059,9 @@ class IRISGraphEngine:
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
             return result
+        traversal = self._extract_traversal(parsed, parameters)
+        if traversal is not None:
+            return self._execute_traversal(traversal, sql_query, parsed, parameters)
         label_filter = None
         return_props = None
         limit = 0
@@ -1085,6 +1088,71 @@ class IRISGraphEngine:
             return_properties=return_props,
             limit=limit,
         )
+
+    def _extract_traversal(self, parsed, parameters):
+        from iris_vector_graph.cypher.ast import Direction
+        try:
+            clause = parsed.query_parts[0].clauses[0]
+            if not (hasattr(clause, "patterns") and clause.patterns):
+                return None
+            pat = clause.patterns[0]
+            if len(pat.nodes) < 2 or len(pat.relationships) < 1:
+                return None
+            rel = pat.relationships[0]
+            if rel.variable_length is not None:
+                return None
+            src_node = pat.nodes[0]
+            src_id = None
+            if src_node.properties:
+                for k, v in src_node.properties.items():
+                    if k == "id":
+                        if isinstance(v, str) and v.startswith("$"):
+                            src_id = parameters.get(v[1:])
+                        elif hasattr(v, 'name'):
+                            src_id = parameters.get(v.name)
+                        elif isinstance(v, str):
+                            src_id = v
+                        else:
+                            src_id = str(v)
+                        break
+            if src_id is None:
+                return None
+            direction_map = {Direction.OUTGOING: "out", Direction.INCOMING: "in", Direction.BOTH: "both"}
+            is_count = bool(
+                parsed.return_clause and
+                any(hasattr(item.expression, "function_name") and
+                    item.expression.function_name.upper() == "COUNT"
+                    for item in parsed.return_clause.items)
+            )
+            return {
+                "source_id": str(src_id),
+                "predicates": rel.types or [],
+                "direction": direction_map.get(rel.direction, "out"),
+                "is_count": is_count,
+                "return_col": (
+                    (parsed.return_clause.items[0].alias or "count") if is_count
+                    else (parsed.return_clause.items[0].alias or "id") if (parsed.return_clause and parsed.return_clause.items)
+                    else "id"
+                ),
+            }
+        except Exception:
+            return None
+
+    def _execute_traversal(self, traversal, sql_query, parsed, parameters):
+        raw = self._store.execute_bfs(
+            traversal["source_id"],
+            traversal["predicates"],
+            1,
+            traversal["direction"],
+            0,
+        )
+        if isinstance(raw, list):
+            rows = [[r.get("node_id", r.get("id", "")), r.get("hops", 1)] for r in raw]
+        else:
+            rows = raw.rows if not raw.error else []
+        if traversal["is_count"]:
+            return IVGResult(columns=[traversal["return_col"]], rows=[[len(rows)]], metadata=sql_query.query_metadata)
+        return IVGResult(columns=[traversal["return_col"]], rows=[[r[0]] for r in rows], metadata=sql_query.query_metadata)
 
     def _route_var_length(self, sql_query, parameters):
         vl0 = sql_query.var_length_paths[0]
@@ -1425,7 +1493,7 @@ class IRISGraphEngine:
                     source_id, predicates_json, max_hops, "", direction, max_results,
                 ))
                 if resp.startswith("SORTED:") and resp != "SORTED:0":
-                    tag = resp.split(":")[1]
+                    tag = resp.split(":", 2)[1]
                     if max_results == 0:
                         bfs_results = list(_bfs_stream_pages(self.conn, tag))
                     else:
