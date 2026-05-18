@@ -1,6 +1,6 @@
 # Fraud Detection Demo
 
-The fraud detection demo shows how IVG's graph engine enables real-time financial fraud detection — the same class of problem AWS published about using Amazon Neptune ([Delivery Hero case study](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/), [fraud graph application notebook](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb)), but running entirely on IRIS with Cypher instead of Gremlin.
+The fraud detection demo shows how IVG's graph engine enables real-time financial fraud detection — the same class of problem described in the AWS Neptune reference notebook [*Building a Fraud Graph Application on Amazon Neptune*](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb), which covers fraud rings (first-party fraud) and identity theft (third-party fraud) in credit card transaction data using Gremlin. The IVG demo implements the same patterns with Cypher on IRIS.
 
 ## Running the Demo
 

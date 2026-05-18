@@ -121,7 +121,7 @@ Two live demos ship in `src/iris_demo_server/`:
 | **Fraud Detection** | `http://localhost:8200/fraud` | Real-time fraud scoring, ring detection, money mule identification, bitemporal audit trails | [docs/demos/FRAUD_DEMO.md](docs/demos/FRAUD_DEMO.md) |
 | **Biomedical Research** | `http://localhost:8200/bio` | Protein similarity search, pathway traversal, hybrid vector+graph queries, D3 network visualization | [docs/demos/BIOMEDICAL_DEMO.md](docs/demos/BIOMEDICAL_DEMO.md) |
 
-The fraud demo is inspired by the [AWS Neptune fraud detection pattern](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/) (ring detection, mule accounts, multi-hop money trails) — same graph patterns, running on IRIS with Cypher.
+The fraud demo is inspired by the [AWS Neptune fraud graph reference notebook](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb) — the same fraud ring and identity theft patterns (first-party and third-party fraud on credit card transaction data), running on IRIS with Cypher instead of Gremlin.
 
 ```bash
 # 1. Start IRIS
