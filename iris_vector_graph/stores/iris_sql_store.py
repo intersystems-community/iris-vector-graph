@@ -336,7 +336,7 @@ class IRISGraphStore:
                 )
                 raw_val = raw if isinstance(raw, str) else str(raw)
                 if raw_val.startswith("SORTED:"):
-                    tag = raw_val.split(":", 1)[1]
+                    tag = raw_val.split(":", 2)[1]
                     iris_obj = self._iris_obj()
                     pages = []
                     i = 1
@@ -369,17 +369,11 @@ class IRISGraphStore:
 
         val = bfs_json if isinstance(bfs_json, str) else str(bfs_json)
         if val.startswith("SORTED:"):
-            tag = val.split(":", 1)[1]
-            iris_obj = self._iris_obj()
-            pages = []
-            i = 1
-            while True:
-                chunk = str(iris_obj.classMethodValue("Graph.KG.Traversal", "ReadBFSPage", tag, i))
-                if not chunk or chunk == "":
-                    break
-                pages.append(chunk)
-                i += 1
-            val = "".join(pages)
+            from iris_vector_graph.engine import _bfs_stream_pages
+            tag = val.split(":", 2)[1]
+            results = list(_bfs_stream_pages(self.conn, tag))
+            rows = [[r.get("o", r.get("id", "")), r.get("step", r.get("hops", 0)), r.get("pred", r.get("p", ""))] for r in results]
+            return IVGResult(columns=["id", "hops", "pred"], rows=rows)
 
         try:
             results = _json.loads(val) if val else []
