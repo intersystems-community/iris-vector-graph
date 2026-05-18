@@ -116,17 +116,19 @@ The single 2025.1 failure: `SKIP` clause uses `ORDER BY + OFFSET` on JSON_TABLE-
 
 Two live demos ship in `src/iris_demo_server/`:
 
-| Demo | URL | What it shows |
-|------|-----|--------------|
-| **Fraud Detection** | `http://localhost:8200/fraud` | Real-time fraud scoring, bitemporal audit trails, ring pattern detection |
-| **Biomedical Research** | `http://localhost:8200/bio` | Protein similarity search, pathway traversal, D3 network visualization |
+| Demo | URL | What it shows | Docs |
+|------|-----|--------------|------|
+| **Fraud Detection** | `http://localhost:8200/fraud` | Real-time fraud scoring, ring detection, money mule identification, bitemporal audit trails | [docs/demos/FRAUD_DEMO.md](docs/demos/FRAUD_DEMO.md) |
+| **Biomedical Research** | `http://localhost:8200/bio` | Protein similarity search, pathway traversal, hybrid vector+graph queries, D3 network visualization | [docs/demos/BIOMEDICAL_DEMO.md](docs/demos/BIOMEDICAL_DEMO.md) |
+
+The fraud demo is inspired by the [AWS Neptune fraud detection pattern](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/) (ring detection, mule accounts, multi-hop money trails) — same graph patterns, running on IRIS with Cypher.
 
 ```bash
 # 1. Start IRIS
 docker compose up -d
 
 # 2. Install deps (once)
-pip install iris-vector-graph[full]
+pip install "iris-vector-graph[full]"
 
 # 3. Start demo server
 python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1 \
@@ -136,7 +138,7 @@ python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1 \
 open http://localhost:8200
 ```
 
-The demos use the generic IVG graph engine — no separate backend required. All data is created by the demo on first run.
+The demos use the generic IVG graph engine — no separate backend required.
 
 ---
 
