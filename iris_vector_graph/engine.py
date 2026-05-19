@@ -901,6 +901,15 @@ class IRISGraphEngine:
             if hasattr(cursor, 'close'):
                 cursor.close()
 
+    def execute_aql(
+        self,
+        aql: str,
+        bind_vars: Optional[Dict[str, Any]] = None,
+    ) -> "IVGResult":
+        from iris_vector_graph.cypher.aql import translate_aql
+        cypher_query, params = translate_aql(aql, bind_vars or {})
+        return self.execute_cypher(cypher_query, parameters=params)
+
     def execute_cypher(
         self, cypher_query: str, parameters: Dict[str, Any] = None,
         read_only: bool = False,
