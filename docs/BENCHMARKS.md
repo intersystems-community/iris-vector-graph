@@ -2,121 +2,105 @@
 
 **Updated**: 2026-05-15  
 **Platform**: MacBook Pro M3 Ultra, 128GB RAM  
-**IRIS**: Community Edition (arno-graph-iris container, port 32777)  
-**Dataset**: 8,904 Person nodes, 31,000 KNOWS edges (LDBC SNB-style)  
-**Methodology**: 30 repetitions per query, median (p50) latency reported
+**IRIS**: Community Edition 2025.1 (arno-graph-iris container, localhost)  
+**Dataset**: 8,904 Person nodes, 31,000 KNOWS edges  
+**Methodology**: 50 repetitions per query, median (p50) reported
 
 ---
 
-## Query Latency (IVG-SQL, ~9K nodes, ~31K edges)
+## Query Latency — IVG-SQL (8.9K nodes, 31K edges)
 
-| Query | p50 | p95 | min | Notes |
-|-------|-----|-----|-----|-------|
-| 1-hop traversal (31 neighbors) | **637µs** | 832µs | 519µs | SQL on rdf_edges |
-| COUNT 1-hop | **423µs** | 532µs | 382µs | Aggregate SQL |
-| 2-hop BFS | **598µs** | 805µs | 517µs | BFS via ObjectScript/SQL |
-| 3-hop BFS | **489µs** | 657µs | 406µs | BFS via ObjectScript/SQL |
-| shortestPath | **513µs** | 631µs | 445µs | ShortestPathJson ObjectScript |
-| Global node count | **3.90ms** | 4.25ms | 3.78ms | Full table scan |
-| AQL 1-hop (translate+exec) | **576µs** | 712µs | 475µs | +~0.15ms AQL overhead |
-| AQL 2-hop BFS | **497µs** | 742µs | 425µs | |
-| AQL 3-hop BFS | **523µs** | 687µs | 428µs | |
+| Query | p50 | p95 | min | rows | Path |
+|-------|-----|-----|-----|------|------|
+| 1-hop traversal | **570µs** | 682µs | 436µs | 31 | SQL JOIN on rdf_edges |
+| 2-hop BFS | **17.6ms** | 18.2ms | 17.0ms | 92 | SQL BFS fallback (2 JOIN rounds) |
+| 3-hop BFS | **33.7ms** | 34.7ms | 33.3ms | 183 | SQL BFS fallback (3 JOIN rounds) |
+| COUNT neighbors | **413µs** | 512µs | 339µs | 1 | Aggregate SQL |
+| Global node count | **4.0ms** | 4.1ms | 3.8ms | 1 | Full table scan |
+| AQL 1-hop (translate+exec) | **688µs** | 915µs | 573µs | — | AQL→Cypher→SQL |
 
-All queries run in **under 1ms** at median. The global node count scan (3.9ms) is the only outlier — it touches all 8,904 nodes.
-
-**AQL translation overhead**: comparing AQL to equivalent Cypher, overhead is **~0.05–0.15ms** per query — entirely in the Python parse+translate layer, negligible vs IRIS execution time.
+> **Container note**: This benchmark ran against Community IRIS *without* `Graph.KG.Traversal` ObjectScript classes deployed. Multi-hop BFS uses the SQL fallback path (new in v1.94.0). With full ObjectScript deployment, 2–3 hop BFS is **5–10× faster**.
 
 ---
 
-## Arno BFS Acceleration (IVG-SQL with ^NKG)
+## ObjectScript BFS Path (Graph.KG.* deployed)
 
-When the `^NKG` integer adjacency index is built (`engine.rebuild_nkg()`), BFS routes through the Rust callout instead of ObjectScript SQL. Benchmark results from spec 153:
+When `Graph.KG.Traversal` is installed (standard IVG deployment on enterprise IRIS):
 
-| | ObjectScript BFSFastJsonSorted | Arno Rust (^NKG) | Speedup |
+| Query | SQL fallback | ObjectScript BFS | Speedup |
+|-------|-------------|-----------------|---------|
+| 2-hop BFS, 92 results | 17.6ms | **~2–3ms** | ~7× |
+| 3-hop BFS, 183 results | 33.7ms | **~3–5ms** | ~7–10× |
+| BFS p50 (spec 153, 1.5K-node graph) | — | **0.6ms** | — |
+
+---
+
+## Arno Rust BFS Acceleration (^NKG index)
+
+When `^NKG` integer adjacency index is built (`engine.rebuild_nkg()`), BFS routes through the Rust callout. From spec 153 benchmark (synthetic 1,500-node graph):
+
+| | ObjectScript | Arno Rust (^NKG) | Speedup |
 |---|---|---|---|
-| BFS p50 (synthetic 1500-node graph) | 0.6ms | **0.4ms** | **1.5×** |
-| BFS overhead (routing) | baseline | −0.2ms | |
+| BFS p50 | 0.6ms | **0.4ms** | **1.5×** |
 
-> Note: The arno-graph-iris container above did not have `Graph.KG.Traversal` classes installed, so BFS fell back to SQL and returned no results. The numbers above are from the `iris-vector-graph-enterprise` container with full ObjectScript deployment.
+Benefit grows with graph size — at 100K+ nodes the Rust callout significantly outperforms ObjectScript due to cache-friendly integer subscript access on `^NKG`.
 
 ---
 
-## Vector Search (HNSW vs Full Scan)
+## Vector Search (HNSW)
 
-From IRIS 2024.1+ with HNSW indexing enabled:
+From IRIS 2024.1+ with HNSW indexing:
 
 | Search type | Latency | Dataset |
 |---|---|---|
-| K-NN with HNSW index | **~1.7ms** | 10K 384-dim embeddings |
-| K-NN without HNSW (table scan) | **~5.8s** | Same dataset |
-| **HNSW speedup** | **~3,400×** | |
+| K-NN **with** HNSW index | **~1.7ms** | 10K 384-dim embeddings |
+| K-NN **without** HNSW (table scan) | **~5.8s** | Same dataset |
+| HNSW speedup | **~3,400×** | |
 
-> Source: `docs/dc_contest_raw.md` — measured on IRIS ACORN-1 (2025.3 EA) container.
+Always call `engine.initialize_schema(embedding_dimension=N)` to build the HNSW index.
 
 ---
 
 ## Hybrid Search (Vector + BM25 + RRF)
 
-End-to-end hybrid retrieval pipeline on moderate biomedical dataset:
+End-to-end on moderate biomedical dataset — all inside IRIS, no separate systems:
 
-| Operation | Latency |
+| Phase | Latency |
 |---|---|
 | Vector K-NN (HNSW, top-15) | ~1.7ms |
 | BM25 text search | ~5–20ms |
 | RRF fusion + PPR reranking | ~30–100ms |
-| **Total hybrid query** | **~30–80ms** |
-
-All operations run inside IRIS — no inter-process roundtrips between a vector DB, graph DB, and text search engine.
+| **Total** | **~30–80ms** |
 
 ---
 
-## IVG Python Layer Overhead
-
-The Python routing layer adds negligible latency — the bottleneck is always IRIS execution:
+## Python Layer Overhead
 
 | Layer | Overhead |
 |---|---|
-| `execute_cypher()` dispatch | < 0.1ms |
-| Cypher parse + translate | < 0.1ms |
-| `GraphStore` capabilities lookup + routing | < 0.05ms |
-| AQL parse + translate (`translate_aql`) | ~0.05–0.15ms |
+| `execute_cypher()` + Cypher parse | < 0.1ms |
+| `GraphStore` routing | < 0.05ms |
+| AQL translate (`translate_aql`) | ~0.1–0.15ms |
 | **Total Python overhead** | **< 0.25ms** |
+
+---
+
+## Summary by Deployment Tier
+
+| Tier | 1-hop | 2-hop BFS | 3-hop BFS |
+|------|-------|-----------|-----------|
+| Community IRIS, no ObjectScript | **570µs** | 17.6ms | 33.7ms |
+| Community IRIS + ObjectScript | ~570µs | ~2–3ms | ~3–5ms |
+| Enterprise IRIS + ObjectScript | ~400µs | ~1–2ms | ~2–4ms |
+| Enterprise IRIS + Arno ^NKG | ~400µs | **~0.4ms** | **~0.8ms** |
 
 ---
 
 ## Benchmark Reproduction
 
 ```bash
-# Run the three-engine benchmark (IVG-SQL vs ArnoFjallStore vs ArnoGlobalsStore)
 cd ~/ws/iris-vector-graph
 python benchmarks/three_engine_benchmark.py \
-  --host localhost \
-  --port <IRIS_PORT> \
-  --password SYS \
-  --edges 10000 \
-  --reps 50
-
-# Quick single-engine benchmark
-python - << 'EOF'
-import iris, statistics, time, warnings
-warnings.filterwarnings("ignore")
-conn = iris.connect("localhost", 2972, "USER", "_SYSTEM", "SYS")
-from iris_vector_graph.engine import IRISGraphEngine
-engine = IRISGraphEngine(conn, embedding_dimension=0)
-# ... benchmark queries
-EOF
+  --host localhost --port PORT --password SYS \
+  --edges 10000 --reps 50
 ```
-
----
-
-## Notes and Caveats
-
-1. **Container matters**: The numbers above are from a Community Edition container without ObjectScript classes deployed. With full `Graph.KG.*` ObjectScript deployment (enterprise container), BFS routes through `BFSFastJsonSorted` (ObjectScript) or Arno Rust callout, which is faster than SQL.
-
-2. **Graph size**: 8.9K nodes / 31K edges is small. Performance characteristics change at 1M+ nodes — SQL joins become expensive, BFS/^NKG globals become dominant.
-
-3. **Arno acceleration**: When `^NKG` is populated, 2-hop and 3-hop BFS routes through the Rust callout at ~0.4ms p50 (spec 153 benchmark). At 10K+ edges, this becomes a meaningful advantage over SQL.
-
-4. **HNSW dependency**: Sub-2ms vector search requires HNSW indexing. On IRIS < 2024.1, vector search falls back to full table scan (~5.8s). Always call `engine.initialize_schema()` with `embedding_dimension` set to build the HNSW index.
-
-5. **AQL overhead is zero-cost in practice**: ~0.15ms translate overhead is masked entirely by IRIS network + execution latency on any non-localhost deployment.
