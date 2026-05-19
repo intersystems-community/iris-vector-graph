@@ -365,7 +365,7 @@ class IRISGraphStore:
             ))
         except Exception as e:
             logger.warning("BFS ObjectScript failed: %s", e)
-            return IVGResult(columns=["id", "hops", "pred"], rows=[])
+            return self._sql_bfs_fallback(source_id, predicates, max_hops, direction, max_results)
 
         val = bfs_json if isinstance(bfs_json, str) else str(bfs_json)
         if val.startswith("SORTED:"):
@@ -384,6 +384,58 @@ class IRISGraphStore:
 
         rows = [[r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")] for r in results]
         return IVGResult(columns=["id", "hops", "pred"], rows=rows)
+
+    def _sql_bfs_fallback(
+        self, source_id: str, predicates: list, max_hops: int,
+        direction: str, max_results: int
+    ) -> "IVGResult":
+        cursor = self.conn.cursor()
+        visited: dict[str, int] = {source_id: 0}
+        frontier: list[str] = [source_id]
+        result_rows: list[list] = []
+        for hop in range(1, max_hops + 1):
+            if not frontier:
+                break
+            preds_clause = ""
+            params = list(frontier)
+            if predicates:
+                placeholders = ",".join("?" * len(predicates))
+                preds_clause = f" AND p IN ({placeholders})"
+                params += predicates
+            placeholders_f = ",".join("?" * len(frontier))
+            if direction in ("out", "outbound"):
+                sql = f"SELECT DISTINCT o_id, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}"
+            elif direction in ("in", "inbound"):
+                sql = f"SELECT DISTINCT s, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
+            else:
+                sql_out = f"SELECT DISTINCT o_id AS nbr, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}"
+                sql_in  = f"SELECT DISTINCT s AS nbr, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
+                cursor.execute(sql_out, params)
+                nbrs_out = cursor.fetchall()
+                cursor.execute(sql_in, list(frontier) + (predicates if predicates else []))
+                nbrs_in = cursor.fetchall()
+                nbrs = [(r[0], r[1]) for r in nbrs_out + nbrs_in]
+                new_frontier = []
+                for nbr, pred in nbrs:
+                    if nbr not in visited:
+                        visited[nbr] = hop
+                        new_frontier.append(nbr)
+                        result_rows.append([nbr, hop, pred])
+                        if max_results and len(result_rows) >= max_results:
+                            return IVGResult(columns=["id", "hops", "pred"], rows=result_rows)
+                frontier = new_frontier
+                continue
+            cursor.execute(sql, params)
+            new_frontier = []
+            for nbr, pred in cursor.fetchall():
+                if nbr not in visited:
+                    visited[nbr] = hop
+                    new_frontier.append(nbr)
+                    result_rows.append([nbr, hop, pred])
+                    if max_results and len(result_rows) >= max_results:
+                        return IVGResult(columns=["id", "hops", "pred"], rows=result_rows)
+            frontier = new_frontier
+        return IVGResult(columns=["id", "hops", "pred"], rows=result_rows)
 
     def execute_shortest_path(
         self, source_id: str, target_id: str, predicates: list,
