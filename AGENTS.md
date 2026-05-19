@@ -118,6 +118,7 @@ use these features. See `docs/architecture/embedded_python_architecture.md`.
 When adding a new Cypher feature: test the generated SQL from ObjectScript (`##class(IVG.CypherEngine).Execute(...)`) before testing from Python. If it works from ObjectScript, it works everywhere. If it only works from Python, the design is wrong.
 
 ## Recent Changes
+- 157-aql-parser: AQL (ArangoDB Query Language) translator — `iris_vector_graph/cypher/aql/` — single-FOR traversal scope; hand-written recursive descent; translates AQL to Cypher AST; `engine.execute_aql(aql, bind_vars)`; `translate_aql(aql, bind_vars)` public API
 - 156-graphstore-protocol: GraphStore Protocol (25 methods) extracted from engine.py into `iris_vector_graph/store_protocol.py` + `iris_vector_graph/stores/iris_sql_store.py`. IRISGraphEngine gains `store: Optional[GraphStore] = None` param. Enables ArnoFjallStore/ArnoGlobalsStore as pluggable backends.
 - 027-fhir-kg-bridge: Added Python 3.11+ (project target per AGENTS.md) + `iris_vector_graph` (engine, schema), `requests` (FHIR REST client)
 - 048-unified-edge-store PR-A: Graph.KG.EdgeScan (MatchEdges/WriteAdjacency/DeleteAdjacency), create_edge syncs to ^KG("out",0,...), translator EdgeScan CTE for MATCH, TemporalIndex + BFS/shortestPath updated to shard-0

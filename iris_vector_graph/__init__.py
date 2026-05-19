@@ -10,6 +10,7 @@ from .result import IVGResult
 from .capabilities import IRISCapabilities
 from .store_protocol import GraphStore
 from .stores import IRISGraphStore
+from .cypher.aql import translate_aql, AQLParseError, AQLTranslationError
 from ._validate import (
     NodeIdInput, EdgeInput, CypherInput,
     IVFBuildInput, VectorSearchInput,
@@ -76,4 +77,7 @@ __all__ = [
     "GetPatientKGNeighborhoodTool",
     "GraphStore",
     "IRISGraphStore",
+    "translate_aql",
+    "AQLParseError",
+    "AQLTranslationError",
 ]
