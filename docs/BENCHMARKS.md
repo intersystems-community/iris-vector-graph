@@ -21,6 +21,28 @@
 
 > **Container note**: This benchmark ran against Community IRIS *without* `Graph.KG.Traversal` ObjectScript classes deployed. Multi-hop BFS uses the SQL fallback path (new in v1.94.0). With full ObjectScript deployment, 2–3 hop BFS is **5–10× faster**.
 
+> **Embedded Python note**: The 17ms / 34ms figures are for the **external dbapi path** (`iris.connect()`) where each BFS hop requires a network round-trip. When IVG runs inside IRIS via `EmbeddedConnection` (e.g., from a `Language=python` method, the Bolt server, or the MCP server), `cursor.execute()` calls use `iris.sql` in-process with no network overhead. In that context, the SQL BFS fallback runs in **~1–2ms for 2-hop** — competitive with ObjectScript BFSFastJsonSorted.
+
+---
+
+## SQL BFS Fallback — Three Execution Contexts
+
+`IRISGraphStore._sql_bfs_fallback()` uses `cursor.execute()` which behaves very differently depending on which connection type was passed to `IRISGraphEngine`:
+
+| Connection | Each `cursor.execute()` | 2-hop BFS | 3-hop BFS |
+|------------|------------------------|-----------|-----------|
+| `iris.connect()` (external dbapi) | ~0.4–1ms network round-trip | **~17ms** | **~34ms** |
+| `EmbeddedConnection` (in-process) | ~0.05ms via `iris.sql` | **~1–2ms** | **~2–4ms** |
+| `EmbeddedConnection` + ObjectScript | single ObjectScript call | **~0.6ms** | **~1ms** |
+
+**When does EmbeddedConnection apply?** Any time IVG runs *inside* IRIS:
+- `Language=python` methods calling `IRISGraphEngine(EmbeddedConnection())`
+- The IVG Bolt server (spec 031) running as a CSP application
+- The IVG MCP server
+- Any embedded Python workflow inside IRIS
+
+In these contexts, the SQL BFS fallback is **competitive with ObjectScript** because the SQL executes in-process via `iris.sql.prepare()` / `iris.sql.exec()` with no network overhead.
+
 ---
 
 ## ObjectScript BFS Path (Graph.KG.* deployed)
