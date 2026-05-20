@@ -703,5 +703,112 @@ class IRISGraphStore:
             caps["wcc_arno"] = "wcc" in self._arno_capabilities.get("algorithms", [])
         return caps
 
+    def get_node_count(self, label: Optional[str] = None) -> IVGResult:
+        cursor = self.conn.cursor()
+        try:
+            if label:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            row = cursor.fetchone()
+            return IVGResult(columns=["count"], rows=[[int(row[0]) if row else 0]])
+        except Exception as e:
+            return IVGResult(columns=["count"], rows=[[0]], error=str(e)[:200])
+
+    def get_edge_count(self, predicate: Optional[str] = None) -> IVGResult:
+        cursor = self.conn.cursor()
+        try:
+            if predicate:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [predicate]
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            row = cursor.fetchone()
+            return IVGResult(columns=["count"], rows=[[int(row[0]) if row else 0]])
+        except Exception as e:
+            return IVGResult(columns=["count"], rows=[[0]], error=str(e)[:200])
+
+    def get_labels(self) -> IVGResult:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
+            rows = [[r[0]] for r in cursor.fetchall()]
+            return IVGResult(columns=["label"], rows=rows)
+        except Exception as e:
+            return IVGResult(columns=["label"], rows=[], error=str(e)[:200])
+
+    def get_relationship_types(self) -> IVGResult:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p"
+            )
+            rows = [[r[0]] for r in cursor.fetchall()]
+            return IVGResult(columns=["relationshipType"], rows=rows)
+        except Exception as e:
+            return IVGResult(columns=["relationshipType"], rows=[], error=str(e)[:200])
+
+    def list_indexes(self) -> IVGResult:
+        cols = ["name", "type", "state"]
+        rows = []
+        cursor = self.conn.cursor()
+
+        def _try_count(sql):
+            try:
+                cursor.execute(sql)
+                r = cursor.fetchone()
+                return int(r[0]) if r else 0
+            except Exception:
+                return -1
+
+        hnsw = _try_count("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings_optimized")
+        rows.append(["hnsw_node_embeddings", "VECTOR(HNSW)",
+                      "ONLINE" if hnsw > 0 else "NOT_BUILT"])
+
+        for table, idx_type in [
+            ("Graph_KG.kg_IVFMeta", "VECTOR(IVF)"),
+            ("Graph_KG.kg_BM25Meta", "FULLTEXT(BM25)"),
+        ]:
+            try:
+                cursor.execute(f"SELECT DISTINCT name FROM {table}")
+                for (name,) in cursor.fetchall():
+                    rows.append([name, idx_type, "ONLINE"])
+            except Exception:
+                pass
+
+        try:
+            cursor.execute("SELECT DISTINCT idx_name FROM Graph_KG.kg_PlaidMeta")
+            for (name,) in cursor.fetchall():
+                rows.append([name, "VECTOR(PLAID)", "ONLINE"])
+        except Exception:
+            pass
+
+        rows.append(["pk_nodes", "UNIQUE", "ONLINE"])
+        rows.append(["pk_rdf_edges", "UNIQUE", "ONLINE"])
+        return IVGResult(columns=cols, rows=rows)
+
+    def server_info(self) -> IVGResult:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT %Version.GetVersion()")
+            row = cursor.fetchone()
+            iris_ver = str(row[0]) if row else "unknown"
+        except Exception:
+            iris_ver = "unknown"
+        try:
+            from importlib.metadata import version as pkg_version
+            ivg_ver = pkg_version("iris-vector-graph")
+        except Exception:
+            ivg_ver = "unknown"
+        return IVGResult(
+            columns=["iris_version", "ivg_version"],
+            rows=[[iris_ver, ivg_ver]],
+        )
+
     def close(self) -> None:
         pass

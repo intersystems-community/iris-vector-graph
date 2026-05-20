@@ -1831,26 +1831,85 @@ class IRISGraphEngine:
                 )
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "INDEXES" in cmd:
-            return IVGResult(                columns= [
-                    "name",
-                    "type",
-                    "entityType",
-                    "labelsOrTypes",
-                    "properties",
-                ],
-                rows= []
-            )
+            return self._show_indexes()
         if "CONSTRAINTS" in cmd:
-            return IVGResult(                columns= [
-                    "name",
-                    "type",
-                    "entityType",
-                    "labelsOrTypes",
-                    "properties",
-                ],
-                rows= []
-            )
+            return self._show_constraints()
         return IVGResult(columns=["value"], rows=[])
+
+    def _show_indexes(self) -> "IVGResult":
+        cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "state"]
+        rows = []
+        cursor = self.conn.cursor()
+
+        def _try(sql, default=None):
+            try:
+                cursor.execute(sql)
+                return cursor.fetchall()
+            except Exception:
+                return default or []
+
+        # HNSW vector index on kg_NodeEmbeddings
+        hnsw_count = 0
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings_optimized')}")
+            r = cursor.fetchone()
+            hnsw_count = int(r[0]) if r else 0
+        except Exception:
+            pass
+        rows.append([
+            "hnsw_node_embeddings", "VECTOR(HNSW)", "NODE", ["*"], ["emb"],
+            "ONLINE" if hnsw_count > 0 else "BUILDING",
+        ])
+
+        for (name,) in _try(f"SELECT DISTINCT name FROM {_table('kg_IVFMeta')}"):
+            rows.append([name, "VECTOR(IVF)", "NODE", ["*"], ["emb"], "ONLINE"])
+
+        for (name,) in _try(f"SELECT DISTINCT name FROM {_table('kg_BM25Meta')}"):
+            rows.append([name, "FULLTEXT(BM25)", "NODE", ["*"], ["*"], "ONLINE"])
+
+        for (idx_name,) in _try(f"SELECT DISTINCT idx_name FROM {_table('kg_PlaidMeta')}"):
+            rows.append([idx_name, "VECTOR(PLAID)", "NODE", ["*"], ["emb"], "ONLINE"])
+
+        try:
+            native = self._iris_obj()
+            nkg_ok = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
+        except Exception:
+            nkg_ok = False
+        rows.append([
+            "nkg_adjacency", "ADJACENCY(^NKG)", "RELATIONSHIP", ["*"], ["*"],
+            "ONLINE" if nkg_ok else "NOT_BUILT",
+        ])
+
+        kg_ok = False
+        try:
+            native = self._iris_obj()
+            kg_ok = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 1)) > 0
+        except Exception:
+            pass
+        rows.append([
+            "kg_adjacency", "ADJACENCY(^KG)", "RELATIONSHIP", ["*"], ["*"],
+            "ONLINE" if kg_ok else "NOT_BUILT",
+        ])
+
+        rows.append(["pk_nodes", "UNIQUE", "NODE", ["*"], ["node_id"], "ONLINE"])
+        rows.append(["pk_rdf_edges", "UNIQUE", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "ONLINE"])
+
+        return IVGResult(columns=cols, rows=rows)
+
+    def _show_constraints(self) -> "IVGResult":
+        cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "ownedIndex"]
+        rows = [
+            ["node_id_unique", "UNIQUENESS", "NODE", ["*"], ["node_id"], "pk_nodes"],
+            ["edge_spo_unique", "UNIQUENESS", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "pk_rdf_edges"],
+        ]
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('fhir_bridges')} FETCH FIRST 1 ROWS ONLY")
+            rows.append(["fhir_bridge_unique", "UNIQUENESS", "NODE",
+                          ["*"], ["external_id", "bridge_type", "node_id"], "pk_fhir_bridges"])
+        except Exception:
+            pass
+        return IVGResult(columns=cols, rows=rows)
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
@@ -6286,6 +6345,32 @@ class IRISGraphEngine:
 
         cursor.close()
         return {"nodes": nodes_written, "edges": edges_written}
+
+    def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
+                "WHERE Command IS NOT NULL FETCH FIRST ? ROWS ONLY",
+                [limit],
+            )
+            return [
+                {"id": str(r[0]), "state": str(r[1]), "client": str(r[2]),
+                 "command": str(r[3])[:200]}
+                for r in cursor.fetchall()
+            ]
+        except Exception as e:
+            logger.warning("list_active_queries failed: %s", e)
+            return []
+
+    def kill_query(self, query_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT %SYSTEM.SYS.KillProcess(?)", [int(query_id)])
+            return True
+        except Exception as e:
+            logger.warning("kill_query %s failed: %s", query_id, e)
+            return False
 
     def export_temporal_edges_ndjson(
         self, path: str, start: int = None, end: int = None, predicate: str = None

@@ -1182,6 +1182,34 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.95.0 (2026-05-15)
+
+**Admin API** — IVG now has a production-grade admin surface matching Neo4j/ArangoDB:
+
+**Fixed: `SHOW INDEXES` / `SHOW CONSTRAINTS`** — were empty stubs; now return actual BM25, IVF, HNSW, PLAID, ^KG, ^NKG indexes and uniqueness constraints. Neo4j Browser, LangChain, and all Neo4j-compatible tools now see the real index state on connect.
+
+**New REST endpoints on the Cypher API:**
+- `GET /schema` — labels, relationship types, property keys, counts
+- `GET /indexes` — full index inventory (all types)
+- `GET /server` — IVG version, IRIS version, namespace, schema status, BFS path
+- `GET /metrics` — Prometheus-format metrics (node/edge/embedding counts, status)
+- `GET /stats` — counts by label, predicate, embedding coverage
+- `POST /admin/schema/init` — initialize schema
+- `POST /admin/indexes/rebuild` — rebuild ^KG and ^NKG adjacency indexes
+- `POST /admin/embed` — trigger node embedding
+- `POST /admin/load` — stream NDJSON graph data
+- `GET /admin/export` — export graph as NDJSON
+- `POST /admin/snapshot` — save snapshot to disk
+- `GET /admin/queries` — list active IRIS queries
+- `DELETE /admin/queries/{id}` — kill a running query
+- `POST /admin/explain` — translate Cypher to SQL (debugging + optimization)
+
+**GraphStore protocol additions** (6 new methods):
+`get_node_count()`, `get_edge_count()`, `get_labels()`, `get_relationship_types()`, `list_indexes()`, `server_info()`
+
+**Engine additions:**
+`engine.list_active_queries()`, `engine.kill_query(id)`
+
 ### v1.94.0 (2026-05-15)
 
 **GraphStore Protocol** — `IRISGraphEngine` now has a pluggable storage backend (spec 156).
