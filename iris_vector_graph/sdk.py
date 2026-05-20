@@ -67,12 +67,11 @@ class IVGRecord:
 
 
 def _wrap_result(raw: dict) -> IVGResult:
-    result = IVGResult(
+    return IVGResult(
         columns=raw.get("columns", []),
         rows=raw.get("rows", []),
         error=raw.get("error"),
     )
-    return result
 
 
 class IVGClient:
@@ -132,19 +131,13 @@ class IVGClient:
             raise IVGClientError(f"Health check failed: {e}", http_code=e.response.status_code)
 
     def schema(self) -> dict:
-        resp = self._get_client().get("/schema")
-        resp.raise_for_status()
-        return resp.json()
+        return self._get("/schema")
 
     def server_info(self) -> dict:
-        resp = self._get_client().get("/server")
-        resp.raise_for_status()
-        return resp.json()
+        return self._get("/server")
 
     def stats(self) -> dict:
-        resp = self._get_client().get("/stats")
-        resp.raise_for_status()
-        return resp.json()
+        return self._get("/stats")
 
     def node_count(self) -> int:
         result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
@@ -183,6 +176,11 @@ class IVGClient:
     def __exit__(self, *args):
         self.close()
 
+    def _get(self, path: str) -> dict:
+        resp = self._get_client().get(path)
+        resp.raise_for_status()
+        return resp.json()
+
     def _post(self, path: str, payload: dict) -> dict:
         last_exc: Exception | None = None
         for attempt in range(self._max_retries):
@@ -205,9 +203,7 @@ class IVGClient:
                 last_exc = e
                 if attempt < self._max_retries - 1:
                     time.sleep(0.5 * (2 ** attempt))
-        raise IVGClientError(
-            f"Failed after {self._max_retries} attempts: {last_exc}"
-        )
+        raise IVGClientError(f"Failed after {self._max_retries} attempts: {last_exc}")
 
 
 class AsyncIVGClient:
