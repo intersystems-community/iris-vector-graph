@@ -122,19 +122,44 @@ _IRIS_NAMESPACE = os.environ.get("IRIS_NAMESPACE", "USER")
 
 
 def _make_engine() -> IRISGraphEngine:
+    try:
+        import iris as _iris_wrapper
+        _state = _iris_wrapper.runtime.state
+    except Exception:
+        _iris_wrapper = None
+        _state = "unavailable"
+
     host = os.environ.get("IRIS_HOST")
+
     if host:
         port = int(os.environ.get("IRIS_PORT", "1972"))
         namespace = os.environ.get("IRIS_NAMESPACE", "USER")
         username = os.environ.get("IRIS_USERNAME", "_SYSTEM")
         password = os.environ.get("IRIS_PASSWORD", "SYS")
-        conn = iris.connect(hostname=host, port=port, namespace=namespace,
-                            username=username, password=password)
+        if _iris_wrapper and hasattr(_iris_wrapper, "dbapi"):
+            conn = _iris_wrapper.dbapi.connect(
+                hostname=host, port=port, namespace=namespace,
+                username=username, password=password,
+            )
+        else:
+            conn = iris.connect(hostname=host, port=port, namespace=namespace,
+                                username=username, password=password)
         return IRISGraphEngine(conn)
+
+    if _state.startswith("embedded") and _iris_wrapper and hasattr(_iris_wrapper, "dbapi"):
+        conn = _iris_wrapper.dbapi.connect(
+            mode="embedded", namespace=os.environ.get("IRIS_NAMESPACE", "USER")
+        )
+        return IRISGraphEngine(conn)
+
     if _EMBEDDED:
         from iris_vector_graph.embedded import EmbeddedConnection
         return IRISGraphEngine(EmbeddedConnection())
-    raise RuntimeError("IRIS_HOST not set and embedded iris not available")
+
+    raise RuntimeError(
+        "No IRIS connection available. Set IRIS_HOST env var or run inside IRIS "
+        "(embedded mode via iris-embedded-python-wrapper or EmbeddedConnection)."
+    )
 
 
 def _get_engine() -> IRISGraphEngine:

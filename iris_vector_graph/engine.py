@@ -127,6 +127,38 @@ class IRISGraphEngine:
         engine._connection_params = conn_params
         return engine
 
+    @classmethod
+    def from_wrapper(
+        cls,
+        hostname: str = None,
+        port: int = 1972,
+        namespace: str = "USER",
+        username: str = "_SYSTEM",
+        password: str = "SYS",
+        embedding_dimension: Optional[int] = None,
+        **kwargs,
+    ) -> "IRISGraphEngine":
+        try:
+            import iris as _iris_wrapper
+            state = _iris_wrapper.runtime.state
+        except ImportError:
+            raise ImportError(
+                "iris-embedded-python-wrapper not installed. "
+                "Run: pip install iris-embedded-python-wrapper"
+            )
+        if hostname:
+            conn = _iris_wrapper.dbapi.connect(
+                hostname=hostname, port=port, namespace=namespace,
+                username=username, password=password,
+            )
+        elif state.startswith("embedded"):
+            conn = _iris_wrapper.dbapi.connect(mode="embedded", namespace=namespace)
+        else:
+            raise RuntimeError(
+                "No IRIS connection available via wrapper. Provide hostname= or run inside IRIS."
+            )
+        return cls(conn, embedding_dimension=embedding_dimension, **kwargs)
+
     @property
     def is_ready(self) -> bool:
         try:

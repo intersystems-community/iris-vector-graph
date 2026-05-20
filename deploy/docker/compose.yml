@@ -1,0 +1,46 @@
+services:
+  iris:
+    image: containers.intersystems.com/intersystems/iris-community:latest
+    restart: unless-stopped
+    environment:
+      ISC_CPF_MERGE_FILE: /cpf/merge.conf
+    volumes:
+      - ./cpf:/cpf:ro
+      - iris-data:/usr/irissys/mgr
+    ports:
+      - "1972:1972"
+      - "52773:52773"
+    healthcheck:
+      test: ["CMD", "iris", "qlist"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ivg:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      iris:
+        condition: service_healthy
+    environment:
+      IRIS_HOST: iris
+      IRIS_PORT: 1972
+      IRIS_NAMESPACE: ${IVG_NAMESPACE:-IVG}
+      IRIS_USERNAME: ivg_service
+      IRIS_PASSWORD: ${IVG_IRIS_PASSWORD:-changeme}
+      IVG_API_KEY: ${IVG_API_KEY}
+      IVG_AUTH_MODE: api_key
+      BOLT_ENABLED: "1"
+    ports:
+      - "${IVG_PORT:-8200}:8200"
+      - "7687:7687"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8200/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  iris-data:

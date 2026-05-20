@@ -1182,6 +1182,45 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.96.0 (2026-05-15)
+
+**IVG SDK, CLI, Deploy, and iris-embedded-python-wrapper adoption** (spec 160):
+
+**`iris_vector_graph.sdk`** — new thin HTTP client, zero `intersystems-irispython` required:
+```python
+from iris_vector_graph import IVGClient
+with IVGClient("http://localhost:8200", api_key="...") as client:
+    result = client.execute_cypher("MATCH (n) RETURN count(n)")
+    result = client.execute_aql("FOR v IN 1..2 OUTBOUND @s g RETURN v._key", bind_vars={"s": "n1"})
+```
+- `IVGRecord` — dict-style row access: `r["name"]` and `r[0]` both work
+- `IVGError` / `IVGClientError` / `IVGServerError` — structured exception hierarchy
+- `AsyncIVGClient` — identical async API
+- Retry on 5xx (3× exponential backoff)
+- `ping()`, `schema()`, `server_info()`, `stats()`, `explain()`, `load_ndjson()`
+
+**`ivg` CLI** — `pip install "iris-vector-graph[cli]"`:
+```bash
+ivg connect http://localhost:8200
+ivg query "MATCH (n) RETURN count(n)"
+ivg query --aql "FOR v IN 1..2 OUTBOUND @s g RETURN v" --bind s=mesh:D003924
+ivg load graph.ndjson
+ivg schema init / status
+ivg indexes list / rebuild
+ivg server start --iris-host localhost --iris-port 1972
+```
+
+**`deploy/`** folder — four setup paths:
+- `deploy/docker/compose.yml` — fresh IRIS + IVG server in Docker
+- `deploy/bolt-on/install.sh` — bolt onto existing IRIS
+- `deploy/README.md` — decision guide
+
+**`iris-embedded-python-wrapper` adoption**:
+- `IRISGraphEngine.from_wrapper(hostname=...)` — new classmethod using `iris.dbapi.connect()`
+- `cypher_api.py` `_make_engine()` prefers wrapper's `iris.dbapi.connect()` when available
+- `iris-embedded-python-wrapper>=0.5.20` added to `[full]` extra
+- `EmbeddedConnection` retained for backward compatibility
+
 ### v1.95.0 (2026-05-15)
 
 **Admin API** — IVG now has a production-grade admin surface matching Neo4j/ArangoDB:
