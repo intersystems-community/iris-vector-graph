@@ -703,55 +703,46 @@ class IRISGraphStore:
             caps["wcc_arno"] = "wcc" in self._arno_capabilities.get("algorithms", [])
         return caps
 
-    def get_node_count(self, label: Optional[str] = None) -> IVGResult:
+    def _count_query(self, sql: str, params: list = None) -> IVGResult:
         cursor = self.conn.cursor()
         try:
-            if label:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
-                )
-            else:
-                cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            cursor.execute(sql, params or [])
             row = cursor.fetchone()
             return IVGResult(columns=["count"], rows=[[int(row[0]) if row else 0]])
         except Exception as e:
             return IVGResult(columns=["count"], rows=[[0]], error=str(e)[:200])
+
+    def _distinct_query(self, sql: str, col: str) -> IVGResult:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql)
+            return IVGResult(columns=[col], rows=[[r[0]] for r in cursor.fetchall()])
+        except Exception as e:
+            return IVGResult(columns=[col], rows=[], error=str(e)[:200])
+
+    def get_node_count(self, label: Optional[str] = None) -> IVGResult:
+        if label:
+            return self._count_query(
+                "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
+            )
+        return self._count_query("SELECT COUNT(*) FROM Graph_KG.nodes")
 
     def get_edge_count(self, predicate: Optional[str] = None) -> IVGResult:
-        cursor = self.conn.cursor()
-        try:
-            if predicate:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [predicate]
-                )
-            else:
-                cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
-            row = cursor.fetchone()
-            return IVGResult(columns=["count"], rows=[[int(row[0]) if row else 0]])
-        except Exception as e:
-            return IVGResult(columns=["count"], rows=[[0]], error=str(e)[:200])
+        if predicate:
+            return self._count_query(
+                "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [predicate]
+            )
+        return self._count_query("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
 
     def get_labels(self) -> IVGResult:
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(
-                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-            )
-            rows = [[r[0]] for r in cursor.fetchall()]
-            return IVGResult(columns=["label"], rows=rows)
-        except Exception as e:
-            return IVGResult(columns=["label"], rows=[], error=str(e)[:200])
+        return self._distinct_query(
+            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label", "label"
+        )
 
     def get_relationship_types(self) -> IVGResult:
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(
-                "SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p"
-            )
-            rows = [[r[0]] for r in cursor.fetchall()]
-            return IVGResult(columns=["relationshipType"], rows=rows)
-        except Exception as e:
-            return IVGResult(columns=["relationshipType"], rows=[], error=str(e)[:200])
+        return self._distinct_query(
+            "SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p", "relationshipType"
+        )
 
     def list_indexes(self) -> IVGResult:
         cols = ["name", "type", "state"]

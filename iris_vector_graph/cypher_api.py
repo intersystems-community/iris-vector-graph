@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -424,7 +424,6 @@ def get_metrics():
             "# TYPE ivg_status_probe_ms gauge",
             f"ivg_status_probe_ms {st.probe_ms:.2f}",
         ]
-        from fastapi.responses import PlainTextResponse
         return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -521,7 +520,6 @@ def admin_export():
                 _os.unlink(path)
             except Exception:
                 pass
-        from fastapi.responses import Response
         return Response(content=data, media_type="application/x-ndjson",
                         headers={"Content-Disposition": "attachment; filename=graph.ndjson"})
     except Exception as e:
