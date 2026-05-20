@@ -110,6 +110,24 @@ class MockGraphStore:
     def capabilities(self):
         return dict(self._caps)
 
+    def get_node_count(self, label=None):
+        return self._record("get_node_count", label=label)
+
+    def get_edge_count(self, predicate=None):
+        return self._record("get_edge_count", predicate=predicate)
+
+    def get_labels(self):
+        return self._record("get_labels")
+
+    def get_relationship_types(self):
+        return self._record("get_relationship_types")
+
+    def list_indexes(self):
+        return self._record("list_indexes")
+
+    def server_info(self):
+        return self._record("server_info")
+
     def close(self):
         pass
 

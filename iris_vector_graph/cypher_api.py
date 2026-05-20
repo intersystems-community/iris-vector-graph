@@ -118,6 +118,7 @@ class Neo4jTxRequest(BaseModel):
 
 _engine_cache: IRISGraphEngine | None = None
 _engine_lock = threading.Lock()
+_IRIS_NAMESPACE = os.environ.get("IRIS_NAMESPACE", "USER")
 
 
 def _make_engine() -> IRISGraphEngine:
@@ -313,6 +314,286 @@ def _neo4j_meta(value: Any) -> dict | None:
     if isinstance(value, dict) and "id" in value:
         return {"id": value.get("id"), "type": "node"}
     return None
+
+
+@app.get("/schema")
+def get_schema():
+    try:
+        eng = _get_engine()
+        return {
+            "labels": eng.get_labels(),
+            "relationshipTypes": eng.get_relationship_types(),
+            "propertyKeys": eng.get_property_keys(),
+            "nodeCount": eng.get_node_count(),
+            "edgeCount": eng.get_edge_count(),
+            "labelDistribution": eng.get_label_distribution(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/indexes")
+def get_indexes():
+    try:
+        eng = _get_engine()
+        result = eng.execute_cypher("SHOW INDEXES")
+        return {
+            "columns": result.columns,
+            "indexes": result.rows,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/server")
+def get_server_info():
+    try:
+        eng = _get_engine()
+        st = eng.status()
+        return {
+            "ivg_version": _ivg_version(),
+            "iris_version": _iris_version(eng),
+            "namespace": _IRIS_NAMESPACE,
+            "schema": {
+                "nodes": st.tables.nodes,
+                "edges": st.tables.edges,
+                "labels": st.tables.labels,
+                "embeddings": st.tables.node_embeddings,
+            },
+            "adjacency": {
+                "kg_populated": st.adjacency.kg_populated,
+                "nkg_populated": st.adjacency.nkg_populated,
+                "bfs_path": st.adjacency.bfs_path,
+            },
+            "objectscript_deployed": st.objectscript.deployed,
+            "arno_loaded": st.arno.loaded,
+            "probe_ms": st.probe_ms,
+            "errors": st.errors,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics")
+def get_metrics():
+    try:
+        eng = _get_engine()
+        st = eng.status()
+        lines = [
+            "# HELP ivg_nodes_total Total nodes in the graph",
+            "# TYPE ivg_nodes_total gauge",
+            f"ivg_nodes_total {st.tables.nodes}",
+            "# HELP ivg_edges_total Total edges in the graph",
+            "# TYPE ivg_edges_total gauge",
+            f"ivg_edges_total {st.tables.edges}",
+            "# HELP ivg_embeddings_total Total node embeddings",
+            "# TYPE ivg_embeddings_total gauge",
+            f"ivg_embeddings_total {st.tables.node_embeddings}",
+            "# HELP ivg_kg_populated Whether ^KG adjacency index is built (0/1)",
+            "# TYPE ivg_kg_populated gauge",
+            f"ivg_kg_populated {1 if st.adjacency.kg_populated else 0}",
+            "# HELP ivg_nkg_populated Whether ^NKG adjacency index is built (0/1)",
+            "# TYPE ivg_nkg_populated gauge",
+            f"ivg_nkg_populated {1 if st.adjacency.nkg_populated else 0}",
+            "# HELP ivg_status_probe_ms Time to collect status in milliseconds",
+            "# TYPE ivg_status_probe_ms gauge",
+            f"ivg_status_probe_ms {st.probe_ms:.2f}",
+        ]
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats")
+def get_stats():
+    try:
+        eng = _get_engine()
+        return {
+            "labelDistribution": eng.get_label_distribution(),
+            "nodeCount": eng.get_node_count(),
+            "edgeCount": eng.get_edge_count(),
+            "embeddingCount": eng.embedding_count(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AdminSchemaRequest(BaseModel):
+    embedding_dimension: int = 768
+    auto_deploy_objectscript: bool = False
+
+
+@app.post("/admin/schema/init")
+def admin_schema_init(req: AdminSchemaRequest):
+    try:
+        eng = _get_engine()
+        result = eng.initialize_schema(
+            auto_deploy_objectscript=req.auto_deploy_objectscript
+        )
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/indexes/rebuild")
+def admin_indexes_rebuild():
+    try:
+        eng = _get_engine()
+        kg_ok = eng.rebuild_kg()
+        nkg_ok = eng.rebuild_nkg()
+        return {"status": "ok", "kg": kg_ok, "nkg": nkg_ok}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AdminEmbedRequest(BaseModel):
+    label: str = None
+    force: bool = False
+
+
+@app.post("/admin/embed")
+def admin_embed(req: AdminEmbedRequest):
+    try:
+        eng = _get_engine()
+        result = eng.embed_nodes(label=req.label, force=req.force)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/load")
+async def admin_load(request: Request):
+    try:
+        import tempfile, os as _os
+        body = await request.body()
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".ndjson", delete=False) as f:
+            f.write(body)
+            path = f.name
+        try:
+            eng = _get_engine()
+            result = eng.import_graph_ndjson(path)
+        finally:
+            _os.unlink(path)
+        return {"status": "ok", "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/export")
+def admin_export():
+    try:
+        import tempfile, os as _os
+        eng = _get_engine()
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".ndjson", delete=False) as f:
+            path = f.name
+        try:
+            result = eng.export_graph_ndjson(path)
+            with open(path, "rb") as f:
+                data = f.read()
+        finally:
+            try:
+                _os.unlink(path)
+            except Exception:
+                pass
+        from fastapi.responses import Response
+        return Response(content=data, media_type="application/x-ndjson",
+                        headers={"Content-Disposition": "attachment; filename=graph.ndjson"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/admin/snapshot")
+def admin_snapshot_save():
+    try:
+        import tempfile, os as _os
+        eng = _get_engine()
+        snap_dir = _os.environ.get("IVG_SNAPSHOT_DIR", tempfile.gettempdir())
+        path = _os.path.join(snap_dir, f"ivg_snapshot_{int(time.time())}.snapshot")
+        result = eng.save_snapshot(path)
+        return {"status": "ok", "path": path, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/queries")
+def admin_list_queries():
+    try:
+        eng = _get_engine()
+        cursor = eng.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
+                "WHERE Command IS NOT NULL FETCH FIRST 50 ROWS ONLY"
+            )
+            rows = cursor.fetchall()
+            queries = [
+                {"id": str(r[0]), "state": r[1], "client": r[2], "command": str(r[3])[:200]}
+                for r in rows
+            ]
+        except Exception:
+            queries = []
+        return {"queries": queries}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/admin/queries/{query_id}")
+def admin_kill_query(query_id: str):
+    try:
+        eng = _get_engine()
+        cursor = eng.conn.cursor()
+        try:
+            cursor.execute("SELECT %SYSTEM.SYS.KillProcess(?)", [int(query_id)])
+            return {"status": "ok", "killed": query_id}
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not kill query {query_id}: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ExplainRequest(BaseModel):
+    query: str
+    parameters: dict = {}
+
+
+@app.post("/admin/explain")
+def admin_explain(req: ExplainRequest):
+    try:
+        from iris_vector_graph.cypher.parser import parse_query
+        from iris_vector_graph.cypher.translator import translate_to_sql
+        parsed = parse_query(req.query)
+        eng = _get_engine()
+        sql_result = translate_to_sql(parsed, req.parameters, engine=eng)
+        return {
+            "cypher": req.query,
+            "sql": sql_result.sql,
+            "parameters": sql_result.parameters,
+            "var_length_paths": sql_result.var_length_paths,
+            "is_transactional": sql_result.is_transactional,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _ivg_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("iris-vector-graph")
+    except Exception:
+        return "unknown"
+
+
+def _iris_version(eng) -> str:
+    try:
+        cursor = eng.conn.cursor()
+        cursor.execute("SELECT %Version.GetVersion()")
+        row = cursor.fetchone()
+        return str(row[0]) if row else "unknown"
+    except Exception:
+        return "unknown"
 
 
 def _log(method: str, path: str, status: int, duration_ms: int, trace_id: str):
