@@ -12,6 +12,11 @@ Language=python method with zero boilerplate:
 Only available when running inside IRIS (the embedded iris module must be
 importable). Raises ImportError with a clear message otherwise.
 
+Deprecation notice (v1.95.0+): prefer iris-embedded-python-wrapper which
+provides the same auto-detection via iris.dbapi.connect(mode='embedded').
+EmbeddedConnection is retained for backward compatibility and for contexts
+where the wrapper is not available (e.g. older IRIS versions).
+
 ## Known constraints for Language=python (wgproto) context
 
 ### sys.path shadowing after pip install

@@ -11,6 +11,7 @@ from .capabilities import IRISCapabilities
 from .store_protocol import GraphStore
 from .stores import IRISGraphStore
 from .cypher.aql import translate_aql, AQLParseError, AQLTranslationError
+from .sdk import IVGClient, AsyncIVGClient, IVGRecord, IVGError, IVGClientError, IVGServerError
 from ._validate import (
     NodeIdInput, EdgeInput, CypherInput,
     IVFBuildInput, VectorSearchInput,
@@ -80,4 +81,10 @@ __all__ = [
     "translate_aql",
     "AQLParseError",
     "AQLTranslationError",
+    "IVGClient",
+    "AsyncIVGClient",
+    "IVGRecord",
+    "IVGError",
+    "IVGClientError",
+    "IVGServerError",
 ]
