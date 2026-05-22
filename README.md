@@ -1182,6 +1182,10 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.96.1 (2026-05-15)
+
+**Fix**: Lazy-load `sentence-transformers` and `torch` to prevent repeated memory allocation. Inline `from sentence_transformers import SentenceTransformer` in `embed_text()`, `embed_nodes()`, `embed_edges()` replaced with module-level singletons (`_get_sentence_transformers()`, `_load_sentence_transformer()`). Prevents torch reference counting from blocking GC between embedding batches.
+
 ### v1.96.0 (2026-05-15)
 
 **IVG SDK, CLI, Deploy, and iris-embedded-python-wrapper adoption** (spec 160):
