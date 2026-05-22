@@ -653,7 +653,9 @@ class TestTemporalEdgeMethods:
         assert isinstance(result, list)
         assert isinstance(result, list)
         if result:
-            assert result[0]["weight"] == 1.0
+            row = result[0]
+            weight_idx = 4
+            assert row[weight_idx] == 1.0
 
     def test_get_distinct_count_returns_int(self):
         ctx, m = self._with_iris("42")

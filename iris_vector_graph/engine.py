@@ -35,6 +35,41 @@ from iris_vector_graph._validate import (
 
 logger = logging.getLogger(__name__)
 
+_sentence_transformers = None
+_torch = None
+
+
+def _get_sentence_transformers():
+    global _sentence_transformers
+    if _sentence_transformers is None:
+        import sentence_transformers as _st
+        _sentence_transformers = _st
+    return _sentence_transformers
+
+
+def _get_torch():
+    global _torch
+    if _torch is None:
+        import torch as _t
+        _torch = _t
+    return _torch
+
+
+def _load_sentence_transformer(model_name: str):
+    st = _get_sentence_transformers()
+    import warnings as _w
+    with _w.catch_warnings():
+        _w.simplefilter("ignore")
+        return st.SentenceTransformer(model_name, local_files_only=False)
+
+
+def _is_sentence_transformer(obj) -> bool:
+    try:
+        st = _get_sentence_transformers()
+        return isinstance(obj, st.SentenceTransformer)
+    except ImportError:
+        return False
+
 
 def _bfs_stream_pages(conn, tag, page_size=500):
     import json as _j
@@ -551,21 +586,15 @@ class IRISGraphEngine:
 
         # 2. Python-side embedding
         if not self.embedder:
-            # Try to auto-load a default model if sentence-transformers is available
             try:
                 import logging as _logging
-                import transformers as _tf
-
-                _tf.logging.set_verbosity_error()
-                _logging.getLogger("safetensors").setLevel(_logging.ERROR)
-                from sentence_transformers import SentenceTransformer
-                import warnings as _w
-
-                with _w.catch_warnings():
-                    _w.simplefilter("ignore")
-                    self.embedder = SentenceTransformer(
-                        "all-MiniLM-L6-v2", local_files_only=False
-                    )
+                try:
+                    import transformers as _tf
+                    _tf.logging.set_verbosity_error()
+                    _logging.getLogger("safetensors").setLevel(_logging.ERROR)
+                except Exception:
+                    pass
+                self.embedder = _load_sentence_transformer("all-MiniLM-L6-v2")
                 logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
             except ImportError:
                 raise RuntimeError(
@@ -4418,9 +4447,7 @@ class IRISGraphEngine:
         orig_embedder = self.embedder
         if model is not None:
             if isinstance(model, str):
-                from sentence_transformers import SentenceTransformer
-
-                self.embedder = SentenceTransformer(model)
+                self.embedder = _load_sentence_transformer(model)
             else:
                 self.embedder = model
 
@@ -4489,8 +4516,7 @@ class IRISGraphEngine:
                     use_batch = False
                     if not self.embedding_config and self.embedder is not None:
                         try:
-                            from sentence_transformers import SentenceTransformer as _ST
-                            use_batch = isinstance(self.embedder, _ST)
+                            use_batch = _is_sentence_transformer(self.embedder)
                         except ImportError:
                             pass
                     if use_batch:
@@ -4583,9 +4609,7 @@ class IRISGraphEngine:
         orig_embedder = self.embedder
         if model is not None:
             if isinstance(model, str):
-                from sentence_transformers import SentenceTransformer
-
-                self.embedder = SentenceTransformer(model)
+                self.embedder = _load_sentence_transformer(model)
             else:
                 self.embedder = model
 
@@ -4650,8 +4674,7 @@ class IRISGraphEngine:
                     use_batch = False
                     if not self.embedding_config and self.embedder is not None:
                         try:
-                            from sentence_transformers import SentenceTransformer as _ST
-                            use_batch = isinstance(self.embedder, _ST)
+                            use_batch = _is_sentence_transformer(self.embedder)
                         except ImportError:
                             pass
                     if use_batch:

@@ -56,11 +56,11 @@ def normalize_vector(
 
     if normalized is None:
         try:
-            import torch
-            if isinstance(vector_data, torch.Tensor):
+            import torch as _torch
+            if isinstance(vector_data, _torch.Tensor):
                 normalized = (
                     vector_data.detach()
-                    .to(dtype=torch.float32)
+                    .to(dtype=_torch.float32)
                     .cpu()
                     .contiguous()
                     .flatten()
