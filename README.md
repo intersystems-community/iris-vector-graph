@@ -1182,6 +1182,10 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.96.2 (2026-05-15)
+
+**Fix**: `_build_index_registry()` infinite loop when `iris.gref` is a `MagicMock` (external connections via IVR or test mocks). `gref.order()` on a MagicMock returns a MagicMock, which is never `== ""`, causing infinite loop. Fix: `isinstance(name, str)` guard + `range(10000)` hard limit. Reported by IVR session.
+
 ### v1.96.1 (2026-05-15)
 
 **Fix**: Lazy-load `sentence-transformers` and `torch` to prevent repeated memory allocation. Inline `from sentence_transformers import SentenceTransformer` in `embed_text()`, `embed_nodes()`, `embed_edges()` replaced with module-level singletons (`_get_sentence_transformers()`, `_load_sentence_transformer()`). Prevents torch reference counting from blocking GC between embedding batches.
