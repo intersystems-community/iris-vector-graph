@@ -3179,6 +3179,8 @@ class IRISGraphEngine:
         registry: Dict[str, str] = {}
         try:
             import iris as _iris_pkg
+            if not callable(getattr(_iris_pkg, "gref", None)):
+                raise AttributeError("iris.gref not available")
             for global_name, type_str in (
                 ("^IVF",      "ivf"),
                 ("^VecIdx",   "vec"),
@@ -3187,13 +3189,11 @@ class IRISGraphEngine:
             ):
                 gref = _iris_pkg.gref(global_name)
                 name = ""
-                while True:
+                for _ in range(10000):
                     name = gref.order([name])
-                    if name is None or name == "":
+                    if not isinstance(name, str) or name == "":
                         break
-                    name_str = str(name)
-                    if name_str:
-                        registry[name_str] = type_str
+                    registry[name] = type_str
         except Exception:
             pass
         if not registry:
