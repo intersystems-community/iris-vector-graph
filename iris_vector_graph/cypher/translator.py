@@ -607,7 +607,7 @@ def _translate_retrieve(
     args = proc.arguments
     if not args:
         raise ValueError(
-            "ivg.retrieve requires: (query_text, limit, bm25_name='default', vec_label='*', rrf_k=60)"
+            "ivg.retrieve requires: (query_text, limit, bm25_name='default', vec_label='*', rrf_k=60, embedding_config='')"
         )
 
     query = _resolve_arg(args[0], context, "ivg.retrieve")
@@ -615,6 +615,7 @@ def _translate_retrieve(
     bm25_name = str(_resolve_arg(args[2], context, "ivg.retrieve")) if len(args) > 2 else "default"
     vec_label = str(_resolve_arg(args[3], context, "ivg.retrieve")) if len(args) > 3 else "*"
     rrf_k = int(_resolve_arg(args[4], context, "ivg.retrieve")) if len(args) > 4 else 60
+    embedding_config = str(_resolve_arg(args[5], context, "ivg.retrieve")) if len(args) > 5 else ""
 
     if not query:
         raise ValueError("ivg.retrieve: query text cannot be empty")
@@ -625,6 +626,7 @@ def _translate_retrieve(
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "Graph_KG.kg_BM25"
     safe_query = str(query).replace("'", "''")
     safe_bm25 = bm25_name.replace("'", "''")
+    safe_config = embedding_config.replace("'", "''")
 
     vec_where = "" if vec_label == "*" else f" WHERE n.label = '{vec_label.replace(chr(39), chr(39)*2)}'"
 
@@ -639,27 +641,24 @@ def _translate_retrieve(
         f") j"
     )
 
-    context.all_stage_params.extend([str(query), str(query)])
+    context.all_stage_params.append(str(query))
     vec_cte = (
-        f"SELECT TOP {vec_limit} e.id AS node, VECTOR_COSINE(e.emb, EMBEDDING(?, '')) AS score\n"
+        f"SELECT TOP {vec_limit} e.id AS node, VECTOR_COSINE(e.emb, EMBEDDING(?, '{safe_config}')) AS score\n"
         f"FROM {emb_table} e{vec_where}\n"
         f"ORDER BY score DESC"
     )
 
     rrf_cte = (
-        f"SELECT\n"
-        f"  COALESCE(b.node, v.node) AS node,\n"
-        f"  (\n"
-        f"    COALESCE(1.0 / ({rrf_k} + b_rank.rn), 0.0) +\n"
-        f"    COALESCE(1.0 / ({rrf_k} + v_rank.rn), 0.0)\n"
-        f"  ) AS score\n"
-        f"FROM BM25_Retrieve b\n"
-        f"FULL OUTER JOIN Vec_Retrieve v ON b.node = v.node\n"
-        f"LEFT JOIN (SELECT node, ROW_NUMBER() OVER (ORDER BY score DESC) rn FROM BM25_Retrieve) b_rank\n"
-        f"  ON b_rank.node = COALESCE(b.node, v.node)\n"
-        f"LEFT JOIN (SELECT node, ROW_NUMBER() OVER (ORDER BY score DESC) rn FROM Vec_Retrieve) v_rank\n"
-        f"  ON v_rank.node = COALESCE(b.node, v.node)\n"
-        f"ORDER BY score DESC\n"
+        f"SELECT node, SUM(rrf_score) AS rrf_score\n"
+        f"FROM (\n"
+        f"  SELECT node, 1.0 / ({rrf_k} + ROW_NUMBER() OVER (ORDER BY score DESC)) AS rrf_score\n"
+        f"  FROM BM25_Retrieve\n"
+        f"  UNION ALL\n"
+        f"  SELECT node, 1.0 / ({rrf_k} + ROW_NUMBER() OVER (ORDER BY score DESC)) AS rrf_score\n"
+        f"  FROM Vec_Retrieve\n"
+        f") ranked\n"
+        f"GROUP BY node\n"
+        f"ORDER BY rrf_score DESC\n"
         f"FETCH FIRST {limit} ROWS ONLY"
     )
 
