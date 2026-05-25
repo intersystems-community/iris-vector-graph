@@ -6427,6 +6427,48 @@ class IRISGraphEngine:
             logger.warning("kill_query %s failed: %s", query_id, e)
             return False
 
+    def enqueue_for_embedding(
+        self,
+        node_ids: List[str],
+        embedding_config: str = "",
+    ) -> int:
+        try:
+            import json as _json
+            ids_json = _json.dumps(node_ids)
+            result = self._call_classmethod(
+                "Graph.KG.EmbedQueue", "BulkEnqueue",
+                ids_json, embedding_config,
+            )
+            return int(str(result))
+        except Exception as e:
+            logger.warning("enqueue_for_embedding failed: %s", e)
+            return 0
+
+    def process_embed_queue(self, batch_size: int = 100) -> dict:
+        try:
+            import json as _json
+            result_json = str(self._call_classmethod(
+                "Graph.KG.EmbedQueue", "ProcessBatch",
+                batch_size, 30,
+            ))
+            return _json.loads(result_json)
+        except Exception as e:
+            logger.warning("process_embed_queue failed: %s", e)
+            return {"processed": 0, "errors": 0}
+
+    def embed_queue_pending(self) -> int:
+        try:
+            return int(str(self._call_classmethod("Graph.KG.EmbedQueue", "PendingCount")))
+        except Exception:
+            return 0
+
+    def start_background_embedding(self, batch_size: int = 100) -> str:
+        try:
+            return str(self._call_classmethod("Graph.KG.EmbedQueue", "StartBackgroundTask", batch_size))
+        except Exception as e:
+            logger.warning("start_background_embedding failed: %s", e)
+            return ""
+
     def export_temporal_edges_ndjson(
         self, path: str, start: int = None, end: int = None, predicate: str = None
     ) -> dict:

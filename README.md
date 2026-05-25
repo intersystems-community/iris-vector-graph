@@ -1182,6 +1182,34 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 
 ## Changelog
 
+### v1.97.0 (2026-05-16)
+
+**Three new features closing the gap with NornicDB-style vector-graph fusion:**
+
+**`CALL ivg.retrieve(query, limit, bm25_name?, vec_label?, rrf_k?)`** — single Cypher procedure for BM25 + vector + RRF fusion. Equivalent to NornicDB's `db.retrieve()`:
+```cypher
+CALL ivg.retrieve('insulin resistance', 10) YIELD node, score
+MATCH (node)-[:INTERACTS_WITH]->(target)
+RETURN target.node_id, score ORDER BY score DESC
+```
+Generates three-CTE SQL (BM25_Retrieve + Vec_Retrieve + Retrieve with FULL OUTER JOIN RRF fusion).
+
+**`WHERE vector_distance(n, $vec) < 0.3`** — scalar vector similarity predicate in WHERE/RETURN clauses:
+```cypher
+MATCH (n:Gene) WHERE vector_distance(n, $vec) < 0.3 RETURN n.node_id
+MATCH (n) RETURN n.node_id, vector_similarity(n, $vec) AS sim ORDER BY sim DESC LIMIT 10
+```
+Translates to `VECTOR_COSINE()` subquery against `kg_NodeEmbeddings`.
+
+**`Graph.KG.EmbedQueue`** — async embedding queue (ObjectScript). Write nodes now, embeddings appear asynchronously:
+```python
+engine.enqueue_for_embedding(["n1", "n2", "n3"], embedding_config="my-model")
+engine.start_background_embedding(batch_size=100)
+count = engine.embed_queue_pending()
+result = engine.process_embed_queue(batch_size=50)
+```
+Uses `^EmbedQueue` global + `Graph.KG.EmbedQueue.ProcessBatch()` via `%SYSTEM.Task`.
+
 ### v1.96.2 (2026-05-15)
 
 **Fix**: `_build_index_registry()` infinite loop when `iris.gref` is a `MagicMock` (external connections via IVR or test mocks). `gref.order()` on a MagicMock returns a MagicMock, which is never `== ""`, causing infinite loop. Fix: `isinstance(name, str)` guard + `range(10000)` hard limit. Reported by IVR session.

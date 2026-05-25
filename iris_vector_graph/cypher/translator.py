@@ -271,11 +271,13 @@ def translate_procedure_call(
         _translate_bm25_search(proc, context)
     elif name == "ivg.ivf.search":
         _translate_ivf_search(proc, context)
+    elif name == "ivg.retrieve":
+        _translate_retrieve(proc, context)
     elif name == "ivg.shortestpath.weighted" or name == "ivg.shortestPath.weighted":
         _translate_weighted_shortest_path(proc, context)
     else:
         raise ValueError(
-            f"Unknown procedure: {name!r}. Supported: ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted"
+            f"Unknown procedure: {name!r}. Supported: ivg.retrieve, ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted"
         )
 
 
@@ -595,6 +597,78 @@ def _translate_bm25_search(
 
     for item in proc.yield_items:
         context.variable_aliases[item] = "BM25"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
+def _translate_retrieve(
+    proc: ast.CypherProcedureCall, context: TranslationContext
+) -> None:
+    args = proc.arguments
+    if not args:
+        raise ValueError(
+            "ivg.retrieve requires: (query_text, limit, bm25_name='default', vec_label='*', rrf_k=60)"
+        )
+
+    query = _resolve_arg(args[0], context, "ivg.retrieve")
+    limit = int(_resolve_arg(args[1], context, "ivg.retrieve")) if len(args) > 1 else 10
+    bm25_name = str(_resolve_arg(args[2], context, "ivg.retrieve")) if len(args) > 2 else "default"
+    vec_label = str(_resolve_arg(args[3], context, "ivg.retrieve")) if len(args) > 3 else "*"
+    rrf_k = int(_resolve_arg(args[4], context, "ivg.retrieve")) if len(args) > 4 else 60
+
+    if not query:
+        raise ValueError("ivg.retrieve: query text cannot be empty")
+
+    vec_limit = limit * 2
+    bm25_limit = limit * 2
+    emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+    bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "Graph_KG.kg_BM25"
+    safe_query = str(query).replace("'", "''")
+    safe_bm25 = bm25_name.replace("'", "''")
+
+    vec_where = "" if vec_label == "*" else f" WHERE n.label = '{vec_label.replace(chr(39), chr(39)*2)}'"
+
+    bm25_cte = (
+        f"SELECT j.node_id AS node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {bm25_fn}('{safe_bm25}', '{safe_query}', {bm25_limit}),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+
+    context.all_stage_params.extend([str(query), str(query)])
+    vec_cte = (
+        f"SELECT TOP {vec_limit} e.id AS node, VECTOR_COSINE(e.emb, EMBEDDING(?, '')) AS score\n"
+        f"FROM {emb_table} e{vec_where}\n"
+        f"ORDER BY score DESC"
+    )
+
+    rrf_cte = (
+        f"SELECT\n"
+        f"  COALESCE(b.node, v.node) AS node,\n"
+        f"  (\n"
+        f"    COALESCE(1.0 / ({rrf_k} + b_rank.rn), 0.0) +\n"
+        f"    COALESCE(1.0 / ({rrf_k} + v_rank.rn), 0.0)\n"
+        f"  ) AS score\n"
+        f"FROM BM25_Retrieve b\n"
+        f"FULL OUTER JOIN Vec_Retrieve v ON b.node = v.node\n"
+        f"LEFT JOIN (SELECT node, ROW_NUMBER() OVER (ORDER BY score DESC) rn FROM BM25_Retrieve) b_rank\n"
+        f"  ON b_rank.node = COALESCE(b.node, v.node)\n"
+        f"LEFT JOIN (SELECT node, ROW_NUMBER() OVER (ORDER BY score DESC) rn FROM Vec_Retrieve) v_rank\n"
+        f"  ON v_rank.node = COALESCE(b.node, v.node)\n"
+        f"ORDER BY score DESC\n"
+        f"FETCH FIRST {limit} ROWS ONLY"
+    )
+
+    context.stages.insert(0, f"Retrieve AS (\n{rrf_cte}\n)")
+    context.stages.insert(0, f"Vec_Retrieve AS (\n{vec_cte}\n)")
+    context.stages.insert(0, f"BM25_Retrieve AS (\n{bm25_cte}\n)")
+
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "Retrieve"
     if "score" in proc.yield_items:
         context.scalar_variables.add("score")
 
@@ -3072,6 +3146,31 @@ def translate_expression(expr, context, segment="select") -> str:
             return translate_expression(a, context, segment="inline")
 
         args = [_translate_arg(a) for a in args_exprs]
+
+        if fn in ("vector_distance", "vector_similarity", "ivg.vector_distance", "ivg.vector_similarity"):
+            if len(args_exprs) < 2:
+                raise ValueError(f"{fn}() requires 2 arguments: (node_variable, query_vector)")
+            node_arg = args_exprs[0]
+            vec_arg = args_exprs[1]
+            alias = context.variable_aliases.get(node_arg.name, node_arg.name) if isinstance(node_arg, ast.Variable) else args[0]
+            emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+            if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
+                vec_val = context.input_params[vec_arg.name]
+                if isinstance(vec_val, list):
+                    vec_str = ",".join(str(x) for x in vec_val)
+                    placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+                else:
+                    placeholder = f"TO_VECTOR(?, DOUBLE)"
+                    context.all_stage_params.append(vec_val)
+            elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
+                vec_str = ",".join(str(x) for x in vec_arg.value)
+                placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+            else:
+                placeholder = args[1]
+            if fn in ("vector_distance", "ivg.vector_distance"):
+                return f"(1 - VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder}))"
+            else:
+                return f"VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder})"
 
         if fn == "type":
             if args_exprs and isinstance(args_exprs[0], ast.Variable):
