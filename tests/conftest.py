@@ -3,64 +3,32 @@ import logging
 import os
 import re
 import subprocess
-import time
 import uuid
 
 import pytest
 
-try:
-    from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
-except ImportError:
-    import iris
-
-    def iris_connect(host, port, namespace, user, password):
-        return iris.connect(
-            hostname=host,
-            port=port,
-            namespace=namespace,
-            username=user,
-            password=password,
-        )
-
 logger = logging.getLogger(__name__)
 
 _GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "gqs-ivg-test")
-_GQS_PORT = int(os.environ.get("IVG_TEST_PORT", "1972"))
 
 
-def _ensure_test_user() -> None:
-    cmds = [
-        'Set sc = $SELECT(##class(Security.Users).Exists("test"):1, 1:##class(Security.Users).Create("test","%ALL","test","Test User",,,,0,1))',
-        'Set u=##class(Security.Users).%OpenId("test") Set u.PasswordNeverExpires=1,u.ChangePassword=0 Do u.%Save()',
-    ]
-    script = "\n".join(cmds) + "\nH\n"
+def _deploy_objectscript(container_name: str) -> None:
     subprocess.run(
-        ["docker", "exec", "-i", _GQS_CONTAINER, "iris", "session", "iris", "-U", "%SYS"],
-        input=script,
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=30,
-    )
-
-
-def _deploy_objectscript() -> None:
-    subprocess.run(
-        ["docker", "exec", _GQS_CONTAINER, "mkdir", "-p", "/tmp/src"],
+        ["docker", "exec", container_name, "mkdir", "-p", "/tmp/src"],
         capture_output=True,
     )
     subprocess.run(
-        ["docker", "cp", "iris_src/src/.", f"{_GQS_CONTAINER}:/tmp/src/"],
+        ["docker", "cp", "iris_src/src/.", f"{container_name}:/tmp/src/"],
         capture_output=True,
     )
     for cls in ["Edge.cls", "TestEdge.cls"]:
         subprocess.run(
-            ["docker", "exec", _GQS_CONTAINER, "rm", "-f", f"/tmp/src/{cls}"],
+            ["docker", "exec", container_name, "rm", "-f", f"/tmp/src/{cls}"],
             capture_output=True,
         )
     load_cmd = 'Do $system.OBJ.LoadDir("/tmp/src","ck",.err,1)\nH\n'
     subprocess.run(
-        ["docker", "exec", "-i", _GQS_CONTAINER, "iris", "session", "IRIS", "-U", "USER"],
+        ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
         input=load_cmd,
         capture_output=True,
         text=True,
@@ -71,30 +39,58 @@ def _deploy_objectscript() -> None:
 
 @pytest.fixture(scope="session")
 def iris_test_container():
-    _ensure_test_user()
-    _deploy_objectscript()
+    from iris_devtester import IRISContainer
 
-    class _Stub:
-        def get_exposed_port(self, _p):
-            return _GQS_PORT
+    attached = False
+    try:
+        container = IRISContainer.attach(_GQS_CONTAINER)
+        attached = True
+        logger.info("Attached to existing container: %s", _GQS_CONTAINER)
+    except Exception:
+        import subprocess as _sp
+        _sp.run(["docker", "rm", "-f", _GQS_CONTAINER], capture_output=True)
+        logger.info("Starting fresh Community IRIS container: %s", _GQS_CONTAINER)
+        container = (
+            IRISContainer.community()
+            .with_name(_GQS_CONTAINER)
+            .with_preconfigured_password("SYS")
+            .start()
+        )
 
-        def get_container_name(self):
-            return _GQS_CONTAINER
+    name = container.get_container_name()
+    _deploy_objectscript(name)
 
-    yield _Stub()
+    yield container
+
+    if not attached:
+        keep = os.environ.get("IVG_KEEP_CONTAINER", "0") in ("1", "true", "yes")
+        if not keep:
+            try:
+                container.stop()
+                logger.info("Stopped container: %s", name)
+            except Exception as e:
+                logger.warning("Could not stop container %s: %s", name, e)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def iris_connection(iris_test_container):
-    conn = iris_connect("localhost", _GQS_PORT, "USER", "test", "test")
+    conn = iris_test_container.get_connection()
 
+    from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import GraphSchema
+
     with contextlib.suppress(Exception):
         cur = conn.cursor()
         GraphSchema.add_graph_id_column(cur)
         GraphSchema.update_spo_unique_constraint(cur)
         GraphSchema.add_graph_id_index(cur)
         conn.commit()
+
+    try:
+        eng = IRISGraphEngine(conn, embedding_dimension=128)
+        eng.initialize_schema(auto_deploy_objectscript=True)
+    except Exception as e:
+        logger.warning("Schema init failed (may already exist): %s", e)
 
     yield conn
     conn.close()
