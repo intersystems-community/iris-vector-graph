@@ -831,10 +831,23 @@ class IRISGraphEngine:
         if not self.capabilities.objectscript_deployed:
             try:
                 iris_obj = self._iris_obj()
-                exists = int(iris_obj.classMethodValue("%Routine", "Exists", "Graph.KG.PageRank.1"))
-                if exists:
-                    self.capabilities.objectscript_deployed = True
-                    logger.info("ObjectScript classes detected via %%Routine.Exists fallback")
+                routine_exists = int(iris_obj.classMethodValue("%Routine", "Exists", "Graph.KG.PageRank.1"))
+                if routine_exists:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
+                        "WHERE Name='Graph.KG.PageRank'"
+                    )
+                    row = cursor.fetchone()
+                    class_registered = int(row[0]) if row else 0
+                    if class_registered:
+                        self.capabilities.objectscript_deployed = True
+                        logger.info("ObjectScript classes detected via %%Routine.Exists fallback")
+                    else:
+                        logger.warning(
+                            "ObjectScript routines compiled but class dictionary missing "
+                            "(irishealth ^oddDEF/^rOBJ mapping issue — classes not callable). "
+                            "Use iris-community image or Atelier API for class deployment."
+                        )
             except Exception:
                 pass
 
