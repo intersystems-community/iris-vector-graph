@@ -828,7 +828,16 @@ class IRISGraphEngine:
             except Exception:
                 pass
 
-        # 7. Bootstrap ^KG global if ObjectScript is deployed and edges exist
+        if not self.capabilities.objectscript_deployed:
+            try:
+                iris_obj = self._iris_obj()
+                exists = int(iris_obj.classMethodValue("%Routine", "Exists", "Graph.KG.PageRank.1"))
+                if exists:
+                    self.capabilities.objectscript_deployed = True
+                    logger.info("ObjectScript classes detected via %%Routine.Exists fallback")
+            except Exception:
+                pass
+
         if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
             try:
                 built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn)
@@ -3250,16 +3259,20 @@ class IRISGraphEngine:
     def rebuild_nkg(self) -> bool:
         try:
             iris_obj = self._iris_obj()
+            rust_succeeded = False
             if self._detect_arno() and self._arno_capabilities.get("rust_callout"):
-                import json as _json
-                raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
-                result = _json.loads(raw)
-                if "error" in result:
-                    logger.warning("BuildNKGRust failed (%s), falling back to ObjectScript", result["error"])
-                    iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
-                else:
-                    logger.info("^NKG rebuilt via Rust: %s", result)
-            else:
+                try:
+                    import json as _json
+                    raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
+                    result = _json.loads(raw)
+                    if "error" not in result:
+                        logger.info("^NKG rebuilt via Rust: %s", result)
+                        rust_succeeded = True
+                    else:
+                        logger.warning("BuildNKGRust returned error (%s), falling back to ObjectScript", result["error"])
+                except Exception as rust_exc:
+                    logger.warning("BuildNKGRust raised (%s), falling back to ObjectScript", rust_exc)
+            if not rust_succeeded:
                 iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
