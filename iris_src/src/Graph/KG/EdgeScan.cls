@@ -184,13 +184,25 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 			Set piter = node.props.%GetIterator()
 			While piter.%GetNext(.key, .val) {
 				If key = "" { Continue }
+				Try {
+					Set valStr = $Select($IsObject(val):val.%ToJSON(), $IsValidNum(val):val, 1:""""_$Replace($ZConvert(val,"O","UTF8"),"""","""""")_"""")
+					&sql(INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (:id, :key, :valStr))
+				} Catch ex { }
+			}
+		}
+		Set n = n + 1
+	}
+		}
+		If $IsObject(node.props) {
+			Set piter = node.props.%GetIterator()
+			While piter.%GetNext(.key, .val) {
+				If key = "" { Continue }
 				Set valStr = $Select($IsObject(val):val.%ToJSON(), 1:""""_$Replace(val,"""","""""")_"""")
 				&sql(INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (:id, :key, :valStr))
 			}
 		}
 		Set n = n + 1
-	}
-	TCOMMIT
+	}	TCOMMIT
 	Quit n
 }
 
