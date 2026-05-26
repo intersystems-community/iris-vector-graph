@@ -3398,7 +3398,7 @@ class IRISGraphEngine:
             s, p, o = edge["s"], edge["p"], edge["o"]
             try:
                 cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight) VALUES (?, ?, ?, 1.0)",
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                     [s, p, o],
                 )
             except Exception as ex:
