@@ -424,3 +424,13 @@ Old `BulkIngestEdges` (Language=python) retained for backward compatibility but 
 - Try/Catch around valStr computation + INSERT per prop — errors skip that prop, not the whole chunk
 - `$IsValidNum(val)` check to store numeric values without redundant quotes  
 - `$ZConvert(val,"O","UTF8")` to normalize encoding before quote-escaping
+
+---
+
+## P2 — get_nodes() IN-clause batching vs JOIN
+
+`IRISGraphStore.get_nodes(node_ids, properties)` issues two sequential `WHERE s IN (?)` queries against `rdf_labels` and `rdf_props`. For large `node_ids` lists this generates N/batch_size round-trips.
+
+On IVG-initialized schemas this is fast (both tables have `idx_labels_s` and `idx_props_s` indexes). On external schemas without these indexes the same pattern causes full table scans per batch.
+
+Future improvement: rewrite as a single JOIN query or use a temporary table for large batches (>1000 IDs). Non-urgent — IVG schemas are always indexed.
