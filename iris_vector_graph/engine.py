@@ -3030,6 +3030,27 @@ class IRISGraphEngine:
         if not nodes:
             return []
 
+        if self.capabilities.objectscript_deployed:
+            try:
+                import json as _json
+                from iris_vector_graph.schema import _call_classmethod_large
+                iris_obj = self._iris_obj()
+                normalized = [
+                    {
+                        "id": n.get("id", ""),
+                        "labels": n.get("labels", []),
+                        "props": n.get("properties", {}),
+                    }
+                    for n in nodes if n.get("id")
+                ]
+                count = int(_call_classmethod_large(
+                    iris_obj, "Graph.KG.EdgeScan", "BulkIngestNodesSQL",
+                    _json.dumps(normalized),
+                ))
+                return [n["id"] for n in normalized[:count]]
+            except Exception as e:
+                logger.warning("BulkIngestNodesSQL failed (%s), falling back to SQL path", e)
+
         cursor = self.conn.cursor()
         created_ids = []
 
