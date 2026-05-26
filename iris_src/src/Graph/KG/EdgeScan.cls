@@ -120,6 +120,8 @@ ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As
         n += 1
     kg["$bie_dirty"] = 1
     return n
+}
+
 /// Bulk ingest edges via SQL INSERT + persistent ^KG global writes.
 /// Replaces BulkIngestEdges which used Language=python iris.gref (process-private).
 /// edges_json: JSON array of {"s":s,"p":p,"o":o} objects.
