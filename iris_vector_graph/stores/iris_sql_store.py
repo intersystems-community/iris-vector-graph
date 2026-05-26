@@ -235,8 +235,8 @@ class IRISGraphStore:
                 continue
             try:
                 cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight) VALUES (?, ?, ?, ?)",
-                    [s, p, o, w],
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                    [s, p, o],
                 )
             except Exception as e:
                 if not err_lower_check(e):

@@ -138,7 +138,7 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 		Set o = edge.o
 		If (s = "") || (o = "") { Continue }
 		If s = o { Continue }
-		&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight) VALUES (:s, :p, :o, 1.0))
+		&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (:s, :p, :o))
 		If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
 		Do ..WriteAdjacency(s, p, o, "1.0")
 		Set n = n + 1
