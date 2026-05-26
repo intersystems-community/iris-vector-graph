@@ -352,3 +352,44 @@ Comparison: GES/GraphScope published SF1000 numbers on large server cluster.
 | BuildNKG (SF10, Rust) | **19s** | — | Was 422s; 22× speedup via `ffi_kg_build_nkg` |
 | Build2HopExactStats (SF10) | timeout | — | `HashSet<String>` too slow; integer-indexed version needed |
 | Arno BFSJson 2-hop (SF10, no MAXSTRING) | ~3.5s | — | Chunk-read loop working; `HashSet<String>` bottleneck |
+
+---
+
+## Bug L: ObjectScript classes compile but are uncallable on irishealth-community (^oddDEF/^rOBJ mapping)
+
+**Status**: Open — workaround documented, root cause in irishealth image configuration
+
+**Symptom**: On `irishealth-community:2026.2.0AI.162.0`, after `docker cp iris_src/src ... && docker exec iris session IRIS LoadDir()`:
+1. `$system.OBJ.Load()` reports "Load finished successfully"
+2. `%Routine.Exists("Graph.KG.Traversal.1")` returns 1 (v1.97.3 fix detects this correctly — `objectscript_deployed=True`)
+3. `##class(Graph.KG.Traversal).BuildKG()` raises `<CLASS DOES NOT EXIST>` or `<SYNTAX>`
+4. `iris.createIRIS(conn).classMethodValue("Graph.KG.Traversal", "BuildKG")` raises the same
+5. `%Dictionary.ClassDefinition WHERE Name='Graph.KG.Traversal'` returns 0
+
+**Root cause**: irishealth-community maps `^oddDEF` (class definition metadata) to a different database than `^rOBJ` (compiled routines). The class compiles its routines into `^rOBJ` in the USER database, but class metadata writes to `^oddDEF` in a read-only or system-mapped database. IRIS won't dispatch `##class()` calls without the class metadata — so the routine is "orphaned": compiled but not callable.
+
+This is a known irishealth-community configuration difference from plain iris-community. The `^oddDEF` global is typically mapped to `IRISLIB` or `HSLIB` which is read-only in irishealth images.
+
+**Impact**: All ObjectScript-accelerated paths (BFS, PPR, BuildKG, BuildNKG) fall back to Python. v1.97.3 correctly reports `objectscript_deployed=True` via `%Routine.Exists`, but any attempt to call the classes raises `<CLASS DOES NOT EXIST>`.
+
+**IVG behavior after v1.97.3**: `objectscript_deployed=True` but all `classMethodValue` calls will raise → caught by per-method try/except → Python fallback. The symptom is slow operations (no ObjectScript acceleration) with no crash.
+
+**Workarounds**:
+1. Use `iris-community` (not `irishealth-community`) for IVG development — plain image has writable `^oddDEF`
+2. Load classes into a non-USER namespace that has a private database with writable class dictionary
+3. Use the Atelier REST API (`/api/atelier/v1/USER/doc`) to PUT the .cls source — this bypasses `$system.OBJ.Load()` and uses a different compilation path that may write to the correct database
+
+**Needed fix (future)**:
+- Detect the "orphaned routine" state: `%Routine.Exists=1` but `%Dictionary.ClassDefinition=0` → set a new capability flag `capabilities.objectscript_callable = False`
+- Adjust log message to warn: "ObjectScript routines compiled but class dictionary missing — likely irishealth ^oddDEF mapping. Classes not callable."
+- Consider using objectscript-mcp's Atelier compilation path as fallback in `_deploy_objectscript()`
+
+**Detection code (for future diagnostic)**:
+```python
+routine_exists = int(iris_obj.classMethodValue("%Routine", "Exists", "Graph.KG.Traversal.1"))
+cursor.execute("SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name='Graph.KG.Traversal'")
+class_registered = int(cursor.fetchone()[0])
+if routine_exists and not class_registered:
+    logger.warning("ObjectScript routines compiled but not callable (irishealth ^oddDEF mapping issue)")
+    self.capabilities.objectscript_deployed = False
+```
