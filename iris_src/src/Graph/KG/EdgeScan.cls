@@ -123,13 +123,14 @@ ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As
 }
 
 /// Bulk ingest edges via SQL INSERT + persistent ^KG global writes.
-/// Replaces BulkIngestEdges which used Language=python iris.gref (process-private).
+/// Writes to BOTH rdf_edges (SQL, queryable via Cypher) AND ^KG globals (BFS acceleration).
 /// edges_json: JSON array of {"s":s,"p":p,"o":o} objects.
 /// Returns count of edges written.
 ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNOWS") As %Integer
 {
 	Set data = {}.%FromJSON(edgesJson)
 	Set n = 0
+	TSTART
 	Set iter = data.%GetIterator()
 	While iter.%GetNext(.idx, .edge) {
 		Set s = edge.s
@@ -137,13 +138,12 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 		Set o = edge.o
 		If (s = "") || (o = "") { Continue }
 		If s = o { Continue }
-		&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight)
-		     SELECT :s, :p, :o, 1.0
-		     WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges
-		                       WHERE s = :s AND p = :p AND o_id = :o))
+		&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight) VALUES (:s, :p, :o, 1.0))
+		If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
 		Do ..WriteAdjacency(s, p, o, "1.0")
 		Set n = n + 1
 	}
+	TCOMMIT
 	Quit n
 }
 
@@ -157,6 +157,41 @@ ClassMethod BulkIngestEdgesFile(filePath As %String, predicate As %String = "KNO
 		Set json = json _ stream.Read(32000)
 	}
 	Quit ..BulkIngestEdgesSQL(json, predicate)
+}
+
+/// Bulk ingest nodes + labels + properties via batched SQL.
+/// nodesJson: JSON array of {"id":id, "labels":["L1",...], "props":{"k":"v",...}} objects.
+/// Returns count of nodes written.
+ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
+{
+	Set data = {}.%FromJSON(nodesJson)
+	Set n = 0
+	TSTART
+	Set iter = data.%GetIterator()
+	While iter.%GetNext(.idx, .node) {
+		Set id = node.id
+		If id = "" { Continue }
+		&sql(INSERT INTO Graph_KG.nodes (node_id) VALUES (:id))
+		If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
+		If $IsObject(node.labels) {
+			Set liter = node.labels.%GetIterator()
+			While liter.%GetNext(.li, .label) {
+				If label = "" { Continue }
+				&sql(INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (:id, :label))
+			}
+		}
+		If $IsObject(node.props) {
+			Set piter = node.props.%GetIterator()
+			While piter.%GetNext(.key, .val) {
+				If key = "" { Continue }
+				Set valStr = $Select($IsObject(val):val.%ToJSON(), 1:""""_$Replace(val,"""","""""")_"""")
+				&sql(INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (:id, :key, :valStr))
+			}
+		}
+		Set n = n + 1
+	}
+	TCOMMIT
+	Quit n
 }
 
 }
