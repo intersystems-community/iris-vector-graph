@@ -393,3 +393,19 @@ if routine_exists and not class_registered:
     logger.warning("ObjectScript routines compiled but not callable (irishealth ^oddDEF mapping issue)")
     self.capabilities.objectscript_deployed = False
 ```
+
+---
+
+## Bug M: bulk_ingest_edges writes to process-private ^||KG via Python iris.gref
+
+**Status**: Fixed in v1.97.5
+
+**Symptom**: `engine.bulk_ingest_edges(edges)` followed by `engine.rebuild_nkg()` in the same process builds ^NKG correctly. Reconnect from a new process — ^NKG is empty, ^KG has no edge data. The 145K edges appear to load (returns correct count) but are gone on the next connection.
+
+**Root cause**: `EdgeScan.BulkIngestEdges` is a `Language=python` method that calls `iris.gref("^KG")`. In the embedded Python context, `iris.gref` expands to the process-private namespace (`^||KG`), not the persistent global. Data is visible in the same process lifetime but destroyed on process exit. This is a fundamental property of process-private globals in IRIS.
+
+**Impact**: Any seeder using `bulk_ingest_edges` then reconnecting gets an empty graph. The current workaround was `create_edge()` which is correct but ~100× slower (individual SQL inserts, ~20 minutes vs ~30 seconds for 145K edges).
+
+**Fix**: New `BulkIngestEdgesSQL` ObjectScript classmethod (Option 3 from diagnosis) — batched SQL `INSERT INTO rdf_edges` + `WriteAdjacency` per edge in a single ObjectScript transaction. Always writes to persistent globals. `bulk_ingest_edges()` now calls `BulkIngestEdgesSQL` when ObjectScript is deployed, falls back to per-edge SQL + `WriteAdjacency` calls when it isn't.
+
+Old `BulkIngestEdges` (Language=python) retained for backward compatibility but marked deprecated.

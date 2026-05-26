@@ -3332,36 +3332,56 @@ class IRISGraphEngine:
     def bulk_ingest_edges(
         self,
         edges: List[Dict[str, Any]],
-        predicate: str = "R",
+        predicate: str = "KNOWS",
     ) -> int:
         if not edges:
             return 0
         import json as _json
-        import warnings as _warnings
-        from iris_vector_graph.schema import _call_classmethod_large
-        iris_obj = self._iris_obj()
         normalized = []
         for e in edges:
             if isinstance(e, (list, tuple)):
                 s, o = str(e[0]), str(e[1])
                 p = str(e[2]) if len(e) > 2 else predicate
             else:
-                s = str(e["s"])
-                p = str(e.get("p", predicate))
-                o = str(e["o"])
-            normalized.append({"s": s, "p": p, "o": o})
-        n = int(_call_classmethod_large(
-            iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdges",
-            _json.dumps(normalized), predicate,
-        ))
+                s = str(e.get("s", e.get("source", "")))
+                p = str(e.get("p", e.get("predicate", predicate)))
+                o = str(e.get("o", e.get("target", "")))
+            if s and o:
+                normalized.append({"s": s, "p": p, "o": o})
+
+        if self.capabilities.objectscript_deployed:
+            try:
+                from iris_vector_graph.schema import _call_classmethod_large
+                iris_obj = self._iris_obj()
+                n = int(_call_classmethod_large(
+                    iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdgesSQL",
+                    _json.dumps(normalized), predicate,
+                ))
+                self._nkg_dirty = True
+                return n
+            except Exception as e:
+                logger.warning("BulkIngestEdgesSQL failed (%s), falling back to SQL path", e)
+
+        cursor = self.conn.cursor()
+        n = 0
+        err_lower = lambda ex: ("unique" in str(ex).lower() or "-119" in str(ex))
+        for edge in normalized:
+            s, p, o = edge["s"], edge["p"], edge["o"]
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight) VALUES (?, ?, ?, 1.0)",
+                    [s, p, o],
+                )
+            except Exception as ex:
+                if not err_lower(ex):
+                    continue
+            try:
+                self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0")
+            except Exception:
+                pass
+            n += 1
+        self.conn.commit()
         self._nkg_dirty = True
-        _warnings.warn(
-            f"bulk_ingest_edges() wrote {n} edges directly to ^KG. "
-            "^NKG is now stale — call engine.rebuild_nkg() before using "
-            "Arno-accelerated BFS or variable-length Cypher path queries.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
         return n
 
     def load_networkx(

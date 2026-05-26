@@ -97,10 +97,8 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 }
 
 
-/// Bulk ingest edges directly to ^KG globals via embedded Python.
-/// edges_json: JSON array of [s, p, o] triples or {"s":..,"p":..,"o":..} objects.
-/// predicate: default predicate if using [s, o] pair format.
-/// Returns count of edges written.
+/// DEPRECATED: writes to process-private ^||KG via Python iris.gref — data lost on process exit.
+/// Use BulkIngestEdgesSQL instead. Kept for backward compatibility only.
 ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Internal, Language = python ]
 {
     import iris, json, warnings
@@ -122,6 +120,41 @@ ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As
         n += 1
     kg["$bie_dirty"] = 1
     return n
+/// Bulk ingest edges via SQL INSERT + persistent ^KG global writes.
+/// Replaces BulkIngestEdges which used Language=python iris.gref (process-private).
+/// edges_json: JSON array of {"s":s,"p":p,"o":o} objects.
+/// Returns count of edges written.
+ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNOWS") As %Integer
+{
+	Set data = {}.%FromJSON(edgesJson)
+	Set n = 0
+	Set iter = data.%GetIterator()
+	While iter.%GetNext(.idx, .edge) {
+		Set s = edge.s
+		Set p = $Select(edge.p'="":edge.p, 1:predicate)
+		Set o = edge.o
+		If (s = "") || (o = "") { Continue }
+		If s = o { Continue }
+		&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, weight)
+		     SELECT :s, :p, :o, 1.0
+		     WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges
+		                       WHERE s = :s AND p = :p AND o_id = :o))
+		Do ..WriteAdjacency(s, p, o, "1.0")
+		Set n = n + 1
+	}
+	Quit n
+}
+
+/// Bulk ingest edges from a JSON file path — streams large datasets without MAXSTRING limit.
+ClassMethod BulkIngestEdgesFile(filePath As %String, predicate As %String = "KNOWS") As %Integer
+{
+	Set stream = ##class(%Stream.FileCharacter).%New()
+	Do stream.LinkToFile(filePath)
+	Set json = ""
+	While 'stream.AtEnd {
+		Set json = json _ stream.Read(32000)
+	}
+	Quit ..BulkIngestEdgesSQL(json, predicate)
 }
 
 }
