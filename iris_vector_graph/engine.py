@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 _sentence_transformers = None
 _torch = None
+_BULK_CHUNK_SIZE = 1000
 
 
 def _get_sentence_transformers():
@@ -3043,11 +3044,15 @@ class IRISGraphEngine:
                     }
                     for n in nodes if n.get("id")
                 ]
-                count = int(_call_classmethod_large(
-                    iris_obj, "Graph.KG.EdgeScan", "BulkIngestNodesSQL",
-                    _json.dumps(normalized),
-                ))
-                return [n["id"] for n in normalized[:count]]
+                created = []
+                for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
+                    chunk = normalized[i:i + _BULK_CHUNK_SIZE]
+                    count = int(_call_classmethod_large(
+                        iris_obj, "Graph.KG.EdgeScan", "BulkIngestNodesSQL",
+                        _json.dumps(chunk),
+                    ))
+                    created.extend(c["id"] for c in chunk[:count])
+                return created
             except Exception as e:
                 logger.warning("BulkIngestNodesSQL failed (%s), falling back to SQL path", e)
 
@@ -3374,10 +3379,13 @@ class IRISGraphEngine:
             try:
                 from iris_vector_graph.schema import _call_classmethod_large
                 iris_obj = self._iris_obj()
-                n = int(_call_classmethod_large(
-                    iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdgesSQL",
-                    _json.dumps(normalized), predicate,
-                ))
+                n = 0
+                for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
+                    chunk = normalized[i:i + _BULK_CHUNK_SIZE]
+                    n += int(_call_classmethod_large(
+                        iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdgesSQL",
+                        _json.dumps(chunk), predicate,
+                    ))
                 self._nkg_dirty = True
                 return n
             except Exception as e:
