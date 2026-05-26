@@ -409,3 +409,18 @@ if routine_exists and not class_registered:
 **Fix**: New `BulkIngestEdgesSQL` ObjectScript classmethod (Option 3 from diagnosis) — batched SQL `INSERT INTO rdf_edges` + `WriteAdjacency` per edge in a single ObjectScript transaction. Always writes to persistent globals. `bulk_ingest_edges()` now calls `BulkIngestEdgesSQL` when ObjectScript is deployed, falls back to per-edge SQL + `WriteAdjacency` calls when it isn't.
 
 Old `BulkIngestEdges` (Language=python) retained for backward compatibility but marked deprecated.
+
+---
+
+## Bug Q: BulkIngestNodesSQL drops ~75% of rdf_props
+
+**Status**: Fixed in v1.97.10
+
+**Symptom**: `bulk_create_nodes` via `BulkIngestNodesSQL` with 50K nodes produces ~15K props vs ~64K from the `create_node` per-node path.
+
+**Root cause**: The `valStr` serialization `""""_$Replace(val,"""","""""")_""""` in the props loop could throw a non-SQL error for certain property values (encoding issues, invalid chars). Because there was no Try/Catch around the props inner loop, an error in any single prop value would propagate out of the While loop, skip all remaining props for all remaining nodes in the chunk, and reach TCOMMIT having written a fraction of expected props.
+
+**Fix**: 
+- Try/Catch around valStr computation + INSERT per prop — errors skip that prop, not the whole chunk
+- `$IsValidNum(val)` check to store numeric values without redundant quotes  
+- `$ZConvert(val,"O","UTF8")` to normalize encoding before quote-escaping
