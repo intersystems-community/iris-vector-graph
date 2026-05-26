@@ -19,6 +19,17 @@
 
 **Drafting is always OK. Filing/sending/deploying is NEVER OK without explicit permission.**
 
+## IRIS Test Container
+
+**Container name**: `gqs-ivg-test`  
+**Lifecycle**: ephemeral — started and stopped by pytest via `IRISContainer.community()` in `tests/conftest.py`  
+**Port**: dynamically assigned by iris-devtester (do NOT hardcode)  
+**To run e2e tests**: `pytest tests/e2e/` — conftest handles everything  
+**To keep container running after tests** (for debugging): `IVG_KEEP_CONTAINER=1 pytest tests/e2e/`  
+**To reuse an already-running container**: `idt container up --name gqs-ivg-test` then `pytest tests/e2e/`
+
+Do NOT use any other IRIS container for IVG tests. Do NOT hardcode ports in test files.
+
 ## Active Technologies
 - Python 3.11 + `intersystems-irispython`, `fastapi`, `strawberry-graphql`, `lark`. (Cypher/GraphQL Core)
 - InterSystems IRIS (RDF Schema: nodes, rdf_labels, rdf_props, rdf_edges, kg_NodeEmbeddings)
