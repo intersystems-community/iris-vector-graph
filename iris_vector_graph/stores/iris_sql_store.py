@@ -909,20 +909,29 @@ class IRISGraphStore:
     def _betweenness_gref(self, sample_size: int, direction: str, max_hops: int,
                           top_k: int, mem_budget_mb: int,
                           progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
-        """Brandes (2001) Betweenness via LazyKG-backed Native API (Bug S workaround).
+        """Brandes (2001) Betweenness via ObjectScript/arno fast path.
 
-        Pure Python implementation reading ^KG via the LazyKG adapter (v1.99.0
-        retrofit). Forward BFS captures predecessors π(v) and shortest-path
-        counts σ(v) per source; reverse stack-pass accumulates dependency δ(v);
-        per-source mem budget protects against high-fanout pathology.
+        Dispatch order:
+          1. arno Rust (kg_betweenness_global_v) — Rust rayon parallel, ~8ms ER(2000)
+          2. OS Brandes (%SYSTEM.WorkMgr 8-way parallel) — ~830ms ER(2000)
+          3. Python LazyKG Brandes — last resort, very slow
 
-        See spec 162 research.md R1 + ENGINEERING_DEBT.md Bug S.
-        v2.0.0 spec 170: try BetweennessGlobal ObjectScript path first (1 round-trip).
-        Capped at maxSources=200 by default in ObjectScript to bound O(V*(V+E)) runtime.
+        Performance cliff: if libarno_callout.so is not deployed, tier 2 is
+        ~100x slower than tier 1. Deploy arno for production use.
         """
         try:
             import iris as _iris
             iris_obj = _iris.createIRIS(self.conn)
+            # Check if arno is loaded — warn if not, OS fallback is much slower
+            if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
+                import warnings
+                warnings.warn(
+                    "betweenness_centrality: arno callout not loaded — "
+                    "falling back to parallel ObjectScript (~100x slower). "
+                    "Deploy libarno_callout.so for production performance.",
+                    RuntimeWarning,
+                    stacklevel=4,
+                )
             # Pass sampleSize=0 (let OS use maxSources cap), topK, maxSources=200
             raw = str(iris_obj.classMethodValue(
                 "Graph.KG.NKGAccel", "BetweennessGlobal",

@@ -1302,7 +1302,7 @@ ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFir
                     }
                     If ^||bwDist(oIdx)=($Get(^||bwDist(vIdx),0)+1) {
                         Set ^||bwSigma(oIdx)=+$Number($Get(^||bwSigma(oIdx),0)+$Get(^||bwSigma(vIdx),1),15)
-                        Set ^||bwPred(oIdx,vIdx)=1
+                        Set ^||bwPred(oIdx,vIdx)=""
                     }
                     Set oIdx=$Order(^NKG(-1,vIdx,negP,oIdx))
                 }
@@ -1385,6 +1385,7 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
     Set chunkSize = srcCount \ numJobs
     Set remainder = srcCount # numJobs
     Set cursor = 0
+
     For w = 1:1:numJobs {
         Set wSize = chunkSize + $Select(w <= remainder: 1, 1: 0)
         Set srcFirst = cursor
