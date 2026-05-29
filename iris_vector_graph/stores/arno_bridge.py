@@ -782,3 +782,59 @@ LANGUAGE OBJECTSCRIPT
     full = "".join(chunks)
     idx_to_node = full.rstrip("\x1f").split("\x1f") if full else []
     return idx_to_node, edge_count
+
+
+def build_graph_json_serverside(conn, include_sinks: bool = True) -> dict:
+    """Spec 167 FR-167-003: Build ^KG graph as JSON in one server-side ObjectScript call.
+
+    Calls ivg_graph_json_build() (SQL OBJECTSCRIPT), fetches JSON chunks
+    via ivg_graph_json_chunk(), returns {"nodes": [...], "edges": [{"s":..,"d":..},..]}.
+    Falls back to build_kg_adjacency_json() on any exception (FR-167-007).
+
+    This collapses O(V+E) Python→IRIS nextSubscript round-trips to 2-5 SQL calls.
+    """
+    import json as _json
+    from iris_vector_graph.schema import GraphSchema
+
+    key = _conn_key(conn)
+    cache = _probe_cache.get(key, {})
+    lib_path = cache.get("lib_path", DEFAULT_LIB_PATH)
+
+    cur = conn.cursor()
+    if not cache.get("graph_json_ddl_installed"):
+        try:
+            ddl_list = GraphSchema.get_graph_json_sql_list("Graph_KG")
+            for ddl in ddl_list:
+                cur.execute(ddl.strip())
+            conn.commit()
+            if key not in _probe_cache:
+                _probe_cache[key] = {}
+            _probe_cache[key]["graph_json_ddl_installed"] = True
+        except Exception as e:
+            raise ArnoError(f"ivg_graph_json DDL install failed: {e}") from e
+
+    try:
+        sinks_arg = 1 if include_sinks else 0
+        cur.execute(f"SELECT Graph_KG.ivg_graph_json_build({sinks_arg})")
+        row = cur.fetchone()
+        if not row or not row[0]:
+            raise ArnoError("ivg_graph_json_build returned NULL")
+        status = str(row[0])
+        if not status.startswith("OK:"):
+            raise ArnoError(f"ivg_graph_json_build: {status}")
+        parts = status[3:].split(":")
+        n, e, chunk_count = int(parts[0]), int(parts[1]), int(parts[2])
+
+        chunks: list = []
+        for i in range(1, chunk_count + 1):
+            cur.execute(f"SELECT Graph_KG.ivg_graph_json_chunk({i})")
+            chunk_row = cur.fetchone()
+            if chunk_row and chunk_row[0]:
+                chunks.append(str(chunk_row[0]))
+        full_json = "".join(chunks)
+        return _json.loads(full_json)
+
+    except ArnoError:
+        raise
+    except Exception as e:
+        raise ArnoError(f"build_graph_json_serverside failed: {e}") from e

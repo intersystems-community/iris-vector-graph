@@ -811,7 +811,7 @@ class IRISGraphStore:
         )
 
     def execute_degree_centrality(self, direction: str, predicate: str,
-                                   top_k: int) -> IVGResult:
+                                   top_k: int, lkg=None) -> IVGResult:
         import json as _json
         try:
             raw = str(self._call_classmethod(
@@ -831,7 +831,7 @@ class IRISGraphStore:
                 )
                 try:
                     return self._degree_centrality_gref_fallback(
-                        direction, predicate, top_k
+                        direction, predicate, top_k, lkg=lkg
                     )
                 except Exception as fallback_err:
                     logger.warning(
@@ -845,7 +845,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "score", "degree"], rows=[], error=err_str[:200])
 
     def _degree_centrality_gref_fallback(self, direction: str, predicate: str,
-                                          top_k: int) -> IVGResult:
+                                          top_k: int, lkg=None) -> IVGResult:
         """Bug S workaround via LazyKG adapter (v1.99.0 retrofit).
 
         Reads ^KG directly via the IRIS Native API rather than
@@ -855,7 +855,7 @@ class IRISGraphStore:
         See ENGINEERING_DEBT.md Bug S for diagnosis.
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
         node_count = len(all_nodes)
@@ -894,11 +894,11 @@ class IRISGraphStore:
 
     def execute_betweenness(self, sample_size: int, direction: str, max_hops: int,
                              top_k: int, mem_budget_mb: int,
-                             progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                             progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         try:
             return self._betweenness_gref(
                 sample_size, direction, max_hops, top_k, mem_budget_mb,
-                progress_callback,
+                progress_callback, lkg=lkg,
             )
         except Exception as e:
             logger.warning("Betweenness failed: %s", e)
@@ -908,7 +908,7 @@ class IRISGraphStore:
 
     def _betweenness_gref(self, sample_size: int, direction: str, max_hops: int,
                           top_k: int, mem_budget_mb: int,
-                          progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                          progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Brandes (2001) Betweenness via LazyKG-backed Native API (Bug S workaround).
 
         Pure Python implementation reading ^KG via the LazyKG adapter (v1.99.0
@@ -922,7 +922,7 @@ class IRISGraphStore:
         import random
         from iris_vector_graph.stores.lazy_kg import LazyKG
         iris_inst = _iris.createIRIS(self.conn)
-        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
         if not all_nodes:
@@ -1028,15 +1028,15 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "score"], rows=rows)
 
     def execute_closeness(self, formula: str, direction: str, max_hops: int, top_k: int,
-                           progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                           progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         try:
-            return self._closeness_gref(formula, direction, max_hops, top_k, progress_callback)
+            return self._closeness_gref(formula, direction, max_hops, top_k, progress_callback, lkg=lkg)
         except Exception as e:
             logger.warning("Closeness failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def _closeness_gref(self, formula: str, direction: str, max_hops: int, top_k: int,
-                         progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                         progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Closeness Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Per-source BFS sums distances. Two formulas:
@@ -1047,7 +1047,7 @@ class IRISGraphStore:
         v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
         if not all_nodes:
@@ -1110,15 +1110,15 @@ class IRISGraphStore:
         )
 
     def execute_eigenvector(self, max_iter: int, tol: float, top_k: int,
-                             progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                             progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         try:
-            return self._eigenvector_gref(max_iter, tol, top_k, progress_callback)
+            return self._eigenvector_gref(max_iter, tol, top_k, progress_callback, lkg=lkg)
         except Exception as e:
             logger.warning("Eigenvector failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def _eigenvector_gref(self, max_iter: int, tol: float, top_k: int,
-                           progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                           progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Eigenvector Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Power iteration over RAW adjacency matrix A (NOT the transition matrix
@@ -1129,7 +1129,7 @@ class IRISGraphStore:
         v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        lkg = LazyKG(self.conn, include_sinks=True)
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
 
         all_nodes = list(lkg.iter_nodes())
         n = len(all_nodes)
@@ -1178,7 +1178,7 @@ class IRISGraphStore:
 
     def execute_leiden(self, max_levels: int, gamma: float, tol: float, top_k: int,
                        mem_budget_mb: int, random_seed: Optional[int] = None,
-                       progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                       progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._leiden_arno(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed)
@@ -1187,7 +1187,7 @@ class IRISGraphStore:
                 if not isinstance(e, ArnoError):
                     logger.warning("Leiden arno path raised non-ArnoError: %s", e)
         return self._leiden_lazykg(max_levels, gamma, tol, top_k, mem_budget_mb,
-                                    random_seed, progress_callback)
+                                    random_seed, progress_callback, lkg=lkg)
 
     def _leiden_arno(self, max_levels: int, gamma: float, tol: float, top_k: int,
                      mem_budget_mb: int, random_seed: Optional[int]) -> IVGResult:
@@ -1207,7 +1207,7 @@ class IRISGraphStore:
 
     def _leiden_lazykg(self, max_levels: int, gamma: float, tol: float, top_k: int,
                         mem_budget_mb: int, random_seed: Optional[int],
-                        progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                        progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Spec 163 FR-025: LazyKG-backed Leiden community detection.
 
         Reads ^KG via LazyKG (Bug S immune), builds a symmetrized in-memory
@@ -1228,23 +1228,35 @@ class IRISGraphStore:
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        lkg = LazyKG(self.conn, include_sinks=True)
-        all_nodes: List[str] = sorted(lkg.iter_nodes())
+        try:
+            from iris_vector_graph.stores.arno_bridge import build_graph_json_serverside, ArnoError
+            graph_data = build_graph_json_serverside(self.conn, include_sinks=True)
+            all_nodes: List[str] = sorted(graph_data["nodes"])
+            node_index: Dict[str, int] = {n: i for i, n in enumerate(all_nodes)}
+            edge_set: set = set()
+            for edge in graph_data["edges"]:
+                s, d = edge["s"], edge["d"]
+                if s != d and s in node_index and d in node_index:
+                    i, j = node_index[s], node_index[d]
+                    edge_set.add((i, j) if i < j else (j, i))
+        except Exception:
+            lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
+            all_nodes = sorted(lkg.iter_nodes())
+            if not all_nodes:
+                return IVGResult(columns=["id", "community", "size"], rows=[])
+            node_index = {n: i for i, n in enumerate(all_nodes)}
+            edge_set = set()
+            for v in all_nodes:
+                v_idx = node_index[v]
+                for w in sorted(n for n in lkg.out_neighbors(v) if n != v and n in node_index):
+                    pair = (v_idx, node_index[w]) if v_idx < node_index[w] else (node_index[w], v_idx)
+                    edge_set.add(pair)
+                for u in sorted(n for n in lkg.in_neighbors(v) if n != v and n in node_index):
+                    pair = (v_idx, node_index[u]) if v_idx < node_index[u] else (node_index[u], v_idx)
+                    edge_set.add(pair)
+
         if not all_nodes:
             return IVGResult(columns=["id", "community", "size"], rows=[])
-
-        node_index: Dict[str, int] = {n: i for i, n in enumerate(all_nodes)}
-        edge_set: set = set()
-        for v in all_nodes:
-            v_idx = node_index[v]
-            out_neighbors = sorted(n for n in lkg.out_neighbors(v) if n != v and n in node_index)
-            for w in out_neighbors:
-                pair = (v_idx, node_index[w]) if v_idx < node_index[w] else (node_index[w], v_idx)
-                edge_set.add(pair)
-            in_neighbors = sorted(n for n in lkg.in_neighbors(v) if n != v and n in node_index)
-            for u in in_neighbors:
-                pair = (v_idx, node_index[u]) if v_idx < node_index[u] else (node_index[u], v_idx)
-                edge_set.add(pair)
 
         if progress_callback is not None:
             progress_callback(1, 2)
@@ -1314,7 +1326,7 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "community", "size"], rows=rows)
 
     def execute_triangle_count(self, top_k: int,
-                                progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                                progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._triangle_count_arno(top_k)
@@ -1322,7 +1334,7 @@ class IRISGraphStore:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
                 if not isinstance(e, ArnoError):
                     logger.warning("TriangleCount arno path raised non-ArnoError: %s", e)
-        return self._triangle_count_lazykg(top_k, progress_callback)
+        return self._triangle_count_lazykg(top_k, progress_callback, lkg=lkg)
 
     def _triangle_count_arno(self, top_k: int) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
@@ -1337,7 +1349,7 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "triangles", "lcc"], rows=rows)
 
     def _triangle_count_lazykg(self, top_k: int,
-                                progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                                progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Spec 163 FR-025: triangle count + LCC over symmetrized neighbors via LazyKG.
 
         For each node v, build N(v) = out_neighbors(v) ∪ in_neighbors(v) (skip
@@ -1350,20 +1362,32 @@ class IRISGraphStore:
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        lkg = LazyKG(self.conn, include_sinks=True)
-        all_nodes = list(lkg.iter_nodes())
-        n_total = len(all_nodes)
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
+        try:
+            from iris_vector_graph.stores.arno_bridge import build_graph_json_serverside
+            graph_data = build_graph_json_serverside(self.conn, include_sinks=True)
+            all_nodes = sorted(graph_data["nodes"])
+            adj: Dict[str, set] = {n: set() for n in all_nodes}
+            for edge in graph_data["edges"]:
+                s, d = edge["s"], edge["d"]
+                if s != d:
+                    adj.setdefault(s, set()).add(d)
+                    adj.setdefault(d, set()).add(s)
+            neighbors = {v: adj.get(v, set()) for v in all_nodes}
+        except Exception:
+            all_nodes = list(lkg.iter_nodes())
+            neighbors = {}
+            for v in all_nodes:
+                sym = set()
+                for w in lkg.out_neighbors(v):
+                    if w != v:
+                        sym.add(w)
+                for u in lkg.in_neighbors(v):
+                    if u != v:
+                        sym.add(u)
+                neighbors[v] = sym
 
-        neighbors: Dict[str, set] = {}
-        for v in all_nodes:
-            sym = set()
-            for w in lkg.out_neighbors(v):
-                if w != v:
-                    sym.add(w)
-            for u in lkg.in_neighbors(v):
-                if u != v:
-                    sym.add(u)
-            neighbors[v] = sym
+        n_total = len(all_nodes)
 
         scored: List[tuple] = []
         for idx, v in enumerate(all_nodes):
@@ -1395,7 +1419,7 @@ class IRISGraphStore:
         )
 
     def execute_scc(self, top_k: int,
-                    progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                    progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._scc_arno(top_k)
@@ -1403,7 +1427,7 @@ class IRISGraphStore:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
                 if not isinstance(e, ArnoError):
                     logger.warning("SCC arno path raised non-ArnoError: %s", e)
-        return self._scc_lazykg(top_k, progress_callback)
+        return self._scc_lazykg(top_k, progress_callback, lkg=lkg)
 
     def _scc_arno(self, top_k: int) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
@@ -1418,7 +1442,7 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "component", "size"], rows=rows)
 
     def _scc_lazykg(self, top_k: int,
-                     progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                     progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Spec 163 FR-025: Strongly Connected Components via iterative Tarjan.
 
         Tarjan 1972: single DFS pass with low-link tracking. Iterative version
@@ -1435,8 +1459,23 @@ class IRISGraphStore:
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        lkg = LazyKG(self.conn, include_sinks=True)
-        all_nodes = list(lkg.iter_nodes())
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
+        adj_out = None
+        try:
+            from iris_vector_graph.stores.arno_bridge import build_graph_json_serverside
+            graph_data = build_graph_json_serverside(self.conn, include_sinks=True)
+            adj_out = {}
+            for edge in graph_data["edges"]:
+                adj_out.setdefault(edge["s"], []).append(edge["d"])
+            all_nodes = list(graph_data["nodes"])
+        except Exception:
+            all_nodes = list(lkg.iter_nodes())
+
+        def _out_neighbors(v):
+            if adj_out is not None:
+                return adj_out.get(v, [])
+            return list(lkg.out_neighbors(v))
+
         n_total = len(all_nodes)
         if n_total == 0:
             return IVGResult(columns=["id", "component", "size"], rows=[])
@@ -1451,7 +1490,7 @@ class IRISGraphStore:
         for start in all_nodes:
             if start in index:
                 continue
-            work_stack: List[tuple] = [(start, iter(lkg.out_neighbors(start)), False)]
+            work_stack: List[tuple] = [(start, iter(_out_neighbors(start)), False)]
             index[start] = counter[0]
             lowlink[start] = counter[0]
             counter[0] += 1
@@ -1468,7 +1507,7 @@ class IRISGraphStore:
                         counter[0] += 1
                         scc_stack.append(w)
                         on_stack.add(w)
-                        work_stack.append((w, iter(lkg.out_neighbors(w)), False))
+                        work_stack.append((w, iter(_out_neighbors(w)), False))
                     elif w in on_stack:
                         lowlink[v] = min(lowlink[v], index[w])
                 except StopIteration:
@@ -1502,7 +1541,7 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "component", "size"], rows=rows)
 
     def execute_k_core(self, top_k: int,
-                       progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+                       progress_callback: Optional[Callable[[int, int], None]] = None, lkg=None) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._k_core_arno(top_k)
@@ -1510,7 +1549,7 @@ class IRISGraphStore:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
                 if not isinstance(e, ArnoError):
                     logger.warning("K-Core arno path raised non-ArnoError: %s", e)
-        return self._k_core_lazykg(top_k, progress_callback)
+        return self._k_core_lazykg(top_k, progress_callback, lkg=lkg)
 
     def _k_core_arno(self, top_k: int) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
@@ -1524,7 +1563,7 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "coreness"], rows=rows)
 
     def _k_core_lazykg(self, top_k: int,
-                        progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                        progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Spec 163 FR-025: K-Core decomposition via Batagelj-Zaversnik (2003).
 
         Linear-time bucket-sort algorithm:
@@ -1541,22 +1580,31 @@ class IRISGraphStore:
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
 
-        lkg = LazyKG(self.conn, include_sinks=True)
-        all_nodes = list(lkg.iter_nodes())
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
+        try:
+            from iris_vector_graph.stores.arno_bridge import build_graph_json_serverside
+            graph_data = build_graph_json_serverside(self.conn, include_sinks=True)
+            all_nodes = list(graph_data["nodes"])
+            adj: Dict[str, set] = {n: set() for n in all_nodes}
+            for edge in graph_data["edges"]:
+                s, d = edge["s"], edge["d"]
+                if s != d and s in adj and d in adj:
+                    adj[s].add(d)
+                    adj[d].add(s)
+        except Exception:
+            all_nodes = list(lkg.iter_nodes())
+            adj = {node: set() for node in all_nodes}
+            for v in all_nodes:
+                for w in lkg.out_neighbors(v):
+                    if w != v and w in adj:
+                        adj[v].add(w); adj[w].add(v)
+                for u in lkg.in_neighbors(v):
+                    if u != v and u in adj:
+                        adj[v].add(u); adj[u].add(v)
+
         n_total = len(all_nodes)
         if n_total == 0:
             return IVGResult(columns=["id", "coreness"], rows=[])
-
-        adj: Dict[str, set] = {node: set() for node in all_nodes}
-        for v in all_nodes:
-            for w in lkg.out_neighbors(v):
-                if w != v and w in adj:
-                    adj[v].add(w)
-                    adj[w].add(v)
-            for u in lkg.in_neighbors(v):
-                if u != v and u in adj:
-                    adj[v].add(u)
-                    adj[u].add(v)
 
         deg: Dict[str, int] = {v: len(neighbors) for v, neighbors in adj.items()}
         max_deg = max(deg.values()) if deg else 0

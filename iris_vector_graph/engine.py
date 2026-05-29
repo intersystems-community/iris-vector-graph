@@ -133,6 +133,7 @@ class IRISGraphEngine:
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
+        self._shared_lkg = None
         self._index_registry: Dict[str, str] = self._build_index_registry()
         if vector_dtype == "DOUBLE":
             self.vector_dtype = self._detect_stored_vector_dtype()
@@ -144,6 +145,16 @@ class IRISGraphEngine:
         self._store_capabilities = self._store.capabilities()
         logger.debug("IRISGraphEngine initialized (dim=%s dtype=%s)",
                      embedding_dimension or "auto", self.vector_dtype)
+
+    def _get_shared_lkg(self, include_sinks: bool = True):
+        """Return the shared LazyKG instance, creating it on first call (spec 166 FR-166-002)."""
+        if self._shared_lkg is None:
+            from iris_vector_graph.stores.lazy_kg import LazyKG
+            self._shared_lkg = LazyKG(self.conn, include_sinks=include_sinks)
+        return self._shared_lkg
+
+    def _invalidate_shared_lkg(self) -> None:
+        self._shared_lkg = None
 
     @classmethod
     def from_connect(
@@ -3289,6 +3300,7 @@ class IRISGraphEngine:
             _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
             self.capabilities.kg_built = True
             self._nkg_dirty = True
+            self._invalidate_shared_lkg()
             logger.info("^KG adjacency index rebuilt successfully")
             return True
         except Exception as e:
@@ -3411,6 +3423,7 @@ class IRISGraphEngine:
             n += 1
         self.conn.commit()
         self._nkg_dirty = True
+        self._invalidate_shared_lkg()
         return n
 
     def load_networkx(
@@ -7120,6 +7133,7 @@ class IRISGraphEngine:
             validated.direction,
             validated.predicate or "",
             validated.top_k,
+            lkg=self._get_shared_lkg(),
         )
         if result.error:
             return []
@@ -7173,6 +7187,7 @@ class IRISGraphEngine:
             validated.top_k,
             validated.mem_budget_mb,
             progress_callback,
+            lkg=self._get_shared_lkg(),
         )
         if result.error:
             return []
@@ -7227,6 +7242,7 @@ class IRISGraphEngine:
             validated.max_hops,
             validated.top_k,
             progress_callback,
+            lkg=self._get_shared_lkg(),
         )
         if result.error:
             return []
@@ -7271,6 +7287,7 @@ class IRISGraphEngine:
             validated.tol,
             validated.top_k,
             progress_callback,
+            lkg=self._get_shared_lkg(),
         )
         if result.error:
             return []
@@ -7343,6 +7360,7 @@ class IRISGraphEngine:
             validated.max_levels, validated.gamma, validated.tol,
             validated.top_k, validated.mem_budget_mb,
             validated.random_seed, progress_callback,
+            lkg=self._get_shared_lkg(),
         )
         if result.error:
             return []
@@ -7371,7 +7389,7 @@ class IRISGraphEngine:
                 f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
             )
 
-        result = self._store.execute_triangle_count(validated.top_k, progress_callback)
+        result = self._store.execute_triangle_count(validated.top_k, progress_callback, lkg=self._get_shared_lkg())
         if result.error:
             return []
         return [{"id": row[0], "triangles": row[1], "lcc": row[2]} for row in result.rows]
@@ -7390,7 +7408,7 @@ class IRISGraphEngine:
                 f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
             )
 
-        result = self._store.execute_scc(validated.top_k, progress_callback)
+        result = self._store.execute_scc(validated.top_k, progress_callback, lkg=self._get_shared_lkg())
         if result.error:
             return []
         return [{"id": row[0], "component": row[1], "size": row[2]} for row in result.rows]
@@ -7409,7 +7427,7 @@ class IRISGraphEngine:
                 f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
             )
 
-        result = self._store.execute_k_core(validated.top_k, progress_callback)
+        result = self._store.execute_k_core(validated.top_k, progress_callback, lkg=self._get_shared_lkg())
         if result.error:
             return []
         return [{"id": row[0], "coreness": row[1]} for row in result.rows]

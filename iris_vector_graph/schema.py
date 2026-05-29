@@ -801,9 +801,77 @@ LANGUAGE OBJECTSCRIPT
 """,
         ]
 
-    # ------------------------------------------------------------------
-    # ObjectScript (.cls) deployment helpers
-    # ------------------------------------------------------------------
+    @staticmethod
+    def get_graph_json_sql_list(table_schema: str = "Graph_KG") -> list:
+        """SQL OBJECTSCRIPT functions for server-side ^KG→JSON export (spec 167 FR-167-001/002)."""
+        TS = table_schema
+        build_ddl = "\n".join([
+            "CREATE OR REPLACE FUNCTION " + TS + ".ivg_graph_json_build(inclsinks INT DEFAULT 1)",
+            "RETURNS VARCHAR(64)",
+            "LANGUAGE OBJECTSCRIPT",
+            "{",
+            "    kill ^||gji, ^||graphjsonchunks",
+            "    set n = 0, e = 0",
+            '    set nodeList = "{""nodes"":["',
+            '    set src = $Order(^KG("out",0,""))',
+            '    while src \'= "" {',
+            "        set ^||gji(src) = n",
+            '        if n > 0 set nodeList = nodeList_","',
+            '        set nodeList = nodeList_""""_src_""""',
+            "        set n = n + 1",
+            '        set src = $Order(^KG("out",0,src))',
+            "    }",
+            "    if inclsinks {",
+            '        set dst = $Order(^KG("in",0,""))',
+            '        while dst \'= "" {',
+            "            if '$Data(^||gji(dst)) {",
+            '                if n > 0 set nodeList = nodeList_","',
+            '                set nodeList = nodeList_""""_dst_""""',
+            "                set ^||gji(dst) = n",
+            "                set n = n + 1",
+            "            }",
+            '            set dst = $Order(^KG("in",0,dst))',
+            "        }",
+            "    }",
+            '    set edgeList = "],""edges"":["',
+            '    set src = $Order(^KG("out",0,""))',
+            '    while src \'= "" {',
+            '        set pred = $Order(^KG("out",0,src,""))',
+            '        while pred \'= "" {',
+            '            set dst = $Order(^KG("out",0,src,pred,""))',
+            '            while dst \'= "" {',
+            '                if e > 0 set edgeList = edgeList_","',
+            '                set edgeList = edgeList_"{""s"":""""_src_"""",""d"":""""_dst_""""}"',
+            "                set e = e + 1",
+            '                set dst = $Order(^KG("out",0,src,pred,dst))',
+            "            }",
+            '            set pred = $Order(^KG("out",0,src,pred))',
+            "        }",
+            '        set src = $Order(^KG("out",0,src))',
+            "    }",
+            '    set full = nodeList_edgeList_"]}"',
+            "    set chunkNum = 0, pos = 1, csize = 12000",
+            "    while pos <= $Length(full) {",
+            "        set chunkNum = chunkNum + 1",
+            "        set ^||graphjsonchunks(chunkNum) = $Extract(full,pos,pos+csize-1)",
+            "        set pos = pos + csize",
+            "    }",
+            "    set ^||graphjsonchunks = chunkNum",
+            '    quit "OK:"_n_":"_e_":"_chunkNum',
+            "}",
+        ])
+        chunk_ddl = "\n".join([
+            "CREATE OR REPLACE FUNCTION " + TS + ".ivg_graph_json_chunk(idx INT)",
+            "RETURNS VARCHAR(32000)",
+            "LANGUAGE OBJECTSCRIPT",
+            "{",
+            "    quit $Get(^||graphjsonchunks(idx))",
+            "}",
+        ])
+        return [build_ddl, chunk_ddl]
+
+
+
 
     @staticmethod
     def check_objectscript_classes(cursor, conn=None) -> "IRISCapabilities":

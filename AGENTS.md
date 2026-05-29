@@ -163,3 +163,13 @@ Candidate rename: `IVG.Core.*` — established pattern, stays in IVG namespace, 
 Requires updating all class names, SQL schema references, and `^KG` global docs.
 Deserves its own spec — no user-visible impact, internal contributors only.
 <!-- MANUAL ADDITIONS END -->
+
+## Active Technologies — spec 166/167
+
+- Python 3.11+ shared LazyKG instance on IRISGraphEngine (spec 166)
+- SQL OBJECTSCRIPT ivg_graph_json_build/chunk for ^KG→JSON server-side (spec 167)
+
+## Recent Changes
+
+- 166-shared-lazy-kg (v1.99.3): IRISGraphEngine._shared_lkg + _get_shared_lkg() + _invalidate_shared_lkg(). All 8 LazyKG-backed algorithm methods share one LazyKG instance per engine lifecycle, invalidated on rebuild_kg()/bulk_ingest_edges(). Eliminates O(V) redundant iter_nodes() round-trips when calling multiple algorithms in sequence.
+- 167-graph-json-os (v1.99.3): ivg_graph_json_build SQL OBJECTSCRIPT function collapses O(V+E) Python→IRIS nextSubscript calls in LazyKG community fallbacks (_leiden_lazykg, _triangle_count_lazykg, _scc_lazykg, _k_core_lazykg) to 2-5 SQL calls. Each method tries build_graph_json_serverside() first, falls back to LazyKG per-node walk on failure.
