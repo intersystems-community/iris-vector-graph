@@ -128,6 +128,39 @@ class MockGraphStore:
     def server_info(self):
         return self._record("server_info")
 
+    def execute_degree_centrality(self, direction, predicate, top_k):
+        return self._record("execute_degree_centrality",
+                            direction=direction, predicate=predicate, top_k=top_k)
+
+    def execute_betweenness(self, sample_size, direction, max_hops, top_k,
+                             mem_budget_mb, progress_callback=None):
+        return self._record("execute_betweenness", sample_size=sample_size,
+                            direction=direction, max_hops=max_hops, top_k=top_k,
+                            mem_budget_mb=mem_budget_mb)
+
+    def execute_closeness(self, formula, direction, max_hops, top_k, progress_callback=None):
+        return self._record("execute_closeness", formula=formula,
+                            direction=direction, max_hops=max_hops, top_k=top_k)
+
+    def execute_eigenvector(self, max_iter, tol, top_k, progress_callback=None):
+        return self._record("execute_eigenvector", max_iter=max_iter,
+                            tol=tol, top_k=top_k)
+
+    def execute_leiden(self, max_levels, gamma, tol, top_k, mem_budget_mb,
+                       random_seed=None, progress_callback=None):
+        return self._record("execute_leiden", max_levels=max_levels, gamma=gamma,
+                            tol=tol, top_k=top_k, mem_budget_mb=mem_budget_mb,
+                            random_seed=random_seed)
+
+    def execute_triangle_count(self, top_k, progress_callback=None):
+        return self._record("execute_triangle_count", top_k=top_k)
+
+    def execute_scc(self, top_k, progress_callback=None):
+        return self._record("execute_scc", top_k=top_k)
+
+    def execute_k_core(self, top_k, progress_callback=None):
+        return self._record("execute_k_core", top_k=top_k)
+
     def close(self):
         pass
 

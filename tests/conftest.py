@@ -9,7 +9,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-_GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "gqs-ivg-test")
+_GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
 
 
 def _deploy_objectscript(container_name: str) -> None:
@@ -74,7 +74,30 @@ def iris_test_container():
 
 @pytest.fixture(scope="session")
 def iris_connection(iris_test_container):
-    conn = iris_test_container.get_connection()
+    try:
+        conn = iris_test_container.get_connection()
+    except Exception as e:
+        if "COMMUNICATION LINK ERROR" in str(e) or "code: 54" in str(e):
+            logger.warning(
+                "Localhost connection failed (likely OrbStack port-forwarding); "
+                "falling back to container IP. Original: %s", str(e)[:120]
+            )
+            import subprocess as _sp
+            cip = _sp.run(
+                ["docker", "inspect", iris_test_container.get_container_name(),
+                 "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
+                capture_output=True, text=True,
+            ).stdout.strip()
+            if not cip:
+                raise
+            import iris.dbapi as _dbapi
+            conn = _dbapi.connect(
+                hostname=cip, port=1972, namespace="USER",
+                username="_SYSTEM", password="SYS",
+            )
+            logger.info("Connected via container IP %s", cip)
+        else:
+            raise
 
     from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import GraphSchema

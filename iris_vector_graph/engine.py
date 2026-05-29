@@ -9,7 +9,7 @@ that can be used across any domain.
 
 import json
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Callable, List, Tuple, Optional, Dict, Any
 import logging
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -7082,3 +7082,360 @@ class IRISGraphEngine:
         finally:
             cursor.close()
         return existing
+
+    def degree_centrality(
+        self,
+        direction: str = "out",
+        predicate: Optional[str] = None,
+        top_k: int = 10000,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import DegreeCentralityInput
+        validated = DegreeCentralityInput(
+            direction=direction,
+            predicate=predicate,
+            top_k=top_k,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("degree_centrality", False):
+            raise NotImplementedError(
+                f"Centrality.degree_centrality not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"degree_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_degree_centrality(
+            validated.direction,
+            validated.predicate or "",
+            validated.top_k,
+        )
+        if result.error:
+            return []
+        return [
+            {"id": row[0], "score": row[1], "degree": row[2]}
+            for row in result.rows
+        ]
+
+    def betweenness_centrality(
+        self,
+        sample_size: int = 0,
+        direction: str = "out",
+        max_hops: int = 0,
+        top_k: int = 10000,
+        mem_budget_mb: int = 256,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import BetweennessInput
+        validated = BetweennessInput(
+            sample_size=sample_size,
+            direction=direction,
+            max_hops=max_hops,
+            top_k=top_k,
+            mem_budget_mb=mem_budget_mb,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("betweenness", False):
+            raise NotImplementedError(
+                f"Centrality.betweenness not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"betweenness_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_betweenness(
+            validated.sample_size,
+            validated.direction,
+            validated.max_hops,
+            validated.top_k,
+            validated.mem_budget_mb,
+            progress_callback,
+        )
+        if result.error:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for row in result.rows:
+            if len(row) == 2 and row[0] == "_meta" and isinstance(row[1], dict):
+                out.append(row[1])
+            else:
+                out.append({"id": row[0], "score": row[1]})
+        return out
+
+    def closeness_centrality(
+        self,
+        formula: str = "harmonic",
+        direction: str = "out",
+        max_hops: int = 0,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import ClosenessInput
+        validated = ClosenessInput(
+            formula=formula,
+            direction=direction,
+            max_hops=max_hops,
+            top_k=top_k,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("closeness", False):
+            raise NotImplementedError(
+                f"Centrality.closeness not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"closeness_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_closeness(
+            validated.formula,
+            validated.direction,
+            validated.max_hops,
+            validated.top_k,
+            progress_callback,
+        )
+        if result.error:
+            return []
+        return [{"id": row[0], "score": row[1]} for row in result.rows]
+
+    def eigenvector_centrality(
+        self,
+        max_iter: int = 30,
+        tol: float = 1e-6,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import EigenvectorInput
+        validated = EigenvectorInput(
+            max_iter=max_iter,
+            tol=tol,
+            top_k=top_k,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("eigenvector", False):
+            raise NotImplementedError(
+                f"Centrality.eigenvector not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"eigenvector_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_eigenvector(
+            validated.max_iter,
+            validated.tol,
+            validated.top_k,
+            progress_callback,
+        )
+        if result.error:
+            return []
+        return [{"id": row[0], "score": row[1]} for row in result.rows]
+
+    def get_centrality_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
+        try:
+            import iris as _iris
+            iris_inst = _iris.createIRIS(self.conn)
+        except Exception as e:
+            logger.debug("get_centrality_warnings: createIRIS failed: %s", e)
+            return []
+
+        warnings_list: List[Dict[str, Any]] = []
+        try:
+            ts = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", "")
+            while ts is not None and ts != "":
+                src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, "")
+                while src is not None and src != "":
+                    reason = iris_inst.get("^IVG.warnings", "centrality", ts, src)
+                    warnings_list.append({
+                        "timestamp": str(ts),
+                        "source": str(src),
+                        "reason": str(reason) if reason is not None else "",
+                    })
+                    if len(warnings_list) >= max_entries:
+                        return warnings_list
+                    src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, src)
+                ts = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts)
+        except Exception as e:
+            logger.debug("get_centrality_warnings: ^IVG.warnings traversal failed: %s", e)
+        return warnings_list
+
+    def leiden_communities(
+        self,
+        max_levels: int = 10,
+        gamma: float = 1.0,
+        tol: float = 1e-4,
+        top_k: int = 10000,
+        mem_budget_mb: int = 256,
+        random_seed: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import LeidenInput
+        validated = LeidenInput(
+            max_levels=max_levels, gamma=gamma, tol=tol, top_k=top_k,
+            mem_budget_mb=mem_budget_mb, random_seed=random_seed,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("leiden", False):
+            raise NotImplementedError(
+                f"Communities.leiden not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"leiden_communities(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning, stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_leiden(
+            validated.max_levels, validated.gamma, validated.tol,
+            validated.top_k, validated.mem_budget_mb,
+            validated.random_seed, progress_callback,
+        )
+        if result.error:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for row in result.rows:
+            if len(row) >= 1 and row[0] == "_meta":
+                import json as _json
+                meta = _json.loads(row[1]) if isinstance(row[1], str) else row[1]
+                out.append(meta if isinstance(meta, dict) else {"_meta": row[1]})
+            else:
+                out.append({"id": row[0], "community": row[1], "size": row[2]})
+        return out
+
+    def triangle_count(
+        self,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import TriangleCountInput
+        validated = TriangleCountInput(top_k=top_k)
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("triangle_count", False):
+            raise NotImplementedError(
+                f"Communities.triangle_count not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        result = self._store.execute_triangle_count(validated.top_k, progress_callback)
+        if result.error:
+            return []
+        return [{"id": row[0], "triangles": row[1], "lcc": row[2]} for row in result.rows]
+
+    def strongly_connected_components(
+        self,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import SCCInput
+        validated = SCCInput(top_k=top_k)
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("scc", False):
+            raise NotImplementedError(
+                f"Communities.scc not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        result = self._store.execute_scc(validated.top_k, progress_callback)
+        if result.error:
+            return []
+        return [{"id": row[0], "component": row[1], "size": row[2]} for row in result.rows]
+
+    def k_core(
+        self,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        from iris_vector_graph._validate import KCoreInput
+        validated = KCoreInput(top_k=top_k)
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("k_core", False):
+            raise NotImplementedError(
+                f"Communities.k_core not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        result = self._store.execute_k_core(validated.top_k, progress_callback)
+        if result.error:
+            return []
+        return [{"id": row[0], "coreness": row[1]} for row in result.rows]
+
+    def get_community_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
+        try:
+            import iris as _iris
+            iris_inst = _iris.createIRIS(self.conn)
+        except Exception:
+            return []
+        warnings_list: List[Dict[str, Any]] = []
+        try:
+            ts = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", "")
+            while ts is not None and ts != "":
+                src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, "")
+                while src is not None and src != "":
+                    reason = iris_inst.get("^IVG.warnings", "communities", ts, src)
+                    warnings_list.append({
+                        "timestamp": str(ts),
+                        "source": str(src),
+                        "reason": str(reason) if reason is not None else "",
+                    })
+                    if len(warnings_list) >= max_entries:
+                        return warnings_list
+                    src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, src)
+                ts = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts)
+        except Exception as e:
+            logger.debug("get_community_warnings: ^IVG.warnings traversal failed: %s", e)
+        return warnings_list

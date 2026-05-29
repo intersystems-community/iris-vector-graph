@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "1.97.10"
+version = "1.99.0"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -49,6 +49,8 @@ full = [
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "networkx>=3.0",
+    "python-igraph>=0.11",
+    "leidenalg>=0.10",
     "requests>=2.28.0",
     "rdflib>=6.0.0",
     "python-dotenv>=1.0.0",
@@ -58,6 +60,11 @@ full = [
     "httpx>=0.28.1",
     "strawberry-graphql[fastapi]>=0.280.0",
     "iris-embedded-python-wrapper>=0.5.20",
+]
+communities = [
+    "python-igraph>=0.11",
+    "leidenalg>=0.10",
+    "networkx>=3.0",
 ]
 plaid = [
     "numpy>=1.24.0",
@@ -75,7 +82,7 @@ dev = [
     "isort>=5.12.0",
     "flake8>=6.0.0",
     "mypy>=1.5.0",
-    "iris-devtester>=1.14.0",
+    "iris-devtester>=1.18.1",
     "pytest-playwright>=0.7.0",
 ]
 performance = [
@@ -192,6 +199,7 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "performance: marks tests as performance benchmarks",
+    "perf: marks tests as opt-in performance benchmarks (run with '-m perf')",
     "requires_iris: marks tests that require IRIS database connection",
     "requires_database: marks tests that require database connection (alias for requires_iris)",
     "e2e: marks tests as end-to-end system tests (all query engines)"
