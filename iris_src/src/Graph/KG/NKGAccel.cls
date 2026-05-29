@@ -1067,8 +1067,271 @@ ClassMethod Build2HopExact() As %Boolean
         If (s '= "") && (p '= "") && (cnt > 0) {
             Set ^KG("deg2p_exact", s, p) = cnt
         }
+     }
+     Return 1
+}
+
+/// Spec 168 (FR-168-001..007): Closeness centrality via ^NKG BFS.
+/// Runs BFS from every node server-side; computes harmonic or classical closeness.
+/// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
+ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
+{
+    Set firstNode = $Order(^NKG("$NI",""))
+    If firstNode = "" Quit "ERROR:^NKG not built"
+    Set n = $Get(^NKG("$meta","nodeCount"), 0)
+    If n = 0 Quit "ERROR:^NKG nodeCount=0"
+
+    Set json = "["
+    Set sep = ""
+    Set nid = ""
+    For {
+        Set nid = $Order(^NKG("$NI",nid))
+        Quit:nid=""
+        Set sIdx = ^NKG("$NI",nid)
+        Kill ^||bfsDist
+        Set ^||bfsDist(sIdx) = 0
+        Set queue = sIdx _ ","
+        Set qStart = 1, qLen = 1
+        Set hop = 0
+        While (qLen > 0) && ((maxHops = 0) || (hop < maxHops)) {
+            Set hop = hop + 1
+            Set newQueue = "", newLen = 0
+            For qi = 1:1:qLen {
+                Set vIdx = $Piece(queue,",",qi)
+                If direction = "in" {
+                    Set negP = $Order(^NKG(-2,vIdx,""))
+                    While negP '= "" {
+                        Set oIdx = $Order(^NKG(-2,vIdx,negP,""))
+                        While oIdx '= "" {
+                            If '$Data(^||bfsDist(oIdx)) {
+                                Set ^||bfsDist(oIdx) = hop
+                                Set newQueue = newQueue_oIdx_","
+                                Set newLen = newLen + 1
+                            }
+                            Set oIdx = $Order(^NKG(-2,vIdx,negP,oIdx))
+                        }
+                        Set negP = $Order(^NKG(-2,vIdx,negP))
+                    }
+                } Else {
+                    Set negP = $Order(^NKG(-1,vIdx,""))
+                    While negP '= "" {
+                        Set oIdx = $Order(^NKG(-1,vIdx,negP,""))
+                        While oIdx '= "" {
+                            If '$Data(^||bfsDist(oIdx)) {
+                                Set ^||bfsDist(oIdx) = hop
+                                Set newQueue = newQueue_oIdx_","
+                                Set newLen = newLen + 1
+                            }
+                            Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
+                        }
+                        Set negP = $Order(^NKG(-1,vIdx,negP))
+                    }
+                }
+            }
+            Set queue = newQueue, qLen = newLen
+        }
+        Set sumDist = 0, sumInv = 0, reached = 0
+        Set uIdx = ""
+        For {
+            Set uIdx = $Order(^||bfsDist(uIdx))
+            Quit:uIdx=""
+            If uIdx = sIdx Continue
+            Set d = ^||bfsDist(uIdx)
+            Set sumDist = sumDist + d
+            Set sumInv = sumInv + (1 / d)
+            Set reached = reached + 1
+        }
+        If formula = "classical" {
+            Set score = $Select((sumDist > 0) && (reached > 0): (reached) / sumDist, 1: 0)
+        } Else {
+            // Harmonic centrality: raw sum of 1/d — matches networkx.harmonic_centrality default
+            Set score = $Select(reached > 0: sumInv, 1: 0)
+        }
+        Set json = json_sep_"{""id"":"""_nid_""",""score"":"_score_"}"
+        Set sep = ","
+        If (topK > 0) && ($Length(json,",") > topK + 1) Quit
     }
-    Return 1
+    Kill ^||bfsDist
+    Quit "OK:"_json_"]"
+}
+
+/// Spec 169: Eigenvector centrality via ^NKG power iteration (FR-169-001).
+/// L2-normalized power iteration over raw adjacency A (NOT transition matrix D^-1*A).
+/// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
+ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, topK As %Integer = 10000) As %String
+{
+    Set firstNode = $Order(^NKG("$NI",""))
+    If firstNode = "" Quit "ERROR:^NKG not built"
+
+    Kill ^||x, ^||xNew, ^||nodeList
+    Set n = 0, nid = ""
+    For {
+        Set nid = $Order(^NKG("$NI",nid))
+        Quit:nid=""
+        Set idx = ^NKG("$NI",nid)
+        Set ^||x(idx) = 1
+        Set ^||nodeList(idx) = nid
+        Set n = n + 1
+    }
+    If n = 0 Quit "ERROR:no nodes"
+    For i = 0:1:n-1 { Set ^||x(i) = 1/n }
+
+    For iter = 1:1:maxIter {
+        Set normSq = 0
+        For i = 0:1:n-1 { Set ^||xNew(i) = 0 }
+        Set src = ""
+        For {
+            Set src = $Order(^NKG("$NI",src))
+            Quit:src=""
+            Set sIdx = ^NKG("$NI",src)
+            Set xSrc = $Get(^||x(sIdx),0)
+            If xSrc = 0 Continue
+            Set negP = $Order(^NKG(-1,sIdx,""))
+            While negP '= "" {
+                Set oIdx = $Order(^NKG(-1,sIdx,negP,""))
+                While oIdx '= "" {
+                    Set ^||xNew(oIdx) = $Get(^||xNew(oIdx),0) + xSrc
+                    Set oIdx = $Order(^NKG(-1,sIdx,negP,oIdx))
+                }
+                Set negP = $Order(^NKG(-1,sIdx,negP))
+            }
+        }
+        For i = 0:1:n-1 { Set normSq = normSq + ($Get(^||xNew(i),0) * $Get(^||xNew(i),0)) }
+        If normSq <= 0 Quit
+        Set norm = $ZSqr(normSq)
+        Set maxDelta = 0
+        For i = 0:1:n-1 {
+            Set newVal = $Get(^||xNew(i),0) / norm
+            Set delta = $ZAbs(newVal - $Get(^||x(i),0))
+            If delta > maxDelta Set maxDelta = delta
+            Set ^||x(i) = newVal
+        }
+        If maxDelta < tol Quit
+    }
+
+    Set json = "[", sep = "", cnt = 0
+    Set idx = -1
+    For {
+        Set idx = $Order(^||nodeList(idx))
+        Quit:idx=""
+        Set nid2 = ^||nodeList(idx)
+        Set score = $Get(^||x(idx),0)
+        Set json = json_sep_"{""id"":"""_nid2_""",""score"":"_score_"}"
+        Set sep = ","
+        Set cnt = cnt + 1
+    }
+    Kill ^||x, ^||xNew, ^||nodeList
+    Quit "OK:"_json_"]"
+}
+
+/// Spec 170: Betweenness centrality via ^NKG Brandes 2001 (FR-170-001).
+/// Full or sampled Brandes: forward BFS for sigma/pred, reverse stack pass for delta.
+/// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
+ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000) As %String
+{
+    Set firstNode = $Order(^NKG("$NI",""))
+    If firstNode = "" Quit "ERROR:^NKG not built"
+
+    Kill ^||bcScore, ^||nodeArr
+    Set n = 0, nid = ""
+    For {
+        Set nid = $Order(^NKG("$NI",nid))
+        Quit:nid=""
+        Set idx = ^NKG("$NI",nid)
+        Set ^||nodeArr(n) = nid
+        Set ^||nodeArrR(nid) = n
+        Set ^||bcScore(idx) = 0
+        Set n = n + 1
+    }
+    If n = 0 Quit "ERROR:no nodes"
+
+    Set useAll = (sampleSize <= 0) || (sampleSize >= n)
+    Set srcCount = $Select(useAll: n, 1: sampleSize)
+    Set scale = $Select(useAll: 1, 1: n / sampleSize)
+
+    Set si = 0
+    For {
+        If si >= srcCount Quit
+        Set srcNid = $Get(^||nodeArr(si))
+        Set si = si + 1
+        If srcNid = "" Continue
+        Set sIdx = $Get(^NKG("$NI",srcNid),-1)
+        If sIdx = -1 Continue
+
+        Kill ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack
+        Set ^||bfsSigma(sIdx) = 1
+        Set ^||bfsDist(sIdx) = 0
+        Set queue = sIdx_",", qLen = 1, stackTop = 0
+
+        While qLen > 0 {
+            Set newQ = "", newLen = 0
+            For qi = 1:1:qLen {
+                Set vIdx = $Piece(queue,",",qi)
+                Set stackTop = stackTop + 1
+                Set ^||bfsStack(stackTop) = vIdx
+                Set negP = $Order(^NKG(-1,vIdx,""))
+                While negP '= "" {
+                    Set oIdx = $Order(^NKG(-1,vIdx,negP,""))
+                    While oIdx '= "" {
+                        If '$Data(^||bfsDist(oIdx)) {
+                            Set ^||bfsDist(oIdx) = $Get(^||bfsDist(vIdx),0) + 1
+                            Set ^||bfsSigma(oIdx) = 0
+                            Set newQ = newQ_oIdx_","
+                            Set newLen = newLen + 1
+                        }
+                        If ^||bfsDist(oIdx) = ($Get(^||bfsDist(vIdx),0) + 1) {
+                            Set ^||bfsSigma(oIdx) = $Get(^||bfsSigma(oIdx),0) + $Get(^||bfsSigma(vIdx),1)
+                            Set ^||bfsPred(oIdx,vIdx) = 1
+                        }
+                        Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
+                    }
+                    Set negP = $Order(^NKG(-1,vIdx,negP))
+                }
+            }
+            Set queue = newQ, qLen = newLen
+        }
+
+        Kill ^||delta
+        For wi = stackTop:-1:1 {
+            Set wIdx = ^||bfsStack(wi)
+            Set vIdx2 = $Order(^||bfsPred(wIdx,""))
+            While vIdx2 '= "" {
+                Set sigV = $Get(^||bfsSigma(vIdx2),1)
+                Set sigW = $Get(^||bfsSigma(wIdx),1)
+                If sigW > 0 {
+                    Set deltaV = $Get(^||delta(vIdx2),0)
+                    Set deltaW = $Get(^||delta(wIdx),0)
+                    Set ^||delta(vIdx2) = deltaV + (sigV / sigW) * (1 + deltaW)
+                }
+                Set vIdx2 = $Order(^||bfsPred(wIdx,vIdx2))
+            }
+            If wIdx '= sIdx {
+                Set ^||bcScore(wIdx) = $Get(^||bcScore(wIdx),0) + $Get(^||delta(wIdx),0) * scale
+            }
+        }
+    }
+
+    Set json = "[", sep = ""
+    Set idx = "", cnt = 0
+    Set maxScore = "", allIdx = ""
+    Set i2 = ""
+    For {
+        Set i2 = $Order(^||bcScore(i2))
+        Quit:i2=""
+        Set allIdx = allIdx_i2_","
+    }
+    Set n2 = $Length(allIdx,",") - 1
+    For i3 = 1:1:n2 {
+        Set score = $Get(^||bcScore($Piece(allIdx,",",i3)),0)
+        Set nid3 = $Get(^NKG("$ND",$Piece(allIdx,",",i3)),"")
+        If nid3 = "" Continue
+        Set json = json_sep_"{""id"":"""_nid3_""",""score"":"_score_"}"
+        Set sep = ","
+        Set cnt = cnt + 1
+        If (topK > 0) && (cnt >= topK) Quit
+    }
+    Kill ^||bcScore, ^||nodeArr, ^||nodeArrR, ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack, ^||delta
+    Quit "OK:"_json_"]"
 }
 
 }

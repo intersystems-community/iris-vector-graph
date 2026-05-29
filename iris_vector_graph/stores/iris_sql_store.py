@@ -908,7 +908,7 @@ class IRISGraphStore:
 
     def _betweenness_gref(self, sample_size: int, direction: str, max_hops: int,
                           top_k: int, mem_budget_mb: int,
-                          progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                          progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Brandes (2001) Betweenness via LazyKG-backed Native API (Bug S workaround).
 
         Pure Python implementation reading ^KG via the LazyKG adapter (v1.99.0
@@ -917,8 +917,25 @@ class IRISGraphStore:
         per-source mem budget protects against high-fanout pathology.
 
         See spec 162 research.md R1 + ENGINEERING_DEBT.md Bug S.
+        v2.0.0 spec 170: try BetweennessGlobal ObjectScript path first (1 round-trip).
         """
-        import iris as _iris
+        try:
+            import iris as _iris
+            iris_obj = _iris.createIRIS(self.conn)
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.NKGAccel", "BetweennessGlobal",
+                sample_size, top_k,
+            ))
+            if raw.startswith("OK:"):
+                import json as _json
+                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
+                        for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))]
+                if top_k > 0:
+                    rows = rows[:top_k]
+                return IVGResult(columns=["id", "score"], rows=rows)
+        except Exception:
+            pass
+
         import random
         from iris_vector_graph.stores.lazy_kg import LazyKG
         iris_inst = _iris.createIRIS(self.conn)
@@ -1036,7 +1053,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def _closeness_gref(self, formula: str, direction: str, max_hops: int, top_k: int,
-                         progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                         progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Closeness Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Per-source BFS sums distances. Two formulas:
@@ -1045,9 +1062,25 @@ class IRISGraphStore:
 
         See spec 162 clarification 2 + research.md R2 (matches networkx.harmonic_centrality).
         v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
+        v2.0.0 spec 168: try ClosenessGlobal ObjectScript path first (1 round-trip).
         """
+        try:
+            import iris as _iris
+            iris_obj = _iris.createIRIS(self.conn)
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.NKGAccel", "ClosenessGlobal",
+                formula, direction, max_hops, top_k,
+            ))
+            if raw.startswith("OK:"):
+                import json as _json
+                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
+                        for r in _json.loads(raw[3:])]
+                return IVGResult(columns=["id", "score"], rows=rows)
+        except Exception:
+            pass
+
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
         if not all_nodes:
@@ -1118,7 +1151,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def _eigenvector_gref(self, max_iter: int, tol: float, top_k: int,
-                           progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+                           progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
         """Eigenvector Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Power iteration over RAW adjacency matrix A (NOT the transition matrix
@@ -1127,9 +1160,27 @@ class IRISGraphStore:
 
         See spec 162 research.md R2 (Eigenvector ≠ PageRank with α=1).
         v1.99.0: refactored from inline ^KG walk to LazyKG adapter.
+        v2.0.0 spec 169: try EigenvectorGlobal ObjectScript path first (1 round-trip).
         """
+        try:
+            import iris as _iris
+            iris_obj = _iris.createIRIS(self.conn)
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.NKGAccel", "EigenvectorGlobal",
+                max_iter, tol, top_k,
+            ))
+            if raw.startswith("OK:"):
+                import json as _json
+                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
+                        for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))]
+                if top_k > 0:
+                    rows = rows[:top_k]
+                return IVGResult(columns=["id", "score"], rows=rows)
+        except Exception:
+            pass
+
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        lkg = LazyKG(self.conn, include_sinks=True)
+        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
 
         all_nodes = list(lkg.iter_nodes())
         n = len(all_nodes)
