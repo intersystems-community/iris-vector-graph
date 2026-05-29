@@ -1311,7 +1311,7 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
                             Set ^||bfsQueue(qTail) = oIdx
                         }
                         If ^||bfsDist(oIdx) = ($Get(^||bfsDist(vIdx),0) + 1) {
-                            Set ^||bfsSigma(oIdx) = $Get(^||bfsSigma(oIdx),0) + $Get(^||bfsSigma(vIdx),1.0)
+                            Set ^||bfsSigma(oIdx) = +$Number($Get(^||bfsSigma(oIdx),0) + $Get(^||bfsSigma(vIdx),1), 15)
                             Set ^||bfsPred(oIdx,vIdx) = 1
                         }
                     Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
@@ -1330,16 +1330,17 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
                 Set sigV = $Get(^||bfsSigma(vIdx2),1)
                 Set sigW = $Get(^||bfsSigma(wIdx),1)
                 If sigW > 0 {
-                    Set deltaV = $Number($Get(^||delta(vIdx2),0), 15)
-                    Set deltaW = $Number($Get(^||delta(wIdx),0), 15)
-                    Set ratio = $Number(sigV / sigW, 15)
-                    Set contrib = $Number(ratio * (1 + deltaW), 15)
-                    Set ^||delta(vIdx2) = $Number(deltaV + contrib, 15)
+                    Set deltaV  = +$Number($Get(^||delta(vIdx2),0), 15)
+                    Set deltaW  = +$Number($Get(^||delta(wIdx),0),  15)
+                    Set ratio   = +$Number(sigV / sigW, 15)
+                    Set contrib = +$Number(ratio * (1 + deltaW), 15)
+                    Set ^||delta(vIdx2) = +$Number(deltaV + contrib, 15)
                 }
                 Set vIdx2 = $Order(^||bfsPred(wIdx,vIdx2))
             }
             If wIdx '= sIdx {
-                Set ^||bcScore(wIdx) = $Number($Get(^||bcScore(wIdx),0) + $Number($Get(^||delta(wIdx),0),15) * scale, 15)
+                Set d = +$Number($Get(^||delta(wIdx),0), 15)
+                Set ^||bcScore(wIdx) = +$Number($Get(^||bcScore(wIdx),0) + +$Number(d * scale, 15), 15)
             }
         }
     }
