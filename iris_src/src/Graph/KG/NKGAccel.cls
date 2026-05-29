@@ -1249,10 +1249,17 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
         Set dllid = $Get(^||NKGAccel("dllid"), 0)
         If dllid '= 0 {
             If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ..WarmAdjCache() }
-            Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
-            If fnid > 0 {
-                Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
+            Set fnidV = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
+            If fnidV > 0 {
+                Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
+                Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
                 If $Extract(raw, 1, 3) = "OK:" Quit raw
+            } Else {
+                Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
+                If fnid > 0 {
+                    Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
+                    If $Extract(raw, 1, 3) = "OK:" Quit raw
+                }
             }
         }
     }
