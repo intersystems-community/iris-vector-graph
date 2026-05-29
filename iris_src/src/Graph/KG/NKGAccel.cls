@@ -1264,20 +1264,100 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
         }
     }
 
-    Kill ^||bcScore, ^||nodeArr
+    Quit ..BetweennessGlobalParallel(sampleSize, topK, maxSources)
+}
+
+/// Spec 172: Parallel Brandes worker — called by %SYSTEM.WorkMgr via BetweennessGlobalParallel.
+/// Runs Brandes over sources[srcFirst..srcLast] from ^bcParSrc(parentPid, i),
+/// writes partial scores to ^bcParScore(parentPid, workerN, nodeIdx).
+ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFirst As %Integer, srcLast As %Integer, scale As %Double) As %Status
+{
+    Set n = +$Get(^NKG("$meta","nodeCount"),0)
+    If n = 0 Return $$$OK
+
+    Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwQueue, ^||bwDelta
+
+    For si = srcFirst:1:srcLast {
+        Set srcNid = $Get(^bcParSrc(parentPid, si),"")
+        If srcNid = "" Continue
+        Set sIdx = $Get(^NKG("$NI",srcNid),-1)
+        If sIdx = -1 Continue
+
+        Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwQueue
+        Set ^||bwSigma(sIdx)=1, ^||bwDist(sIdx)=0
+        Set qHead=1, qTail=1, stackTop=0
+        Set ^||bwQueue(1)=sIdx
+
+        While qHead<=qTail {
+            Set vIdx=^||bwQueue(qHead), qHead=qHead+1
+            Set stackTop=stackTop+1, ^||bwStack(stackTop)=vIdx
+            Set negP=$Order(^NKG(-1,vIdx,""))
+            While negP'="" {
+                Set oIdx=$Order(^NKG(-1,vIdx,negP,""))
+                While oIdx'="" {
+                    If '$Data(^||bwDist(oIdx)) {
+                        Set ^||bwDist(oIdx)=$Get(^||bwDist(vIdx),0)+1
+                        Set ^||bwSigma(oIdx)=0
+                        Set qTail=qTail+1, ^||bwQueue(qTail)=oIdx
+                    }
+                    If ^||bwDist(oIdx)=($Get(^||bwDist(vIdx),0)+1) {
+                        Set ^||bwSigma(oIdx)=+$Number($Get(^||bwSigma(oIdx),0)+$Get(^||bwSigma(vIdx),1),15)
+                        Set ^||bwPred(oIdx,vIdx)=1
+                    }
+                    Set oIdx=$Order(^NKG(-1,vIdx,negP,oIdx))
+                }
+                Set negP=$Order(^NKG(-1,vIdx,negP))
+            }
+        }
+
+        Kill ^||bwDelta
+        Set wi=stackTop
+        While wi>=1 {
+            Set wIdx=^||bwStack(wi), wi=wi-1
+            Set v2=$Order(^||bwPred(wIdx,""))
+            While v2'="" {
+                Set sv=+$Number($Get(^||bwSigma(v2),1),15)
+                Set sw=+$Number($Get(^||bwSigma(wIdx),1),15)
+                If sw>0 {
+                    Set dv=+$Number($Get(^||bwDelta(v2),0),15)
+                    Set dw=+$Number($Get(^||bwDelta(wIdx),0),15)
+                    Set r=+$Number(sv/sw,15)
+                    Set c=+$Number(r*(1+dw),15)
+                    Set ^||bwDelta(v2)=+$Number(dv+c,15)
+                }
+                Set v2=$Order(^||bwPred(wIdx,v2))
+            }
+            If wIdx'=sIdx {
+                Set d=+$Number($Get(^||bwDelta(wIdx),0),15)
+                Set cur=$Get(^bcParScore(parentPid,workerN,wIdx),0)
+                Set ^bcParScore(parentPid,workerN,wIdx)=+$Number(cur+d*scale,15)
+            }
+        }
+    }
+
+    Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwQueue, ^||bwDelta
+    Return $$$OK
+}
+
+/// Spec 172: Parallel Brandes dispatcher using %SYSTEM.WorkMgr.
+/// Splits sources across numJobs workers, each writing partial scores to
+/// ^bcParScore(parentPid, workerN, nodeIdx). Waits via Sync(), then merges.
+/// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
+ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200, numJobs As %Integer = 0) As %String
+{
+    Set firstNode = $Order(^NKG("$NI",""))
+    If firstNode = "" Quit "ERROR:^NKG not built"
+
     Set n = 0, nid = ""
+    Kill ^||parNodes
     For {
         Set nid = $Order(^NKG("$NI",nid))
         Quit:nid=""
-        Set idx = ^NKG("$NI",nid)
-        Set ^||nodeArr(n) = nid
-        Set ^||nodeArrR(nid) = n
-        Set ^||bcScore(idx) = 0
+        Set ^||parNodes(n) = nid
         Set n = n + 1
     }
     If n = 0 Quit "ERROR:no nodes"
 
-    // Determine source count: explicit sampleSize > 0 wins; otherwise cap at maxSources
     If (sampleSize > 0) && (sampleSize < n) {
         Set srcCount = sampleSize
     } ElseIf (maxSources > 0) && (maxSources < n) {
@@ -1285,87 +1365,62 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
     } Else {
         Set srcCount = n
     }
-    Set scale = $Number(n / srcCount, 15)
+    Set scale = +$Number(n / srcCount, 15)
 
-    Set si = 0
-    For {
-        If si >= srcCount Quit
-        Set srcNid = $Get(^||nodeArr(si))
-        Set si = si + 1
-        If srcNid = "" Continue
-        Set sIdx = $Get(^NKG("$NI",srcNid),-1)
-        If sIdx = -1 Continue
+    If numJobs <= 0 {
+        Set numJobs = $System.Util.NumberOfCPUs()
+        If numJobs > 8 { Set numJobs = 8 }
+        If numJobs < 1 { Set numJobs = 1 }
+    }
+    If numJobs > srcCount { Set numJobs = srcCount }
 
-        Kill ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack, ^||bfsQueue
-        Set ^||bfsSigma(sIdx) = 1.0
-        Set ^||bfsDist(sIdx) = 0
-        Set qHead = 1, qTail = 1, stackTop = 0
-        Set ^||bfsQueue(1) = sIdx
+    Set parentPid = $Job
+    Kill ^bcParSrc(parentPid), ^bcParScore(parentPid)
 
-        While qHead <= qTail {
-            Set vIdx = ^||bfsQueue(qHead)
-            Set qHead = qHead + 1
-            Set stackTop = stackTop + 1
-            Set ^||bfsStack(stackTop) = vIdx
-            Set negP = $Order(^NKG(-1,vIdx,""))
-            While negP '= "" {
-                Set oIdx = $Order(^NKG(-1,vIdx,negP,""))
-                While oIdx '= "" {
-                    If '$Data(^||bfsDist(oIdx)) {
-                            Set ^||bfsDist(oIdx) = $Get(^||bfsDist(vIdx),0) + 1
-                            Set ^||bfsSigma(oIdx) = 0.0
-                            Set qTail = qTail + 1
-                            Set ^||bfsQueue(qTail) = oIdx
-                        }
-                        If ^||bfsDist(oIdx) = ($Get(^||bfsDist(vIdx),0) + 1) {
-                            Set ^||bfsSigma(oIdx) = +$Number($Get(^||bfsSigma(oIdx),0) + $Get(^||bfsSigma(vIdx),1), 15)
-                            Set ^||bfsPred(oIdx,vIdx) = 1
-                        }
-                    Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
-                }
-                Set negP = $Order(^NKG(-1,vIdx,negP))
-            }
-        }
+    For si = 0:1:srcCount-1 {
+        Set ^bcParSrc(parentPid, si) = ^||parNodes(si)
+    }
 
-        Kill ^||delta
-        Set wi = stackTop
-        While wi >= 1 {
-            Set wIdx = ^||bfsStack(wi)
-            Set wi = wi - 1
-            Set vIdx2 = $Order(^||bfsPred(wIdx,""))
-            While vIdx2 '= "" {
-                Set sigV = $Get(^||bfsSigma(vIdx2),1)
-                Set sigW = $Get(^||bfsSigma(wIdx),1)
-                If sigW > 0 {
-                    Set deltaV  = +$Number($Get(^||delta(vIdx2),0), 15)
-                    Set deltaW  = +$Number($Get(^||delta(wIdx),0),  15)
-                    Set ratio   = +$Number(sigV / sigW, 15)
-                    Set contrib = +$Number(ratio * (1 + deltaW), 15)
-                    Set ^||delta(vIdx2) = +$Number(deltaV + contrib, 15)
-                }
-                Set vIdx2 = $Order(^||bfsPred(wIdx,vIdx2))
-            }
-            If wIdx '= sIdx {
-                Set d = +$Number($Get(^||delta(wIdx),0), 15)
-                Set ^||bcScore(wIdx) = +$Number($Get(^||bcScore(wIdx),0) + +$Number(d * scale, 15), 15)
-            }
+    Set queue = ##class(%SYSTEM.WorkMgr).%New("", numJobs)
+    Set chunkSize = srcCount \ numJobs
+    Set remainder = srcCount # numJobs
+    Set cursor = 0
+    For w = 1:1:numJobs {
+        Set wSize = chunkSize + $Select(w <= remainder: 1, 1: 0)
+        Set srcFirst = cursor
+        Set srcLast  = cursor + wSize - 1
+        Set cursor   = cursor + wSize
+        Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker", parentPid, w, srcFirst, srcLast, scale)
+        If $$$ISERR(sc) {
+            Kill ^bcParSrc(parentPid), ^bcParScore(parentPid), ^||parNodes
+            Quit "ERROR:Queue failed "_$System.Status.GetErrorText(sc)
         }
     }
 
-    Set json = "[", sep = "", cnt = 0
-    Set i2 = ""
+    Set sc = queue.Sync()
+    Kill ^bcParSrc(parentPid)
+    If $$$ISERR(sc) {
+        Kill ^bcParScore(parentPid), ^||parNodes
+        Quit "ERROR:Worker failed "_$System.Status.GetErrorText(sc)
+    }
+
+    Set json = "[", sep = "", cnt = 0, i2 = ""
     For {
-        Set i2 = $Order(^||bcScore(i2))
+        Set i2 = $Order(^NKG("$NI",i2))
         Quit:i2=""
-        Set score = $Get(^||bcScore(i2),0)
-        Set nid3 = $Get(^NKG("$ND",i2),"")
-        If nid3 = "" Continue
-        Set json = json_sep_"{""id"":"""_nid3_""",""score"":"_score_"}"
+        Set idx = ^NKG("$NI",i2)
+        Set total = 0
+        For w = 1:1:numJobs {
+            Set total = total + $Get(^bcParScore(parentPid, w, idx), 0)
+        }
+        If total = 0 Continue
+        Set json = json_sep_"{""id"":"""_i2_""",""score"":"_total_"}"
         Set sep = ","
         Set cnt = cnt + 1
         If (topK > 0) && (cnt >= topK) Quit
     }
-    Kill ^||bcScore, ^||nodeArr, ^||nodeArrR, ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack, ^||bfsQueue, ^||delta
+
+    Kill ^bcParScore(parentPid), ^||parNodes
     Quit "OK:"_json_"]"
 }
 
