@@ -1474,4 +1474,151 @@ ClassMethod BuildBitAdj(parentPid As %Integer) [ Private ]
     }
 }
 
+/// Spec 173: Betweenness centrality on a neighborhood subgraph.
+/// Extracts the hops-hop neighborhood around seedId, then runs Brandes
+/// restricted to that subgraph. Scales to any total graph size — performance
+/// depends only on neighborhood size (~500-5K nodes for biomedical KGs).
+/// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
+ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sampleSize As %Integer = 200, topK As %Integer = 20) As %String
+{
+    Set firstNode = $Order(^NKG("$NI",""))
+    If firstNode = "" Quit "ERROR:^NKG not built"
+    If $Get(^NKG("$NI",seedId),-1) = -1 Quit "ERROR:seed node not found: "_seedId
+
+    Set hopsRaw = ..KHopNeighbors(seedId, hops, 1000000)
+    If $Extract(hopsRaw,1,7) = "ERROR: " Quit hopsRaw
+    If hopsRaw = "" Quit "ERROR:empty neighborhood"
+
+    // Parse node list from KHopNeighbors JSON response
+    Kill ^||nbhIdx, ^||nbhNodes
+    Set n = 0, parseErr = ""
+    Try {
+        Set obj = ##class(%DynamicObject).%FromJSON(hopsRaw)
+        Set nodesArr = obj.nodes
+        If '$IsObject(nodesArr) { Set parseErr = "ERROR:no nodes in neighborhood" }
+        Else {
+            Set iter = nodesArr.%GetIterator()
+            While iter.%GetNext(.k, .nodeObj) {
+                Set nodeId = $Select($IsObject(nodeObj):nodeObj.id, 1:nodeObj)
+                Set idx = $Get(^NKG("$NI",nodeId),-1)
+                If idx >= 0 {
+                    Set ^||nbhIdx(idx) = ""
+                    Set ^||nbhNodes(n) = nodeId
+                    Set n = n + 1
+                }
+            }
+        }
+    } Catch ex {
+        Set parseErr = "ERROR:parse failed "_ex.DisplayString()
+    }
+    If parseErr '= "" Quit parseErr
+    If n = 0 Quit "ERROR:no valid nodes in neighborhood"
+
+    // Try arno fast path — reuses BETWEENNESS_ADJ_CACHE, extracts subgraph in Rust
+    If ..IsLoaded() {
+        Set dllid = $Get(^||NKGAccel("dllid"), 0)
+        If dllid '= 0 {
+            If '$Data(^ArnoKG("KG","nkg_adj")) { Do ..WarmAdjCache() }
+            Set fnidN = $ZF(-4, 3, dllid, "kg_betweenness_neighborhood_v")
+            If fnidN > 0 {
+                Set idxList = "", idx = ""
+                For {
+                    Set idx = $Order(^||nbhIdx(idx))
+                    Quit:idx=""
+                    Set:idxList'="" idxList = idxList_","
+                    Set idxList = idxList_idx
+                }
+                Set nkgVer = +$Get(^NKG("$meta","version"),-1)
+                // Ensure full adj is cached in Rust (warm if needed)
+                Set fnidG = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
+                If fnidG > 0 {
+                    Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
+                }
+                Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
+                If $Extract(raw,1,3) = "OK:" {
+                    Kill ^||nbhIdx, ^||nbhNodes
+                    Quit raw
+                }
+            }
+        }
+    }
+
+    // OS fallback: $BITLOGIC parallel Brandes on subgraph
+    Quit ..BetweennessNeighborhoodOS(n, sampleSize, topK)
+}
+
+/// OS fallback for BetweennessNeighborhood: $BITLOGIC parallel Brandes
+/// restricted to ^||nbhNodes(0..n-1). Caller must populate ^||nbhNodes.
+ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, topK As %Integer) As %String [ Private ]
+{
+    If n = 0 Quit "ERROR:no nodes"
+
+    Set srcCount = $Select((sampleSize>0)&&(sampleSize<n):sampleSize, 1:n)
+    Set scale = +$Number(n/srcCount,15)
+
+    Set parentPid = $Job
+    Kill ^bcParSrc(parentPid), ^bcParScore(parentPid), ^bcBitAdj(parentPid)
+
+    // Build $BIT adjacency restricted to neighborhood
+    Set idx = "", pos = 0
+    For {
+        Set idx = $Order(^||nbhIdx(idx))
+        Quit:idx=""
+        Set negP = $Order(^NKG(-1,idx,""))
+        While negP '= "" {
+            Set dstIdx = $Order(^NKG(-1,idx,negP,""))
+            While dstIdx '= "" {
+                If $Data(^||nbhIdx(dstIdx)) {
+                    Set $BIT(^bcBitAdj(parentPid,idx),dstIdx+1) = 1
+                    Set $BIT(^bcBitAdj(parentPid,dstIdx),idx+1) = 1
+                }
+                Set dstIdx = $Order(^NKG(-1,idx,negP,dstIdx))
+            }
+            Set negP = $Order(^NKG(-1,idx,negP))
+        }
+    }
+
+    For si = 0:1:srcCount-1 {
+        Set ^bcParSrc(parentPid,si) = ^||nbhNodes(si)
+    }
+
+    Set numJobs = $System.Util.NumberOfCPUs()
+    If numJobs > 8 { Set numJobs = 8 }
+    If numJobs > srcCount { Set numJobs = srcCount }
+
+    Set queue = ##class(%SYSTEM.WorkMgr).%New("",numJobs)
+    Set chunkSize = srcCount\numJobs, remainder = srcCount#numJobs, cursor = 0
+    For w = 1:1:numJobs {
+        Set wSize = chunkSize + $Select(w<=remainder:1,1:0)
+        Set sc = queue.Queue("##class(Graph.KG.NKGAccel).BetweennessWorker",parentPid,w,cursor,cursor+wSize-1,scale)
+        Set cursor = cursor + wSize
+        If $$$ISERR(sc) {
+            Kill ^bcParSrc(parentPid),^bcParScore(parentPid),^bcBitAdj(parentPid),^||nbhIdx,^||nbhNodes
+            Quit "ERROR:Queue failed"
+        }
+    }
+
+    Do queue.Sync()
+    Kill ^bcParSrc(parentPid), ^bcBitAdj(parentPid)
+
+    Set json = "[", sep = "", cnt = 0
+    Set idx = ""
+    For {
+        Set idx = $Order(^||nbhIdx(idx))
+        Quit:idx=""
+        Set nid = $Get(^NKG("$ND",idx),"")
+        If nid = "" Continue
+        Set total = 0
+        For w = 1:1:numJobs { Set total = total + $Get(^bcParScore(parentPid,w,idx),0) }
+        If total = 0 Continue
+        Set json = json_sep_"{""id"":"""_nid_""",""score"":"_total_"}"
+        Set sep = ","
+        Set cnt = cnt+1
+        If (topK>0)&&(cnt>=topK) Quit
+    }
+
+    Kill ^bcParScore(parentPid), ^||nbhIdx, ^||nbhNodes
+    Quit "OK:"_json_"]"
+}
+
 }
