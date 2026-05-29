@@ -1225,9 +1225,11 @@ ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, 
 }
 
 /// Spec 170: Betweenness centrality via ^NKG Brandes 2001 (FR-170-001).
-/// Full or sampled Brandes: forward BFS for sigma/pred, reverse stack pass for delta.
+/// Sampled Brandes betweenness: capped at maxSources (default 200) to bound runtime.
+/// For graphs with n <= maxSources, runs exact full Brandes. For larger graphs,
+/// samples maxSources random-ish sources and scales scores by n/maxSources.
 /// Returns "OK:[{""id"":""..."",""score"":0.5}]" or "ERROR:<msg>".
-ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000) As %String
+ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 10000, maxSources As %Integer = 200) As %String
 {
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
@@ -1245,9 +1247,15 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
     }
     If n = 0 Quit "ERROR:no nodes"
 
-    Set useAll = (sampleSize <= 0) || (sampleSize >= n)
-    Set srcCount = $Select(useAll: n, 1: sampleSize)
-    Set scale = $Select(useAll: 1, 1: n / sampleSize)
+    // Determine source count: explicit sampleSize > 0 wins; otherwise cap at maxSources
+    If (sampleSize > 0) && (sampleSize < n) {
+        Set srcCount = sampleSize
+    } ElseIf (maxSources > 0) && (maxSources < n) {
+        Set srcCount = maxSources
+    } Else {
+        Set srcCount = n
+    }
+    Set scale = $Number(n / srcCount, 15)
 
     Set si = 0
     For {

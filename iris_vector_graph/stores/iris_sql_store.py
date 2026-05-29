@@ -918,13 +918,15 @@ class IRISGraphStore:
 
         See spec 162 research.md R1 + ENGINEERING_DEBT.md Bug S.
         v2.0.0 spec 170: try BetweennessGlobal ObjectScript path first (1 round-trip).
+        Capped at maxSources=200 by default in ObjectScript to bound O(V*(V+E)) runtime.
         """
         try:
             import iris as _iris
             iris_obj = _iris.createIRIS(self.conn)
+            # Pass sampleSize=0 (let OS use maxSources cap), topK, maxSources=200
             raw = str(iris_obj.classMethodValue(
                 "Graph.KG.NKGAccel", "BetweennessGlobal",
-                sample_size, top_k,
+                sample_size, top_k, 200,
             ))
             if raw.startswith("OK:"):
                 import json as _json
