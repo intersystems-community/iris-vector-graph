@@ -7185,6 +7185,20 @@ class IRISGraphEngine:
                 out.append({"id": row[0], "score": row[1]})
         return out
 
+    def betweenness_centrality_neighborhood(
+        self,
+        seed: str,
+        hops: int = 2,
+        sample_size: int = 200,
+        top_k: int = 20,
+    ) -> List[Dict[str, Any]]:
+        if not getattr(self, "_store", None):
+            raise NotImplementedError("No store configured")
+        result = self._store.execute_betweenness_neighborhood(seed, hops, sample_size, top_k)
+        if result.error:
+            return []
+        return [{"id": r[0], "score": r[1]} for r in result.rows]
+
     def closeness_centrality(
         self,
         formula: str = "harmonic",

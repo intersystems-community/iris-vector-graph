@@ -32,6 +32,11 @@ _FULL_CAPABILITIES = {
     "k_core": True,
 }
 
+import re as _re_global
+
+def _fix_iris_json(raw3: str) -> str:
+    return _re_global.sub(r'(?<=[:\[,])(\.\d)', r'0\1', raw3)
+
 
 class IRISGraphStore:
     def __init__(self, conn):
@@ -905,6 +910,33 @@ class IRISGraphStore:
             return IVGResult(
                 columns=["id", "score"], rows=[], error=str(e)[:200],
             )
+
+    def execute_betweenness_neighborhood(
+        self, seed: str, hops: int, sample_size: int, top_k: int,
+    ) -> IVGResult:
+        try:
+            import iris as _iris
+            import json as _json
+            iris_obj = _iris.createIRIS(self.conn)
+            if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
+                import warnings
+                warnings.warn(
+                    "betweenness_centrality_neighborhood: arno not loaded — OS fallback active.",
+                    RuntimeWarning, stacklevel=4,
+                )
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.NKGAccel", "BetweennessNeighborhood",
+                seed, hops, sample_size, top_k,
+            ))
+            if raw.startswith("OK:"):
+                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
+                        for r in sorted(_json.loads(_fix_iris_json(raw[3:])), key=lambda x: -x.get("score", 0))]
+                if top_k > 0:
+                    rows = rows[:top_k]
+                return IVGResult(columns=["id", "score"], rows=rows)
+            return IVGResult(columns=["id", "score"], rows=[], error=raw)
+        except Exception as e:
+            return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def _betweenness_gref(self, sample_size: int, direction: str, max_hops: int,
                           top_k: int, mem_budget_mb: int,
