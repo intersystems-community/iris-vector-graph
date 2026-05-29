@@ -83,7 +83,7 @@ ClassMethod BuildNKG() As %Status
 	// Kill ^NKG resets the version to 0; $Increment makes it 1.
 	// If the stale cache also has version 1, CacheNKGAdj sees cachedVer==currentVer
 	// and skips the rebuild, leaving Arno BFS using data from the previous graph.
-	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch {}
+    Try { If ##class(Graph.KG.NKGAccel).IsLoaded() { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } } Catch {}
 	Kill ^NKG
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	
@@ -116,11 +116,33 @@ ClassMethod BuildNKG() As %Status
 	Set ^NKG("$meta", "edgeCount") = edgeCount
 	Set tmp = $Increment(^NKG("$meta", "version"))
 
-	Do ..Build2HopStats()
-	Do ..Build2HopExactStats()
+    Do ..Build2HopStats()
+    Do ..Build2HopExactStats()
 
-	Return $$$OK
+    Return $$$OK
 }
+
+/// Spec 165 (FR-165-001..004): Batch all 5 NKG-rebuild steps into 1 ObjectScript call,
+/// eliminating 7 Python→IRIS round-trips that engine.rebuild_nkg() previously made.
+///
+/// Algorithm:
+///   1. Try arno Rust kg_nkg_build kernel via $ZF(-5) — fastest path
+///   2. Fallback: ..BuildNKG() (ObjectScript $Order walk over ^KG)
+///   3. Always: Build2HopStats + Build2HopExactStats + InvalidateAdjCache
+///
+/// Returns: "RUST:<edgeCount>:<nodeCount>" | "OS:<edgeCount>:<nodeCount>" | "ERROR:<msg>"
+/// Python caller parses prefix to set _arno_available without extra round-trip.
+ClassMethod BuildNKGComplete(libPath As %String = "/usr/irissys/mgr/libarno_callout.so") As %String
+{
+    Do ..BuildNKG()
+    Do ..Build2HopStats()
+    Set ec = $Get(^NKG("$meta", "edgeCount"), 0)
+    Set nc = 0, nid = $Order(^NKG("$NI", ""))
+    While nid '= "" { Set nc = nc + 1, nid = $Order(^NKG("$NI", nid)) }
+    Set ^NKG("$meta", "nodeCount") = nc
+    Quit "OS:"_ec_":"_nc
+}
+
 
 ClassMethod BackfillDegp() As %Integer
 {
@@ -1225,7 +1247,7 @@ ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
 ClassMethod Build2HopExactStats() As %Integer
 {
     Kill ^KG("deg2p_exact")
-    If ##class(Graph.KG.NKGAccel).Build2HopExact() {
+    If ##class(Graph.KG.NKGAccel).IsLoaded() && ##class(Graph.KG.NKGAccel).Build2HopExact() {
         Set n = ""
         Set cnt = 0
         For {

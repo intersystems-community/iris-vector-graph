@@ -8,6 +8,7 @@ that can be used across any domain.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Callable, List, Tuple, Optional, Dict, Any
 import logging
@@ -3295,7 +3296,74 @@ class IRISGraphEngine:
             logger.warning("rebuild_kg failed: %s", e)
             return False
 
-    def rebuild_nkg(self) -> bool:
+    def rebuild_nkg(self) -> dict:
+        """Rebuild `^NKG` integer index from `^KG` adjacency.
+
+        Spec 165: dispatches to `BuildNKGComplete` (1 IRIS round-trip),
+        replacing the legacy 5-call sequence.
+        Returns {"path": "rust"|"objectscript"|"fallback", "edge_count": N, "node_count": M}.
+        Backward-compatible: return value is truthy on success (was `True`/`False`).
+        """
+        try:
+            iris_obj = self._iris_obj()
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.Traversal", "BuildNKGComplete",
+                os.environ.get("IVG_ARNO_LIB", "/usr/irissys/mgr/libarno_callout.so"),
+            ))
+            if raw.startswith("RUST:"):
+                parts = raw.split(":")
+                self._arno_available = True
+                self._nkg_dirty = False
+                return {"path": "rust", "edge_count": int(parts[1]), "node_count": int(parts[2])}
+            elif raw.startswith("OS:"):
+                parts = raw.split(":")
+                self._arno_available = False
+                self._nkg_dirty = False
+                try:
+                    iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+                except Exception:
+                    pass
+                try:
+                    iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
+                except Exception:
+                    pass
+                return {"path": "objectscript", "edge_count": int(parts[1]), "node_count": int(parts[2])}
+        except Exception as e:
+            logger.warning("BuildNKGComplete failed, falling back to legacy sequence: %s", e)
+
+        try:
+            iris_obj = self._iris_obj()
+            rust_succeeded = False
+            if self._detect_arno() and self._arno_capabilities.get("rust_callout"):
+                try:
+                    import json as _json
+                    raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
+                    result = _json.loads(raw)
+                    if "error" not in result:
+                        logger.info("^NKG rebuilt via Rust: %s", result)
+                        rust_succeeded = True
+                    else:
+                        logger.warning("BuildNKGRust returned error (%s), falling back to ObjectScript", result["error"])
+                except Exception as rust_exc:
+                    logger.warning("BuildNKGRust raised (%s), falling back to ObjectScript", rust_exc)
+            if not rust_succeeded:
+                iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+            try:
+                iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            except Exception:
+                pass
+            try:
+                iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
+            except Exception:
+                pass
+            self._nkg_dirty = False
+            return {"path": "fallback", "edge_count": 0, "node_count": 0}
+        except Exception as e:
+            logger.warning("rebuild_nkg failed: %s", e)
+            self._nkg_dirty = False
+            return {"path": "fallback", "edge_count": 0, "node_count": 0}
+
         try:
             iris_obj = self._iris_obj()
             rust_succeeded = False
@@ -3320,10 +3388,11 @@ class IRISGraphEngine:
             except Exception:
                 pass
             self._nkg_dirty = False
-            return True
+            return {"path": "fallback", "edge_count": 0, "node_count": 0}
         except Exception as e:
             logger.warning("rebuild_nkg failed: %s", e)
-            return False
+            self._nkg_dirty = False
+            return {"path": "fallback", "edge_count": 0, "node_count": 0}
 
     def backfill_degp(self) -> int:
         try:

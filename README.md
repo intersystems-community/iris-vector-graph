@@ -733,7 +733,12 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 
  ## Changelog
 
-### v1.99.0 (2026-05-28)
+### v1.99.2 (2026-05-29)
+- **perf(spec-165)**: `BuildNKGComplete` — collapses 7 Python→IRIS round-trips in `engine.rebuild_nkg()` to 1. New `Graph.KG.Traversal.BuildNKGComplete()` ObjectScript method runs `BuildNKG + Build2HopStats` in one call; returns discriminated `"OS:<edges>:<nodes>"` / `"RUST:<edges>:<nodes>"` prefix for zero-probe path discrimination. `engine.rebuild_nkg()` now returns `{"path": "objectscript"|"rust"|"fallback", "edge_count": N, "node_count": M}` (was `bool`; backward-compatible — still truthy on success).
+- **fix(spec-165)**: `Graph.KG.GraphIndex.EmptyHLL` — applied to `main` branch; `..EmptyHLL()` → `##class(Graph.KG.GraphIndex).EmptyHLL()` prevents `<No such method>` compile error on `Graph.KG.Edge.cls` in fresh containers. (Previously only on the `164-seed-local-khop-fast-path` branch.)
+- **fix(spec-165)**: `Graph.KG.Traversal.BuildNKG` and `Build2HopExactStats` — added `##class(Graph.KG.NKGAccel).IsLoaded()` guards before `InvalidateAdjCache()` and `Build2HopExact()` calls to prevent non-trappable `<DYNAMIC LIBRARY LOAD>` errors when `libarno_callout.so` is absent.
+
+
 - **feat**: Spec 163 — Community Detection & Cluster Analysis Suite. Four new graph algorithms via the GraphStore protocol + Cypher procedures + dual-path architecture (arno Rust accelerator primary + LazyKG pure-Python fallback):
   - `engine.leiden_communities(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed, progress_callback)` — Leiden community detection (Traag et al. 2019). At `gamma=1.0` uses `ModularityVertexPartition` (canonical Leiden); at `gamma != 1.0` uses `CPMVertexPartition` for resolution control. ARI = 1.0 with `leidenalg` reference (4-way benchmark on karate, ER(500), ER(2000)).
   - `engine.triangle_count(top_k, progress_callback)` — symmetrized triangle count + LCC. Pearson > 0.95 with `networkx.triangles(networkx.Graph(G_directed))` on Erdős-Rényi 100-node fixture.
