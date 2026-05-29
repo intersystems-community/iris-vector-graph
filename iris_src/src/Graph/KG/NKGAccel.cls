@@ -36,6 +36,11 @@ ClassMethod Load(libPath As %String = "/usr/irissys/mgr/libarno_callout.so") As 
     Return 1
 }
 
+ClassMethod Unload()
+{
+    Kill ^||NKGAccel
+}
+
 /// Returns 1 if arno is loaded and bfs function is available in this process.
 ClassMethod IsLoaded() As %Boolean
 {
@@ -101,8 +106,16 @@ ClassMethod ExportAdjacencyNKG() As %String [ Private ]
         Set ^||adj(chunkNum) = chunk
     }
     If chunkNum > 0 {
-        Set ^||adj = chunkNum
-        Return "CHUNKED:" _ chunkNum
+        Set n = $Get(^NKG("$meta", "nodeCount"), 0)
+        Set nodemap = "NODEMAP:" _ n _ $Char(10)
+        For i = 0:1:n-1 {
+            Set nodemap = nodemap _ i _ "=" _ $Get(^NKG("$ND", i), "") _ $Char(10)
+        }
+        Set nodemap = nodemap _ "---" _ $Char(10)
+        Set ^||adj = chunkNum + 1
+        For i = chunkNum:-1:1 { Set ^||adj(i+1) = ^||adj(i) }
+        Set ^||adj(1) = nodemap
+        Return "CHUNKED:" _ (chunkNum + 1) _ "|NODEMAP"
     }
     Return ""
 }
@@ -707,9 +720,7 @@ ClassMethod CacheNKGAdj() [ Private ]
     Kill ^ArnoKG("KG", "nkg_adj")
     Set adj = ..ExportAdjacency()
     If $Extract(adj, 1, 8) = "CHUNKED:" {
-        // ExportAdjacencyNKG already wrote chunks to ^||adj(1..N)
-        // Transfer them directly to ^ArnoKG("KG","nkg_adj",1..N)
-        Set n = $Piece(adj, ":", 2)
+        Set n = $Piece($Piece(adj, ":", 2), "|", 1)
         For i = 1:1:n {
             Set ^ArnoKG("KG", "nkg_adj", i) = $Get(^||adj(i), "")
         }
@@ -1233,6 +1244,18 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
 {
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
+
+    If ##class(Graph.KG.NKGAccel).IsLoaded() {
+        Set dllid = $Get(^||NKGAccel("dllid"), 0)
+        If dllid '= 0 {
+            If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ..WarmAdjCache() }
+            Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
+            If fnid > 0 {
+                Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
+                If $Extract(raw, 1, 3) = "OK:" Quit raw
+            }
+        }
+    }
 
     Kill ^||bcScore, ^||nodeArr
     Set n = 0, nid = ""
