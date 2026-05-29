@@ -484,7 +484,7 @@ iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', 'DegreeCentralityJ
 
 **Investigation owner**: Needs deep dive into `%SYS.DBSRV` cache behavior and IRIS bindings server initialization. Not blocking shipping algorithm code.
 
-**Mitigation shipped in v1.98.0** (extended in v1.99.0): All 4 centrality algorithms in spec 162 + all 4 community-detection algorithms in spec 163 use a **gref-bypass production path** — pure-Python implementations reading `^KG` directly via `iris.createIRIS().nextSubscript/get/set/kill`. The Native API global access bypasses `%SYS.DBSRV` class lookup entirely. See:
+**Mitigation shipped in v1.98.0** (extended in v1.99.0, further in v1.99.1): All 4 centrality algorithms in spec 162 + all 4 community-detection algorithms in spec 163 + `KHopNeighborsSeedLocal` in spec 164 use a **gref-bypass production path** — pure-Python / pure-ObjectScript implementations reading `^KG` or `^NKG` directly. The Native API global access bypasses `%SYS.DBSRV` class lookup entirely. See:
 - `iris_vector_graph/stores/iris_sql_store.py::_degree_centrality_gref_fallback`
 - `iris_vector_graph/stores/iris_sql_store.py::_betweenness_gref`
 - `iris_vector_graph/stores/iris_sql_store.py::_closeness_gref`

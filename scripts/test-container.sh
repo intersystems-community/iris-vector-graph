@@ -22,6 +22,7 @@ set -euo pipefail
 
 CONTAINER="${IVG_TEST_CONTAINER:-ivg-iris}"
 EDITION="community"
+PORT="${IVG_TEST_PORT:-1972}"
 
 cmd="${1:-status}"
 
@@ -31,8 +32,8 @@ case "$cmd" in
       echo "✓ $CONTAINER already running"
       exit 0
     fi
-    echo "Starting $CONTAINER (edition=$EDITION) via iris-devtester..."
-    idt container up --name "$CONTAINER" --edition "$EDITION"
+    echo "Starting $CONTAINER (edition=$EDITION, port=$PORT) via iris-devtester..."
+    idt container up --name "$CONTAINER" --edition "$EDITION" --port "$PORT"
     ;;
 
   down)

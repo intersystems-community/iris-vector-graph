@@ -1027,6 +1027,13 @@ ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 
 /// Returns 1-hop neighbor IDs as a newline-delimited string — no JSON overhead.
 /// ~10x faster than BFSFastJson for large neighbor sets when only IDs are needed.
+/// DEPRECATED (spec 164, 2026-05-29): Prefer
+/// Graph.KG.NKGAccel.KHopNeighborsSeedLocal which walks ^NKG directly
+/// via $Order without the whole-graph serialization tax (~86µs vs ~455µs
+/// SQL BFS on 50K-node graph). This method is retained for backward
+/// compatibility with direct-classMethodValue callers outside the engine
+/// layer (custom dashboards, debug scripts); the engine itself now
+/// dispatches to KHopNeighborsSeedLocal for hops<=IVG_KHOP_SEEDLOCAL_MAX_HOPS.
 ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "") As %String
 {
     Set result = ""
@@ -1125,6 +1132,9 @@ ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
 
 /// Returns 2-hop distinct neighbor IDs as newline-delimited string.
 /// Excludes srcId. Uses process-private globals for dedup — no JSON.
+/// DEPRECATED (spec 164, 2026-05-29): Prefer
+/// Graph.KG.NKGAccel.KHopNeighborsSeedLocal(seedId, 2, ...) which walks ^NKG
+/// directly. See KHopNeighborIds deprecation notice for full rationale.
 ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults As %Integer = 0) As %String
 {
     Kill ^||kh2s, ^||kh2all

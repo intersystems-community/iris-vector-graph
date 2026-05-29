@@ -44,6 +44,8 @@ COMMUNITY_ALLOWED_KEYS: Dict[str, set] = {
     "ivg.kcore":          {"topK"},
 }
 
+KHOP_SEEDLOCAL_ALLOWED_KEYS: set = {"seed", "hops", "predicate", "maxResults"}
+
 
 def _validate_centrality_proc_map(proc_name: str, map_keys) -> None:
     """Reject unknown map-parameter keys for centrality procedures.
@@ -343,9 +345,11 @@ def translate_procedure_call(
         _translate_scc(proc, context)
     elif name == "ivg.kcore":
         _translate_kcore(proc, context)
+    elif name == "ivg.khopSeedLocal":
+        _translate_khop_seedlocal(proc, context)
     else:
         raise ValueError(
-            f"Unknown procedure: {name!r}. Supported: ivg.retrieve, ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted, ivg.degreeCentrality, ivg.betweenness, ivg.closeness, ivg.eigenvector, ivg.leiden, ivg.triangleCount, ivg.scc, ivg.kcore"
+            f"Unknown procedure: {name!r}. Supported: ivg.retrieve, ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted, ivg.degreeCentrality, ivg.betweenness, ivg.closeness, ivg.eigenvector, ivg.leiden, ivg.triangleCount, ivg.scc, ivg.kcore, ivg.khopSeedLocal"
         )
 
 
@@ -3899,3 +3903,53 @@ def _translate_kcore(proc, context) -> None:
         context.variable_aliases[item] = "KCore"
     if "coreness" in proc.yield_items:
         context.scalar_variables.add("coreness")
+
+
+def _validate_khop_seedlocal_proc_map(proc_name: str, map_keys) -> None:
+    """Reject unknown map-parameter keys for ivg.khopSeedLocal (Spec 164 FR-164-010 / round-2 Q4 / FR-015 precedent)."""
+    unknown = set(map_keys) - KHOP_SEEDLOCAL_ALLOWED_KEYS
+    if unknown:
+        raise ValueError(
+            f"Unknown parameters for {proc_name}: {sorted(unknown)}. "
+            f"Allowed: {sorted(KHOP_SEEDLOCAL_ALLOWED_KEYS)}"
+        )
+
+
+def _translate_khop_seedlocal(proc, context) -> None:
+    """Spec 164 FR-164-010 — Cypher → SQL CTE for CALL ivg.khopSeedLocal({...}).
+
+    Xfail-marked at e2e layer pending Bug S: the SQL function kg_KHopSeedLocal
+    calls ##class(Graph.KG.NKGAccel) which fails <CLASS DOES NOT EXIST> from
+    external SQL bindings. Python API path works. See ENGINEERING_DEBT.md Bug S.
+    """
+    opts = proc.options or {}
+    _validate_khop_seedlocal_proc_map("ivg.khopSeedLocal", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    seed       = _val("seed", None)
+    hops       = int(_val("hops", 1))
+    predicate  = str(_val("predicate", ""))
+    max_results = int(_val("maxResults", 10000))
+
+    fn = f"{_schema_prefix}.kg_KHopSeedLocal" if _schema_prefix else "kg_KHopSeedLocal"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.hops\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?, ?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.node_id',\n"
+        f"    hops INTEGER PATH '$.hops'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([seed, hops, predicate, max_results])
+    context.stages.insert(0, f"KHopSeedLocal AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "KHopSeedLocal"
+    if "hops" in proc.yield_items:
+        context.scalar_variables.add("hops")

@@ -91,7 +91,7 @@ ClassMethod UpdateStructuralHLL(sIdx As %Integer, pIdx As %Integer, oIdx As %Int
 	} Else {
 		While (b1 # 2) = 0 { Set lz = lz + 1, b1 = b1 \ 2 }
 	}
-	Set hll = $Get(^NKG("$agg", sIdx, pIdx, "hll"), ..EmptyHLL())
+	Set hll = $Get(^NKG("$agg", sIdx, pIdx, "hll"), ##class(Graph.KG.GraphIndex).EmptyHLL())
 	If lz > $List(hll, regIdx) {
 		Set $List(hll, regIdx) = lz
 		Set ^NKG("$agg", sIdx, pIdx, "hll") = hll

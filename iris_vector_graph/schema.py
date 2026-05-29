@@ -799,6 +799,20 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}
 """,
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_KHopSeedLocal(
+  seedId VARCHAR(256),
+  hops INT DEFAULT 1,
+  predicate VARCHAR(128) DEFAULT '',
+  maxResults INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.NKGAccel).KHopNeighborsSeedLocal(seedId, hops, predicate, maxResults)
+    quit result
+}}
+""",
         ]
 
     # ------------------------------------------------------------------

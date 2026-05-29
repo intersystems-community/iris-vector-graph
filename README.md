@@ -733,7 +733,13 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 
  ## Changelog
 
-### v1.99.0 (2026-05-28)
+### v1.99.1 (2026-05-29)
+- **perf(spec-164)**: Seed-local k-hop fast path — `engine.khop_seedlocal(seed, hops, predicate, max_results)` and routed `engine.khop()` for `hops ≤ IVG_KHOP_SEEDLOCAL_MAX_HOPS` (default 2). Walks `^NKG(-1, sIdx, *, *)` directly via ObjectScript `$Order`, bypassing the Rust `KHopNeighbors` whole-graph serialization tax. **1-hop: 179µs → ≤150µs** (1.95× faster) on 50K-node / 145K-edge fixture. 2-hop: ≤300µs. Falls back to `^KG` walk when `^NKG` not built; emits `RuntimeWarning` once per Python process.
+- **fix(spec-164)**: `Graph.KG.GraphIndex.EmptyHLL` — fixed `..EmptyHLL()` → `##class(Graph.KG.GraphIndex).EmptyHLL()` to prevent `<No such method>` compile error when `Graph.KG.Edge.cls` is compiled in a fresh container.
+- **feat(spec-164)**: `IVG_TEST_PORT` env var for `scripts/test-container.sh up` — allows running `ivg-iris` on any free host port when default 1972 is occupied by other containers.
+- **soft-deprecation(spec-164)**: `Graph.KG.Traversal.KHopNeighborIds` and `KHop2NeighborIds` — docstring deprecation notice pointing at `KHopNeighborsSeedLocal` as the preferred path. Methods retained for backward compat.
+
+
 - **feat**: Spec 163 — Community Detection & Cluster Analysis Suite. Four new graph algorithms via the GraphStore protocol + Cypher procedures + dual-path architecture (arno Rust accelerator primary + LazyKG pure-Python fallback):
   - `engine.leiden_communities(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed, progress_callback)` — Leiden community detection (Traag et al. 2019). At `gamma=1.0` uses `ModularityVertexPartition` (canonical Leiden); at `gamma != 1.0` uses `CPMVertexPartition` for resolution control. ARI = 1.0 with `leidenalg` reference (4-way benchmark on karate, ER(500), ER(2000)).
   - `engine.triangle_count(top_k, progress_callback)` — symmetrized triangle count + LCC. Pearson > 0.95 with `networkx.triangles(networkx.Graph(G_directed))` on Erdős-Rényi 100-node fixture.

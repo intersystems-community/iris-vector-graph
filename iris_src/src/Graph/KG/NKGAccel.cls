@@ -1071,4 +1071,225 @@ ClassMethod Build2HopExact() As %Boolean
     Return 1
 }
 
+/// Spec 164 (FR-164-001..005): Seed-local k-hop walk via ^NKG without serializing
+/// the whole graph. ~5x faster than KHopNeighbors for hops=1.
+///
+/// Walks ^NKG(-1, sIdx, *, *) directly via $Order. Returns JSON array
+/// [{"node_id": ..., "hops": N}] ordered hops-ascending, then ^NKG subscript
+/// order within each hop (FR-164-001 / round-1 Q1 BFS layer order).
+///
+/// Edge cases (FR-164-004 / round-1 Q5):
+///   - hops=0          → "[]"
+///   - seedId not in $NI → delegate to KHopFromKGGlobalFallback
+///   - predicate not in $LI → "[]"
+///   - maxResults=0    → unlimited
+ClassMethod KHopNeighborsSeedLocal(seedId As %String, hops As %Integer = 1, predicate As %String = "", maxResults As %Integer = 10000) As %String
+{
+    If (seedId = "") || (hops = 0) {
+        Return "SEEDLOCAL:[]"
+    }
+    Set sIdx = $Get(^NKG("$NI", seedId))
+    If sIdx = "" {
+        Return "KGFALLBACK:"_..KHopFromKGGlobalFallback(seedId, hops, predicate, maxResults)
+    }
+
+    Kill ^||khopSeen, ^||khopResult
+    Set ^||khopSeen(sIdx) = 0
+    Set count = 0, frontStart = 1, frontEnd = 0
+    Set capped = 0
+    If predicate '= "" {
+        Set pIdx = $Get(^NKG("$LI", predicate))
+        If pIdx = "" {
+            Kill ^||khopSeen, ^||khopResult
+            Return "[]"
+        }
+        Set negP = -(pIdx + 1)
+        Set oIdx = $Order(^NKG(-1, sIdx, negP, ""))
+        While (oIdx '= "") && ('capped) {
+            If '$Data(^||khopSeen(oIdx)) {
+                Set ^||khopSeen(oIdx) = 1
+                Set count = count + 1
+                Set frontEnd = count
+                Set ^||khopResult(count, "id") = $Get(^NKG("$ND", oIdx))
+                Set ^||khopResult(count, "hops") = 1
+                Set ^||khopResult(count, "idx") = oIdx
+                If (maxResults > 0) && (count >= maxResults) Set capped = 1
+            }
+            Set oIdx = $Order(^NKG(-1, sIdx, negP, oIdx))
+        }
+    } Else {
+        Set negP = $Order(^NKG(-1, sIdx, ""))
+        While (negP '= "") && ('capped) {
+            Set oIdx = $Order(^NKG(-1, sIdx, negP, ""))
+            While (oIdx '= "") && ('capped) {
+                If '$Data(^||khopSeen(oIdx)) {
+                    Set ^||khopSeen(oIdx) = 1
+                    Set count = count + 1
+                    Set frontEnd = count
+                    Set ^||khopResult(count, "id") = $Get(^NKG("$ND", oIdx))
+                    Set ^||khopResult(count, "hops") = 1
+                    Set ^||khopResult(count, "idx") = oIdx
+                    If (maxResults > 0) && (count >= maxResults) Set capped = 1
+                }
+                Set oIdx = $Order(^NKG(-1, sIdx, negP, oIdx))
+            }
+            Set negP = $Order(^NKG(-1, sIdx, negP))
+        }
+    }
+
+    If (hops >= 2) && ('capped) {
+        For i = frontStart:1:frontEnd {
+            Quit:capped
+            Set fIdx = $Get(^||khopResult(i, "idx"))
+            If fIdx = "" Continue
+            If predicate '= "" {
+                Set pIdx2 = $Get(^NKG("$LI", predicate))
+                Quit:pIdx2=""
+                Set negP2 = -(pIdx2 + 1)
+                Set oIdx2 = $Order(^NKG(-1, fIdx, negP2, ""))
+                While (oIdx2 '= "") && ('capped) {
+                    If '$Data(^||khopSeen(oIdx2)) {
+                        Set ^||khopSeen(oIdx2) = 1
+                        Set count = count + 1
+                        Set ^||khopResult(count, "id") = $Get(^NKG("$ND", oIdx2))
+                        Set ^||khopResult(count, "hops") = 2
+                        Set ^||khopResult(count, "idx") = oIdx2
+                        If (maxResults > 0) && (count >= maxResults) Set capped = 1
+                    }
+                    Set oIdx2 = $Order(^NKG(-1, fIdx, negP2, oIdx2))
+                }
+            } Else {
+                Set negP2 = $Order(^NKG(-1, fIdx, ""))
+                While (negP2 '= "") && ('capped) {
+                    Set oIdx2 = $Order(^NKG(-1, fIdx, negP2, ""))
+                    While (oIdx2 '= "") && ('capped) {
+                        If '$Data(^||khopSeen(oIdx2)) {
+                            Set ^||khopSeen(oIdx2) = 1
+                            Set count = count + 1
+                            Set ^||khopResult(count, "id") = $Get(^NKG("$ND", oIdx2))
+                            Set ^||khopResult(count, "hops") = 2
+                            Set ^||khopResult(count, "idx") = oIdx2
+                            If (maxResults > 0) && (count >= maxResults) Set capped = 1
+                        }
+                        Set oIdx2 = $Order(^NKG(-1, fIdx, negP2, oIdx2))
+                    }
+                    Set negP2 = $Order(^NKG(-1, fIdx, negP2))
+                }
+            }
+        }
+    }
+
+    Set json = "["
+    Set sep = ""
+    For j = 1:1:count {
+        Set nid = $Get(^||khopResult(j, "id"))
+        Set h = $Get(^||khopResult(j, "hops"))
+        Set escNid = $Replace($Replace(nid, "\", "\\"), """", "\""")
+        Set json = json _ sep _ "{""node_id"":""" _ escNid _ """,""hops"":" _ h _ "}"
+        Set sep = ","
+    }
+    Set json = json _ "]"
+
+    Kill ^||khopSeen, ^||khopResult
+    Return "SEEDLOCAL:"_json
+}
+/// Spec 164 FR-164-008 / round-2 Q3 — `^KG` walk fallback when `^NKG("$NI", seedId)`
+/// is empty. Emits **identical JSON schema** to KHopNeighborsSeedLocal:
+///   [{"node_id": "...", "hops": N}, ...] hops-ascending, BFS layer order.
+/// Uses `^||khopSeenId` (string-keyed) for dedup since `^KG` is string-keyed.
+ClassMethod KHopFromKGGlobalFallback(seedId As %String, hops As %Integer = 1, predicate As %String = "", maxResults As %Integer = 10000) As %String [ Private ]
+{
+    If (seedId = "") || (hops = 0) {
+        Return "[]"
+    }
+
+    Kill ^||khopSeenId, ^||khopResult
+    Set ^||khopSeenId(seedId) = 0
+    Set count = 0, frontStart = 1, frontEnd = 0
+    Set capped = 0
+
+    If predicate '= "" {
+        Set dst = $Order(^KG("out", 0, seedId, predicate, ""))
+        While (dst '= "") && ('capped) {
+            If '$Data(^||khopSeenId(dst)) {
+                Set ^||khopSeenId(dst) = 1
+                Set count = count + 1
+                Set frontEnd = count
+                Set ^||khopResult(count, "id") = dst
+                Set ^||khopResult(count, "hops") = 1
+                If (maxResults > 0) && (count >= maxResults) Set capped = 1
+            }
+            Set dst = $Order(^KG("out", 0, seedId, predicate, dst))
+        }
+    } Else {
+        Set pred = $Order(^KG("out", 0, seedId, ""))
+        While (pred '= "") && ('capped) {
+            Set dst = $Order(^KG("out", 0, seedId, pred, ""))
+            While (dst '= "") && ('capped) {
+                If '$Data(^||khopSeenId(dst)) {
+                    Set ^||khopSeenId(dst) = 1
+                    Set count = count + 1
+                    Set frontEnd = count
+                    Set ^||khopResult(count, "id") = dst
+                    Set ^||khopResult(count, "hops") = 1
+                    If (maxResults > 0) && (count >= maxResults) Set capped = 1
+                }
+                Set dst = $Order(^KG("out", 0, seedId, pred, dst))
+            }
+            Set pred = $Order(^KG("out", 0, seedId, pred))
+        }
+    }
+
+    If (hops >= 2) && ('capped) {
+        For i = frontStart:1:frontEnd {
+            Quit:capped
+            Set fId = $Get(^||khopResult(i, "id"))
+            If fId = "" Continue
+            If predicate '= "" {
+                Set d2 = $Order(^KG("out", 0, fId, predicate, ""))
+                While (d2 '= "") && ('capped) {
+                    If '$Data(^||khopSeenId(d2)) {
+                        Set ^||khopSeenId(d2) = 1
+                        Set count = count + 1
+                        Set ^||khopResult(count, "id") = d2
+                        Set ^||khopResult(count, "hops") = 2
+                        If (maxResults > 0) && (count >= maxResults) Set capped = 1
+                    }
+                    Set d2 = $Order(^KG("out", 0, fId, predicate, d2))
+                }
+            } Else {
+                Set p2 = $Order(^KG("out", 0, fId, ""))
+                While (p2 '= "") && ('capped) {
+                    Set d2 = $Order(^KG("out", 0, fId, p2, ""))
+                    While (d2 '= "") && ('capped) {
+                        If '$Data(^||khopSeenId(d2)) {
+                            Set ^||khopSeenId(d2) = 1
+                            Set count = count + 1
+                            Set ^||khopResult(count, "id") = d2
+                            Set ^||khopResult(count, "hops") = 2
+                            If (maxResults > 0) && (count >= maxResults) Set capped = 1
+                        }
+                        Set d2 = $Order(^KG("out", 0, fId, p2, d2))
+                    }
+                    Set p2 = $Order(^KG("out", 0, fId, p2))
+                }
+            }
+        }
+    }
+
+    Set json = "["
+    Set sep = ""
+    For j = 1:1:count {
+        Set nid = $Get(^||khopResult(j, "id"))
+        Set h = $Get(^||khopResult(j, "hops"))
+        Set escNid = $Replace($Replace(nid, "\", "\\"), """", "\""")
+        Set json = json _ sep _ "{""node_id"":""" _ escNid _ """,""hops"":" _ h _ "}"
+        Set sep = ","
+    }
+    Set json = json _ "]"
+
+    Kill ^||khopSeenId, ^||khopResult
+    Return json
+}
+
 }
