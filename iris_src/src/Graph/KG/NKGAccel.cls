@@ -1275,7 +1275,7 @@ ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFir
     Set n = +$Get(^NKG("$meta","nodeCount"),0)
     If n = 0 Return $$$OK
 
-    Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwQueue, ^||bwDelta
+    Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwDelta
 
     For si = srcFirst:1:srcLast {
         Set srcNid = $Get(^bcParSrc(parentPid, si),"")
@@ -1283,59 +1283,86 @@ ClassMethod BetweennessWorker(parentPid As %Integer, workerN As %Integer, srcFir
         Set sIdx = $Get(^NKG("$NI",srcNid),-1)
         If sIdx = -1 Continue
 
-        Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwQueue
+        Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack
         Set ^||bwSigma(sIdx)=1, ^||bwDist(sIdx)=0
-        Set qHead=1, qTail=1, stackTop=0
-        Set ^||bwQueue(1)=sIdx
+        Set frontier = ""
+        Set $BIT(frontier, sIdx+1) = 1
+        Set visited = frontier
+        Set stackTop = 0, bfsLevel = 0
+        Set ^||bwStack(0) = sIdx
 
-        While qHead<=qTail {
-            Set vIdx=^||bwQueue(qHead), qHead=qHead+1
-            Set stackTop=stackTop+1, ^||bwStack(stackTop)=vIdx
-            Set negP=$Order(^NKG(-1,vIdx,""))
-            While negP'="" {
-                Set oIdx=$Order(^NKG(-1,vIdx,negP,""))
-                While oIdx'="" {
-                    If '$Data(^||bwDist(oIdx)) {
-                        Set ^||bwDist(oIdx)=$Get(^||bwDist(vIdx),0)+1
-                        Set ^||bwSigma(oIdx)=0
-                        Set qTail=qTail+1, ^||bwQueue(qTail)=oIdx
-                    }
-                    If ^||bwDist(oIdx)=($Get(^||bwDist(vIdx),0)+1) {
-                        Set ^||bwSigma(oIdx)=+$Number($Get(^||bwSigma(oIdx),0)+$Get(^||bwSigma(vIdx),1),15)
-                        Set ^||bwPred(oIdx,vIdx)=""
-                    }
-                    Set oIdx=$Order(^NKG(-1,vIdx,negP,oIdx))
+        While $BITCOUNT(frontier,1) > 0 {
+            Set bfsLevel = bfsLevel + 1
+            Set candidates = ""
+            Set pos = 0
+            For {
+                Set pos = $BITFIND(frontier, 1, pos+1)
+                Quit:pos=0
+                Set v = pos-1
+                If $Data(^bcBitAdj(parentPid,v)) {
+                    Set candidates = $BITLOGIC(candidates | ^bcBitAdj(parentPid,v))
                 }
-                Set negP=$Order(^NKG(-1,vIdx,negP))
             }
+            Set newFrontier = $BITLOGIC(candidates & ~visited)
+            Quit:$BITCOUNT(newFrontier,1)=0
+
+            Set pos = 0
+            For {
+                Set pos = $BITFIND(newFrontier, 1, pos+1)
+                Quit:pos=0
+                Set w = pos-1
+                Set ^||bwDist(w) = bfsLevel
+                Set ^||bwSigma(w) = 0
+                Set stackTop = stackTop+1
+                Set ^||bwStack(stackTop) = w
+            }
+            Set pos = 0
+            For {
+                Set pos = $BITFIND(frontier, 1, pos+1)
+                Quit:pos=0
+                Set v = pos-1
+                If $Data(^bcBitAdj(parentPid,v)) {
+                    Set vToNew = $BITLOGIC(^bcBitAdj(parentPid,v) & newFrontier)
+                    Set pos2 = 0
+                    For {
+                        Set pos2 = $BITFIND(vToNew, 1, pos2+1)
+                        Quit:pos2=0
+                        Set w = pos2-1
+                        Set ^||bwSigma(w) = +$Number($Get(^||bwSigma(w),0)+$Get(^||bwSigma(v),1),15)
+                        Set ^||bwPred(w,v) = ""
+                    }
+                }
+            }
+            Set visited = $BITLOGIC(visited | newFrontier)
+            Set frontier = newFrontier
         }
 
         Kill ^||bwDelta
-        Set wi=stackTop
-        While wi>=1 {
-            Set wIdx=^||bwStack(wi), wi=wi-1
-            Set v2=$Order(^||bwPred(wIdx,""))
-            While v2'="" {
-                Set sv=+$Number($Get(^||bwSigma(v2),1),15)
-                Set sw=+$Number($Get(^||bwSigma(wIdx),1),15)
-                If sw>0 {
-                    Set dv=+$Number($Get(^||bwDelta(v2),0),15)
-                    Set dw=+$Number($Get(^||bwDelta(wIdx),0),15)
-                    Set r=+$Number(sv/sw,15)
-                    Set c=+$Number(r*(1+dw),15)
-                    Set ^||bwDelta(v2)=+$Number(dv+c,15)
+        Set wi = stackTop
+        While wi >= 0 {
+            Set wIdx = ^||bwStack(wi), wi = wi-1
+            Set v2 = $Order(^||bwPred(wIdx,""))
+            While v2 '= "" {
+                Set sv = +$Number($Get(^||bwSigma(v2),1),15)
+                Set sw = +$Number($Get(^||bwSigma(wIdx),1),15)
+                If sw > 0 {
+                    Set dv = +$Number($Get(^||bwDelta(v2),0),15)
+                    Set dw = +$Number($Get(^||bwDelta(wIdx),0),15)
+                    Set r  = +$Number(sv/sw,15)
+                    Set c  = +$Number(r*(1+dw),15)
+                    Set ^||bwDelta(v2) = +$Number(dv+c,15)
                 }
-                Set v2=$Order(^||bwPred(wIdx,v2))
+                Set v2 = $Order(^||bwPred(wIdx,v2))
             }
-            If wIdx'=sIdx {
-                Set d=+$Number($Get(^||bwDelta(wIdx),0),15)
-                Set cur=$Get(^bcParScore(parentPid,workerN,wIdx),0)
-                Set ^bcParScore(parentPid,workerN,wIdx)=+$Number(cur+d*scale,15)
+            If wIdx '= sIdx {
+                Set d   = +$Number($Get(^||bwDelta(wIdx),0),15)
+                Set cur = $Get(^bcParScore(parentPid,workerN,wIdx),0)
+                Set ^bcParScore(parentPid,workerN,wIdx) = +$Number(cur + +$Number(d*scale,15),15)
             }
         }
     }
 
-    Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwQueue, ^||bwDelta
+    Kill ^||bwSigma, ^||bwDist, ^||bwPred, ^||bwStack, ^||bwDelta
     Return $$$OK
 }
 
@@ -1386,6 +1413,8 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
     Set remainder = srcCount # numJobs
     Set cursor = 0
 
+    Do ..BuildBitAdj(parentPid)
+
     For w = 1:1:numJobs {
         Set wSize = chunkSize + $Select(w <= remainder: 1, 1: 0)
         Set srcFirst = cursor
@@ -1421,8 +1450,28 @@ ClassMethod BetweennessGlobalParallel(sampleSize As %Integer = 0, topK As %Integ
         If (topK > 0) && (cnt >= topK) Quit
     }
 
-    Kill ^bcParScore(parentPid), ^||parNodes
+    Kill ^bcParScore(parentPid), ^bcBitAdj(parentPid), ^||parNodes
     Quit "OK:"_json_"]"
+}
+
+ClassMethod BuildBitAdj(parentPid As %Integer) [ Private ]
+{
+    Kill ^bcBitAdj(parentPid)
+    Set srcIdx = ""
+    For {
+        Set srcIdx = $Order(^NKG(-3,srcIdx))
+        Quit:srcIdx=""
+        Set negP = $Order(^NKG(-1,srcIdx,""))
+        While negP '= "" {
+            Set dstIdx = $Order(^NKG(-1,srcIdx,negP,""))
+            While dstIdx '= "" {
+                Set $BIT(^bcBitAdj(parentPid,srcIdx), dstIdx+1) = 1
+                Set $BIT(^bcBitAdj(parentPid,dstIdx), srcIdx+1) = 1
+                Set dstIdx = $Order(^NKG(-1,srcIdx,negP,dstIdx))
+            }
+            Set negP = $Order(^NKG(-1,srcIdx,negP))
+        }
+    }
 }
 
 }
