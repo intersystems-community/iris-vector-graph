@@ -1258,79 +1258,75 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
         Set sIdx = $Get(^NKG("$NI",srcNid),-1)
         If sIdx = -1 Continue
 
-        Kill ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack
-        Set ^||bfsSigma(sIdx) = 1
+        Kill ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack, ^||bfsQueue
+        Set ^||bfsSigma(sIdx) = 1.0
         Set ^||bfsDist(sIdx) = 0
-        Set queue = sIdx_",", qLen = 1, stackTop = 0
+        Set qHead = 1, qTail = 1, stackTop = 0
+        Set ^||bfsQueue(1) = sIdx
 
-        While qLen > 0 {
-            Set newQ = "", newLen = 0
-            For qi = 1:1:qLen {
-                Set vIdx = $Piece(queue,",",qi)
-                Set stackTop = stackTop + 1
-                Set ^||bfsStack(stackTop) = vIdx
-                Set negP = $Order(^NKG(-1,vIdx,""))
-                While negP '= "" {
-                    Set oIdx = $Order(^NKG(-1,vIdx,negP,""))
-                    While oIdx '= "" {
-                        If '$Data(^||bfsDist(oIdx)) {
+        While qHead <= qTail {
+            Set vIdx = ^||bfsQueue(qHead)
+            Set qHead = qHead + 1
+            Set stackTop = stackTop + 1
+            Set ^||bfsStack(stackTop) = vIdx
+            Set negP = $Order(^NKG(-1,vIdx,""))
+            While negP '= "" {
+                Set oIdx = $Order(^NKG(-1,vIdx,negP,""))
+                While oIdx '= "" {
+                    If '$Data(^||bfsDist(oIdx)) {
                             Set ^||bfsDist(oIdx) = $Get(^||bfsDist(vIdx),0) + 1
-                            Set ^||bfsSigma(oIdx) = 0
-                            Set newQ = newQ_oIdx_","
-                            Set newLen = newLen + 1
+                            Set ^||bfsSigma(oIdx) = 0.0
+                            Set qTail = qTail + 1
+                            Set ^||bfsQueue(qTail) = oIdx
                         }
                         If ^||bfsDist(oIdx) = ($Get(^||bfsDist(vIdx),0) + 1) {
-                            Set ^||bfsSigma(oIdx) = $Get(^||bfsSigma(oIdx),0) + $Get(^||bfsSigma(vIdx),1)
+                            Set ^||bfsSigma(oIdx) = $Get(^||bfsSigma(oIdx),0) + $Get(^||bfsSigma(vIdx),1.0)
                             Set ^||bfsPred(oIdx,vIdx) = 1
                         }
-                        Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
-                    }
-                    Set negP = $Order(^NKG(-1,vIdx,negP))
+                    Set oIdx = $Order(^NKG(-1,vIdx,negP,oIdx))
                 }
+                Set negP = $Order(^NKG(-1,vIdx,negP))
             }
-            Set queue = newQ, qLen = newLen
         }
 
         Kill ^||delta
-        For wi = stackTop:-1:1 {
+        Set wi = stackTop
+        While wi >= 1 {
             Set wIdx = ^||bfsStack(wi)
+            Set wi = wi - 1
             Set vIdx2 = $Order(^||bfsPred(wIdx,""))
             While vIdx2 '= "" {
                 Set sigV = $Get(^||bfsSigma(vIdx2),1)
                 Set sigW = $Get(^||bfsSigma(wIdx),1)
                 If sigW > 0 {
-                    Set deltaV = $Get(^||delta(vIdx2),0)
-                    Set deltaW = $Get(^||delta(wIdx),0)
-                    Set ^||delta(vIdx2) = deltaV + (sigV / sigW) * (1 + deltaW)
+                    Set deltaV = $Number($Get(^||delta(vIdx2),0), 15)
+                    Set deltaW = $Number($Get(^||delta(wIdx),0), 15)
+                    Set ratio = $Number(sigV / sigW, 15)
+                    Set contrib = $Number(ratio * (1 + deltaW), 15)
+                    Set ^||delta(vIdx2) = $Number(deltaV + contrib, 15)
                 }
                 Set vIdx2 = $Order(^||bfsPred(wIdx,vIdx2))
             }
             If wIdx '= sIdx {
-                Set ^||bcScore(wIdx) = $Get(^||bcScore(wIdx),0) + $Get(^||delta(wIdx),0) * scale
+                Set ^||bcScore(wIdx) = $Number($Get(^||bcScore(wIdx),0) + $Number($Get(^||delta(wIdx),0),15) * scale, 15)
             }
         }
     }
 
-    Set json = "[", sep = ""
-    Set idx = "", cnt = 0
-    Set maxScore = "", allIdx = ""
+    Set json = "[", sep = "", cnt = 0
     Set i2 = ""
     For {
         Set i2 = $Order(^||bcScore(i2))
         Quit:i2=""
-        Set allIdx = allIdx_i2_","
-    }
-    Set n2 = $Length(allIdx,",") - 1
-    For i3 = 1:1:n2 {
-        Set score = $Get(^||bcScore($Piece(allIdx,",",i3)),0)
-        Set nid3 = $Get(^NKG("$ND",$Piece(allIdx,",",i3)),"")
+        Set score = $Get(^||bcScore(i2),0)
+        Set nid3 = $Get(^NKG("$ND",i2),"")
         If nid3 = "" Continue
         Set json = json_sep_"{""id"":"""_nid3_""",""score"":"_score_"}"
         Set sep = ","
         Set cnt = cnt + 1
         If (topK > 0) && (cnt >= topK) Quit
     }
-    Kill ^||bcScore, ^||nodeArr, ^||nodeArrR, ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack, ^||delta
+    Kill ^||bcScore, ^||nodeArr, ^||nodeArrR, ^||bfsSigma, ^||bfsDist, ^||bfsPred, ^||bfsStack, ^||bfsQueue, ^||delta
     Quit "OK:"_json_"]"
 }
 

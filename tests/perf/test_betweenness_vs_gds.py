@@ -69,20 +69,13 @@ def _pearson(a: Dict[str, float], b: Dict[str, float]) -> float:
 
 
 def _load_into_ivg(engine, nodes: List[str], edges: List[Tuple[str, str]]) -> None:
+    from iris_vector_graph.schema import _call_classmethod
     for n in nodes:
         engine.create_node(n)
     for u, v in edges:
         engine.create_edge(u, "EDGE", v)
         engine.create_edge(v, "EDGE", u)
-    engine.rebuild_kg()
-    try:
-        engine.rebuild_nkg()
-    except Exception:
-        pass
-    try:
-        engine._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildNKG")
-    except Exception:
-        pass
+    _call_classmethod(engine.conn, "Graph.KG.Traversal", "BuildKG")
 
 
 def _bench_ivg(
