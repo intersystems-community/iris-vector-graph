@@ -733,6 +733,15 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 
  ## Changelog
 
+### v2.0.0 (2026-05-29)
+- **perf(spec-168)**: `ClosenessGlobal` ObjectScript ClassMethod — harmonic and classical closeness centrality via BFS over `^NKG` integer adjacency index. 1-round-trip dispatch path in `_closeness_gref`. Matches `networkx.harmonic_centrality` (raw `sumInv`, not divided by n-1). Transparent fallback to LazyKG when `^NKG` is stale.
+- **perf(spec-169)**: `EigenvectorGlobal` ObjectScript ClassMethod — L2-normalized power iteration over raw adjacency `A` (not transition matrix). Matches `networkx.eigenvector_centrality_numpy`. 1-round-trip dispatch in `_eigenvector_gref`.
+- **perf(spec-170)**: `BetweennessGlobal` ObjectScript ClassMethod — Brandes (2001) betweenness centrality via BFS forward pass + reverse stack pass using process-private globals (`^||bfsSigma`, `^||bfsDist`, `^||bfsPred`, `^||bfsStack`, `^||delta`). `While` countdown loop for reverse pass (avoids ObjectScript negative-step `For` parsing issue). Optional `sampleSize` parameter for Brandes-Pich approximation. 1-round-trip dispatch in `_betweenness_gref`.
+- **fix(spec-168)**: `ClosenessGlobal` normalization bug — was dividing `sumInv` by `(n-1)` where `n` = total ^NKG node count, causing gross underestimate on mixed-data containers. Fixed to raw `sumInv` matching networkx.
+- **test**: `tests/unit/test_betweenness_os_unit.py` — 3 unit tests for BetweennessGlobal dispatch logic.
+- **test**: `tests/e2e/test_betweenness_os_e2e.py`, `test_closeness_os_e2e.py`, `test_eigenvector_os_e2e.py` — 2+2+2 e2e tests.
+- **bench**: `tests/perf/test_betweenness_vs_gds.py` — IVG `BetweennessGlobal` vs Neo4j GDS `gds.betweenness.stream` on karate/ER(500)/ER(2000); Pearson > 0.85 correctness gate; speedup measurement.
+
 ### v1.99.0 (2026-05-28)
 - **feat**: Spec 163 — Community Detection & Cluster Analysis Suite. Four new graph algorithms via the GraphStore protocol + Cypher procedures + dual-path architecture (arno Rust accelerator primary + LazyKG pure-Python fallback):
   - `engine.leiden_communities(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed, progress_callback)` — Leiden community detection (Traag et al. 2019). At `gamma=1.0` uses `ModularityVertexPartition` (canonical Leiden); at `gamma != 1.0` uses `CPMVertexPartition` for resolution control. ARI = 1.0 with `leidenalg` reference (4-way benchmark on karate, ER(500), ER(2000)).
