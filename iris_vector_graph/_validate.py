@@ -183,3 +183,51 @@ class VecSearchInput(BaseModel):
         if not v:
             raise ValueError("query vector cannot be empty")
         return _finite_floats(v, "query")
+
+
+class DegreeCentralityInput(BaseModel):
+    direction: Literal["out", "in", "both"] = "out"
+    predicate: Optional[str] = None
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+
+
+class BetweennessInput(BaseModel):
+    sample_size: int = Field(default=0, ge=0, le=1_000_000)
+    direction: Literal["out", "in", "both"] = "out"
+    max_hops: int = Field(default=0, ge=0, le=1000)
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+    mem_budget_mb: int = Field(default=256, ge=16, le=8192)
+
+
+class ClosenessInput(BaseModel):
+    formula: Literal["harmonic", "classical"] = "harmonic"
+    direction: Literal["out", "in", "both"] = "out"
+    max_hops: int = Field(default=0, ge=0, le=1000)
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+
+
+class EigenvectorInput(BaseModel):
+    max_iter: int = Field(default=30, ge=1, le=1000)
+    tol: float = Field(default=1e-6, gt=0.0, lt=1.0)
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+
+
+class LeidenInput(BaseModel):
+    max_levels: int = Field(default=10, ge=1, le=100)
+    gamma: float = Field(default=1.0, gt=0.0, le=100.0)
+    tol: float = Field(default=1e-4, gt=0.0, lt=1.0)
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+    mem_budget_mb: int = Field(default=256, ge=16, le=8192)
+    random_seed: Optional[int] = Field(default=None, ge=0, le=2**32 - 1)
+
+
+class TriangleCountInput(BaseModel):
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+
+
+class SCCInput(BaseModel):
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)
+
+
+class KCoreInput(BaseModel):
+    top_k: int = Field(default=10000, ge=0, le=1_000_000)

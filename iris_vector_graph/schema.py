@@ -695,6 +695,110 @@ LANGUAGE OBJECTSCRIPT
     quit result
 }}
 """,
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_DegreeCentrality(
+  direction VARCHAR(8) DEFAULT 'out',
+  predicate VARCHAR(256) DEFAULT '',
+  topK INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Centrality).DegreeCentralityJson(direction, predicate, topK)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_Betweenness(
+  sampleSize INT DEFAULT 0,
+  direction VARCHAR(8) DEFAULT 'out',
+  maxHops INT DEFAULT 0,
+  topK INT DEFAULT 10000,
+  memBudgetMB INT DEFAULT 256
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Centrality).BetweennessJson(sampleSize, direction, maxHops, topK, memBudgetMB)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_Closeness(
+  formula VARCHAR(16) DEFAULT 'harmonic',
+  direction VARCHAR(8) DEFAULT 'out',
+  maxHops INT DEFAULT 0,
+  topK INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Centrality).ClosenessJson(formula, direction, maxHops, topK)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_Eigenvector(
+  maxIter INT DEFAULT 30,
+  tol DOUBLE DEFAULT 0.000001,
+  topK INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Centrality).EigenvectorJson(maxIter, tol, topK)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_Leiden(
+  maxLevels INT DEFAULT 10,
+  gamma DOUBLE DEFAULT 1.0,
+  tol DOUBLE DEFAULT 0.0001,
+  topK INT DEFAULT 10000,
+  memBudgetMB INT DEFAULT 256,
+  randomSeed INT DEFAULT -1
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Communities).LeidenJson(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_TriangleCount(
+  topK INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Communities).TriangleCountJson(topK)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_SCC(
+  topK INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Communities).SCCJson(topK)
+    quit result
+}}
+""",
+            f"""
+CREATE OR REPLACE FUNCTION {table_schema}.kg_KCore(
+  topK INT DEFAULT 10000
+)
+RETURNS VARCHAR(32000)
+LANGUAGE OBJECTSCRIPT
+{{
+    set result = ##class(Graph.KG.Communities).KCoreJson(topK)
+    quit result
+}}
+""",
         ]
 
     # ------------------------------------------------------------------

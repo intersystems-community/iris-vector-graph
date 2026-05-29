@@ -17,6 +17,8 @@ from ._validate import (
     IVFBuildInput, VectorSearchInput,
     BM25BuildInput, BM25SearchInput,
     KHop2Input, TemporalEdgeInput, VecSearchInput,
+    DegreeCentralityInput, BetweennessInput, ClosenessInput, EigenvectorInput,
+    LeidenInput, TriangleCountInput, SCCInput, KCoreInput,
 )
 from .vector_utils import VectorOptimizer
 from .text_search import TextSearchEngine

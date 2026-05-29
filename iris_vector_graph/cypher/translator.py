@@ -24,6 +24,58 @@ logger = logging.getLogger(__name__)
 # Set to "" (empty string) for unqualified table names
 _schema_prefix: str = ""
 
+# Allowed map-parameter keys for centrality procedures (Spec 162 FR-029).
+# The procedure-call validator rejects unknown keys to prevent silent typos
+# and reserves keys (e.g. `weighted`) for future Phase 2 extensions.
+CENTRALITY_ALLOWED_KEYS: Dict[str, set] = {
+    "ivg.degreeCentrality": {"direction", "predicate", "topK"},
+    "ivg.betweenness":      {"sampleSize", "direction", "maxHops", "topK", "memBudgetMB"},
+    "ivg.closeness":        {"formula", "direction", "maxHops", "topK"},
+    "ivg.eigenvector":      {"maxIter", "tol", "topK"},
+}
+
+# Allowed map-parameter keys for community-detection procedures (Spec 163 FR-015).
+# Same forward-compat semantics as CENTRALITY_ALLOWED_KEYS — `weighted` is reserved
+# for Phase 2 weighted Leiden / weighted Triangle / etc.
+COMMUNITY_ALLOWED_KEYS: Dict[str, set] = {
+    "ivg.leiden":         {"maxLevels", "gamma", "tol", "topK", "memBudgetMB", "randomSeed"},
+    "ivg.triangleCount":  {"topK"},
+    "ivg.scc":            {"topK"},
+    "ivg.kcore":          {"topK"},
+}
+
+
+def _validate_centrality_proc_map(proc_name: str, map_keys) -> None:
+    """Reject unknown map-parameter keys for centrality procedures.
+
+    Raises ValueError with a clear message listing both the unknown key(s)
+    and the allowed set. Used by `_translate_degree_centrality`,
+    `_translate_betweenness`, `_translate_closeness`, `_translate_eigenvector`.
+    """
+    allowed = CENTRALITY_ALLOWED_KEYS.get(proc_name, set())
+    unknown = set(map_keys) - allowed
+    if unknown:
+        raise ValueError(
+            f"Unknown parameters for {proc_name}: {sorted(unknown)}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+
+
+def _validate_community_proc_map(proc_name: str, map_keys) -> None:
+    """Reject unknown map-parameter keys for community-detection procedures (Spec 163 FR-015).
+
+    Same forward-compat semantics as `_validate_centrality_proc_map` — `weighted`
+    is reserved for Phase 2. Used by `_translate_leiden`, `_translate_triangle_count`,
+    `_translate_scc`, `_translate_kcore`.
+    """
+    allowed = COMMUNITY_ALLOWED_KEYS.get(proc_name, set())
+    unknown = set(map_keys) - allowed
+    if unknown:
+        raise ValueError(
+            f"Unknown parameters for {proc_name}: {sorted(unknown)}. "
+            f"Allowed: {sorted(allowed)}"
+        )
+
 
 def set_schema_prefix(prefix: str) -> None:
     """Set the schema prefix for all table references in generated SQL.
@@ -275,9 +327,25 @@ def translate_procedure_call(
         _translate_retrieve(proc, context)
     elif name == "ivg.shortestpath.weighted" or name == "ivg.shortestPath.weighted":
         _translate_weighted_shortest_path(proc, context)
+    elif name == "ivg.degreeCentrality":
+        _translate_degree_centrality(proc, context)
+    elif name == "ivg.betweenness":
+        _translate_betweenness(proc, context)
+    elif name == "ivg.closeness":
+        _translate_closeness(proc, context)
+    elif name == "ivg.eigenvector":
+        _translate_eigenvector(proc, context)
+    elif name == "ivg.leiden":
+        _translate_leiden(proc, context)
+    elif name == "ivg.triangleCount":
+        _translate_triangle_count(proc, context)
+    elif name == "ivg.scc":
+        _translate_scc(proc, context)
+    elif name == "ivg.kcore":
+        _translate_kcore(proc, context)
     else:
         raise ValueError(
-            f"Unknown procedure: {name!r}. Supported: ivg.retrieve, ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted"
+            f"Unknown procedure: {name!r}. Supported: ivg.retrieve, ivg.vector.search, ivg.neighbors, ivg.ppr, ivg.bm25.search, ivg.ivf.search, ivg.shortestPath.weighted, ivg.degreeCentrality, ivg.betweenness, ivg.closeness, ivg.eigenvector, ivg.leiden, ivg.triangleCount, ivg.scc, ivg.kcore"
         )
 
 
@@ -3426,7 +3494,9 @@ def translate_return_clause(ret, context):
                 node_expr = (
                     var_name
                     if alias_name.startswith("Stage")
-                    or alias_name in ("VecSearch", "BM25", "PPR", "IVF_SEARCH")
+                    or alias_name in ("VecSearch", "BM25", "PPR", "IVF_SEARCH",
+                                      "DegCent", "Betweenness", "Closeness",
+                                      "Eigenvector")
                     else f"{alias_name}.node_id"
                 )
                 context.select_items.append(f"{node_expr} AS {prefix}_id")
@@ -3547,3 +3617,285 @@ def _translate_having_expr(expr, agg_aliases: set, agg_alias_sql: dict, context)
         if op in op_map:
             return f"{left} {op_map[op]} {right}"
     return translate_boolean_expression(expr, context)
+
+
+def _translate_degree_centrality(proc, context) -> None:
+    """CALL ivg.degreeCentrality({direction:'out', predicate:'CITES', topK:50}) YIELD node, score, degree"""
+    opts = proc.options or {}
+    _validate_centrality_proc_map("ivg.degreeCentrality", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    direction = str(_val("direction", "out"))
+    pred_v = _val("predicate", "")
+    predicate = str(pred_v) if pred_v is not None else ""
+    top_k = int(_val("topK", 10000))
+
+    fn = f"{_schema_prefix}.kg_DegreeCentrality" if _schema_prefix else "kg_DegreeCentrality"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.score, j.degree\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score',\n"
+        f"    degree INTEGER PATH '$.degree'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([direction, predicate, top_k])
+    context.stages.insert(0, f"DegCent AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "DegCent"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+    if "degree" in proc.yield_items:
+        context.scalar_variables.add("degree")
+
+
+def _translate_betweenness(proc, context) -> None:
+    """CALL ivg.betweenness({sampleSize:100, direction:'out', maxHops:0, topK:50, memBudgetMB:256}) YIELD node, score"""
+    opts = proc.options or {}
+    _validate_centrality_proc_map("ivg.betweenness", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    sample_size = int(_val("sampleSize", 0))
+    direction = str(_val("direction", "out"))
+    max_hops = int(_val("maxHops", 0))
+    top_k = int(_val("topK", 10000))
+    mem_budget_mb = int(_val("memBudgetMB", 256))
+
+    fn = f"{_schema_prefix}.kg_Betweenness" if _schema_prefix else "kg_Betweenness"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?, ?, ?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([sample_size, direction, max_hops, top_k, mem_budget_mb])
+    context.stages.insert(0, f"Betweenness AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "Betweenness"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
+def _translate_closeness(proc, context) -> None:
+    """CALL ivg.closeness({formula:'harmonic', direction:'out', maxHops:0, topK:50}) YIELD node, score (Phase 5 — pending T064)"""
+    opts = proc.options or {}
+    _validate_centrality_proc_map("ivg.closeness", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    formula = str(_val("formula", "harmonic"))
+    direction = str(_val("direction", "out"))
+    max_hops = int(_val("maxHops", 0))
+    top_k = int(_val("topK", 10000))
+
+    fn = f"{_schema_prefix}.kg_Closeness" if _schema_prefix else "kg_Closeness"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?, ?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([formula, direction, max_hops, top_k])
+    context.stages.insert(0, f"Closeness AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "Closeness"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
+def _translate_eigenvector(proc, context) -> None:
+    """CALL ivg.eigenvector({maxIter:30, tol:1e-6, topK:50}) YIELD node, score (Phase 6 — pending T080)"""
+    opts = proc.options or {}
+    _validate_centrality_proc_map("ivg.eigenvector", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    max_iter = int(_val("maxIter", 30))
+    tol = float(_val("tol", 1e-6))
+    top_k = int(_val("topK", 10000))
+
+    fn = f"{_schema_prefix}.kg_Eigenvector" if _schema_prefix else "kg_Eigenvector"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.score\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    score DOUBLE PATH '$.score'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([max_iter, tol, top_k])
+    context.stages.insert(0, f"Eigenvector AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "Eigenvector"
+    if "score" in proc.yield_items:
+        context.scalar_variables.add("score")
+
+
+def _translate_leiden(proc, context) -> None:
+    opts = proc.options or {}
+    _validate_community_proc_map("ivg.leiden", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    max_levels = int(_val("maxLevels", 10))
+    gamma = float(_val("gamma", 1.0))
+    tol = float(_val("tol", 1e-4))
+    top_k = int(_val("topK", 10000))
+    mem_budget_mb = int(_val("memBudgetMB", 256))
+    seed_v = _val("randomSeed", None)
+    random_seed = -1 if seed_v is None else int(seed_v)
+
+    fn = f"{_schema_prefix}.kg_Leiden" if _schema_prefix else "kg_Leiden"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.community, j.size\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?, ?, ?, ?, ?, ?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    community INTEGER PATH '$.community',\n"
+        f"    size INTEGER PATH '$.size'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.extend([max_levels, gamma, tol, top_k, mem_budget_mb, random_seed])
+    context.stages.insert(0, f"Leiden AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "Leiden"
+    if "community" in proc.yield_items:
+        context.scalar_variables.add("community")
+    if "size" in proc.yield_items:
+        context.scalar_variables.add("size")
+
+
+def _translate_triangle_count(proc, context) -> None:
+    opts = proc.options or {}
+    _validate_community_proc_map("ivg.triangleCount", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    top_k = int(_val("topK", 10000))
+
+    fn = f"{_schema_prefix}.kg_TriangleCount" if _schema_prefix else "kg_TriangleCount"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.triangles, j.lcc\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    triangles INTEGER PATH '$.triangles',\n"
+        f"    lcc DOUBLE PATH '$.lcc'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.append(top_k)
+    context.stages.insert(0, f"TriangleCount AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "TriangleCount"
+    if "triangles" in proc.yield_items:
+        context.scalar_variables.add("triangles")
+    if "lcc" in proc.yield_items:
+        context.scalar_variables.add("lcc")
+
+
+def _translate_scc(proc, context) -> None:
+    opts = proc.options or {}
+    _validate_community_proc_map("ivg.scc", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    top_k = int(_val("topK", 10000))
+
+    fn = f"{_schema_prefix}.kg_SCC" if _schema_prefix else "kg_SCC"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.component, j.size\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    component INTEGER PATH '$.component',\n"
+        f"    size INTEGER PATH '$.size'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.append(top_k)
+    context.stages.insert(0, f"SCC AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "SCC"
+    if "component" in proc.yield_items:
+        context.scalar_variables.add("component")
+    if "size" in proc.yield_items:
+        context.scalar_variables.add("size")
+
+
+def _translate_kcore(proc, context) -> None:
+    opts = proc.options or {}
+    _validate_community_proc_map("ivg.kcore", opts.keys())
+
+    def _val(key, default):
+        v = opts.get(key, default)
+        if hasattr(v, "value"):
+            return v.value
+        return v
+
+    top_k = int(_val("topK", 10000))
+
+    fn = f"{_schema_prefix}.kg_KCore" if _schema_prefix else "kg_KCore"
+    cte_sql = (
+        f"SELECT j.node_id AS node, j.coreness\n"
+        f"FROM JSON_TABLE(\n"
+        f"  {fn}(?),\n"
+        f"  '$[*]' COLUMNS(\n"
+        f"    node_id VARCHAR(256) PATH '$.id',\n"
+        f"    coreness INTEGER PATH '$.coreness'\n"
+        f"  )\n"
+        f") j"
+    )
+    context.all_stage_params.append(top_k)
+    context.stages.insert(0, f"KCore AS (\n{cte_sql}\n)")
+    for item in proc.yield_items:
+        context.variable_aliases[item] = "KCore"
+    if "coreness" in proc.yield_items:
+        context.scalar_variables.add("coreness")

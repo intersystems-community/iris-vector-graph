@@ -434,3 +434,126 @@ Old `BulkIngestEdges` (Language=python) retained for backward compatibility but 
 On IVG-initialized schemas this is fast (both tables have `idx_labels_s` and `idx_props_s` indexes). On external schemas without these indexes the same pattern causes full table scans per batch.
 
 Future improvement: rewrite as a single JOIN query or use a temporary table for large batches (>1000 IDs). Non-urgent — IVG schemas are always indexed.
+
+---
+
+## Bug S — User-class CallIn fails on fresh ivg-iris container (XDCall returns CLASS DOES NOT EXIST)
+
+**Status**: ⚠️ **MITIGATED** in v1.98.0 via gref-bypass production path. Root cause still open in IRIS bindings server cache. Cypher CALL path remains xfail-marked.
+
+**Symptom**: External Python `iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', 'DegreeCentralityJson', ...)` returns `<CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.Centrality` — even though:
+- The class IS compiled (`%Dictionary.CompiledClass.%ExistsId` returns 1)
+- `^rOBJ("Graph.KG.Centrality.1")` exists
+- `^oddCOM` is populated  
+- The class is callable from inside `iris session` (proven via MCP HTTP path)
+
+**Affects**: All `Graph.KG.*` user classes — `kg_PPR` SQL function fails identically with `<CLASS DOES NOT EXIST> *Graph.KG.PageRank`. Has been there longer than spec 162 — existing tests work around it by using `engine.execute_cypher(...)` with built-in Cypher functions, never user-class direct CallIn.
+
+**Repro**:
+```bash
+./scripts/test-container.sh up   # fresh ivg-iris
+./scripts/test-container.sh deploy
+./scripts/test-container.sh compile Graph.KG.Centrality   # OK
+python3 -c "
+import iris
+conn = iris.connect('localhost', 1972, 'USER', '_SYSTEM', 'SYS')
+iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', 'DegreeCentralityJson', 'out', '', 5)
+"
+# RuntimeError: <CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.Centrality
+```
+
+**Diagnostics tried (none worked)**:
+- `Do $system.OBJ.Compile("Graph.KG.Centrality", "cuk-d")` (force re-deploy)
+- IRIS instance restart (`iris stop iris && iris start iris`)
+- Container restart (`docker restart ivg-iris`)
+- `CREATE OR REPLACE FUNCTION ... LANGUAGE OBJECTSCRIPT { ##class(Graph.KG.Centrality)... }` — registers SQL function but the inner `##class()` lookup also fails
+- `PURGE CACHED QUERIES`
+
+**What's known to work (pre-existing baseline)**:
+- `tests/e2e/test_approx_count_distinct.py` (6/6 pass) — uses `engine.execute_cypher(...)` only, NEVER calls user classes directly via CallIn
+- `engine.rebuild_kg()` returns False silently when `Graph.KG.Traversal.BuildKG` is "missing" (try/except swallows)
+
+**Hypothesis**: `%SYS.DBSRV` (the SQL Bindings server process) maintains a separate class-resolution cache from the iris session that's only populated through specific channels (perhaps the IRIS startup-time package compile, or a specific load procedure). New classes compiled at runtime aren't registered with DBSRV's cache.
+
+**Workarounds available**:
+1. Use Cypher path exclusively (`engine.execute_cypher`) — works for read paths
+2. Run the algorithm in a JOB-spawned worker process within IRIS (different bindings session)
+3. Pre-compile classes BEFORE container startup via `CPF merge` action
+
+**Spec 162 impact**: Algorithm code is correct (verified via MCP). Phase 3 implementation complete (T022–T031). E2E test (T032) blocked until Bug S is resolved.
+
+**Investigation owner**: Needs deep dive into `%SYS.DBSRV` cache behavior and IRIS bindings server initialization. Not blocking shipping algorithm code.
+
+**Mitigation shipped in v1.98.0** (extended in v1.99.0): All 4 centrality algorithms in spec 162 + all 4 community-detection algorithms in spec 163 use a **gref-bypass production path** — pure-Python implementations reading `^KG` directly via `iris.createIRIS().nextSubscript/get/set/kill`. The Native API global access bypasses `%SYS.DBSRV` class lookup entirely. See:
+- `iris_vector_graph/stores/iris_sql_store.py::_degree_centrality_gref_fallback`
+- `iris_vector_graph/stores/iris_sql_store.py::_betweenness_gref`
+- `iris_vector_graph/stores/iris_sql_store.py::_closeness_gref`
+- `iris_vector_graph/stores/iris_sql_store.py::_eigenvector_gref`
+- `iris_vector_graph/stores/iris_sql_store.py::_leiden_lazykg` (v1.99.0; LazyKG-backed)
+- `iris_vector_graph/stores/iris_sql_store.py::_triangle_count_lazykg` (v1.99.0)
+- `iris_vector_graph/stores/iris_sql_store.py::_scc_lazykg` (v1.99.0)
+- `iris_vector_graph/stores/iris_sql_store.py::_k_core_lazykg` (v1.99.0)
+- `iris_vector_graph/stores/lazy_kg.py::LazyKG` (v1.99.0; reusable adapter)
+
+15/16 spec 162 e2e tests pass + 12/12 spec 163 e2e tests pass; 5 xfail tests (1 spec 162 + 4 spec 163) document the remaining Cypher → SQL function → `##class()` path that still trips Bug S inside the SQL bindings server. When Bug S is upstream-fixed (or arno's `$ZF(-5)` Rust path lands — see `iris_vector_graph/stores/arno_bridge.py`), the Cypher paths will turn green automatically and the ObjectScript classmethod implementations (deferred) become a perf optimization rather than a correctness requirement.
+
+---
+
+## Bug T — Silent data loss on `docker stop` without graceful IRIS shutdown (HIGH severity)
+
+**Status**: ✅ **FIXED** in `iris-devtester>=1.18.1` (published 2026-05-28). `IRISContainer.__exit__()` now calls `stop_gracefully()` which runs `iris stop IRIS quietly` inside the container before Docker SIGKILL, flushing the WIJ. IVG bumped its dependency pin to `iris-devtester>=1.18.1` in `pyproject.toml`.
+**Reported by**: productivity-framework / hipporag2 session, 2026-05-28
+**Resolved by**: iris-devtester session, same day
+
+**Symptom**: After `docker stop <container>` (or OrbStack restart), tables that were populated before stop return 0 rows on restart. Schema survives, rows are gone, IRIS.DAT is present, journal-recovery startup is clean (no errors).
+
+**Reproduction (any IRIS container with named volume)**:
+```bash
+# 1. Ingest data
+# 2. Verify: SELECT COUNT(*) FROM Graph_KG.rdf_edges → N > 0
+docker stop ivg-iris
+docker start ivg-iris
+# 3. SELECT COUNT(*) FROM Graph_KG.rdf_edges → 0
+```
+
+**Root cause**: IRIS SQL rows live in globals. When `docker stop` sends SIGTERM,
+IRIS may not flush its write image journal (wij) to disk before container
+termination. The named volume preserves `IRIS.DAT` but without the unflushed
+writes, recently-inserted rows are lost on next start.
+
+**The default Docker stop_grace_period is 10s** — too short for IRIS checkpoint.
+
+**Fix options** (in increasing order of robustness):
+
+1. **Manual** (current workaround):
+   ```bash
+   docker exec ivg-iris iris stop IRIS quietly
+   docker stop ivg-iris
+   ```
+
+2. **docker-compose.yml**:
+   ```yaml
+   services:
+     ivg-iris:
+       stop_signal: SIGTERM
+       stop_grace_period: 60s
+   ```
+
+3. **Pre-stop hook** in container's entrypoint to trap SIGTERM and run `iris stop IRIS quietly` first.
+
+4. **CPF merge** with `WD_SHUTDOWN_TIMEOUT` raised, so the daemon write image journal flushes before exit.
+
+**IVG-specific impact**: `scripts/test-container.sh down` currently does
+`docker rm -f ivg-iris` which does NOT issue `iris stop IRIS quietly` first.
+Any data inserted between `up` and `down` may be lost. For tests this is
+acceptable (every test rebuilds fixtures), but for development sessions where
+data persists across container stops, this is a silent data loss.
+
+**Recommended IVG fix**: Update `scripts/test-container.sh down` to call
+`docker exec ivg-iris iris stop IRIS quietly` before `docker rm -f`. See also
+`scripts/test-container.sh restart` / `recreate` if added.
+
+**Cross-project note**: Same issue affects productivity-framework's `los-iris`
+and any other persistent IRIS container with a named volume. Filing here for
+IVG awareness; coordinate with iris-devtester for an upstream fix to all
+projects using `idt container up`.

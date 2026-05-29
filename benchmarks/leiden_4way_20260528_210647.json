@@ -1,0 +1,95 @@
+[
+  {
+    "fixture": "karate_club",
+    "engines": [
+      {
+        "label": "IVG (leidenalg CPM)",
+        "mean_s": 0.1013,
+        "stdev_s": 0.1261,
+        "n_communities": 2,
+        "modularity": 0.3718
+      },
+      {
+        "label": "networkx Louvain",
+        "mean_s": 0.0007,
+        "stdev_s": 0.0003,
+        "n_communities": 3,
+        "modularity": 0.3854
+      },
+      {
+        "label": "cdlib/igraph Leiden",
+        "mean_s": 0.0033,
+        "stdev_s": 0.0001,
+        "n_communities": 2,
+        "modularity": 0.3718
+      }
+    ],
+    "pairwise_ari": {
+      "IVG (leidenalg CPM) vs networkx Louvain": 0.813,
+      "IVG (leidenalg CPM) vs cdlib/igraph Leiden": 1.0,
+      "networkx Louvain vs cdlib/igraph Leiden": 0.813
+    }
+  },
+  {
+    "fixture": "erdos_renyi_n500_p0.02",
+    "engines": [
+      {
+        "label": "IVG (leidenalg CPM)",
+        "mean_s": 0.5296,
+        "stdev_s": 0.0072,
+        "n_communities": 75,
+        "modularity": 0.2355
+      },
+      {
+        "label": "networkx Louvain",
+        "mean_s": 0.0236,
+        "stdev_s": 0.0,
+        "n_communities": 14,
+        "modularity": 0.2824
+      },
+      {
+        "label": "cdlib/igraph Leiden",
+        "mean_s": 0.1281,
+        "stdev_s": 0.0008,
+        "n_communities": 75,
+        "modularity": 0.2355
+      }
+    ],
+    "pairwise_ari": {
+      "IVG (leidenalg CPM) vs networkx Louvain": 0.072,
+      "IVG (leidenalg CPM) vs cdlib/igraph Leiden": 1.0,
+      "networkx Louvain vs cdlib/igraph Leiden": 0.072
+    }
+  },
+  {
+    "fixture": "erdos_renyi_n2000_p0.005",
+    "engines": [
+      {
+        "label": "IVG (leidenalg CPM)",
+        "mean_s": 2.2735,
+        "stdev_s": 0.0,
+        "n_communities": 226,
+        "modularity": 0.2253
+      },
+      {
+        "label": "networkx Louvain",
+        "mean_s": 0.1502,
+        "stdev_s": 0.0,
+        "n_communities": 17,
+        "modularity": 0.2814
+      },
+      {
+        "label": "cdlib/igraph Leiden",
+        "mean_s": 0.6866,
+        "stdev_s": 0.0,
+        "n_communities": 226,
+        "modularity": 0.2253
+      }
+    ],
+    "pairwise_ari": {
+      "IVG (leidenalg CPM) vs networkx Louvain": 0.017,
+      "IVG (leidenalg CPM) vs cdlib/igraph Leiden": 1.0,
+      "networkx Louvain vs cdlib/igraph Leiden": 0.017
+    }
+  }
+]

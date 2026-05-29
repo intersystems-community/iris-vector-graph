@@ -1,0 +1,125 @@
+[
+  {
+    "fixture": "karate_club",
+    "engines": [
+      {
+        "label": "IVG (leidenalg CPM)",
+        "mean_s": 0.1035,
+        "stdev_s": 0.1295,
+        "n_communities": 2,
+        "modularity": 0.3718
+      },
+      {
+        "label": "networkx Louvain",
+        "mean_s": 0.0007,
+        "stdev_s": 0.0003,
+        "n_communities": 3,
+        "modularity": 0.3854
+      },
+      {
+        "label": "cdlib/igraph Leiden",
+        "mean_s": 0.0031,
+        "stdev_s": 0.0,
+        "n_communities": 2,
+        "modularity": 0.3718
+      },
+      {
+        "label": "Neo4j GDS Leiden",
+        "mean_s": 0.0885,
+        "stdev_s": 0.1133,
+        "n_communities": 4,
+        "modularity": 0.4188
+      }
+    ],
+    "pairwise_ari": {
+      "IVG (leidenalg CPM) vs networkx Louvain": 0.813,
+      "IVG (leidenalg CPM) vs cdlib/igraph Leiden": 1.0,
+      "IVG (leidenalg CPM) vs Neo4j GDS Leiden": 0.544,
+      "networkx Louvain vs cdlib/igraph Leiden": 0.813,
+      "networkx Louvain vs Neo4j GDS Leiden": 0.642,
+      "cdlib/igraph Leiden vs Neo4j GDS Leiden": 0.544
+    }
+  },
+  {
+    "fixture": "erdos_renyi_n500_p0.02",
+    "engines": [
+      {
+        "label": "IVG (leidenalg CPM)",
+        "mean_s": 0.533,
+        "stdev_s": 0.0362,
+        "n_communities": 75,
+        "modularity": 0.2355
+      },
+      {
+        "label": "networkx Louvain",
+        "mean_s": 0.0237,
+        "stdev_s": 0.0002,
+        "n_communities": 14,
+        "modularity": 0.2824
+      },
+      {
+        "label": "cdlib/igraph Leiden",
+        "mean_s": 0.1285,
+        "stdev_s": 0.0002,
+        "n_communities": 75,
+        "modularity": 0.2355
+      },
+      {
+        "label": "Neo4j GDS Leiden",
+        "mean_s": 0.1422,
+        "stdev_s": 0.1093,
+        "n_communities": 12,
+        "modularity": 0.2829
+      }
+    ],
+    "pairwise_ari": {
+      "IVG (leidenalg CPM) vs networkx Louvain": 0.072,
+      "IVG (leidenalg CPM) vs cdlib/igraph Leiden": 1.0,
+      "IVG (leidenalg CPM) vs Neo4j GDS Leiden": 0.069,
+      "networkx Louvain vs cdlib/igraph Leiden": 0.072,
+      "networkx Louvain vs Neo4j GDS Leiden": 0.053,
+      "cdlib/igraph Leiden vs Neo4j GDS Leiden": 0.069
+    }
+  },
+  {
+    "fixture": "erdos_renyi_n2000_p0.005",
+    "engines": [
+      {
+        "label": "IVG (leidenalg CPM)",
+        "mean_s": 2.2061,
+        "stdev_s": 0.0,
+        "n_communities": 226,
+        "modularity": 0.2253
+      },
+      {
+        "label": "networkx Louvain",
+        "mean_s": 0.2006,
+        "stdev_s": 0.0,
+        "n_communities": 17,
+        "modularity": 0.2814
+      },
+      {
+        "label": "cdlib/igraph Leiden",
+        "mean_s": 0.6821,
+        "stdev_s": 0.0,
+        "n_communities": 226,
+        "modularity": 0.2253
+      },
+      {
+        "label": "Neo4j GDS Leiden",
+        "mean_s": 0.0765,
+        "stdev_s": 0.0,
+        "n_communities": 15,
+        "modularity": 0.2812
+      }
+    ],
+    "pairwise_ari": {
+      "IVG (leidenalg CPM) vs networkx Louvain": 0.017,
+      "IVG (leidenalg CPM) vs cdlib/igraph Leiden": 1.0,
+      "IVG (leidenalg CPM) vs Neo4j GDS Leiden": 0.014,
+      "networkx Louvain vs cdlib/igraph Leiden": 0.017,
+      "networkx Louvain vs Neo4j GDS Leiden": 0.016,
+      "cdlib/igraph Leiden vs Neo4j GDS Leiden": 0.014
+    }
+  }
+]
