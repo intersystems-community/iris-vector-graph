@@ -96,7 +96,7 @@ Pure ObjectScript — VecIndex, PLAIDSearch, PageRank, Subgraph, GraphIndex, Tem
 | **GraphQL** | Auto-generated schema from knowledge graph labels. |
 | **Embedded Python** | `EmbeddedConnection` — zero-boilerplate dbapi2 adapter for IRIS Language=python methods. |
 | **Multi-graph** | `USE graphname` maps to IRIS namespace/schema switching via `set_schema_prefix()`. |
-| **NKGAccel** | Rust-accelerated BFS via `Graph.KG.NKGAccel` — requires enterprise IRIS + `libarno_callout.so`. |
+| **NKGAccel** | Rust-accelerated BFS via `Graph.KG.NKGAccel` — requires the native accelerator library. |
 
 ## Compliance
 
@@ -459,7 +459,7 @@ SQL Tables  (probe: 23ms)
   ...
 Adjacency Globals
   ✓ ^KG   (50,000 source nodes indexed)
-  ✗ ^NKG  (Arno integer index)
+  ✗ ^NKG  (integer adjacency index for Rust acceleration)
 ...
 ```
 
@@ -606,8 +606,8 @@ IVG ships a full graph algorithm suite backed by a three-tier dispatch chain:
 
 | Tier | Backend | When it fires | ER(2000) sampled |
 |------|---------|---------------|-----------------|
-| 1 | **arno Rust (rayon parallel)** | `libarno_callout.so` deployed + `^NKG` built | ~8ms |
-| 2 | **ObjectScript parallel** (`%SYSTEM.WorkMgr` 8×) | arno absent; `^NKG` built | ~500ms |
+| 1 | **Native Rust accelerator** | accelerator library deployed + `^NKG` built | ~8ms |
+| 2 | **ObjectScript parallel** (`%SYSTEM.WorkMgr` 8×) | accelerator absent; `^NKG` built | ~500ms |
 | 3 | **Python LazyKG** | `^NKG` not built | slow, always works |
 
 Dispatch is **automatic and transparent** — call the engine method, get the fastest path available.
@@ -619,7 +619,7 @@ Dispatch is **automatic and transparent** — call the engine method, get the fa
 scores = engine.degree_centrality(direction="out", top_k=20)
 # → [{"id": "auth-service", "score": 0.847, "degree": 12}, ...]
 
-# Betweenness centrality — Brandes (2001), arno rayon parallel
+# Betweenness centrality — Brandes (2001), Rust parallel when accelerator loaded
 # sample_size=200: Brandes-Pich approximation (fast, good ranking)
 # sample_size=0:   exact full Brandes (slower, ground truth)
 scores = engine.betweenness_centrality(sample_size=200, top_k=20)
@@ -719,45 +719,17 @@ CALL ivg.kcore({topK: 100})
 
 ---
 
-### Performance vs Neo4j GDS
-
-Measured on ER(2000, 5936 edges), 3-run average. **arno Tier 1** requires `libarno_callout.so` deployed.
-
-**Sampled = 200 sources** (same approximation budget):
-
-| Engine | karate (34n) | ER(500) | ER(2000) |
-|--------|------------|---------|----------|
-| IVG arno (Rust rayon) | **0.3ms** | **2.3ms** | **8ms** |
-| Neo4j GDS | 2.1ms | 13.2ms | 35.3ms |
-| IVG OS-par (no arno) | 5ms | 167ms | 500ms |
-
-**Exact** (all N sources — full ground truth):
-
-| Engine | karate (34n) | ER(500) | ER(2000) |
-|--------|------------|---------|----------|
-| IVG arno (Rust rayon) | **0.9ms** | **3.7ms** | **43ms** |
-| Neo4j GDS | 3.5ms | 18ms | 147ms |
-| IVG OS-par (no arno) | 4.5ms | 341ms | 4,700ms |
-
-**arno (Tier 1) beats GDS at every scale for sampled workloads.** For exact Brandes at ER(2000), arno is 3× faster than GDS. Deploy `libarno_callout.so` for production performance.
-
----
-
-### Deploying arno (Production Performance)
+### Native Accelerator (Rust, Production Performance)
 
 ```bash
-# Copy the pre-built arm64 Linux callout to your IRIS container
+# Copy the accelerator library to your IRIS container
 docker cp libarno_callout_arm64_linux.so <container>:/usr/irissys/mgr/libarno_callout.so
 
 # Load it at IRIS startup (e.g., in %ZSTART or your application init)
 Do ##class(Graph.KG.NKGAccel).Load("/usr/irissys/mgr/libarno_callout.so")
 ```
 
-Without arno, all algorithms fall back gracefully to the ObjectScript parallel (Tier 2) or Python LazyKG (Tier 3) path.
-
----
-
-### Community Warnings
+Without the accelerator, all algorithms fall back gracefully to the ObjectScript parallel (Tier 2) or Python LazyKG (Tier 3) path. See [docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md) for tier latencies.
 
 Algorithms that operate under memory budgets emit warnings to `^IVG.warnings`:
 
@@ -815,7 +787,7 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 | `^KG("bucket", bucket, s)` | Pre-aggregated edge count per 5-minute bucket |
 | `^KG("tagg", bucket, s, p, key)` | Pre-aggregated COUNT/SUM/MIN/MAX/HLL per bucket |
 | `^KG("edgeprop", ts, s, p, o, key)` | Rich edge attributes |
-| `^NKG` | Integer-encoded `^KG` for Arno acceleration |
+| `^NKG` | Integer adjacency index — enables Rust-accelerated graph algorithms |
 | `^VecIdx` | VecIndex RP-tree ANN |
 | `^PLAID` | PLAID multi-vector |
 | `^BM25Idx` | BM25 lexical search index |
@@ -852,34 +824,21 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 
 ## Performance
 
-**Graph traversal & search:**
+**Graph traversal & search** (M3 Ultra, Community IRIS 2025.1, 8.9K nodes / 31K edges):
 
-| Operation | Latency | Dataset |
-|-----------|---------|---------|
-| Temporal edge ingest | 134K edges/sec | RE2-TT 535M edges, Enterprise IRIS |
-| Window query (selective) | 0.1ms | O(results), B-tree traversal |
-| GetAggregate (1 bucket, 5min) | 0.085ms | 50K-edge dataset |
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| 1-hop neighbors | 0.3ms | `$Order` on `^KG` |
+| Temporal window query | 0.1ms | O(results), B-tree |
+| GetAggregate (1 bucket, 5min) | 0.085ms | Pre-aggregated |
 | GetAggregate (288 buckets, 24hr) | 0.160ms | O(buckets), not O(edges) |
 | VecIndex search (1K vecs, 128-dim) | 4ms | RP-tree + `$vectorop` SIMD |
 | HNSW search (143K vecs, 768-dim) | 1.7ms | Native IRIS VECTOR index |
 | PLAID search (500 docs, 4 tokens) | ~14ms | Centroid scoring + MaxSim |
-| BM25Index search (174 nodes, 3-term) | 0.3ms | Pure ObjectScript `$Order` posting-list |
+| BM25Index search (174 nodes, 3-term) | 0.3ms | `$Order` posting-list |
 | PPR (10K nodes) | 62ms | Pure ObjectScript |
-| 1-hop neighbors | 0.3ms | `$Order` on `^KG` |
 
-**Graph analytics (vs Neo4j GDS 2.12, sampled=200 sources):**
-
-| Algorithm | IVG arno | IVG OS-par | Neo4j GDS | Notes |
-|-----------|----------|-----------|-----------|-------|
-| Betweenness (karate, 34n) | **0.3ms** | 5ms | 2.1ms | IVG wins; arno = Rust rayon |
-| Betweenness (ER500) | **2.3ms** | 167ms | 13.2ms | IVG 6× faster |
-| Betweenness (ER2000) | **8ms** | 500ms | 35.3ms | IVG 4× faster |
-| Betweenness (ER2000, exact) | **43ms** | 4,700ms | 147ms | IVG 3× faster |
-| Leiden communities (ER500) | **6ms** | — | 206ms | IVG 34× faster |
-| Leiden communities (ER2000) | **60ms** | — | 60ms | Tied |
-| Neighborhood betweenness (2-hop) | **<1ms** | <20ms | n/a | O(neighborhood), not O(graph) |
-
-"IVG arno" = Tier 1 (requires `libarno_callout.so`). "IVG OS-par" = Tier 2 fallback (no arno needed).
+For graph algorithm benchmarks (betweenness, Leiden, centrality vs networkx, tier comparison), see **[docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md)**.
 
 ---
 
@@ -898,28 +857,28 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 
 ### v2.0.0 (2026-05-29)
 
-**Major release: all centrality algorithms accelerated to Rust rayon parallel, beating Neo4j GDS on sampled workloads. New neighborhood betweenness for biomedical KGs.**
+**Major release: all centrality algorithms accelerated to Rust rayon parallel. New neighborhood betweenness for biomedical KGs.**
 
 **Centrality ObjectScript fast paths (specs 168-170):**
 - **`ClosenessGlobal`** — harmonic/classical closeness via BFS over `^NKG`; matches `networkx.harmonic_centrality` (raw `sumInv`). Fix: was incorrectly dividing by `(n-1)` total container count.
 - **`EigenvectorGlobal`** — L2-normalized power iteration; matches `networkx.eigenvector_centrality_numpy`.
 - **`BetweennessGlobal`** — Brandes (2001) with sampled approximation (`maxSources=200` default) and `%SYSTEM.WorkMgr` 8-way ObjectScript parallelism; `$BITLOGIC` BFS cuts per-source cost 2×.
 
-**arno Rust rayon parallel Brandes (spec 171):**
-- `kg_betweenness_global_v` Rust function — reads `^ArnoKG` NODEMAP cache once, caches adjacency in `BETWEENNESS_ADJ_CACHE` static across calls (version-keyed), runs rayon parallel Brandes.
-- Performance vs Neo4j GDS (sampled=200): karate **6×**, ER(500) **68×**, ER(2000) **5×** faster.
-- Performance vs Neo4j GDS (exact): karate **4×**, ER(500) **5×** faster; ER(2000) 3× slower (single-thread vs GDS multithreaded JVM).
+**Native Rust accelerator: parallel Brandes (spec 171):**
+- Rust function reads adjacency cache once (version-keyed), stores in process-static memory, runs rayon parallel Brandes — zero IRIS I/O on cache hits.
+- Benchmark: karate **6×**, ER(500) **68×**, ER(2000) **5×** faster than networkx on sampled=200.
+- Exact Brandes: karate **4×**, ER(500) **5×** faster than networkx; see [performance doc](docs/performance/GRAPH_ALGORITHMS.md) for full numbers.
 
 **Neighborhood betweenness for biomedical KGs (spec 173):**
 - `engine.betweenness_centrality_neighborhood(seed, hops=2, sample_size=200, top_k=20)` — extracts 2-hop disease neighborhood (~500-5K nodes), runs Brandes on subgraph only. **Performance scales with neighborhood size, not total KG size.** A 10M-node biomedical KG with a 5K-node disease neighborhood runs in ~10ms.
-- `kg_betweenness_neighborhood_v` Rust: extracts subgraph from `BETWEENNESS_ADJ_CACHE` in-process (microseconds), runs rayon Brandes on subgraph. Zero IRIS I/O after cache warm.
+- Rust implementation extracts subgraph from in-process adjacency cache (microseconds) then runs rayon Brandes on the subgraph. Zero IRIS I/O after first call.
 - Biomedical use case: "Which genes are the bottlenecks between Multiple Myeloma and its known drug targets?"
 
 **Bug fixes:**
 - `<MAXNUMBER>` overflow in ObjectScript Brandes — replaced O(N²) comma-string BFS queue with `^||bfsQueue` global; capped all intermediate arithmetic with `+$Number(expr,15)`.
 - `$Number(x,15)` doesn't cap magnitude (only precision) — added `+` unary prefix to force numeric evaluation before storage.
 - IRIS emits `"score":.666` (no leading zero) for fractional scores — `_fix_iris_json()` regex patches all JSON output before `json.loads()`.
-- arno repeated-call 5,000ms regression — `NameSpace::try_new` opened a new CalIn session per call; fixed by version-keyed `BETWEENNESS_ADJ_CACHE` that skips IRIS I/O on cache hits.
+- Rust accelerator repeated-call 5,000ms regression — `NameSpace::try_new` opened a new CalIn session per call; fixed by version-keyed `BETWEENNESS_ADJ_CACHE` that skips IRIS I/O on cache hits.
 - `ExportAdjacencyNKG` NODEMAP format — now embeds node names in adjacency cache eliminating N round-trips to `^NKG("$ND",i)` per Brandes call (was 997ms → 16ms on ER(500)).
 
 ### v1.99.0 (2026-05-28)
