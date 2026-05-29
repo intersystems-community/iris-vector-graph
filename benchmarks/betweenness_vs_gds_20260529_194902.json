@@ -1,0 +1,84 @@
+{
+  "spec": "170-betweenness-os",
+  "timestamp": "2026-05-29T19:49:02.372079",
+  "fixtures": [
+    {
+      "fixture": "karate_club",
+      "nodes": 34,
+      "edges": 78,
+      "ivg_max_sources": 200,
+      "engines": [
+        {
+          "label": "IVG BetweennessGlobal",
+          "mean_ms": 31.26,
+          "stdev_ms": 0.89
+        },
+        {
+          "label": "Neo4j GDS betweenness (exact)",
+          "mean_ms": 3.52,
+          "stdev_ms": 1.85
+        },
+        {
+          "label": "Neo4j GDS betweenness (sampled=34)",
+          "mean_ms": 2.12,
+          "stdev_ms": 0.2
+        }
+      ],
+      "pearson_ivg_vs_gds_exact": 1.0,
+      "speedup_ivg_sampled_vs_gds_exact": 0.11,
+      "speedup_ivg_sampled_vs_gds_sampled": 0.07
+    },
+    {
+      "fixture": "er_500",
+      "nodes": 500,
+      "edges": 1230,
+      "ivg_max_sources": 200,
+      "engines": [
+        {
+          "label": "IVG BetweennessGlobal",
+          "mean_ms": 990.09,
+          "stdev_ms": 25.61
+        },
+        {
+          "label": "Neo4j GDS betweenness (exact)",
+          "mean_ms": 15.61,
+          "stdev_ms": 3.7
+        },
+        {
+          "label": "Neo4j GDS betweenness (sampled=200)",
+          "mean_ms": 14.93,
+          "stdev_ms": 4.28
+        }
+      ],
+      "pearson_ivg_vs_gds_exact": 0.3081,
+      "speedup_ivg_sampled_vs_gds_exact": 0.02,
+      "speedup_ivg_sampled_vs_gds_sampled": 0.02
+    },
+    {
+      "fixture": "er_2000",
+      "nodes": 2000,
+      "edges": 5936,
+      "ivg_max_sources": 200,
+      "engines": [
+        {
+          "label": "IVG BetweennessGlobal",
+          "mean_ms": 9534.53,
+          "stdev_ms": 104.64
+        },
+        {
+          "label": "Neo4j GDS betweenness (exact)",
+          "mean_ms": 151.4,
+          "stdev_ms": 8.36
+        },
+        {
+          "label": "Neo4j GDS betweenness (sampled=200)",
+          "mean_ms": 35.33,
+          "stdev_ms": 2.28
+        }
+      ],
+      "pearson_ivg_vs_gds_exact": 1.0,
+      "speedup_ivg_sampled_vs_gds_exact": 0.02,
+      "speedup_ivg_sampled_vs_gds_sampled": 0.0
+    }
+  ]
+}
