@@ -847,11 +847,12 @@ For graph algorithm benchmarks (betweenness, Leiden, centrality vs networkx, tie
 
 ## Documentation
 
+- [**User Guide**](docs/USER_GUIDE.md) — API reference for developers: algorithms, Cypher, error handling
+- [**Admin Guide**](docs/ADMIN_GUIDE.md) — deployment, container setup, accelerator library, troubleshooting
+- [Architecture Reference](docs/architecture/ARCHITECTURE.md) — globals, SQL schema, ObjectScript classes
+- [Performance Benchmarks](docs/performance/GRAPH_ALGORITHMS.md) — algorithm latency vs networkx
 - [Python SDK Reference](docs/python/PYTHON_SDK.md)
-- [Architecture](docs/architecture/ARCHITECTURE.md)
-- [Schema Reference](docs/architecture/ACTUAL_SCHEMA.md)
-- [Temporal Graph Full Spec](docs/enhancements/006-temporal-property-graph-full-spec.md)
-- [Setup Guide](docs/setup/QUICKSTART.md)
+- [Temporal Graph Spec](docs/enhancements/006-temporal-property-graph-full-spec.md)
 - [Testing Policy](docs/TESTING_POLICY.md)
 
 ---
