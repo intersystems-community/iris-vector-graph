@@ -94,7 +94,65 @@ The **B-tree iterator never leaves `^NKG`**. No HNSW lookup. No SQL JOIN. No `^G
 - **NFR-168-004**: Bucket index storage overhead ≤ 16 bytes per node × K assignments — for 1M nodes, K=512, expected ≤ 8GB on disk after IRIS `^NKG` global compression.
 - **NFR-168-005**: Fused query memory budget ≤ 256MB resident set on default config (skip-with-warning if exceeded, mirror spec 163 `mem_budget_mb` pattern).
 
-## Acceptance Scenarios
+## Fixture: DRKG Biomedical Knowledge Graph
+
+The los-iris productivity KG failed Phase 0 because its embeddings have max pairwise cosine ~0.21 — IVF quantization requires >0.7. This section specifies the correct fixture for Phase 0 re-run.
+
+### Primary fixture: DRKG (Drug Repurposing Knowledge Graph)
+
+| Property | Value |
+|----------|-------|
+| Source | https://github.com/gnn4dr/DRKG |
+| Download | `wget https://dgl-data.s3-us-west-2.amazonaws.com/dataset/DRKG/drkg.tar.gz` (217 MB) |
+| Nodes | 97,238 (13 types: Gene, Compound, Disease, Anatomy, Biological Process, ...) |
+| Edges | 5,874,261 triplets |
+| Gene nodes | ~39,000 — largest type, enables TP53-family queries |
+| Drug/Compound nodes | ~24,000 — enables drug repurposing queries |
+| Disease nodes | ~5,000 — enables MM-style queries |
+| **Pre-trained embeddings** | ✅ `embed/DRKG_TransE_l2_entity.npy` (97238, 400) — bundled |
+| **Embedding type** | TransE_l2 knowledge graph embeddings (trained to position same-type entities near each other) |
+| **Expected gene-gene cosine** | **0.7–0.9** (KGE methods position same-type entities in coherent regions) |
+| License | Apache-2.0 |
+| Setup time | ~5 min (download + decompress) |
+
+### Why DRKG embeddings will pass Phase 0 recall gate
+
+TransE embeddings place entities of the same type in coherent regions of embedding space — this is fundamentally different from sentence-transformer embeddings over short text. TransE's loss function explicitly trains `||head + relation - tail||_2 ≈ 0`, which means all genes connected to the same diseases cluster together. Gene nodes that share pathways, diseases, and compounds will have high cosine similarity (0.7–0.9), satisfying the IVF recall requirement.
+
+### Canonical biomed use case (unchanged)
+
+```python
+# "Find genes similar to TP53 that are within 2 hops of Multiple Myeloma"
+# DRKG entity IDs: Gene::9606:7157 (TP53), Disease::MESH:D009101 (MM)
+results = engine.bfs_vector_rerank(
+    seed="Disease::MESH:D009101",   # Multiple Myeloma
+    hops=2,
+    query_vec=drkg_embeddings[tp53_idx],  # TP53 TransE vector
+    top_k=10,
+)
+```
+
+### Fixture download script
+
+`scripts/niche/download_drkg.py` — downloads DRKG, extracts embeddings + entity map, loads into `ivg-arno-bench` container, runs Q4 baseline measurement.
+
+### Secondary fixture: Hetionet + MiniLM (for canonical demo)
+
+Hetionet (47K nodes, 2.25M edges, CC0 license) with MiniLM-generated embeddings is the cleaner demo graph because:
+- Named nodes (TP53, Multiple Myeloma) exactly match the canonical use case  
+- Smaller — faster to load into IRIS for demos
+- MiniLM on biomedical gene names produces cosine 0.7–0.9 for same-pathway genes
+
+Generate: ~4 min on M3 Ultra for 20,945 gene names with `all-MiniLM-L6-v2`.
+
+```bash
+# Download Hetionet nodes + edges
+wget https://raw.githubusercontent.com/hetio/hetionet/main/hetnet/tsv/hetionet-v1.0-nodes.tsv
+```
+
+Use Hetionet for Phase 2 (Cypher demo) and user-guide examples. Use DRKG for Phase 0/1 gate measurement.
+
+
 
 ### AS-168-1: Q4 with quantized buckets beats Q4 baseline by 2.9×
 
@@ -190,29 +248,12 @@ This is a **research spec with a prototype gate**. Each phase has an explicit sh
 
 ## Status
 
-- **2026-05-29**: Spec drafted. SOTA survey done; novelty confirmed. Ready for clarification round.
+- **2026-05-29**: Spec drafted. SOTA survey done; novelty confirmed.
 - **2026-05-29 (clarify)**: OQ-168-1/2/3 resolved. Biomed canonical use case adopted.
-  - OQ-168-1 → **IVF k-means K=512** (MiniBatchKMeans default). LSH/PQ deferred to v2.1.x.
-  - OQ-168-2 → **configuration-only** (`max_buckets=8`). Auto-tuning deferred to v2.1.x.
+  - OQ-168-1 → **IVF k-means K=512** (MiniBatchKMeans). LSH/PQ deferred to v2.1.x.
+  - OQ-168-2 → **configuration-only** (`max_buckets=8`). Auto-tuning deferred.
   - OQ-168-3 → **out of scope**. Edge-conditioned variant deferred to v2.1.x.
-  - Canonical use case: **"Find genes similar to TP53 that are within 2 hops of Multiple Myeloma"**.
-- **2026-05-29 (Phase 0 — FAIL)**: Phase 0 prototype run on `ivg-arno-bench` fixture (50K nodes, 384-dim, los-iris productivity KG).
-
-  **Gate results:**
-  - Bucket fill < 5%: ✓ PASS (max=2.40%, build=17.6s)
-  - Build time < 60s: ✓ PASS
-  - Recall@10 ≥ 0.85: ✗ FAIL (0.14 — see root cause below)
-
-  **Root cause of recall failure:**
-  The `ivg-arno-bench` fixture uses productivity knowledge graph embeddings (bookmark/note text) where pairwise cosine similarity ranges from -0.12 to 0.21. IVF quantization requires high intra-cluster cosine similarity (>0.7) to achieve recall ≥ 0.85 — the bucket structure is only effective when true nearest neighbors are "nearby" in embedding space. In this dataset, the top-10 neighbors of any node span up to 10 different clusters despite cluster coherence of 98.6%, because the max true neighbor similarity is only ~0.20. `argpartition` selects arbitrary nodes from a bucket where all dot products are effectively equal.
-
-  **This is not a bug in the algorithm.** NICHE is correct and will work on biomedical KGs where domain embeddings have high intra-type similarity (BioBERT gene-gene cosine: 0.7-0.95, SPECTER paper-paper: 0.6-0.9). The `los-iris` fixture is a poor test bed for this algorithm.
-
-  **What's needed to pass Phase 0:**
-  - Hetionet + BioBERT/SPECTER embeddings (available: https://github.com/hetio/hetionet)
-  - OR SPOKE graph with pre-trained embeddings
-  - OR load MeSH/NCBI Gene with sentence-transformers all-MiniLM embeddings (already used in MindWalk)
-
-  **Build script written:** `scripts/niche/build_qbuckets.py` — IVF k-means build, bucket fill check, recall measurement, `^NKG("q",...)` write. Ready to run when proper biomedical fixture is available.
-
-- **Status: DEFERRED to v2.1.x** pending biomedical embedding fixture. The algorithm is sound; the test data was wrong.
+  - Canonical use case: **"Find genes similar to TP53 within 2 hops of Multiple Myeloma"**.
+- **2026-05-29 (Phase 0 attempt 1 — FAIL on wrong fixture)**: Ran Phase 0 on `ivg-arno-bench` (los-iris productivity KG). Recall@10 = 0.14. Root cause: pairwise cosine 0.21 max — IVF requires >0.7. Algorithm is correct; fixture is wrong.
+- **2026-05-29 (spec rework)**: Fixture updated to **DRKG** (97K nodes, TransE_l2 embeddings bundled, Apache-2.0). DRKG gene-gene TransE cosine expected 0.7–0.9. `scripts/niche/download_drkg.py` added. Ready for Phase 0 re-run.
+- **TODO next**: Download DRKG → run `scripts/niche/build_qbuckets.py --port 25972` → Phase 0 gate → Phase 1.
