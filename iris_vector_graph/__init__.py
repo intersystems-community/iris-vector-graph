@@ -16,6 +16,7 @@ from .store_protocol import GraphStore
 from .stores import IRISGraphStore
 from .cypher.aql import translate_aql, AQLParseError, AQLTranslationError
 from .sdk import IVGClient, AsyncIVGClient, IVGRecord, IVGError, IVGClientError, IVGServerError
+from .embed_selector import EmbedSelector
 from .errors import (
     PrerequisiteError, IndexNotFoundError, IndexNotBuiltError,
     EmbeddingsMissingError, IndexNotSyncedError, NodeNotFoundError,
@@ -104,6 +105,7 @@ __all__ = [
     "IVGError",
     "IVGClientError",
     "IVGServerError",
+    "EmbedSelector",
     "PrerequisiteError",
     "IndexNotFoundError",
     "IndexNotBuiltError",
