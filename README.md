@@ -484,20 +484,20 @@ results = engine.plaid_search("colbert_idx", query_tokens, k=10)
 
 Finds the minimum-**cost** path between two nodes using Dijkstra's algorithm. Unlike `shortestPath()` which minimizes hops, this minimizes the sum of edge weights.
 
-Edge weights come from the numeric value stored in `^KG("out",0,s,p,o)` — set automatically when you call `create_edge` or `WriteAdjacency` with a weight parameter.
+Edge weights are set via the `weight` parameter on `create_edge` (or updated later with `set_edge_weight`).
 
 ```python
 # Store weighted edges
 engine.create_node("svc:auth")
 engine.create_node("svc:db")
-iris_obj = engine._iris_obj()
-iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
-    "svc:auth", "CALLS", "svc:db", "5.2")  # weight=5.2ms latency
+engine.create_node("svc:cache")
 
-iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
-    "svc:auth", "CALLS", "svc:cache", "0.3")
-iris_obj.classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency",
-    "svc:cache", "CALLS", "svc:db", "0.8")
+engine.create_edge("svc:auth", "CALLS", "svc:db", weight=5.2)    # 5.2ms latency
+engine.create_edge("svc:auth", "CALLS", "svc:cache", weight=0.3)
+engine.create_edge("svc:cache", "CALLS", "svc:db", weight=0.8)
+
+# Update a weight later
+engine.set_edge_weight("svc:auth", "CALLS", "svc:db", 4.9)
 ```
 
 ```cypher

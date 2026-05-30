@@ -134,6 +134,7 @@ class IRISGraphEngine:
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
         self._index_registry: Dict[str, str] = self._build_index_registry()
+        self._pending_index_config: Dict[str, Any] = {}
         if vector_dtype == "DOUBLE":
             self.vector_dtype = self._detect_stored_vector_dtype()
         if store is None:
@@ -2944,33 +2945,22 @@ class IRISGraphEngine:
         source_id: str,
         predicate: str,
         target_id: str,
+        weight: float = 1.0,
         qualifiers: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
         """Create an edge in the knowledge graph.
 
-        Writes to both the SQL `rdf_edges` table (for durability) and the `^KG("out",0,...)` 
-        globals (for immediate query visibility). No rebuild required.
-
         Args:
-            source_id: Source node identifier (string).
-            predicate: Relationship type/predicate name (e.g., "KNOWS", "BINDS").
-            target_id: Target node identifier (string).
-            qualifiers: Optional dict of relationship properties (e.g., weight, confidence).
+            source_id: Source node identifier.
+            predicate: Relationship type (e.g., "KNOWS", "CALLS").
+            target_id: Target node identifier.
+            weight: Edge weight used by weighted shortest-path / cost traversals (default 1.0).
+            qualifiers: Optional relationship properties.
             graph: Optional named graph identifier.
 
         Returns:
-            True if the edge was created or already existed (duplicate), False on error.
-
-        Example:
-            >>> engine.create_edge("auth-service", "CALLS", "payment-service", 
-            ...                    qualifiers={"latency_ms": 42.7})
-            True
-
-        Note:
-            For high-volume temporal event ingest (1000s/sec), use `create_edge_temporal()` 
-            or `bulk_create_edges_temporal()` instead. This method is optimized for 
-            structural relationships.
+            True if the edge was created or already existed, False on error.
         """
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         cursor = self.conn.cursor()
@@ -3004,11 +2994,42 @@ class IRISGraphEngine:
                 source_id,
                 predicate,
                 target_id,
-                "1.0",
+                str(float(weight)),
             )
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
         return True
+
+    def set_edge_weight(
+        self, source: str, predicate: str, target: str, weight: float
+    ) -> bool:
+        """Set or update the weight of an existing edge.
+
+        Used by weighted shortest-path / cost traversals.
+
+        Args:
+            source: Source node identifier.
+            predicate: Relationship type.
+            target: Target node identifier.
+            weight: New edge weight.
+
+        Returns:
+            True on success, False if the edge could not be updated.
+        """
+        EdgeInput(source_id=source, predicate=predicate, target_id=target)
+        try:
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.EdgeScan",
+                "WriteAdjacency",
+                source,
+                predicate,
+                target,
+                str(float(weight)),
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"set_edge_weight failed: {e}")
+            return False
 
     def delete_edge(self, source_id: str, predicate: str, target_id: str) -> bool:
         cursor = self.conn.cursor()
@@ -3314,14 +3335,113 @@ class IRISGraphEngine:
             registry["hnsw"] = "hnsw"
         return registry
 
-    def index(self, name: str) -> "IndexHandle":
-        from iris_vector_graph.index_protocol import IndexHandle
+    _LEGACY_TO_CONCEPT = {
+        "ivf": "vector", "vec": "vector", "bm25": "fulltext",
+        "plaid": "multivector", "hnsw": "hnsw",
+        "neighborhood_vector": "neighborhood_vector",
+    }
+
+    def index(self, name: str) -> "Index":
+        from iris_vector_graph.index_protocol import Index
+        from iris_vector_graph.errors import IndexNotFoundError
         if name not in self._index_registry:
-            raise ValueError(
-                f"Index '{name}' not found. Known indexes: {sorted(self._index_registry)}. "
-                "Call ivf_build/bm25_build/vec_create_index/plaid_build first."
-            )
-        return IndexHandle(name=name, type=self._index_registry[name], engine=self)
+            raise IndexNotFoundError(name, known=list(self._index_registry))
+        concept = self._LEGACY_TO_CONCEPT.get(
+            self._index_registry[name], self._index_registry[name]
+        )
+        return Index(name=name, type=concept, engine=self)
+
+    def create_index(self, config, replace: bool = False) -> "Index":
+        from iris_vector_graph.index_protocol import Index
+        if config.name in self._index_registry:
+            if not replace:
+                raise ValueError(
+                    f"Index '{config.name}' already exists; pass replace=True to recreate."
+                )
+            self.index(config.name).drop()
+        self._pending_index_config[config.name] = config
+        self._index_registry[config.name] = config.type
+        return Index(name=config.name, type=config.type, engine=self)
+
+    def list_indexes(self) -> "List[Index]":
+        return [self.index(n) for n in sorted(self._index_registry)]
+
+    def _index_config(self, name: str):
+        return self._pending_index_config.get(name)
+
+    def _build_vector_index(self, name: str, **kw) -> dict:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            self.vec_create_index(name, dim=kw.get("dim") or cfg.dim, metric=cfg.metric)
+            return self.vec_build(name)
+        nlist = kw.get("nlist", getattr(cfg, "nlist", 256))
+        metric = kw.get("metric", getattr(cfg, "metric", "cosine"))
+        return self.ivf_build(name, nlist=nlist, metric=metric, node_ids=kw.get("node_ids"))
+
+    def _search_vector_index(self, name: str, q, k: int = 10, **kw) -> list:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            return self.vec_search(name, q, k, **kw)
+        return self.ivf_search(name, q, k, **kw)
+
+    def _vector_index_insert(self, name: str, id_: str, vec) -> None:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            self.vec_insert(name, id_, vec)
+        else:
+            self.ivf_insert(name, id_, vec)
+
+    def _vector_index_drop(self, name: str) -> None:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            self.vec_drop(name)
+        else:
+            self.ivf_drop(name)
+
+    def _vector_index_info(self, name: str) -> dict:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            return self.vec_info(name)
+        return self.ivf_info(name)
+
+    def _build_fulltext_index(self, name: str, **kw) -> dict:
+        cfg = self._index_config(name)
+        props = kw.get("properties") or (cfg.properties if cfg else ["name"])
+        k1 = kw.get("k1", getattr(cfg, "k1", 1.5))
+        b = kw.get("b", getattr(cfg, "b", 0.75))
+        info = self.bm25_build(name, props, k1=k1, b=b)
+        from iris_vector_graph.index_protocol import _rows_of
+        from iris_vector_graph.errors import IndexNotBuiltError
+        if _rows_of(info or {}) == 0:
+            raise IndexNotBuiltError(name, rows=0)
+        return info
+
+    def _build_multivector_index(self, name: str, **kw) -> dict:
+        docs = kw.get("docs")
+        if not docs:
+            from iris_vector_graph.errors import IndexNotBuiltError
+            raise IndexNotBuiltError(name, rows=0)
+        cfg = self._index_config(name)
+        return self.plaid_build(
+            name, docs,
+            n_clusters=kw.get("n_clusters", getattr(cfg, "n_clusters", None)),
+            dim=kw.get("dim", getattr(cfg, "dim", 128)),
+        )
+
+    def _build_neighborhood_index(self, name: str, **kw) -> dict:
+        raise NotImplementedError(
+            "neighborhood_vector index build lands in spec 181; "
+            "config registered but build not yet wired."
+        )
+
+    def _search_neighborhood_index(self, name: str, q, k: int = 10, **kw) -> list:
+        raise NotImplementedError("neighborhood_vector search lands in spec 181.")
+
+    def _neighborhood_index_drop(self, name: str) -> None:
+        self._iris_obj().kill("^NKG", "q")
+
+    def _neighborhood_index_info(self, name: str) -> dict:
+        return {"type": "neighborhood_vector", "rows": 0}
 
     def rebuild_kg(self) -> bool:
         from iris_vector_graph.schema import _call_classmethod
@@ -7322,6 +7442,61 @@ class IRISGraphEngine:
         if result.error:
             return []
         return [{"id": r[0], "score": r[1]} for r in result.rows]
+
+    def bfs_vector_rerank(
+        self,
+        seed: str,
+        query_vec: List[float],
+        hops: int = 2,
+        top_k: int = 10,
+        max_buckets: int = 32,
+    ) -> List[Dict[str, Any]]:
+        """Graph-filtered semantic search: fused BFS + vector reranking.
+
+        Finds nodes that are BOTH reachable from a seed within `hops` BFS steps
+        AND semantically similar to `query_vec`. Graph topology defines the
+        candidate scope; vector similarity defines relevance. This is the
+        biomedical drug-discovery pattern — "which genes are connected to this
+        disease AND similar to my target gene?"
+
+        Uses the NICHE quantized bucket index (`^NKG("q",...)`): the BFS frontier
+        is pruned to nodes in the query's nearest IVF buckets before full-precision
+        cosine reranking.
+
+        Args:
+            seed: Seed node ID to start the BFS from (e.g., "Gene::7157" for TP53).
+            query_vec: Query embedding vector (same dimension as node embeddings).
+            hops: BFS radius (default 2). Larger neighborhoods cost more.
+            top_k: Maximum results to return (default 10).
+            max_buckets: Number of nearest IVF buckets to scan (default 32).
+                Higher = better recall, slower. 32 gives recall@10 ≈ 0.90 on
+                400-dim TransE embeddings.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Cosine similarity to query_vec.
+                - hops (int): BFS distance from seed.
+
+        Example:
+            >>> tp53_vec = engine.get_node_embedding("Gene::7157")
+            >>> hits = engine.bfs_vector_rerank(
+            ...     seed="Gene::7157", query_vec=tp53_vec, hops=1, top_k=10
+            ... )
+            >>> print(hits[0])  # {"id": "Gene::8626", "score": 0.63, "hops": 1}
+
+        Note:
+            Requires the NICHE bucket index to be built (see scripts/niche/).
+            Returns [] if the bucket index is absent or the seed is not found.
+            Performance: ObjectScript path ~28ms for hops=1 on a 18K-node graph.
+            The sub-millisecond Rust accelerator path is planned for v2.1.x.
+        """
+        if not getattr(self, "_store", None):
+            raise NotImplementedError("No store configured")
+        result = self._store.execute_bfs_vector_rerank(seed, query_vec, hops, top_k, max_buckets)
+        if result.error:
+            return []
+        return [{"id": r[0], "score": r[1], "hops": r[2]} for r in result.rows]
 
     def closeness_centrality(
         self,
