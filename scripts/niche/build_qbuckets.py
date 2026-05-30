@@ -112,7 +112,7 @@ def check_bucket_fill(labels: np.ndarray, n_clusters: int, n_nodes: int) -> dict
 
 
 def measure_recall(embeddings: np.ndarray, node_ids: list, labels: np.ndarray,
-                   km, n_queries: int = 200, top_k: int = 10, max_buckets: int = 8) -> float:
+                   km, n_queries: int = 200, top_k: int = 10, max_buckets: int = 32) -> float:
     """Measure Recall@10 of bucket-filtered search vs exact full-precision search."""
     rng = np.random.default_rng(42)
     query_indices = rng.choice(len(node_ids), size=n_queries, replace=False)
