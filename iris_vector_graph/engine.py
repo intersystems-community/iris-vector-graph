@@ -1249,6 +1249,9 @@ class IRISGraphEngine:
         return IVGResult(columns=[traversal["return_col"]], rows=[[r[0]] for r in rows], metadata=sql_query.query_metadata)
 
     def _route_var_length(self, sql_query, parameters):
+        if self._nkg_dirty:
+            from iris_vector_graph.errors import IndexNotSyncedError
+            raise IndexNotSyncedError()
         vl0 = sql_query.var_length_paths[0]
         if vl0.get("weighted"):
             return self._execute_weighted_shortest_path(sql_query, parameters)
@@ -1479,13 +1482,8 @@ class IRISGraphEngine:
         import warnings as _warnings
 
         if self._nkg_dirty:
-            _warnings.warn(
-                "bulk_ingest_edges() was called without a subsequent rebuild_nkg(). "
-                "^NKG is stale — Arno-accelerated BFS may return incomplete results. "
-                "Call engine.rebuild_nkg() to resync.",
-                RuntimeWarning,
-                stacklevel=4,
-            )
+            from iris_vector_graph.errors import IndexNotSyncedError
+            raise IndexNotSyncedError()
 
         vl = sql_query.var_length_paths[0]
         predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
@@ -2702,7 +2700,7 @@ class IRISGraphEngine:
 
         return {"id": row_map[id_key], "labels": labels, "properties": props}
 
-    def status(self) -> "EngineStatus":
+    def status(self, internals: bool = False) -> "EngineStatus":
         import time as _time
         t0 = _time.perf_counter()
         errors: list = []
@@ -2741,7 +2739,7 @@ class IRISGraphEngine:
                 iris_native = self._iris_obj()
                 kg_populated = bool(iris_native.isDefined(["KG", "out"]))
             except Exception:
-                errors.append(f"^KG probe failed: {e}")
+                errors.append(f"adjacency probe failed: {e}")
 
         kg_predicates_consistent = True
         if kg_populated and tables.edges > 0:
@@ -2768,10 +2766,8 @@ class IRISGraphEngine:
                     if row and int(row[0]) == 0:
                         kg_predicates_consistent = False
                         errors.append(
-                            f"^KG predicate mismatch: ^KG has '{kg_pred[:60]}' "
-                            f"but rdf_edges has no matching p — "
-                            f"^KG is stale from a different data snapshot. "
-                            f"Run BuildKG() after reloading graph data."
+                            "Index mismatch: adjacency index predicate does not match current edges. "
+                            "Call engine.sync() after reloading graph data."
                         )
                 except Exception:
                     pass
@@ -2848,6 +2844,9 @@ class IRISGraphEngine:
             embedding_dimension=self.embedding_dimension,
             probe_ms=probe_ms,
             errors=errors,
+            pending_sync=self._nkg_dirty,
+            internals={"^KG_populated": adjacency.kg_populated,
+                       "^NKG_populated": adjacency.nkg_populated} if internals else None,
         )
 
     def count_nodes(self, label: Optional[str] = None) -> int:
@@ -3191,21 +3190,18 @@ class IRISGraphEngine:
         edges: List[Dict[str, Any]],
         disable_indexes: bool = True,
         graph: Optional[str] = None,
-        auto_rebuild_kg: bool = True,
+        auto_sync: bool = True,
+        auto_rebuild_kg: bool = None,
     ) -> int:
-        """
-        Bulk create edges using high-performance batch SQL.
+        if auto_rebuild_kg is not None:
+            import warnings
+            warnings.warn(
+                "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            auto_sync = auto_rebuild_kg
 
-        Args:
-            edges: List of edge dicts:
-                - source_id: Source node ID
-                - predicate: Relationship type
-                - target_id: Target node ID
-            disable_indexes: Drops indexes before load (default True)
-
-        Returns:
-            Number of edges created
-        """
         if not edges:
             return 0
 
@@ -3246,14 +3242,8 @@ class IRISGraphEngine:
             if disable_indexes:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
-            if auto_rebuild_kg:
-                try:
-                    self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
-                    self.capabilities.kg_built = True
-                except Exception as e:
-                    logger.warning(
-                        f"bulk_create_edges BuildKG failed (^KG may be stale): {e}"
-                    )
+            if auto_sync:
+                self.sync()
 
     def _detect_stored_vector_dtype(self) -> str:
         try:
@@ -3443,7 +3433,20 @@ class IRISGraphEngine:
     def _neighborhood_index_info(self, name: str) -> dict:
         return {"type": "neighborhood_vector", "rows": 0}
 
-    def rebuild_kg(self) -> bool:
+    def sync(self) -> bool:
+        """Unified sync of adjacency and acceleration indexes (^KG + ^NKG).
+
+        Idempotent. Chooses Rust accelerator for ^NKG when arno is available.
+        Resets the pending-sync flag on success.
+
+        Returns:
+            True on success, False if a fatal error prevented completion.
+        """
+        kg_ok = self._sync_kg()
+        nkg_ok = self._sync_nkg()
+        return kg_ok and nkg_ok
+
+    def _sync_kg(self) -> bool:
         from iris_vector_graph.schema import _call_classmethod
         try:
             _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
@@ -3452,10 +3455,10 @@ class IRISGraphEngine:
             logger.info("^KG adjacency index rebuilt successfully")
             return True
         except Exception as e:
-            logger.warning("rebuild_kg failed: %s", e)
+            logger.warning("_sync_kg failed: %s", e)
             return False
 
-    def rebuild_nkg(self) -> bool:
+    def _sync_nkg(self) -> bool:
         try:
             iris_obj = self._iris_obj()
             rust_succeeded = False
@@ -3482,8 +3485,28 @@ class IRISGraphEngine:
             self._nkg_dirty = False
             return True
         except Exception as e:
-            logger.warning("rebuild_nkg failed: %s", e)
+            logger.warning("_sync_nkg failed: %s", e)
             return False
+
+    def rebuild_kg(self) -> bool:
+        """Deprecated: use ``engine.sync()`` instead."""
+        import warnings
+        warnings.warn(
+            "rebuild_kg() is deprecated. Use engine.sync() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._sync_kg()
+
+    def rebuild_nkg(self) -> bool:
+        """Deprecated: use ``engine.sync()`` instead."""
+        import warnings
+        warnings.warn(
+            "rebuild_nkg() is deprecated. Use engine.sync() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._sync_nkg()
 
     def backfill_degp(self) -> int:
         try:
@@ -3519,6 +3542,7 @@ class IRISGraphEngine:
         self,
         edges: List[Dict[str, Any]],
         predicate: str = "KNOWS",
+        auto_sync: bool = True,
     ) -> int:
         if not edges:
             return 0
@@ -3547,6 +3571,8 @@ class IRISGraphEngine:
                         _json.dumps(chunk), predicate,
                     ))
                 self._nkg_dirty = True
+                if auto_sync:
+                    self.sync()
                 return n
             except Exception as e:
                 logger.warning("BulkIngestEdgesSQL failed (%s), falling back to SQL path", e)
@@ -3571,6 +3597,8 @@ class IRISGraphEngine:
             n += 1
         self.conn.commit()
         self._nkg_dirty = True
+        if auto_sync:
+            self.sync()
         return n
 
     def load_networkx(
@@ -3579,8 +3607,17 @@ class IRISGraphEngine:
         label_attr: str = "type",
         skip_existing: bool = True,
         progress_callback=None,
-        auto_rebuild_kg: bool = True,
+        auto_sync: bool = True,
+        auto_rebuild_kg: bool = None,
     ) -> dict:
+        if auto_rebuild_kg is not None:
+            import warnings
+            warnings.warn(
+                "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            auto_sync = auto_rebuild_kg
         added_nodes = 0
         added_edges = 0
         skipped_nodes = 0
@@ -3648,8 +3685,8 @@ class IRISGraphEngine:
             "skipped_nodes": skipped_nodes,
             "skipped_edges": skipped_edges,
         }
-        if auto_rebuild_kg and (added_nodes > 0 or added_edges > 0):
-            self.rebuild_kg()
+        if auto_sync and (added_nodes > 0 or added_edges > 0):
+            self.sync()
         return stats
 
     def import_rdf(
@@ -4623,61 +4660,25 @@ class IRISGraphEngine:
     def embed_nodes(
         self,
         model=None,
-        where: str = None,
         text_fn=None,
         batch_size: int = 500,
         force: bool = False,
         progress_callback=None,
         label: str = None,
         node_ids: List[str] = None,
+        exclude_pattern: str = None,
+        missing_only: bool = False,
     ) -> dict:
-        """Incrementally embed nodes from Graph_KG.nodes into kg_NodeEmbeddings.
+        from iris_vector_graph.embed_selector import EmbedSelector, build_node_where
+        from iris_vector_graph.cypher import get_schema_prefix
 
-        Args:
-            model: Embedder to use (overrides engine's configured embedder for this call).
-                   Must have .encode(text) or .embed(text) method, or be callable.
-                   If None, uses the engine's configured embedder/embedding_config.
-            where: SQL WHERE fragment applied to node_id. Examples:
-                   "node_id NOT LIKE 'NCIT:%'"
-                   "node_id NOT IN (SELECT id FROM Graph_KG.kg_NodeEmbeddings)"
-                   None means all nodes.
-            text_fn: callable(node_id, props_dict) -> str. Builds the text to embed.
-                     props_dict is the merged rdf_props for the node (key → val).
-                     If None, uses node_id as the embedding text.
-                     If returns None or "", the node is skipped.
-            batch_size: nodes processed per batch (controls memory usage).
-            force: if True, re-embeds nodes already in kg_NodeEmbeddings.
-            progress_callback: callable(n_done, n_total) called after each batch.
-
-        Returns:
-            {"embedded": int, "skipped": int, "errors": int, "total": int}
-        """
-        from iris_vector_graph.security import sanitize_identifier
-        import warnings
-
-        if where is not None and (label is not None or node_ids is not None):
-            raise ValueError("where= cannot be combined with label= or node_ids=")
-
-        if where is not None:
-            warnings.warn(
-                "embed_nodes(where=) is deprecated. Use label=, node_ids=, or predicate= instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if any(
-                x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")
-            ):
-                raise ValueError(f"Unsafe WHERE clause rejected: {where!r}")
-
-        if label is not None:
-            where = (
-                f"node_id IN (SELECT s FROM Graph_KG.rdf_labels WHERE label = '{label}')"
-            )
-        elif node_ids is not None:
-            if not node_ids:
-                return {"embedded": 0, "skipped": 0, "errors": 0, "total": 0}
-            placeholders = ", ".join(f"'{nid}'" for nid in node_ids)
-            where = f"node_id IN ({placeholders})"
+        sel = EmbedSelector(
+            label=label,
+            node_ids=node_ids,
+            exclude_pattern=exclude_pattern,
+            missing_only=missing_only,
+        )
+        where = build_node_where(sel, schema_prefix=get_schema_prefix())
 
         orig_embedder = self.embedder
         if model is not None:
@@ -4694,7 +4695,7 @@ class IRISGraphEngine:
             all_node_ids = [row[0] for row in cursor.fetchall()]
             n_total = len(all_node_ids)
 
-            if not force:
+            if not force and not missing_only:
                 cursor.execute(f"SELECT id FROM {_table('kg_NodeEmbeddings')}")
                 already_embedded = {row[0] for row in cursor.fetchall()}
                 to_embed = [nid for nid in all_node_ids if nid not in already_embedded]
@@ -4830,16 +4831,26 @@ class IRISGraphEngine:
         self,
         model=None,
         text_fn=None,
-        where: str = None,
         batch_size: int = 500,
         force: bool = False,
         progress_callback=None,
+        predicate: str = None,
+        source_label: str = None,
+        target_label: str = None,
+        exclude_pattern: str = None,
+        missing_only: bool = False,
     ) -> dict:
-        if where is not None:
-            if any(
-                x in where.upper() for x in (";", "--", "/*", "XP_", "EXEC", "EXECUTE")
-            ):
-                raise ValueError(f"Unsafe WHERE clause rejected: {where!r}")
+        from iris_vector_graph.embed_selector import EmbedSelector, build_edge_where
+        from iris_vector_graph.cypher import get_schema_prefix
+
+        sel = EmbedSelector(
+            predicate=predicate,
+            source_label=source_label,
+            target_label=target_label,
+            exclude_pattern=exclude_pattern,
+            missing_only=missing_only,
+        )
+        where = build_edge_where(sel, schema_prefix=get_schema_prefix())
 
         orig_embedder = self.embedder
         if model is not None:

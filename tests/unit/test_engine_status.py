@@ -82,12 +82,25 @@ class TestEngineStatusUnit:
     def test_report_contains_all_sections(self):
         s = self._make_status()
         report = s.report()
-        assert "SQL Tables" in report
-        assert "Adjacency" in report
-        assert "ObjectScript" in report
-        assert "Arno" in report
-        assert "Indexes" in report
+        assert "^" not in report, "default report must not contain ^ global names"
+        assert "Graph:" in report
+        assert "Vector index:" in report
+        assert "Full-text index:" in report
+        assert "Acceleration:" in report
+        assert "Sync state:" in report
         assert "12" in report
+
+    def test_report_internals_shows_globals(self):
+        s = self._make_status()
+        report = s.report(internals=True)
+        assert "^KG" in report
+        assert "^NKG" in report
+        assert "objectscript" in report.lower()
+        assert "arno" in report.lower()
+
+    def test_str_does_not_contain_globals(self):
+        s = self._make_status()
+        assert "^" not in str(s)
 
     def test_report_warns_kg_empty_with_edges(self):
         from iris_vector_graph.status import AdjacencyStatus, TableCounts
@@ -97,8 +110,41 @@ class TestEngineStatusUnit:
             adjacency=AdjacencyStatus(kg_populated=False, kg_edge_count=0,
                                       kg_edge_count_capped=False, nkg_populated=False),
         )
-        report = s.report()
-        assert "BuildKG" in report or "^KG" in report
+        report_full = s.report(internals=True)
+        assert "^KG" in report_full
+
+    def test_vector_index_state(self):
+        from iris_vector_graph.status import TableCounts, IndexInventory
+        s_absent = self._make_status()
+        assert s_absent.vector_index_state == "absent"
+
+        s_empty = self._make_status(
+            tables=TableCounts(nodes=5, edges=5, labels=5, props=5,
+                               node_embeddings=100, edge_embeddings=0),
+        )
+        assert s_empty.vector_index_state == "empty"
+
+        s_ready = self._make_status(
+            tables=TableCounts(nodes=5, edges=5, labels=5, props=5,
+                               node_embeddings=100, edge_embeddings=0),
+            indexes=IndexInventory(hnsw_built=True, ivf_indexes=[], bm25_indexes=[], plaid_indexes=[]),
+        )
+        assert s_ready.vector_index_state == "ready"
+
+    def test_fulltext_index_state(self):
+        from iris_vector_graph.status import IndexInventory
+        s = self._make_status()
+        assert s.fulltext_index_state == "absent"
+
+        s2 = self._make_status(
+            indexes=IndexInventory(hnsw_built=False, ivf_indexes=[], bm25_indexes=["idx"], plaid_indexes=[]),
+        )
+        assert s2.fulltext_index_state == "ready"
+
+    def test_acceleration_state(self):
+        from iris_vector_graph.status import AdjacencyStatus
+        s = self._make_status()
+        assert s.acceleration_state in ("empty", "absent", "ready")
 
     def test_report_shows_capped_count(self):
         from iris_vector_graph.status import AdjacencyStatus
@@ -106,7 +152,7 @@ class TestEngineStatusUnit:
             adjacency=AdjacencyStatus(kg_populated=True, kg_edge_count=10000,
                                       kg_edge_count_capped=True, nkg_populated=False),
         )
-        report = s.report()
+        report = s.report(internals=True)
         assert "≥10,000" in report or "10,000+" in report or "capped" in report.lower()
 
     def test_errors_captured_not_raised(self):

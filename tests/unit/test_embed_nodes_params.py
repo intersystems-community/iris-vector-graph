@@ -73,26 +73,24 @@ class TestEmbedNodesNodeIdsParam:
             f"Expected IN clause for node_ids, got: {sqls}"
 
 
-class TestEmbedNodesWhereDeprecation:
-    def test_where_still_works(self):
+class TestEmbedNodesWhereRemoved:
+    def test_where_raises_type_error(self):
+        engine, _ = _make_engine_for_embed()
+        with pytest.raises(TypeError):
+            engine.embed_nodes(where="node_id LIKE 'test:%'", model=MagicMock())
+
+    def test_exclude_pattern_replaces_not_like(self):
         engine, cursor = _make_engine_for_embed()
         cursor.fetchall.return_value = []
         mock_model = MagicMock()
         mock_model.encode.return_value = []
-        with warnings.catch_warnings(record=True):
-            warnings.simplefilter("always")
-            result = engine.embed_nodes(where="node_id LIKE 'test:%'", model=mock_model)
+        result = engine.embed_nodes(exclude_pattern="test:*", model=mock_model)
         assert isinstance(result, dict)
 
-    def test_where_emits_deprecation_warning(self):
+    def test_missing_only_replaces_not_in_subquery(self):
         engine, cursor = _make_engine_for_embed()
         cursor.fetchall.return_value = []
         mock_model = MagicMock()
         mock_model.encode.return_value = []
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            engine.embed_nodes(where="node_id LIKE 'test:%'", model=mock_model)
-        deprecation_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert len(deprecation_warnings) >= 1
-        assert "label=" in str(deprecation_warnings[0].message) or \
-               "deprecated" in str(deprecation_warnings[0].message).lower()
+        result = engine.embed_nodes(missing_only=True, model=mock_model)
+        assert isinstance(result, dict)
