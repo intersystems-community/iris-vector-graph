@@ -2879,6 +2879,21 @@ class IRISGraphEngine:
         self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
+        """Create a node in the knowledge graph.
+
+        Args:
+            node_id: Unique string identifier for the node.
+            labels: Optional list of label strings (e.g., ["Person", "Employee"]).
+            properties: Optional dict of property key-value pairs.
+            graph: Optional named graph identifier.
+
+        Returns:
+            True if the node was created or already existed, False on error.
+
+        Example:
+            >>> engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53"})
+            True
+        """
         NodeIdInput(node_id=node_id)
         cursor = self.conn.cursor()
         try:
@@ -2932,6 +2947,31 @@ class IRISGraphEngine:
         qualifiers: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
+        """Create an edge in the knowledge graph.
+
+        Writes to both the SQL `rdf_edges` table (for durability) and the `^KG("out",0,...)` 
+        globals (for immediate query visibility). No rebuild required.
+
+        Args:
+            source_id: Source node identifier (string).
+            predicate: Relationship type/predicate name (e.g., "KNOWS", "BINDS").
+            target_id: Target node identifier (string).
+            qualifiers: Optional dict of relationship properties (e.g., weight, confidence).
+            graph: Optional named graph identifier.
+
+        Returns:
+            True if the edge was created or already existed (duplicate), False on error.
+
+        Example:
+            >>> engine.create_edge("auth-service", "CALLS", "payment-service", 
+            ...                    qualifiers={"latency_ms": 42.7})
+            True
+
+        Note:
+            For high-volume temporal event ingest (1000s/sec), use `create_edge_temporal()` 
+            or `bulk_create_edges_temporal()` instead. This method is optimized for 
+            structural relationships.
+        """
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         cursor = self.conn.cursor()
         try:
@@ -7089,6 +7129,30 @@ class IRISGraphEngine:
         predicate: Optional[str] = None,
         top_k: int = 10000,
     ) -> List[Dict[str, Any]]:
+        """Degree centrality — node connectivity.
+
+        Measures how many edges connect to each node (in/out/bidirectional). Useful for 
+        identifying hubs and peripheral nodes. Normalized to (n-1).
+
+        Args:
+            direction: Edge direction — "out" (outbound), "in" (inbound), or "both" (undirected). Default "out".
+            predicate: Optional relationship type to filter by (e.g., "DEPENDS_ON"). None = all predicates.
+            top_k: Maximum results to return. 0 = all nodes (with warning if > 100K).
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Normalized degree (value / (n-1)).
+                - degree (int): Raw edge count.
+
+        Example:
+            >>> scores = engine.degree_centrality(direction="out", top_k=20)
+            >>> print(scores[0])  # {"id": "hub-node", "score": 0.847, "degree": 12}
+
+        Note:
+            Performance tier: ObjectScript parallel (8× workers) when `^NKG` built, 
+            otherwise Python LazyKG. See docs/performance/GRAPH_ALGORITHMS.md.
+        """
         from iris_vector_graph._validate import DegreeCentralityInput
         validated = DegreeCentralityInput(
             direction=direction,
@@ -7137,6 +7201,37 @@ class IRISGraphEngine:
         mem_budget_mb: int = 256,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """Betweenness centrality via Brandes (2001) algorithm.
+
+        Measures how often a node appears on shortest paths between other nodes.
+        Uses three-tier dispatch: Rust accelerator (fastest) → ObjectScript parallel 
+        (8× workers) → Python LazyKG (always works).
+
+        Args:
+            sample_size: Number of source nodes for Brandes-Pich approximation.
+                0 uses the maxSources cap (default 200). Set equal to node count
+                for exact full Brandes.
+            direction: Edge direction — "out", "in", or "both". Default "out".
+            max_hops: Maximum BFS depth per source. 0 = unbounded.
+            top_k: Maximum results to return. 0 = all nodes.
+            mem_budget_mb: Memory budget in MB for predecessor accumulator.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Raw betweenness score (sum of dependency values
+                  scaled by n/sample_size if sampled).
+
+        Example:
+            >>> scores = engine.betweenness_centrality(sample_size=200, top_k=20)
+            >>> print(scores[0])  # {"id": "hub-node", "score": 4821.3}
+
+        Note:
+            Performance tiers require `^NKG` to be built (`engine.rebuild_nkg()`).
+            Without the accelerator library, falls back to ObjectScript parallel
+            (~500ms on ER(2000)). See docs/performance/GRAPH_ALGORITHMS.md.
+        """
         from iris_vector_graph._validate import BetweennessInput
         validated = BetweennessInput(
             sample_size=sample_size,
@@ -7192,6 +7287,35 @@ class IRISGraphEngine:
         sample_size: int = 200,
         top_k: int = 20,
     ) -> List[Dict[str, Any]]:
+        """Betweenness centrality within a node's neighborhood.
+
+        Extracts a k-hop neighborhood around a seed node and computes Brandes 
+        betweenness only on that subgraph. Scales to biomedical KGs: performance depends 
+        on neighborhood size, not total graph size.
+
+        Args:
+            seed: Seed node ID (e.g., "MESH:D009101" for Multiple Myeloma).
+            hops: Neighborhood radius in hops (default 2). Typical biomedical: 2–3 hops = 500–5K nodes.
+            sample_size: Number of source nodes for Brandes approximation (default 200).
+            top_k: Maximum results to return (default 20).
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Betweenness within the neighborhood subgraph.
+                - hops (int): Distance from seed node.
+
+        Example:
+            >>> scores = engine.betweenness_centrality_neighborhood(
+            ...     seed="MESH:D009101", hops=2, top_k=20
+            ... )
+            >>> print(scores[0])  # {"id": "TP53", "score": 1234.5, "hops": 1}
+
+        Note:
+            Use this for disease-gene bottleneck analysis. Rust accelerator extracts 
+            subgraph via process-static adjacency cache (~microseconds), then runs 
+            rayon parallel Brandes on the subgraph only.
+        """
         if not getattr(self, "_store", None):
             raise NotImplementedError("No store configured")
         result = self._store.execute_betweenness_neighborhood(seed, hops, sample_size, top_k)
@@ -7207,6 +7331,34 @@ class IRISGraphEngine:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """Closeness centrality — how close a node is to all other nodes.
+
+        Measures how quickly a node can reach other nodes via shortest paths.
+        Uses either the classical formula (undefined for disconnected graphs) or 
+        the harmonic formula (robust for disconnected graphs).
+
+        Args:
+            formula: "harmonic" (default, Beauchamp 1965, works on disconnected) 
+                or "classical" (standard Bavelas-Freeman, undefined for disconnected).
+            direction: Edge direction — "out", "in", or "both". Default "out".
+            max_hops: Maximum BFS depth. 0 = unbounded (full graph).
+            top_k: Maximum results to return. 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Closeness score (depends on formula choice).
+
+        Example:
+            >>> scores = engine.closeness_centrality(formula="harmonic", top_k=20)
+            >>> print(scores[0])  # {"id": "central-node", "score": 0.823}
+
+        Note:
+            Harmonic formula = 1 / (average shortest-path distance), so it works 
+            on disconnected components. Classical formula is undefined when any node 
+            is unreachable.
+        """
         from iris_vector_graph._validate import ClosenessInput
         validated = ClosenessInput(
             formula=formula,
@@ -7253,6 +7405,31 @@ class IRISGraphEngine:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """Eigenvector centrality — influence by neighbor influence.
+
+        Iterative power method over the raw adjacency matrix A (not the transition 
+        matrix). Measures influence: a node is important if it's connected to other 
+        important nodes. L2-normalized output. Matches `networkx.eigenvector_centrality_numpy`.
+
+        Args:
+            max_iter: Maximum power iterations (default 30). Typical convergence: 5–15 iters.
+            tol: Convergence tolerance for L2 norm change (default 1e-6).
+            top_k: Maximum results to return. 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): L2-normalized eigenvector component (range 0–1).
+
+        Example:
+            >>> scores = engine.eigenvector_centrality(max_iter=30, top_k=20)
+            >>> print(scores[0])  # {"id": "influential-node", "score": 0.894}
+
+        Note:
+            Convergence requires the largest eigenvalue to be unique (no symmetry).
+            Falls back to Python LazyKG if ObjectScript or Rust path unavailable.
+        """
         from iris_vector_graph._validate import EigenvectorInput
         validated = EigenvectorInput(
             max_iter=max_iter,
@@ -7328,6 +7505,38 @@ class IRISGraphEngine:
         random_seed: Optional[int] = None,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """Leiden community detection (Traag et al. 2019).
+
+        Partitions the graph into densely-connected communities using the Leiden
+        algorithm, which fixes the "badly connected community" problem in Louvain.
+        Supports modularity (gamma=1.0) and CPM (resolution parameter) quality functions.
+
+        Args:
+            max_levels: Maximum number of aggregation levels (default 10).
+            gamma: Resolution parameter. 1.0 = ModularityVertexPartition (default,
+                canonical Leiden). Values < 1.0 produce fewer, larger communities;
+                values > 1.0 produce more, smaller communities.
+            tol: Convergence tolerance (default 1e-4).
+            top_k: Maximum results to return. 0 = all nodes.
+            mem_budget_mb: Memory budget in MB for community tracking.
+            random_seed: Seed for reproducibility. None = stochastic.
+            progress_callback: Optional callable(completed, total).
+
+        Returns:
+            List of dicts sorted by community ascending, each containing:
+                - id (str): Node identifier.
+                - community (int): Community index (0 = largest, 1 = second-largest, ...).
+                - size (int): Number of nodes in this community.
+
+        Example:
+            >>> communities = engine.leiden_communities(gamma=1.0, top_k=100)
+            >>> print(communities[0])  # {"id": "node-a", "community": 0, "size": 23}
+
+        Note:
+            Uses Rust accelerator (leiden-rs) when libarno_callout.so is deployed.
+            Falls back to Python leidenalg or networkx Louvain. Quality matches 
+            leidenalg reference (ARI=1.0 on karate club).
+        """
         from iris_vector_graph._validate import LeidenInput
         validated = LeidenInput(
             max_levels=max_levels, gamma=gamma, tol=tol, top_k=top_k,
@@ -7376,6 +7585,30 @@ class IRISGraphEngine:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """Triangle count and local clustering coefficient.
+
+        Counts triangles incident to each node and computes the local clustering 
+        coefficient (LCC) — fraction of a node's neighbors that are also connected 
+        to each other. High LCC indicates tightly-knit local neighborhoods.
+
+        Args:
+            top_k: Maximum results to return (default 10000). 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by triangle count descending, each containing:
+                - id (str): Node identifier.
+                - triangles (int): Number of triangles involving this node.
+                - lcc (float): Local clustering coefficient (0–1).
+
+        Example:
+            >>> results = engine.triangle_count(top_k=50)
+            >>> print(results[0])  # {"id": "hub-node", "triangles": 45, "lcc": 0.73}
+
+        Note:
+            Uses symmetrized adjacency (treats graph as undirected for deduplication).
+            LCC = 2 * triangles / (k * (k-1)) where k is node degree.
+        """
         from iris_vector_graph._validate import TriangleCountInput
         validated = TriangleCountInput(top_k=top_k)
 
@@ -7395,6 +7628,29 @@ class IRISGraphEngine:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """Strongly connected components (Tarjan 1972, iterative).
+
+        Partitions directed graph into SCCs — maximal sets of nodes where every node 
+        is reachable from every other node. Detects feedback loops and cycles in workflows.
+
+        Args:
+            top_k: Maximum results to return (default 10000). 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by component ascending, each containing:
+                - id (str): Node identifier.
+                - component (int): Component index (0 = first SCC, etc.).
+                - size (int): Number of nodes in this SCC.
+
+        Example:
+            >>> sccs = engine.strongly_connected_components(top_k=100)
+            >>> print(sccs[0])  # {"id": "node-a", "component": 0, "size": 8}
+
+        Note:
+            Iterative Tarjan (1972) with explicit DFS stack to avoid Python recursion limits.
+            Matches `networkx.strongly_connected_components` exactly.
+        """
         from iris_vector_graph._validate import SCCInput
         validated = SCCInput(top_k=top_k)
 
@@ -7414,6 +7670,29 @@ class IRISGraphEngine:
         top_k: int = 10000,
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> List[Dict[str, Any]]:
+        """K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)).
+
+        Recursively removes nodes with degree < k, iteratively increasing k. The k-core 
+        is the maximal subgraph where all nodes have degree ≥ k. High coreness nodes form 
+        the network's structural core; low coreness nodes are peripheral.
+
+        Args:
+            top_k: Maximum results to return (default 10000). 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by coreness descending, each containing:
+                - id (str): Node identifier.
+                - coreness (int): K-core index (higher = more central/core).
+
+        Example:
+            >>> cores = engine.k_core(top_k=100)
+            >>> print(cores[0])  # {"id": "core-hub", "coreness": 5}
+
+        Note:
+            Uses bucket-sort O(V+E) algorithm (Batagelj-Zaversnik 2003) over symmetrized 
+            adjacency. Matches `networkx.core_number` per-node values exactly.
+        """
         from iris_vector_graph._validate import KCoreInput
         validated = KCoreInput(top_k=top_k)
 
