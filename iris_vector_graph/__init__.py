@@ -5,13 +5,21 @@ IRIS Graph Core - Domain-Agnostic Graph Engine
 from .engine import IRISGraphEngine
 from .status import EngineStatus
 from .schema import GraphSchema
-from .index_protocol import IVGIndex, IndexHandle
+from .index_protocol import IVGIndex, IndexHandle, Index
+from .index_config import (
+    IndexConfig, VectorIndexConfig, FulltextIndexConfig,
+    MultiVectorIndexConfig, NeighborhoodVectorConfig, HNSWIndexConfig,
+)
 from .result import IVGResult
 from .capabilities import IRISCapabilities
 from .store_protocol import GraphStore
 from .stores import IRISGraphStore
 from .cypher.aql import translate_aql, AQLParseError, AQLTranslationError
 from .sdk import IVGClient, AsyncIVGClient, IVGRecord, IVGError, IVGClientError, IVGServerError
+from .errors import (
+    PrerequisiteError, IndexNotFoundError, IndexNotBuiltError,
+    EmbeddingsMissingError, IndexNotSyncedError, NodeNotFoundError,
+)
 from ._validate import (
     NodeIdInput, EdgeInput, CypherInput,
     IVFBuildInput, VectorSearchInput,
@@ -61,6 +69,13 @@ __all__ = [
     "EmbeddedCursor",
     "IVGIndex",
     "IndexHandle",
+    "Index",
+    "IndexConfig",
+    "VectorIndexConfig",
+    "FulltextIndexConfig",
+    "MultiVectorIndexConfig",
+    "NeighborhoodVectorConfig",
+    "HNSWIndexConfig",
     "IVGResult",
     "NodeIdInput",
     "EdgeInput",
@@ -89,4 +104,10 @@ __all__ = [
     "IVGError",
     "IVGClientError",
     "IVGServerError",
+    "PrerequisiteError",
+    "IndexNotFoundError",
+    "IndexNotBuiltError",
+    "EmbeddingsMissingError",
+    "IndexNotSyncedError",
+    "NodeNotFoundError",
 ]
