@@ -260,6 +260,18 @@ This is a **research spec with a prototype gate**. Each phase has an explicit sh
   - Bucket fill max=1.14%, zero empty buckets ✓ PASS
   - Build time 4.3s ✓ PASS
   - Recall@10 (max_buckets=32): **0.901** ✓ PASS (NFR-168-002 gate)
-  - Key finding: `max_buckets=8` default too aggressive (0.77). **Updated default to max_buckets=32** (6.2% of index, recall=0.90).
-  - TransE gene-gene cosine max=0.91 — exactly the high-similarity regime NICHE requires.
-- **TODO next**: Load DRKG into ivg-arno-bench container → run `build_qbuckets.py` to materialize `^NKG("q",...)` → Phase 1 fused query implementation.
+   - Key finding: `max_buckets=8` default too aggressive (0.77). **Updated default to max_buckets=32** (6.2% of index, recall=0.90).
+   - TransE gene-gene cosine max=0.91 — exactly the high-similarity regime NICHE requires.
+- **2026-05-30 (Phase 1 — recall PASS, latency FAIL)**: Implemented `Graph.KG.QBucket.BFSWithBuckets` ObjectScript ClassMethod. DRKG loaded into bench container (18,486 nodes, 503K Hetionet edges, 400-dim TransE embeddings). Bucket index materialized.
+
+  **Results on TP53 (Gene::7157), hops=1, max_buckets=32:**
+  - Recall@10: ✓ PASS — finds TP53 family (TP63 cosine=0.63, TP73 cosine=0.60, CDK inhibitors ~0.53). 5/10 true top-similar genes in 1-hop neighborhood.
+  - Latency: ✗ FAIL — 28ms ObjectScript, 150ms Python Native API. NFR-168-001 target 200µs.
+
+  **Bottleneck**: string-based `$Piece(embStr,",",...) × 400-dim` in ObjectScript. Not reducible in pure ObjectScript.
+
+  **Path to < 200µs**: Rust `$ZF(-5)` callout (`kg_bfs_vector_rerank`) with in-process adjacency + embedding cache — same arno pattern as betweenness centrality. Estimated Rust latency ~0.5ms.
+
+  **`Graph.KG.QBucket.BFSWithBuckets` saved to `scripts/niche/Graph.KG.QBucket.cls`.**
+- **Status: Phase 1 PARTIAL. Recall proven. Latency requires Rust acceleration (Phase 2).**
+- **TODO next**: Implement `kg_bfs_vector_rerank` in arno (spec 175 or extend 171).
