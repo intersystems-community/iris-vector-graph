@@ -776,49 +776,52 @@ conditions = tool("patient-123")  # → {"conditions": [...], "error": None}
 
 ## Architecture
 
-### Global Structure
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    iris-vector-graph  v2.0.0                        │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│   ┌───────────────┐   ┌───────────────┐   ┌───────────────────┐    │
+│   │  Python SDK   │   │  Cypher/AQL   │   │   Bolt (wire)     │    │
+│   │  IRISGraph    │   │  translator   │   │   neo4j-driver    │    │
+│   │  Engine       │   │  + executor   │   │   compatible      │    │
+│   └───────┬───────┘   └───────┬───────┘   └────────┬──────────┘    │
+│           └──────────────┬────┘                    │               │
+│                          ▼                          │               │
+│             ┌────────────────────────┐              │               │
+│             │   GraphStore protocol  │◄─────────────┘               │
+│             │   (pluggable backend)  │                              │
+│             └───────────┬────────────┘                              │
+│                         │                                           │
+│          ┌──────────────┼──────────────┐                           │
+│          ▼              ▼              ▼                            │
+│   ┌─────────────┐ ┌──────────┐ ┌───────────────┐                  │
+│   │  SQL layer  │ │  ^KG     │ │  ^NKG         │                  │
+│   │  Graph_KG.* │ │  globals │ │  integer adj  │                  │
+│   │  (nodes,    │ │  (edges, │ │  index        │                  │
+│   │   edges,    │ │   temp,  │ └───────┬───────┘                  │
+│   │   vectors)  │ │   PPR)   │         │                          │
+│   └─────────────┘ └──────────┘         │                          │
+│                                         ▼                          │
+│                              ┌────────────────────┐               │
+│                              │  Algorithm tiers   │               │
+│                              ├────────────────────┤               │
+│                              │ 1. Rust accelerator│ ← fastest     │
+│                              │    (rayon parallel)│               │
+│                              │ 2. ObjectScript    │               │
+│                              │    parallel 8×     │               │
+│                              │ 3. Python LazyKG   │ ← always works│
+│                              └────────────────────┘               │
+│                                                                     │
+│   Centrality:  betweenness (Brandes) · closeness · eigenvector     │
+│                degree                                              │
+│   Community:   Leiden · triangle count · SCC · k-core             │
+│   Search:      vector (HNSW/IVF/PLAID) · BM25 · temporal · PPR   │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-| Global | Purpose |
-|--------|---------|
-| `^KG("out", s, p, o)` | Knowledge graph — outbound edges |
-| `^KG("in", o, p, s)` | Knowledge graph — inbound edges |
-| `^KG("tout", ts, s, p, o)` | Temporal index — outbound, ordered by timestamp |
-| `^KG("tin", ts, o, p, s)` | Temporal index — inbound, ordered by timestamp |
-| `^KG("bucket", bucket, s)` | Pre-aggregated edge count per 5-minute bucket |
-| `^KG("tagg", bucket, s, p, key)` | Pre-aggregated COUNT/SUM/MIN/MAX/HLL per bucket |
-| `^KG("edgeprop", ts, s, p, o, key)` | Rich edge attributes |
-| `^NKG` | Integer adjacency index — enables Rust-accelerated graph algorithms |
-| `^VecIdx` | VecIndex RP-tree ANN |
-| `^PLAID` | PLAID multi-vector |
-| `^BM25Idx` | BM25 lexical search index |
-
-### Schema (Graph_KG)
-
-| Table | Purpose |
-|-------|---------|
-| `nodes` | Node registry (node_id PK) |
-| `rdf_edges` | Edges (s, p, o_id) |
-| `rdf_labels` | Node labels (s, label) |
-| `rdf_props` | Node properties (s, key, val) |
-| `kg_NodeEmbeddings` | HNSW vector index (id, emb VECTOR) |
-| `kg_EdgeEmbeddings` | Triple embeddings (s, p, o_id, emb VECTOR) — composite PK |
-| `fhir_bridges` | ICD-10→MeSH clinical code mappings |
-
-### ObjectScript Classes
-
-| Class | Key Methods |
-|-------|-------------|
-| `Graph.KG.TemporalIndex` | InsertEdge, BulkInsert, QueryWindow, GetVelocity, FindBursts, GetAggregate, GetBucketGroups, GetDistinctCount, Purge |
-| `Graph.KG.VecIndex` | Create, InsertJSON, Build, SearchJSON, SearchMultiJSON, InsertBatchJSON |
-| `Graph.KG.PLAIDSearch` | StoreCentroids, BuildInvertedIndex, Search |
-| `Graph.KG.PageRank` | RunJson, PageRankGlobalJson |
-| `Graph.KG.Algorithms` | WCCJson, CDLPJson |
-| `Graph.KG.Subgraph` | SubgraphJson, PPRGuidedJson |
-| `Graph.KG.Traversal` | BuildKG, BuildNKG, BFSFastJson, ShortestPathJson |
-| `Graph.KG.BulkLoader` | BulkLoad (`INSERT %NOINDEX %NOCHECK` + `%BuildIndices`) |
-| `Graph.KG.BM25Index` | Build, Search, Insert, Drop, Info, SearchProc (`kg_BM25` stored procedure) |
-| `Graph.KG.IVFIndex` | Build, Search, Drop, Info, SearchProc (`kg_IVF` stored procedure) |
-| `Graph.KG.EdgeScan` | MatchEdges (`Graph_KG.MatchEdges` stored procedure), WriteAdjacency, DeleteAdjacency |
+For global structure, SQL schema, and ObjectScript class reference, see [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
 
 ---
 
