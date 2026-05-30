@@ -358,21 +358,18 @@ class TestEmbedNodesMethod:
         except Exception:
             pass
 
-    def test_embed_nodes_where_and_label_raises(self):
-        with pytest.raises(ValueError):
+    def test_embed_nodes_where_removed(self):
+        with pytest.raises(TypeError):
             self.engine.embed_nodes(where="node_id = 'x'", label="Gene")
 
-    def test_embed_nodes_where_deprecated(self):
-        self.cursor.fetchall.return_value = []
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = self.engine.embed_nodes(where="node_id = 'x'")
-            assert any(issubclass(x.category, DeprecationWarning) for x in w)
+    def test_embed_nodes_where_raises_type_error(self):
+        with pytest.raises(TypeError):
+            self.engine.embed_nodes(where="node_id = 'x'")
 
-    def test_embed_nodes_unsafe_where_raises(self):
-        with pytest.raises(ValueError, match="Unsafe WHERE"):
-            self.engine.embed_nodes(where="node_id = 'x'; DROP TABLE nodes --")
+    def test_embed_nodes_exclude_pattern_accepted(self):
+        self.cursor.fetchall.return_value = []
+        result = self.engine.embed_nodes(exclude_pattern="test:*")
+        assert isinstance(result, dict)
 
     def test_embed_nodes_progress_callback(self):
         progress_calls = []
@@ -413,16 +410,16 @@ class TestEmbedEdgesMethod:
         self.cursor.fetchone.return_value = (0,)
         result = self.engine.embed_edges()
         assert isinstance(result, dict)
-    def test_embed_edges_unsafe_where_raises(self):
-        with pytest.raises(ValueError, match="Unsafe WHERE"):
+    def test_embed_edges_where_removed(self):
+        with pytest.raises(TypeError):
             self.engine.embed_edges(where="s = 'x'; EXEC cmd --")
 
-    def test_embed_edges_where_filter(self):
+    def test_embed_edges_predicate_filter(self):
         self.cursor.fetchall.side_effect = [
             [("n1", "CAUSES", "n2")],
             [],
         ]
-        result = self.engine.embed_edges(where="p = 'CAUSES'")
+        result = self.engine.embed_edges(predicate="CAUSES")
         assert isinstance(result, dict)
 
     def test_embed_edges_custom_text_fn(self):
@@ -931,8 +928,8 @@ class TestBugHunting:
     def setup_method(self):
         self.engine, self.conn, self.cursor = _make_engine()
 
-    def test_embed_nodes_where_with_node_ids_raises(self):
-        with pytest.raises(ValueError):
+    def test_embed_nodes_where_raises_type_error(self):
+        with pytest.raises(TypeError):
             self.engine.embed_nodes(where="x = 'y'", node_ids=["n1"])
 
     def test_create_node_with_empty_string_id_raises_validation(self):

@@ -120,10 +120,10 @@ class TestEdgeEmbeddingsUnit:
         assert result["errors"] == 1
         assert result["embedded"] == 1
 
-    def test_embed_edges_unsafe_where_raises(self):
+    def test_embed_edges_where_removed(self):
         engine = _make_engine()
 
-        with pytest.raises(ValueError, match="[Uu]nsafe"):
+        with pytest.raises(TypeError):
             engine.embed_edges(where="p = 'x'; DROP TABLE nodes")
 
     def test_default_text_fn_format(self):
