@@ -77,7 +77,7 @@ The **B-tree iterator never leaves `^NKG`**. No HNSW lookup. No SQL JOIN. No `^G
 ## Functional Requirements
 
 - **FR-168-001**: Build `^NKG("q", bucketIdx, nodeIdx)` from a configurable quantizer over `kg_NodeEmbeddings`. Initial supported quantizers: `ivf_kmeans` (default, K-means with K=512 by default), `lsh_hyperplane` (B-bit LSH).
-- **FR-168-002**: New API `engine.bfs_vector_rerank(seed, hops, query_vec, top_k, max_buckets=8)` performing fused BFS + bucket-prefilter + final rerank.
+- **FR-168-002**: New API `engine.bfs_vector_rerank(seed, hops, query_vec, top_k, max_buckets=32)` performing fused BFS + bucket-prefilter + final rerank.
 - **FR-168-003**: New Cypher procedure `CALL ivg.bfsVectorRerank({seed, hops, queryVec, topK, maxBuckets}) YIELD node, score, hops`.
 - **FR-168-004**: Quantizer training takes < 60s on 100K embeddings (single-threaded k-means, MiniBatchKMeans implementation).
 - **FR-168-005**: Bucket index supports incremental update — `add_node_to_buckets(node_id)` recomputes only that node's bucket assignment, not the whole index.
@@ -89,7 +89,7 @@ The **B-tree iterator never leaves `^NKG`**. No HNSW lookup. No SQL JOIN. No `^G
 ## Non-Functional Requirements
 
 - **NFR-168-001 (the headline gate)**: On the same 50K-node ivg-arno-bench fixture, **Q4 latency drops below 200µs** (from current 580µs). 2.9× speedup minimum.
-- **NFR-168-002**: Recall@10 ≥ 0.90 vs exact full-precision rerank on a 1000-query test set, at default quantizer config (IVF, K=512, max_buckets=8).
+- **NFR-168-002**: Recall@10 ≥ 0.90 vs exact full-precision rerank on a 1000-query test set, at default quantizer config (IVF, K=512, max_buckets=32).
 - **NFR-168-003**: Build time ≤ 60s on 100K nodes, ≤ 600s on 1M nodes (linear scaling).
 - **NFR-168-004**: Bucket index storage overhead ≤ 16 bytes per node × K assignments — for 1M nodes, K=512, expected ≤ 8GB on disk after IRIS `^NKG` global compression.
 - **NFR-168-005**: Fused query memory budget ≤ 256MB resident set on default config (skip-with-warning if exceeded, mirror spec 163 `mem_budget_mb` pattern).
@@ -157,7 +157,7 @@ Use Hetionet for Phase 2 (Cypher demo) and user-guide examples. Use DRKG for Pha
 ### AS-168-1: Q4 with quantized buckets beats Q4 baseline by 2.9×
 
 **Given** the ivg-arno-bench fixture (50K nodes, 145K MENTIONED_IN edges), built bucket index with default config (IVF K=512), and a fixed seed entity + query embedding,
-**When** running `engine.bfs_vector_rerank(seed, hops=1, query_vec, top_k=10, max_buckets=8)`,
+**When** running `engine.bfs_vector_rerank(seed, hops=1, query_vec, top_k=10, max_buckets=32)`,
 **Then** wall-clock latency < 200µs (median over 100 trials), and the top-10 Recall@10 vs exact rerank ≥ 0.85.
 
 ### AS-168-2: Quantizer reproducibility
@@ -224,7 +224,7 @@ This is a **research spec with a prototype gate**. Each phase has an explicit sh
 
 ## Risks
 
-- **Quantizer recall ceiling**: If IVF K=512 + max_buckets=8 caps recall@10 at < 0.90 on real corpora, the spec fails NFR-168-002. Mitigation: Phase 0 measures recall before committing to Phase 1.
+- **Quantizer recall ceiling**: If IVF K=512 + max_buckets=32 caps recall@10 at < 0.90 on real corpora, the spec fails NFR-168-002. Mitigation: Phase 0 measures recall before committing to Phase 1.
 - **`^NKG` global pollution**: Adding `^NKG("q",...)` triples could fragment the global. Mitigation: separate global `^NKG_Q` if Phase 0 measures > 20% slowdown of existing `$Order` walks on `^NKG(-1,...)`.
 - **Quantizer drift**: If embeddings update (e.g., model swap), bucket assignments go stale silently. Mitigation: version token in `^NKG("q","$meta","version")` + warning when mismatched against `kg_NodeEmbeddings` model fingerprint.
 - **Novelty claim erosion**: A competing system could ship the same architecture during the 4-week prototype window. Mitigation: file a defensive disclosure / preprint at end of Phase 1 if NFRs are met.
@@ -251,9 +251,15 @@ This is a **research spec with a prototype gate**. Each phase has an explicit sh
 - **2026-05-29**: Spec drafted. SOTA survey done; novelty confirmed.
 - **2026-05-29 (clarify)**: OQ-168-1/2/3 resolved. Biomed canonical use case adopted.
   - OQ-168-1 → **IVF k-means K=512** (MiniBatchKMeans). LSH/PQ deferred to v2.1.x.
-  - OQ-168-2 → **configuration-only** (`max_buckets=8`). Auto-tuning deferred.
+  - OQ-168-2 → **configuration-only** (`max_buckets=32`). Auto-tuning deferred.
   - OQ-168-3 → **out of scope**. Edge-conditioned variant deferred to v2.1.x.
   - Canonical use case: **"Find genes similar to TP53 within 2 hops of Multiple Myeloma"**.
 - **2026-05-29 (Phase 0 attempt 1 — FAIL on wrong fixture)**: Ran Phase 0 on `ivg-arno-bench` (los-iris productivity KG). Recall@10 = 0.14. Root cause: pairwise cosine 0.21 max — IVF requires >0.7. Algorithm is correct; fixture is wrong.
 - **2026-05-29 (spec rework)**: Fixture updated to **DRKG** (97K nodes, TransE_l2 embeddings bundled, Apache-2.0). DRKG gene-gene TransE cosine expected 0.7–0.9. `scripts/niche/download_drkg.py` added. Ready for Phase 0 re-run.
-- **TODO next**: Download DRKG → run `scripts/niche/build_qbuckets.py --port 25972` → Phase 0 gate → Phase 1.
+- **2026-05-29 (Phase 0 attempt 2 — PASS on DRKG)**: Ran Phase 0 recall test on DRKG Gene subset (39,220 genes, TransE_l2 embeddings, 400-dim).
+  - Bucket fill max=1.14%, zero empty buckets ✓ PASS
+  - Build time 4.3s ✓ PASS
+  - Recall@10 (max_buckets=32): **0.901** ✓ PASS (NFR-168-002 gate)
+  - Key finding: `max_buckets=8` default too aggressive (0.77). **Updated default to max_buckets=32** (6.2% of index, recall=0.90).
+  - TransE gene-gene cosine max=0.91 — exactly the high-similarity regime NICHE requires.
+- **TODO next**: Load DRKG into ivg-arno-bench container → run `build_qbuckets.py` to materialize `^NKG("q",...)` → Phase 1 fused query implementation.
