@@ -1855,204 +1855,202 @@ def translate_match_clause(match_clause, context, metadata):
         context.path_edge_aliases[np.variable] = edge_aliases
 
 
+def _subquery_correlated_scalar(subquery, inner, child_ctx, context):
+    ret_item = inner.return_clause.items[0]
+    alias = ret_item.alias or "sub_result"
+    inner_expr = translate_expression(ret_item.expression, child_ctx, segment="select")
+    inner_sql_parts = [f"SELECT {inner_expr}"]
+    if child_ctx.from_clauses:
+        inner_sql_parts.append(f"FROM {', '.join(child_ctx.from_clauses)}")
+        if child_ctx.join_clauses:
+            inner_sql_parts.extend(child_ctx.join_clauses)
+    elif child_ctx.join_clauses:
+        first_join = (
+            child_ctx.join_clauses[0]
+            .replace("JOIN ", "", 1)
+            .replace("CROSS JOIN ", "", 1)
+        )
+        on_idx = first_join.find(" ON ")
+        if on_idx > 0:
+            from_part = first_join[:on_idx]
+            on_part = first_join[on_idx + 4 :]
+            inner_sql_parts.append(f"FROM {from_part}")
+            if child_ctx.join_clauses[1:]:
+                inner_sql_parts.extend(child_ctx.join_clauses[1:])
+            if child_ctx.where_conditions:
+                child_ctx.where_conditions.insert(0, on_part)
+            else:
+                child_ctx.where_conditions.append(on_part)
+        else:
+            inner_sql_parts.append(f"FROM {first_join}")
+            if child_ctx.join_clauses[1:]:
+                inner_sql_parts.extend(child_ctx.join_clauses[1:])
+    if child_ctx.where_conditions:
+        inner_sql_parts.append(f"WHERE {' AND '.join(child_ctx.where_conditions)}")
+    scalar_sql = "\n".join(inner_sql_parts)
+    all_params = child_ctx.select_params + child_ctx.join_params + child_ctx.where_params
+    for p in all_params:
+        context.select_params.append(p)
+    context.select_items.append(f"COALESCE(({scalar_sql}), 0) AS {alias}")
+    context.scalar_variables.add(alias)
+    context.variable_aliases[alias] = "scalar"
+
+
+def _subquery_lateral_inline_param(val):
+    if isinstance(val, str):
+        return f"'{val.replace(chr(39), chr(39) + chr(39))}'"
+    if isinstance(val, bool):
+        return "1" if val else "0"
+    if val is None:
+        return "NULL"
+    return str(val)
+
+
+def _subquery_correlated_lateral(subquery, inner, context, metadata):
+    child_ctx_lateral = TranslationContext()
+    child_ctx_lateral.input_params = context.input_params
+    child_ctx_lateral._alias_counter = context._alias_counter
+    for var in subquery.import_variables:
+        child_ctx_lateral.variable_aliases[var] = context.variable_aliases[var]
+
+    child_ctx_lateral.add_join_param = _subquery_lateral_inline_param
+    child_ctx_lateral.add_where_param = _subquery_lateral_inline_param
+    child_ctx_lateral.add_select_param = _subquery_lateral_inline_param
+
+    for part in inner.query_parts:
+        for clause in part.clauses:
+            if isinstance(clause, ast.MatchClause):
+                translate_match_clause(clause, child_ctx_lateral, metadata)
+            elif isinstance(clause, ast.WhereClause):
+                translate_where_clause(clause, child_ctx_lateral)
+    translate_return_clause(inner.return_clause, child_ctx_lateral)
+    if not child_ctx_lateral.from_clauses and child_ctx_lateral.join_clauses:
+        first_jc = child_ctx_lateral.join_clauses[0]
+        for prefix in ("CROSS JOIN ", "LEFT OUTER JOIN ", "JOIN "):
+            if first_jc.startswith(prefix):
+                rest = first_jc[len(prefix):]
+                on_idx = rest.find(" ON ")
+                if on_idx > 0:
+                    table_part = rest[:on_idx]
+                    cond_part = rest[on_idx + 4:]
+                    child_ctx_lateral.from_clauses.append(table_part)
+                    if cond_part.strip() and cond_part.strip() != "1=1":
+                        child_ctx_lateral.where_conditions.insert(0, cond_part)
+                    child_ctx_lateral.join_clauses = child_ctx_lateral.join_clauses[1:]
+                else:
+                    child_ctx_lateral.from_clauses.append(rest)
+                    child_ctx_lateral.join_clauses = child_ctx_lateral.join_clauses[1:]
+                break
+    inner_sql_parts_lat = [
+        f"SELECT {'DISTINCT ' if inner.return_clause.distinct else ''}{', '.join(child_ctx_lateral.select_items)}"
+    ]
+    if child_ctx_lateral.from_clauses:
+        inner_sql_parts_lat.append(f"FROM {', '.join(child_ctx_lateral.from_clauses)}")
+    if child_ctx_lateral.join_clauses:
+        inner_sql_parts_lat.extend(child_ctx_lateral.join_clauses)
+    if child_ctx_lateral.where_conditions:
+        inner_sql_parts_lat.append(f"WHERE {' AND '.join(child_ctx_lateral.where_conditions)}")
+    inner_sql = "\n".join(inner_sql_parts_lat)
+    lat_alias = context.next_alias("lat")
+    context.join_clauses.append(f"CROSS JOIN LATERAL (\n{inner_sql}\n) {lat_alias}")
+    for item in inner.return_clause.items:
+        col_alias = item.alias
+        if col_alias is None:
+            if isinstance(item.expression, ast.Variable):
+                col_alias = item.expression.name
+            elif isinstance(item.expression, ast.PropertyReference):
+                col_alias = f"{item.expression.variable}_{item.expression.property_name}"
+            else:
+                col_alias = f"col_{len(context.scalar_variables)}"
+        if col_alias:
+            context.variable_aliases[col_alias] = lat_alias
+            context.scalar_variables.add(col_alias)
+
+
+def _subquery_correlated(subquery, inner, context, metadata):
+    if not inner.return_clause:
+        raise ValueError("Correlated subquery requires a RETURN clause")
+
+    child_ctx = TranslationContext()
+    child_ctx.input_params = context.input_params
+    child_ctx._alias_counter = context._alias_counter
+
+    for var in subquery.import_variables:
+        if var not in context.variable_aliases:
+            raise ValueError(f"Imported variable '{var}' is not defined in outer scope")
+        child_ctx.variable_aliases[var] = context.variable_aliases[var]
+
+    for part in inner.query_parts:
+        for clause in part.clauses:
+            if isinstance(clause, ast.MatchClause):
+                translate_match_clause(clause, child_ctx, metadata)
+            elif isinstance(clause, ast.WhereClause):
+                translate_where_clause(clause, child_ctx)
+
+    num_return_cols = len(inner.return_clause.items)
+    is_single_scalar = num_return_cols == 1 and isinstance(
+        inner.return_clause.items[0].expression, (ast.AggregationFunction,)
+    )
+
+    if is_single_scalar:
+        _subquery_correlated_scalar(subquery, inner, child_ctx, context)
+    else:
+        _subquery_correlated_lateral(subquery, inner, context, metadata)
+
+
+def _subquery_uncorrelated(subquery, inner, context, metadata):
+    child_ctx = TranslationContext()
+    child_ctx.input_params = context.input_params
+
+    for part in inner.query_parts:
+        for clause in part.clauses:
+            if isinstance(clause, ast.MatchClause):
+                translate_match_clause(clause, child_ctx, metadata)
+            elif isinstance(clause, ast.WhereClause):
+                translate_where_clause(clause, child_ctx)
+            elif isinstance(clause, ast.UnwindClause):
+                translate_unwind_clause(clause, child_ctx)
+
+    if inner.return_clause:
+        translate_return_clause(inner.return_clause, child_ctx)
+
+    inner_sql, inner_params = child_ctx.build_stage_sql(
+        inner.return_clause.distinct if inner.return_clause else False
+    )
+
+    cte_name = f"SubQuery{len(context.stages)}"
+    context.all_stage_params.extend(inner_params)
+    context.stages.append(f"{cte_name} AS (\n{inner_sql}\n)")
+
+    if not context.from_clauses:
+        context.from_clauses.append(cte_name)
+    else:
+        context.join_clauses.append(f"CROSS JOIN {cte_name}")
+
+    if inner.return_clause:
+        for item in inner.return_clause.items:
+            alias = item.alias
+            if alias is None:
+                if isinstance(item.expression, ast.Variable):
+                    alias = item.expression.name
+                elif isinstance(item.expression, ast.PropertyReference):
+                    alias = f"{item.expression.variable}_{item.expression.property_name}"
+                elif isinstance(item.expression, (ast.AggregationFunction, ast.FunctionCall)):
+                    alias = f"{item.expression.function_name}_res"
+            if alias:
+                context.variable_aliases[alias] = cte_name
+                context.scalar_variables.add(alias)
+
+
 def translate_subquery_call(
     subquery: ast.SubqueryCall, context: TranslationContext, metadata
 ):
     inner = subquery.inner_query
     is_correlated = len(subquery.import_variables) > 0
-
     if is_correlated:
-        if not inner.return_clause:
-            raise ValueError("Correlated subquery requires a RETURN clause")
-
-        child_ctx = TranslationContext()
-        child_ctx.input_params = context.input_params
-        child_ctx._alias_counter = context._alias_counter
-
-        for var in subquery.import_variables:
-            if var not in context.variable_aliases:
-                raise ValueError(
-                    f"Imported variable '{var}' is not defined in outer scope"
-                )
-            child_ctx.variable_aliases[var] = context.variable_aliases[var]
-
-        for part in inner.query_parts:
-            for clause in part.clauses:
-                if isinstance(clause, ast.MatchClause):
-                    translate_match_clause(clause, child_ctx, metadata)
-                elif isinstance(clause, ast.WhereClause):
-                    translate_where_clause(clause, child_ctx)
-
-        num_return_cols = len(inner.return_clause.items)
-        is_single_scalar = (
-            num_return_cols == 1
-            and isinstance(
-                inner.return_clause.items[0].expression,
-                (ast.AggregationFunction,),
-            )
-        )
-
-        if is_single_scalar:
-            ret_item = inner.return_clause.items[0]
-            alias = ret_item.alias or "sub_result"
-            inner_expr = translate_expression(
-                ret_item.expression, child_ctx, segment="select"
-            )
-            inner_sql_parts = [f"SELECT {inner_expr}"]
-            if child_ctx.from_clauses:
-                inner_sql_parts.append(f"FROM {', '.join(child_ctx.from_clauses)}")
-                if child_ctx.join_clauses:
-                    inner_sql_parts.extend(child_ctx.join_clauses)
-            elif child_ctx.join_clauses:
-                first_join = (
-                    child_ctx.join_clauses[0]
-                    .replace("JOIN ", "", 1)
-                    .replace("CROSS JOIN ", "", 1)
-                )
-                on_idx = first_join.find(" ON ")
-                if on_idx > 0:
-                    from_part = first_join[:on_idx]
-                    on_part = first_join[on_idx + 4 :]
-                    inner_sql_parts.append(f"FROM {from_part}")
-                    if child_ctx.join_clauses[1:]:
-                        inner_sql_parts.extend(child_ctx.join_clauses[1:])
-                    if child_ctx.where_conditions:
-                        child_ctx.where_conditions.insert(0, on_part)
-                    else:
-                        child_ctx.where_conditions.append(on_part)
-                else:
-                    inner_sql_parts.append(f"FROM {first_join}")
-                    if child_ctx.join_clauses[1:]:
-                        inner_sql_parts.extend(child_ctx.join_clauses[1:])
-            if child_ctx.where_conditions:
-                inner_sql_parts.append(f"WHERE {' AND '.join(child_ctx.where_conditions)}")
-            scalar_sql = "\n".join(inner_sql_parts)
-            all_params = (
-                child_ctx.select_params + child_ctx.join_params + child_ctx.where_params
-            )
-            for p in all_params:
-                context.select_params.append(p)
-            context.select_items.append(f"COALESCE(({scalar_sql}), 0) AS {alias}")
-            context.scalar_variables.add(alias)
-            context.variable_aliases[alias] = "scalar"
-        else:
-            child_ctx_lateral = TranslationContext()
-            child_ctx_lateral.input_params = context.input_params
-            child_ctx_lateral._alias_counter = context._alias_counter
-            for var in subquery.import_variables:
-                child_ctx_lateral.variable_aliases[var] = context.variable_aliases[var]
-
-            def _inline_val(v):
-                if isinstance(v, str): return f"'{v.replace(chr(39), chr(39)+chr(39))}'"
-                if isinstance(v, bool): return "1" if v else "0"
-                if v is None: return "NULL"
-                return str(v)
-
-            def _inline_join_param(val):
-                return _inline_val(val)
-            def _inline_where_param(val):
-                return _inline_val(val)
-            def _inline_select_param(val):
-                return _inline_val(val)
-
-            child_ctx_lateral.add_join_param = _inline_join_param
-            child_ctx_lateral.add_where_param = _inline_where_param
-            child_ctx_lateral.add_select_param = _inline_select_param
-
-            for part in inner.query_parts:
-                for clause in part.clauses:
-                    if isinstance(clause, ast.MatchClause):
-                        translate_match_clause(clause, child_ctx_lateral, metadata)
-                    elif isinstance(clause, ast.WhereClause):
-                        translate_where_clause(clause, child_ctx_lateral)
-            translate_return_clause(inner.return_clause, child_ctx_lateral)
-            if not child_ctx_lateral.from_clauses and child_ctx_lateral.join_clauses:
-                first_jc = child_ctx_lateral.join_clauses[0]
-                for prefix in ("CROSS JOIN ", "LEFT OUTER JOIN ", "JOIN "):
-                    if first_jc.startswith(prefix):
-                        rest = first_jc[len(prefix):]
-                        on_idx = rest.find(" ON ")
-                        if on_idx > 0:
-                            table_part = rest[:on_idx]
-                            cond_part = rest[on_idx + 4:]
-                            child_ctx_lateral.from_clauses.append(table_part)
-                            if cond_part.strip() and cond_part.strip() != "1=1":
-                                child_ctx_lateral.where_conditions.insert(0, cond_part)
-                            child_ctx_lateral.join_clauses = child_ctx_lateral.join_clauses[1:]
-                        else:
-                            child_ctx_lateral.from_clauses.append(rest)
-                            child_ctx_lateral.join_clauses = child_ctx_lateral.join_clauses[1:]
-                        break
-            inner_sql_parts_lat = [
-                f"SELECT {'DISTINCT ' if inner.return_clause.distinct else ''}{', '.join(child_ctx_lateral.select_items)}"
-            ]
-            if child_ctx_lateral.from_clauses:
-                inner_sql_parts_lat.append(f"FROM {', '.join(child_ctx_lateral.from_clauses)}")
-            if child_ctx_lateral.join_clauses:
-                inner_sql_parts_lat.extend(child_ctx_lateral.join_clauses)
-            if child_ctx_lateral.where_conditions:
-                inner_sql_parts_lat.append(f"WHERE {' AND '.join(child_ctx_lateral.where_conditions)}")
-            inner_sql = "\n".join(inner_sql_parts_lat)
-            lat_alias = context.next_alias("lat")
-            context.join_clauses.append(
-                f"CROSS JOIN LATERAL (\n{inner_sql}\n) {lat_alias}"
-            )
-            for item in inner.return_clause.items:
-                col_alias = item.alias
-                if col_alias is None:
-                    if isinstance(item.expression, ast.Variable):
-                        col_alias = item.expression.name
-                    elif isinstance(item.expression, ast.PropertyReference):
-                        col_alias = f"{item.expression.variable}_{item.expression.property_name}"
-                    else:
-                        col_alias = f"col_{len(context.scalar_variables)}"
-                if col_alias:
-                    context.variable_aliases[col_alias] = lat_alias
-                    context.scalar_variables.add(col_alias)
+        _subquery_correlated(subquery, inner, context, metadata)
     else:
-        child_ctx = TranslationContext()
-        child_ctx.input_params = context.input_params
-
-        for part in inner.query_parts:
-            for clause in part.clauses:
-                if isinstance(clause, ast.MatchClause):
-                    translate_match_clause(clause, child_ctx, metadata)
-                elif isinstance(clause, ast.WhereClause):
-                    translate_where_clause(clause, child_ctx)
-                elif isinstance(clause, ast.UnwindClause):
-                    translate_unwind_clause(clause, child_ctx)
-
-        if inner.return_clause:
-            translate_return_clause(inner.return_clause, child_ctx)
-
-        inner_sql, inner_params = child_ctx.build_stage_sql(
-            inner.return_clause.distinct if inner.return_clause else False
-        )
-
-        cte_name = f"SubQuery{len(context.stages)}"
-        context.all_stage_params.extend(inner_params)
-        context.stages.append(f"{cte_name} AS (\n{inner_sql}\n)")
-
-        if not context.from_clauses:
-            context.from_clauses.append(cte_name)
-        else:
-            context.join_clauses.append(f"CROSS JOIN {cte_name}")
-
-        if inner.return_clause:
-            for item in inner.return_clause.items:
-                alias = item.alias
-                if alias is None:
-                    if isinstance(item.expression, ast.Variable):
-                        alias = item.expression.name
-                    elif isinstance(item.expression, ast.PropertyReference):
-                        alias = f"{item.expression.variable}_{item.expression.property_name}"
-                    elif isinstance(
-                        item.expression, (ast.AggregationFunction, ast.FunctionCall)
-                    ):
-                        alias = f"{item.expression.function_name}_res"
-                if alias:
-                    context.variable_aliases[alias] = cte_name
-                    context.scalar_variables.add(alias)
+        _subquery_uncorrelated(subquery, inner, context, metadata)
 
 
 def translate_node_pattern(node, context, metadata, optional=False):
