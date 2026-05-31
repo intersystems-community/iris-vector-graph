@@ -782,26 +782,13 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
     def _detect_arno(self) -> bool:
         if self._arno_available is not None:
             return self._arno_available
-        try:
-            iris_obj = self._iris_obj()
-            try:
-                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
-            except Exception:
-                pass
-            try:
-                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
-            except Exception:
-                pass
-            cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
-            self._arno_capabilities = json.loads(str(cap_json))
-            self._arno_available = True
-            if not self._arno_capabilities.get("nkg_data", False):
-                logger.warning(
-                    "Arno detected but ^NKG not populated — run BuildKG() to enable acceleration"
-                )
-        except Exception:
+        detector = getattr(self._store, "_detect_arno", None)
+        if detector is None:
             self._arno_available = False
             self._arno_capabilities = {}
+            return False
+        self._arno_available = detector()
+        self._arno_capabilities = dict(getattr(self._store, "_arno_capabilities", {}) or {})
         return self._arno_available
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
