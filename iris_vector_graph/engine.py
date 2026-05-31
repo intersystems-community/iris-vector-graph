@@ -41,7 +41,7 @@ from iris_vector_graph._engine.fhir import FhirMixin
 from iris_vector_graph._engine.admin import AdminMixin
 from iris_vector_graph._engine.embeddings import EmbeddingsMixin
 from iris_vector_graph._engine.schema import SchemaMixin
-from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin
+from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
 
 logger = logging.getLogger(__name__)
 

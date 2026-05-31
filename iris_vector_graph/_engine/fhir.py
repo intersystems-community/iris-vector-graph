@@ -236,7 +236,7 @@ class FhirMixin:
     ) -> dict:
         mapping = self.get_table_mapping(label)
         if not mapping:
-            raise IRISGraphEngine.TableNotMappedError(
+            raise self.TableNotMappedError(
                 f"Label '{label}' is not registered. Call map_sql_table first."
             )
         sql_table = mapping["sql_table"]
