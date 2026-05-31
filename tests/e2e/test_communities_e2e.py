@@ -349,14 +349,6 @@ class TestCypherProcedureXfail:
     Python API path (engine.leiden_communities()) works fine via gref bypass.
     """
 
-    @pytest.mark.xfail(
-        reason="Pure-ObjectScript Leiden is a greedy single-pass approximation "
-               "(no aggregation phase): karate ARI 0.50 < 0.75 gate (spec 182 FR-012). "
-               "For canonical Leiden use the Python path engine.leiden_communities() "
-               "which delegates to the leidenalg C library (ARI=1.0). The Cypher "
-               "greedy result is correct JSON but below the quality bar.",
-        strict=False,
-    )
     def test_cypher_call_ivg_leiden(self, iris_connection, iris_master_cleanup):
         engine = IRISGraphEngine(iris_connection)
         fixture = make_three_cliques()
@@ -368,6 +360,8 @@ class TestCypherProcedureXfail:
         )
         assert result.error is None or result.error == "", f"Cypher error: {result.error}"
         assert len(result.rows) <= 5
+        assert "node_id" in result.columns
+        assert "community" in result.columns
 
     def test_cypher_call_ivg_triangle_count(self, iris_connection, iris_master_cleanup):
         engine = IRISGraphEngine(iris_connection)
