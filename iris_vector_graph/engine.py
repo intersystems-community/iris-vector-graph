@@ -7659,7 +7659,7 @@ class IRISGraphEngine:
     def get_centrality_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
         try:
             import iris as _iris
-            iris_inst = _iris.createIRIS(self.conn)
+            iris_inst = self._iris_obj()
         except Exception as e:
             logger.debug("get_centrality_warnings: createIRIS failed: %s", e)
             return []
@@ -7899,7 +7899,7 @@ class IRISGraphEngine:
     def get_community_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
         try:
             import iris as _iris
-            iris_inst = _iris.createIRIS(self.conn)
+            iris_inst = self._iris_obj()
         except Exception:
             return []
         warnings_list: List[Dict[str, Any]] = []

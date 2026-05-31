@@ -41,6 +41,13 @@ class BulkLoader:
         self.schema = schema
         self.batch_size = batch_size
         self._stats: Dict[str, Any] = {}
+        self._iris_handle = None
+
+    def _iris_obj(self):
+        if self._iris_handle is None:
+            import iris
+            self._iris_handle = iris.createIRIS(self.conn)
+        return self._iris_handle
 
     def _table(self, name: str) -> str:
         return f"{self.schema}.{name}"
@@ -274,7 +281,7 @@ class BulkLoader:
         Also rebuilds bitmap extent indexes for correct COUNT(*).
         """
         import iris
-        iris_obj = iris.createIRIS(self.conn)
+        iris_obj = self._iris_obj()
         results = {}
 
         for cls in ["Graph.KG.rdfedges", "Graph.KG.rdflabels", "Graph.KG.rdfprops", "Graph.KG.nodes"]:
@@ -302,7 +309,7 @@ class BulkLoader:
         """
         try:
             import iris
-            iris_obj = iris.createIRIS(self.conn)
+            iris_obj = self._iris_obj()
             logger.info("Building ^KG + ^NKG globals from SQL tables...")
             t0 = time.time()
             iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
