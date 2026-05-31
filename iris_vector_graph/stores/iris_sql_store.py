@@ -971,10 +971,14 @@ class IRISGraphStore:
             ))
             if raw.startswith("OK:"):
                 import json as _json
+                parsed = _json.loads(raw[3:])
                 rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))]
+                        for r in sorted(parsed, key=lambda x: -x.get("score", 0))]
                 if top_k > 0:
                     rows = rows[:top_k]
+                if progress_callback:
+                    total = len(parsed) or 1
+                    progress_callback(total, total)
                 return IVGResult(columns=["id", "score"], rows=rows)
         except Exception:
             pass

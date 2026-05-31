@@ -39,9 +39,26 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
 {
     // Count nodes for normalization
     Set nodeCount = 0
+    // Enumerate the full node set: outbound sources (^KG("deg")) UNION
+    // inbound targets (^KG("in",0)). Sink nodes have no ^KG("deg") entry but
+    // must still be scored for direction="in"/"both".
+    Kill ^||CENTNODES
     Set node = ""
     For {
         Set node = $Order(^KG("deg", node))
+        Quit:node=""
+        Set ^||CENTNODES(node) = ""
+    }
+    Set node = ""
+    For {
+        Set node = $Order(^KG("in", 0, node))
+        Quit:node=""
+        Set ^||CENTNODES(node) = ""
+    }
+    Set nodeCount = 0
+    Set node = ""
+    For {
+        Set node = $Order(^||CENTNODES(node))
         Quit:node=""
         Set nodeCount = nodeCount + 1
     }
@@ -53,7 +70,7 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
     // Compute degree for each node based on direction + predicate
     Set node = ""
     For {
-        Set node = $Order(^KG("deg", node))
+        Set node = $Order(^||CENTNODES(node))
         Quit:node=""
         
         Set deg = 0
