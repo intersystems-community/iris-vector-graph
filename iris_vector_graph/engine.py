@@ -341,7 +341,8 @@ class IRISGraphEngine:
                 _time.sleep(delay)
                 delay *= 2
 
-    def bulk_load_session(self, max_retries: int = 3, rebuild_indexes: bool = True):
+    def bulk_load_session(self, max_retries: int = 3, rebuild_indexes: bool = True,
+                          incremental: bool = True):
         from contextlib import contextmanager
 
         @contextmanager
@@ -352,7 +353,7 @@ class IRISGraphEngine:
             stats: Dict[str, Any] = {
                 "nodes": 0, "edges": 0, "retries": 0,
                 "load_seconds": 0.0, "index_rebuild_seconds": 0.0,
-                "sync_seconds": 0.0,
+                "sync_seconds": 0.0, "incremental": incremental,
             }
             if rebuild_indexes:
                 try:
@@ -360,6 +361,17 @@ class IRISGraphEngine:
                     self.conn.commit()
                 except Exception as e:
                     logger.warning("bulk_load_session: disable_indexes skipped: %s", str(e)[:120])
+
+            if incremental:
+                try:
+                    self._iris_obj().classMethodValue("Graph.KG.Traversal", "InitNKGSkeleton")
+                except Exception as e:
+                    logger.warning("bulk_load_session: InitNKGSkeleton failed, falling back to full rebuild: %s", str(e)[:120])
+                    incremental_ok = False
+                else:
+                    incremental_ok = True
+            else:
+                incremental_ok = False
 
             session = _BulkLoadSession(self, stats, max_retries)
             t0 = _time.perf_counter()
@@ -376,13 +388,43 @@ class IRISGraphEngine:
                         logger.warning("bulk_load_session: rebuild_indexes failed: %s", str(e)[:120])
                     stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
                 ts = _time.perf_counter()
-                try:
-                    self.sync()
-                except Exception as e:
-                    logger.warning("bulk_load_session: final sync() failed: %s", str(e)[:120])
+                if incremental_ok and not self._bulk_load_drifted():
+                    self._nkg_dirty = False
+                    try:
+                        self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+                    except Exception:
+                        pass
+                else:
+                    if incremental_ok:
+                        logger.warning("bulk_load_session: ^NKG drift detected — running full sync()")
+                    try:
+                        self.sync()
+                    except Exception as e:
+                        logger.warning("bulk_load_session: final sync() failed: %s", str(e)[:120])
                 stats["sync_seconds"] = round(_time.perf_counter() - ts, 2)
 
         return _session()
+
+    def _bulk_load_drifted(self) -> bool:
+        try:
+            iris_obj = self._iris_obj()
+            nkg_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            sql_edges = int(cur.fetchone()[0])
+            if sql_edges == 0:
+                return False
+            return nkg_nodes == 0
+        except Exception:
+            return True
+
+    def backfill_2hop_exact(self) -> int:
+        try:
+            return int(self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats"))
+        except Exception as e:
+            logger.warning("backfill_2hop_exact failed: %s", str(e)[:120])
+            return 0
+
 
     def get_table_mapping(self, label: str) -> Optional[dict]:
         if self._table_mapping_cache is None:
@@ -3589,7 +3631,6 @@ class IRISGraphEngine:
             if not rust_succeeded:
                 iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
             iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
-            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
             try:
                 iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
             except Exception:

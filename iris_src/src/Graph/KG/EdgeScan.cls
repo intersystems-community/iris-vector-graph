@@ -79,9 +79,12 @@ ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %Strin
 		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
 		Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(o)
 		Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(p)
-		Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = +w
-		Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = +w
-		Set tmp = $Increment(^NKG(-3, sIdx))
+		If '$Data(^NKG(-1, sIdx, -(pIdx+1), oIdx)) {
+			Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = +w
+			Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = +w
+			Set tmp = $Increment(^NKG(-3, sIdx))
+			Set tmp = $Increment(^NKG("$meta", "edgeCount"))
+		}
 		Set tmp = $Increment(^NKG("$meta", "version"))
 		Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
 	}

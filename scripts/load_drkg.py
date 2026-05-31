@@ -18,13 +18,14 @@ def _node_type(entity_id: str) -> str:
     return entity_id.split("::", 1)[0] if "::" in entity_id else "Entity"
 
 
-def load_drkg(host, port, edges_limit=None, load_embeddings=False, batch=50000):
+def load_drkg(host, port, edges_limit=None, load_embeddings=False, batch=50000,
+              skip_deploy=False):
     import iris
     from iris_vector_graph.engine import IRISGraphEngine
 
     conn = iris.connect(host, port, "USER", "_SYSTEM", "SYS")
     engine = IRISGraphEngine(conn, embedding_dimension=400)
-    engine.initialize_schema()
+    engine.initialize_schema(auto_deploy_objectscript=not skip_deploy)
 
     entities_file = DRKG_DIR / "embed" / "entities.tsv"
     triples_file = DRKG_DIR / "drkg.tsv"
@@ -103,5 +104,8 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=1972)
     ap.add_argument("--edges-limit", type=int, default=None)
     ap.add_argument("--embeddings", action="store_true")
+    ap.add_argument("--skip-deploy", action="store_true",
+                    help="Skip ObjectScript re-deploy (classes already compiled)")
     args = ap.parse_args()
-    load_drkg(args.host, args.port, args.edges_limit, args.embeddings)
+    load_drkg(args.host, args.port, args.edges_limit, args.embeddings,
+              skip_deploy=args.skip_deploy)
