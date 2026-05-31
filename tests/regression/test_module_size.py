@@ -52,7 +52,13 @@ def test_no_python_module_exceeds_2000_lines():
     assert not offenders, f"Modules exceed line budget:\n{msg}"
 
 
-@pytest.mark.xfail(reason="Spec 186 Phase E not yet complete — NKGAccel/Traversal", strict=False)
+@pytest.mark.xfail(
+    reason="Spec 186 FR-008 DEFERRED: NKGAccel(1629L)/Traversal(1302L) are cohesive, "
+    "rarely-edited ObjectScript classes with 25 caller files and no fast test net. "
+    "Splitting is P3, high-risk, low-benefit; deferred to a dedicated spec. "
+    "Tracked here so the debt stays visible.",
+    strict=False,
+)
 def test_objectscript_god_classes_split():
     targets = ["NKGAccel.cls", "Traversal.cls"]
     base = os.path.join(REPO_ROOT, "iris_src", "src", "Graph", "KG")
