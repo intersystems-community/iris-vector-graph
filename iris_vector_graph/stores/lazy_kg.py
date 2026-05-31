@@ -4,7 +4,11 @@ Wraps `iris.createIRIS(conn)` with lazy fetching + dict caching of the IVG `^KG`
 global structure. Algorithms call `lkg.out_neighbors(node)` etc. — first call hits
 IRIS via `nextSubscript`/`get`, subsequent calls hit the Python dict cache.
 
-Bug S immune: uses Native API direct global access (no `##class()` lookup).
+Avoids the `%SYS.DBSRV` class-lookup path: uses Native API direct global access
+(no `##class()` lookup), so it is unaffected by SQL-bindings-server class
+resolution issues. (Historically tracked as "Bug S"; that turned out to be an
+SSH-tunnel-to-wrong-container artifact, not a real IRIS defect — the direct-gref
+path remains valuable regardless.)
 
 Designed to be shared across spec 162 (centrality retrofit per FR-026) and spec 163
 (community detection algorithms). Sibling module `arno_bridge.py` provides the

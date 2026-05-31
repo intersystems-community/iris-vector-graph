@@ -1308,7 +1308,7 @@ class IRISGraphStore:
                         progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
         """Spec 163 FR-025: LazyKG-backed Leiden community detection.
 
-        Reads ^KG via LazyKG (Bug S immune), builds a symmetrized in-memory
+        Reads ^KG via LazyKG (direct gref, no class lookup), builds a symmetrized in-memory
         igraph.Graph, delegates to leidenalg (canonical Leiden, Traag 2019).
 
         Why leidenalg (not networkx.community.louvain_communities):

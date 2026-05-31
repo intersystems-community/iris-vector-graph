@@ -10,9 +10,11 @@ Python clients. Provides:
   * `ArnoError` — raised on `<FUNCTION DOES NOT EXIST>` (fn_id=0), library
     not loaded, or runtime error from the Rust kernel.
 
-Bug S immunity: `$ZF(-5)` invocation does NOT route through `%SYS.DBSRV`
-class lookup. Confirmed via existing arno deployments (`kg_pagerank_global`,
-`kg_wcc_global`, `kg_cdlp_global`) work from external Python today.
+Avoids the `%SYS.DBSRV` class-lookup path: `$ZF(-5)` invocation does NOT route
+through SQL-bindings-server class resolution. Confirmed via existing arno
+deployments (`kg_pagerank_global`, `kg_wcc_global`, `kg_cdlp_global`) working
+from external Python. (Historically tracked as "Bug S immunity"; Bug S turned
+out to be an SSH-tunnel-to-wrong-container artifact, not a real IRIS defect.)
 
 Environment overrides:
   IVG_DISABLE_ARNO=1     — force `arno_available()` to return False
@@ -52,9 +54,9 @@ def _ensure_zf_call_function(conn) -> None:
     """Install the single multi-arg SQL function that wraps load+lookup+call.
 
     This is idempotent (CREATE OR REPLACE) and runs once per connection (cached
-    by connection key). Bug S immunity: SQL function bodies execute as
-    LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through %SYS.DBSRV
-    class lookup that fails for `%SYSTEM.Util.Evaluate` from external Python.
+    by connection key). Avoids %SYS.DBSRV class lookup: SQL function bodies
+    execute as LANGUAGE OBJECTSCRIPT inside IRIS — they don't route through the
+    class resolution that fails for `%SYSTEM.Util.Evaluate` from external Python.
     """
     key = _conn_key(conn)
     if _probe_cache.get(key, {}).get("ddl_installed"):
@@ -307,8 +309,8 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
 
     Routes to a typed SQL wrapper based on `fn_name` to satisfy IRIS SQL
     function signature requirements (each wrapper has a fixed arg arity).
-    Bug S immunity: SQL function body executes inside IRIS without going
-    through `%SYS.DBSRV` class lookup.
+    Avoids %SYS.DBSRV class lookup: SQL function body executes inside IRIS
+    without going through SQL-bindings-server class resolution.
 
     Args:
         conn: IRIS dbapi connection.
