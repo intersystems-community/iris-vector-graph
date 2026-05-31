@@ -809,12 +809,12 @@ class QueryMixin:
     def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> Dict[str, Any]:
         import json as _json
         import re as _re
-        from .schema import _call_classmethod
+        from iris_vector_graph.schema import _call_classmethod
 
         col_name = match.group(2)
 
-        from .cypher.parser import parse_query
-        from .cypher.translator import translate_to_sql
+        from iris_vector_graph.cypher.parser import parse_query
+        from iris_vector_graph.cypher.translator import translate_to_sql
         try:
             q = parse_query(cypher_query)
             sql_query = translate_to_sql(q, params=parameters or {})
@@ -860,7 +860,7 @@ class QueryMixin:
             registers = 256
             std_error = 0.065
 
-        from .cypher.translator import QueryMetadata
+        from iris_vector_graph.cypher.translator import QueryMetadata
         meta = QueryMetadata(
             warnings=[
                 f"approx_count_distinct: HLL-{registers}, "
