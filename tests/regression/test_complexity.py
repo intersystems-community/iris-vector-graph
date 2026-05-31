@@ -20,14 +20,7 @@ TRANSLATOR = os.path.join(REPO_ROOT, "iris_vector_graph", "cypher", "translator.
 # Threshold from spec 186 SC-002.
 MAX_CC = 25
 
-# Spec 186 Phase B residuals: two deeply-nested SQL builders reduced from
-# 108/109 but not below 25 without behavior risk on the 100%-TCK translator.
-# Allowlisted so the guard still catches NEW offenders and regressions of the
-# 9 functions already brought under 25.
-ALLOWLIST = {
-    "translate_to_sql": 90,
-    "translate_relationship_pattern": 115,
-}
+ALLOWLIST = {}
 
 
 class _CCVisitor(ast.NodeVisitor):
@@ -109,10 +102,6 @@ def _offenders(path: str, threshold: int = MAX_CC):
     return bad
 
 
-@pytest.mark.xfail(
-    reason="Spec 186 Phase B not yet complete — translate_expression cx 211",
-    strict=False,
-)
 def test_translator_no_function_exceeds_cc25():
     offenders = _offenders(TRANSLATOR)
     msg = "\n".join(f"  {name} (line {ln}): cc={cc}" for name, ln, cc in offenders)
