@@ -2710,773 +2710,793 @@ def _sql_arg(v) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
+def _expr_pattern_comprehension(expr, context, segment):
+    pat = expr.pattern
+    src_node = pat.nodes[0] if pat.nodes else None
+    tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
+    rel = pat.relationships[0] if pat.relationships else None
+
+    e_alias = context.next_alias("pce")
+    t_alias = context.next_alias("pct")
+
+    pred_type = ""
+    if rel and rel.types:
+        safe_type = rel.types[0].replace("'", "''")
+        pred_type = f" AND {e_alias}.p = '{safe_type}'"
+
+    src_bind = ""
+    if (
+        src_node
+        and src_node.variable
+        and src_node.variable in context.variable_aliases
+    ):
+        src_id = f"{context.variable_aliases[src_node.variable]}.node_id"
+        src_bind = f" AND {e_alias}.s = {src_id}"
+
+    tgt_var = tgt_node.variable if tgt_node else None
+
+    if (
+        expr.projection
+        and isinstance(expr.projection, ast.PropertyReference)
+        and expr.projection.variable == tgt_var
+    ):
+        if expr.projection.property_name == "node_id":
+            proj_sql = f"{t_alias}.node_id"
+        else:
+            safe_key = expr.projection.property_name.replace("'", "''")
+            proj_sql = (
+                f"(SELECT val FROM {_table('rdf_props')} "
+                f"WHERE s = {t_alias}.node_id AND \"key\" = '{safe_key}')"
+            )
+    elif expr.projection:
+        if tgt_var:
+            context.variable_aliases[tgt_var] = t_alias
+        if rel and rel.variable:
+            context.variable_aliases[rel.variable] = e_alias
+        proj_sql = translate_expression(expr.projection, context, segment="select")
+        if tgt_var and tgt_var in context.variable_aliases:
+            del context.variable_aliases[tgt_var]
+        if rel and rel.variable and rel.variable in context.variable_aliases:
+            del context.variable_aliases[rel.variable]
+    else:
+        proj_sql = f"{t_alias}.node_id"
+
+    return (
+        f"(SELECT JSON_ARRAYAGG({proj_sql}) FROM "
+        f"{_table('rdf_edges')} {e_alias} "
+        f"JOIN {_table('nodes')} {t_alias} ON {t_alias}.node_id = {e_alias}.o_id "
+        f"WHERE 1=1{pred_type}{src_bind})"
+    )
+
+
+def _expr_prop(expr, context, segment):
+    inner_expr = expr.arguments[0]
+    prop = str(expr.arguments[1].value) if isinstance(expr.arguments[1], ast.Literal) else "node_id"
+    if prop == "id":
+        prop = "node_id"
+    inner_fn = inner_expr.function_name.lower() if isinstance(inner_expr, ast.FunctionCall) else ""
+    if inner_fn in ("startnode", "endnode"):
+        return translate_expression(inner_expr, context, segment=segment)
+    inner = translate_expression(inner_expr, context, segment=segment)
+    return f"{inner}.{prop}"
+
+
+def _expr_arith(expr, context, segment):
+    op = expr.function_name[len("__arith_") :]
+    left = translate_expression(expr.arguments[0], context, segment=segment)
+    right = translate_expression(expr.arguments[1], context, segment=segment)
+    if op == "%":
+        return f"MOD({left}, {right})"
+    if op == "^":
+        return f"POWER({left}, {right})"
+    if op == "+":
+        def _is_str(arg):
+            return (isinstance(arg, ast.Literal) and isinstance(arg.value, str)) or \
+                isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_+")
+        left_str = _is_str(expr.arguments[0])
+        right_str = _is_str(expr.arguments[1])
+        if left_str or right_str:
+            return f"(CAST({left} AS VARCHAR(4096)) || CAST({right} AS VARCHAR(4096)))"
+    return f"({left} {op} {right})"
+
+
+def _expr_list_predicate(expr, context, segment):
+    source_sql = translate_expression(expr.source, context, segment=segment)
+    var = sanitize_identifier(expr.variable)
+    alias = context.next_alias("lp")
+    context.variable_aliases[expr.variable] = f"{alias}"
+    pred_sql = translate_expression(expr.predicate, context, segment=segment)
+    del context.variable_aliases[expr.variable]
+    pred_with_alias = pred_sql.replace(
+        f"{alias}.node_id", f"{alias}.{var}"
+    ).replace(f"{alias}.", f"{alias}.")
+    pred_with_alias = pred_sql
+    for col in ("node_id", "p", "val", "label"):
+        pred_with_alias = pred_with_alias.replace(
+            f"{alias}.{col}", f"{alias}.{var}"
+        )
+    count_alias = context.next_alias("lpc")
+    inner = (
+        f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
+        f" WHERE {pred_with_alias}"
+    )
+    all_count = f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {count_alias}"
+    if expr.quantifier == "all":
+        return f"(({inner}) = ({all_count}))"
+    if expr.quantifier == "any":
+        return f"(({inner}) > 0)"
+    if expr.quantifier == "none":
+        return f"(({inner}) = 0)"
+    if expr.quantifier == "single":
+        return f"(({inner}) = 1)"
+    return f"(({inner}) > 0)"
+
+
+def _expr_list_comprehension(expr, context, segment):
+    source_sql = translate_expression(expr.source, context, segment="inline")
+    var = sanitize_identifier(expr.variable)
+    alias = context.next_alias("lc")
+    context.variable_aliases[expr.variable] = alias
+    where_clause = ""
+    if expr.predicate:
+        if isinstance(expr.predicate, ast.BooleanExpression):
+            pred_sql = translate_boolean_expression(expr.predicate, context)
+        else:
+            pred_sql = translate_expression(expr.predicate, context, segment="inline")
+        for col in ("node_id", "p", "val", "label"):
+            pred_sql = pred_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
+        where_clause = f" WHERE {pred_sql}"
+    select_expr = f"{alias}.{var}"
+    if expr.projection:
+        proj_sql = translate_expression(expr.projection, context, segment="inline")
+        for col in ("node_id", "p", "val", "label"):
+            proj_sql = proj_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
+        select_expr = proj_sql
+    del context.variable_aliases[expr.variable]
+    return (
+        f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
+        f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} INTEGER PATH '$')) {alias}"
+        f"{where_clause})"
+    )
+
+
+def _expr_reduce(expr, context, segment):
+    var = sanitize_identifier(expr.variable)
+    acc = expr.accumulator
+
+    try:
+        init_val = float(expr.init.value) if hasattr(expr.init, "value") else 0.0
+    except Exception:
+        init_val = 0.0
+
+    if (
+        isinstance(expr.source, ast.AggregationFunction)
+        and expr.source.function_name.lower() == "collect"
+        and expr.source.argument is not None
+    ):
+        collect_arg = expr.source.argument
+        collect_sql = translate_expression(collect_arg, context, segment=segment)
+        return f"({init_val} + SUM(CAST({collect_sql} AS DOUBLE)))"
+
+    source_sql = translate_expression(expr.source, context, segment=segment)
+    alias = context.next_alias("re")
+    context.variable_aliases[expr.variable] = alias
+    context.variable_aliases[acc] = "__acc__"
+    body_sql = translate_expression(expr.body, context, segment=segment)
+    for col in ("node_id", "p", "val", "label"):
+        body_sql = body_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
+    body_sql = body_sql.replace("__acc__.node_id", "0").replace("__acc__", "0")
+    del context.variable_aliases[expr.variable]
+    del context.variable_aliases[acc]
+    init_sql = translate_expression(expr.init, context, segment=segment)
+    return (
+        f"({init_sql} + (SELECT SUM({body_sql}) FROM "
+        f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} DOUBLE PATH '$')) {alias}))"
+    )
+
+
+def _expr_case(expr, context, segment):
+    parts = ["CASE"]
+    if expr.test_expression is not None:
+        parts.append(translate_expression(expr.test_expression, context, segment))
+    for wc in expr.when_clauses:
+        if isinstance(wc.condition, ast.BooleanExpression):
+            cond = translate_boolean_expression(wc.condition, context)
+        else:
+            cond = translate_expression(wc.condition, context, segment)
+        res = _inline_literal(wc.result)
+        if res is None:
+            res = translate_expression(wc.result, context, segment)
+        parts.append(f"WHEN {cond} THEN {res}")
+    else_res = (
+        _inline_literal(expr.else_result) if expr.else_result is not None else None
+    )
+    if else_res is None and expr.else_result is not None:
+        else_res = translate_expression(expr.else_result, context, segment)
+    if else_res is not None:
+        parts.append(f"ELSE {else_res}")
+    parts.append("END")
+    return " ".join(parts)
+
+
+def _expr_property_reference(expr, context, segment):
+    alias = context.variable_aliases.get(expr.variable)
+    if not alias:
+        raise ValueError(f"Undefined: {expr.variable}")
+    cte_alias = context.temporal_rel_ctes.get(expr.variable)
+    if cte_alias is not None:
+        if expr.property_name == "ts":
+            return f"{cte_alias}.ts"
+        if expr.property_name in ("weight", "w"):
+            return f"{cte_alias}.weight"
+    temporal_node_col = getattr(context, "temporal_node_col", {})
+    if expr.variable in temporal_node_col:
+        col = temporal_node_col[expr.variable]
+        cte_name = context.variable_aliases[expr.variable]
+        if expr.property_name in ("id", "node_id"):
+            return f"{cte_name}.{col}"
+    if (
+        expr.property_name in ("ts", "weight", "w")
+        and expr.variable not in context.temporal_rel_ctes
+    ):
+        if alias and alias.startswith("e"):
+            m = getattr(context, "_metadata", None)
+            if m is not None:
+                m.warnings.append(
+                    f"{expr.variable}.{expr.property_name} in RETURN without WHERE {expr.variable}.ts filter "
+                    f"— {expr.property_name} will be NULL. Add WHERE {expr.variable}.ts >= $start AND "
+                    f"{expr.variable}.ts <= $end for temporal routing."
+                )
+            return "NULL"
+    if alias in context.mapped_node_aliases:
+        mapping = context.mapped_node_aliases[alias]
+        if expr.property_name in ("id", "node_id"):
+            return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
+        return f"{alias}.{sanitize_identifier(expr.property_name)}"
+    if alias.startswith("Stage"):
+        if expr.property_name in ("node_id", "id"):
+            return expr.variable
+        return f"SQLUser.JSON_VALUE({expr.variable}, '$.{expr.property_name}')"
+    if alias.startswith("e") and not alias.startswith("ES_"):
+        is_undirected = alias in getattr(context, "_undirected_aliases", set())
+        is_edgescan = alias in getattr(context, "_edgescan_aliases", set())
+        if expr.property_name == "p":
+            return f"{alias}.{'_p' if is_undirected else 'p'}"
+        if expr.property_name == "s":
+            return f"{alias}.{'_src' if is_undirected else 's'}"
+        if expr.property_name == "o_id":
+            return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
+        if is_undirected or is_edgescan:
+            return "NULL"
+        return f"SQLUser.JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}')"
+    if expr.property_name in ("node_id", "id"):
+        return f"{alias}.node_id"
+    p_alias = context.next_alias("p")
+    context.join_clauses.append(
+        f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(expr.property_name)}'
+    )
+    return f"{p_alias}.val"
+
+
+def _expr_map_projection(expr, context, segment):
+    alias = context.variable_aliases.get(expr.variable, "")
+    parts = []
+    for key_spec, _ in expr.keys:
+        prop = key_spec.lstrip(".")
+        p_alias = context.next_alias("p")
+        context.join_clauses.append(
+            f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(prop)}"
+        )
+        safe_prop = prop.replace("'", "''")
+        parts.append(f"'\"'||'{safe_prop}'||'\":'||COALESCE('\"'||{p_alias}.val||'\"','null')")
+    if not parts:
+        return "'{}'"
+    return "('{'||" + "||','||".join(parts) + "||'}')"
+
+
+def _expr_map_literal(expr, context, segment):
+    if not expr.entries:
+        return "'{}'"
+    parts = []
+    for k, v in expr.entries.items():
+        safe_k = k.replace("'", "''")
+        if isinstance(v, ast.Literal) and v.value is None:
+            parts.append(f"'\"'||'{safe_k}'||'\":null'")
+        elif isinstance(v, ast.Literal) and isinstance(v.value, bool):
+            bval = "true" if v.value else "false"
+            parts.append(f"'\"'||'{safe_k}'||'\":{bval}'")
+        elif isinstance(v, ast.Literal) and isinstance(v.value, (int, float)):
+            parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({v.value} AS VARCHAR)")
+        elif isinstance(v, ast.Literal) and isinstance(v.value, str):
+            safe_v = v.value.replace("\\", "\\\\").replace('"', '\\"').replace("'", "''")
+            parts.append(f"'\"'||'{safe_k}'||'\":\"'||'{safe_v}'||'\"'")
+        else:
+            val_sql = translate_expression(v, context, segment=segment)
+            parts.append(f"'\"'||'{safe_k}'||'\":\"'||CAST({val_sql} AS VARCHAR)||'\"'")
+    inner = " || ',' || ".join(parts)
+    return f"('{{'||{inner}||'}}')"
+
+
+def _expr_subscript(expr, context, segment):
+    base = expr.expression
+    idx = expr.index
+    if isinstance(base, ast.Variable) and isinstance(idx, ast.Variable):
+        node_alias = context.variable_aliases.get(base.name, "")
+        key_val = context.input_params.get(idx.name, idx.name)
+        p_alias = context.next_alias("dp")
+        node_ref = f"{node_alias}.node_id" if node_alias else "NULL"
+        context.join_clauses.append(
+            f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {node_ref} AND {p_alias}.\"key\" = {context.add_join_param(key_val)}"
+        )
+        return f"{p_alias}.val"
+    base_sql = translate_expression(base, context, segment=segment)
+    if isinstance(idx, ast.Literal) and isinstance(idx.value, int):
+        i = idx.value
+        return (
+            f"(SELECT elem FROM JSON_TABLE({base_sql}, "
+            f"'$[{i}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
+        )
+    idx_sql = translate_expression(idx, context, segment=segment)
+    return (
+        f"JSON_TABLE({base_sql}, '$[*]' COLUMNS "
+        f"(idx FOR ORDINALITY, elem VARCHAR(1000) PATH '$'))[{idx_sql}].elem"
+    )
+
+
+def _expr_slice(expr, context, segment):
+    base_sql = translate_expression(expr.expression, context, segment=segment)
+    start_val = expr.start.value if isinstance(expr.start, ast.Literal) else None
+    end_val = expr.end.value if isinstance(expr.end, ast.Literal) else None
+    if start_val is not None and end_val is not None:
+        return f"SUBSTRING({base_sql}, {int(start_val) + 1}, {int(end_val) - int(start_val)})"
+    start_sql = translate_expression(expr.start, context, segment=segment)
+    end_sql = translate_expression(expr.end, context, segment=segment)
+    return f"SUBSTRING({base_sql}, ({start_sql}) + 1, ({end_sql}) - ({start_sql}))"
+
+
+def _expr_property_access(expr, context, segment):
+    base_sql = translate_expression(expr.expression, context, segment=segment)
+    prop = expr.property_name.replace("'", "''")
+    return f"SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
+
+
+def _expr_variable(expr, context, segment):
+    alias = context.variable_aliases.get(expr.name)
+    if alias == "__foreach_literal__":
+        val = getattr(context, "foreach_literals", {}).get(expr.name)
+        if val is not None:
+            if isinstance(val, str):
+                safe = val.replace("'", "''")
+                return f"'{safe}'"
+            if isinstance(val, bool):
+                return "1" if val else "0"
+            return str(val)
+    if not alias:
+        if expr.name in context.input_params:
+            v = context.input_params[expr.name]
+            if segment == "select":
+                return context.add_select_param(v)
+            if segment == "join":
+                return context.add_join_param(v)
+            return context.add_where_param(v)
+        raise ValueError(f"Undefined: {expr.name}")
+    if alias.startswith("Stage"):
+        return expr.name
+    if alias.startswith("e"):
+        is_undirected = alias in getattr(context, "_undirected_aliases", set())
+        return f"{alias}.{'_p' if is_undirected else 'p'}"
+    if expr.name in context.scalar_variables:
+        if alias == "scalar" or alias in _PROC_CTE_ALIASES:
+            return expr.name
+        return f"{alias}.{expr.name}"
+    if alias in context.mapped_node_aliases:
+        mapping = context.mapped_node_aliases[alias]
+        return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
+    return f"{alias}.node_id"
+
+
+def _expr_literal(expr, context, segment):
+    v = expr.value
+    if v is True:
+        return "1"
+    if v is False:
+        return "0"
+    if v is None:
+        return "NULL"
+    if isinstance(v, list):
+        import json as _json
+        all_simple = all(
+            isinstance(item, ast.Literal) and isinstance(item.value, (int, float, str, bool, type(None)))
+            for item in v
+        )
+        if all_simple:
+            items = [item.value for item in v]
+            return f"'{_json.dumps(items)}'"
+        sql_items = []
+        for item in v:
+            if isinstance(item, ast.Literal):
+                iv = item.value
+                if iv is True: sql_items.append("1")
+                elif iv is False: sql_items.append("0")
+                elif iv is None: sql_items.append("NULL")
+                elif isinstance(iv, str): sql_items.append(f"'{iv.replace(chr(39), chr(39)+chr(39))}'")
+                else: sql_items.append(str(iv))
+            else:
+                sql_items.append(translate_expression(item, context, segment=segment))
+        return f"JSON_ARRAY({', '.join(sql_items)})"
+    if segment == "select":
+        return context.add_select_param(v)
+    if segment == "join":
+        return context.add_join_param(v)
+    if segment == "inline":
+        if isinstance(v, str): return f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+        return str(v)
+    return context.add_where_param(v)
+
+
+def _expr_aggregation(expr, context, segment):
+    if expr.argument and isinstance(expr.argument, ast.Literal):
+        v = expr.argument.value
+        if v is True: arg = "1"
+        elif v is False: arg = "0"
+        elif v is None: arg = "NULL"
+        elif isinstance(v, str): arg = f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+        else: arg = str(v)
+    else:
+        arg = (
+            translate_expression(expr.argument, context, segment=segment)
+            if expr.argument
+            else "*"
+        )
+    fn = (
+        "JSON_ARRAYAGG"
+        if expr.function_name.upper() == "COLLECT"
+        else expr.function_name.upper()
+    )
+    return f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
+
+
+def _expr_function_call(expr, context, segment):
+    fn = expr.function_name.lower()
+
+    if fn in ("shortestpath", "allshortestpaths") and expr.arguments:
+        arg = expr.arguments[0]
+        if isinstance(arg, ast.Literal) and isinstance(arg.value, ast.GraphPattern):
+            pattern = arg.value
+            is_all = fn == "allshortestpaths"
+            for rel in pattern.relationships:
+                if rel.variable_length is None:
+                    rel.variable_length = ast.VariableLength(
+                        min_hops=1, max_hops=5, shortest=not is_all, all_shortest=is_all
+                    )
+                else:
+                    rel.variable_length.shortest = not is_all
+                    rel.variable_length.all_shortest = is_all
+            fake_match = ast.MatchClause(patterns=[pattern], optional=False)
+            translate_match_clause(fake_match, context, {})
+            return "'path'"
+
+    if fn in ("length", "nodes", "relationships") and len(expr.arguments) == 1:
+        arg = expr.arguments[0]
+        if isinstance(arg, ast.Variable) and arg.name in context.named_paths:
+            path_var = arg.name
+            if fn == "length":
+                vl_names = {vl.get("path_var") for vl in (context.var_length_paths or [])}
+                if path_var in vl_names:
+                    node_aliases = context.path_node_aliases.get(path_var, [])
+                    return str(max(0, len(node_aliases) - 1))
+                return str(len(context.named_paths[path_var].pattern.relationships))
+            elif fn == "nodes":
+                aliases = context.path_node_aliases[path_var]
+                return f"JSON_ARRAY({', '.join(f'{a}.node_id' for a in aliases)})"
+            else:
+                aliases = context.path_edge_aliases[path_var]
+                return f"JSON_ARRAY({', '.join(f'{a}.p' for a in aliases)})"
+        elif isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
+            if fn in ("nodes", "relationships"):
+                raise ValueError(f"'{arg.name}' is not a named path variable")
+
+    fn, args_exprs = expr.function_name.lower(), expr.arguments
+    if fn == "toboolean" and args_exprs and isinstance(args_exprs[0], ast.Literal):
+        v = args_exprs[0].value
+        if not isinstance(v, str):
+            return "1" if v else "0"
+    def _translate_arg(a):
+        if isinstance(a, ast.Literal) and not isinstance(a.value, list):
+            inlined = _inline_literal(a)
+            if inlined is not None:
+                return inlined
+        return translate_expression(a, context, segment="inline")
+
+    args = [_translate_arg(a) for a in args_exprs]
+
+    if fn in ("vector_distance", "vector_similarity", "ivg.vector_distance", "ivg.vector_similarity"):
+        if len(args_exprs) < 2:
+            raise ValueError(f"{fn}() requires 2 arguments: (node_variable, query_vector)")
+        node_arg = args_exprs[0]
+        vec_arg = args_exprs[1]
+        alias = context.variable_aliases.get(node_arg.name, node_arg.name) if isinstance(node_arg, ast.Variable) else args[0]
+        emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+        if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
+            vec_val = context.input_params[vec_arg.name]
+            if isinstance(vec_val, list):
+                vec_str = ",".join(str(x) for x in vec_val)
+                placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+            else:
+                placeholder = f"TO_VECTOR(?, DOUBLE)"
+                context.all_stage_params.append(vec_val)
+        elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
+            vec_str = ",".join(str(x) for x in vec_arg.value)
+            placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+        else:
+            placeholder = args[1]
+        if fn in ("vector_distance", "ivg.vector_distance"):
+            return f"(1 - VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder}))"
+        else:
+            return f"VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder})"
+
+    if fn == "type":
+        if args_exprs and isinstance(args_exprs[0], ast.Variable):
+            var_name = args_exprs[0].name
+            alias = context.variable_aliases.get(var_name, "")
+            if alias:
+                if alias.startswith("Stage"):
+                    return f"{alias}.{var_name}"
+                p_col = "_p" if getattr(context, "_undirected_aliases", set()) and alias in context._undirected_aliases else "p"
+                return f"{alias}.{p_col}"
+        return args[0] if args else "NULL"
+
+    if fn in ("startnode",):
+        if args_exprs and isinstance(args_exprs[0], ast.Variable):
+            var_name = args_exprs[0].name
+            alias = context.variable_aliases.get(var_name, "")
+            if alias:
+                return f"{alias}.s"
+        return args[0] if args else "NULL"
+
+    if fn == "endnode":
+        if args_exprs and isinstance(args_exprs[0], ast.Variable):
+            var_name = args_exprs[0].name
+            alias = context.variable_aliases.get(var_name, "")
+            if alias:
+                return f"{alias}.o_id"
+        return args[0] if args else "NULL"
+
+    if fn == "id":
+        if args_exprs and isinstance(args_exprs[0], ast.Variable):
+            var_name = args_exprs[0].name
+            alias = context.variable_aliases.get(var_name, "")
+            if alias:
+                return f"{alias}.node_id"
+        return args[0] if args else "NULL"
+
+    if fn == "labels":
+        return labels_subquery(args[0] if args else "NULL")
+    if fn == "properties":
+        return properties_subquery(args[0] if args else "NULL")
+
+    if fn == "keys":
+        if not args:
+            return "JSON_ARRAY()"
+        node_expr = args[0]
+        if (
+            ".node_id" in node_expr
+            or node_expr.startswith("n")
+            or node_expr.startswith("'")
+        ):
+            id_expr = node_expr if ".node_id" not in node_expr else node_expr
+        else:
+            id_expr = node_expr
+        return f"(SELECT JSON_ARRAYAGG(rp.key) FROM {_table('rdf_props')} rp WHERE rp.s = {id_expr})"
+
+    if fn == "range":
+        if len(args_exprs) < 2:
+            return "JSON_ARRAY()"
+        try:
+            start = (
+                int(args_exprs[0].value)
+                if isinstance(args_exprs[0], ast.Literal)
+                else None
+            )
+            end = (
+                int(args_exprs[1].value)
+                if isinstance(args_exprs[1], ast.Literal)
+                else None
+            )
+            step = (
+                int(args_exprs[2].value)
+                if len(args_exprs) > 2 and isinstance(args_exprs[2], ast.Literal)
+                else 1
+            )
+            if start is not None and end is not None:
+                vals = list(range(start, end + (1 if step > 0 else -1), step))
+                return f"JSON_ARRAY({', '.join(str(v) for v in vals)})"
+        except (TypeError, ValueError):
+            pass
+        return f"JSON_ARRAY()"
+
+    if fn == "size":
+        if not args:
+            return "0"
+        arg_expr = args_exprs[0] if args_exprs else None
+        is_list = (
+            isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
+        ) or isinstance(arg_expr, ast.ListComprehension)
+        if is_list:
+            return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
+    if fn == "head":
+        if not args:
+            return "NULL"
+        return f"SQLUser.LIST_HEAD({args[0]})"
+
+    if fn == "tail":
+        if not args:
+            return "JSON_ARRAY()"
+        return f"SQLUser.LIST_TAIL({args[0]})"
+
+    if fn == "last":
+        if not args:
+            return "NULL"
+        return f"SQLUser.LIST_LAST({args[0]})"
+
+    if fn == "isempty":
+        if not args:
+            return "1"
+        return f"CASE WHEN {args[0]} IS NULL OR {args[0]} = '' OR {args[0]} = '[]' OR {args[0]} = '{{}}' THEN 1 ELSE 0 END"
+
+    if fn == "round":
+        return f"CAST(ROUND({args[0] if args else '0'}, 0) AS DOUBLE)"
+    _CYPHER_FN_MAP = {
+        "tolower": "LOWER",
+        "toupper": "UPPER",
+        "trim": "TRIM",
+        "ltrim": "LTRIM",
+        "rtrim": "RTRIM",
+        "tostring": "CAST",
+        "tointeger": "CAST",
+        "tofloat": "CAST",
+        "size": "LENGTH",
+        "length": "LENGTH",
+        "substring": "SUBSTRING",
+        "left": "LEFT",
+        "right": "RIGHT",
+        "split": "STRTOK_TO_TABLE",
+        "replace": "REPLACE",
+        "reverse": "REVERSE",
+        "abs": "ABS",
+        "ceil": "CEILING",
+        "floor": "FLOOR",
+        "round": "ROUND",
+        "sqrt": "SQRT",
+        "sign": "SIGN",
+        "coalesce": "COALESCE",
+        "nullif": "NULLIF",
+        "exists": "EXISTS",
+        "toboolean": "CASE WHEN",
+    }
+    sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
+    if fn == "coalesce":
+        if len(args) >= 2 and args_exprs:
+            coerced = []
+            for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
+                if i == 0:
+                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                elif isinstance(arg_expr, ast.Literal) and not isinstance(arg_expr.value, str) and arg_expr.value is not None:
+                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                else:
+                    coerced.append(arg)
+            return f"COALESCE({', '.join(coerced)})"
+        return f"COALESCE({', '.join(args)})" if args else "NULL"
+    if fn == "tointeger":
+        return f"CAST({args[0]} AS INTEGER)"
+    if fn == "tofloat":
+        return f"CAST({args[0]} AS DOUBLE)"
+    if fn == "tostring":
+        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, bool):
+            return f"'{'true' if args_exprs[0].value else 'false'}'"
+        return f"CAST({args[0]} AS VARCHAR(4096))"
+    if fn == "substring":
+        if len(args) >= 2:
+            start = f"({args[1]}) + 1"
+            if len(args) >= 3:
+                return f"SUBSTRING({args[0]}, {start}, {args[2]})"
+            return f"SUBSTRING({args[0]}, {start})"
+        return f"SUBSTRING({args[0]})"
+    if fn == "reverse":
+        if not args:
+            return "NULL"
+        arg_expr = args_exprs[0] if args_exprs else None
+        is_list = (
+            isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
+        ) or isinstance(arg_expr, ast.ListComprehension)
+        if is_list:
+            return f"SQLUser.LIST_REVERSE({args[0]})"
+        return f"REVERSE({args[0]})"
+    if fn in ("stdev", "stdevs"):
+        return f"STDDEV({args[0]})" if args else "NULL"
+    if fn in ("stdevp",):
+        return f"STDDEV_POP({args[0]})" if args else "NULL"
+    if fn in ("percentiledisc", "percentilecont"):
+        if not args:
+            return "NULL"
+        val_expr = args[0]
+        pct_expr = args[1] if len(args) > 1 else "0.5"
+        context._percentile_queries = getattr(context, "_percentile_queries", [])
+        if args_exprs and isinstance(args_exprs[0], ast.Variable):
+            var_name = args_exprs[0].name
+            alias = context.variable_aliases.get(var_name, "")
+            pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else 0.5
+            context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
+        return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
+    if fn == "haversin":
+        return f"(1 - COS({args[0]})) / 2" if args else "NULL"
+    if fn == "e":
+        return "EXP(1)"
+    if fn == "rand":
+        return "SQLUser.RAND()"
+    if fn == "timestamp":
+        return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
+    if fn == "randomuuid":
+        return "SQLUser.NEWID()"
+    if fn == "split":
+        return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
+    if fn in ("datetime", "localdatetime"):
+        return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
+    if fn in ("localtime", "time"):
+        return f"CAST(GETDATE() AS TIME)"
+    if fn == "duration":
+        return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
+    if fn == "toboolean":
+        return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
+    return f"{sql_fn}({', '.join(args)})"
+
+
+def _expr_boolean(expr, context, segment):
+    cond = translate_boolean_expression(expr, context)
+    return f"CASE WHEN ({cond}) THEN 1 ELSE 0 END"
+
+
 def translate_expression(expr, context, segment="select") -> str:
 
     if isinstance(expr, ast.PatternComprehension):
-        pat = expr.pattern
-        src_node = pat.nodes[0] if pat.nodes else None
-        tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
-        rel = pat.relationships[0] if pat.relationships else None
-
-        e_alias = context.next_alias("pce")
-        t_alias = context.next_alias("pct")
-
-        pred_type = ""
-        if rel and rel.types:
-            safe_type = rel.types[0].replace("'", "''")
-            pred_type = f" AND {e_alias}.p = '{safe_type}'"
-
-        src_bind = ""
-        if (
-            src_node
-            and src_node.variable
-            and src_node.variable in context.variable_aliases
-        ):
-            src_id = f"{context.variable_aliases[src_node.variable]}.node_id"
-            src_bind = f" AND {e_alias}.s = {src_id}"
-
-        tgt_var = tgt_node.variable if tgt_node else None
-
-        if (
-            expr.projection
-            and isinstance(expr.projection, ast.PropertyReference)
-            and expr.projection.variable == tgt_var
-        ):
-            if expr.projection.property_name == "node_id":
-                proj_sql = f"{t_alias}.node_id"
-            else:
-                safe_key = expr.projection.property_name.replace("'", "''")
-                proj_sql = (
-                    f"(SELECT val FROM {_table('rdf_props')} "
-                    f"WHERE s = {t_alias}.node_id AND \"key\" = '{safe_key}')"
-                )
-        elif expr.projection:
-            if tgt_var:
-                context.variable_aliases[tgt_var] = t_alias
-            if rel and rel.variable:
-                context.variable_aliases[rel.variable] = e_alias
-            proj_sql = translate_expression(expr.projection, context, segment="select")
-            if tgt_var and tgt_var in context.variable_aliases:
-                del context.variable_aliases[tgt_var]
-            if rel and rel.variable and rel.variable in context.variable_aliases:
-                del context.variable_aliases[rel.variable]
-        else:
-            proj_sql = f"{t_alias}.node_id"
-
-        return (
-            f"(SELECT JSON_ARRAYAGG({proj_sql}) FROM "
-            f"{_table('rdf_edges')} {e_alias} "
-            f"JOIN {_table('nodes')} {t_alias} ON {t_alias}.node_id = {e_alias}.o_id "
-            f"WHERE 1=1{pred_type}{src_bind})"
-        )
-
+        return _expr_pattern_comprehension(expr, context, segment)
     if isinstance(expr, ast.FunctionCall) and expr.function_name == "__prop__":
-        inner_expr = expr.arguments[0]
-        prop = str(expr.arguments[1].value) if isinstance(expr.arguments[1], ast.Literal) else "node_id"
-        if prop == "id":
-            prop = "node_id"
-        inner_fn = inner_expr.function_name.lower() if isinstance(inner_expr, ast.FunctionCall) else ""
-        if inner_fn in ("startnode", "endnode"):
-            return translate_expression(inner_expr, context, segment=segment)
-        inner = translate_expression(inner_expr, context, segment=segment)
-        return f"{inner}.{prop}"
-
+        return _expr_prop(expr, context, segment)
     if isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_"):
-        op = expr.function_name[len("__arith_") :]
-        left = translate_expression(expr.arguments[0], context, segment=segment)
-        right = translate_expression(expr.arguments[1], context, segment=segment)
-        if op == "%":
-            return f"MOD({left}, {right})"
-        if op == "^":
-            return f"POWER({left}, {right})"
-        if op == "+":
-            def _is_str(arg):
-                return (isinstance(arg, ast.Literal) and isinstance(arg.value, str)) or \
-                    isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_+")
-            left_str = _is_str(expr.arguments[0])
-            right_str = _is_str(expr.arguments[1])
-            if left_str or right_str:
-                return f"(CAST({left} AS VARCHAR(4096)) || CAST({right} AS VARCHAR(4096)))"
-        return f"({left} {op} {right})"
-
+        return _expr_arith(expr, context, segment)
     if isinstance(expr, ast.ListPredicateExpression):
-        source_sql = translate_expression(expr.source, context, segment=segment)
-        var = sanitize_identifier(expr.variable)
-        alias = context.next_alias("lp")
-        context.variable_aliases[expr.variable] = f"{alias}"
-        pred_sql = translate_expression(expr.predicate, context, segment=segment)
-        del context.variable_aliases[expr.variable]
-        pred_with_alias = pred_sql.replace(
-            f"{alias}.node_id", f"{alias}.{var}"
-        ).replace(f"{alias}.", f"{alias}.")
-        pred_with_alias = pred_sql
-        for col in ("node_id", "p", "val", "label"):
-            pred_with_alias = pred_with_alias.replace(
-                f"{alias}.{col}", f"{alias}.{var}"
-            )
-        count_alias = context.next_alias("lpc")
-        inner = (
-            f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias}"
-            f" WHERE {pred_with_alias}"
-        )
-        all_count = f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {count_alias}"
-        if expr.quantifier == "all":
-            return f"(({inner}) = ({all_count}))"
-        if expr.quantifier == "any":
-            return f"(({inner}) > 0)"
-        if expr.quantifier == "none":
-            return f"(({inner}) = 0)"
-        if expr.quantifier == "single":
-            return f"(({inner}) = 1)"
-        return f"(({inner}) > 0)"
-
+        return _expr_list_predicate(expr, context, segment)
     if isinstance(expr, ast.ListComprehension):
-        source_sql = translate_expression(expr.source, context, segment="inline")
-        var = sanitize_identifier(expr.variable)
-        alias = context.next_alias("lc")
-        context.variable_aliases[expr.variable] = alias
-        where_clause = ""
-        if expr.predicate:
-            if isinstance(expr.predicate, ast.BooleanExpression):
-                pred_sql = translate_boolean_expression(expr.predicate, context)
-            else:
-                pred_sql = translate_expression(expr.predicate, context, segment="inline")
-            for col in ("node_id", "p", "val", "label"):
-                pred_sql = pred_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
-            where_clause = f" WHERE {pred_sql}"
-        select_expr = f"{alias}.{var}"
-        if expr.projection:
-            proj_sql = translate_expression(expr.projection, context, segment="inline")
-            for col in ("node_id", "p", "val", "label"):
-                proj_sql = proj_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
-            select_expr = proj_sql
-        del context.variable_aliases[expr.variable]
-        return (
-            f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
-            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} INTEGER PATH '$')) {alias}"
-            f"{where_clause})"
-        )
-
+        return _expr_list_comprehension(expr, context, segment)
     if isinstance(expr, ast.ReduceExpression):
-        var = sanitize_identifier(expr.variable)
-        acc = expr.accumulator
-
-        try:
-            init_val = float(expr.init.value) if hasattr(expr.init, "value") else 0.0
-        except Exception:
-            init_val = 0.0
-
-        if (
-            isinstance(expr.source, ast.AggregationFunction)
-            and expr.source.function_name.lower() == "collect"
-            and expr.source.argument is not None
-        ):
-            collect_arg = expr.source.argument
-            collect_sql = translate_expression(collect_arg, context, segment=segment)
-            return f"({init_val} + SUM(CAST({collect_sql} AS DOUBLE)))"
-
-        source_sql = translate_expression(expr.source, context, segment=segment)
-        alias = context.next_alias("re")
-        context.variable_aliases[expr.variable] = alias
-        context.variable_aliases[acc] = "__acc__"
-        body_sql = translate_expression(expr.body, context, segment=segment)
-        for col in ("node_id", "p", "val", "label"):
-            body_sql = body_sql.replace(f"{alias}.{col}", f"{alias}.{var}")
-        body_sql = body_sql.replace("__acc__.node_id", "0").replace("__acc__", "0")
-        del context.variable_aliases[expr.variable]
-        del context.variable_aliases[acc]
-        init_sql = translate_expression(expr.init, context, segment=segment)
-        return (
-            f"({init_sql} + (SELECT SUM({body_sql}) FROM "
-            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} DOUBLE PATH '$')) {alias}))"
-        )
-
-        count_alias = context.next_alias("lpc")
-        all_count = f"SELECT COUNT(*) FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {count_alias}"
-        if expr.quantifier == "all":
-            return f"(({inner}) = ({all_count}))"
-        if expr.quantifier == "any":
-            return f"(({inner}) > 0)"
-        if expr.quantifier == "none":
-            return f"(({inner}) = 0)"
-        if expr.quantifier == "single":
-            return f"(({inner}) = 1)"
-        return f"(({inner}) > 0)"
-
-    if isinstance(expr, ast.ListComprehension):
-        source_sql = translate_expression(expr.source, context, segment="inline")
-        var = sanitize_identifier(expr.variable)
-        alias = context.next_alias("lc")
-        where_clause = ""
-        if expr.predicate:
-            if isinstance(expr.predicate, ast.BooleanExpression):
-                pred_sql = translate_boolean_expression(expr.predicate, context)
-            else:
-                pred_sql = translate_expression(expr.predicate, context, segment="inline")
-            where_clause = f" WHERE {pred_sql.replace(var, f'{alias}.{var}')}"
-        select_expr = f"{alias}.{var}"
-        if expr.projection:
-            proj_sql = translate_expression(expr.projection, context, segment="inline")
-            select_expr = proj_sql.replace(var, f"{alias}.{var}")
-        return (
-            f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
-            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} INTEGER PATH '$')) {alias}"
-            f"{where_clause})"
-        )
-
-    if isinstance(expr, ast.ReduceExpression):
-        source_sql = translate_expression(expr.source, context, segment=segment)
-        init_sql = translate_expression(expr.init, context, segment=segment)
-        var = sanitize_identifier(expr.variable)
-        alias = context.next_alias("re")
-        body_sql = translate_expression(expr.body, context, segment=segment)
-        body_replaced = body_sql.replace(var, f"{alias}.{var}").replace(
-            sanitize_identifier(expr.accumulator), f"0"
-        )
-        return (
-            f"(SELECT SUM({body_replaced}) + {init_sql} FROM "
-            f"JSON_TABLE({source_sql}, '$[*]' COLUMNS({var} VARCHAR(1000) PATH '$')) {alias})"
-        )
-
+        return _expr_reduce(expr, context, segment)
     if isinstance(expr, ast.CaseExpression):
-        parts = ["CASE"]
-        if expr.test_expression is not None:
-            parts.append(translate_expression(expr.test_expression, context, segment))
-        for wc in expr.when_clauses:
-            if isinstance(wc.condition, ast.BooleanExpression):
-                cond = translate_boolean_expression(wc.condition, context)
-            else:
-                cond = translate_expression(wc.condition, context, segment)
-            res = _inline_literal(wc.result)
-            if res is None:
-                res = translate_expression(wc.result, context, segment)
-            parts.append(f"WHEN {cond} THEN {res}")
-        else_res = (
-            _inline_literal(expr.else_result) if expr.else_result is not None else None
-        )
-        if else_res is None and expr.else_result is not None:
-            else_res = translate_expression(expr.else_result, context, segment)
-        if else_res is not None:
-            parts.append(f"ELSE {else_res}")
-        parts.append("END")
-        return " ".join(parts)
+        return _expr_case(expr, context, segment)
     if isinstance(expr, ast.PropertyReference):
-        alias = context.variable_aliases.get(expr.variable)
-        if not alias:
-            raise ValueError(f"Undefined: {expr.variable}")
-        cte_alias = context.temporal_rel_ctes.get(expr.variable)
-        if cte_alias is not None:
-            if expr.property_name == "ts":
-                return f"{cte_alias}.ts"
-            if expr.property_name in ("weight", "w"):
-                return f"{cte_alias}.weight"
-        temporal_node_col = getattr(context, "temporal_node_col", {})
-        if expr.variable in temporal_node_col:
-            col = temporal_node_col[expr.variable]
-            cte_name = context.variable_aliases[expr.variable]
-            if expr.property_name in ("id", "node_id"):
-                return f"{cte_name}.{col}"
-        if (
-            expr.property_name in ("ts", "weight", "w")
-            and expr.variable not in context.temporal_rel_ctes
-        ):
-            if alias and alias.startswith("e"):
-                m = getattr(context, "_metadata", None)
-                if m is not None:
-                    m.warnings.append(
-                        f"{expr.variable}.{expr.property_name} in RETURN without WHERE {expr.variable}.ts filter "
-                        f"— {expr.property_name} will be NULL. Add WHERE {expr.variable}.ts >= $start AND "
-                        f"{expr.variable}.ts <= $end for temporal routing."
-                    )
-                return "NULL"
-        if alias in context.mapped_node_aliases:
-            mapping = context.mapped_node_aliases[alias]
-            if expr.property_name in ("id", "node_id"):
-                return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
-            return f"{alias}.{sanitize_identifier(expr.property_name)}"
-        if alias.startswith("Stage"):
-            if expr.property_name in ("node_id", "id"):
-                return expr.variable
-            return f"SQLUser.JSON_VALUE({expr.variable}, '$.{expr.property_name}')"
-        if alias.startswith("e") and not alias.startswith("ES_"):
-            is_undirected = alias in getattr(context, "_undirected_aliases", set())
-            is_edgescan = alias in getattr(context, "_edgescan_aliases", set())
-            if expr.property_name == "p":
-                return f"{alias}.{'_p' if is_undirected else 'p'}"
-            if expr.property_name == "s":
-                return f"{alias}.{'_src' if is_undirected else 's'}"
-            if expr.property_name == "o_id":
-                return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
-            if is_undirected or is_edgescan:
-                return "NULL"
-            return f"SQLUser.JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}')"
-        if expr.property_name in ("node_id", "id"):
-            return f"{alias}.node_id"
-        p_alias = context.next_alias("p")
-        context.join_clauses.append(
-            f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(expr.property_name)}'
-        )
-        return f"{p_alias}.val"
+        return _expr_property_reference(expr, context, segment)
     if isinstance(expr, ast.MapProjection):
-        alias = context.variable_aliases.get(expr.variable, "")
-        parts = []
-        for key_spec, _ in expr.keys:
-            prop = key_spec.lstrip(".")
-            p_alias = context.next_alias("p")
-            context.join_clauses.append(
-                f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(prop)}"
-            )
-            safe_prop = prop.replace("'", "''")
-            parts.append(f"'\"'||'{safe_prop}'||'\":'||COALESCE('\"'||{p_alias}.val||'\"','null')")
-        if not parts:
-            return "'{}'"
-        return "('{'||" + "||','||".join(parts) + "||'}')"
+        return _expr_map_projection(expr, context, segment)
     if isinstance(expr, ast.MapLiteral):
-        if not expr.entries:
-            return "'{}'"
-        parts = []
-        for k, v in expr.entries.items():
-            safe_k = k.replace("'", "''")
-            if isinstance(v, ast.Literal) and v.value is None:
-                parts.append(f"'\"'||'{safe_k}'||'\":null'")
-            elif isinstance(v, ast.Literal) and isinstance(v.value, bool):
-                bval = "true" if v.value else "false"
-                parts.append(f"'\"'||'{safe_k}'||'\":{bval}'")
-            elif isinstance(v, ast.Literal) and isinstance(v.value, (int, float)):
-                parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({v.value} AS VARCHAR)")
-            elif isinstance(v, ast.Literal) and isinstance(v.value, str):
-                safe_v = v.value.replace("\\", "\\\\").replace('"', '\\"').replace("'", "''")
-                parts.append(f"'\"'||'{safe_k}'||'\":\"'||'{safe_v}'||'\"'")
-            else:
-                val_sql = translate_expression(v, context, segment=segment)
-                parts.append(f"'\"'||'{safe_k}'||'\":\"'||CAST({val_sql} AS VARCHAR)||'\"'")
-        inner = " || ',' || ".join(parts)
-        return f"('{{'||{inner}||'}}')"
+        return _expr_map_literal(expr, context, segment)
     if isinstance(expr, ast.SubscriptExpression):
-        base = expr.expression
-        idx = expr.index
-        if isinstance(base, ast.Variable) and isinstance(idx, ast.Variable):
-            node_alias = context.variable_aliases.get(base.name, "")
-            key_val = context.input_params.get(idx.name, idx.name)
-            p_alias = context.next_alias("dp")
-            node_ref = f"{node_alias}.node_id" if node_alias else "NULL"
-            context.join_clauses.append(
-                f"LEFT JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {node_ref} AND {p_alias}.\"key\" = {context.add_join_param(key_val)}"
-            )
-            return f"{p_alias}.val"
-        base_sql = translate_expression(base, context, segment=segment)
-        if isinstance(idx, ast.Literal) and isinstance(idx.value, int):
-            i = idx.value
-            return (
-                f"(SELECT elem FROM JSON_TABLE({base_sql}, "
-                f"'$[{i}]' COLUMNS (elem VARCHAR(1000) PATH '$')) __jt)"
-            )
-        idx_sql = translate_expression(idx, context, segment=segment)
-        return (
-            f"JSON_TABLE({base_sql}, '$[*]' COLUMNS "
-            f"(idx FOR ORDINALITY, elem VARCHAR(1000) PATH '$'))[{idx_sql}].elem"
-        )
+        return _expr_subscript(expr, context, segment)
     if isinstance(expr, ast.SliceExpression):
-        base_sql = translate_expression(expr.expression, context, segment=segment)
-        start_val = expr.start.value if isinstance(expr.start, ast.Literal) else None
-        end_val = expr.end.value if isinstance(expr.end, ast.Literal) else None
-        if start_val is not None and end_val is not None:
-            return f"SUBSTRING({base_sql}, {int(start_val) + 1}, {int(end_val) - int(start_val)})"
-        start_sql = translate_expression(expr.start, context, segment=segment)
-        end_sql = translate_expression(expr.end, context, segment=segment)
-        return f"SUBSTRING({base_sql}, ({start_sql}) + 1, ({end_sql}) - ({start_sql}))"
+        return _expr_slice(expr, context, segment)
     if isinstance(expr, ast.PropertyAccessExpression):
-        base_sql = translate_expression(expr.expression, context, segment=segment)
-        prop = expr.property_name.replace("'", "''")
-        return f"SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
+        return _expr_property_access(expr, context, segment)
     if isinstance(expr, ast.Variable):
-        alias = context.variable_aliases.get(expr.name)
-        if alias == "__foreach_literal__":
-            val = getattr(context, "foreach_literals", {}).get(expr.name)
-            if val is not None:
-                if isinstance(val, str):
-                    safe = val.replace("'", "''")
-                    return f"'{safe}'"
-                if isinstance(val, bool):
-                    return "1" if val else "0"
-                return str(val)
-        if not alias:
-            if expr.name in context.input_params:
-                v = context.input_params[expr.name]
-                if segment == "select":
-                    return context.add_select_param(v)
-                if segment == "join":
-                    return context.add_join_param(v)
-                return context.add_where_param(v)
-            raise ValueError(f"Undefined: {expr.name}")
-        if alias.startswith("Stage"):
-            return expr.name
-        if alias.startswith("e"):
-            is_undirected = alias in getattr(context, "_undirected_aliases", set())
-            return f"{alias}.{'_p' if is_undirected else 'p'}"
-        if expr.name in context.scalar_variables:
-            if alias == "scalar" or alias in _PROC_CTE_ALIASES:
-                return expr.name
-            return f"{alias}.{expr.name}"
-        if alias in context.mapped_node_aliases:
-            mapping = context.mapped_node_aliases[alias]
-            return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
-        return f"{alias}.node_id"
+        return _expr_variable(expr, context, segment)
     if isinstance(expr, ast.Literal):
-        v = expr.value
-        if v is True:
-            return "1"
-        if v is False:
-            return "0"
-        if v is None:
-            return "NULL"
-        if isinstance(v, list):
-            import json as _json
-            all_simple = all(
-                isinstance(item, ast.Literal) and isinstance(item.value, (int, float, str, bool, type(None)))
-                for item in v
-            )
-            if all_simple:
-                items = [item.value for item in v]
-                return f"'{_json.dumps(items)}'"
-            sql_items = []
-            for item in v:
-                if isinstance(item, ast.Literal):
-                    iv = item.value
-                    if iv is True: sql_items.append("1")
-                    elif iv is False: sql_items.append("0")
-                    elif iv is None: sql_items.append("NULL")
-                    elif isinstance(iv, str): sql_items.append(f"'{iv.replace(chr(39), chr(39)+chr(39))}'")
-                    else: sql_items.append(str(iv))
-                else:
-                    sql_items.append(translate_expression(item, context, segment=segment))
-            return f"JSON_ARRAY({', '.join(sql_items)})"
-        if segment == "select":
-            return context.add_select_param(v)
-        if segment == "join":
-            return context.add_join_param(v)
-        if segment == "inline":
-            if isinstance(v, str): return f"'{v.replace(chr(39), chr(39)+chr(39))}'"
-            return str(v)
-        return context.add_where_param(v)
+        return _expr_literal(expr, context, segment)
     if isinstance(expr, ast.AggregationFunction):
-        if expr.argument and isinstance(expr.argument, ast.Literal):
-            v = expr.argument.value
-            if v is True: arg = "1"
-            elif v is False: arg = "0"
-            elif v is None: arg = "NULL"
-            elif isinstance(v, str): arg = f"'{v.replace(chr(39), chr(39)+chr(39))}'"
-            else: arg = str(v)
-        else:
-            arg = (
-                translate_expression(expr.argument, context, segment=segment)
-                if expr.argument
-                else "*"
-            )
-        fn = (
-            "JSON_ARRAYAGG"
-            if expr.function_name.upper() == "COLLECT"
-            else expr.function_name.upper()
-        )
-        return f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
+        return _expr_aggregation(expr, context, segment)
     if isinstance(expr, ast.FunctionCall):
-        fn = expr.function_name.lower()
-
-        if fn in ("shortestpath", "allshortestpaths") and expr.arguments:
-            arg = expr.arguments[0]
-            if isinstance(arg, ast.Literal) and isinstance(arg.value, ast.GraphPattern):
-                pattern = arg.value
-                is_all = fn == "allshortestpaths"
-                for rel in pattern.relationships:
-                    if rel.variable_length is None:
-                        rel.variable_length = ast.VariableLength(
-                            min_hops=1, max_hops=5, shortest=not is_all, all_shortest=is_all
-                        )
-                    else:
-                        rel.variable_length.shortest = not is_all
-                        rel.variable_length.all_shortest = is_all
-                fake_match = ast.MatchClause(patterns=[pattern], optional=False)
-                translate_match_clause(fake_match, context, {})
-                return "'path'"
-
-        if fn in ("length", "nodes", "relationships") and len(expr.arguments) == 1:
-            arg = expr.arguments[0]
-            if isinstance(arg, ast.Variable) and arg.name in context.named_paths:
-                path_var = arg.name
-                if fn == "length":
-                    vl_names = {vl.get("path_var") for vl in (context.var_length_paths or [])}
-                    if path_var in vl_names:
-                        node_aliases = context.path_node_aliases.get(path_var, [])
-                        return str(max(0, len(node_aliases) - 1))
-                    return str(len(context.named_paths[path_var].pattern.relationships))
-                elif fn == "nodes":
-                    aliases = context.path_node_aliases[path_var]
-                    return f"JSON_ARRAY({', '.join(f'{a}.node_id' for a in aliases)})"
-                else:
-                    aliases = context.path_edge_aliases[path_var]
-                    return f"JSON_ARRAY({', '.join(f'{a}.p' for a in aliases)})"
-            elif isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
-                if fn in ("nodes", "relationships"):
-                    raise ValueError(f"'{arg.name}' is not a named path variable")
-
-        fn, args_exprs = expr.function_name.lower(), expr.arguments
-        if fn == "toboolean" and args_exprs and isinstance(args_exprs[0], ast.Literal):
-            v = args_exprs[0].value
-            if not isinstance(v, str):
-                return "1" if v else "0"
-        def _translate_arg(a):
-            if isinstance(a, ast.Literal) and not isinstance(a.value, list):
-                inlined = _inline_literal(a)
-                if inlined is not None:
-                    return inlined
-            return translate_expression(a, context, segment="inline")
-
-        args = [_translate_arg(a) for a in args_exprs]
-
-        if fn in ("vector_distance", "vector_similarity", "ivg.vector_distance", "ivg.vector_similarity"):
-            if len(args_exprs) < 2:
-                raise ValueError(f"{fn}() requires 2 arguments: (node_variable, query_vector)")
-            node_arg = args_exprs[0]
-            vec_arg = args_exprs[1]
-            alias = context.variable_aliases.get(node_arg.name, node_arg.name) if isinstance(node_arg, ast.Variable) else args[0]
-            emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
-            if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
-                vec_val = context.input_params[vec_arg.name]
-                if isinstance(vec_val, list):
-                    vec_str = ",".join(str(x) for x in vec_val)
-                    placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
-                else:
-                    placeholder = f"TO_VECTOR(?, DOUBLE)"
-                    context.all_stage_params.append(vec_val)
-            elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
-                vec_str = ",".join(str(x) for x in vec_arg.value)
-                placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
-            else:
-                placeholder = args[1]
-            if fn in ("vector_distance", "ivg.vector_distance"):
-                return f"(1 - VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder}))"
-            else:
-                return f"VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder})"
-
-        if fn == "type":
-            if args_exprs and isinstance(args_exprs[0], ast.Variable):
-                var_name = args_exprs[0].name
-                alias = context.variable_aliases.get(var_name, "")
-                if alias:
-                    if alias.startswith("Stage"):
-                        return f"{alias}.{var_name}"
-                    p_col = "_p" if getattr(context, "_undirected_aliases", set()) and alias in context._undirected_aliases else "p"
-                    return f"{alias}.{p_col}"
-            return args[0] if args else "NULL"
-
-        if fn in ("startnode",):
-            if args_exprs and isinstance(args_exprs[0], ast.Variable):
-                var_name = args_exprs[0].name
-                alias = context.variable_aliases.get(var_name, "")
-                if alias:
-                    return f"{alias}.s"
-            return args[0] if args else "NULL"
-
-        if fn == "endnode":
-            if args_exprs and isinstance(args_exprs[0], ast.Variable):
-                var_name = args_exprs[0].name
-                alias = context.variable_aliases.get(var_name, "")
-                if alias:
-                    return f"{alias}.o_id"
-            return args[0] if args else "NULL"
-
-        if fn == "id":
-            if args_exprs and isinstance(args_exprs[0], ast.Variable):
-                var_name = args_exprs[0].name
-                alias = context.variable_aliases.get(var_name, "")
-                if alias:
-                    return f"{alias}.node_id"
-            return args[0] if args else "NULL"
-
-        if fn == "labels":
-            return labels_subquery(args[0] if args else "NULL")
-        if fn == "properties":
-            return properties_subquery(args[0] if args else "NULL")
-
-        if fn == "keys":
-            if not args:
-                return "JSON_ARRAY()"
-            node_expr = args[0]
-            if (
-                ".node_id" in node_expr
-                or node_expr.startswith("n")
-                or node_expr.startswith("'")
-            ):
-                id_expr = node_expr if ".node_id" not in node_expr else node_expr
-            else:
-                id_expr = node_expr
-            return f"(SELECT JSON_ARRAYAGG(rp.key) FROM {_table('rdf_props')} rp WHERE rp.s = {id_expr})"
-
-        if fn == "range":
-            if len(args_exprs) < 2:
-                return "JSON_ARRAY()"
-            try:
-                start = (
-                    int(args_exprs[0].value)
-                    if isinstance(args_exprs[0], ast.Literal)
-                    else None
-                )
-                end = (
-                    int(args_exprs[1].value)
-                    if isinstance(args_exprs[1], ast.Literal)
-                    else None
-                )
-                step = (
-                    int(args_exprs[2].value)
-                    if len(args_exprs) > 2 and isinstance(args_exprs[2], ast.Literal)
-                    else 1
-                )
-                if start is not None and end is not None:
-                    vals = list(range(start, end + (1 if step > 0 else -1), step))
-                    return f"JSON_ARRAY({', '.join(str(v) for v in vals)})"
-            except (TypeError, ValueError):
-                pass
-            return f"JSON_ARRAY()"
-
-        if fn == "size":
-            if not args:
-                return "0"
-            arg_expr = args_exprs[0] if args_exprs else None
-            is_list = (
-                isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
-            ) or isinstance(arg_expr, ast.ListComprehension)
-            if is_list:
-                return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
-        if fn == "head":
-            if not args:
-                return "NULL"
-            return f"SQLUser.LIST_HEAD({args[0]})"
-
-        if fn == "tail":
-            if not args:
-                return "JSON_ARRAY()"
-            return f"SQLUser.LIST_TAIL({args[0]})"
-
-        if fn == "last":
-            if not args:
-                return "NULL"
-            return f"SQLUser.LIST_LAST({args[0]})"
-
-        if fn == "isempty":
-            if not args:
-                return "1"
-            return f"CASE WHEN {args[0]} IS NULL OR {args[0]} = '' OR {args[0]} = '[]' OR {args[0]} = '{{}}' THEN 1 ELSE 0 END"
-
-        # Cypher → SQL function name mapping
-        if fn == "round":
-            return f"CAST(ROUND({args[0] if args else '0'}, 0) AS DOUBLE)"
-        _CYPHER_FN_MAP = {
-            "tolower": "LOWER",
-            "toupper": "UPPER",
-            "trim": "TRIM",
-            "ltrim": "LTRIM",
-            "rtrim": "RTRIM",
-            "tostring": "CAST",
-            "tointeger": "CAST",
-            "tofloat": "CAST",
-            "size": "LENGTH",
-            "length": "LENGTH",
-            "substring": "SUBSTRING",
-            "left": "LEFT",
-            "right": "RIGHT",
-            "split": "STRTOK_TO_TABLE",
-            "replace": "REPLACE",
-            "reverse": "REVERSE",
-            "abs": "ABS",
-            "ceil": "CEILING",
-            "floor": "FLOOR",
-            "round": "ROUND",
-            "sqrt": "SQRT",
-            "sign": "SIGN",
-            "coalesce": "COALESCE",
-            "nullif": "NULLIF",
-            "exists": "EXISTS",
-            "toboolean": "CASE WHEN",
-        }
-        sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
-        if fn == "coalesce":
-            if len(args) >= 2 and args_exprs:
-                coerced = []
-                for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
-                    if i == 0:
-                        coerced.append(f"CAST({arg} AS VARCHAR(4096))")
-                    elif isinstance(arg_expr, ast.Literal) and not isinstance(arg_expr.value, str) and arg_expr.value is not None:
-                        coerced.append(f"CAST({arg} AS VARCHAR(4096))")
-                    else:
-                        coerced.append(arg)
-                return f"COALESCE({', '.join(coerced)})"
-            return f"COALESCE({', '.join(args)})" if args else "NULL"
-        if fn == "tointeger":
-            return f"CAST({args[0]} AS INTEGER)"
-        if fn == "tofloat":
-            return f"CAST({args[0]} AS DOUBLE)"
-        if fn == "tostring":
-            if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, bool):
-                return f"'{'true' if args_exprs[0].value else 'false'}'"
-            return f"CAST({args[0]} AS VARCHAR(4096))"
-        if fn == "substring":
-            if len(args) >= 2:
-                start = f"({args[1]}) + 1"
-                if len(args) >= 3:
-                    return f"SUBSTRING({args[0]}, {start}, {args[2]})"
-                return f"SUBSTRING({args[0]}, {start})"
-            return f"SUBSTRING({args[0]})"
-        if fn == "reverse":
-            if not args:
-                return "NULL"
-            arg_expr = args_exprs[0] if args_exprs else None
-            is_list = (
-                isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
-            ) or isinstance(arg_expr, ast.ListComprehension)
-            if is_list:
-                return f"SQLUser.LIST_REVERSE({args[0]})"
-            return f"REVERSE({args[0]})"
-        if fn in ("stdev", "stdevs"):
-            return f"STDDEV({args[0]})" if args else "NULL"
-        if fn in ("stdevp",):
-            return f"STDDEV_POP({args[0]})" if args else "NULL"
-        if fn in ("percentiledisc", "percentilecont"):
-            if not args:
-                return "NULL"
-            val_expr = args[0]
-            pct_expr = args[1] if len(args) > 1 else "0.5"
-            context._percentile_queries = getattr(context, "_percentile_queries", [])
-            if args_exprs and isinstance(args_exprs[0], ast.Variable):
-                var_name = args_exprs[0].name
-                alias = context.variable_aliases.get(var_name, "")
-                pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else 0.5
-                context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
-            return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
-        if fn == "haversin":
-            return f"(1 - COS({args[0]})) / 2" if args else "NULL"
-        if fn == "e":
-            return "EXP(1)"
-        if fn == "rand":
-            return "SQLUser.RAND()"
-        if fn == "timestamp":
-            return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
-        if fn == "randomuuid":
-            return "SQLUser.NEWID()"
-        if fn == "split":
-            return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
-        if fn in ("datetime", "localdatetime"):
-            return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
-        if fn in ("localtime", "time"):
-            return f"CAST(GETDATE() AS TIME)"
-        if fn == "duration":
-            return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
-        if fn == "toboolean":
-            return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
-        return f"{sql_fn}({', '.join(args)})"
+        return _expr_function_call(expr, context, segment)
     if isinstance(expr, ast.BooleanExpression):
-        cond = translate_boolean_expression(expr, context)
-        return f"CASE WHEN ({cond}) THEN 1 ELSE 0 END"
+        return _expr_boolean(expr, context, segment)
+    
     return "NULL"
+
 
 
 _IRIS_RESERVED = frozenset({
