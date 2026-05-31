@@ -439,9 +439,28 @@ Future improvement: rewrite as a single JOIN query or use a temporary table for 
 
 ## Bug S — User-class CallIn fails on fresh ivg-iris container (XDCall returns CLASS DOES NOT EXIST)
 
-**Status**: ⚠️ **MITIGATED** in v1.98.0 via gref-bypass production path. Root cause still open in IRIS bindings server cache. Cypher CALL path remains xfail-marked.
+**Status**: ✅ **ROOT CAUSE IDENTIFIED AND RESOLVED** (2026-05-31). Was never an IRIS kernel bug. See postmortem below.
 
-**Symptom**: External Python `iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', 'DegreeCentralityJson', ...)` returns `<CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.Centrality` — even though:
+**POSTMORTEM**: The entire "Bug S" diagnosis was based on test runs that were silently connecting to the **wrong IRIS instance**. Tom's machine has an SSH tunnel: `localhost:1972 → mac-studio:11972 (los-iris)`. `los-iris` is the productivity-framework container running IRIS 2026.2.0AI; it doesn't have `Graph.KG.Centrality` compiled. `ivg-iris` (the IVG test container, IRIS 2025.1) has all classes compiled and `classMethodValue` works correctly when connected via its container IP (`192.168.215.3:1972`).
+
+**Evidence**:
+```python
+# localhost:1972 (SSH tunnel → los-iris, 2026.2.0AI):
+iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', ...)
+# → <CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.Centrality
+
+# 192.168.215.3:1972 (real ivg-iris, 2025.1):
+iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', ...)
+# → [] (WORKS perfectly)
+```
+
+**Fix**: `tests/conftest.py:iris_connection` now resolves the container IP via `docker inspect` and connects directly, bypassing localhost port-forwarding entirely. See commit `fix(conftest): always connect via container IP to avoid SSH tunnel shadowing`.
+
+**Remaining xfail tests**: The 5 xfail tests (4 community Cypher procedures + 1 centrality Cypher procedure) testing the `CALL ivg.leiden(...)` SQL-function path are still xfail, but for a **different reason**: `Graph.KG.EdgeScan` and `Graph.KG.Communities` fail to **compile** on the ivg-iris container due to syntax errors in the source (MCP/AI class dependencies, non-matching braces). This is a compile-time issue in the source classes, not an IRIS bindings server problem. Fix: resolve `Graph.KG.EdgeScan.cls` and `Graph.KG.Communities.cls` compile errors.
+
+**Obsolete diagnosis** (kept for historical reference):
+
+**Original Symptom**: External Python `iris.createIRIS(conn).classMethodValue('Graph.KG.Centrality', 'DegreeCentralityJson', ...)` returns `<CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.Centrality` — even though:
 - The class IS compiled (`%Dictionary.CompiledClass.%ExistsId` returns 1)
 - `^rOBJ("Graph.KG.Centrality.1")` exists
 - `^oddCOM` is populated  
