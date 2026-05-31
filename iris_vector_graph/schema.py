@@ -719,7 +719,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Betweenness(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
-    set result = ##class(Graph.KG.Centrality).BetweennessJson(sampleSize, direction, maxHops, topK, memBudgetMB)
+    set result = ##class(Graph.KG.NKGAccel).BetweennessGlobal(sampleSize, topK, $SELECT(sampleSize>0:sampleSize, 1:200))
     quit result
 }}
 """,
@@ -733,7 +733,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Closeness(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
-    set result = ##class(Graph.KG.Centrality).ClosenessJson(formula, direction, maxHops, topK)
+    set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, topK)
     quit result
 }}
 """,
@@ -746,7 +746,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Eigenvector(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
-    set result = ##class(Graph.KG.Centrality).EigenvectorJson(maxIter, tol, topK)
+    set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK)
     quit result
 }}
 """,
@@ -915,9 +915,18 @@ LANGUAGE OBJECTSCRIPT
                         _call_classmethod(_native, "%Library.File", "Delete", file_path)
                     except Exception:
                         pass
+                try:
+                    _call_classmethod(_native, "%SYSTEM.OBJ", "Compile", "Graph.KG.GraphIndex", "ck-d")
+                except Exception:
+                    pass
                 _call_classmethod(
                     _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
                 )
+                for dep_cls in ("Graph.KG.Edge", "Graph.KG.TestEdge"):
+                    try:
+                        _call_classmethod(_native, "%SYSTEM.OBJ", "Compile", dep_cls, "ck-d")
+                    except Exception:
+                        pass
                 logger.debug("ObjectScript classes loaded from %s", candidate_dir)
                 deployed = True
                 break

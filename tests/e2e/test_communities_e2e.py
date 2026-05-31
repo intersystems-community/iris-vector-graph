@@ -350,10 +350,10 @@ class TestCypherProcedureXfail:
     """
 
     @pytest.mark.xfail(
-        reason="Bug S: SQL function kg_Leiden calls ##class(Graph.KG.Communities) "
-               "which fails with <CLASS DOES NOT EXIST> via SQL bindings. "
-               "Python API path works (test_leiden_karate_club_ari). "
-               "See ENGINEERING_DEBT.md Bug S.",
+        reason="Graph.KG.Communities ObjectScript class is not implemented "
+               "(community algorithms ship as Python LazyKG only in v2.0.0). "
+               "Python API path works (engine.leiden_communities). "
+               "Cypher CALL path needs an ObjectScript Communities.cls.",
         strict=False,
     )
     def test_cypher_call_ivg_leiden(self, iris_connection, iris_master_cleanup):
@@ -369,8 +369,10 @@ class TestCypherProcedureXfail:
         assert len(result.columns) == 3
 
     @pytest.mark.xfail(
-        reason="Bug S: SQL function kg_TriangleCount calls ##class(Graph.KG.Communities). "
-               "Python API path works. See ENGINEERING_DEBT.md Bug S.",
+        reason="Graph.KG.Communities ObjectScript class is not implemented "
+               "(community algorithms ship as Python LazyKG only in v2.0.0). "
+               "Python API path works (engine.triangle_count). "
+               "Cypher CALL path needs an ObjectScript Communities.cls.",
         strict=False,
     )
     def test_cypher_call_ivg_triangle_count(self, iris_connection, iris_master_cleanup):
@@ -385,8 +387,10 @@ class TestCypherProcedureXfail:
         assert len(result.rows) <= 5
 
     @pytest.mark.xfail(
-        reason="Bug S: SQL function kg_SCC calls ##class(Graph.KG.Communities). "
-               "Python API path works. See ENGINEERING_DEBT.md Bug S.",
+        reason="Graph.KG.Communities ObjectScript class is not implemented "
+               "(community algorithms ship as Python LazyKG only in v2.0.0). "
+               "Python API path works (engine.strongly_connected_components). "
+               "Cypher CALL path needs an ObjectScript Communities.cls.",
         strict=False,
     )
     def test_cypher_call_ivg_scc(self, iris_connection, iris_master_cleanup):
@@ -400,8 +404,10 @@ class TestCypherProcedureXfail:
         assert result.error is None or result.error == "", f"Cypher error: {result.error}"
 
     @pytest.mark.xfail(
-        reason="Bug S: SQL function kg_KCore calls ##class(Graph.KG.Communities). "
-               "Python API path works. See ENGINEERING_DEBT.md Bug S.",
+        reason="Graph.KG.Communities ObjectScript class is not implemented "
+               "(community algorithms ship as Python LazyKG only in v2.0.0). "
+               "Python API path works (engine.k_core_decomposition). "
+               "Cypher CALL path needs an ObjectScript Communities.cls.",
         strict=False,
     )
     def test_cypher_call_ivg_kcore(self, iris_connection, iris_master_cleanup):

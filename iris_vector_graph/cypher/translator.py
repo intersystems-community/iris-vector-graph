@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 # Set to "" (empty string) for unqualified table names
 _schema_prefix: str = ""
 
+# Procedure CTE aliases (VecSearch, BM25, DegCent, etc.) whose columns must be
+# referenced UNQUALIFIED in SELECT/ORDER BY. IRIS does not register a
+# JSON_TABLE-backed CTE name as a referenceable label, so `DegCent.score`
+# raises SQLCODE -23; bare `score` resolves correctly.
+_PROC_CTE_ALIASES = frozenset({
+    "VecSearch", "BM25", "PPR", "IVF_SEARCH", "Retrieve", "Neighbors", "WS",
+    "DegCent", "Betweenness", "Closeness", "Eigenvector",
+    "Leiden", "TriangleCount", "SCC", "KCore",
+})
+
 # Allowed map-parameter keys for centrality procedures (Spec 162 FR-029).
 # The procedure-call validator rejects unknown keys to prevent silent typos
 # and reserves keys (e.g. `weighted`) for future Phase 2 extensions.
@@ -1401,18 +1411,19 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                     context.join_params = saved_join
                     context.join_clauses = saved_join_clauses
     import re as _re
+    _proc_prefix_re = _re.compile(r'^(?:Stage\d+|' + '|'.join(_PROC_CTE_ALIASES) + r')\.')
     for item in query.order_by_clause.items:
         try:
             if (isinstance(item.expression, ast.Variable)
                     and item.expression.name in alias_to_sql):
-                expr = _re.sub(r'^Stage\d+\.', '', alias_to_sql[item.expression.name])
+                expr = _proc_prefix_re.sub('', alias_to_sql[item.expression.name])
             else:
                 expr = translate_expression(item.expression, context, segment="where")
-                expr = _re.sub(r'^Stage\d+\.', '', expr)
+                expr = _proc_prefix_re.sub('', expr)
         except ValueError:
             if (isinstance(item.expression, ast.Variable)
                     and item.expression.name in alias_to_sql):
-                expr = _re.sub(r'^Stage\d+\.', '', alias_to_sql[item.expression.name])
+                expr = _proc_prefix_re.sub('', alias_to_sql[item.expression.name])
             else:
                 raise
         items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
@@ -2691,6 +2702,14 @@ def _inline_literal(expr) -> Optional[str]:
     return None
 
 
+def _sql_arg(v) -> str:
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
 def translate_expression(expr, context, segment="select") -> str:
 
     if isinstance(expr, ast.PatternComprehension):
@@ -3096,7 +3115,7 @@ def translate_expression(expr, context, segment="select") -> str:
             is_undirected = alias in getattr(context, "_undirected_aliases", set())
             return f"{alias}.{'_p' if is_undirected else 'p'}"
         if expr.name in context.scalar_variables:
-            if alias == "scalar":
+            if alias == "scalar" or alias in _PROC_CTE_ALIASES:
                 return expr.name
             return f"{alias}.{expr.name}"
         if alias in context.mapped_node_aliases:
@@ -3639,7 +3658,7 @@ def _translate_degree_centrality(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.score, j.degree\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?, ?, ?),\n"
+        f"  {fn}({_sql_arg(direction)}, {_sql_arg(predicate)}, {_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score',\n"
@@ -3647,7 +3666,6 @@ def _translate_degree_centrality(proc, context) -> None:
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([direction, predicate, top_k])
     context.stages.insert(0, f"DegCent AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "DegCent"
@@ -3678,14 +3696,13 @@ def _translate_betweenness(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?, ?, ?, ?, ?),\n"
+        f"  {fn}({_sql_arg(sample_size)}, {_sql_arg(direction)}, {_sql_arg(max_hops)}, {_sql_arg(top_k)}, {_sql_arg(mem_budget_mb)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([sample_size, direction, max_hops, top_k, mem_budget_mb])
     context.stages.insert(0, f"Betweenness AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "Betweenness"
@@ -3713,14 +3730,13 @@ def _translate_closeness(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?, ?, ?, ?),\n"
+        f"  {fn}({_sql_arg(formula)}, {_sql_arg(direction)}, {_sql_arg(max_hops)}, {_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([formula, direction, max_hops, top_k])
     context.stages.insert(0, f"Closeness AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "Closeness"
@@ -3747,14 +3763,13 @@ def _translate_eigenvector(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?, ?, ?),\n"
+        f"  {fn}({_sql_arg(max_iter)}, {_sql_arg(tol)}, {_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([max_iter, tol, top_k])
     context.stages.insert(0, f"Eigenvector AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "Eigenvector"
@@ -3784,7 +3799,7 @@ def _translate_leiden(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.community, j.size\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?, ?, ?, ?, ?, ?),\n"
+        f"  {fn}({_sql_arg(max_levels)}, {_sql_arg(gamma)}, {_sql_arg(tol)}, {_sql_arg(top_k)}, {_sql_arg(mem_budget_mb)}, {_sql_arg(random_seed)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    community INTEGER PATH '$.community',\n"
@@ -3792,7 +3807,6 @@ def _translate_leiden(proc, context) -> None:
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([max_levels, gamma, tol, top_k, mem_budget_mb, random_seed])
     context.stages.insert(0, f"Leiden AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "Leiden"
@@ -3818,7 +3832,7 @@ def _translate_triangle_count(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.triangles, j.lcc\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?),\n"
+        f"  {fn}({_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    triangles INTEGER PATH '$.triangles',\n"
@@ -3826,7 +3840,6 @@ def _translate_triangle_count(proc, context) -> None:
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.append(top_k)
     context.stages.insert(0, f"TriangleCount AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "TriangleCount"
@@ -3852,7 +3865,7 @@ def _translate_scc(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.component, j.size\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?),\n"
+        f"  {fn}({_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    component INTEGER PATH '$.component',\n"
@@ -3860,7 +3873,6 @@ def _translate_scc(proc, context) -> None:
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.append(top_k)
     context.stages.insert(0, f"SCC AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "SCC"
@@ -3886,14 +3898,13 @@ def _translate_kcore(proc, context) -> None:
     cte_sql = (
         f"SELECT j.node_id AS node, j.coreness\n"
         f"FROM JSON_TABLE(\n"
-        f"  {fn}(?),\n"
+        f"  {fn}({_sql_arg(top_k)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    coreness INTEGER PATH '$.coreness'\n"
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.append(top_k)
     context.stages.insert(0, f"KCore AS (\n{cte_sql}\n)")
     for item in proc.yield_items:
         context.variable_aliases[item] = "KCore"

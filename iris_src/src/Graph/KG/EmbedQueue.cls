@@ -7,7 +7,7 @@ Class Graph.KG.EmbedQueue Extends %RegisteredObject
 ClassMethod Enqueue(nodeId As %String, embeddingConfig As %String = "") As %Status
 {
     Set status = "pending"
-    Set queuedAt = $ZDateTime($ZDateTimeH($ZDateTime(,3),3),3)
+    Set queuedAt = $ZDateTime($Horolog, 3)
     Set ^EmbedQueue(nodeId) = $LB(embeddingConfig, status, queuedAt)
     Quit $$$OK
 }
