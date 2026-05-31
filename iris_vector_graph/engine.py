@@ -270,430 +270,461 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
 
 
 
+    _SYSTEM_PROCEDURES = {
+        "ivg.vector.search": "_proc_ivg_vector_search",
+        "ivg.shortestpath.weighted": "_proc_ivg_shortestpath_weighted",
+        "db.labels": "_proc_db_labels",
+        "db.relationshiptypes": "_proc_db_relationshiptypes",
+        "db.schema.visualization": "_proc_db_schema_visualization",
+        "db.schema.nodetypeproperties": "_proc_db_schema_nodetypeproperties",
+        "db.schema.reltypeproperties": "_proc_db_schema_reltypeproperties",
+        "dbms.components": "_proc_dbms_components",
+        "dbms.procedures": "_proc_dbms_procedures",
+        "db.propertykeys": "_proc_db_propertykeys",
+        "dbms.clientconfig": "_proc_dbms_clientconfig",
+        "dbms.security.showcurrentuser": "_proc_dbms_security_showcurrentuser",
+        "dbms.showcurrentuser": "_proc_dbms_security_showcurrentuser",
+        "dbms.functions": "_proc_dbms_functions",
+        "dbms.queryjmx": "_proc_dbms_queryjmx",
+        "apoc.meta.data": "_proc_apoc_meta_data",
+        "apoc.meta.schema": "_proc_apoc_meta_schema",
+    }
+
+    def _proc_ivg_vector_search(self, proc) -> Optional[Dict[str, Any]]:
+        from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
+        args = proc.arguments
+        label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
+        k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
+        vec_arg = args[2] if len(args) > 2 else None
+        query_vector = None
+        if isinstance(vec_arg, CypherLiteral) and isinstance(vec_arg.value, list):
+            query_vector = vec_arg.value
+        return self._store.execute_knn_vec(query_vector or [], k, label_filter)
+
+    def _proc_ivg_shortestpath_weighted(self, proc) -> Optional[Dict[str, Any]]:
+        args = proc.arguments
+        from iris_vector_graph.cypher import ast as cypher_ast
+
+        def _arg_str(a, params=None):
+            if isinstance(a, cypher_ast.Literal):
+                return str(a.value)
+            if isinstance(a, cypher_ast.Variable):
+                if params and a.name in params:
+                    return str(params[a.name])
+                return a.name
+            return str(a)
+
+        source_id = _arg_str(args[0]) if len(args) > 0 else None
+        target_id = _arg_str(args[1]) if len(args) > 1 else None
+        weight_prop = _arg_str(args[2]) if len(args) > 2 else "weight"
+        max_cost = float(_arg_str(args[3])) if len(args) > 3 else 9999.0
+        max_hops = int(float(_arg_str(args[4]))) if len(args) > 4 else 10
+        direction = _arg_str(args[5]) if len(args) > 5 else "out"
+
+        if not source_id or not target_id:
+            return IVGResult(columns=["path", "totalCost"], rows=[])
+
+        import json as _json
+
+        try:
+            raw = _call_classmethod(
+                self.conn,
+                "Graph.KG.Traversal",
+                "DijkstraJson",
+                source_id,
+                target_id,
+                weight_prop,
+                max_cost,
+                max_hops,
+                direction,
+            )
+            result_str = str(raw) if raw else "{}"
+        except Exception as e:
+            logger.warning(f"DijkstraJson failed: {e}")
+            return IVGResult(columns=["path", "totalCost"], rows=[])
+
+        if not result_str or result_str == "{}":
+            return IVGResult(columns=["path", "totalCost"], rows=[])
+
+        try:
+            path_obj = _json.loads(result_str)
+        except Exception:
+            return IVGResult(columns=["path", "totalCost"], rows=[])
+
+        total_cost = float(path_obj.get("totalCost", 0))
+        return IVGResult(columns=["path", "totalCost"], rows=[[result_str, total_cost]])
+
+    def _proc_db_labels(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+        )
+        labels = [row[0] for row in cursor.fetchall()]
+        return IVGResult(columns=["label"], rows=[[l] for l in labels])
+
+    def _proc_db_relationshiptypes(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+        types = [row[0] for row in cursor.fetchall()]
+        return IVGResult(columns=["relationshipType"], rows=[[t] for t in types])
+
+    def _proc_db_schema_visualization(self, proc) -> Optional[Dict[str, Any]]:
+        schema = self.get_schema_visualization()
+        nodes = schema.get("nodes", [])
+        rels = schema.get("relationships", [])
+        return IVGResult(columns=["nodes", "relationships"], rows=[[nodes, rels]])
+
+    def _proc_db_schema_nodetypeproperties(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+        )
+        labels = [row[0] for row in cursor.fetchall()]
+        rows = []
+        for label in labels:
+            cursor.execute(
+                "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                [label],
+            )
+            sample = cursor.fetchone()
+            if sample:
+                cursor.execute(
+                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props '
+                    'WHERE s = ? ORDER BY "key"',
+                    [sample[0]],
+                )
+                for (prop_name,) in cursor.fetchall():
+                    rows.append(
+                        [
+                            f":`{label}`",
+                            [label],
+                            prop_name,
+                            ["String"],
+                            False,
+                        ]
+                    )
+        return IVGResult(
+            columns=[
+                "nodeType",
+                "nodeLabels",
+                "propertyName",
+                "propertyTypes",
+                "mandatory",
+            ],
+            rows=rows
+        )
+
+    def _proc_db_schema_reltypeproperties(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        rows = []
+        try:
+            cursor.execute(
+                "SELECT DISTINCT p FROM Graph_KG.rdf_edges WHERE p IS NOT NULL ORDER BY p"
+            )
+            rel_types = [r[0] for r in cursor.fetchall()]
+            for rel_type in rel_types[:50]:
+                props = {"weight"}
+                cursor.execute(
+                    "SELECT TOP 1 qualifiers FROM Graph_KG.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
+                    [rel_type],
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    try:
+                        keys = list(json.loads(str(row[0])).keys())
+                        props.update(keys[:20])
+                    except Exception:
+                        pass
+                for prop in sorted(props):
+                    rows.append([rel_type, prop, ["STRING"], False])
+        except Exception as e:
+            logger.debug("relTypeProperties query failed: %s", e)
+        return IVGResult(
+            columns=["relType", "propertyName", "propertyTypes", "mandatory"],
+            rows=rows
+        )
+
+    def _proc_dbms_components(self, proc) -> Optional[Dict[str, Any]]:
+        return IVGResult(
+            columns=["name", "versions", "edition"],
+            rows=[["iris-vector-graph", ["5.0.0"], "community"]]
+        )
+
+    def _proc_dbms_procedures(self, proc) -> Optional[Dict[str, Any]]:
+        def _proc(n, sig, desc, mode="READ"):
+            return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
+
+        procs = [
+            _proc(
+                "db.labels", "db.labels() :: (label :: STRING)", "List all labels"
+            ),
+            _proc(
+                "db.relationshipTypes",
+                "db.relationshipTypes() :: (relationshipType :: STRING)",
+                "List all rel types",
+            ),
+            _proc(
+                "db.schema.visualization",
+                "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)",
+                "Schema visualization",
+            ),
+            _proc(
+                "db.schema.nodeTypeProperties",
+                "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
+                "Node type props",
+            ),
+            _proc(
+                "db.schema.relTypeProperties",
+                "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
+                "Rel type props",
+            ),
+            _proc(
+                "dbms.components",
+                "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)",
+                "Server components",
+                "DBMS",
+            ),
+            _proc(
+                "dbms.procedures",
+                "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                "List procedures",
+                "DBMS",
+            ),
+            _proc(
+                "dbms.functions",
+                "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                "List functions",
+                "DBMS",
+            ),
+            _proc(
+                "dbms.clientConfig",
+                "dbms.clientConfig() :: (key :: STRING, value :: STRING)",
+                "Client config",
+                "DBMS",
+            ),
+            _proc(
+                "dbms.security.showCurrentUser",
+                "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)",
+                "Current user",
+                "DBMS",
+            ),
+            _proc(
+                "dbms.queryJmx",
+                "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)",
+                "Query JMX management data",
+                "DBMS",
+            ),
+        ]
+        return IVGResult(
+            columns=[
+                "name",
+                "signature",
+                "description",
+                "mode",
+                "admin",
+                "option",
+                "defaultBuiltInRoles",
+                "isDeprecated",
+                "worksOnSystem",
+                "argumentDescription",
+            ],
+            rows=procs
+        )
+
+    def _proc_db_propertykeys(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
+        )
+        keys = [row[0] for row in cursor.fetchall()]
+        return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
+
+    def _proc_dbms_clientconfig(self, proc) -> Optional[Dict[str, Any]]:
+        return IVGResult(
+            columns=["key", "value"],
+            rows=[
+                ["browser.allow_outgoing_connections", "false"],
+                ["browser.credential_timeout", "0"],
+                ["browser.retain_connection_credentials", "true"],
+                ["browser.retain_editor_history", "true"],
+                ["browser.post_connect_cmd", ""],
+                ["dbms.security.auth_enabled", "false"],
+            ]
+        )
+
+    def _proc_dbms_security_showcurrentuser(self, proc) -> Optional[Dict[str, Any]]:
+        return IVGResult(
+            columns=["username", "roles", "flags"],
+            rows=[["neo4j", [], []]]
+        )
+
+    def _proc_dbms_functions(self, proc) -> Optional[Dict[str, Any]]:
+        return IVGResult(
+            columns=[
+                "name",
+                "signature",
+                "description",
+                "aggregating",
+                "defaultBuiltInRoles",
+                "isDeprecated",
+                "argumentDescription",
+                "returnDescription",
+                "category",
+            ],
+            rows=[]
+        )
+
+    def _proc_dbms_queryjmx(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+        node_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+        edge_count = cursor.fetchone()[0]
+        pfx = "org.neo4j:instance=kernel#0"
+        return IVGResult(
+            columns=["name", "description", "attributes"],
+            rows=[
+                [
+                    f"{pfx},name=Store file sizes",
+                    "Store file sizes",
+                    {
+                        "TotalStoreSize": {"value": node_count * 200},
+                        "NodeStoreSize": {"value": node_count * 100},
+                        "RelationshipStoreSize": {"value": edge_count * 100},
+                        "PropertyStoreSize": {"value": node_count * 50},
+                        "StringStoreSize": {"value": node_count * 30},
+                        "ArrayStoreSize": {"value": 0},
+                        "IndexStoreSize": {"value": 0},
+                        "LabelStoreSize": {"value": node_count * 10},
+                        "SchemaStoreSize": {"value": 4096},
+                    },
+                ],
+                [
+                    f"{pfx},name=Primitive count",
+                    "Primitive count",
+                    {
+                        "NumberOfNodeIdsInUse": {"value": node_count},
+                        "NumberOfRelationshipIdsInUse": {"value": edge_count},
+                        "NumberOfPropertyIdsInUse": {"value": node_count * 3},
+                        "NumberOfRelationshipTypeIdsInUse": {"value": 20},
+                        "NumberOfLabelIdsInUse": {"value": 5},
+                    },
+                ],
+                [
+                    f"{pfx},name=Page cache",
+                    "Page cache statistics",
+                    {
+                        "Hits": {"value": 1000},
+                        "Faults": {"value": 10},
+                        "HitRatio": {"value": 0.99},
+                        "UsageRatio": {"value": 0.5},
+                        "FileMappings": {"value": 5},
+                        "FileUnmappings": {"value": 0},
+                        "BytesRead": {"value": 1024 * 1024},
+                        "BytesWritten": {"value": 1024},
+                        "FlushEvents": {"value": 0},
+                        "EvictionExceptions": {"value": 0},
+                    },
+                ],
+                [
+                    f"{pfx},name=Transactions",
+                    "Transaction statistics",
+                    {
+                        "LastCommittedTxId": {"value": 1},
+                        "CurrentCommittedTxId": {"value": 1},
+                        "LastClosedTxId": {"value": 1},
+                        "NumberOfOpenTransactions": {"value": 0},
+                        "PeakNumberOfConcurrentTransactions": {"value": 1},
+                        "NumberOfOpenedTransactions": {"value": 1},
+                        "NumberOfCommittedTransactions": {"value": 1},
+                        "NumberOfRolledBackTransactions": {"value": 0},
+                        "NumberOfTerminatedTransactions": {"value": 0},
+                    },
+                ],
+                [
+                    f"{pfx},name=Kernel",
+                    "Kernel information",
+                    {
+                        "KernelVersion": {"value": "iris-vector-graph-1.47.0"},
+                        "StoreId": {"value": "store-001"},
+                        "DatabaseName": {"value": "neo4j"},
+                        "ReadOnly": {"value": False},
+                        "MBeanQuery": {"value": pfx},
+                    },
+                ],
+                [
+                    f"{pfx},name=Configuration",
+                    "Configuration",
+                    {
+                        "dbms.jvm.heap.initial_size": {"value": "256m"},
+                        "dbms.jvm.heap.max_size": {"value": "512m"},
+                        "dbms.logs.native.size": {"value": "20m"},
+                    },
+                ],
+            ]
+        )
+
+    def _proc_apoc_meta_data(self, proc) -> Optional[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+        )
+        labels = [row[0] for row in cursor.fetchall()]
+        rows = []
+        for label in labels[:50]:
+            cursor.execute(
+                'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props rp '
+                "JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s "
+                'WHERE rl.label = ? ORDER BY "key"',
+                [label],
+            )
+            props = [row[0] for row in cursor.fetchall()]
+            if props:
+                for prop_name in props:
+                    rows.append(
+                        [label, prop_name, "STRING", "node", False, False, False]
+                    )
+            else:
+                rows.append([label, None, "STRING", "node", False, False, False])
+        cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+        for (rel_type,) in cursor.fetchall():
+            rows.append(
+                [
+                    rel_type,
+                    None,
+                    "RELATIONSHIP",
+                    "relationship",
+                    False,
+                    False,
+                    False,
+                ]
+            )
+        return IVGResult(
+            columns=[
+                "label",
+                "property",
+                "type",
+                "elementType",
+                "unique",
+                "index",
+                "existence",
+            ],
+            rows=rows
+        )
+
+    def _proc_apoc_meta_schema(self, proc) -> Optional[Dict[str, Any]]:
+        result = self._try_system_procedure(
+            type("P", (), {"procedure_name": "apoc.meta.data"})()
+        )
+        return IVGResult(columns=["value"], rows=[[result or {}]])
+
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
-        if name == "ivg.vector.search":
-            from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
-            args = proc.arguments
-            label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
-            k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
-            vec_arg = args[2] if len(args) > 2 else None
-            query_vector = None
-            if isinstance(vec_arg, CypherLiteral) and isinstance(vec_arg.value, list):
-                query_vector = vec_arg.value
-            return self._store.execute_knn_vec(query_vector or [], k, label_filter)
-
-        if name == "ivg.shortestpath.weighted":
-            args = proc.arguments
-            from iris_vector_graph.cypher import ast as cypher_ast
-
-            def _arg_str(a, params=None):
-                if isinstance(a, cypher_ast.Literal):
-                    return str(a.value)
-                if isinstance(a, cypher_ast.Variable):
-                    if params and a.name in params:
-                        return str(params[a.name])
-                    return a.name
-                return str(a)
-
-            source_id = _arg_str(args[0]) if len(args) > 0 else None
-            target_id = _arg_str(args[1]) if len(args) > 1 else None
-            weight_prop = _arg_str(args[2]) if len(args) > 2 else "weight"
-            max_cost = float(_arg_str(args[3])) if len(args) > 3 else 9999.0
-            max_hops = int(float(_arg_str(args[4]))) if len(args) > 4 else 10
-            direction = _arg_str(args[5]) if len(args) > 5 else "out"
-
-            if not source_id or not target_id:
-                return IVGResult(columns=["path", "totalCost"], rows=[])
-
-            import json as _json
-
-            try:
-                raw = _call_classmethod(
-                    self.conn,
-                    "Graph.KG.Traversal",
-                    "DijkstraJson",
-                    source_id,
-                    target_id,
-                    weight_prop,
-                    max_cost,
-                    max_hops,
-                    direction,
-                )
-                result_str = str(raw) if raw else "{}"
-            except Exception as e:
-                logger.warning(f"DijkstraJson failed: {e}")
-                return IVGResult(columns=["path", "totalCost"], rows=[])
-
-            if not result_str or result_str == "{}":
-                return IVGResult(columns=["path", "totalCost"], rows=[])
-
-            try:
-                path_obj = _json.loads(result_str)
-            except Exception:
-                return IVGResult(columns=["path", "totalCost"], rows=[])
-
-            total_cost = float(path_obj.get("totalCost", 0))
-            return IVGResult(                columns= ["path", "totalCost"],
-                rows= [[result_str, total_cost]]
-            )
-
-        if name == "db.labels":
-            cursor = self.conn.cursor()
-            cursor.execute(
-                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-            )
-            labels = [row[0] for row in cursor.fetchall()]
-            return IVGResult(columns=["label"], rows=[[l] for l in labels])
-
-        if name == "db.relationshiptypes":
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
-            types = [row[0] for row in cursor.fetchall()]
-            return IVGResult(columns=["relationshipType"], rows=[[t] for t in types])
-
-        if name == "db.schema.visualization":
-            schema = self.get_schema_visualization()
-            nodes = schema.get("nodes", [])
-            rels = schema.get("relationships", [])
-            return IVGResult(columns=["nodes", "relationships"], rows=[[nodes, rels]])
-
-        if name == "db.schema.nodetypeproperties":
-            cursor = self.conn.cursor()
-            cursor.execute(
-                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-            )
-            labels = [row[0] for row in cursor.fetchall()]
-            rows = []
-            for label in labels:
-                cursor.execute(
-                    "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
-                    [label],
-                )
-                sample = cursor.fetchone()
-                if sample:
-                    cursor.execute(
-                        'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props '
-                        'WHERE s = ? ORDER BY "key"',
-                        [sample[0]],
-                    )
-                    for (prop_name,) in cursor.fetchall():
-                        rows.append(
-                            [
-                                f":`{label}`",
-                                [label],
-                                prop_name,
-                                ["String"],
-                                False,
-                            ]
-                        )
-            return IVGResult(                columns= [
-                    "nodeType",
-                    "nodeLabels",
-                    "propertyName",
-                    "propertyTypes",
-                    "mandatory",
-                ],
-                rows= rows
-            )
-
-        if name == "db.schema.reltypeproperties":
-            cursor = self.conn.cursor()
-            rows = []
-            try:
-                cursor.execute(
-                    "SELECT DISTINCT p FROM Graph_KG.rdf_edges WHERE p IS NOT NULL ORDER BY p"
-                )
-                rel_types = [r[0] for r in cursor.fetchall()]
-                for rel_type in rel_types[:50]:
-                    props = {"weight"}
-                    cursor.execute(
-                        "SELECT TOP 1 qualifiers FROM Graph_KG.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
-                        [rel_type],
-                    )
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        try:
-                            keys = list(json.loads(str(row[0])).keys())
-                            props.update(keys[:20])
-                        except Exception:
-                            pass
-                    for prop in sorted(props):
-                        rows.append([rel_type, prop, ["STRING"], False])
-            except Exception as e:
-                logger.debug("relTypeProperties query failed: %s", e)
-            return IVGResult(                columns= ["relType", "propertyName", "propertyTypes", "mandatory"],
-                rows= rows
-            )
-
-        if name == "dbms.components":
-            return IVGResult(                columns= ["name", "versions", "edition"],
-                rows= [["iris-vector-graph", ["5.0.0"], "community"]]
-            )
-
-        if name == "dbms.procedures":
-
-            def _proc(n, sig, desc, mode="READ"):
-                return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
-
-            procs = [
-                _proc(
-                    "db.labels", "db.labels() :: (label :: STRING)", "List all labels"
-                ),
-                _proc(
-                    "db.relationshipTypes",
-                    "db.relationshipTypes() :: (relationshipType :: STRING)",
-                    "List all rel types",
-                ),
-                _proc(
-                    "db.schema.visualization",
-                    "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)",
-                    "Schema visualization",
-                ),
-                _proc(
-                    "db.schema.nodeTypeProperties",
-                    "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
-                    "Node type props",
-                ),
-                _proc(
-                    "db.schema.relTypeProperties",
-                    "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
-                    "Rel type props",
-                ),
-                _proc(
-                    "dbms.components",
-                    "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)",
-                    "Server components",
-                    "DBMS",
-                ),
-                _proc(
-                    "dbms.procedures",
-                    "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)",
-                    "List procedures",
-                    "DBMS",
-                ),
-                _proc(
-                    "dbms.functions",
-                    "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
-                    "List functions",
-                    "DBMS",
-                ),
-                _proc(
-                    "dbms.clientConfig",
-                    "dbms.clientConfig() :: (key :: STRING, value :: STRING)",
-                    "Client config",
-                    "DBMS",
-                ),
-                _proc(
-                    "dbms.security.showCurrentUser",
-                    "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)",
-                    "Current user",
-                    "DBMS",
-                ),
-                _proc(
-                    "dbms.queryJmx",
-                    "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)",
-                    "Query JMX management data",
-                    "DBMS",
-                ),
-            ]
-            return IVGResult(                columns= [
-                    "name",
-                    "signature",
-                    "description",
-                    "mode",
-                    "admin",
-                    "option",
-                    "defaultBuiltInRoles",
-                    "isDeprecated",
-                    "worksOnSystem",
-                    "argumentDescription",
-                ],
-                rows= procs
-            )
-
-        if name == "db.propertykeys":
-            cursor = self.conn.cursor()
-            cursor.execute(
-                'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
-            )
-            keys = [row[0] for row in cursor.fetchall()]
-            return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
-
-        if name == "dbms.clientconfig":
-            return IVGResult(                columns= ["key", "value"],
-                rows= [
-                    ["browser.allow_outgoing_connections", "false"],
-                    ["browser.credential_timeout", "0"],
-                    ["browser.retain_connection_credentials", "true"],
-                    ["browser.retain_editor_history", "true"],
-                    ["browser.post_connect_cmd", ""],
-                    ["dbms.security.auth_enabled", "false"],
-                ]
-            )
-
-        if name == "dbms.security.showcurrentuser" or name == "dbms.showcurrentuser":
-            return IVGResult(                columns= ["username", "roles", "flags"],
-                rows= [["neo4j", [], []]]
-            )
-
-        if name == "dbms.functions":
-            return IVGResult(                columns= [
-                    "name",
-                    "signature",
-                    "description",
-                    "aggregating",
-                    "defaultBuiltInRoles",
-                    "isDeprecated",
-                    "argumentDescription",
-                    "returnDescription",
-                    "category",
-                ],
-                rows= []
-            )
-
-        if name == "dbms.queryjmx":
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
-            node_count = cursor.fetchone()[0]
-            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
-            edge_count = cursor.fetchone()[0]
-            pfx = "org.neo4j:instance=kernel#0"
-            return IVGResult(                columns= ["name", "description", "attributes"],
-                rows= [
-                    [
-                        f"{pfx},name=Store file sizes",
-                        "Store file sizes",
-                        {
-                            "TotalStoreSize": {"value": node_count * 200},
-                            "NodeStoreSize": {"value": node_count * 100},
-                            "RelationshipStoreSize": {"value": edge_count * 100},
-                            "PropertyStoreSize": {"value": node_count * 50},
-                            "StringStoreSize": {"value": node_count * 30},
-                            "ArrayStoreSize": {"value": 0},
-                            "IndexStoreSize": {"value": 0},
-                            "LabelStoreSize": {"value": node_count * 10},
-                            "SchemaStoreSize": {"value": 4096},
-                        },
-                    ],
-                    [
-                        f"{pfx},name=Primitive count",
-                        "Primitive count",
-                        {
-                            "NumberOfNodeIdsInUse": {"value": node_count},
-                            "NumberOfRelationshipIdsInUse": {"value": edge_count},
-                            "NumberOfPropertyIdsInUse": {"value": node_count * 3},
-                            "NumberOfRelationshipTypeIdsInUse": {"value": 20},
-                            "NumberOfLabelIdsInUse": {"value": 5},
-                        },
-                    ],
-                    [
-                        f"{pfx},name=Page cache",
-                        "Page cache statistics",
-                        {
-                            "Hits": {"value": 1000},
-                            "Faults": {"value": 10},
-                            "HitRatio": {"value": 0.99},
-                            "UsageRatio": {"value": 0.5},
-                            "FileMappings": {"value": 5},
-                            "FileUnmappings": {"value": 0},
-                            "BytesRead": {"value": 1024 * 1024},
-                            "BytesWritten": {"value": 1024},
-                            "FlushEvents": {"value": 0},
-                            "EvictionExceptions": {"value": 0},
-                        },
-                    ],
-                    [
-                        f"{pfx},name=Transactions",
-                        "Transaction statistics",
-                        {
-                            "LastCommittedTxId": {"value": 1},
-                            "CurrentCommittedTxId": {"value": 1},
-                            "LastClosedTxId": {"value": 1},
-                            "NumberOfOpenTransactions": {"value": 0},
-                            "PeakNumberOfConcurrentTransactions": {"value": 1},
-                            "NumberOfOpenedTransactions": {"value": 1},
-                            "NumberOfCommittedTransactions": {"value": 1},
-                            "NumberOfRolledBackTransactions": {"value": 0},
-                            "NumberOfTerminatedTransactions": {"value": 0},
-                        },
-                    ],
-                    [
-                        f"{pfx},name=Kernel",
-                        "Kernel information",
-                        {
-                            "KernelVersion": {"value": "iris-vector-graph-1.47.0"},
-                            "StoreId": {"value": "store-001"},
-                            "DatabaseName": {"value": "neo4j"},
-                            "ReadOnly": {"value": False},
-                            "MBeanQuery": {"value": pfx},
-                        },
-                    ],
-                    [
-                        f"{pfx},name=Configuration",
-                        "Configuration",
-                        {
-                            "dbms.jvm.heap.initial_size": {"value": "256m"},
-                            "dbms.jvm.heap.max_size": {"value": "512m"},
-                            "dbms.logs.native.size": {"value": "20m"},
-                        },
-                    ],
-                ]
-            )
-
-        if name == "apoc.meta.data":
-            cursor = self.conn.cursor()
-            cursor.execute(
-                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-            )
-            labels = [row[0] for row in cursor.fetchall()]
-            rows = []
-            for label in labels[:50]:
-                cursor.execute(
-                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props rp '
-                    "JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s "
-                    'WHERE rl.label = ? ORDER BY "key"',
-                    [label],
-                )
-                props = [row[0] for row in cursor.fetchall()]
-                if props:
-                    for prop_name in props:
-                        rows.append(
-                            [label, prop_name, "STRING", "node", False, False, False]
-                        )
-                else:
-                    rows.append([label, None, "STRING", "node", False, False, False])
-            cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
-            for (rel_type,) in cursor.fetchall():
-                rows.append(
-                    [
-                        rel_type,
-                        None,
-                        "RELATIONSHIP",
-                        "relationship",
-                        False,
-                        False,
-                        False,
-                    ]
-                )
-            return IVGResult(                columns= [
-                    "label",
-                    "property",
-                    "type",
-                    "elementType",
-                    "unique",
-                    "index",
-                    "existence",
-                ],
-                rows= rows
-            )
-
-        if name == "apoc.meta.schema":
-            result = self._try_system_procedure(
-                type("P", (), {"procedure_name": "apoc.meta.data"})()
-            )
-            return IVGResult(columns=["value"], rows=[[result or {}]])
+        handler_method_name = self._SYSTEM_PROCEDURES.get(name)
+        if handler_method_name is not None:
+            handler = getattr(self, handler_method_name)
+            return handler(proc)
 
         if name.startswith("apoc."):
             return IVGResult(columns=["value"], rows=[])
