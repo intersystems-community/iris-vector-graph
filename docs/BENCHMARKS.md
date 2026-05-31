@@ -1,5 +1,12 @@
 # IVG Performance Benchmarks
 
+> **Scope note**: This file covers **Cypher query latency** (traversal, vector,
+> hybrid) on a small social-network dataset. For **graph-analytics algorithm**
+> benchmarks (centrality, community detection) and large-scale results, see
+> [`performance/GRAPH_ALGORITHMS.md`](performance/GRAPH_ALGORITHMS.md). For the
+> DRKG biomed-scale validation (97K nodes / 5.87M edges), see
+> [`performance/DRKG_SCALE.md`](performance/DRKG_SCALE.md).
+
 **Updated**: 2026-05-15  
 **Platform**: MacBook Pro M3 Ultra, 128GB RAM  
 **IRIS**: Community Edition 2025.1 (arno-graph-iris container, localhost)  

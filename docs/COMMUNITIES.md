@@ -129,11 +129,17 @@ CALL ivg.scc({topK: 50}) YIELD node, component, size RETURN ...
 CALL ivg.kcore({topK: 100}) YIELD node, coreness RETURN ...
 ```
 
-> **Note**: The Cypher → SQL function path is currently `xfail`-marked pending
-> upstream IRIS fix to **Bug S** (`<CLASS DOES NOT EXIST>` on user-class
-> XDCall lookup from external SQL connections). The Python API path
-> (`engine.leiden_communities()` etc.) works in production. See
-> [`ENGINEERING_DEBT.md`](../ENGINEERING_DEBT.md#bug-s).
+> **Status (v2.0.0)**: All four community Cypher procedures
+> (`ivg.leiden`, `ivg.triangleCount`, `ivg.scc`, `ivg.kcore`) work end-to-end
+> via the SQL-function path, backed by `Graph.KG.Communities` (spec 182).
+> `triangleCount`/`scc`/`kcore` match networkx exactly; `leiden` uses a tiered
+> dispatch (spec 185): canonical `leidenalg` server-side via embedded Python
+> when `igraph`+`leidenalg` are installed in `mgr/python`, falling back to a
+> pure-ObjectScript greedy modularity partition on stock containers. The Python
+> API path (`engine.leiden_communities()` etc.) also works and uses `leidenalg`
+> directly. (The earlier "Bug S" blocker was diagnosed as an SSH-tunnel
+> wrong-container artifact, not an IRIS defect — see
+> [`ENGINEERING_DEBT.md`](../ENGINEERING_DEBT.md).)
 
 Unknown keys in the procedure-args map raise `ValueError` (FR-015 strict
 validation). The `weighted` key is reserved for future weighted-graph
@@ -207,10 +213,12 @@ and verifies the result is well-formed.
 ### LazyKG adapter
 
 The LazyKG fallback path uses `iris_vector_graph.stores.lazy_kg.LazyKG` to
-read `^KG` via the IRIS Native API on demand with caching. This is the
-**Bug S workaround** — Native API global access bypasses `%SYS.DBSRV`
-class lookup that fails for `##class()` user-class calls from external
-Python.
+read `^KG` via the IRIS Native API on demand with caching. It avoids the
+`%SYS.DBSRV` class-lookup path — Native API global access does not route
+through the class resolution that fails for `##class()` user-class calls from
+external Python. (This was historically framed as a "Bug S workaround"; Bug S
+was later diagnosed as an SSH-tunnel wrong-container artifact, not an IRIS
+defect — the direct-gref path remains valuable regardless.)
 
 K-Core particularly benefits: isolated nodes (`coreness=0`) are detected
 after a single degree query; their neighbors are never fetched.
@@ -237,10 +245,12 @@ ObjectScript pattern.
 
 - `tests/perf/test_leiden_four_way.py` — 4-way benchmark (IVG vs networkx Louvain
   vs leidenalg vs Neo4j GDS Leiden), apples-to-apples Modularity at γ=1.0
-- `tests/e2e/test_communities_e2e.py` — 13 e2e tests + 4 xfail Cypher procedure
-  tests (Bug S blocked) + master gate + quiescent graph + capabilities
+- `tests/e2e/test_communities_e2e.py` — e2e tests incl. all 4 Cypher procedure
+  tests now PASSING (triangle/scc/kcore exact vs networkx; leiden via tiered
+  dispatch) + master gate + quiescent graph + capabilities
 - `tests/e2e/test_communities_perf.py` — NFR-001..004 upper-bound gates
 - `tests/unit/test_communities_unit.py` — 17 unit tests (engine routing, capabilities)
 - `tests/unit/test_communities_translator.py` — Cypher translator tests
 - `specs/163-communities/spec.md` — full functional + non-functional requirements
-- `ENGINEERING_DEBT.md` — Bug S documentation and v1.98.0 + v1.99.0 mitigations
+- `specs/182-communities-objectscript/spec.md` — ObjectScript Communities.cls (Cypher path)
+- `ENGINEERING_DEBT.md` — Bug S postmortem (SSH-tunnel artifact, resolved)
