@@ -167,3 +167,4 @@ docker-compose.yaml
 .playwright-mcp/
 examples/expanded_mindwalk_KG_10000.*
 .sesskey
+data/drkg/
