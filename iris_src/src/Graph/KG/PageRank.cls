@@ -19,7 +19,8 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 	
 	Try {
 		Set seedArr = ##class(%DynamicArray).%FromJSON(seedJson)
-	} Catch {
+	} Catch seedEx {
+		Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.PageRank: seed JSON parse failed: "_seedEx.DisplayString(), 0, 2)
 		Return "[]"
 	}
 	If seedArr.%Size() = 0 Return "[]"
