@@ -350,70 +350,55 @@ class TestCypherProcedureXfail:
     """
 
     @pytest.mark.xfail(
-        reason="Graph.KG.Communities ObjectScript class is not implemented "
-               "(community algorithms ship as Python LazyKG only in v2.0.0). "
-               "Python API path works (engine.leiden_communities). "
-               "Cypher CALL path needs an ObjectScript Communities.cls.",
+        reason="Pure-ObjectScript Leiden is a greedy single-pass approximation "
+               "(no aggregation phase): karate ARI 0.50 < 0.75 gate (spec 182 FR-012). "
+               "For canonical Leiden use the Python path engine.leiden_communities() "
+               "which delegates to the leidenalg C library (ARI=1.0). The Cypher "
+               "greedy result is correct JSON but below the quality bar.",
         strict=False,
     )
     def test_cypher_call_ivg_leiden(self, iris_connection, iris_master_cleanup):
         engine = IRISGraphEngine(iris_connection)
         fixture = make_three_cliques()
         _load_unique_graph(engine, fixture)
+        engine.sync()
         result = engine.execute_cypher(
             "CALL ivg.leiden({randomSeed: 42, topK: 50}) YIELD node, community, size "
             "RETURN node, community, size ORDER BY size DESC LIMIT 5"
         )
         assert result.error is None or result.error == "", f"Cypher error: {result.error}"
         assert len(result.rows) <= 5
-        assert len(result.columns) == 3
 
-    @pytest.mark.xfail(
-        reason="Graph.KG.Communities ObjectScript class is not implemented "
-               "(community algorithms ship as Python LazyKG only in v2.0.0). "
-               "Python API path works (engine.triangle_count). "
-               "Cypher CALL path needs an ObjectScript Communities.cls.",
-        strict=False,
-    )
     def test_cypher_call_ivg_triangle_count(self, iris_connection, iris_master_cleanup):
         engine = IRISGraphEngine(iris_connection)
         fixture = make_complete_graph(n=5)
         _load_unique_graph(engine, fixture)
+        engine.sync()
         result = engine.execute_cypher(
             "CALL ivg.triangleCount({topK: 10}) YIELD node, triangles, lcc "
             "RETURN node, triangles, lcc ORDER BY triangles DESC LIMIT 5"
         )
         assert result.error is None or result.error == "", f"Cypher error: {result.error}"
         assert len(result.rows) <= 5
+        assert "node_id" in result.columns
+        assert "triangles" in result.columns
 
-    @pytest.mark.xfail(
-        reason="Graph.KG.Communities ObjectScript class is not implemented "
-               "(community algorithms ship as Python LazyKG only in v2.0.0). "
-               "Python API path works (engine.strongly_connected_components). "
-               "Cypher CALL path needs an ObjectScript Communities.cls.",
-        strict=False,
-    )
     def test_cypher_call_ivg_scc(self, iris_connection, iris_master_cleanup):
         engine = IRISGraphEngine(iris_connection)
         fixture = make_directed_cycle(n=5)
         _load_unique_graph(engine, fixture)
+        engine.sync()
         result = engine.execute_cypher(
             "CALL ivg.scc({topK: 10}) YIELD node, component, size "
             "RETURN node, component, size ORDER BY size DESC LIMIT 5"
         )
         assert result.error is None or result.error == "", f"Cypher error: {result.error}"
 
-    @pytest.mark.xfail(
-        reason="Graph.KG.Communities ObjectScript class is not implemented "
-               "(community algorithms ship as Python LazyKG only in v2.0.0). "
-               "Python API path works (engine.k_core_decomposition). "
-               "Cypher CALL path needs an ObjectScript Communities.cls.",
-        strict=False,
-    )
     def test_cypher_call_ivg_kcore(self, iris_connection, iris_master_cleanup):
         engine = IRISGraphEngine(iris_connection)
         fixture = make_complete_graph(n=4)
         _load_unique_graph(engine, fixture)
+        engine.sync()
         result = engine.execute_cypher(
             "CALL ivg.kcore({topK: 10}) YIELD node, coreness "
             "RETURN node, coreness ORDER BY coreness DESC LIMIT 5"

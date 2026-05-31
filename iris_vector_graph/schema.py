@@ -720,6 +720,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.NKGAccel).BetweennessGlobal(sampleSize, topK, $SELECT(sampleSize>0:sampleSize, 1:200))
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,
@@ -734,6 +735,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.NKGAccel).ClosenessGlobal(formula, direction, maxHops, topK)
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,
@@ -747,6 +749,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.NKGAccel).EigenvectorGlobal(maxIter, tol, topK)
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,
@@ -763,6 +766,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).LeidenJson(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,
@@ -774,6 +778,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).TriangleCountJson(topK)
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,
@@ -785,6 +790,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).SCCJson(topK)
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,
@@ -796,6 +802,7 @@ RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
     set result = ##class(Graph.KG.Communities).KCoreJson(topK)
+    if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
 """,

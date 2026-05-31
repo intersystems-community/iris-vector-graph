@@ -3513,9 +3513,7 @@ def translate_return_clause(ret, context):
                 node_expr = (
                     var_name
                     if alias_name.startswith("Stage")
-                    or alias_name in ("VecSearch", "BM25", "PPR", "IVF_SEARCH",
-                                      "DegCent", "Betweenness", "Closeness",
-                                      "Eigenvector")
+                    or alias_name in _PROC_CTE_ALIASES
                     else f"{alias_name}.node_id"
                 )
                 context.select_items.append(f"{node_expr} AS {prefix}_id")
