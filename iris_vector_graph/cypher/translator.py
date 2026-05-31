@@ -1474,152 +1474,160 @@ def translate_unwind_clause(unwind, context):
         context.from_clauses.append(json_table_sql)
 
 
+def _create_clause_node_entry(node, context):
+    if node.variable and node.variable in context.variable_aliases:
+        return
+    node_id_expr = node.properties.get("id") or node.properties.get("node_id")
+    if node_id_expr is None:
+        import uuid as _uuid
+        generated_id = str(_uuid.uuid4())
+        node_id_expr = ast.Literal(generated_id)
+        key = f"__create_id_{node.variable}" if node.variable else f"__create_id_anon_{id(node)}"
+        context.input_params[key] = generated_id
+        if not hasattr(context, '_anon_node_keys'):
+            context._anon_node_keys = {}
+        context._anon_node_keys[id(node)] = generated_id
+
+    var_alias = None
+    if isinstance(node_id_expr, ast.Variable):
+        var_alias = context.variable_aliases.get(node_id_expr.name)
+        if not var_alias and node_id_expr.name in context.input_params:
+            node_id_expr = ast.Literal(context.input_params[node_id_expr.name])
+        elif not var_alias:
+            raise ValueError(f"Undefined: {node_id_expr.name}")
+
+    if isinstance(node_id_expr, ast.Variable) and var_alias:
+        sql, p = context.build_stage_sql(
+            select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
+        )
+        context.add_dml(
+            f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
+            p,
+        )
+        for label in node.labels:
+            context.add_dml(
+                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
+                [label] + p + [label],
+            )
+    else:
+        node_id = (
+            node_id_expr.value
+            if isinstance(node_id_expr, ast.Literal)
+            else node_id_expr
+        )
+        context.add_dml(
+            f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+            [node_id, node_id],
+        )
+        for label in node.labels:
+            context.add_dml(
+                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
+                [node_id, label, node_id, label],
+            )
+        for k, v in node.properties.items():
+            if isinstance(v, ast.Literal):
+                val = v.value
+            elif isinstance(v, ast.Variable) and v.name in context.input_params:
+                val = context.input_params[v.name]
+            elif isinstance(v, ast.Variable) and getattr(context, "foreach_literals", {}).get(v.name) is not None:
+                raw = context.foreach_literals[v.name]
+                val = raw.value if isinstance(raw, ast.Literal) else raw
+            else:
+                val = v
+            context.add_dml(
+                f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+                [node_id, k, val, node_id, k],
+            )
+    if node.variable:
+        context.register_variable(node.variable)
+        if not context.from_clauses and isinstance(node_id_expr, ast.Literal):
+            node_id_val = node_id_expr.value
+            alias = context.variable_aliases[node.variable]
+            context.from_clauses.append(f"{_table('nodes')} {alias}")
+            context.where_conditions.append(f"{alias}.node_id = {context.add_where_param(node_id_val)}")
+
+
+def _create_clause_resolve_node_id(id_expr, node, context):
+    if id_expr is None:
+        if node.variable:
+            stored = context.input_params.get(f"__create_id_{node.variable}")
+            if stored:
+                return stored
+            if node.variable in context.input_params:
+                return context.input_params[node.variable]
+        anon_id = getattr(context, '_anon_node_keys', {}).get(id(node))
+        if anon_id:
+            return anon_id
+        return None
+    if isinstance(id_expr, ast.Literal):
+        return id_expr.value
+    if isinstance(id_expr, ast.Variable) and id_expr.name in context.input_params:
+        return context.input_params[id_expr.name]
+    if not isinstance(id_expr, ast.Variable):
+        return id_expr
+    return None
+
+
+def _create_clause_relationship_entry(rel, i, pat, context):
+    source_node, target_node = pat.nodes[i], pat.nodes[i + 1]
+    s_id_expr = source_node.properties.get("id") or source_node.properties.get("node_id")
+    t_id_expr = target_node.properties.get("id") or target_node.properties.get("node_id")
+
+    s_id = _create_clause_resolve_node_id(s_id_expr, source_node, context)
+    t_id = _create_clause_resolve_node_id(t_id_expr, target_node, context)
+    if s_id and t_id:
+        for rt in rel.types:
+            context.add_dml(
+                f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
+                [s_id, rt, t_id],
+            )
+    else:
+        s_alias = (
+            context.variable_aliases.get(source_node.variable)
+            if source_node.variable
+            else None
+        )
+        t_alias = (
+            context.variable_aliases.get(target_node.variable)
+            if target_node.variable
+            else None
+        )
+        s_expr, s_p = (
+            ("?", [s_id])
+            if s_id
+            else (
+                f"{s_alias}.{source_node.variable}"
+                if s_alias and s_alias.startswith("Stage")
+                else f"{s_alias}.node_id",
+                [],
+            )
+        )
+        t_expr, t_p = (
+            ("?", [t_id])
+            if t_id
+            else (
+                f"{t_alias}.{target_node.variable}"
+                if t_alias and t_alias.startswith("Stage")
+                else f"{t_alias}.node_id",
+                [],
+            )
+        )
+        for rt in rel.types:
+            sql, p = context.build_stage_sql(
+                select_override=f"SELECT {s_expr}, ?, {t_expr}"
+            )
+            context.add_dml(
+                f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
+                s_p + [rt] + t_p + p,
+            )
+
+
 def translate_create_clause(create, context, metadata):
     for pat in create.patterns:
         for node in pat.nodes:
-            if node.variable and node.variable in context.variable_aliases:
-                continue
-            node_id_expr = node.properties.get("id") or node.properties.get("node_id")
-            if node_id_expr is None:
-                import uuid as _uuid
-                generated_id = str(_uuid.uuid4())
-                node_id_expr = ast.Literal(generated_id)
-                key = f"__create_id_{node.variable}" if node.variable else f"__create_id_anon_{id(node)}"
-                context.input_params[key] = generated_id
-                if not hasattr(context, '_anon_node_keys'):
-                    context._anon_node_keys = {}
-                context._anon_node_keys[id(node)] = generated_id
-
-            var_alias = None
-            if isinstance(node_id_expr, ast.Variable):
-                var_alias = context.variable_aliases.get(node_id_expr.name)
-                if not var_alias and node_id_expr.name in context.input_params:
-                    node_id_expr = ast.Literal(context.input_params[node_id_expr.name])
-                elif not var_alias:
-                    raise ValueError(f"Undefined: {node_id_expr.name}")
-
-            if isinstance(node_id_expr, ast.Variable) and var_alias:
-                sql, p = context.build_stage_sql(
-                    select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
-                )
-                context.add_dml(
-                    f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
-                    p,
-                )
-                for label in node.labels:
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
-                        [label] + p + [label],
-                    )
-            else:
-                node_id = (
-                    node_id_expr.value
-                    if isinstance(node_id_expr, ast.Literal)
-                    else node_id_expr
-                )
-                context.add_dml(
-                    f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
-                    [node_id, node_id],
-                )
-                for label in node.labels:
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
-                        [node_id, label, node_id, label],
-                    )
-                for k, v in node.properties.items():
-                    if isinstance(v, ast.Literal):
-                        val = v.value
-                    elif isinstance(v, ast.Variable) and v.name in context.input_params:
-                        val = context.input_params[v.name]
-                    elif isinstance(v, ast.Variable) and getattr(context, "foreach_literals", {}).get(v.name) is not None:
-                        raw = context.foreach_literals[v.name]
-                        val = raw.value if isinstance(raw, ast.Literal) else raw
-                    else:
-                        val = v
-                    context.add_dml(
-                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
-                        [node_id, k, val, node_id, k],
-                    )
-            if node.variable:
-                context.register_variable(node.variable)
-                if not context.from_clauses and isinstance(node_id_expr, ast.Literal):
-                    node_id_val = node_id_expr.value
-                    alias = context.variable_aliases[node.variable]
-                    context.from_clauses.append(f"{_table('nodes')} {alias}")
-                    context.where_conditions.append(f"{alias}.node_id = {context.add_where_param(node_id_val)}")
-
+            _create_clause_node_entry(node, context)
         for i, rel in enumerate(pat.relationships):
-            source_node, target_node = pat.nodes[i], pat.nodes[i + 1]
-            s_id_expr = source_node.properties.get("id") or source_node.properties.get("node_id")
-            t_id_expr = target_node.properties.get("id") or target_node.properties.get("node_id")
-
-            def _resolve_id(id_expr, node):
-                if id_expr is None:
-                    if node.variable:
-                        stored = context.input_params.get(f"__create_id_{node.variable}")
-                        if stored:
-                            return stored
-                        if node.variable in context.input_params:
-                            return context.input_params[node.variable]
-                    anon_id = getattr(context, '_anon_node_keys', {}).get(id(node))
-                    if anon_id:
-                        return anon_id
-                    return None
-                if isinstance(id_expr, ast.Literal):
-                    return id_expr.value
-                if isinstance(id_expr, ast.Variable) and id_expr.name in context.input_params:
-                    return context.input_params[id_expr.name]
-                if not isinstance(id_expr, ast.Variable):
-                    return id_expr
-                return None
-
-            s_id = _resolve_id(s_id_expr, source_node)
-            t_id = _resolve_id(t_id_expr, target_node)
-            if s_id and t_id:
-                for rt in rel.types:
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
-                        [s_id, rt, t_id],
-                    )
-            else:
-                s_alias = (
-                    context.variable_aliases.get(source_node.variable)
-                    if source_node.variable
-                    else None
-                )
-                t_alias = (
-                    context.variable_aliases.get(target_node.variable)
-                    if target_node.variable
-                    else None
-                )
-                s_expr, s_p = (
-                    ("?", [s_id])
-                    if s_id
-                    else (
-                        f"{s_alias}.{source_node.variable}"
-                        if s_alias and s_alias.startswith("Stage")
-                        else f"{s_alias}.node_id",
-                        [],
-                    )
-                )
-                t_expr, t_p = (
-                    ("?", [t_id])
-                    if t_id
-                    else (
-                        f"{t_alias}.{target_node.variable}"
-                        if t_alias and t_alias.startswith("Stage")
-                        else f"{t_alias}.node_id",
-                        [],
-                    )
-                )
-                for rt in rel.types:
-                    sql, p = context.build_stage_sql(
-                        select_override=f"SELECT {s_expr}, ?, {t_expr}"
-                    )
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
-                        s_p + [rt] + t_p + p,
-                    )
+            _create_clause_relationship_entry(rel, i, pat, context)
 
 
 def translate_delete_clause(delete, context, metadata):
@@ -2514,58 +2522,91 @@ def _is_temporal_ts_condition(expr, context) -> bool:
     )
 
 
+def _boolean_expr_exists(expr, context) -> Optional[str]:
+    pat = expr.pattern
+    if pat.relationships:
+        rel = pat.relationships[0]
+        src_node = pat.nodes[0]
+        tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
+        src_bound = (
+            src_node.variable and src_node.variable in context.variable_aliases
+        )
+        tgt_bound = (
+            tgt_node
+            and tgt_node.variable
+            and tgt_node.variable in context.variable_aliases
+        )
+        edge_alias = f"_ex{len(context.variable_aliases) + 1}"
+        child_ctx = TranslationContext()
+        child_ctx.input_params = context.input_params
+        child_ctx._alias_counter = context._alias_counter
+        child_ctx.variable_aliases = dict(context.variable_aliases)
+        if tgt_node and tgt_node.variable and not tgt_bound:
+            tgt_alias = child_ctx.next_alias("n")
+            child_ctx.variable_aliases[tgt_node.variable] = tgt_alias
+        if tgt_bound:
+            tgt_ref = context.variable_aliases[tgt_node.variable]
+            cond = f"{edge_alias}.o_id = {tgt_ref}.node_id"
+        elif src_bound:
+            src_ref = context.variable_aliases[src_node.variable]
+            cond = f"{edge_alias}.s = {src_ref}.node_id"
+        else:
+            cond = "1=1"
+        if rel.types:
+            cond += f" AND {edge_alias}.p = '{rel.types[0]}'"
+        sub_froms = [f"{_table('rdf_edges')} {edge_alias}"]
+        sub_wheres = [cond]
+        if tgt_node and tgt_node.variable and not tgt_bound:
+            tgt_alias = child_ctx.variable_aliases.get(tgt_node.variable, "_tn")
+            sub_froms.append(f"{_table('nodes')} {tgt_alias}")
+            sub_wheres.append(f"{tgt_alias}.node_id = {edge_alias}.o_id")
+            if tgt_node.labels:
+                for lbl in tgt_node.labels:
+                    lbl_alias = child_ctx.next_alias("l")
+                    sub_froms.append(f"{_table('rdf_labels')} {lbl_alias}")
+                    sub_wheres.append(f"{lbl_alias}.s = {tgt_alias}.node_id AND {lbl_alias}.label = '{lbl}'")
+        if expr.where_condition:
+            where_sql = translate_boolean_expression(expr.where_condition, child_ctx)
+            for p in child_ctx.where_params:
+                context.where_params.append(p)
+            sub_wheres.append(where_sql)
+        sub = f"SELECT 1 FROM {', '.join(sub_froms)} WHERE {' AND '.join(sub_wheres)}"
+        prefix = "NOT " if expr.negated else ""
+        return f"{prefix}EXISTS ({sub})"
+    return None
+
+
+def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Optional[str]:
+    if op == ast.BooleanOperator.EQUALS:
+        return f"{left} = {right}"
+    if op == ast.BooleanOperator.NOT_EQUALS:
+        return f"{left} <> {right}"
+    if op == ast.BooleanOperator.LESS_THAN:
+        return f"{left} < {right}"
+    if op == ast.BooleanOperator.LESS_THAN_OR_EQUAL:
+        return f"{left} <= {right}"
+    if op == ast.BooleanOperator.GREATER_THAN:
+        return f"{left} > {right}"
+    if op == ast.BooleanOperator.GREATER_THAN_OR_EQUAL:
+        return f"{left} >= {right}"
+    if op == ast.BooleanOperator.STARTS_WITH:
+        return f"{left} LIKE ({right} || '%')"
+    if op == ast.BooleanOperator.ENDS_WITH:
+        return f"{left} LIKE ('%' || {right})"
+    if op == ast.BooleanOperator.CONTAINS:
+        return f"{left} LIKE ('%' || {right} || '%')"
+    if op == ast.BooleanOperator.REGEX_MATCH:
+        return f"SQLUser.REGEX_MATCH({left}, {right}) = 1"
+    if op == ast.BooleanOperator.IN:
+        return f"{left} IN {right}"
+    return None
+
+
 def translate_boolean_expression(expr, context) -> str:
     if isinstance(expr, ast.ExistsExpression):
-        pat = expr.pattern
-        if pat.relationships:
-            rel = pat.relationships[0]
-            src_node = pat.nodes[0]
-            tgt_node = pat.nodes[1] if len(pat.nodes) > 1 else None
-            src_bound = (
-                src_node.variable and src_node.variable in context.variable_aliases
-            )
-            tgt_bound = (
-                tgt_node
-                and tgt_node.variable
-                and tgt_node.variable in context.variable_aliases
-            )
-            edge_alias = f"_ex{len(context.variable_aliases) + 1}"
-            child_ctx = TranslationContext()
-            child_ctx.input_params = context.input_params
-            child_ctx._alias_counter = context._alias_counter
-            child_ctx.variable_aliases = dict(context.variable_aliases)
-            if tgt_node and tgt_node.variable and not tgt_bound:
-                tgt_alias = child_ctx.next_alias("n")
-                child_ctx.variable_aliases[tgt_node.variable] = tgt_alias
-            if tgt_bound:
-                tgt_ref = context.variable_aliases[tgt_node.variable]
-                cond = f"{edge_alias}.o_id = {tgt_ref}.node_id"
-            elif src_bound:
-                src_ref = context.variable_aliases[src_node.variable]
-                cond = f"{edge_alias}.s = {src_ref}.node_id"
-            else:
-                cond = "1=1"
-            if rel.types:
-                cond += f" AND {edge_alias}.p = '{rel.types[0]}'"
-            sub_froms = [f"{_table('rdf_edges')} {edge_alias}"]
-            sub_wheres = [cond]
-            if tgt_node and tgt_node.variable and not tgt_bound:
-                tgt_alias = child_ctx.variable_aliases.get(tgt_node.variable, "_tn")
-                sub_froms.append(f"{_table('nodes')} {tgt_alias}")
-                sub_wheres.append(f"{tgt_alias}.node_id = {edge_alias}.o_id")
-                if tgt_node.labels:
-                    for lbl in tgt_node.labels:
-                        lbl_alias = child_ctx.next_alias("l")
-                        sub_froms.append(f"{_table('rdf_labels')} {lbl_alias}")
-                        sub_wheres.append(f"{lbl_alias}.s = {tgt_alias}.node_id AND {lbl_alias}.label = '{lbl}'")
-            if expr.where_condition:
-                where_sql = translate_boolean_expression(expr.where_condition, child_ctx)
-                for p in child_ctx.where_params:
-                    context.where_params.append(p)
-                sub_wheres.append(where_sql)
-            sub = f"SELECT 1 FROM {', '.join(sub_froms)} WHERE {' AND '.join(sub_wheres)}"
-            prefix = "NOT " if expr.negated else ""
-            return f"{prefix}EXISTS ({sub})"
+        result = _boolean_expr_exists(expr, context)
+        if result is not None:
+            return result
         return "1=1"
     if isinstance(expr, ast.LabelPredicate):
         alias = context.variable_aliases.get(expr.variable)
@@ -2639,28 +2680,9 @@ def translate_boolean_expression(expr, context) -> str:
             left = f"CAST({left} AS DOUBLE)"
         if isinstance(right_expr, ast.PropertyReference):
             right = f"CAST({right} AS DOUBLE)"
-    if op == ast.BooleanOperator.EQUALS:
-        return f"{left} = {right}"
-    if op == ast.BooleanOperator.NOT_EQUALS:
-        return f"{left} <> {right}"
-    if op == ast.BooleanOperator.LESS_THAN:
-        return f"{left} < {right}"
-    if op == ast.BooleanOperator.LESS_THAN_OR_EQUAL:
-        return f"{left} <= {right}"
-    if op == ast.BooleanOperator.GREATER_THAN:
-        return f"{left} > {right}"
-    if op == ast.BooleanOperator.GREATER_THAN_OR_EQUAL:
-        return f"{left} >= {right}"
-    if op == ast.BooleanOperator.STARTS_WITH:
-        return f"{left} LIKE ({right} || '%')"
-    if op == ast.BooleanOperator.ENDS_WITH:
-        return f"{left} LIKE ('%' || {right})"
-    if op == ast.BooleanOperator.CONTAINS:
-        return f"{left} LIKE ('%' || {right} || '%')"
-    if op == ast.BooleanOperator.REGEX_MATCH:
-        return f"SQLUser.REGEX_MATCH({left}, {right}) = 1"
-    if op == ast.BooleanOperator.IN:
-        return f"{left} IN {right}"
+    result = _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr)
+    if result is not None:
+        return result
     raise ValueError(f"Unsupported operator: {op}")
 
 
@@ -3257,125 +3279,115 @@ def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
     return None
 
 
-def _expr_function_call(expr, context, segment):
-    fn = expr.function_name.lower()
+def _expr_fn_shortestpath(fn, expr, context):
+    if fn not in ("shortestpath", "allshortestpaths") or not expr.arguments:
+        return None
+    arg = expr.arguments[0]
+    if not (isinstance(arg, ast.Literal) and isinstance(arg.value, ast.GraphPattern)):
+        return None
+    pattern = arg.value
+    is_all = fn == "allshortestpaths"
+    for rel in pattern.relationships:
+        if rel.variable_length is None:
+            rel.variable_length = ast.VariableLength(
+                min_hops=1, max_hops=5, shortest=not is_all, all_shortest=is_all
+            )
+        else:
+            rel.variable_length.shortest = not is_all
+            rel.variable_length.all_shortest = is_all
+    fake_match = ast.MatchClause(patterns=[pattern], optional=False)
+    translate_match_clause(fake_match, context, {})
+    return "'path'"
 
-    if fn in ("shortestpath", "allshortestpaths") and expr.arguments:
-        arg = expr.arguments[0]
-        if isinstance(arg, ast.Literal) and isinstance(arg.value, ast.GraphPattern):
-            pattern = arg.value
-            is_all = fn == "allshortestpaths"
-            for rel in pattern.relationships:
-                if rel.variable_length is None:
-                    rel.variable_length = ast.VariableLength(
-                        min_hops=1, max_hops=5, shortest=not is_all, all_shortest=is_all
-                    )
-                else:
-                    rel.variable_length.shortest = not is_all
-                    rel.variable_length.all_shortest = is_all
-            fake_match = ast.MatchClause(patterns=[pattern], optional=False)
-            translate_match_clause(fake_match, context, {})
-            return "'path'"
 
-    if fn in ("length", "nodes", "relationships") and len(expr.arguments) == 1:
-        arg = expr.arguments[0]
-        if isinstance(arg, ast.Variable) and arg.name in context.named_paths:
-            path_var = arg.name
-            if fn == "length":
-                vl_names = {vl.get("path_var") for vl in (context.var_length_paths or [])}
-                if path_var in vl_names:
-                    node_aliases = context.path_node_aliases.get(path_var, [])
-                    return str(max(0, len(node_aliases) - 1))
-                return str(len(context.named_paths[path_var].pattern.relationships))
-            elif fn == "nodes":
-                aliases = context.path_node_aliases[path_var]
-                return f"JSON_ARRAY({', '.join(f'{a}.node_id' for a in aliases)})"
-            else:
-                aliases = context.path_edge_aliases[path_var]
-                return f"JSON_ARRAY({', '.join(f'{a}.p' for a in aliases)})"
-        elif isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
+def _expr_fn_path_funcs(fn, expr, context):
+    if fn not in ("length", "nodes", "relationships") or len(expr.arguments) != 1:
+        return None
+    arg = expr.arguments[0]
+    if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
+        if isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
             if fn in ("nodes", "relationships"):
                 raise ValueError(f"'{arg.name}' is not a named path variable")
+        return None
+    path_var = arg.name
+    if fn == "length":
+        vl_names = {vl.get("path_var") for vl in (context.var_length_paths or [])}
+        if path_var in vl_names:
+            node_aliases = context.path_node_aliases.get(path_var, [])
+            return str(max(0, len(node_aliases) - 1))
+        return str(len(context.named_paths[path_var].pattern.relationships))
+    elif fn == "nodes":
+        aliases = context.path_node_aliases[path_var]
+        return f"JSON_ARRAY({', '.join(f'{a}.node_id' for a in aliases)})"
+    else:
+        aliases = context.path_edge_aliases[path_var]
+        return f"JSON_ARRAY({', '.join(f'{a}.p' for a in aliases)})"
 
-    fn, args_exprs = expr.function_name.lower(), expr.arguments
-    if fn == "toboolean" and args_exprs and isinstance(args_exprs[0], ast.Literal):
-        v = args_exprs[0].value
-        if not isinstance(v, str):
-            return "1" if v else "0"
-    def _translate_arg(a):
-        if isinstance(a, ast.Literal) and not isinstance(a.value, list):
-            inlined = _inline_literal(a)
-            if inlined is not None:
-                return inlined
-        return translate_expression(a, context, segment="inline")
 
-    args = [_translate_arg(a) for a in args_exprs]
-
-    if fn in ("vector_distance", "vector_similarity", "ivg.vector_distance", "ivg.vector_similarity"):
-        if len(args_exprs) < 2:
-            raise ValueError(f"{fn}() requires 2 arguments: (node_variable, query_vector)")
-        node_arg = args_exprs[0]
-        vec_arg = args_exprs[1]
-        alias = context.variable_aliases.get(node_arg.name, node_arg.name) if isinstance(node_arg, ast.Variable) else args[0]
-        emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
-        if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
-            vec_val = context.input_params[vec_arg.name]
-            if isinstance(vec_val, list):
-                vec_str = ",".join(str(x) for x in vec_val)
-                placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
-            else:
-                placeholder = f"TO_VECTOR(?, DOUBLE)"
-                context.all_stage_params.append(vec_val)
-        elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
-            vec_str = ",".join(str(x) for x in vec_arg.value)
+def _expr_fn_vector_ops(fn, args_exprs, args, context):
+    if fn not in ("vector_distance", "vector_similarity", "ivg.vector_distance", "ivg.vector_similarity"):
+        return None
+    if len(args_exprs) < 2:
+        raise ValueError(f"{fn}() requires 2 arguments: (node_variable, query_vector)")
+    node_arg = args_exprs[0]
+    vec_arg = args_exprs[1]
+    alias = context.variable_aliases.get(node_arg.name, node_arg.name) if isinstance(node_arg, ast.Variable) else args[0]
+    emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+    if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
+        vec_val = context.input_params[vec_arg.name]
+        if isinstance(vec_val, list):
+            vec_str = ",".join(str(x) for x in vec_val)
             placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
         else:
-            placeholder = args[1]
-        if fn in ("vector_distance", "ivg.vector_distance"):
-            return f"(1 - VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder}))"
-        else:
-            return f"VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder})"
+            placeholder = f"TO_VECTOR(?, DOUBLE)"
+            context.all_stage_params.append(vec_val)
+    elif isinstance(vec_arg, ast.Literal) and isinstance(vec_arg.value, list):
+        vec_str = ",".join(str(x) for x in vec_arg.value)
+        placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
+    else:
+        placeholder = args[1]
+    if fn in ("vector_distance", "ivg.vector_distance"):
+        return f"(1 - VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder}))"
+    else:
+        return f"VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder})"
 
+
+def _expr_fn_node_funcs(fn, args_exprs, args, context):
     if fn == "type":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
-            alias = context.variable_aliases.get(var_name, "")
-            if alias:
-                if alias.startswith("Stage"):
-                    return f"{alias}.{var_name}"
-                p_col = "_p" if getattr(context, "_undirected_aliases", set()) and alias in context._undirected_aliases else "p"
-                return f"{alias}.{p_col}"
+            context_alias = context.variable_aliases.get(var_name, "")
+            if context_alias:
+                if context_alias.startswith("Stage"):
+                    return f"{context_alias}.{var_name}"
+                p_col = "_p" if getattr(context, "_undirected_aliases", set()) and context_alias in context._undirected_aliases else "p"
+                return f"{context_alias}.{p_col}"
         return args[0] if args else "NULL"
-
-    if fn in ("startnode",):
+    if fn == "startnode":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
-            alias = context.variable_aliases.get(var_name, "")
-            if alias:
-                return f"{alias}.s"
+            context_alias = context.variable_aliases.get(var_name, "")
+            if context_alias:
+                return f"{context_alias}.s"
         return args[0] if args else "NULL"
-
     if fn == "endnode":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
-            alias = context.variable_aliases.get(var_name, "")
-            if alias:
-                return f"{alias}.o_id"
+            context_alias = context.variable_aliases.get(var_name, "")
+            if context_alias:
+                return f"{context_alias}.o_id"
         return args[0] if args else "NULL"
-
     if fn == "id":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
-            alias = context.variable_aliases.get(var_name, "")
-            if alias:
-                return f"{alias}.node_id"
+            context_alias = context.variable_aliases.get(var_name, "")
+            if context_alias:
+                return f"{context_alias}.node_id"
         return args[0] if args else "NULL"
+    return None
 
-    if fn == "labels":
-        return labels_subquery(args[0] if args else "NULL")
-    if fn == "properties":
-        return properties_subquery(args[0] if args else "NULL")
 
+def _expr_fn_list_ops(fn, args, args_exprs):
     if fn == "keys":
         if not args:
             return "JSON_ARRAY()"
@@ -3389,7 +3401,6 @@ def _expr_function_call(expr, context, segment):
         else:
             id_expr = node_expr
         return f"(SELECT JSON_ARRAYAGG(rp.key) FROM {_table('rdf_props')} rp WHERE rp.s = {id_expr})"
-
     if fn == "range":
         if len(args_exprs) < 2:
             return "JSON_ARRAY()"
@@ -3415,7 +3426,6 @@ def _expr_function_call(expr, context, segment):
         except (TypeError, ValueError):
             pass
         return f"JSON_ARRAY()"
-
     if fn == "size":
         if not args:
             return "0"
@@ -3425,28 +3435,70 @@ def _expr_function_call(expr, context, segment):
         ) or isinstance(arg_expr, ast.ListComprehension)
         if is_list:
             return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
+        return None
     if fn == "head":
         if not args:
             return "NULL"
         return f"SQLUser.LIST_HEAD({args[0]})"
-
     if fn == "tail":
         if not args:
             return "JSON_ARRAY()"
         return f"SQLUser.LIST_TAIL({args[0]})"
-
     if fn == "last":
         if not args:
             return "NULL"
         return f"SQLUser.LIST_LAST({args[0]})"
-
     if fn == "isempty":
         if not args:
             return "1"
         return f"CASE WHEN {args[0]} IS NULL OR {args[0]} = '' OR {args[0]} = '[]' OR {args[0]} = '{{}}' THEN 1 ELSE 0 END"
-
     if fn == "round":
         return f"CAST(ROUND({args[0] if args else '0'}, 0) AS DOUBLE)"
+    return None
+
+
+def _expr_function_call(expr, context, segment):
+    fn = expr.function_name.lower()
+
+    result = _expr_fn_shortestpath(fn, expr, context)
+    if result is not None:
+        return result
+
+    result = _expr_fn_path_funcs(fn, expr, context)
+    if result is not None:
+        return result
+
+    if fn == "toboolean" and expr.arguments and isinstance(expr.arguments[0], ast.Literal):
+        v = expr.arguments[0].value
+        if not isinstance(v, str):
+            return "1" if v else "0"
+    
+    def _translate_arg(a):
+        if isinstance(a, ast.Literal) and not isinstance(a.value, list):
+            inlined = _inline_literal(a)
+            if inlined is not None:
+                return inlined
+        return translate_expression(a, context, segment="inline")
+
+    args = [_translate_arg(a) for a in expr.arguments]
+
+    result = _expr_fn_vector_ops(fn, expr.arguments, args, context)
+    if result is not None:
+        return result
+
+    result = _expr_fn_node_funcs(fn, expr.arguments, args, context)
+    if result is not None:
+        return result
+
+    if fn == "labels":
+        return labels_subquery(args[0] if args else "NULL")
+    if fn == "properties":
+        return properties_subquery(args[0] if args else "NULL")
+
+    result = _expr_fn_list_ops(fn, args, expr.arguments)
+    if result is not None:
+        return result
+
     _CYPHER_FN_MAP = {
         "tolower": "LOWER",
         "toupper": "UPPER",
@@ -3476,7 +3528,7 @@ def _expr_function_call(expr, context, segment):
         "toboolean": "CASE WHEN",
     }
     sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
-    scalar_result = _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment)
+    scalar_result = _expr_scalar_function(fn, sql_fn, args, expr.arguments, expr, context, segment)
     if scalar_result is not None:
         return scalar_result
     return f"{sql_fn}({', '.join(args)})"
