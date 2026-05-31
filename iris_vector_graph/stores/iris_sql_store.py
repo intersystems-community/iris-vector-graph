@@ -917,7 +917,7 @@ class IRISGraphStore:
         try:
             import iris as _iris
             import json as _json
-            iris_obj = _iris.createIRIS(self.conn)
+            iris_obj = self._iris_obj()
             if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
                 import warnings
                 warnings.warn(
@@ -953,7 +953,7 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
-            iris_obj = _iris.createIRIS(self.conn)
+            iris_obj = self._iris_obj()
             # Check if arno is loaded — warn if not, OS fallback is much slower
             if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
                 import warnings
@@ -985,7 +985,7 @@ class IRISGraphStore:
 
         import random
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        iris_inst = _iris.createIRIS(self.conn)
+        iris_inst = self._iris_obj()
         lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
@@ -1113,7 +1113,7 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
-            iris_obj = _iris.createIRIS(self.conn)
+            iris_obj = self._iris_obj()
             raw = str(iris_obj.classMethodValue(
                 "Graph.KG.NKGAccel", "ClosenessGlobal",
                 formula, direction, max_hops, top_k,
@@ -1211,7 +1211,7 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
-            iris_obj = _iris.createIRIS(self.conn)
+            iris_obj = self._iris_obj()
             raw = str(iris_obj.classMethodValue(
                 "Graph.KG.NKGAccel", "EigenvectorGlobal",
                 max_iter, tol, top_k,
