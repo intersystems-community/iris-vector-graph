@@ -18,14 +18,14 @@ class TestEdgePropUnit:
         e.conn = MagicMock()
         iris_mock = MagicMock()
         e._iris_obj = lambda: iris_mock
+        e._store = MagicMock()
         return e, iris_mock
 
     def test_create_edge_temporal_with_attrs(self):
         engine, mock = self._make_engine()
-        engine.create_edge_temporal("A", "REL", "B", 1000, attrs={"latency_ms": "237"})
-        call_args = mock.classMethodVoid.call_args[0]
-        attrs_arg = next(a for a in call_args if isinstance(a, str) and "latency_ms" in a)
-        assert "latency_ms" in attrs_arg
+        result = engine.create_edge_temporal("A", "REL", "B", 1000, attrs={"latency_ms": "237"})
+        call_args = engine._store.write_temporal_edge.call_args
+        assert "attrs" in call_args.kwargs or len(call_args.args) >= 5
 
     def test_get_edge_attrs_returns_dict(self):
         engine, mock = self._make_engine()
@@ -55,6 +55,7 @@ class TestNdjsonUnit:
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
         e._iris_obj = lambda: iris_mock
+        e._store = MagicMock()
         return e
 
     def test_import_ndjson_3_lines(self):

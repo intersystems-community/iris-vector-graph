@@ -55,6 +55,9 @@ class TestSchemaInitialization:
         self.engine.initialize_schema(auto_deploy_objectscript=False)
         cursor = self.conn.cursor()
         try:
+            cursor.execute("SELECT 1 FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_NAME='MatchEdges' AND ROUTINE_SCHEMA='Graph_KG'")
+            if not cursor.fetchone():
+                pytest.skip("Graph_KG.MatchEdges not deployed — compile Graph.KG.EdgeScan first")
             cursor.execute("SELECT Graph_KG.MatchEdges(?, ?, ?)", ["", "", 0])
             cursor.fetchone()
         except Exception as e:

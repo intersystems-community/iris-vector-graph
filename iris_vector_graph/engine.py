@@ -81,6 +81,8 @@ def _bfs_stream_pages(conn, tag, page_size=500):
             conn, "Graph.KG.Traversal", "ReadBFSPage",
             tag, cursor_step, cursor_o, page_size,
         ))
+        if raw.startswith("SORTED:"):
+            break
         page = _j.loads(raw)
         yield from page.get("items", [])
         if page.get("done"):
@@ -3437,13 +3439,14 @@ class IRISGraphEngine:
         """Unified sync of adjacency and acceleration indexes (^KG + ^NKG).
 
         Idempotent. Chooses Rust accelerator for ^NKG when arno is available.
-        Resets the pending-sync flag on success.
+        Always clears the pending-sync flag after the attempt completes.
 
         Returns:
             True on success, False if a fatal error prevented completion.
         """
         kg_ok = self._sync_kg()
         nkg_ok = self._sync_nkg()
+        self._nkg_dirty = False
         return kg_ok and nkg_ok
 
     def _sync_kg(self) -> bool:

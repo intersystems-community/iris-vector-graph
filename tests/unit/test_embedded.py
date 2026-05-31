@@ -184,7 +184,8 @@ class TestEmbeddedConnectionUnit:
         try:
             if embedded_path in sys.path:
                 sys.path.remove(embedded_path)
-            _ensure_embedded_iris_first()
+            with patch.dict('sys.modules', {'iris': None}):
+                _ensure_embedded_iris_first()
             assert sys.path[0] == embedded_path
         finally:
             sys.path[:] = original
@@ -199,7 +200,8 @@ class TestEmbeddedConnectionUnit:
                 sys.path.remove(embedded_path)
             sys.path.append(embedded_path)
             assert sys.path[0] != embedded_path
-            _ensure_embedded_iris_first()
+            with patch.dict('sys.modules', {'iris': None}):
+                _ensure_embedded_iris_first()
             assert sys.path[0] == embedded_path
         finally:
             sys.path[:] = original

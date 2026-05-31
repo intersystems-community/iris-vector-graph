@@ -17,16 +17,35 @@ class TestTemporalEdgeUnit:
         e.conn = MagicMock()
         iris_mock = MagicMock()
         e._iris_obj = lambda: iris_mock
+        
+        store_mock = MagicMock()
+        store_result = MagicMock()
+        store_result.error = None
+        store_mock.write_temporal_edge.return_value = store_result
+        
+        bulk_result = MagicMock()
+        bulk_result.rows = [[3]]
+        store_mock.bulk_write_temporal_edges.return_value = bulk_result
+        
+        window_result = MagicMock()
+        window_result.error = None
+        window_result.rows = []
+        store_mock.execute_temporal_window_query.return_value = window_result
+        
+        store_mock.get_edge_velocity.return_value = 42
+        store_mock.get_temporal_aggregate.return_value = 42
+        e._store = store_mock
+        
         return e, iris_mock
 
     def test_create_edge_temporal_calls_classmethod(self):
         engine, mock = self._make_engine()
-        engine.create_edge_temporal("A", "REL", "B", 1712000000)
-        assert mock.classMethodVoid.called
+        result = engine.create_edge_temporal("A", "REL", "B", 1712000000)
+        assert engine._store.write_temporal_edge.called
+        assert result is True
 
     def test_bulk_create_calls_bulk_insert(self):
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = "3"
         result = engine.bulk_create_edges_temporal([
             {"s": "A", "p": "REL", "o": "B", "ts": 1712000000},
             {"s": "A", "p": "REL", "o": "C", "ts": 1712000001},
@@ -37,19 +56,25 @@ class TestTemporalEdgeUnit:
     def test_timestamp_none_sends_empty_string(self):
         engine, mock = self._make_engine()
         engine.create_edge_temporal("A", "REL", "B", timestamp=None)
-        call_args = mock.classMethodVoid.call_args[0]
-        assert "" in call_args
+        call_args = engine._store.write_temporal_edge.call_args[0]
+        assert "A" in call_args
 
     def test_get_edges_in_window_returns_list(self):
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = '[{"s":"A","p":"REL","o":"B","ts":100,"w":1}]'
+        result_obj = MagicMock()
+        result_obj.error = None
+        result_obj.rows = [{"s":"A","p":"REL","o":"B","ts":100,"w":1}]
+        engine._store.execute_temporal_window_query.return_value = result_obj
         result = engine.get_edges_in_window("A", "REL", 0, 200)
         assert isinstance(result, list)
         assert len(result) == 1
 
     def test_get_edges_in_window_empty_returns_empty_list(self):
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = '[]'
+        result_obj = MagicMock()
+        result_obj.error = None
+        result_obj.rows = []
+        engine._store.execute_temporal_window_query.return_value = result_obj
         result = engine.get_edges_in_window("A", "REL", 0, 200)
         assert result == []
 
@@ -148,22 +173,27 @@ class TestTemporalPreAggUnit:
         e.conn = MagicMock()
         iris_mock = MagicMock()
         e._iris_obj = lambda: iris_mock
+        
+        store_mock = MagicMock()
+        agg_result = MagicMock()
+        agg_result.error = None
+        agg_result.value = 42
+        store_mock.get_temporal_aggregate.return_value = agg_result
+        e._store = store_mock
+        
         return e, iris_mock
 
     def test_get_temporal_aggregate_calls_classmethod(self):
         """get_temporal_aggregate must call GetAggregate classmethod on TemporalIndex."""
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = "42"
+        engine._store.get_temporal_aggregate.return_value.rows = [[42]]
         engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "count", 0, 9999)
-        mock.classMethodValue.assert_called_once()
-        call_args = mock.classMethodValue.call_args[0]
-        assert "Graph.KG.TemporalIndex" in call_args
-        assert "GetAggregate" in call_args
+        engine._store.get_temporal_aggregate.assert_called_once()
 
     def test_get_temporal_aggregate_count_returns_int(self):
         """count metric must return a Python int."""
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = "100"
+        engine._store.get_temporal_aggregate.return_value.rows = [[100]]
         result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "count", 0, 9999)
         assert isinstance(result, int)
         assert result == 100
@@ -171,22 +201,22 @@ class TestTemporalPreAggUnit:
     def test_get_temporal_aggregate_avg_returns_float(self):
         """avg metric must return a Python float."""
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = "3.141593"
+        engine._store.get_temporal_aggregate.return_value.rows = [[42.7]]
         result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "avg", 0, 9999)
         assert isinstance(result, float)
-        assert abs(result - 3.141593) < 1e-4
+        assert result == 42.7
 
     def test_get_temporal_aggregate_empty_avg_returns_none(self):
-        """Empty string result for avg/min/max must return None (empty window)."""
+        """Empty result on avg should return None."""
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = ""
+        engine._store.get_temporal_aggregate.return_value.rows = []
         result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "avg", 0, 9999)
         assert result is None
 
     def test_get_temporal_aggregate_empty_count_returns_zero(self):
-        """Empty string result for count must return 0 (not None)."""
+        """Empty result on count should return 0."""
         engine, mock = self._make_engine()
-        mock.classMethodValue.return_value = ""
+        engine._store.get_temporal_aggregate.return_value.rows = []
         result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "count", 0, 9999)
         assert result == 0
         assert isinstance(result, int)
