@@ -423,6 +423,72 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
 
 /// Canonical Leiden via embedded-Python leidenalg (igraph backend), when those
 /// packages are installed in mgr/python. Reads ^NKG adjacency via gref, runs
+ClassMethod ClosenessJsonPy(formula As %String = "harmonic", topK As %Integer = 10000) As %String [ Language = python ]
+{
+    import iris, json
+    try:
+        import igraph
+    except ImportError:
+        return "PYUNAVAIL"
+
+    g = iris.gref("^NKG")
+    if not g["$meta", "nodeCount"]:
+        return "ERROR:^NKG not built"
+
+    nd = {}
+    cur = ""
+    while True:
+        cur = g.order(["$ND", cur])
+        if cur is None or cur == "":
+            break
+        nd[int(cur)] = g["$ND", cur]
+    if not nd:
+        return "ERROR:^NKG not built"
+
+    edge_set = set()
+    src = ""
+    while True:
+        src = g.order([-1, src])
+        if src is None or src == "":
+            break
+        srci = int(src)
+        negp = ""
+        while True:
+            negp = g.order([-1, src, negp])
+            if negp is None or negp == "":
+                break
+            dst = ""
+            while True:
+                dst = g.order([-1, src, negp, dst])
+                if dst is None or dst == "":
+                    break
+                dsti = int(dst)
+                if srci != dsti:
+                    a, b = (srci, dsti) if srci < dsti else (dsti, srci)
+                    edge_set.add((a, b))
+
+    sorted_idx = sorted(nd.keys())
+    pos = {ix: i for i, ix in enumerate(sorted_idx)}
+    ig = igraph.Graph(n=len(sorted_idx), directed=False)
+    ig.add_edges([(pos[a], pos[b]) for (a, b) in edge_set if a in pos and b in pos])
+    n = len(sorted_idx)
+
+    if formula == "classical":
+        scores = ig.closeness(mode="all", normalized=True)
+    else:
+        norm = ig.harmonic_centrality(mode="all")
+        scores = [s * (n - 1) for s in norm]
+
+    ranked = sorted(range(n), key=lambda i: -scores[i])
+    out = []
+    tk = int(topK)
+    for rank, i in enumerate(ranked):
+        out.append({"id": nd[sorted_idx[i]], "score": scores[i]})
+        if tk > 0 and rank + 1 >= tk:
+            break
+    return "OK:" + json.dumps(out)
+}
+
 /// leidenalg.find_partition, returns the same "OK:[{id,community,size}]" format
 /// as LeidenJson (contiguous 0..K-1 by descending size). Returns the sentinel
 /// "PYUNAVAIL" if igraph/leidenalg are not importable so the caller can fall

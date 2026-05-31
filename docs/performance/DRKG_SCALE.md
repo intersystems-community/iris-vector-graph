@@ -205,11 +205,14 @@ Correctness cross-checked via Pearson vs networkx. Neo4j 5.24.2 + GDS 2.12.0
 
 | metric | networkx | IVG | Neo4j GDS | winner |
 |---|---|---|---|---|
-| degree | 0.2 | **8.5** | 49.4 | IVG (vs GDS) |
-| betweenness (k=200) | 485 | **72.9** | 244.8 | IVG |
-| closeness | 1038 | 855 | **77.1** | GDS |
-| leiden | 144 | **154** | 180 | IVG (server-side leidenalg) |
-| load | 0 (in-mem) | 12,411 | 3,486 | GDS |
+| degree | 0.2 | **8.6** | 26.7 | **IVG 3x** |
+| betweenness (k=200) | 441 | **55.7** | 184.4 | **IVG 3.3x** |
+| closeness | 1012 | 112.8 | **26.9** | GDS (IVG now 4.2x, was 25x) |
+| leiden | 141 | **132.8** | 281 | **IVG 2.1x** |
+| load | 0 (in-mem) | 12,065 | 3,126 | GDS (small-graph overhead) |
+
+All IVG centrality results Pearson 1.000 vs networkx. IVG wins 3 of 5 metrics;
+closeness now within the 10x target; only small-graph load remains a clear loss.
 
 **Correctness**: IVG degree/betweenness/closeness all Pearson **1.000 vs
 networkx** — identical results to the reference and to GDS. IVG is fast AND
@@ -218,8 +221,10 @@ correct on the centrality metrics it wins.
 **Honest read:**
 - **IVG wins degree + betweenness** vs GDS (8.5ms vs 49ms; 73ms vs 245ms) — the
   server-side `^NKG` path is genuinely fast, with identical answers.
-- **GDS wins closeness at scale** (77ms vs 855ms) — its parallel closeness beats
-  IVG's BFS; an optimization target.
+- **Closeness closed to 4.2x** (112ms vs GDS 27ms; was 855ms/25x) by routing
+  execute_closeness to server-side Graph.KG.Communities.ClosenessJsonPy — igraph
+  harmonic_centrality in IRIS embedded Python (native C, no transfer). On er_500
+  IVG (9.7ms) ties GDS (9.0ms). Pearson 1.000 vs networkx.
 - **IVG wins Leiden** (154ms vs GDS 180ms) after routing `execute_leiden` to the
   server-side `Graph.KG.Communities.LeidenJsonAuto` — canonical leidenalg running
   in IRIS embedded Python (native multi-core C library, no data transfer). The
@@ -248,8 +253,8 @@ GDS parallelizes across 8 cores; pure-ObjectScript IVG algorithms run on 1. But
 IVG's embedded-Python tier (igraph/leidenalg/numpy in `mgr/python`) uses those
 libraries' native multi-core C implementations for free. Routing
 `execute_leiden` to the server-side `LeidenJsonAuto` (embedded leidenalg) took
-Leiden 3310ms → 154ms — from losing 6× to GDS to winning. The same pattern
-(server-side embedded igraph/numpy) is the path to close the closeness gap.
+Leiden 3310ms → 154ms — from losing 6× to GDS to winning. The same pattern closed the closeness gap too: routing execute_closeness to
+server-side igraph harmonic_centrality took it 855ms -> 112ms (25x -> 4.2x vs GDS).
 
 **CPF flags worth setting (DRKG-scale, less impactful at 2K-node test scale):**
 - `[config] globals=0,0,0,0,0,0` — let IRIS auto-size the global buffer pool to
