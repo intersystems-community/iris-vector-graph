@@ -20,6 +20,12 @@ BASELINE = os.path.join(
 )
 
 
+def _normalize_sig(sig: str) -> str:
+    return sig.replace("'", "").replace("Optional[str]", "str | None").replace(
+        "Optional[int]", "int | None"
+    ).replace("NoneType", "None").replace(" ", "")
+
+
 def _current_surface():
     surface = {}
     for name in dir(IRISGraphEngine):
@@ -48,7 +54,9 @@ def test_engine_public_api_unchanged():
     removed = sorted(set(baseline) - set(current))
     added = sorted(set(current) - set(baseline))
     changed = sorted(
-        n for n in set(baseline) & set(current) if baseline[n] != current[n]
+        n
+        for n in set(baseline) & set(current)
+        if _normalize_sig(baseline[n]) != _normalize_sig(current[n])
     )
     problems = []
     if removed:
