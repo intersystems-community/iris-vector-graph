@@ -3156,6 +3156,83 @@ def _expr_aggregation(expr, context, segment):
     return f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
 
 
+def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
+    if fn == "coalesce":
+        if len(args) >= 2 and args_exprs:
+            coerced = []
+            for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
+                if i == 0:
+                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                elif isinstance(arg_expr, ast.Literal) and not isinstance(arg_expr.value, str) and arg_expr.value is not None:
+                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
+                else:
+                    coerced.append(arg)
+            return f"COALESCE({', '.join(coerced)})"
+        return f"COALESCE({', '.join(args)})" if args else "NULL"
+    if fn == "tointeger":
+        return f"CAST({args[0]} AS INTEGER)"
+    if fn == "tofloat":
+        return f"CAST({args[0]} AS DOUBLE)"
+    if fn == "tostring":
+        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, bool):
+            return f"'{'true' if args_exprs[0].value else 'false'}'"
+        return f"CAST({args[0]} AS VARCHAR(4096))"
+    if fn == "substring":
+        if len(args) >= 2:
+            start = f"({args[1]}) + 1"
+            if len(args) >= 3:
+                return f"SUBSTRING({args[0]}, {start}, {args[2]})"
+            return f"SUBSTRING({args[0]}, {start})"
+        return f"SUBSTRING({args[0]})"
+    if fn == "reverse":
+        if not args:
+            return "NULL"
+        arg_expr = args_exprs[0] if args_exprs else None
+        is_list = (
+            isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
+        ) or isinstance(arg_expr, ast.ListComprehension)
+        if is_list:
+            return f"SQLUser.LIST_REVERSE({args[0]})"
+        return f"REVERSE({args[0]})"
+    if fn in ("stdev", "stdevs"):
+        return f"STDDEV({args[0]})" if args else "NULL"
+    if fn in ("stdevp",):
+        return f"STDDEV_POP({args[0]})" if args else "NULL"
+    if fn in ("percentiledisc", "percentilecont"):
+        if not args:
+            return "NULL"
+        val_expr = args[0]
+        pct_expr = args[1] if len(args) > 1 else "0.5"
+        context._percentile_queries = getattr(context, "_percentile_queries", [])
+        if args_exprs and isinstance(args_exprs[0], ast.Variable):
+            var_name = args_exprs[0].name
+            alias = context.variable_aliases.get(var_name, "")
+            pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else 0.5
+            context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
+        return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
+    if fn == "haversin":
+        return f"(1 - COS({args[0]})) / 2" if args else "NULL"
+    if fn == "e":
+        return "EXP(1)"
+    if fn == "rand":
+        return "SQLUser.RAND()"
+    if fn == "timestamp":
+        return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
+    if fn == "randomuuid":
+        return "SQLUser.NEWID()"
+    if fn == "split":
+        return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
+    if fn in ("datetime", "localdatetime"):
+        return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
+    if fn in ("localtime", "time"):
+        return f"CAST(GETDATE() AS TIME)"
+    if fn == "duration":
+        return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
+    if fn == "toboolean":
+        return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
+    return None
+
+
 def _expr_function_call(expr, context, segment):
     fn = expr.function_name.lower()
 
@@ -3375,79 +3452,9 @@ def _expr_function_call(expr, context, segment):
         "toboolean": "CASE WHEN",
     }
     sql_fn = _CYPHER_FN_MAP.get(fn, fn.upper())
-    if fn == "coalesce":
-        if len(args) >= 2 and args_exprs:
-            coerced = []
-            for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
-                if i == 0:
-                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
-                elif isinstance(arg_expr, ast.Literal) and not isinstance(arg_expr.value, str) and arg_expr.value is not None:
-                    coerced.append(f"CAST({arg} AS VARCHAR(4096))")
-                else:
-                    coerced.append(arg)
-            return f"COALESCE({', '.join(coerced)})"
-        return f"COALESCE({', '.join(args)})" if args else "NULL"
-    if fn == "tointeger":
-        return f"CAST({args[0]} AS INTEGER)"
-    if fn == "tofloat":
-        return f"CAST({args[0]} AS DOUBLE)"
-    if fn == "tostring":
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, bool):
-            return f"'{'true' if args_exprs[0].value else 'false'}'"
-        return f"CAST({args[0]} AS VARCHAR(4096))"
-    if fn == "substring":
-        if len(args) >= 2:
-            start = f"({args[1]}) + 1"
-            if len(args) >= 3:
-                return f"SUBSTRING({args[0]}, {start}, {args[2]})"
-            return f"SUBSTRING({args[0]}, {start})"
-        return f"SUBSTRING({args[0]})"
-    if fn == "reverse":
-        if not args:
-            return "NULL"
-        arg_expr = args_exprs[0] if args_exprs else None
-        is_list = (
-            isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
-        ) or isinstance(arg_expr, ast.ListComprehension)
-        if is_list:
-            return f"SQLUser.LIST_REVERSE({args[0]})"
-        return f"REVERSE({args[0]})"
-    if fn in ("stdev", "stdevs"):
-        return f"STDDEV({args[0]})" if args else "NULL"
-    if fn in ("stdevp",):
-        return f"STDDEV_POP({args[0]})" if args else "NULL"
-    if fn in ("percentiledisc", "percentilecont"):
-        if not args:
-            return "NULL"
-        val_expr = args[0]
-        pct_expr = args[1] if len(args) > 1 else "0.5"
-        context._percentile_queries = getattr(context, "_percentile_queries", [])
-        if args_exprs and isinstance(args_exprs[0], ast.Variable):
-            var_name = args_exprs[0].name
-            alias = context.variable_aliases.get(var_name, "")
-            pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else 0.5
-            context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
-        return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
-    if fn == "haversin":
-        return f"(1 - COS({args[0]})) / 2" if args else "NULL"
-    if fn == "e":
-        return "EXP(1)"
-    if fn == "rand":
-        return "SQLUser.RAND()"
-    if fn == "timestamp":
-        return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
-    if fn == "randomuuid":
-        return "SQLUser.NEWID()"
-    if fn == "split":
-        return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
-    if fn in ("datetime", "localdatetime"):
-        return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
-    if fn in ("localtime", "time"):
-        return f"CAST(GETDATE() AS TIME)"
-    if fn == "duration":
-        return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
-    if fn == "toboolean":
-        return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
+    scalar_result = _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment)
+    if scalar_result is not None:
+        return scalar_result
     return f"{sql_fn}({', '.join(args)})"
 
 
