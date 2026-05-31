@@ -6164,7 +6164,7 @@ class IRISGraphEngine:
         )
 
     def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
-        if self._detect_arno() and "khop" in self._arno_capabilities.get(
+        if hops > 1 and self._detect_arno() and "khop" in self._arno_capabilities.get(
             "algorithms", []
         ):
             result = self._arno_call(
