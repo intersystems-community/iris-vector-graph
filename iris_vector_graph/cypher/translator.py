@@ -1058,6 +1058,74 @@ def _demote_agg_stages_to_subqueries(sql: str, ctes: list) -> tuple:
     return sql, remaining_ctes
 
 
+def _to_sql_init_part_from(context: TranslationContext, cypher_query: ast.CypherQuery, i: int) -> None:
+    if i > 0:
+        context.from_clauses.append(f"Stage{i}")
+    elif getattr(context, "_ivf_derived", None):
+        context.from_clauses.append(context._ivf_derived)
+    elif cypher_query.procedure_call is not None:
+        if context.temporal_derived:
+            for td_name in context.temporal_derived:
+                context.from_clauses.append(td_name)
+        elif context.stages:
+            cte_name = context.stages[0].split(" AS ")[0].strip()
+            context.from_clauses.append(cte_name)
+        else:
+            context.from_clauses.append("VecSearch")
+    elif context.stages and not context.from_clauses:
+        cte_name = context.stages[0].split(" AS ")[0].strip()
+        context.from_clauses.append(cte_name)
+
+
+def _to_sql_handle_foreach(clause, context: TranslationContext, metadata) -> bool:
+    if isinstance(clause.source, ast.Literal) and isinstance(clause.source.value, list):
+        for item in clause.source.value:
+            orig_aliases = dict(context.variable_aliases)
+            context.variable_aliases[clause.variable] = "__foreach_literal__"
+            context.foreach_literals = getattr(context, "foreach_literals", {})
+            context.foreach_literals[clause.variable] = (
+                item.value if isinstance(item, ast.Literal) else item
+            )
+            for uc in clause.update_clauses:
+                if isinstance(uc, ast.UpdatingClause):
+                    translate_updating_clause(uc, context, metadata)
+            context.variable_aliases = orig_aliases
+            if hasattr(context, "foreach_literals"):
+                context.foreach_literals.pop(clause.variable, None)
+    else:
+        for uc in clause.update_clauses:
+            if isinstance(uc, ast.UpdatingClause):
+                translate_updating_clause(uc, context, metadata)
+    return True
+
+
+def _to_sql_handle_with(part, context: TranslationContext, i: int) -> None:
+    translate_with_clause(part.with_clause, context)
+    sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
+    context.all_stage_params.extend(stage_params)
+    context.stages.append(f"Stage{i + 1} AS (\n{sql}\n)")
+    context.having_conditions = []
+    context.where_params = []
+    new_stage = f"Stage{i + 1}"
+    if part.with_clause.star:
+        new_aliases = {var: new_stage for var in context.variable_aliases}
+    else:
+        new_aliases = {}
+        for item in part.with_clause.items:
+            alias = item.alias or (
+                item.expression.name
+                if isinstance(item.expression, ast.Variable)
+                else None
+            )
+            if alias:
+                new_aliases[alias] = new_stage
+            if isinstance(item.expression, ast.AggregationFunction) and alias:
+                context.scalar_variables.add(alias)
+            elif alias and not isinstance(item.expression, ast.Variable):
+                context.scalar_variables.add(alias)
+    context.variable_aliases = new_aliases
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None, engine=None
 ) -> SQLQuery:
@@ -1124,22 +1192,7 @@ def translate_to_sql(
         context.select_items, context.from_clauses, context.join_clauses = [], [], []
         context.where_conditions, context.group_by_items = [], []
         context.select_params, context.join_params, context.where_params = [], [], []
-        if i > 0:
-            context.from_clauses.append(f"Stage{i}")
-        elif getattr(context, "_ivf_derived", None):
-            context.from_clauses.append(context._ivf_derived)
-        elif cypher_query.procedure_call is not None:
-            if context.temporal_derived:
-                for td_name in context.temporal_derived:
-                    context.from_clauses.append(td_name)
-            elif context.stages:
-                cte_name = context.stages[0].split(" AS ")[0].strip()
-                context.from_clauses.append(cte_name)
-            else:
-                context.from_clauses.append("VecSearch")
-        elif context.stages and not context.from_clauses:
-            cte_name = context.stages[0].split(" AS ")[0].strip()
-            context.from_clauses.append(cte_name)
+        _to_sql_init_part_from(context, cypher_query, i)
         for clause in part.clauses:
             if isinstance(clause, ast.WhereClause):
                 context.pending_where = clause.expression
@@ -1152,31 +1205,7 @@ def translate_to_sql(
             elif isinstance(clause, ast.SubqueryCall):
                 translate_subquery_call(clause, context, metadata)
             elif isinstance(clause, ast.ForeachClause):
-                is_transactional = True
-                if isinstance(clause.source, ast.Literal) and isinstance(
-                    clause.source.value, list
-                ):
-                    for item in clause.source.value:
-                        orig_aliases = dict(context.variable_aliases)
-                        context.variable_aliases[clause.variable] = (
-                            "__foreach_literal__"
-                        )
-                        context.foreach_literals = getattr(
-                            context, "foreach_literals", {}
-                        )
-                        context.foreach_literals[clause.variable] = (
-                            item.value if isinstance(item, ast.Literal) else item
-                        )
-                        for uc in clause.update_clauses:
-                            if isinstance(uc, ast.UpdatingClause):
-                                translate_updating_clause(uc, context, metadata)
-                        context.variable_aliases = orig_aliases
-                        if hasattr(context, "foreach_literals"):
-                            context.foreach_literals.pop(clause.variable, None)
-                else:
-                    for uc in clause.update_clauses:
-                        if isinstance(uc, ast.UpdatingClause):
-                            translate_updating_clause(uc, context, metadata)
+                is_transactional = _to_sql_handle_foreach(clause, context, metadata) or is_transactional
             elif isinstance(clause, ast.UpdatingClause):
                 is_transactional = True
                 translate_updating_clause(clause, context, metadata)
@@ -1185,30 +1214,7 @@ def translate_to_sql(
         if part.procedure_call is not None:
             translate_procedure_call(part.procedure_call, context)
         if part.with_clause:
-            translate_with_clause(part.with_clause, context)
-            sql, stage_params = context.build_stage_sql(part.with_clause.distinct)
-            context.all_stage_params.extend(stage_params)
-            context.stages.append(f"Stage{i + 1} AS (\n{sql}\n)")
-            context.having_conditions = []
-            context.where_params = []
-            new_stage = f"Stage{i + 1}"
-            if part.with_clause.star:
-                new_aliases = {var: new_stage for var in context.variable_aliases}
-            else:
-                new_aliases = {}
-                for item in part.with_clause.items:
-                    alias = item.alias or (
-                        item.expression.name
-                        if isinstance(item.expression, ast.Variable)
-                        else None
-                    )
-                    if alias:
-                        new_aliases[alias] = new_stage
-                    if isinstance(item.expression, ast.AggregationFunction) and alias:
-                        context.scalar_variables.add(alias)
-                    elif alias and not isinstance(item.expression, ast.Variable):
-                        context.scalar_variables.add(alias)
-            context.variable_aliases = new_aliases
+            _to_sql_handle_with(part, context, i)
 
     # 2. Final stage (RETURN)
     # If the last QueryPart had a WITH clause, we must select from that CTE stage.
