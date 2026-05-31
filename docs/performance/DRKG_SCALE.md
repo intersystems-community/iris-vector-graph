@@ -170,13 +170,23 @@ adjacency model (storage IS the adjacency; no batch build phase).
 - 16 unit tests green (init-on-enter, skip-rebuild-no-drift, drift→full-sync
   fallback, non-incremental→full-sync, throughput-safe).
 
-**Honest status**: the incremental mechanism is proven (3-node exact parity +
-observed inline build at 5.87M + 150s measured deferral win). The *clean
-full-scale wall-time* (expected: ~8.5 min ingest + ~50s index + ~3s stats ≈ 9–10
-min total, vs 18.6 min) was repeatedly blocked from a pristine measurement by
-test-container lock/compile-state corruption accumulated from this session's many
-interrupted load attempts — NOT by the code. Final clean timing requires a fresh
-container restart and is the remaining validation step before closing SC-001.
+**VALIDATED full-scale result** (fresh container, 2026-05-31): the incremental
+session loaded the **full DRKG (97,238 nodes / 5,874,261 edges)** in
+**554.5 s (9.2 min)**, with **0 retries**:
+
+| Phase | spec 184 (rebuild) | spec 185 (incremental) |
+|---|---|---|
+| Edge ingest | 511 s | **510 s** (flat ~11.5K/s) |
+| SQL index rebuild (once) | 50 s | **37 s** |
+| `sync()` (BuildKG + BuildNKG + 2hop) | **550 s** | **2.85 s** (Build2HopStats only — BuildKG/BuildNKG SKIPPED) |
+| **Total** | **18.6 min** | **9.2 min** |
+
+The session's drift check confirmed `^NKG` was built inline (nodeCount 97,238 ==
+SQL distinct nodes 97,238) and skipped both batch rebuilds. **Parity verified**:
+`ClosenessGlobal` (3.9s) and `degree_centrality` (0.93s) run correctly on the
+incrementally-built `^NKG`. SC-001 met (single-digit minutes); the post-load
+overhead dropped from 550s to 2.85s — IVG now pays adjacency cost per write, like
+Neo4j, not in a batch phase.
 
 **Neo4j comparison (corrected approach)**: with incremental adjacency, IVG now
 pays adjacency cost *per write* (like Neo4j's index-free adjacency) instead of in
