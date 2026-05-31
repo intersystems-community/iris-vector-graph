@@ -89,11 +89,8 @@ class TestSpec178SyncModel:
             auto_sync=False,
         )
         engine._nkg_dirty = True
-        result = engine.sync()
-        if result:
-            assert engine._nkg_dirty is False
-        else:
-            pytest.skip("sync() failed (likely missing ObjectScript classes in container)")
+        engine.sync()
+        assert engine._nkg_dirty is False
 
     def test_rebuild_kg_emits_deprecation_warning(self, biomed_graph):
         import warnings
