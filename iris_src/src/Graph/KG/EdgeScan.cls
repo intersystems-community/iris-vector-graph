@@ -100,31 +100,6 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String)
 }
 
 
-/// DEPRECATED: writes to process-private ^||KG via Python iris.gref — data lost on process exit.
-/// Use BulkIngestEdgesSQL instead. Kept for backward compatibility only.
-ClassMethod BulkIngestEdges(edgesJson As %String, predicate As %String = "R") As %Integer [ Internal, Language = python ]
-{
-    import iris, json, warnings
-    data = json.loads(edgesJson)
-    kg = iris.gref("^KG")
-    n = 0
-    for edge in data:
-        if isinstance(edge, (list, tuple)):
-            s, o = str(edge[0]), str(edge[1])
-            p = str(edge[2]) if len(edge) > 2 else predicate
-        else:
-            s, p, o = str(edge["s"]), str(edge.get("p", predicate)), str(edge["o"])
-        if s == o:
-            continue
-        kg["out", 0, s, p, o] = 1
-        kg["in", 0, o, p, s] = 1
-        kg["degp", s, p] = (kg.get(["degp", s, p]) or 0) + 1
-        kg["deg", s] = (kg.get(["deg", s]) or 0) + 1
-        n += 1
-    kg["$bie_dirty"] = 1
-    return n
-}
-
 /// Bulk ingest edges via SQL INSERT + persistent ^KG global writes.
 /// Writes to BOTH rdf_edges (SQL, queryable via Cypher) AND ^KG globals (BFS acceleration).
 /// edges_json: JSON array of {"s":s,"p":p,"o":o} objects.
