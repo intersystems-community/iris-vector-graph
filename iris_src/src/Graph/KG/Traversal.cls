@@ -1225,7 +1225,9 @@ ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
 ClassMethod Build2HopExactStats() As %Integer
 {
     Kill ^KG("deg2p_exact")
-    If ##class(Graph.KG.NKGAccel).Build2HopExact() {
+    Set arnoOk = 0
+    Try { Set arnoOk = ##class(Graph.KG.NKGAccel).Build2HopExact() } Catch { Set arnoOk = 0 }
+    If arnoOk {
         Set n = ""
         Set cnt = 0
         For {
