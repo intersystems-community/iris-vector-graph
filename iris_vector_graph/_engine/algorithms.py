@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple, Callable
 
 from iris_vector_graph.cypher.translator import _table
-from iris_vector_graph.result import IVGResult
 
 logger = logging.getLogger(__name__)
 

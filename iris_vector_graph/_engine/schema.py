@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.cypher.translator import _table
