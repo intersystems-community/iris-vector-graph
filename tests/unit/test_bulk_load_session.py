@@ -130,3 +130,48 @@ class TestBulkLoadSession:
                 s.add_edges([{"s": "a", "p": "R", "o": "b"}])
         dis.assert_not_called()
         reb.assert_not_called()
+
+
+class TestIncrementalMode:
+    def test_incremental_calls_init_skeleton_and_skips_rebuild(self):
+        eng = _engine()
+        eng.bulk_ingest_edges = MagicMock(return_value=1)
+        eng._iris_obj = MagicMock()
+        eng.sync = MagicMock()
+        with patch("iris_vector_graph.schema.GraphSchema.disable_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.rebuild_indexes"), \
+             patch.object(eng, "_bulk_load_drifted", return_value=False):
+            with eng.bulk_load_session(incremental=True) as s:
+                s.add_edges([{"s": "a", "p": "R", "o": "b"}])
+        # InitNKGSkeleton called on enter
+        init_calls = [c for c in eng._iris_obj().classMethodValue.call_args_list
+                      if "InitNKGSkeleton" in str(c)]
+        assert init_calls, "InitNKGSkeleton should be called in incremental mode"
+        # full sync() NOT called when no drift
+        eng.sync.assert_not_called()
+
+    def test_incremental_drift_triggers_full_sync(self):
+        eng = _engine()
+        eng.bulk_ingest_edges = MagicMock(return_value=1)
+        eng._iris_obj = MagicMock()
+        eng.sync = MagicMock()
+        with patch("iris_vector_graph.schema.GraphSchema.disable_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.rebuild_indexes"), \
+             patch.object(eng, "_bulk_load_drifted", return_value=True):
+            with eng.bulk_load_session(incremental=True) as s:
+                s.add_edges([{"s": "a", "p": "R", "o": "b"}])
+        eng.sync.assert_called_once()
+
+    def test_non_incremental_always_full_sync(self):
+        eng = _engine()
+        eng.bulk_ingest_edges = MagicMock(return_value=1)
+        eng._iris_obj = MagicMock()
+        eng.sync = MagicMock()
+        with patch("iris_vector_graph.schema.GraphSchema.disable_indexes"), \
+             patch("iris_vector_graph.schema.GraphSchema.rebuild_indexes"):
+            with eng.bulk_load_session(incremental=False) as s:
+                s.add_edges([{"s": "a", "p": "R", "o": "b"}])
+        eng.sync.assert_called_once()
+        init_calls = [c for c in eng._iris_obj().classMethodValue.call_args_list
+                      if "InitNKGSkeleton" in str(c)]
+        assert not init_calls, "InitNKGSkeleton must NOT be called when incremental=False"

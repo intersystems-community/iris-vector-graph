@@ -76,6 +76,26 @@ ClassMethod BuildKG() As %Status
 	}
 }
 
+ClassMethod InitNKGSkeleton() As %Status
+{
+	If $Data(^NKG("$meta", "nodeCount")) Return $$$OK
+	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
+	Set ^NKG("$meta", "nodeCount") = 0
+	Set ^NKG("$meta", "edgeCount") = 0
+	If '$Data(^NKG("$meta", "version")) Set ^NKG("$meta", "version") = 0
+	Return $$$OK
+}
+
+ClassMethod NKGEdgeCount() As %Integer
+{
+	Return +$Get(^NKG("$meta", "edgeCount"), 0)
+}
+
+ClassMethod NKGNodeCount() As %Integer
+{
+	Return +$Get(^NKG("$meta", "nodeCount"), 0)
+}
+
 ClassMethod BuildNKG() As %Status
 {
 	// Invalidate the Arno adjacency cache BEFORE killing ^NKG.

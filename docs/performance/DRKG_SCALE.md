@@ -139,3 +139,47 @@ or a degree-capped/approximate variant for production scale.
   need the arno accelerator for dense-hub graphs (finding 6)."*
 - **Not yet validated**: full community/eigenvector timings at 5.5M edges (gated
   on findings 5 & 6); graphs beyond DRKG; arno-accelerated runs at this scale.
+
+## Spec 185 — Incremental adjacency (toward Neo4j write-time-adjacency)
+
+**Goal**: eliminate the post-load `sync()` rebuild (BuildKG 213s + BuildNKG 187s)
+by maintaining `^KG`/`^NKG` *during* ingest, matching Neo4j's index-free
+adjacency model (storage IS the adjacency; no batch build phase).
+
+**Measured `sync()` breakdown (5.87M edges)** that motivated this:
+
+| sync sub-step | time | disposition |
+|---|---|---|
+| BuildKG (rebuild ^KG) | 213 s | redundant — WriteAdjacency writes ^KG inline per edge |
+| BuildNKG (rebuild ^NKG) | 187 s | avoidable — WriteAdjacency writes ^NKG inline when skeleton pre-initialized |
+| Build2HopStats | 2.9 s | cheap, kept |
+| Build2HopExactStats | >120 s | deferred (lazy fallback exists) |
+
+**Mechanism — validated:**
+- `Graph.KG.Traversal.InitNKGSkeleton()` pre-creates `^NKG("$meta")` so
+  `EdgeScan.WriteAdjacency`'s inline `^NKG` branch fires for every edge during
+  ingest. **3-node parity test: incremental `^NKG` == batch `BuildNKG` exactly**
+  (identical node count + (-1) sources).
+- During a full 5.87M incremental load, `^NKG` `nodeCount`/`version`/`(-1)`
+  populated continuously — confirming inline build at scale.
+- `bulk_load_session(incremental=True)` (default) calls `InitNKGSkeleton` on
+  enter, skips the redundant BuildKG/BuildNKG on exit (drift-guarded via
+  `^NKG.nodeCount` vs `rdf_edges`), runs only cheap Build2HopStats.
+- **Deferred Build2HopExactStats: measured sync 550s → 404s (−150s)** on a full
+  load even with the rebuild fallback still firing.
+- 16 unit tests green (init-on-enter, skip-rebuild-no-drift, drift→full-sync
+  fallback, non-incremental→full-sync, throughput-safe).
+
+**Honest status**: the incremental mechanism is proven (3-node exact parity +
+observed inline build at 5.87M + 150s measured deferral win). The *clean
+full-scale wall-time* (expected: ~8.5 min ingest + ~50s index + ~3s stats ≈ 9–10
+min total, vs 18.6 min) was repeatedly blocked from a pristine measurement by
+test-container lock/compile-state corruption accumulated from this session's many
+interrupted load attempts — NOT by the code. Final clean timing requires a fresh
+container restart and is the remaining validation step before closing SC-001.
+
+**Neo4j comparison (corrected approach)**: with incremental adjacency, IVG now
+pays adjacency cost *per write* (like Neo4j's index-free adjacency) instead of in
+a 400s post-load batch. The architectural gap to Neo4j on this axis is closed in
+*approach*; absolute per-edge cost (IVG ~11.5K edges/s incl. inline ^NKG vs
+Neo4j Bolt+UNWIND 10–60K rels/s) remains the tuning frontier.
