@@ -576,3 +576,35 @@ data persists across container stops, this is a silent data loss.
 and any other persistent IRIS container with a named volume. Filing here for
 IVG awareness; coordinate with iris-devtester for an upstream fix to all
 projects using `idt container up`.
+
+## Spec 186 (deferred) — `^NKG` staleness guard in server-side analytics SQL functions
+
+**Status**: DEFERRED past v2.0.0 (documented note, low-probability footgun).
+
+**Issue**: The centrality + community Cypher procedures (`kg_DegreeCentrality`,
+`kg_Betweenness`, `kg_Closeness`, `kg_Eigenvector`, `kg_Leiden`,
+`kg_TriangleCount`, `kg_SCC`, `kg_KCore`) read `^NKG` server-side with no
+freshness check. If a caller does `bulk_ingest_edges(auto_sync=False)` (or
+otherwise mutates edges) and then runs a Cypher analytics `CALL` without an
+intervening `engine.sync()`, the analytics run against a stale `^NKG` and return
+silently wrong results.
+
+**Partial existing coverage**: var-length BFS (`_route_var_length` /
+`_execute_var_length_cypher`) already raises `IndexNotSyncedError` when
+`engine._nkg_dirty` is set. The centrality/community procedures do NOT.
+
+**Why deferred, not fixed for v2.0.0**:
+- `_nkg_dirty` is a Python-engine flag — it does not exist server-side, so a SQL
+  function cannot consult it. A real guard needs a NEW server-side dirty marker
+  (e.g. compare `^NKG("$meta","version")` against an `^KG`-mutation counter
+  written by `create_edge`/`bulk_*`). That is genuine design work touching the
+  sync contract, not a one-liner.
+- The footgun is low-probability: the default `auto_sync=True` on bulk methods
+  means most callers never hit it; you have to explicitly opt out of sync AND
+  then run analytics.
+
+**Candidate fix (spec 186)**: write `^KG("$dirty")` on every edge mutation;
+have each analytics SQL function compare `^NKG("$meta","version")` against it and
+return `"ERROR:^NKG stale — call engine.sync()"` (same convention as
+`"ERROR:^NKG not built"`) when they diverge. Surfaces as a clean `result.error`
+instead of silently-wrong scores.
