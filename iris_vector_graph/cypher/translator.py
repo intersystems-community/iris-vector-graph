@@ -1126,46 +1126,43 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int) -> None:
     context.variable_aliases = new_aliases
 
 
-def translate_to_sql(
-    cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None, engine=None
-) -> SQLQuery:
-    if getattr(cypher_query, "union_queries", None):
-        branches = [cypher_query] + [uq["query"] for uq in cypher_query.union_queries]
-        all_flags = [False] + [uq["all"] for uq in cypher_query.union_queries]
-        sqls = []
-        all_params = []
-        for branch in branches:
-            branch_copy = ast.CypherQuery(
-                query_parts=branch.query_parts,
-                return_clause=branch.return_clause,
-                order_by_clause=branch.order_by_clause,
-                skip=branch.skip,
-                limit=branch.limit,
-                procedure_call=branch.procedure_call,
-            )
-            branch_copy.union_queries = []
-            r = translate_to_sql(branch_copy, params)
-            sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
-            all_params.extend(r.parameters)
-        sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
-        def _ensure_from(s: str) -> str:
-            if "\nFROM " not in s and "\nfrom " not in s:
-                return s.rstrip() + "\nFROM (SELECT 1) __dual"
-            return s
-        combined = sep.join(f"({_ensure_from(s)})" for s in sqls)
-        flat_params = []
-        for p_list in all_params:
-            flat_params.extend(p_list)
-        return SQLQuery(sql=combined, parameters=[flat_params])
 
-    context = TranslationContext()
-    context.input_params = params or {}
-    context._engine = engine
-    context.graph_context = getattr(cypher_query, "graph_context", None)
-    metadata = QueryMetadata()
-    context._metadata = metadata
+def _tts_union_branches(cypher_query, params):
+    """Handle UNION/UNION ALL. Returns SQLQuery or None."""
+    if not getattr(cypher_query, "union_queries", None):
+        return None
+    branches = [cypher_query] + [uq["query"] for uq in cypher_query.union_queries]
+    all_flags = [False] + [uq["all"] for uq in cypher_query.union_queries]
+    sqls = []
+    all_params = []
+    for branch in branches:
+        branch_copy = ast.CypherQuery(
+            query_parts=branch.query_parts,
+            return_clause=branch.return_clause,
+            order_by_clause=branch.order_by_clause,
+            skip=branch.skip,
+            limit=branch.limit,
+            procedure_call=branch.procedure_call,
+        )
+        branch_copy.union_queries = []
+        r = translate_to_sql(branch_copy, params)
+        sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
+        all_params.extend(r.parameters)
+    sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
+    def _ensure_from(s: str) -> str:
+        if "\nFROM " not in s and "\nfrom " not in s:
+            return s.rstrip() + "\nFROM (SELECT 1) __dual"
+        return s
+    combined = sep.join(f"({_ensure_from(s)})" for s in sqls)
+    flat_params = []
+    for p_list in all_params:
+        flat_params.extend(p_list)
+    return SQLQuery(sql=combined, parameters=[flat_params])
+
+
+def _tts_process_parts(cypher_query, context, metadata):
+    """Handle procedure_call + iterate query_parts. Returns is_transactional."""
     is_transactional = False
-
     if cypher_query.procedure_call is not None:
         translate_procedure_call(cypher_query.procedure_call, context)
         if context.system_procedure_call is not None:
@@ -1215,7 +1212,11 @@ def translate_to_sql(
             translate_procedure_call(part.procedure_call, context)
         if part.with_clause:
             _to_sql_handle_with(part, context, i)
+    return is_transactional
 
+
+def _tts_finalize_context(cypher_query, context):
+    """Apply last-part WITH, translate RETURN, compute order_by + graph_context. Returns order_by_items."""
     # 2. Final stage (RETURN)
     # If the last QueryPart had a WITH clause, we must select from that CTE stage.
     # Otherwise, we continue with the context of the last QueryPart (e.g. current MATCH joins).
@@ -1259,116 +1260,146 @@ def translate_to_sql(
                 context.where_conditions.append(f"{ea}.graph_id = {graph_filter}")
                 break
 
-    if is_transactional:
-        stmts, all_params = [], []
-        for s, p in context.dml_statements:
-            stmts.append(s)
-            all_params.append(p)
-        sql = None
-        if cypher_query.return_clause:
-            sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
-            sql = apply_pagination(sql, cypher_query, context, order_by_items)
-        all_ctes = [
-            c
-            for c in getattr(context, "cte_clauses", [])
-            if not any(td in c for td in context.temporal_derived)
-        ] + context.stages
-        if all_ctes and sql is not None:
-            sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
-            if all_ctes:
-                sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
-            all_params.append(context.all_stage_params + p)
-        elif sql is not None:
-             all_params.append(p)
-        if sql is not None:
-            stmts.append(sql)
-        return SQLQuery(
-            sql=stmts,
-            parameters=all_params,
-            query_metadata=metadata,
-            is_transactional=True,
-        )
-    else:
-        sql, p = context.build_stage_sql(
-            cypher_query.return_clause.distinct if cypher_query.return_clause else False
-        )
-        if not context.select_items and context.stages and context.from_clauses:
-            stage_name = context.from_clauses[-1]
-            if stage_name in [s.split(" AS ")[0].strip() for s in context.stages]:
-                sql = sql.replace("SELECT \nFROM", f"SELECT *\nFROM", 1)
-                sql = sql.replace("SELECT DISTINCT \nFROM", f"SELECT DISTINCT *\nFROM", 1)
-        if hasattr(context, '_percentile_queries') and context._percentile_queries:
-            import re as _re
-            from_match = _re.search(r'\nFROM\s+(.*?)(?:\nWHERE|\nORDER|\nLIMIT|\nGROUP|\nHAVING|$)', sql, _re.DOTALL)
-            if from_match and len(context._percentile_queries) == 1:
-                from_clause = from_match.group(0).strip()
-                val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
-                col_alias = _re.search(r'AS\s+(\w+)\s*$', sql.split('\n')[0])
-                out_alias = col_alias.group(1) if col_alias else "result"
-                proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
-                inner_col = val_expr.split('.')[-1] if '.' in val_expr else val_expr
-                sql = (
-                    f"SELECT IVG.Percentile_{proc}("
-                    f"(SELECT JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)) "
-                    f"\n{from_clause}), {pct_val}) AS {out_alias}"
-                )
-                p = []
+    return order_by_items
+
+
+def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
+    """Assemble SQLQuery for transactional (DML) queries."""
+    stmts, all_params = [], []
+    for s, p in context.dml_statements:
+        stmts.append(s)
+        all_params.append(p)
+    sql = None
+    if cypher_query.return_clause:
+        sql, p = context.build_stage_sql(cypher_query.return_clause.distinct)
         sql = apply_pagination(sql, cypher_query, context, order_by_items)
-        vl = context.var_length_paths or None
-
-        if (
-            vl
-            and (vl[0].get("shortest") or vl[0].get("all_shortest"))
-            and cypher_query.return_clause
-        ):
-            path_funcs = []
-            path_var = vl[0].get("target_var") or vl[0].get("source_var")
-            named_path_vars = {
-                np.variable
-                for np in (
-                    cypher_query.query_parts[0].clauses[0].named_paths
-                    if cypher_query.query_parts
-                    else []
-                )
-            }
-            for item in cypher_query.return_clause.items:
-                expr = item.expression
-                if isinstance(expr, ast.Variable) and expr.name in named_path_vars:
-                    path_funcs.append("path")
-                elif isinstance(
-                    expr, ast.FunctionCall
-                ) and expr.function_name.lower() in (
-                    "length",
-                    "nodes",
-                    "relationships",
-                ):
-                    if expr.arguments and isinstance(expr.arguments[0], ast.Variable):
-                        if expr.arguments[0].name in named_path_vars:
-                            path_funcs.append(expr.function_name.lower())
-            if path_funcs:
-                vl[0]["return_path_funcs"] = path_funcs
-
-        all_ctes = [
-            c
-            for c in getattr(context, "cte_clauses", [])
-            if not any(td in c for td in context.temporal_derived)
-        ] + context.stages
+    all_ctes = [
+        c
+        for c in getattr(context, "cte_clauses", [])
+        if not any(td in c for td in context.temporal_derived)
+    ] + context.stages
+    if all_ctes and sql is not None:
+        sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
         if all_ctes:
-            sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
-            if all_ctes:
-                sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
-            return SQLQuery(
-                sql=sql,
-                parameters=[context.all_stage_params + p],
-                query_metadata=metadata,
-                var_length_paths=vl,
-            )
+            sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
+        all_params.append(context.all_stage_params + p)
+    elif sql is not None:
+         all_params.append(p)
+    if sql is not None:
+        stmts.append(sql)
+    return SQLQuery(
+        sql=stmts,
+        parameters=all_params,
+        query_metadata=metadata,
+        is_transactional=True,
+    )
 
-        sql = _maybe_split_deep_joins(sql, p, context)
 
-        return SQLQuery(
-            sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl
+def _tts_collect_path_funcs(cypher_query, vl):
+    """Collect RETURN path functions for shortest-path queries. Mutates vl[0]."""
+    if not (vl and (vl[0].get("shortest") or vl[0].get("all_shortest")) and cypher_query.return_clause):
+        return
+
+    path_funcs = []
+    path_var = vl[0].get("target_var") or vl[0].get("source_var")
+    named_path_vars = {
+        np.variable
+        for np in (
+            cypher_query.query_parts[0].clauses[0].named_paths
+            if cypher_query.query_parts
+            else []
         )
+    }
+    for item in cypher_query.return_clause.items:
+        expr = item.expression
+        if isinstance(expr, ast.Variable) and expr.name in named_path_vars:
+            path_funcs.append("path")
+        elif isinstance(
+            expr, ast.FunctionCall
+        ) and expr.function_name.lower() in (
+            "length",
+            "nodes",
+            "relationships",
+        ):
+            if expr.arguments and isinstance(expr.arguments[0], ast.Variable):
+                if expr.arguments[0].name in named_path_vars:
+                    path_funcs.append(expr.function_name.lower())
+    if path_funcs:
+        vl[0]["return_path_funcs"] = path_funcs
+
+
+def _tts_select_result(cypher_query, context, metadata, order_by_items):
+    """Assemble SQLQuery for SELECT queries."""
+    sql, p = context.build_stage_sql(
+        cypher_query.return_clause.distinct if cypher_query.return_clause else False
+    )
+    if not context.select_items and context.stages and context.from_clauses:
+        stage_name = context.from_clauses[-1]
+        if stage_name in [s.split(" AS ")[0].strip() for s in context.stages]:
+            sql = sql.replace("SELECT \nFROM", f"SELECT *\nFROM", 1)
+            sql = sql.replace("SELECT DISTINCT \nFROM", f"SELECT DISTINCT *\nFROM", 1)
+    if hasattr(context, '_percentile_queries') and context._percentile_queries:
+        import re as _re
+        from_match = _re.search(r'\nFROM\s+(.*?)(?:\nWHERE|\nORDER|\nLIMIT|\nGROUP|\nHAVING|$)', sql, _re.DOTALL)
+        if from_match and len(context._percentile_queries) == 1:
+            from_clause = from_match.group(0).strip()
+            val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
+            col_alias = _re.search(r'AS\s+(\w+)\s*$', sql.split('\n')[0])
+            out_alias = col_alias.group(1) if col_alias else "result"
+            proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
+            inner_col = val_expr.split('.')[-1] if '.' in val_expr else val_expr
+            sql = (
+                f"SELECT IVG.Percentile_{proc}("
+                f"(SELECT JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)) "
+                f"\n{from_clause}), {pct_val}) AS {out_alias}"
+            )
+            p = []
+    sql = apply_pagination(sql, cypher_query, context, order_by_items)
+    vl = context.var_length_paths or None
+
+    _tts_collect_path_funcs(cypher_query, vl)
+
+    all_ctes = [
+        c
+        for c in getattr(context, "cte_clauses", [])
+        if not any(td in c for td in context.temporal_derived)
+    ] + context.stages
+    if all_ctes:
+        sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
+        if all_ctes:
+            sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
+        return SQLQuery(
+            sql=sql,
+            parameters=[context.all_stage_params + p],
+            query_metadata=metadata,
+            var_length_paths=vl,
+        )
+
+    sql = _maybe_split_deep_joins(sql, p, context)
+
+    return SQLQuery(
+        sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl
+    )
+
+
+def translate_to_sql(
+    cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None, engine=None
+) -> SQLQuery:
+    result = _tts_union_branches(cypher_query, params)
+    if result is not None:
+        return result
+
+    context = TranslationContext()
+    context.input_params = params or {}
+    context._engine = engine
+    context.graph_context = getattr(cypher_query, "graph_context", None)
+    metadata = QueryMetadata()
+    context._metadata = metadata
+    is_transactional = _tts_process_parts(cypher_query, context, metadata)
+    order_by_items = _tts_finalize_context(cypher_query, context)
+    if is_transactional:
+        return _tts_transactional_result(cypher_query, context, metadata, order_by_items)
+    return _tts_select_result(cypher_query, context, metadata, order_by_items)
 
 
 def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> list:
@@ -2129,9 +2160,9 @@ def translate_node_pattern(node, context, metadata, optional=False):
                 context.where_conditions.append(f"{p_alias}.val = {val_sql}")
 
 
-def translate_relationship_pattern(
-    rel, source_node, target_node, context, metadata, optional=False
-):
+
+def _trp_variable_length(rel, source_node, target_node, context, metadata):
+    """Handle variable-length path patterns. Writes to context.var_length_paths."""
     if rel.variable_length is not None:
         source_alias = context.variable_aliases.get(source_node.variable, "")
         target_alias = context.register_variable(target_node.variable)
@@ -2182,6 +2213,10 @@ def translate_relationship_pattern(
         else:
             context.join_clauses.append(f"JOIN {_table('nodes')} {target_alias} ON 1=1")
         return
+
+
+def _trp_setup_aliases(rel, source_node, target_node, context):
+    """Register aliases. Returns (src, tgt, edge, is_anon, is_new)."""
     is_anon_source = (
         source_node.variable is None
         and not source_node.labels
@@ -2210,213 +2245,233 @@ def translate_relationship_pattern(
         if rel.variable
         else context.next_alias("e")
     )
+    return source_alias, target_alias, edge_alias, is_anon_source, is_new_target
 
-    def _node_col(variable, alias):
-        if alias.startswith("Stage") or alias == "VecSearch":
-            return variable
-        return "node_id"
 
-    direction = "in" if rel.direction == ast.Direction.INCOMING else "out"
-
-    if rel.variable and context.pending_where is not None:
-        tb = _extract_temporal_bounds(
-            context.pending_where, rel.variable, context.input_params
-        )
-        if tb is not None:
-            engine = getattr(context, "_engine", None)
-            if engine is None:
-                raise TemporalQueryRequiresEngine(
-                    f"Temporal WHERE {rel.variable}.ts filter detected but no engine was provided. "
-                    f"Pass engine=self when calling translate_to_sql() from execute_cypher()."
-                )
-            tb.direction = direction
-            predicate_filter = rel.types[0] if rel.types and len(rel.types) == 1 else ""
-            src_node_id = None
-            if source_alias and not source_alias.startswith("Stage"):
-                bound_src = source_node.variable
-                if bound_src:
-                    src_val = context.input_params.get(bound_src)
-                    if src_val:
-                        src_node_id = src_val
-            source_filter = src_node_id or ""
-            ts_start = tb.ts_start if tb.ts_start is not None else 0
-            ts_end = tb.ts_end if tb.ts_end is not None else 9_999_999_999
-            edges = engine.get_edges_in_window(
-                source_filter,
-                predicate_filter,
-                ts_start,
-                ts_end,
-                direction=tb.direction,
-            )
-            cte_name = f"tc{edge_alias}"
-            cte_sql = _build_temporal_cte(edges, cte_name, metadata)
-            if not hasattr(context, "cte_clauses"):
-                context.cte_clauses = []
-            context.cte_clauses.append(
-                f"{cte_name}(s, p, o, ts, weight) AS ({cte_sql})"
-            )
-            context.temporal_rel_ctes[rel.variable] = cte_name
-            context.temporal_derived[cte_name] = cte_sql
-            context.temporal_rel_ctes[rel.variable] = cte_name
-
-            if not hasattr(context, "temporal_node_col"):
-                context.temporal_node_col = {}
-
-            if direction == "out":
-                src_col_in_cte, tgt_col_in_cte = "s", "o"
-            else:
-                src_col_in_cte, tgt_col_in_cte = "o", "s"
-
-            context.temporal_node_col[source_node.variable] = src_col_in_cte
-            context.temporal_node_col[target_node.variable] = tgt_col_in_cte
-            context.variable_aliases[source_node.variable] = cte_name
-            context.variable_aliases[target_node.variable] = cte_name
-
-            new_from = []
-            for fc in context.from_clauses:
-                if source_alias in fc and _table("nodes") in fc:
-                    new_from.append(cte_name)
-                else:
-                    new_from.append(fc)
-            if not new_from or cte_name not in new_from:
-                new_from = [cte_name] + [f for f in new_from if f != cte_name]
-            context.from_clauses = new_from
-
-            new_joins = []
-            for jc in context.join_clauses:
-                if (
-                    f"{source_alias}.node_id" in jc
-                    or f"{_table('nodes')} {source_alias}" in jc
-                ):
-                    continue
-                new_joins.append(jc)
-            context.join_clauses = new_joins
-
-            _remove_ts_conditions_from_where(context, rel.variable)
-            return
-
-    if rel.types and len(rel.types) == 1:
-        engine = getattr(context, "_engine", None)
-        src_label = (
-            next((lbl for lbl in source_node.labels), None)
-            if source_node.labels
-            else None
-        )
-        tgt_label = (
-            next((lbl for lbl in target_node.labels), None)
-            if target_node.labels
-            else None
-        )
-        if engine and src_label and tgt_label:
-            rel_map = engine.get_rel_mapping(src_label, rel.types[0], tgt_label)
-            if rel_map:
-                src_mapping = engine.get_table_mapping(src_label)
-                tgt_mapping = engine.get_table_mapping(tgt_label)
-                if src_mapping and tgt_mapping:
-                    jt = "LEFT OUTER JOIN" if optional else "JOIN"
-                    tgt_tbl = sanitize_identifier(tgt_mapping["sql_table"])
-                    tgt_id_col = tgt_mapping["id_column"]
-                    src_id_col = src_mapping["id_column"]
-                    if rel_map.get("target_fk"):
-                        tfk = sanitize_identifier(rel_map["target_fk"])
-                        context.join_clauses.append(
-                            f"{jt} {tgt_tbl} {target_alias} ON {target_alias}.{tfk} = {source_alias}.{src_id_col}"
-                        )
-                    elif rel_map.get("via_table"):
-                        via_tbl = sanitize_identifier(rel_map["via_table"])
-                        vs = sanitize_identifier(rel_map["via_source"])
-                        vt = sanitize_identifier(rel_map["via_target"])
-                        via_alias = context.next_alias("vj")
-                        context.join_clauses.append(
-                            f"{jt} {via_tbl} {via_alias} ON {via_alias}.{vs} = {source_alias}.{src_id_col}"
-                        )
-                        context.join_clauses.append(
-                            f"{jt} {tgt_tbl} {target_alias} ON {target_alias}.{tgt_id_col} = {via_alias}.{vt}"
-                        )
-                    context.mapped_node_aliases[target_alias] = tgt_mapping
-                    return
-
-    s_col = _node_col(source_node.variable, source_alias)
-    t_col = _node_col(target_node.variable, target_alias)
-    jt = "LEFT OUTER JOIN" if optional else "JOIN"
-
-    if rel.direction == ast.Direction.OUTGOING:
-        if is_anon_source:
-            edge_cond, target_on = (
-                f"1=1",
-                f"{target_alias}.{t_col} = {edge_alias}.o_id",
-            )
+def _trp_temporal_rewrite_from_joins(context, source_alias, cte_name):
+    new_from = []
+    for fc in context.from_clauses:
+        if source_alias in fc and _table("nodes") in fc:
+            new_from.append(cte_name)
         else:
-            edge_cond, target_on = (
-                f"{edge_alias}.s = {source_alias}.{s_col}",
-                f"{target_alias}.{t_col} = {edge_alias}.o_id",
-            )
-    elif rel.direction == ast.Direction.INCOMING:
-        edge_cond, target_on = (
-            f"{edge_alias}.o_id = {source_alias}.{s_col}",
-            f"{target_alias}.{t_col} = {edge_alias}.s",
-        )
-    else:
-        # UNION ALL of two indexed scans replaces OR-join:
-        # OR-join forces full table scan; UNION ALL uses two index seeks (10-50× faster on IRIS).
-        pred_filter = ""
-        if rel.types:
-            if len(rel.types) == 1:
-                safe_p = rel.types[0].replace("'", "''")
-                pred_filter = f" AND p = '{safe_p}'"
-            else:
-                safe_ps = ", ".join(f"'{t.replace(chr(39), chr(39)+chr(39))}'" for t in rel.types)
-                pred_filter = f" AND p IN ({safe_ps})"
-        edges_tbl = _table("rdf_edges")
-        union_derived = (
-            f"(\n"
-            f"  SELECT s AS _src, p AS _p, o_id AS _dst\n"
-            f"  FROM {edges_tbl}\n"
-            f"  WHERE s = {source_alias}.{s_col}{pred_filter}\n"
-            f"  UNION ALL\n"
-            f"  SELECT o_id AS _src, p AS _p, s AS _dst\n"
-            f"  FROM {edges_tbl}\n"
-            f"  WHERE o_id = {source_alias}.{s_col}{pred_filter}\n"
-            f") {edge_alias}"
-        )
-        edge_cond = f"1=1"
-        target_on = f"{target_alias}.{t_col} = {edge_alias}._dst"
-        context.join_clauses.append(f"{jt} {union_derived} ON {edge_cond}")
-        context._undirected_aliases.add(edge_alias)
-        if is_new_target and not target_alias.startswith("Stage"):
-            context.join_clauses.append(
-                f"{jt} {_table('nodes')} {target_alias} ON {target_on}"
-            )
-        else:
-            context.where_conditions.append(target_on)
-        context.variable_aliases[rel.variable or edge_alias] = edge_alias
-        for prop_node, prop_alias in (
-            (source_node, source_alias),
-            (target_node, target_alias),
+            new_from.append(fc)
+    if not new_from or cte_name not in new_from:
+        new_from = [cte_name] + [f for f in new_from if f != cte_name]
+    context.from_clauses = new_from
+
+    new_joins = []
+    for jc in context.join_clauses:
+        if (
+            f"{source_alias}.node_id" in jc
+            or f"{_table('nodes')} {source_alias}" in jc
         ):
-            if prop_node:
-                for k, v in (prop_node.properties or {}).items():
-                    if k in ("id", "node_id"):
-                        id_col = f"{prop_alias}.node_id"
-                        context.where_conditions.append(
-                            f"{id_col} = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
-                        )
-                    else:
-                        p_alias = context.next_alias("p")
-                        context.join_clauses.append(
-                            f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
-                        )
-                        context.where_conditions.append(
-                            f"{p_alias}.val = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
-                        )
-        return
+            continue
+        new_joins.append(jc)
+    context.join_clauses = new_joins
 
+
+def _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edge_alias, direction):
+    if rel.variable is None or context.pending_where is None:
+        return False
+    tb = _extract_temporal_bounds(
+        context.pending_where, rel.variable, context.input_params
+    )
+    if tb is None:
+        return False
+    engine = getattr(context, "_engine", None)
+    if engine is None:
+        raise TemporalQueryRequiresEngine(
+            f"Temporal WHERE {rel.variable}.ts filter detected but no engine was provided. "
+            f"Pass engine=self when calling translate_to_sql() from execute_cypher()."
+        )
+    tb.direction = direction
+    predicate_filter = rel.types[0] if rel.types and len(rel.types) == 1 else ""
+    src_node_id = None
+    if source_alias and not source_alias.startswith("Stage"):
+        bound_src = source_node.variable
+        if bound_src:
+            src_val = context.input_params.get(bound_src)
+            if src_val:
+                src_node_id = src_val
+    source_filter = src_node_id or ""
+    ts_start = tb.ts_start if tb.ts_start is not None else 0
+    ts_end = tb.ts_end if tb.ts_end is not None else 9_999_999_999
+    edges = engine.get_edges_in_window(
+        source_filter,
+        predicate_filter,
+        ts_start,
+        ts_end,
+        direction=tb.direction,
+    )
+    cte_name = f"tc{edge_alias}"
+    cte_sql = _build_temporal_cte(edges, cte_name, getattr(context, "_metadata", None))
+    if not hasattr(context, "cte_clauses"):
+        context.cte_clauses = []
+    context.cte_clauses.append(
+        f"{cte_name}(s, p, o, ts, weight) AS ({cte_sql})"
+    )
+    context.temporal_rel_ctes[rel.variable] = cte_name
+    context.temporal_derived[cte_name] = cte_sql
+    context.temporal_rel_ctes[rel.variable] = cte_name
+
+    if not hasattr(context, "temporal_node_col"):
+        context.temporal_node_col = {}
+
+    if direction == "out":
+        src_col_in_cte, tgt_col_in_cte = "s", "o"
+    else:
+        src_col_in_cte, tgt_col_in_cte = "o", "s"
+
+    context.temporal_node_col[source_node.variable] = src_col_in_cte
+    context.temporal_node_col[target_node.variable] = tgt_col_in_cte
+    context.variable_aliases[source_node.variable] = cte_name
+    context.variable_aliases[target_node.variable] = cte_name
+
+    _trp_temporal_rewrite_from_joins(context, source_alias, cte_name)
+
+    _remove_ts_conditions_from_where(context, rel.variable)
+    return True
+
+
+def _trp_mapped_relation(rel, source_node, target_node, context, source_alias, target_alias, optional):
+    """Handle SQL-table-bridge mapped relations. Returns True if handled."""
+    if not (rel.types and len(rel.types) == 1):
+        return False
+    engine = getattr(context, "_engine", None)
+    src_label = (
+        next((lbl for lbl in source_node.labels), None)
+        if source_node.labels
+        else None
+    )
+    tgt_label = (
+        next((lbl for lbl in target_node.labels), None)
+        if target_node.labels
+        else None
+    )
+    if engine and src_label and tgt_label:
+        rel_map = engine.get_rel_mapping(src_label, rel.types[0], tgt_label)
+        if rel_map:
+            src_mapping = engine.get_table_mapping(src_label)
+            tgt_mapping = engine.get_table_mapping(tgt_label)
+            if src_mapping and tgt_mapping:
+                jt = "LEFT OUTER JOIN" if optional else "JOIN"
+                tgt_tbl = sanitize_identifier(tgt_mapping["sql_table"])
+                tgt_id_col = tgt_mapping["id_column"]
+                src_id_col = src_mapping["id_column"]
+                if rel_map.get("target_fk"):
+                    tfk = sanitize_identifier(rel_map["target_fk"])
+                    context.join_clauses.append(
+                        f"{jt} {tgt_tbl} {target_alias} ON {target_alias}.{tfk} = {source_alias}.{src_id_col}"
+                    )
+                elif rel_map.get("via_table"):
+                    via_tbl = sanitize_identifier(rel_map["via_table"])
+                    vs = sanitize_identifier(rel_map["via_source"])
+                    vt = sanitize_identifier(rel_map["via_target"])
+                    via_alias = context.next_alias("vj")
+                    context.join_clauses.append(
+                        f"{jt} {via_tbl} {via_alias} ON {via_alias}.{vs} = {source_alias}.{src_id_col}"
+                    )
+                    context.join_clauses.append(
+                        f"{jt} {tgt_tbl} {target_alias} ON {target_alias}.{tgt_id_col} = {via_alias}.{vt}"
+                    )
+                context.mapped_node_aliases[target_alias] = tgt_mapping
+                return True
+
+
+def _trp_undirected_edge(
+    rel, source_node, target_node, context,
+    source_alias, target_alias, edge_alias, s_col, t_col, jt, is_new_target,
+):
+    """Handle undirected (BOTH direction) patterns via UNION ALL derived table."""
+    # UNION ALL of two indexed scans replaces OR-join:
+    # OR-join forces full table scan; UNION ALL uses two index seeks (10-50× faster on IRIS).
+    pred_filter = ""
     if rel.types:
         if len(rel.types) == 1:
-            edge_cond += f" AND {edge_alias}.p = {context.add_join_param(rel.types[0])}"
+            safe_p = rel.types[0].replace("'", "''")
+            pred_filter = f" AND p = '{safe_p}'"
         else:
-            edge_cond += f" AND {edge_alias}.p IN ({', '.join([context.add_join_param(t) for t in rel.types])})"
+            safe_ps = ", ".join(f"'{t.replace(chr(39), chr(39)+chr(39))}'" for t in rel.types)
+            pred_filter = f" AND p IN ({safe_ps})"
+    edges_tbl = _table("rdf_edges")
+    union_derived = (
+        f"(\n"
+        f"  SELECT s AS _src, p AS _p, o_id AS _dst\n"
+        f"  FROM {edges_tbl}\n"
+        f"  WHERE s = {source_alias}.{s_col}{pred_filter}\n"
+        f"  UNION ALL\n"
+        f"  SELECT o_id AS _src, p AS _p, s AS _dst\n"
+        f"  FROM {edges_tbl}\n"
+        f"  WHERE o_id = {source_alias}.{s_col}{pred_filter}\n"
+        f") {edge_alias}"
+    )
+    edge_cond = f"1=1"
+    target_on = f"{target_alias}.{t_col} = {edge_alias}._dst"
+    context.join_clauses.append(f"{jt} {union_derived} ON {edge_cond}")
+    context._undirected_aliases.add(edge_alias)
+    if is_new_target and not target_alias.startswith("Stage"):
+        context.join_clauses.append(
+            f"{jt} {_table('nodes')} {target_alias} ON {target_on}"
+        )
+    else:
+        context.where_conditions.append(target_on)
+    context.variable_aliases[rel.variable or edge_alias] = edge_alias
+    for prop_node, prop_alias in (
+        (source_node, source_alias),
+        (target_node, target_alias),
+    ):
+        if prop_node:
+            for k, v in (prop_node.properties or {}).items():
+                if k in ("id", "node_id"):
+                    id_col = f"{prop_alias}.node_id"
+                    context.where_conditions.append(
+                        f"{id_col} = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
+                    )
+                else:
+                    p_alias = context.next_alias("p")
+                    context.join_clauses.append(
+                        f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
+                    )
+                    context.where_conditions.append(
+                        f"{p_alias}.val = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
+                    )
 
+
+def _trp_resolve_src_id_sql(source_node, context):
+    src_id_val = source_node.properties.get("id") if source_node else None
+    if src_id_val is None:
+        return None
+    if isinstance(src_id_val, ast.Literal):
+        return f"'{str(src_id_val.value)}'"
+    if isinstance(src_id_val, ast.Variable):
+        resolved = context.input_params.get(src_id_val.name) if context.input_params else None
+        return f"'{resolved}'" if resolved else None
+    return None
+
+
+def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias, context, jt):
+    for prop_node, prop_alias in (
+        (source_node, source_alias),
+        (target_node, target_alias),
+    ):
+        if not prop_node.properties:
+            continue
+        for k, v in prop_node.properties.items():
+            val_sql = translate_expression(v, context, segment="where")
+            if k in ("node_id", "id"):
+                context.where_conditions.append(f"{prop_alias}.node_id = {val_sql}")
+            else:
+                p_alias = context.next_alias("p")
+                context.join_clauses.append(
+                    f"{jt} {_table('rdf_props')} {p_alias} "
+                    f'ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}."key" = {context.add_join_param(k)}'
+                )
+                context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+
+
+def _trp_directed_edge_join(
+    rel, source_node, context, source_alias, edge_alias, edge_cond, jt, is_anon_source
+):
     use_edgescan = (
         source_alias is not None
         and not source_alias.startswith("tc")
@@ -2429,21 +2484,7 @@ def translate_relationship_pattern(
 
     if use_edgescan and not is_anon_source:
         pred_sql = f"'{rel.types[0]}'" if len(rel.types) == 1 else "NULL"
-        src_id_val = source_node.properties.get("id") if source_node else None
-        if src_id_val is not None:
-            if isinstance(src_id_val, ast.Literal):
-                src_id_sql = f"'{str(src_id_val.value)}'"
-            elif isinstance(src_id_val, ast.Variable):
-                p_name = src_id_val.name
-                resolved = (
-                    context.input_params.get(p_name) if context.input_params else None
-                )
-                src_id_sql = f"'{resolved}'" if resolved else None
-            else:
-                src_id_sql = None
-        else:
-            src_id_sql = None
-
+        src_id_sql = _trp_resolve_src_id_sql(source_node, context)
         if src_id_sql is not None and not context.graph_context:
             derived = (
                 f"(\n"
@@ -2482,34 +2523,70 @@ def translate_relationship_pattern(
                 f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
             )
 
+
+def _trp_directed_edge(
+    rel, source_node, target_node, context,
+    source_alias, target_alias, edge_alias, s_col, t_col,
+    edge_cond, target_on, jt, is_anon_source, is_new_target,
+):
+    if rel.types:
+        if len(rel.types) == 1:
+            edge_cond += f" AND {edge_alias}.p = {context.add_join_param(rel.types[0])}"
+        else:
+            edge_cond += f" AND {edge_alias}.p IN ({', '.join([context.add_join_param(t) for t in rel.types])})"
+
+    _trp_directed_edge_join(
+        rel, source_node, context, source_alias, edge_alias, edge_cond, jt, is_anon_source
+    )
+
     if is_new_target and not target_alias.startswith("Stage"):
         context.join_clauses.append(
             f"{jt} {_table('nodes')} {target_alias} ON {target_on}"
         )
     else:
-        # If target node is already joined, add the connection as a WHERE condition
         context.where_conditions.append(target_on)
 
-    # Apply inline property filters from source and target nodes.
-    # These are silently dropped without this block — e.g. MATCH (t)-[:R]->(c {id: 'x'})
-    # returns all nodes instead of filtering, because the relationship path never applies them.
-    for prop_node, prop_alias in (
-        (source_node, source_alias),
-        (target_node, target_alias),
-    ):
-        if not prop_node.properties:
-            continue
-        for k, v in prop_node.properties.items():
-            val_sql = translate_expression(v, context, segment="where")
-            if k in ("node_id", "id"):
-                context.where_conditions.append(f"{prop_alias}.node_id = {val_sql}")
-            else:
-                p_alias = context.next_alias("p")
-                context.join_clauses.append(
-                    f"{jt} {_table('rdf_props')} {p_alias} "
-                    f'ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}."key" = {context.add_join_param(k)}'
-                )
-                context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+    _trp_apply_inline_props(source_node, source_alias, target_node, target_alias, context, jt)
+
+
+def translate_relationship_pattern(
+    rel, source_node, target_node, context, metadata, optional=False
+):
+    if rel.variable_length is not None:
+        _trp_variable_length(rel, source_node, target_node, context, metadata)
+        return
+    source_alias, target_alias, edge_alias, is_anon_source, is_new_target = (
+        _trp_setup_aliases(rel, source_node, target_node, context)
+    )
+    def _node_col(variable, alias):
+        if alias.startswith("Stage") or alias == "VecSearch":
+            return variable
+        return "node_id"
+    direction = "in" if rel.direction == ast.Direction.INCOMING else "out"
+    s_col = _node_col(source_node.variable, source_alias)
+    t_col = _node_col(target_node.variable, target_alias)
+    jt = "LEFT OUTER JOIN" if optional else "JOIN"
+    if _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edge_alias, direction):
+        return
+    if _trp_mapped_relation(rel, source_node, target_node, context, source_alias, target_alias, optional):
+        return
+    if rel.direction == ast.Direction.BOTH:
+        _trp_undirected_edge(rel, source_node, target_node, context,
+                              source_alias, target_alias, edge_alias, s_col, t_col, jt, is_new_target)
+        return
+    if rel.direction == ast.Direction.OUTGOING:
+        if is_anon_source:
+            edge_cond = "1=1"
+            target_on = f"{target_alias}.{t_col} = {edge_alias}.o_id"
+        else:
+            edge_cond = f"{edge_alias}.s = {source_alias}.{s_col}"
+            target_on = f"{target_alias}.{t_col} = {edge_alias}.o_id"
+    else:
+        edge_cond = f"{edge_alias}.o_id = {source_alias}.{s_col}"
+        target_on = f"{target_alias}.{t_col} = {edge_alias}.s"
+    _trp_directed_edge(rel, source_node, target_node, context,
+                       source_alias, target_alias, edge_alias, s_col, t_col,
+                       edge_cond, target_on, jt, is_anon_source, is_new_target)
 
 
 def translate_where_clause(where, context):
