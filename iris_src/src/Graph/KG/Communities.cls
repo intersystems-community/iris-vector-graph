@@ -421,4 +421,97 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
     Quit "OK:" _ json _ "]"
 }
 
+/// Canonical Leiden via embedded-Python leidenalg (igraph backend), when those
+/// packages are installed in mgr/python. Reads ^NKG adjacency via gref, runs
+/// leidenalg.find_partition, returns the same "OK:[{id,community,size}]" format
+/// as LeidenJson (contiguous 0..K-1 by descending size). Returns the sentinel
+/// "PYUNAVAIL" if igraph/leidenalg are not importable so the caller can fall
+/// back to the pure-ObjectScript greedy LeidenJson.
+ClassMethod LeidenJsonPy(gamma As %Double = 1.0, topK As %Integer = 10000, randomSeed As %Integer = -1) As %String [ Language = python ]
+{
+    import iris, json
+    try:
+        import igraph
+        import leidenalg
+    except ImportError:
+        return "PYUNAVAIL"
+
+    g = iris.gref("^NKG")
+    nodecount = g["$meta", "nodeCount"]
+    if not nodecount:
+        return "ERROR:^NKG not built"
+
+    # idx -> nodeId via ^NKG("$ND", idx)
+    nd = {}
+    cur = ""
+    while True:
+        cur = g.order(["$ND", cur])
+        if cur is None or cur == "":
+            break
+        nd[int(cur)] = g["$ND", cur]
+    if not nd:
+        return "ERROR:^NKG not built"
+
+    # symmetrized edges from ^NKG(-1, src, negP, dst)
+    edge_set = set()
+    src = ""
+    while True:
+        src = g.order([-1, src])
+        if src is None or src == "":
+            break
+        srci = int(src)
+        negp = ""
+        while True:
+            negp = g.order([-1, src, negp])
+            if negp is None or negp == "":
+                break
+            dst = ""
+            while True:
+                dst = g.order([-1, src, negp, dst])
+                if dst is None or dst == "":
+                    break
+                dsti = int(dst)
+                if srci != dsti:
+                    a, b = (srci, dsti) if srci < dsti else (dsti, srci)
+                    edge_set.add((a, b))
+
+    sorted_idx = sorted(nd.keys())
+    pos = {ix: i for i, ix in enumerate(sorted_idx)}
+    ig = igraph.Graph(n=len(sorted_idx))
+    ig.add_edges([(pos[a], pos[b]) for (a, b) in edge_set if a in pos and b in pos])
+
+    seed = None if (randomSeed is None or int(randomSeed) < 0) else int(randomSeed)
+    if abs(float(gamma) - 1.0) < 1e-9:
+        part = leidenalg.find_partition(ig, leidenalg.ModularityVertexPartition, seed=seed)
+    else:
+        part = leidenalg.find_partition(
+            ig, leidenalg.CPMVertexPartition,
+            resolution_parameter=float(gamma), seed=seed)
+
+    groups = {}
+    for vpos, comm in enumerate(part.membership):
+        groups.setdefault(comm, []).append(sorted_idx[vpos])
+
+    out = []
+    new_id = 0
+    emitted = 0
+    tk = int(topK)
+    for _comm, members in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        size = len(members)
+        for ix in members:
+            out.append({"id": nd[ix], "community": new_id, "size": size})
+            emitted += 1
+        new_id += 1
+        if tk > 0 and emitted >= tk:
+            break
+    return "OK:" + json.dumps(out)
+}
+
+ClassMethod LeidenJsonAuto(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol As %Double = 0.0001, topK As %Integer = 10000, memBudgetMB As %Integer = 256, randomSeed As %Integer = -1) As %String
+{
+    Set py = ..LeidenJsonPy(gamma, topK, randomSeed)
+    If py '= "PYUNAVAIL" Return py
+    Return ..LeidenJson(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
+}
+
 }

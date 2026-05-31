@@ -765,7 +765,7 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_Leiden(
 RETURNS VARCHAR(32000)
 LANGUAGE OBJECTSCRIPT
 {{
-    set result = ##class(Graph.KG.Communities).LeidenJson(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
+    set result = ##class(Graph.KG.Communities).LeidenJsonAuto(maxLevels, gamma, tol, topK, memBudgetMB, randomSeed)
     if $extract(result,1,3)="OK:" {{ set result = $extract(result,4,*) }}
     quit result
 }}
