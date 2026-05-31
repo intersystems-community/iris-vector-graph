@@ -1093,11 +1093,35 @@ class IRISGraphStore:
 
     def execute_closeness(self, formula: str, direction: str, max_hops: int, top_k: int,
                            progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+        if max_hops == 0:
+            srv = self._closeness_serverside(formula, top_k)
+            if srv is not None:
+                return srv
         try:
             return self._closeness_gref(formula, direction, max_hops, top_k, progress_callback)
         except Exception as e:
             logger.warning("Closeness failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
+
+    def _closeness_serverside(self, formula: str, top_k: int) -> Optional[IVGResult]:
+        """Server-side Graph.KG.Communities.ClosenessJsonPy — full-graph harmonic/
+        classical closeness via igraph in IRIS embedded Python (native multi-core C,
+        no data transfer). Used only for max_hops=0 (full closeness). Returns None
+        (caller falls back to the ObjectScript/LazyKG BFS) when igraph is absent.
+        """
+        try:
+            import json as _json
+            iris_obj = self._iris_obj()
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.Communities", "ClosenessJsonPy", formula, int(top_k)))
+            if not raw.startswith("OK:"):
+                return None
+            data = _json.loads(raw[3:])
+            rows = [[r.get("id", ""), float(r.get("score", 0.0))] for r in data]
+            return IVGResult(columns=["id", "score"], rows=rows)
+        except Exception as e:
+            logger.debug("Closeness server-side path unavailable, falling back: %s", str(e)[:120])
+            return None
 
     def _closeness_gref(self, formula: str, direction: str, max_hops: int, top_k: int,
                          progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
