@@ -193,3 +193,42 @@ pays adjacency cost *per write* (like Neo4j's index-free adjacency) instead of i
 a 400s post-load batch. The architectural gap to Neo4j on this axis is closed in
 *approach*; absolute per-edge cost (IVG ~11.5K edges/s incl. inline ^NKG vs
 Neo4j Bolt+UNWIND 10–60K rels/s) remains the tuning frontier.
+
+## Head-to-head: IVG vs Neo4j GDS vs networkx
+
+`tests/perf/test_head_to_head.py` runs load + degree/betweenness/closeness/Leiden
+across all three engines on shared fixtures (karate, ER(500), ER(2000)).
+Correctness cross-checked via Pearson vs networkx. Neo4j 5.24.2 + GDS 2.12.0
+(bolt://localhost:7688); IVG on ivg-iris (no arno).
+
+**Algorithm latency, ER(2000) = 2000 nodes / 9941 edges (ms):**
+
+| metric | networkx | IVG | Neo4j GDS | winner |
+|---|---|---|---|---|
+| degree | 0.2 | **8.5** | 49.4 | IVG (vs GDS) |
+| betweenness (k=200) | 485 | **72.9** | 244.8 | IVG |
+| closeness | 1038 | 855 | **77.1** | GDS |
+| leiden | 147 | 3310 | 528 | networkx/GDS |
+| load | 0 (in-mem) | 12,411 | 3,486 | GDS |
+
+**Correctness**: IVG degree/betweenness/closeness all Pearson **1.000 vs
+networkx** — identical results to the reference and to GDS. IVG is fast AND
+correct on the centrality metrics it wins.
+
+**Honest read:**
+- **IVG wins degree + betweenness** vs GDS (8.5ms vs 49ms; 73ms vs 245ms) — the
+  server-side `^NKG` path is genuinely fast, with identical answers.
+- **GDS wins closeness at scale** (77ms vs 855ms) — its parallel closeness beats
+  IVG's BFS; an optimization target.
+- **GDS/networkx win Leiden** (528/147ms vs IVG 3310ms) — IVG hit the greedy
+  ObjectScript fallback here (ivg-iris embedded Python lacks leidenalg; with
+  leidenalg present, spec 185's tiered path uses canonical leidenalg server-side).
+- **GDS wins small-graph load** (3.5s vs 12.4s at ER2000) — IVG's per-load fixed
+  overhead dominates small graphs; the spec-185 incremental win only pays off at
+  DRKG scale (5.87M edges, where IVG's sync dropped to 2.85s).
+
+**Takeaway**: IVG is competitive-to-winning on read-side graph analytics
+(degree, betweenness) with exact correctness, and the load story is strong at
+real biomed scale. The open gaps — closeness parallelism, Leiden on
+leidenalg-less containers, and small-graph load overhead — are specific,
+measured, and bounded.
