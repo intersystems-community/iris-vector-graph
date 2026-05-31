@@ -134,6 +134,13 @@ def iris_master_cleanup(iris_connection):
         with contextlib.suppress(Exception):
             cursor.execute(f"DELETE FROM {table}")
     with contextlib.suppress(Exception):
+        iris_connection.commit()
+    with contextlib.suppress(Exception):
+        import iris as _iris
+        _iris_obj = _iris.createIRIS(iris_connection)
+        _iris_obj.kill("^KG")
+        _iris_obj.kill("^NKG")
+    with contextlib.suppress(Exception):
         cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
     iris_connection.commit()
     yield

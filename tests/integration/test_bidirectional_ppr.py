@@ -29,23 +29,19 @@ class TestBidirectionalPageRank:
             - Should find D (via reverse edge B <- D)
             - Should find C (via forward edge B -> C)
         """
-        # Clean up any existing test data
         cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PPR:%", "TEST_PPR:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PPR:%", "TEST_PPR:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PPR:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PPR:%"])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PPR:%"])
-    engine.conn.commit()
-    cursor.close()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PPR:%", "TEST_PPR:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PPR:%", "TEST_PPR:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PPR:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PPR:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PPR:%"])
+        engine.conn.commit()
+        cursor.close()
 
-
-        # Create test nodes
         nodes = ['TEST_PPR:A', 'TEST_PPR:B', 'TEST_PPR:C', 'TEST_PPR:D']
         for node_id in nodes:
             engine.create_node(node_id)
 
-        # Create edges: A->B, B->C, D->B
         edges = [
             ('TEST_PPR:A', 'connects_to', 'TEST_PPR:B'),
             ('TEST_PPR:B', 'connects_to', 'TEST_PPR:C'),
@@ -54,13 +50,12 @@ class TestBidirectionalPageRank:
         for s, p, o_id in edges:
             engine.create_edge(s, p, o_id)
 
-
         yield nodes, edges
 
-        # Cleanup
-        cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_PPR:%' OR o_id LIKE 'TEST_PPR:%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_PPR:%'")
-
+        cursor = engine.conn.cursor()
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TEST_PPR:%' OR o_id LIKE 'TEST_PPR:%'")
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST_PPR:%'")
+        engine.conn.commit()
     def test_bidirectional_discovers_incoming_edges(self, engine, setup_asymmetric_graph):
         """
         Given: Graph with edge A->B
@@ -124,39 +119,30 @@ class TestWeightedReverseEdges:
     """User Story 2: Weighted Reverse Edge Control (P2)"""
 
     @pytest.fixture
-    def setup_simple_edge(self, iris_connection):
+    def setup_simple_edge(self, engine):
         """Create a simple A->B edge for weight testing."""
-        cursor = iris_connection.cursor()
-
         cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_WEIGHT:%"])
-    engine.conn.commit()
-    cursor.close()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_WEIGHT:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_WEIGHT:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_WEIGHT:%"])
+        engine.conn.commit()
+        cursor.close()
 
         nodes = ['TEST_WEIGHT:A', 'TEST_WEIGHT:B']
         for node_id in nodes:
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
+            engine.create_node(node_id)
 
-        cursor.execute(
-            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-            ['TEST_WEIGHT:A', 'connects_to', 'TEST_WEIGHT:B']
-        )
-
+        engine.create_edge('TEST_WEIGHT:A', 'connects_to', 'TEST_WEIGHT:B')
 
         yield nodes
 
         cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_WEIGHT:%", "TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_WEIGHT:%"])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_WEIGHT:%"])
-    engine.conn.commit()
-    cursor.close()
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TEST_WEIGHT:%' OR o_id LIKE 'TEST_WEIGHT:%'")
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST_WEIGHT:%'")
+        engine.conn.commit()
+        cursor.close()
 
     def test_weight_1_0_full_contribution(self, engine, setup_simple_edge):
         """
@@ -240,17 +226,17 @@ class TestPerformance:
     """User Story 3: Performance Within Acceptable Bounds (P3)"""
 
     @pytest.fixture
-    def setup_large_graph(self, iris_connection):
+    def setup_large_graph(self, engine):
         """Create a graph with ~1000 nodes for performance testing."""
         # Clean up
         cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PERF:%", "TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PERF:%", "TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PERF:%"])
-    engine.conn.commit()
-    cursor.close()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PERF:%", "TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PERF:%", "TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PERF:%"])
+        engine.conn.commit()
+        cursor.close()
 
         # Create 1000 nodes
         num_nodes = 1000
@@ -265,24 +251,20 @@ class TestPerformance:
                 target = random.randint(0, num_nodes - 1)
                 if target != i:
                     try:
-                        cursor.execute(
-                            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                            [f"TEST_PERF:N{i}", 'connects_to', f"TEST_PERF:N{target}"]
-                        )
+                        engine.create_edge(f"TEST_PERF:N{i}", 'connects_to', f"TEST_PERF:N{target}")
                     except Exception:
                         pass  # Skip duplicate edges (UNIQUE constraint on s,p,o_id)
-
 
         yield num_nodes
 
         cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PERF:%", "TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PERF:%", "TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PERF:%"])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PERF:%"])
-    engine.conn.commit()
-    cursor.close()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_PERF:%", "TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_PERF:%", "TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_PERF:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_PERF:%"])
+        engine.conn.commit()
+        cursor.close()
 
     @pytest.mark.slow
     def test_bidirectional_performance_acceptable(self, engine, setup_large_graph):
@@ -375,13 +357,13 @@ class TestIndexOptimization:
 
         # Setup: Create test data
         cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_FALLBACK:%", "TEST_FALLBACK:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_FALLBACK:%", "TEST_FALLBACK:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_FALLBACK:%"])
-    cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_FALLBACK:%"])
-    cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_FALLBACK:%"])
-    engine.conn.commit()
-    cursor.close()
+        cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["TEST_FALLBACK:%", "TEST_FALLBACK:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["TEST_FALLBACK:%", "TEST_FALLBACK:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["TEST_FALLBACK:%"])
+        cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE ?", ["TEST_FALLBACK:%"])
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", ["TEST_FALLBACK:%"])
+        engine.conn.commit()
+        cursor.close()
 
         # Create 500 nodes (smaller set for fallback test)
         num_nodes = 500
@@ -396,13 +378,9 @@ class TestIndexOptimization:
                 target = random.randint(0, num_nodes - 1)
                 if target != i:
                     try:
-                        cursor.execute(
-                            "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                            [f"TEST_FALLBACK:N{i}", 'connects_to', f"TEST_FALLBACK:N{target}"]
-                        )
+                        engine.create_edge(f"TEST_FALLBACK:N{i}", 'connects_to', f"TEST_FALLBACK:N{target}")
                     except Exception:
                         pass  # Skip duplicate edges (UNIQUE constraint on s,p,o_id)
-
 
         try:
             # Run bidirectional PageRank
@@ -422,6 +400,8 @@ class TestIndexOptimization:
 
         finally:
             # Cleanup
-            cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'TEST_FALLBACK:%' OR o_id LIKE 'TEST_FALLBACK:%'")
-            cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST_FALLBACK:%'")
+            cursor = iris_connection.cursor()
+            cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE 'TEST_FALLBACK:%' OR o_id LIKE 'TEST_FALLBACK:%'")
+            cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST_FALLBACK:%'")
             iris_connection.commit()
+            cursor.close()
