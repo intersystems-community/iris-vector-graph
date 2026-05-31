@@ -21,19 +21,20 @@ def _deploy_objectscript(container_name: str) -> None:
         ["docker", "cp", "iris_src/src/.", f"{container_name}:/tmp/src/"],
         capture_output=True,
     )
-    for cls in ["Edge.cls", "TestEdge.cls"]:
-        subprocess.run(
-            ["docker", "exec", container_name, "rm", "-f", f"/tmp/src/{cls}"],
-            capture_output=True,
-        )
-    load_cmd = 'Do $system.OBJ.LoadDir("/tmp/src","ck",.err,1)\nH\n'
+    load_cmd = (
+        'Do $system.OBJ.Compile("Graph.KG.GraphIndex","ck-d")\n'
+        'Do $system.OBJ.LoadDir("/tmp/src","ck",.err,1)\n'
+        'Do $system.OBJ.Compile("Graph.KG.Edge","ck-d")\n'
+        'Do $system.OBJ.Compile("Graph.KG.TestEdge","ck-d")\n'
+        'H\n'
+    )
     subprocess.run(
         ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
         input=load_cmd,
         capture_output=True,
         text=True,
         errors="replace",
-        timeout=60,
+        timeout=120,
     )
 
 

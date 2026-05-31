@@ -154,8 +154,11 @@ class TestTranslator:
             "RETURN node, score"
         )
         sql_q = translate_to_sql(q)
-        # score should be selected as VecSearch.score, not expanded as a node
-        assert "VecSearch.score AS score" in sql_q.sql
+        # score is selected unqualified ("score AS score") — IRIS does not register
+        # a JSON_TABLE/CTE alias as a referenceable label, so qualified
+        # "VecSearch.score" raises SQLCODE -23. Bare "score" resolves correctly.
+        assert "score AS score" in sql_q.sql
+        assert "VecSearch.score" not in sql_q.sql
         # node should expand with labels/props
         assert "node_labels" in sql_q.sql
 

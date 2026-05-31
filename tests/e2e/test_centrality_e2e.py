@@ -100,18 +100,12 @@ class TestDegreeCentrality:
         assert b_id in scores_by_id, f"Expected {b_id} in results, got {list(scores_by_id.keys())[:5]}"
         assert scores_by_id[b_id]["degree"] == 3
 
-    @pytest.mark.xfail(
-        reason="Bug S: SQL function kg_DegreeCentrality calls ##class(Graph.KG.Centrality) "
-               "which fails with <CLASS DOES NOT EXIST> via the SQL bindings server. "
-               "Python API path works (test_degree_centrality_returns_top_influencers); "
-               "Cypher CALL path requires SQL-function-side gref bypass. See ENGINEERING_DEBT.md Bug S.",
-        strict=False,
-    )
     def test_cypher_call_ivg_degree_centrality(self, iris_connection, iris_master_cleanup):
         """US2 (P0): CALL ivg.degreeCentrality() YIELD node, score, degree works via Cypher."""
         engine = IRISGraphEngine(iris_connection)
         fixture = make_erdos_renyi_graph(n=15, p=0.3, seed=7, directed=True)
         prefix = _load_unique_graph(engine, fixture)
+        engine.sync()
 
         result = engine.execute_cypher(
             "CALL ivg.degreeCentrality() YIELD node, score, degree "
@@ -120,7 +114,9 @@ class TestDegreeCentrality:
 
         assert result.error is None or result.error == "", f"Cypher error: {result.error}"
         assert len(result.rows) <= 5
-        assert len(result.columns) == 3
+        assert "node_id" in result.columns
+        assert "score" in result.columns
+        assert "degree" in result.columns
 
 
 class TestBetweennessCentrality:
