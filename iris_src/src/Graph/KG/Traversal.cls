@@ -67,7 +67,7 @@ ClassMethod BuildKG() As %Status
 		TCommit
 
 		// BuildNKG requires Graph.KG.GraphIndex — optional, non-fatal if missing
-		Try { Do ..BuildNKG() } Catch {}
+		Try { Do ..BuildNKG() } Catch buildEx { Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: BuildNKG skipped: "_buildEx.DisplayString(), 0, 1) }
 
 		Return $$$OK
 	} Catch ex {
@@ -103,7 +103,7 @@ ClassMethod BuildNKG() As %Status
 	// Kill ^NKG resets the version to 0; $Increment makes it 1.
 	// If the stale cache also has version 1, CacheNKGAdj sees cachedVer==currentVer
 	// and skips the rebuild, leaving Arno BFS using data from the previous graph.
-	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch {}
+	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch invEx { Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: InvalidateAdjCache failed: "_invEx.DisplayString(), 0, 1) }
 	Kill ^NKG
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	

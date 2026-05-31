@@ -25,8 +25,11 @@ Environment overrides:
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_LIB_PATH = "/usr/irissys/mgr/libarno_callout.so"
@@ -537,10 +540,10 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
     if arno_available(conn):
         try:
             return _build_kg_adjacency_serverside(conn)
-        except ArnoError:
-            pass
-        except Exception:
-            pass
+        except ArnoError as exc:
+            logger.debug("arno serverside adjacency build unavailable, falling back: %s", exc)
+        except Exception as exc:
+            logger.warning("arno serverside adjacency build failed, falling back to Python: %s", exc)
 
     import iris as _iris
     iris_inst = _iris.createIRIS(conn)
