@@ -1277,6 +1277,9 @@ class IRISGraphStore:
     def execute_leiden(self, max_levels: int, gamma: float, tol: float, top_k: int,
                        mem_budget_mb: int, random_seed: Optional[int] = None,
                        progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+        srv = self._leiden_serverside(gamma, top_k, random_seed)
+        if srv is not None:
+            return srv
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._leiden_arno(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed)
@@ -1286,6 +1289,31 @@ class IRISGraphStore:
                     logger.warning("Leiden arno path raised non-ArnoError: %s", e)
         return self._leiden_lazykg(max_levels, gamma, tol, top_k, mem_budget_mb,
                                     random_seed, progress_callback)
+
+    def _leiden_serverside(self, gamma: float, top_k: int,
+                           random_seed: Optional[int]) -> Optional[IVGResult]:
+        """Server-side Graph.KG.Communities.LeidenJsonAuto — canonical leidenalg in
+        IRIS embedded Python (native multi-core, no data transfer) when igraph+
+        leidenalg are installed in mgr/python; greedy ObjectScript otherwise.
+        Returns None (caller falls back to LazyKG) if the path is unavailable.
+        """
+        try:
+            import json as _json
+            iris_obj = self._iris_obj()
+            seed = -1 if random_seed is None else int(random_seed)
+            raw = str(iris_obj.classMethodValue(
+                "Graph.KG.Communities", "LeidenJsonAuto",
+                10, float(gamma), 0.0001, int(top_k), 256, seed,
+            ))
+            if not raw.startswith("OK:"):
+                return None
+            data = _json.loads(raw[3:])
+            rows = [[r.get("id", ""), int(r.get("community", 0)), int(r.get("size", 0))]
+                    for r in data]
+            return IVGResult(columns=["id", "community", "size"], rows=rows)
+        except Exception as e:
+            logger.debug("Leiden server-side path unavailable, falling back: %s", str(e)[:120])
+            return None
 
     def _leiden_arno(self, max_levels: int, gamma: float, tol: float, top_k: int,
                      mem_budget_mb: int, random_seed: Optional[int]) -> IVGResult:
