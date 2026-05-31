@@ -20,7 +20,7 @@ class AdminMixin:
 
     def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
         if "DATABASES" in cmd:
-            return IVGResult(                columns= [
+            return IVGResult(columns=[
                     "name",
                     "type",
                     "aliases",
@@ -35,7 +35,7 @@ class AdminMixin:
                     "home",
                     "constituents",
                 ],
-                rows= [
+                rows=[
                     [
                         "neo4j",
                         "standard",
@@ -58,18 +58,16 @@ class AdminMixin:
                 type("P", (), {"procedure_name": "dbms.procedures"})()
             )
             if procs:
-                return IVGResult(                    columns= ["name", "description", "signature"],
-                    rows= [[r[0], r[2], r[1]] for r in procs.get("rows", [])]
-                )
+                return IVGResult(columns=["name", "description", "signature"],
+                    rows=[[r[0], r[2], r[1]] for r in procs.get("rows", [])])
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "FUNCTIONS" in cmd:
             fns = self._try_system_procedure(
                 type("P", (), {"procedure_name": "dbms.functions"})()
             )
             if fns:
-                return IVGResult(                    columns= ["name", "description", "signature"],
-                    rows= [[r[0], r[2], r[1]] for r in fns.get("rows", [])]
-                )
+                return IVGResult(columns=["name", "description", "signature"],
+                    rows=[[r[0], r[2], r[1]] for r in fns.get("rows", [])])
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "INDEXES" in cmd:
             return self._show_indexes()

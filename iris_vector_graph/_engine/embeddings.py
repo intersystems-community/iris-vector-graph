@@ -1,8 +1,8 @@
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 import json
 import logging
 
-from iris_vector_graph.schema import GraphSchema, _call_classmethod
+from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.cypher.translator import _table
 
 logger = logging.getLogger(__name__)
@@ -161,9 +161,6 @@ class EmbeddingsMixin:
             return [row[0] for row in cursor.fetchall()]
         except Exception:
             return []
-
-
-
 
 
     def store_embedding(

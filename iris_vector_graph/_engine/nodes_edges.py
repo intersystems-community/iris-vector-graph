@@ -1,8 +1,8 @@
 import json
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 
-from iris_vector_graph.schema import GraphSchema, _call_classmethod
+from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.cypher.translator import _table
 from iris_vector_graph._validate import NodeIdInput, EdgeInput
 
@@ -121,17 +121,6 @@ class NodesEdgesMixin:
         except Exception as e:
             logger.warning("backfill_2hop_exact failed: %s", str(e)[:120])
             return 0
-
-
-
-
-
-
-
-
-
-
-
 
 
     def _assert_node_exists(self, node_id: str) -> None:
