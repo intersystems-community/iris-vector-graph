@@ -1094,6 +1094,7 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
 
     Set json = "["
     Set sep = ""
+    Set emitted = 0
     Set nid = ""
     For {
         Set nid = $Order(^NKG("$NI",nid))
@@ -1153,14 +1154,19 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
             Set reached = reached + 1
         }
         If formula = "classical" {
-            Set score = $Select((sumDist > 0) && (reached > 0): (reached) / sumDist, 1: 0)
+            // Classical (Bavelas) closeness is defined only when the node reaches
+            // every other node (reached = n-1). On a disconnected graph no node
+            // reaches the full graph, so score is 0 — matches the standard
+            // (non-Wasserman-Faust) definition.
+            Set score = $Select((sumDist > 0) && (reached = (n - 1)): reached / sumDist, 1: 0)
         } Else {
             // Harmonic centrality: raw sum of 1/d — matches networkx.harmonic_centrality default
             Set score = $Select(reached > 0: sumInv, 1: 0)
         }
         Set json = json_sep_"{""id"":"""_nid_""",""score"":"_score_"}"
         Set sep = ","
-        If (topK > 0) && ($Length(json,",") > topK + 1) Quit
+        Set emitted = emitted + 1
+        If (topK > 0) && (emitted >= topK) Quit
     }
     Kill ^||bfsDist
     Quit "OK:"_json_"]"
@@ -1466,7 +1472,6 @@ ClassMethod BuildBitAdj(parentPid As %Integer) [ Private ]
             Set dstIdx = $Order(^NKG(-1,srcIdx,negP,""))
             While dstIdx '= "" {
                 Set $BIT(^bcBitAdj(parentPid,srcIdx), dstIdx+1) = 1
-                Set $BIT(^bcBitAdj(parentPid,dstIdx), srcIdx+1) = 1
                 Set dstIdx = $Order(^NKG(-1,srcIdx,negP,dstIdx))
             }
             Set negP = $Order(^NKG(-1,srcIdx,negP))
