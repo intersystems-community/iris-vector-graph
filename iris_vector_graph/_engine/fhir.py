@@ -1,6 +1,8 @@
 import logging
 from typing import Optional, Dict, Any, List
 
+from iris_vector_graph.cypher.translator import _table
+
 logger = logging.getLogger(__name__)
 
 

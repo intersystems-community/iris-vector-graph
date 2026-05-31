@@ -3,6 +3,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any, List
 
+from iris_vector_graph.cypher.translator import _table
+
 logger = logging.getLogger(__name__)
 
 
