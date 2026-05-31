@@ -1474,6 +1474,51 @@ def translate_unwind_clause(unwind, context):
         context.from_clauses.append(json_table_sql)
 
 
+def _create_resolve_prop_value(v, context):
+    if isinstance(v, ast.Literal):
+        return v.value
+    if isinstance(v, ast.Variable) and v.name in context.input_params:
+        return context.input_params[v.name]
+    if isinstance(v, ast.Variable) and getattr(context, "foreach_literals", {}).get(v.name) is not None:
+        raw = context.foreach_literals[v.name]
+        return raw.value if isinstance(raw, ast.Literal) else raw
+    return v
+
+
+def _create_node_literal(node, node_id_expr, context):
+    node_id = node_id_expr.value if isinstance(node_id_expr, ast.Literal) else node_id_expr
+    context.add_dml(
+        f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+        [node_id, node_id],
+    )
+    for label in node.labels:
+        context.add_dml(
+            f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
+            [node_id, label, node_id, label],
+        )
+    for k, v in node.properties.items():
+        val = _create_resolve_prop_value(v, context)
+        context.add_dml(
+            f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+            [node_id, k, val, node_id, k],
+        )
+
+
+def _create_node_from_alias(node, node_id_expr, var_alias, context):
+    sql, p = context.build_stage_sql(
+        select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
+    )
+    context.add_dml(
+        f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
+        p,
+    )
+    for label in node.labels:
+        context.add_dml(
+            f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
+            [label] + p + [label],
+        )
+
+
 def _create_clause_node_entry(node, context):
     if node.variable and node.variable in context.variable_aliases:
         return
@@ -1497,47 +1542,9 @@ def _create_clause_node_entry(node, context):
             raise ValueError(f"Undefined: {node_id_expr.name}")
 
     if isinstance(node_id_expr, ast.Variable) and var_alias:
-        sql, p = context.build_stage_sql(
-            select_override=f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
-        )
-        context.add_dml(
-            f"INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
-            p,
-        )
-        for label in node.labels:
-            context.add_dml(
-                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
-                [label] + p + [label],
-            )
+        _create_node_from_alias(node, node_id_expr, var_alias, context)
     else:
-        node_id = (
-            node_id_expr.value
-            if isinstance(node_id_expr, ast.Literal)
-            else node_id_expr
-        )
-        context.add_dml(
-            f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
-            [node_id, node_id],
-        )
-        for label in node.labels:
-            context.add_dml(
-                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
-                [node_id, label, node_id, label],
-            )
-        for k, v in node.properties.items():
-            if isinstance(v, ast.Literal):
-                val = v.value
-            elif isinstance(v, ast.Variable) and v.name in context.input_params:
-                val = context.input_params[v.name]
-            elif isinstance(v, ast.Variable) and getattr(context, "foreach_literals", {}).get(v.name) is not None:
-                raw = context.foreach_literals[v.name]
-                val = raw.value if isinstance(raw, ast.Literal) else raw
-            else:
-                val = v
-            context.add_dml(
-                f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
-                [node_id, k, val, node_id, k],
-            )
+        _create_node_literal(node, node_id_expr, context)
     if node.variable:
         context.register_variable(node.variable)
         if not context.from_clauses and isinstance(node_id_expr, ast.Literal):
@@ -2602,6 +2609,48 @@ def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Opti
     return None
 
 
+def _boolean_expr_logical(op, expr, context):
+    if op == ast.BooleanOperator.AND:
+        parts = []
+        for o in expr.operands:
+            if _is_temporal_ts_condition(o, context):
+                continue
+            parts.append(translate_boolean_expression(o, context))
+        return "(" + " AND ".join(parts) + ")" if parts else "1=1"
+    if op == ast.BooleanOperator.OR:
+        return (
+            "("
+            + " OR ".join(
+                translate_boolean_expression(o, context) for o in expr.operands
+            )
+            + ")"
+        )
+    if op == ast.BooleanOperator.XOR:
+        a, b = expr.operands[0], expr.operands[1]
+        sa = translate_boolean_expression(a, context)
+        sb = translate_boolean_expression(b, context)
+        return f"(({sa} AND NOT ({sb})) OR (NOT ({sa}) AND {sb}))"
+    if op == ast.BooleanOperator.NOT:
+        return f"NOT ({translate_boolean_expression(expr.operands[0], context)})"
+    return None
+
+
+def _boolean_expr_in(left, right_expr, context):
+    if isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, list):
+        items = right_expr.value
+        placeholders = ", ".join(
+            context.add_where_param(item.value if isinstance(item, ast.Literal) else item)
+            for item in items
+        )
+        return f"{left} IN ({placeholders})"
+    if isinstance(right_expr, ast.Variable) and right_expr.name in context.input_params:
+        val = context.input_params[right_expr.name]
+        if isinstance(val, list):
+            placeholders = ", ".join(context.add_where_param(v) for v in val)
+            return f"{left} IN ({placeholders})"
+    return None
+
+
 def translate_boolean_expression(expr, context) -> str:
     if isinstance(expr, ast.ExistsExpression):
         result = _boolean_expr_exists(expr, context)
@@ -2625,28 +2674,9 @@ def translate_boolean_expression(expr, context) -> str:
                 return "(1=0)"
         return translate_expression(expr, context, segment="where")
     op = expr.operator
-    if op == ast.BooleanOperator.AND:
-        parts = []
-        for o in expr.operands:
-            if _is_temporal_ts_condition(o, context):
-                continue
-            parts.append(translate_boolean_expression(o, context))
-        return "(" + " AND ".join(parts) + ")" if parts else "1=1"
-    if op == ast.BooleanOperator.OR:
-        return (
-            "("
-            + " OR ".join(
-                translate_boolean_expression(o, context) for o in expr.operands
-            )
-            + ")"
-        )
-    if op == ast.BooleanOperator.XOR:
-        a, b = expr.operands[0], expr.operands[1]
-        sa = translate_boolean_expression(a, context)
-        sb = translate_boolean_expression(b, context)
-        return f"(({sa} AND NOT ({sb})) OR (NOT ({sa}) AND {sb}))"
-    if op == ast.BooleanOperator.NOT:
-        return f"NOT ({translate_boolean_expression(expr.operands[0], context)})"
+    logical = _boolean_expr_logical(op, expr, context)
+    if logical is not None:
+        return logical
     left_expr = expr.operands[0]
     right_expr = expr.operands[1] if len(expr.operands) > 1 else None
     left = translate_expression(left_expr, context, segment="where")
@@ -2655,20 +2685,9 @@ def translate_boolean_expression(expr, context) -> str:
     if op == ast.BooleanOperator.IS_NOT_NULL:
         return f"{left} IS NOT NULL"
     if op == ast.BooleanOperator.IN:
-        if isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, list):
-            items = right_expr.value
-            placeholders = ", ".join(
-                context.add_where_param(
-                    item.value if isinstance(item, ast.Literal) else item
-                )
-                for item in items
-            )
-            return f"{left} IN ({placeholders})"
-        if isinstance(right_expr, ast.Variable) and right_expr.name in context.input_params:
-            val = context.input_params[right_expr.name]
-            if isinstance(val, list):
-                placeholders = ", ".join(context.add_where_param(v) for v in val)
-                return f"{left} IN ({placeholders})"
+        in_sql = _boolean_expr_in(left, right_expr, context)
+        if in_sql is not None:
+            return in_sql
     right = translate_expression(right_expr, context, segment="where")
     if op in (
         ast.BooleanOperator.LESS_THAN,
@@ -3387,45 +3406,37 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
     return None
 
 
+def _expr_fn_keys(args):
+    if not args:
+        return "JSON_ARRAY()"
+    id_expr = args[0]
+    return f"(SELECT JSON_ARRAYAGG(rp.key) FROM {_table('rdf_props')} rp WHERE rp.s = {id_expr})"
+
+
+def _expr_fn_range(args_exprs):
+    if len(args_exprs) < 2:
+        return "JSON_ARRAY()"
+    try:
+        start = int(args_exprs[0].value) if isinstance(args_exprs[0], ast.Literal) else None
+        end = int(args_exprs[1].value) if isinstance(args_exprs[1], ast.Literal) else None
+        step = (
+            int(args_exprs[2].value)
+            if len(args_exprs) > 2 and isinstance(args_exprs[2], ast.Literal)
+            else 1
+        )
+        if start is not None and end is not None:
+            vals = list(range(start, end + (1 if step > 0 else -1), step))
+            return f"JSON_ARRAY({', '.join(str(v) for v in vals)})"
+    except (TypeError, ValueError):
+        pass
+    return f"JSON_ARRAY()"
+
+
 def _expr_fn_list_ops(fn, args, args_exprs):
     if fn == "keys":
-        if not args:
-            return "JSON_ARRAY()"
-        node_expr = args[0]
-        if (
-            ".node_id" in node_expr
-            or node_expr.startswith("n")
-            or node_expr.startswith("'")
-        ):
-            id_expr = node_expr if ".node_id" not in node_expr else node_expr
-        else:
-            id_expr = node_expr
-        return f"(SELECT JSON_ARRAYAGG(rp.key) FROM {_table('rdf_props')} rp WHERE rp.s = {id_expr})"
+        return _expr_fn_keys(args)
     if fn == "range":
-        if len(args_exprs) < 2:
-            return "JSON_ARRAY()"
-        try:
-            start = (
-                int(args_exprs[0].value)
-                if isinstance(args_exprs[0], ast.Literal)
-                else None
-            )
-            end = (
-                int(args_exprs[1].value)
-                if isinstance(args_exprs[1], ast.Literal)
-                else None
-            )
-            step = (
-                int(args_exprs[2].value)
-                if len(args_exprs) > 2 and isinstance(args_exprs[2], ast.Literal)
-                else 1
-            )
-            if start is not None and end is not None:
-                vals = list(range(start, end + (1 if step > 0 else -1), step))
-                return f"JSON_ARRAY({', '.join(str(v) for v in vals)})"
-        except (TypeError, ValueError):
-            pass
-        return f"JSON_ARRAY()"
+        return _expr_fn_range(args_exprs)
     if fn == "size":
         if not args:
             return "0"
