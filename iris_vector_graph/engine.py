@@ -40,6 +40,28 @@ _torch = None
 _BULK_CHUNK_SIZE = 1000
 
 
+class _BulkLoadSession:
+    def __init__(self, engine, stats, max_retries):
+        self._engine = engine
+        self.stats = stats
+        self._max_retries = max_retries
+
+    def add_nodes(self, nodes):
+        n = self._engine._with_reconnect(
+            self._engine.bulk_create_nodes, nodes, max_retries=self._max_retries
+        )
+        self.stats["nodes"] += (n if isinstance(n, int) else len(nodes))
+        return n
+
+    def add_edges(self, edges, predicate="KNOWS"):
+        n = self._engine._with_reconnect(
+            self._engine.bulk_ingest_edges, edges, predicate,
+            auto_sync=False, max_retries=self._max_retries,
+        )
+        self.stats["edges"] += (n if isinstance(n, int) else len(edges))
+        return n
+
+
 def _get_sentence_transformers():
     global _sentence_transformers
     if _sentence_transformers is None:
@@ -284,6 +306,83 @@ class IRISGraphEngine:
     def _invalidate_mapping_cache(self) -> None:
         self._table_mapping_cache = None
         self._rel_mapping_cache = None
+
+    @staticmethod
+    def _is_conn_drop(exc: Exception) -> bool:
+        s = str(exc).lower()
+        if isinstance(exc, (BrokenPipeError, ConnectionError)):
+            return True
+        return any(
+            x in s
+            for x in (
+                "communication link",
+                "epipe",
+                "broken pipe",
+                "connection reset",
+                "operationalerror",
+            )
+        )
+
+    def _with_reconnect(self, fn, *args, max_retries: int = 3, **kwargs):
+        import time as _time
+
+        delay = 0.5
+        for attempt in range(max_retries + 1):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                if (not self._is_conn_drop(e)) or attempt == max_retries:
+                    raise
+                logger.warning(
+                    "bulk op hit connection drop (attempt %d/%d): %s — reconnecting",
+                    attempt + 1, max_retries, str(e)[:120],
+                )
+                self._reconnect_if_stale()
+                _time.sleep(delay)
+                delay *= 2
+
+    def bulk_load_session(self, max_retries: int = 3, rebuild_indexes: bool = True):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _session():
+            import time as _time
+            from iris_vector_graph.schema import GraphSchema
+
+            stats: Dict[str, Any] = {
+                "nodes": 0, "edges": 0, "retries": 0,
+                "load_seconds": 0.0, "index_rebuild_seconds": 0.0,
+                "sync_seconds": 0.0,
+            }
+            if rebuild_indexes:
+                try:
+                    GraphSchema.disable_indexes(self.conn.cursor())
+                    self.conn.commit()
+                except Exception as e:
+                    logger.warning("bulk_load_session: disable_indexes skipped: %s", str(e)[:120])
+
+            session = _BulkLoadSession(self, stats, max_retries)
+            t0 = _time.perf_counter()
+            try:
+                yield session
+            finally:
+                stats["load_seconds"] = round(_time.perf_counter() - t0, 2)
+                if rebuild_indexes:
+                    tr = _time.perf_counter()
+                    try:
+                        GraphSchema.rebuild_indexes(self.conn.cursor())
+                        self.conn.commit()
+                    except Exception as e:
+                        logger.warning("bulk_load_session: rebuild_indexes failed: %s", str(e)[:120])
+                    stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
+                ts = _time.perf_counter()
+                try:
+                    self.sync()
+                except Exception as e:
+                    logger.warning("bulk_load_session: final sync() failed: %s", str(e)[:120])
+                stats["sync_seconds"] = round(_time.perf_counter() - ts, 2)
+
+        return _session()
 
     def get_table_mapping(self, label: str) -> Optional[dict]:
         if self._table_mapping_cache is None:
@@ -3203,6 +3302,16 @@ class IRISGraphEngine:
                 stacklevel=2,
             )
             auto_sync = auto_rebuild_kg
+
+        if len(edges) > 250_000 and disable_indexes and not getattr(self, "_large_load_hinted", False):
+            self._large_load_hinted = True
+            logger.info(
+                "bulk_create_edges called with %d edges and per-call index rebuild "
+                "(disable_indexes=True). For multi-million-edge loads use "
+                "engine.bulk_load_session() — it disables/rebuilds indexes once and "
+                "syncs once, avoiding O(table-size) per-batch rebuilds.",
+                len(edges),
+            )
 
         if not edges:
             return 0

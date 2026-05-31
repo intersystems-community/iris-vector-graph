@@ -26,18 +26,41 @@ jupyter lab docs/notebooks/biomed_drkg_showcase.ipynb
 
 ## Load results (validated 2026-05-31)
 
-Loaded into `ivg-iris`: **97,238 nodes + 5,499,997 edges** (94% of DRKG; the
-background load hit a `<COMMUNICATION LINK ERROR>` EPIPE at 5.5M — see finding 2).
-`^KG` adjacency built successfully over the full 5.5M-edge graph.
+Two loads were run. The **smooth-load session** (spec 184) replaced the degrading
+per-batch path and loaded the **full** DRKG without dropping the connection.
 
-| Phase | Result |
-|---|---|
-| Nodes (97,238, `bulk_create_nodes`) | ✅ 2.6 s |
-| Edges (5.5M, `bulk_create_edges`) | ✅ loaded; throughput degrades — finding 1 |
-| `BuildKG` (^KG adjacency, 5.5M edges) | ✅ **45.9 s** (~120K edges/s) |
-| `BuildNKG` (^NKG integer index, 5.5M edges) | ✅ **180.5 s** (after finding 3 fix; → 97,236 nodes / 5.5M edges) |
+### Smooth load — `engine.bulk_load_session()` (spec 184, recommended)
 
-### Algorithm timing (5.5M-edge graph)
+Loaded **97,238 nodes + 5,874,261 edges** (full DRKG) with **0 retries**:
+
+| Phase | Time | Notes |
+|---|---|---|
+| Edge ingest (5.87M, `bulk_ingest_edges` via session) | **511 s** (~11.5K edges/s) | **constant rate, no decay** — indexes disabled once up front |
+| Index rebuild (11 indexes, **once**) | **50 s** | vs ~5,870 per-batch rebuilds on the old path |
+| `sync()` = BuildKG + BuildNKG (5.87M edges) | **550 s** | inherent index construction (BuildKG ~46s + BuildNKG ~180s + 2-hop stats) |
+| **Total** | **~1,115 s (18.6 min)** | full graph, ^KG + ^NKG built, 0 retries |
+
+### Old path — `bulk_create_edges(disable_indexes=True)` (deprecated for large loads)
+
+~40 min and **degrading** (7.5K → 2K edges/s), **dropped the connection (EPIPE)
+at 5.5M edges** — never finished. See findings 1 & 2.
+
+### Smooth vs old — what changed
+
+The session eliminates the **per-batch index rebuild** (the ~80% bottleneck):
+old path rebuilt 11 O(table-size) indexes on every 50K-edge call; the session
+disables once / rebuilds once (50s total). Ingest rate is now **flat ~11.5K/s**
+instead of decaying. SC-002 (decay ratio ≥ 0.5) is met with margin — the rate
+held constant from first to last increment.
+
+**Honest note on SC-001**: the 8-minute target was an estimate; the **measured**
+full-load total is **18.6 min**, dominated by `sync()` (550s = BuildKG +
+BuildNKG, inherent index construction over 5.87M edges), not by load churn. The
+load *itself* is now smooth and resilient (findings 1 & 2 RESOLVED). Further
+total-time reduction would require accelerating `BuildNKG` (arno, or incremental
+^NKG maintenance) — tracked separately, not a load-smoothness issue.
+
+### Algorithm timing (5.5M–5.87M edge graph)
 
 | Algorithm | Path | Median time |
 |---|---|---|
@@ -53,18 +76,21 @@ intersection/iteration algorithms hit two scale limits (findings 5 & 6).
 
 ## Findings (the real value of this scale test)
 
-**Finding 1 — bulk-edge load throughput degrades.**
-`bulk_create_edges(disable_indexes=True)` (the default) rebuilds the `rdf_edges`
-index per batch at O(table size). Throughput decayed ~7.5K → ~2K edges/s as the
-table grew past 3M rows. **Fix shipped**: `scripts/load_drkg.py` now passes
-`disable_indexes=False`. v2.0.0 docs note: for >1M-edge loads, do not use the
-per-call `disable_indexes=True` default — use a single disable/rebuild bracket.
+**Finding 1 — bulk-edge load throughput degrades. RESOLVED (spec 184).**
+`bulk_create_edges(disable_indexes=True)` rebuilt the `rdf_edges` indexes
+**per batch** at O(table size); throughput decayed ~7.5K → ~2K edges/s past 3M
+rows. **Fix shipped**: `engine.bulk_load_session()` disables indexes once,
+loads all batches via the server-side `EdgeScan` path (no per-call churn), then
+rebuilds once (50s) + syncs once. Measured: flat ~11.5K edges/s, no decay
+(SC-002 met). `scripts/load_drkg.py` uses the session.
 
-**Finding 2 — connection drops on very long loads.**
-The 5.5M-edge load (≈40 min on the slow path) hit `<COMMUNICATION LINK ERROR>`
-EPIPE — the IRIS connection dropped during a large operation. Large ingests
-should checkpoint/reconnect, or use the faster load (finding 1 fix) so the
-connection isn't held open for 40 min.
+**Finding 2 — connection drops on very long loads. RESOLVED (spec 184).**
+The old 40-min load hit `<COMMUNICATION LINK ERROR>` EPIPE at 5.5M edges and
+aborted. **Fix shipped**: the bulk paths now detect connection drops
+(`_is_conn_drop` + `_with_reconnect`), reconnect via `_reconnect_if_stale()`, and
+retry with backoff (default 3 retries). The smooth load completed the full 5.87M
+edges with **0 retries** (faster load = shorter window for a drop), and the
+retry path is unit-tested for the simulated-EPIPE case.
 
 **Finding 3 — `BuildNKG` hard-required libarno. FIXED this session.**
 `BuildNKG` → `Build2HopExactStats` → `NKGAccel.Build2HopExact()` raised

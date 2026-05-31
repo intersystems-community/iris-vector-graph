@@ -56,27 +56,25 @@ def load_drkg(host, port, edges_limit=None, load_embeddings=False, batch=50000):
     t2 = time.time()
     n_edges = 0
     edge_batch = []
-    with open(triples_file) as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) != 3:
-                continue
-            h, r, t = parts
-            edge_batch.append({"source_id": h, "predicate": r, "target_id": t})
-            if len(edge_batch) >= batch:
-                engine.bulk_create_edges(edge_batch, disable_indexes=False, auto_sync=False)
-                n_edges += len(edge_batch)
-                edge_batch = []
-                if edges_limit and n_edges >= edges_limit:
-                    break
-    if edge_batch and not (edges_limit and n_edges >= edges_limit):
-        engine.bulk_create_edges(edge_batch, disable_indexes=False, auto_sync=False)
-        n_edges += len(edge_batch)
-    print(f"[{time.time()-t2:.1f}s] loaded {n_edges:,} edges (indexes kept live, sync deferred)")
-
-    t3 = time.time()
-    engine.sync()
-    print(f"[{time.time()-t3:.1f}s] engine.sync() built ^KG + ^NKG")
+    with engine.bulk_load_session() as session:
+        with open(triples_file) as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) != 3:
+                    continue
+                h, r, t = parts
+                edge_batch.append({"s": h, "p": r, "o": t})
+                if len(edge_batch) >= batch:
+                    session.add_edges(edge_batch)
+                    n_edges += len(edge_batch)
+                    edge_batch = []
+                    if edges_limit and n_edges >= edges_limit:
+                        break
+        if edge_batch and not (edges_limit and n_edges >= edges_limit):
+            session.add_edges(edge_batch)
+            n_edges += len(edge_batch)
+    print(f"[{time.time()-t2:.1f}s] loaded {n_edges:,} edges via bulk_load_session")
+    print(f"  session stats: {session.stats}")
 
     if load_embeddings:
         import numpy as np
