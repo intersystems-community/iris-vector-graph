@@ -64,15 +64,15 @@ def load_drkg(host, port, edges_limit=None, load_embeddings=False, batch=50000):
             h, r, t = parts
             edge_batch.append({"source_id": h, "predicate": r, "target_id": t})
             if len(edge_batch) >= batch:
-                engine.bulk_create_edges(edge_batch, auto_sync=False)
+                engine.bulk_create_edges(edge_batch, disable_indexes=False, auto_sync=False)
                 n_edges += len(edge_batch)
                 edge_batch = []
                 if edges_limit and n_edges >= edges_limit:
                     break
     if edge_batch and not (edges_limit and n_edges >= edges_limit):
-        engine.bulk_create_edges(edge_batch, auto_sync=False)
+        engine.bulk_create_edges(edge_batch, disable_indexes=False, auto_sync=False)
         n_edges += len(edge_batch)
-    print(f"[{time.time()-t2:.1f}s] loaded {n_edges:,} edges (auto_sync deferred)")
+    print(f"[{time.time()-t2:.1f}s] loaded {n_edges:,} edges (indexes kept live, sync deferred)")
 
     t3 = time.time()
     engine.sync()
