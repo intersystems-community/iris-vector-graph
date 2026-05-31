@@ -208,7 +208,7 @@ Correctness cross-checked via Pearson vs networkx. Neo4j 5.24.2 + GDS 2.12.0
 | degree | 0.2 | **8.5** | 49.4 | IVG (vs GDS) |
 | betweenness (k=200) | 485 | **72.9** | 244.8 | IVG |
 | closeness | 1038 | 855 | **77.1** | GDS |
-| leiden | 147 | 3310 | 528 | networkx/GDS |
+| leiden | 144 | **154** | 180 | IVG (server-side leidenalg) |
 | load | 0 (in-mem) | 12,411 | 3,486 | GDS |
 
 **Correctness**: IVG degree/betweenness/closeness all Pearson **1.000 vs
@@ -220,9 +220,12 @@ correct on the centrality metrics it wins.
   server-side `^NKG` path is genuinely fast, with identical answers.
 - **GDS wins closeness at scale** (77ms vs 855ms) — its parallel closeness beats
   IVG's BFS; an optimization target.
-- **GDS/networkx win Leiden** (528/147ms vs IVG 3310ms) — IVG hit the greedy
-  ObjectScript fallback here (ivg-iris embedded Python lacks leidenalg; with
-  leidenalg present, spec 185's tiered path uses canonical leidenalg server-side).
+- **IVG wins Leiden** (154ms vs GDS 180ms) after routing `execute_leiden` to the
+  server-side `Graph.KG.Communities.LeidenJsonAuto` — canonical leidenalg running
+  in IRIS embedded Python (native multi-core C library, no data transfer). The
+  earlier 3310ms was the LazyKG external-client path (pulled adjacency over the
+  wire); reordering the dispatch to try server-side first (before the arno path's
+  expensive adjacency serialization) cut it to ~155ms.
 - **GDS wins small-graph load** (3.5s vs 12.4s at ER2000) — IVG's per-load fixed
   overhead dominates small graphs; the spec-185 incremental win only pays off at
   DRKG scale (5.87M edges, where IVG's sync dropped to 2.85s).
@@ -232,3 +235,32 @@ correct on the centrality metrics it wins.
 real biomed scale. The open gaps — closeness parallelism, Leiden on
 leidenalg-less containers, and small-graph load overhead — are specific,
 measured, and bounded.
+
+## Quick-win tuning notes (CPF + parallelism)
+
+**Edition/cores (verified)**: ivg-iris is IRIS Community (8-core license);
+neo4j-ivg-bench also gets 8 cores — **fair core allocation**, no license artifact.
+The closeness/Leiden gaps were single-threaded ObjectScript vs GDS's 8-core
+parallelism, NOT a core cap.
+
+**The biggest quick win is not a CPF flag — it's routing to embedded Python.**
+GDS parallelizes across 8 cores; pure-ObjectScript IVG algorithms run on 1. But
+IVG's embedded-Python tier (igraph/leidenalg/numpy in `mgr/python`) uses those
+libraries' native multi-core C implementations for free. Routing
+`execute_leiden` to the server-side `LeidenJsonAuto` (embedded leidenalg) took
+Leiden 3310ms → 154ms — from losing 6× to GDS to winning. The same pattern
+(server-side embedded igraph/numpy) is the path to close the closeness gap.
+
+**CPF flags worth setting (DRKG-scale, less impactful at 2K-node test scale):**
+- `[config] globals=0,0,0,0,0,0` — let IRIS auto-size the global buffer pool to
+  25% of container RAM (the deploy `merge.conf` currently caps it at 256 MB,
+  which starves the ^NKG working set on large graphs). Biggest CPF win for
+  global-read-heavy BFS at scale.
+- Per-process journal disable around bulk load (`%SYSTEM.Process.SetJournalDisabled(1)`)
+  — ~2× INSERT throughput; acceptable for reloadable dev/bench data.
+- `[config] routines=256`, `gmheap=614400` — explicit, predictable cache sizing
+  for the compiled `Graph.KG.*` classmethods and parallel-worker coordination.
+
+At the 2K-node test scale these CPF flags barely move the needle (the working set
+already fits in cache); they matter at DRKG/PrimeKG scale where ^NKG exceeds the
+default buffer pool.
