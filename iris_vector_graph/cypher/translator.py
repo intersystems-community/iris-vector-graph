@@ -3145,7 +3145,7 @@ def _expr_aggregation(expr, context, segment):
     return f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
 
 
-def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
+def _scalar_coalesce(fn, args, args_exprs):
     if fn == "coalesce":
         if len(args) >= 2 and args_exprs:
             coerced = []
@@ -3158,6 +3158,10 @@ def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
                     coerced.append(arg)
             return f"COALESCE({', '.join(coerced)})"
         return f"COALESCE({', '.join(args)})" if args else "NULL"
+    return None
+
+
+def _scalar_string(fn, args, args_exprs):
     if fn == "tointeger":
         return f"CAST({args[0]} AS INTEGER)"
     if fn == "tofloat":
@@ -3183,6 +3187,32 @@ def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
         if is_list:
             return f"SQLUser.LIST_REVERSE({args[0]})"
         return f"REVERSE({args[0]})"
+    if fn == "split":
+        return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
+    return None
+
+
+def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
+    if fn == "haversin":
+        return f"(1 - COS({args[0]})) / 2" if args else "NULL"
+    if fn == "e":
+        return "EXP(1)"
+    if fn == "rand":
+        return "SQLUser.RAND()"
+    if fn == "timestamp":
+        return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
+    if fn == "randomuuid":
+        return "SQLUser.NEWID()"
+    if fn in ("datetime", "localdatetime"):
+        return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
+    if fn in ("localtime", "time"):
+        return f"CAST(GETDATE() AS TIME)"
+    if fn == "duration":
+        return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
+    return None
+
+
+def _scalar_statistical(fn, args, args_exprs, context):
     if fn in ("stdev", "stdevs"):
         return f"STDDEV({args[0]})" if args else "NULL"
     if fn in ("stdevp",):
@@ -3199,26 +3229,31 @@ def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
             pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else 0.5
             context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
         return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
-    if fn == "haversin":
-        return f"(1 - COS({args[0]})) / 2" if args else "NULL"
-    if fn == "e":
-        return "EXP(1)"
-    if fn == "rand":
-        return "SQLUser.RAND()"
-    if fn == "timestamp":
-        return "CAST(DATEDIFF('ms', '1970-01-01', GETDATE()) AS BIGINT)"
-    if fn == "randomuuid":
-        return "SQLUser.NEWID()"
-    if fn == "split":
-        return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
-    if fn in ("datetime", "localdatetime"):
-        return f"CAST(GETDATE() AS TIMESTAMP)" if not args else f"CAST({args[0]} AS TIMESTAMP)"
-    if fn in ("localtime", "time"):
-        return f"CAST(GETDATE() AS TIME)"
-    if fn == "duration":
-        return f"CAST({args[0]} AS VARCHAR(256))" if args else "NULL"
+    return None
+
+
+def _scalar_type_conversion(fn, args, args_exprs):
     if fn == "toboolean":
         return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR)) IN ('true','1','yes','y') THEN 1 ELSE 0 END"
+    return None
+
+
+def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
+    result = _scalar_coalesce(fn, args, args_exprs)
+    if result is not None:
+        return result
+    result = _scalar_string(fn, args, args_exprs)
+    if result is not None:
+        return result
+    result = _scalar_numeric_and_datetime(fn, args, args_exprs, context)
+    if result is not None:
+        return result
+    result = _scalar_statistical(fn, args, args_exprs, context)
+    if result is not None:
+        return result
+    result = _scalar_type_conversion(fn, args, args_exprs)
+    if result is not None:
+        return result
     return None
 
 
