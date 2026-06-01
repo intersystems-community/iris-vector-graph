@@ -111,7 +111,9 @@ def main(argv: list[str]) -> int:
             if "".join(block.splitlines(keepends=True)[rs : re_ + 1]) != block:
                 raise SystemExit(f"ERROR: byte-diff self-check failed for {name}")
             out.append(block)
-        sys.stdout.write("\n".join(b.rstrip("\n") for b in out) + "\n")
+        # Write as binary to avoid Python interpreting \n in source as escape sequences
+        combined = "\n".join(b.rstrip("\n") for b in out) + "\n"
+        sys.stdout.buffer.write(combined.encode("utf-8"))
         return 0
 
     if mode == "strip":
