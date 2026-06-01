@@ -3,10 +3,10 @@ Class Graph.KG.TemporalIndex Extends %RegisteredObject
 
 Parameter BUCKET = 300;
 
-ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0)
+ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0) As %Status
 {
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
-	If upsert && $Data(^KG("tout", timestamp, source, predicate, target)) { Return }
+	If upsert && $Data(^KG("tout", timestamp, source, predicate, target)) { Return 1 }
 	Set ^KG("tout", timestamp, source, predicate, target) = weight
 	Set ^KG("tin", timestamp, target, predicate, source) = weight
 	Set bucket = timestamp \ ..#BUCKET
@@ -38,6 +38,7 @@ ClassMethod InsertEdge(source As %String, predicate As %String, target As %Strin
 			Set ^KG("edgeprop", timestamp, source, predicate, target, key) = val
 		}
 	}
+	Return 1
 }
 
 ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer

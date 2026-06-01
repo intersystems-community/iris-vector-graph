@@ -278,6 +278,8 @@ class QueryMixin:
             return self._execute_weighted_shortest_path(sql_query, parameters)
         if vl0.get("shortest") or vl0.get("all_shortest"):
             return self._execute_shortest_path_cypher(sql_query, parameters)
+        if vl0.get("min_hops", 1) > 1 or vl0.get("properties") or vl0.get("return_path_funcs"):
+            return self._execute_var_length_cypher(sql_query, parameters)
 
         import re as _re
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
@@ -497,6 +499,8 @@ class QueryMixin:
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
         import warnings as _warnings
+        from iris_vector_graph.engine import _bfs_stream_pages
+        from iris_vector_graph.schema import _call_classmethod
 
         if self._nkg_dirty:
             from iris_vector_graph.errors import IndexNotSyncedError
