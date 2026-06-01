@@ -36,6 +36,25 @@ def _deploy_objectscript(container_name: str) -> None:
         errors="replace",
         timeout=120,
     )
+    try:
+        from iris_devtester import IRISContainer as _IRC
+        _c = _IRC.attach(container_name); _c._connection = None
+        _conn = _c.get_connection()
+        from iris_vector_graph import IRISGraphEngine as _E
+        _E(_conn, embedding_dimension=128).initialize_schema()
+        for _cls in [
+            "Graph.KG.TraversalBuild", "Graph.KG.TraversalBFS",
+            "Graph.KG.TraversalPaths", "Graph.KG.TraversalKHop", "Graph.KG.Traversal",
+            "Graph.KG.NKGAccelLoader", "Graph.KG.NKGAccelAdjacency",
+            "Graph.KG.NKGAccelTraversal", "Graph.KG.NKGAccelCentrality", "Graph.KG.NKGAccel",
+        ]:
+            subprocess.run(
+                ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
+                input=f'Do $system.OBJ.Compile("{_cls}","cuk")\nH\n',
+                capture_output=True, text=True, timeout=30,
+            )
+    except Exception:
+        pass
 
 
 @pytest.fixture(scope="session")

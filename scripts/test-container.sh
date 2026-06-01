@@ -40,6 +40,15 @@ case "$cmd" in
     echo "Waiting for IRIS to be ready..."
     sleep 15
     "$0" deploy
+    echo "Initializing schema (required before compile-all — &sql macros reference Graph_KG tables)..."
+    python3 -c "
+from iris_devtester import IRISContainer
+c = IRISContainer.attach('$CONTAINER')
+conn = c.get_connection()
+from iris_vector_graph import IRISGraphEngine
+IRISGraphEngine(conn, embedding_dimension=128).initialize_schema()
+print('✓ schema initialized')
+" 2>&1 | grep -E 'schema initialized|ERROR|CRITICAL' | grep -v 'Embedding dimension'
     echo "Recompiling Graph.KG.* after container start..."
     "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
     # Recompile split-class facades AFTER their sibling impl classes (dependency order).
