@@ -42,6 +42,12 @@ case "$cmd" in
     "$0" deploy
     echo "Recompiling Graph.KG.* after container start..."
     "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
+    # Recompile split-class facades AFTER their sibling impl classes (dependency order).
+    # compile-all uses alphabetical order: Traversal.cls compiles before TraversalBuild.cls,
+    # leaving the facade's .1 routine with unresolved references. Fix by recompiling in order.
+    for _cls in Graph.KG.TraversalBuild Graph.KG.TraversalBFS Graph.KG.TraversalPaths Graph.KG.TraversalKHop Graph.KG.Traversal Graph.KG.NKGAccelLoader Graph.KG.NKGAccelAdjacency Graph.KG.NKGAccelTraversal Graph.KG.NKGAccelCentrality Graph.KG.NKGAccel; do
+      "$0" compile "$_cls" > /dev/null 2>&1 || true
+    done
     echo "✓ $CONTAINER ready"
     ;;
 
