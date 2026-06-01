@@ -22,6 +22,10 @@ set -euo pipefail
 
 CONTAINER="${IVG_TEST_CONTAINER:-ivg-iris}"
 EDITION="community"
+# Port 21972: avoids conflict with localhost:1972 SSH tunnel to los-iris (productivity-framework).
+# Registry: ~/ws/productivity-framework/tools/lab_manager/config/iris-container-registry.yaml
+# ivg-iris host_port: 21972, web_port: 32779 (or auto-assigned)
+CONTAINER_PORT="${IVG_CONTAINER_PORT:-21972}"
 
 cmd="${1:-status}"
 
@@ -32,7 +36,7 @@ case "$cmd" in
       exit 0
     fi
     echo "Starting $CONTAINER (edition=$EDITION) via iris-devtester..."
-    idt container up --name "$CONTAINER" --edition "$EDITION"
+    idt container up --name "$CONTAINER" --edition "$EDITION" --port "$CONTAINER_PORT"
     echo "Waiting for IRIS to be ready..."
     sleep 15
     "$0" deploy
