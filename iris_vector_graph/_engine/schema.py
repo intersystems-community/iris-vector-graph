@@ -198,12 +198,41 @@ class SchemaMixin:
                 except Exception as alter_e:
                     logger.warning("Could not alter emb column dimension: %s", alter_e)
             elif db_dim != dim:
-                logger.error(
-                    "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
-                    "Vector operations will fail. You must drop and recreate kg_NodeEmbeddings to change dimension.",
-                    db_dim,
-                    dim,
-                )
+                row_count = None
+                try:
+                    cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
+                    row_count = cursor.fetchone()[0]
+                except Exception:
+                    row_count = None
+                if row_count == 0:
+                    logger.info(
+                        "Embedding dimension mismatch (DB=%d, configured=%d) on EMPTY table — "
+                        "recreating kg_NodeEmbeddings/kg_EdgeEmbeddings at %d",
+                        db_dim, dim, dim,
+                    )
+                    for _t in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings"):
+                        try:
+                            cursor.execute(f"DROP TABLE {_t}")
+                        except Exception:
+                            pass
+                    self.conn.commit()
+                    for _stmt in GraphSchema.get_base_schema_sql(embedding_dimension=dim).split(";"):
+                        _s = _stmt.strip()
+                        if _s.upper().startswith("CREATE TABLE") and "EMBEDDINGS" in _s.upper():
+                            try:
+                                cursor.execute(_s)
+                            except Exception:
+                                pass
+                    self.conn.commit()
+                else:
+                    logger.error(
+                        "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
+                        "Vector operations will fail. Table is non-empty (%s rows) — drop and recreate "
+                        "kg_NodeEmbeddings manually to change dimension.",
+                        db_dim,
+                        dim,
+                        row_count,
+                    )
         except Exception as e:
             logger.warning("Could not verify embedding dimension: %s", e)
 
