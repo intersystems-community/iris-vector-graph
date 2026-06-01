@@ -375,7 +375,7 @@ class IRISGraphStore:
             bfs_json = str(self._call_classmethod(
                 "Graph.KG.Traversal", "BFSFastJsonSorted",
                 source_id, predicates_json, str(max_hops),
-                str(max_results), direction,
+                "", direction, str(max_results),
             ))
         except Exception as e:
             logger.warning("BFS ObjectScript failed: %s", e)
@@ -616,7 +616,7 @@ class IRISGraphStore:
         attrs_json = _json.dumps(attrs) if attrs else ""
         try:
             self._call_classmethod(
-                "Graph.KG.TemporalIndex", "Insert",
+                "Graph.KG.TemporalIndex", "InsertEdge",
                 source_id, predicate, target_id,
                 str(timestamp), str(weight), attrs_json, str(int(upsert)),
             )
@@ -646,9 +646,10 @@ class IRISGraphStore:
     ) -> IVGResult:
         import json as _json
         try:
+            method = "QueryWindowInbound" if direction == "in" else "QueryWindow"
             result_json = str(self._call_classmethod(
-                "Graph.KG.TemporalIndex", "QueryWindow",
-                source_id, predicate, str(ts_start), str(ts_end), direction,
+                "Graph.KG.TemporalIndex", method,
+                source_id, predicate, str(ts_start), str(ts_end),
             ))
             edges = _json.loads(result_json) if result_json else []
             rows = []

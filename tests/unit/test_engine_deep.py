@@ -648,11 +648,9 @@ class TestTemporalEdgeMethods:
         with ctx:
             result = self.engine.get_edges_in_window("n1", "CITED", start=1000, end=2000)
         assert isinstance(result, list)
-        assert isinstance(result, list)
         if result:
             row = result[0]
-            weight_idx = 4
-            assert row[weight_idx] == 1.0
+            assert row["w"] == 1.0
 
     def test_get_distinct_count_returns_int(self):
         ctx, m = self._with_iris("42")

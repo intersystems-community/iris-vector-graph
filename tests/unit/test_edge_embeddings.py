@@ -231,14 +231,12 @@ class TestEdgeEmbeddingsE2E:
         edges = self._make_nodes_and_edges(5)
 
         result = self.engine.embed_edges(
-            where=f"s LIKE 'ee65_{self._run}%'",
             force=True,
         )
         assert result["embedded"] == 5
         assert result["errors"] == 0
 
         result2 = self.engine.embed_edges(
-            where=f"s LIKE 'ee65_{self._run}%'",
             force=False,
         )
         assert result2["embedded"] == 0
@@ -247,10 +245,9 @@ class TestEdgeEmbeddingsE2E:
     def test_embed_edges_force_true(self):
         edges = self._make_nodes_and_edges(3)
 
-        self.engine.embed_edges(where=f"s LIKE 'ee65_{self._run}%'", force=True)
+        self.engine.embed_edges(force=True)
 
         result = self.engine.embed_edges(
-            where=f"s LIKE 'ee65_{self._run}%'",
             force=True,
         )
         assert result["embedded"] == 3
@@ -260,7 +257,7 @@ class TestEdgeEmbeddingsE2E:
         self._make_nodes_and_edges(6)
 
         result = self.engine.embed_edges(
-            where=f"s LIKE 'ee65_{self._run}%' AND p = 'REL_0'",
+            predicate="REL_0",
             force=True,
         )
         assert result["embedded"] >= 1
@@ -278,7 +275,6 @@ class TestEdgeEmbeddingsE2E:
 
         custom_fn = lambda s, p, o: f"{s.lower()} {p.lower()} {o.lower()}"
         result = self.engine.embed_edges(
-            where=f"s LIKE 'ee65_{self._run}%'",
             text_fn=custom_fn,
             force=True,
         )
@@ -288,7 +284,7 @@ class TestEdgeEmbeddingsE2E:
     def test_edge_vector_search_ranking(self):
         edges = self._make_nodes_and_edges(4)
 
-        self.engine.embed_edges(where=f"s LIKE 'ee65_{self._run}%'", force=True)
+        self.engine.embed_edges(force=True)
 
         query = [0.5, 0.5, 0.5, 0.5] + [0.0] * 764
         results = self.engine.edge_vector_search(query, top_k=4)
@@ -329,7 +325,7 @@ class TestEdgeEmbeddingsE2E:
         fixed_emb = [0.1, 0.2, 0.3, 0.4] + [0.0] * 764
         self.engine.embed_text = lambda t: fixed_emb
 
-        self.engine.embed_edges(where=f"s = '{s}'", force=True)
+        self.engine.embed_edges(force=True)
 
         results = self.engine.edge_vector_search(fixed_emb, top_k=10)
         matching = [r for r in results if r["s"] == s and r["p"] == p and r["o_id"] == o]
@@ -347,7 +343,6 @@ class TestEdgeEmbeddingsE2E:
             return f"{s} {p} {o}"
 
         result = self.engine.embed_edges(
-            where=f"s LIKE 'ee65_{self._run}%'",
             text_fn=sometimes_raises,
             force=True,
         )
@@ -358,7 +353,7 @@ class TestEdgeEmbeddingsE2E:
 
     def test_snapshot_round_trip_edge_embeddings(self, tmp_path):
         edges = self._make_nodes_and_edges(3)
-        self.engine.embed_edges(where=f"s LIKE 'ee65_{self._run}%'", force=True)
+        self.engine.embed_edges(force=True)
 
         cursor = self.conn.cursor()
         cursor.execute(

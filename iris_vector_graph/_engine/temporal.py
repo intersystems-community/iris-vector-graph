@@ -58,7 +58,21 @@ class TemporalMixin:
         direction: str = "out",
     ) -> list:
         result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
-        return result.rows if not result.error else []
+        if result.error:
+            return []
+        cols = result.columns
+        if cols and result.rows and isinstance(result.rows[0], (list, tuple)):
+            long_to_short = {"source": "s", "predicate": "p", "target": "o", "timestamp": "ts", "weight": "w"}
+            short_to_long = {v: k for k, v in long_to_short.items()}
+            out = []
+            for row in result.rows:
+                d = dict(zip(cols, row))
+                extras = {long_to_short[k]: v for k, v in d.items() if k in long_to_short}
+                extras.update({short_to_long[k]: v for k, v in d.items() if k in short_to_long})
+                d.update(extras)
+                out.append(d)
+            return out
+        return result.rows
 
     def purge_before(self, ts: int) -> None:
         self._iris_obj().classMethodVoid(
