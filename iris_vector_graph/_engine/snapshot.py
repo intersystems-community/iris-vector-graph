@@ -571,6 +571,9 @@ class SnapshotMixin:
                     continue
                 try:
                     row = _json.loads(line)
+                    # Strip RowID/identity columns that cannot be explicitly inserted
+                    if table_name == "Graph_KG.rdf_edges":
+                        row = {k: v for k, v in row.items() if k.lower() != "id"}
                     cols = list(row.keys())
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
