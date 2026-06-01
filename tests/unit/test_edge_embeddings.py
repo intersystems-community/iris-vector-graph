@@ -171,6 +171,13 @@ class TestEdgeEmbeddingsE2E:
         self.conn = iris_connection
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self._run = uuid.uuid4().hex[:8]
+        _cur = iris_connection.cursor()
+        for _tbl in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_EdgeEmbeddings"):
+            try:
+                _cur.execute(f"DROP TABLE {_tbl}")
+            except Exception:
+                pass
+        iris_connection.commit()
         self.engine.initialize_schema()
 
         self.engine.embed_text = lambda text: [

@@ -176,6 +176,14 @@ class TestIVFIndexE2E:
 
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self._run = uuid.uuid4().hex[:8]
+        cursor = iris_connection.cursor()
+        for tbl in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_EdgeEmbeddings"):
+            try:
+                cursor.execute(f"DROP TABLE {tbl}")
+            except Exception:
+                pass
+        iris_connection.commit()
+        self.engine.initialize_schema()
         yield
         for idx in [f"test46a_{self._run}", f"test46b_{self._run}",
                     f"test46c_{self._run}", f"test46d_{self._run}",
