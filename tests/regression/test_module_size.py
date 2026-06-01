@@ -52,20 +52,12 @@ def test_no_python_module_exceeds_2000_lines():
     assert not offenders, f"Modules exceed line budget:\n{msg}"
 
 
-@pytest.mark.xfail(
-    reason="Spec 186 FR-008 DEFERRED: NKGAccel(1629L)/Traversal(1302L) are cohesive, "
-    "rarely-edited ObjectScript classes with 25 caller files and no fast test net. "
-    "Splitting is P3, high-risk, low-benefit; deferred to a dedicated spec. "
-    "Tracked here so the debt stays visible.",
-    strict=False,
-)
 def test_objectscript_god_classes_split():
-    targets = ["NKGAccel.cls", "Traversal.cls"]
     base = os.path.join(REPO_ROOT, "iris_src", "src", "Graph", "KG")
     offenders = []
-    for name in targets:
-        path = os.path.join(base, name)
-        if os.path.exists(path) and _line_count(path) > MAX_CLS_LINES:
-            offenders.append((name, _line_count(path)))
-    msg = "\n".join(f"  {n}: {ln} lines" for n, ln in offenders)
+    for path in glob.glob(os.path.join(base, "*.cls")):
+        n = _line_count(path)
+        if n > MAX_CLS_LINES:
+            offenders.append((os.path.basename(path), n))
+    msg = "\n".join(f"  {n}: {ln} lines" for n, ln in sorted(offenders))
     assert not offenders, f"ObjectScript classes exceed {MAX_CLS_LINES} lines:\n{msg}"
