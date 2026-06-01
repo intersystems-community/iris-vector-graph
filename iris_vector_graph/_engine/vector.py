@@ -978,12 +978,16 @@ class VectorMixin:
             import numpy as np
             from sklearn.cluster import MiniBatchKMeans
         except ImportError as _ie:
-            np = _sys.modules.get("numpy")
-            MiniBatchKMeans = _sys.modules.get("sklearn.cluster.MiniBatchKMeans") or (
-                _sys.modules.get("sklearn.cluster") and
-                getattr(_sys.modules["sklearn.cluster"], "MiniBatchKMeans", None)
-            )
-            if np is None or MiniBatchKMeans is None:
+            _err = str(_ie)
+            if "more than once" in _err or "cannot load" in _err.lower():
+                np = _sys.modules.get("numpy")
+                _sklearn_cluster = _sys.modules.get("sklearn.cluster")
+                MiniBatchKMeans = getattr(_sklearn_cluster, "MiniBatchKMeans", None) if _sklearn_cluster else None
+                if np is None or MiniBatchKMeans is None:
+                    raise ImportError(
+                        "ivf_build requires numpy and sklearn: pip install numpy scikit-learn"
+                    )
+            else:
                 raise ImportError(
                     "ivf_build requires numpy and sklearn: pip install numpy scikit-learn"
                 )

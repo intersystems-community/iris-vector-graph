@@ -32,22 +32,34 @@ from iris_vector_graph._validate import (
     BM25BuildInput, BM25SearchInput,
     KHop2Input, TemporalEdgeInput, VecSearchInput,
 )
-from iris_vector_graph._engine.temporal import TemporalMixin
-from iris_vector_graph._engine.query import QueryMixin
-from iris_vector_graph._engine.algorithms import AlgorithmsMixin
-from iris_vector_graph._engine.vector import VectorMixin
-from iris_vector_graph._engine.snapshot import SnapshotMixin
-from iris_vector_graph._engine.fhir import FhirMixin
-from iris_vector_graph._engine.admin import AdminMixin
-from iris_vector_graph._engine.embeddings import EmbeddingsMixin
-from iris_vector_graph._engine.schema import SchemaMixin
-from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
 
 logger = logging.getLogger(__name__)
 
 _sentence_transformers = None
 _torch = None
 _BULK_CHUNK_SIZE = 1000
+
+
+class _BulkLoadSession:
+    def __init__(self, engine, stats, max_retries):
+        self._engine = engine
+        self.stats = stats
+        self._max_retries = max_retries
+
+    def add_nodes(self, nodes):
+        n = self._engine._with_reconnect(
+            self._engine.bulk_create_nodes, nodes, max_retries=self._max_retries
+        )
+        self.stats["nodes"] += (n if isinstance(n, int) else len(nodes))
+        return n
+
+    def add_edges(self, edges, predicate="KNOWS"):
+        n = self._engine._with_reconnect(
+            self._engine.bulk_ingest_edges, edges, predicate,
+            auto_sync=False, max_retries=self._max_retries,
+        )
+        self.stats["edges"] += (n if isinstance(n, int) else len(edges))
+        return n
 
 
 def _get_sentence_transformers():
@@ -57,12 +69,14 @@ def _get_sentence_transformers():
         _sentence_transformers = _st
     return _sentence_transformers
 
+
 def _get_torch():
     global _torch
     if _torch is None:
         import torch as _t
         _torch = _t
     return _torch
+
 
 def _load_sentence_transformer(model_name: str):
     st = _get_sentence_transformers()
@@ -71,12 +85,14 @@ def _load_sentence_transformer(model_name: str):
         _w.simplefilter("ignore")
         return st.SentenceTransformer(model_name, local_files_only=False)
 
+
 def _is_sentence_transformer(obj) -> bool:
     try:
         st = _get_sentence_transformers()
         return isinstance(obj, st.SentenceTransformer)
     except ImportError:
         return False
+
 
 def _bfs_stream_pages(conn, tag, page_size=500):
     import json as _j
@@ -99,7 +115,8 @@ def _bfs_stream_pages(conn, tag, page_size=500):
         cursor_step = str(next_step)
         cursor_o = page.get("next_o", "")
 
-class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, EmbeddingsMixin, SchemaMixin, NodesEdgesMixin, QueryMixin, AlgorithmsMixin, VectorMixin):
+
+class IRISGraphEngine:
     """
     Domain-agnostic IRIS graph engine providing:
     - HNSW-optimized vector search (50ms performance)
@@ -203,6 +220,71 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
             )
         return cls(conn, embedding_dimension=embedding_dimension, **kwargs)
 
+    @property
+    def is_ready(self) -> bool:
+        try:
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            cur.fetchone()
+            return True
+        except Exception:
+            return False
+
+    def get_labels(self) -> List[str]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+        return [r[0] for r in cur.fetchall()]
+
+    def get_relationship_types(self) -> List[str]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+        return [r[0] for r in cur.fetchall()]
+
+    def get_node_count(self, label: str = None) -> int:
+        cur = self.conn.cursor()
+        if label:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
+        else:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+        return int(cur.fetchone()[0])
+
+    def get_edge_count(self, predicate: str = None) -> int:
+        cur = self.conn.cursor()
+        if predicate:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE p = ?", [predicate])
+        else:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+        return int(cur.fetchone()[0])
+
+    def get_label_distribution(self) -> Dict[str, int]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT label, COUNT(*) AS cnt FROM Graph_KG.rdf_labels GROUP BY label ORDER BY cnt DESC"
+        )
+        return {r[0]: int(r[1]) for r in cur.fetchall()}
+
+    def get_property_keys(self, label: str = None) -> List[str]:
+        cur = self.conn.cursor()
+        if label:
+            cur.execute(
+                'SELECT DISTINCT rp."key" FROM Graph_KG.rdf_props rp'
+                " JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s"
+                ' WHERE rl.label = ? ORDER BY rp."key"',
+                [label],
+            )
+        else:
+            cur.execute('SELECT DISTINCT "key" FROM Graph_KG.rdf_props ORDER BY "key"')
+        return [r[0] for r in cur.fetchall()]
+
+    def node_exists(self, node_id: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ?",
+            [node_id],
+        )
+        row = cur.fetchone()
+        return row is not None and int(row[0]) > 0
+
     def _reconnect_if_stale(self) -> None:
         try:
             cur = self.conn.cursor()
@@ -259,472 +341,2226 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
                 _time.sleep(delay)
                 delay *= 2
 
+    def bulk_load_session(self, max_retries: int = 3, rebuild_indexes: bool = True,
+                          incremental: bool = True):
+        from contextlib import contextmanager
 
+        @contextmanager
+        def _session():
+            import time as _time
+            from iris_vector_graph.schema import GraphSchema
 
+            stats: Dict[str, Any] = {
+                "nodes": 0, "edges": 0, "retries": 0,
+                "load_seconds": 0.0, "index_rebuild_seconds": 0.0,
+                "sync_seconds": 0.0, "incremental": incremental,
+            }
+            if rebuild_indexes:
+                try:
+                    GraphSchema.disable_indexes(self.conn.cursor())
+                    self.conn.commit()
+                except Exception as e:
+                    logger.warning("bulk_load_session: disable_indexes skipped: %s", str(e)[:120])
 
+            if incremental:
+                try:
+                    self._iris_obj().classMethodValue("Graph.KG.Traversal", "InitNKGSkeleton")
+                except Exception as e:
+                    logger.warning("bulk_load_session: InitNKGSkeleton failed, falling back to full rebuild: %s", str(e)[:120])
+                    incremental_ok = False
+                else:
+                    incremental_ok = True
+            else:
+                incremental_ok = False
 
+            session = _BulkLoadSession(self, stats, max_retries)
+            t0 = _time.perf_counter()
+            try:
+                yield session
+            finally:
+                stats["load_seconds"] = round(_time.perf_counter() - t0, 2)
+                if rebuild_indexes:
+                    tr = _time.perf_counter()
+                    try:
+                        GraphSchema.rebuild_indexes(self.conn.cursor())
+                        self.conn.commit()
+                    except Exception as e:
+                        logger.warning("bulk_load_session: rebuild_indexes failed: %s", str(e)[:120])
+                    stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
+                ts = _time.perf_counter()
+                if incremental_ok and not self._bulk_load_drifted():
+                    self._nkg_dirty = False
+                    try:
+                        self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+                    except Exception:
+                        pass
+                else:
+                    if incremental_ok:
+                        logger.warning("bulk_load_session: ^NKG drift detected — running full sync()")
+                    try:
+                        self.sync()
+                    except Exception as e:
+                        logger.warning("bulk_load_session: final sync() failed: %s", str(e)[:120])
+                stats["sync_seconds"] = round(_time.perf_counter() - ts, 2)
 
+        return _session()
 
-
-
-
-
-
-    _SYSTEM_PROCEDURES = {
-        "ivg.vector.search": "_proc_ivg_vector_search",
-        "ivg.shortestpath.weighted": "_proc_ivg_shortestpath_weighted",
-        "db.labels": "_proc_db_labels",
-        "db.relationshiptypes": "_proc_db_relationshiptypes",
-        "db.schema.visualization": "_proc_db_schema_visualization",
-        "db.schema.nodetypeproperties": "_proc_db_schema_nodetypeproperties",
-        "db.schema.reltypeproperties": "_proc_db_schema_reltypeproperties",
-        "dbms.components": "_proc_dbms_components",
-        "dbms.procedures": "_proc_dbms_procedures",
-        "db.propertykeys": "_proc_db_propertykeys",
-        "dbms.clientconfig": "_proc_dbms_clientconfig",
-        "dbms.security.showcurrentuser": "_proc_dbms_security_showcurrentuser",
-        "dbms.showcurrentuser": "_proc_dbms_security_showcurrentuser",
-        "dbms.functions": "_proc_dbms_functions",
-        "dbms.queryjmx": "_proc_dbms_queryjmx",
-        "apoc.meta.data": "_proc_apoc_meta_data",
-        "apoc.meta.schema": "_proc_apoc_meta_schema",
-    }
-
-    def _proc_ivg_vector_search(self, proc) -> Optional[Dict[str, Any]]:
-        from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
-        args = proc.arguments
-        label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
-        k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
-        vec_arg = args[2] if len(args) > 2 else None
-        query_vector = None
-        if isinstance(vec_arg, CypherLiteral) and isinstance(vec_arg.value, list):
-            query_vector = vec_arg.value
-        return self._store.execute_knn_vec(query_vector or [], k, label_filter)
-
-    def _proc_ivg_shortestpath_weighted(self, proc) -> Optional[Dict[str, Any]]:
-        args = proc.arguments
-        from iris_vector_graph.cypher import ast as cypher_ast
-
-        def _arg_str(a, params=None):
-            if isinstance(a, cypher_ast.Literal):
-                return str(a.value)
-            if isinstance(a, cypher_ast.Variable):
-                if params and a.name in params:
-                    return str(params[a.name])
-                return a.name
-            return str(a)
-
-        source_id = _arg_str(args[0]) if len(args) > 0 else None
-        target_id = _arg_str(args[1]) if len(args) > 1 else None
-        weight_prop = _arg_str(args[2]) if len(args) > 2 else "weight"
-        max_cost = float(_arg_str(args[3])) if len(args) > 3 else 9999.0
-        max_hops = int(float(_arg_str(args[4]))) if len(args) > 4 else 10
-        direction = _arg_str(args[5]) if len(args) > 5 else "out"
-
-        if not source_id or not target_id:
-            return IVGResult(columns=["path", "totalCost"], rows=[])
-
-        import json as _json
-
+    def _bulk_load_drifted(self) -> bool:
         try:
-            raw = _call_classmethod(
-                self.conn,
-                "Graph.KG.Traversal",
-                "DijkstraJson",
-                source_id,
-                target_id,
-                weight_prop,
-                max_cost,
-                max_hops,
-                direction,
-            )
-            result_str = str(raw) if raw else "{}"
-        except Exception as e:
-            logger.warning(f"DijkstraJson failed: {e}")
-            return IVGResult(columns=["path", "totalCost"], rows=[])
-
-        if not result_str or result_str == "{}":
-            return IVGResult(columns=["path", "totalCost"], rows=[])
-
-        try:
-            path_obj = _json.loads(result_str)
+            iris_obj = self._iris_obj()
+            nkg_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            sql_edges = int(cur.fetchone()[0])
+            if sql_edges == 0:
+                return False
+            return nkg_nodes == 0
         except Exception:
-            return IVGResult(columns=["path", "totalCost"], rows=[])
+            return True
 
-        total_cost = float(path_obj.get("totalCost", 0))
-        return IVGResult(columns=["path", "totalCost"], rows=[[result_str, total_cost]])
-
-    def _proc_db_labels(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-        )
-        labels = [row[0] for row in cursor.fetchall()]
-        return IVGResult(columns=["label"], rows=[[l] for l in labels])
-
-    def _proc_db_relationshiptypes(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
-        types = [row[0] for row in cursor.fetchall()]
-        return IVGResult(columns=["relationshipType"], rows=[[t] for t in types])
-
-    def _proc_db_schema_visualization(self, proc) -> Optional[Dict[str, Any]]:
-        schema = self.get_schema_visualization()
-        nodes = schema.get("nodes", [])
-        rels = schema.get("relationships", [])
-        return IVGResult(columns=["nodes", "relationships"], rows=[[nodes, rels]])
-
-    def _proc_db_schema_nodetypeproperties(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-        )
-        labels = [row[0] for row in cursor.fetchall()]
-        rows = []
-        for label in labels:
-            cursor.execute(
-                "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
-                [label],
-            )
-            sample = cursor.fetchone()
-            if sample:
-                cursor.execute(
-                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props '
-                    'WHERE s = ? ORDER BY "key"',
-                    [sample[0]],
-                )
-                for (prop_name,) in cursor.fetchall():
-                    rows.append(
-                        [
-                            f":`{label}`",
-                            [label],
-                            prop_name,
-                            ["String"],
-                            False,
-                        ]
-                    )
-        return IVGResult(
-            columns=[
-                "nodeType",
-                "nodeLabels",
-                "propertyName",
-                "propertyTypes",
-                "mandatory",
-            ],
-            rows=rows
-        )
-
-    def _proc_db_schema_reltypeproperties(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        rows = []
+    def backfill_2hop_exact(self) -> int:
         try:
-            cursor.execute(
-                "SELECT DISTINCT p FROM Graph_KG.rdf_edges WHERE p IS NOT NULL ORDER BY p"
+            return int(self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats"))
+        except Exception as e:
+            logger.warning("backfill_2hop_exact failed: %s", str(e)[:120])
+            return 0
+
+
+    def get_table_mapping(self, label: str) -> Optional[dict]:
+        if self._table_mapping_cache is None:
+            self._load_table_mapping_cache()
+        return (
+            self._table_mapping_cache.get(label) if self._table_mapping_cache else None
+        )
+
+    def _load_table_mapping_cache(self) -> None:
+        self._table_mapping_cache = {}
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT label, sql_table, id_column, prop_columns FROM Graph_KG.table_mappings"
             )
-            rel_types = [r[0] for r in cursor.fetchall()]
-            for rel_type in rel_types[:50]:
-                props = {"weight"}
+            for row in cur.fetchall():
+                self._table_mapping_cache[row[0]] = {
+                    "label": row[0],
+                    "sql_table": row[1],
+                    "id_column": row[2],
+                    "prop_columns": row[3],
+                }
+        except Exception:
+            self._table_mapping_cache = {}
+
+    def get_rel_mapping(
+        self, source_label: str, predicate: str, target_label: str
+    ) -> Optional[dict]:
+        if self._rel_mapping_cache is None:
+            self._load_rel_mapping_cache()
+        key = (source_label, predicate, target_label)
+        return self._rel_mapping_cache.get(key) if self._rel_mapping_cache else None
+
+    def _load_rel_mapping_cache(self) -> None:
+        self._rel_mapping_cache = {}
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT source_label, predicate, target_label, target_fk, "
+                "via_table, via_source, via_target FROM Graph_KG.relationship_mappings"
+            )
+            for row in cur.fetchall():
+                key = (row[0], row[1], row[2])
+                self._rel_mapping_cache[key] = {
+                    "source_label": row[0],
+                    "predicate": row[1],
+                    "target_label": row[2],
+                    "target_fk": row[3],
+                    "via_table": row[4],
+                    "via_source": row[5],
+                    "via_target": row[6],
+                }
+        except Exception:
+            self._rel_mapping_cache = {}
+
+    class TableNotMappedError(ValueError):
+        pass
+
+    def map_sql_table(
+        self, table: str, id_column: str, label: str, property_columns=None
+    ) -> dict:
+        from iris_vector_graph.security import sanitize_identifier
+
+        sanitize_identifier(table)
+        sanitize_identifier(id_column)
+        sanitize_identifier(label)
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            [
+                table.split(".")[0] if "." in table else "USER",
+                table.split(".")[-1],
+                id_column,
+            ],
+        )
+        row = cur.fetchone()
+        if not row or int(row[0]) == 0:
+            raise ValueError(
+                f"Table '{table}' or column '{id_column}' not found. "
+                f"Verify the table exists and id_column is correct."
+            )
+        prop_json = json.dumps(property_columns) if property_columns else None
+        cur.execute(
+            "UPDATE Graph_KG.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
+            [table, id_column, prop_json, label],
+        )
+        if cur.rowcount == 0:
+            cur.execute(
+                "INSERT INTO Graph_KG.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
+                [label, table, id_column, prop_json],
+            )
+        self.conn.commit()
+        self._invalidate_mapping_cache()
+        return {
+            "label": label,
+            "sql_table": table,
+            "id_column": id_column,
+            "prop_columns": property_columns,
+        }
+
+    def map_sql_relationship(
+        self,
+        source_label: str,
+        predicate: str,
+        target_label: str,
+        target_fk: str = None,
+        via_table: str = None,
+        via_source: str = None,
+        via_target: str = None,
+    ) -> dict:
+        if not target_fk and not via_table:
+            raise ValueError("Either target_fk or via_table must be provided.")
+        if not self.get_table_mapping(source_label):
+            raise ValueError(
+                f"Source label '{source_label}' is not registered. Call map_sql_table first."
+            )
+        if not self.get_table_mapping(target_label):
+            raise ValueError(
+                f"Target label '{target_label}' is not registered. Call map_sql_table first."
+            )
+        cur = self.conn.cursor()
+        cur.execute(
+            "UPDATE Graph_KG.relationship_mappings SET target_fk=?, via_table=?, via_source=?, via_target=? "
+            "WHERE source_label=? AND predicate=? AND target_label=?",
+            [
+                target_fk,
+                via_table,
+                via_source,
+                via_target,
+                source_label,
+                predicate,
+                target_label,
+            ],
+        )
+        if cur.rowcount == 0:
+            cur.execute(
+                "INSERT INTO Graph_KG.relationship_mappings "
+                "(source_label, predicate, target_label, target_fk, via_table, via_source, via_target) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [
+                    source_label,
+                    predicate,
+                    target_label,
+                    target_fk,
+                    via_table,
+                    via_source,
+                    via_target,
+                ],
+            )
+        self.conn.commit()
+        self._invalidate_mapping_cache()
+        return {
+            "source_label": source_label,
+            "predicate": predicate,
+            "target_label": target_label,
+            "target_fk": target_fk,
+            "via_table": via_table,
+        }
+
+    def list_table_mappings(self) -> dict:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT label, sql_table, id_column, prop_columns, registered_at FROM Graph_KG.table_mappings"
+        )
+        nodes = [
+            {
+                "label": r[0],
+                "sql_table": r[1],
+                "id_column": r[2],
+                "prop_columns": r[3],
+                "registered_at": str(r[4]),
+            }
+            for r in cur.fetchall()
+        ]
+        cur.execute(
+            "SELECT source_label, predicate, target_label, target_fk, via_table, via_source, via_target "
+            "FROM Graph_KG.relationship_mappings"
+        )
+        rels = [
+            {
+                "source_label": r[0],
+                "predicate": r[1],
+                "target_label": r[2],
+                "target_fk": r[3],
+                "via_table": r[4],
+                "via_source": r[5],
+                "via_target": r[6],
+            }
+            for r in cur.fetchall()
+        ]
+        return {"nodes": nodes, "relationships": rels}
+
+    def remove_table_mapping(self, label: str) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM Graph_KG.table_mappings WHERE label=?", [label]
+        )
+        if int(cur.fetchone()[0]) == 0:
+            raise ValueError(f"Label '{label}' not found in table_mappings.")
+        cur.execute("DELETE FROM Graph_KG.table_mappings WHERE label=?", [label])
+        cur.execute(
+            "DELETE FROM Graph_KG.relationship_mappings WHERE source_label=? OR target_label=?",
+            [label, label],
+        )
+        self.conn.commit()
+        self._invalidate_mapping_cache()
+
+    def reload_table_mappings(self) -> None:
+        self._invalidate_mapping_cache()
+        self._load_table_mapping_cache()
+        self._load_rel_mapping_cache()
+
+    def attach_embeddings_to_table(
+        self,
+        label: str,
+        text_columns: list,
+        batch_size: int = 1000,
+        force: bool = False,
+        progress_callback=None,
+    ) -> dict:
+        mapping = self.get_table_mapping(label)
+        if not mapping:
+            raise IRISGraphEngine.TableNotMappedError(
+                f"Label '{label}' is not registered. Call map_sql_table first."
+            )
+        sql_table = mapping["sql_table"]
+        id_col = mapping["id_column"]
+        cur = self.conn.cursor()
+        cur.execute(f"SELECT {id_col}, {', '.join(text_columns)} FROM {sql_table}")
+        all_rows = cur.fetchall()
+        n_total = len(all_rows)
+        embedded = 0
+        skipped = 0
+        for batch_start in range(0, n_total, batch_size):
+            batch = all_rows[batch_start : batch_start + batch_size]
+            for row in batch:
+                row_id = row[0]
+                node_id = f"{label}:{row_id}"
+                if not force:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id=?",
+                        [node_id],
+                    )
+                    if int(cur.fetchone()[0]) > 0:
+                        skipped += 1
+                        continue
+                text = " ".join(
+                    str(row[i + 1])
+                    for i in range(len(text_columns))
+                    if row[i + 1] is not None
+                )
+                try:
+                    emb = self.embed_text(text)
+                    emb_str = ",".join(str(x) for x in emb)
+                    cur.execute(
+                        "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id]
+                    )
+                    cur.execute(
+                        f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
+                        [node_id, emb_str],
+                    )
+                    embedded += 1
+                except Exception as ex:
+                    logger.warning(
+                        f"attach_embeddings_to_table: failed to embed {node_id}: {ex}"
+                    )
+            self.conn.commit()
+            n_done = batch_start + len(batch)
+            logger.info(
+                f"attach_embeddings_to_table: {n_done}/{n_total} rows processed"
+            )
+            if progress_callback:
+                progress_callback(n_done, n_total)
+        return {"embedded": embedded, "skipped": skipped, "total": n_total}
+
+    def embed_text(self, text: str) -> List[float]:
+        """
+        Converts text to a vector embedding using the best available method.
+        Order of preference:
+        1. Native IRIS EMBEDDING() if embedding_config is set.
+        2. Configured Python embedder.
+        3. Default SentenceTransformer fallback.
+        """
+        # 1. Native IRIS embedding if available
+        if self.embedding_config and self._probe_embedding_support():
+            cursor = self.conn.cursor()
+            try:
+                # Call SQL EMBEDDING function
+                cursor.execute("SELECT EMBEDDING(?, ?)", [text, self.embedding_config])
+                result = cursor.fetchone()
+                if result:
+                    # IRIS returns vector as string or list depending on driver version
+                    val = result[0]
+                    if isinstance(val, str):
+                        return [float(x) for x in val.strip("[]").split(",")]
+                    return list(val)
+            except Exception as e:
+                logger.warning(
+                    f"Native IRIS EMBEDDING failed for config '{self.embedding_config}': {e}. Falling back to Python."
+                )
+            finally:
+                cursor.close()
+
+        # 2. Python-side embedding
+        if not self.embedder:
+            try:
+                import logging as _logging
+                try:
+                    import transformers as _tf
+                    _tf.logging.set_verbosity_error()
+                    _logging.getLogger("safetensors").setLevel(_logging.ERROR)
+                except Exception:
+                    pass
+                self.embedder = _load_sentence_transformer("all-MiniLM-L6-v2")
+                logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
+            except ImportError:
+                raise RuntimeError(
+                    "No embedder or embedding_config configured, and 'sentence-transformers' not installed. "
+                    "Pass an embedder/embedding_config to IRISGraphEngine or install sentence-transformers."
+                )
+
+        if hasattr(self.embedder, "encode"):
+            return self.embedder.encode(text).tolist()
+        if hasattr(self.embedder, "embed"):
+            return self.embedder.embed(text)
+        if callable(self.embedder):
+            return self.embedder(text)
+
+        raise TypeError(
+            f"Configured embedder {type(self.embedder)} is not a supported type (must have encode/embed or be callable)"
+        )
+
+    def initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
+        """
+        Create the base schema tables in IRIS.
+
+        Returns a status dict with keys:
+          - 'tables_created': True/False
+          - 'objectscript_deployed': True/False
+          - 'kg_built': True/False  
+          - 'embedding_dimension': int
+          - 'warnings': list[str]
+
+        Safe to call on existing databases — statements that fail with "already exists"
+        are silently ignored.  Raises if ``embedding_dimension`` has not been set (either
+        via the constructor or prior calls to :meth:`store_embedding`).
+
+        Args:
+            auto_deploy_objectscript: When True (default), attempt to load and compile
+                the ObjectScript .cls files from iris_src/ into IRIS.  On failure a
+                warning is logged and the engine falls back to Python/SQL paths.
+                Set to False to skip .cls deployment entirely.
+        """
+        from iris_vector_graph.utils import _split_sql_statements
+
+        dim = self.embedding_dimension
+        if dim is None:
+            raise ValueError(
+                "embedding_dimension must be set before calling initialize_schema(). "
+                "Pass it to IRISGraphEngine(conn, embedding_dimension=<N>) or call "
+                "store_embedding() first so the dimension can be inferred."
+            )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("CREATE SCHEMA Graph_KG")
+        except Exception:
+            pass  # already exists
+
+        sql = GraphSchema.get_base_schema_sql(embedding_dimension=dim)
+        for stmt in _split_sql_statements(sql):
+            if not stmt.strip():
+                continue
+            try:
+                cursor.execute(stmt)
+            except Exception as e:
+                err = str(e).lower()
+                _OPTIONAL_DDL_PATTERNS = (
+                    "ifind",
+                    "json_value",
+                    "indextype",
+                    "%find",
+                    "kg_txt",
+                    "kg_rrf",
+                    "irisdev",
+                    "iris_src",
+                )
+                if (
+                    "already exists" not in err
+                    and "already has a" not in err
+                    and "already has index" not in err
+                ):
+                    import re as _re_ddl
+
+                    _sqlcode = _re_ddl.search(
+                        r"sqlcode.*?<(-?\d+)>", err
+                    ) or _re_ddl.search(r"<(-\d+)>", err)
+                    _sqlcode_val = _sqlcode.group(1) if _sqlcode else ""
+                    is_index_on_rdf_edges = (
+                        _sqlcode_val == "-400"
+                        and "rdf_edges" in stmt.lower()
+                        and "create index" in stmt.lower()
+                    )
+                    if (
+                        any(
+                            p in err or p in stmt.lower()
+                            for p in _OPTIONAL_DDL_PATTERNS
+                        )
+                        or is_index_on_rdf_edges
+                    ):
+                        logger.debug(
+                            "Optional DDL skipped (will retry via ALTER TABLE): %s",
+                            stmt[:80],
+                        )
+                    else:
+                        logger.warning(
+                            "Schema setup warning: %s | Statement: %.100s", e, stmt
+                        )
+
+        # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
+        GraphSchema.ensure_indexes(cursor)
+
+        # 4. Check for dimension mismatch on existing tables; fix untyped vector column
+        try:
+            db_dim = GraphSchema.get_embedding_dimension(cursor)
+            if db_dim is None:
+                # Column exists but has no dimension (e.g. created without VECTOR(DOUBLE,N)).
+                # ALTER TABLE to add the dimension so procedure compilation succeeds.
+                logger.info(
+                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)",
+                    dim,
+                )
+                try:
+                    cursor.execute(
+                        f"ALTER TABLE Graph_KG.kg_NodeEmbeddings ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                    )
+                    cursor.execute(
+                        f"ALTER TABLE Graph_KG.kg_NodeEmbeddings_optimized ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                    )
+                    self.conn.commit()
+                    logger.info("ALTER TABLE succeeded — dimension set to %d", dim)
+                except Exception as alter_e:
+                    logger.warning("Could not alter emb column dimension: %s", alter_e)
+            elif db_dim != dim:
+                logger.error(
+                    "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
+                    "Vector operations will fail. You must drop and recreate kg_NodeEmbeddings to change dimension.",
+                    db_dim,
+                    dim,
+                )
+        except Exception as e:
+            logger.warning("Could not verify embedding dimension: %s", e)
+
+        # 5. Install stored procedures
+        procedure_errors = []
+        for stmt in GraphSchema.get_procedures_sql_list(
+            table_schema="Graph_KG",
+            embedding_dimension=dim,
+        ):
+            if not stmt.strip():
+                continue
+            try:
+                cursor.execute(stmt)
+            except Exception as e:
+                err = str(e).lower()
+                if "already exists" in err or "already has" in err:
+                    continue  # idempotent re-run — schema or procedure already installed
+                # Only kg_KNN_VEC is required for server-side vector search;
+                # kg_TXT and kg_RRF_FUSE are optional (depend on full-text search feature)
+                is_core = "procedure graph_kg.kg_knn_vec" in stmt.lower()
+                if is_core:
+                    _sqlcode = ""
+                    import re as _re_proc
+                    m = _re_proc.search(r"sqlcode.*?<(-?\d+)>", err)
+                    if m:
+                        _sqlcode = m.group(1)
+                    if _sqlcode == "-260":
+                        logger.debug(
+                            "kg_KNN_VEC skipped: vector dimension mismatch in kg_NodeEmbeddings "
+                            "(table has mixed-dim vectors from tests). Non-fatal. | Error: %s", e
+                        )
+                    else:
+                        procedure_errors.append((stmt[:80], e))
+                        logger.error(
+                            "Procedure DDL failed: %s | Error: %s", stmt[:80], e
+                        )
+                else:
+                    logger.debug(
+                        "Optional procedure DDL skipped (non-fatal): %s | Error: %s",
+                        stmt[:80],
+                        e,
+                    )
+
+        if procedure_errors:
+            raise RuntimeError(
+                f"initialize_schema() failed to install {len(procedure_errors)} "
+                f"stored procedure(s). Server-side vector search will be unavailable. "
+                f"First error: {procedure_errors[0][1]}"
+            )
+
+        self.conn.commit()
+
+        # 5b. Create SQLUser views so IVG's Python PPR fallback can use unqualified table names
+        for view_sql in [
+            "CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes",
+            "CREATE VIEW SQLUser.rdf_edges AS SELECT * FROM Graph_KG.rdf_edges",
+            "CREATE VIEW SQLUser.rdf_labels AS SELECT * FROM Graph_KG.rdf_labels",
+            "CREATE VIEW SQLUser.rdf_props AS SELECT * FROM Graph_KG.rdf_props",
+        ]:
+            try:
+                cursor.execute(view_sql)
+            except Exception:
+                pass
+
+        # 6. Deploy ObjectScript .cls layer (best-effort)
+        if auto_deploy_objectscript:
+            try:
+                pkg_dir = Path(__file__).parent.parent / "iris_src"
+                if not pkg_dir.exists():
+                    pkg_dir = Path(__file__).parent / ".." / "iris_src"
+                self.capabilities = GraphSchema.deploy_objectscript_classes(
+                    cursor, pkg_dir.resolve(), conn=self.conn
+                )
+            except Exception as exc:
+                logger.debug(
+                    "ObjectScript auto-deploy skipped (expected in Docker — use docker cp + LoadDir): %s",
+                    exc,
+                )
+                self.capabilities = IRISCapabilities()
+        else:
+            self.capabilities = IRISCapabilities()
+
+        # 6b. Always detect capabilities from %Dictionary (deployment may have failed
+        # but classes could already be compiled from a prior docker cp + LoadDir)
+        if not self.capabilities.objectscript_deployed:
+            try:
                 cursor.execute(
-                    "SELECT TOP 1 qualifiers FROM Graph_KG.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
-                    [rel_type],
+                    "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
+                    "WHERE Name='Graph.KG.PageRank'"
                 )
                 row = cursor.fetchone()
                 if row and row[0]:
-                    try:
-                        keys = list(json.loads(str(row[0])).keys())
-                        props.update(keys[:20])
-                    except Exception:
-                        pass
-                for prop in sorted(props):
-                    rows.append([rel_type, prop, ["STRING"], False])
-        except Exception as e:
-            logger.debug("relTypeProperties query failed: %s", e)
-        return IVGResult(
-            columns=["relType", "propertyName", "propertyTypes", "mandatory"],
-            rows=rows
-        )
+                    self.capabilities.objectscript_deployed = True
+                    logger.info("ObjectScript classes detected (pre-compiled)")
+            except Exception:
+                pass
 
-    def _proc_dbms_components(self, proc) -> Optional[Dict[str, Any]]:
-        return IVGResult(
-            columns=["name", "versions", "edition"],
-            rows=[["iris-vector-graph", ["5.0.0"], "community"]]
-        )
-
-    def _proc_dbms_procedures(self, proc) -> Optional[Dict[str, Any]]:
-        def _proc(n, sig, desc, mode="READ"):
-            return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
-
-        procs = [
-            _proc(
-                "db.labels", "db.labels() :: (label :: STRING)", "List all labels"
-            ),
-            _proc(
-                "db.relationshipTypes",
-                "db.relationshipTypes() :: (relationshipType :: STRING)",
-                "List all rel types",
-            ),
-            _proc(
-                "db.schema.visualization",
-                "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)",
-                "Schema visualization",
-            ),
-            _proc(
-                "db.schema.nodeTypeProperties",
-                "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
-                "Node type props",
-            ),
-            _proc(
-                "db.schema.relTypeProperties",
-                "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
-                "Rel type props",
-            ),
-            _proc(
-                "dbms.components",
-                "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)",
-                "Server components",
-                "DBMS",
-            ),
-            _proc(
-                "dbms.procedures",
-                "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)",
-                "List procedures",
-                "DBMS",
-            ),
-            _proc(
-                "dbms.functions",
-                "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
-                "List functions",
-                "DBMS",
-            ),
-            _proc(
-                "dbms.clientConfig",
-                "dbms.clientConfig() :: (key :: STRING, value :: STRING)",
-                "Client config",
-                "DBMS",
-            ),
-            _proc(
-                "dbms.security.showCurrentUser",
-                "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)",
-                "Current user",
-                "DBMS",
-            ),
-            _proc(
-                "dbms.queryJmx",
-                "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)",
-                "Query JMX management data",
-                "DBMS",
-            ),
-        ]
-        return IVGResult(
-            columns=[
-                "name",
-                "signature",
-                "description",
-                "mode",
-                "admin",
-                "option",
-                "defaultBuiltInRoles",
-                "isDeprecated",
-                "worksOnSystem",
-                "argumentDescription",
-            ],
-            rows=procs
-        )
-
-    def _proc_db_propertykeys(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
-        )
-        keys = [row[0] for row in cursor.fetchall()]
-        return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
-
-    def _proc_dbms_clientconfig(self, proc) -> Optional[Dict[str, Any]]:
-        return IVGResult(
-            columns=["key", "value"],
-            rows=[
-                ["browser.allow_outgoing_connections", "false"],
-                ["browser.credential_timeout", "0"],
-                ["browser.retain_connection_credentials", "true"],
-                ["browser.retain_editor_history", "true"],
-                ["browser.post_connect_cmd", ""],
-                ["dbms.security.auth_enabled", "false"],
-            ]
-        )
-
-    def _proc_dbms_security_showcurrentuser(self, proc) -> Optional[Dict[str, Any]]:
-        return IVGResult(
-            columns=["username", "roles", "flags"],
-            rows=[["neo4j", [], []]]
-        )
-
-    def _proc_dbms_functions(self, proc) -> Optional[Dict[str, Any]]:
-        return IVGResult(
-            columns=[
-                "name",
-                "signature",
-                "description",
-                "aggregating",
-                "defaultBuiltInRoles",
-                "isDeprecated",
-                "argumentDescription",
-                "returnDescription",
-                "category",
-            ],
-            rows=[]
-        )
-
-    def _proc_dbms_queryjmx(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
-        node_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
-        edge_count = cursor.fetchone()[0]
-        pfx = "org.neo4j:instance=kernel#0"
-        return IVGResult(
-            columns=["name", "description", "attributes"],
-            rows=[
-                [
-                    f"{pfx},name=Store file sizes",
-                    "Store file sizes",
-                    {
-                        "TotalStoreSize": {"value": node_count * 200},
-                        "NodeStoreSize": {"value": node_count * 100},
-                        "RelationshipStoreSize": {"value": edge_count * 100},
-                        "PropertyStoreSize": {"value": node_count * 50},
-                        "StringStoreSize": {"value": node_count * 30},
-                        "ArrayStoreSize": {"value": 0},
-                        "IndexStoreSize": {"value": 0},
-                        "LabelStoreSize": {"value": node_count * 10},
-                        "SchemaStoreSize": {"value": 4096},
-                    },
-                ],
-                [
-                    f"{pfx},name=Primitive count",
-                    "Primitive count",
-                    {
-                        "NumberOfNodeIdsInUse": {"value": node_count},
-                        "NumberOfRelationshipIdsInUse": {"value": edge_count},
-                        "NumberOfPropertyIdsInUse": {"value": node_count * 3},
-                        "NumberOfRelationshipTypeIdsInUse": {"value": 20},
-                        "NumberOfLabelIdsInUse": {"value": 5},
-                    },
-                ],
-                [
-                    f"{pfx},name=Page cache",
-                    "Page cache statistics",
-                    {
-                        "Hits": {"value": 1000},
-                        "Faults": {"value": 10},
-                        "HitRatio": {"value": 0.99},
-                        "UsageRatio": {"value": 0.5},
-                        "FileMappings": {"value": 5},
-                        "FileUnmappings": {"value": 0},
-                        "BytesRead": {"value": 1024 * 1024},
-                        "BytesWritten": {"value": 1024},
-                        "FlushEvents": {"value": 0},
-                        "EvictionExceptions": {"value": 0},
-                    },
-                ],
-                [
-                    f"{pfx},name=Transactions",
-                    "Transaction statistics",
-                    {
-                        "LastCommittedTxId": {"value": 1},
-                        "CurrentCommittedTxId": {"value": 1},
-                        "LastClosedTxId": {"value": 1},
-                        "NumberOfOpenTransactions": {"value": 0},
-                        "PeakNumberOfConcurrentTransactions": {"value": 1},
-                        "NumberOfOpenedTransactions": {"value": 1},
-                        "NumberOfCommittedTransactions": {"value": 1},
-                        "NumberOfRolledBackTransactions": {"value": 0},
-                        "NumberOfTerminatedTransactions": {"value": 0},
-                    },
-                ],
-                [
-                    f"{pfx},name=Kernel",
-                    "Kernel information",
-                    {
-                        "KernelVersion": {"value": "iris-vector-graph-1.47.0"},
-                        "StoreId": {"value": "store-001"},
-                        "DatabaseName": {"value": "neo4j"},
-                        "ReadOnly": {"value": False},
-                        "MBeanQuery": {"value": pfx},
-                    },
-                ],
-                [
-                    f"{pfx},name=Configuration",
-                    "Configuration",
-                    {
-                        "dbms.jvm.heap.initial_size": {"value": "256m"},
-                        "dbms.jvm.heap.max_size": {"value": "512m"},
-                        "dbms.logs.native.size": {"value": "20m"},
-                    },
-                ],
-            ]
-        )
-
-    def _proc_apoc_meta_data(self, proc) -> Optional[Dict[str, Any]]:
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-        )
-        labels = [row[0] for row in cursor.fetchall()]
-        rows = []
-        for label in labels[:50]:
-            cursor.execute(
-                'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props rp '
-                "JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s "
-                'WHERE rl.label = ? ORDER BY "key"',
-                [label],
-            )
-            props = [row[0] for row in cursor.fetchall()]
-            if props:
-                for prop_name in props:
-                    rows.append(
-                        [label, prop_name, "STRING", "node", False, False, False]
+        if not self.capabilities.objectscript_deployed:
+            try:
+                iris_obj = self._iris_obj()
+                routine_exists = int(iris_obj.classMethodValue("%Routine", "Exists", "Graph.KG.PageRank.1"))
+                if routine_exists:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
+                        "WHERE Name='Graph.KG.PageRank'"
                     )
+                    row = cursor.fetchone()
+                    class_registered = int(row[0]) if row else 0
+                    if class_registered:
+                        self.capabilities.objectscript_deployed = True
+                        logger.info("ObjectScript classes detected via %%Routine.Exists fallback")
+                    else:
+                        logger.warning(
+                            "ObjectScript routines compiled but class dictionary missing "
+                            "(irishealth ^oddDEF/^rOBJ mapping issue — classes not callable). "
+                            "Use iris-community image or Atelier API for class deployment."
+                        )
+            except Exception:
+                pass
+
+        if self.capabilities.objectscript_deployed and not self.capabilities.kg_built:
+            try:
+                built = GraphSchema.bootstrap_kg_global(cursor, conn=self.conn)
+                if built:
+                    self.capabilities.kg_built = True
+                    self.conn.commit()
+            except Exception as exc:
+                logger.warning("^KG bootstrap failed: %s", exc)
+
+        status = {
+            "tables_created": True,
+            "objectscript_deployed": self.capabilities.objectscript_deployed,
+            "kg_built": self.capabilities.kg_built,
+            "embedding_dimension": dim,
+            "warnings": [],
+        }
+        if not self.capabilities.objectscript_deployed:
+            status["warnings"].append(
+                "ObjectScript classes not deployed — BFS, Subgraph, PageRank using Python fallbacks. "
+                "Run docker cp iris_src/src <container>:/tmp/src && docker exec <container> iris session IRIS "
+                "-U USER 'Do $system.OBJ.LoadDir(\"/tmp/src\",\"ck\",,1)' to deploy."
+            )
+        if not self.capabilities.kg_built:
+            status["warnings"].append(
+                "^KG adjacency index not built — multi-hop BFS unavailable. "
+                "Call BuildKG() after loading data: from iris_vector_graph.schema import _call_classmethod; "
+                "_call_classmethod(conn, 'Graph.KG.Traversal', 'BuildKG')"
+            )
+
+        if status["warnings"]:
+            for w in status["warnings"]:
+                logger.warning("IVG setup: %s", w[:120])
+
+        logger.info(
+            "initialize_schema() complete — objectscript=%s kg_built=%s dim=%d",
+            status["objectscript_deployed"],
+            status["kg_built"],
+            dim,
+        )
+        return status
+
+    def _get_embedding_dimension(self) -> int:
+        """
+        Get the vector embedding dimension, either from initialization or auto-detection.
+        Prioritizes database detection if the schema exists.
+        """
+        cursor = self.conn.cursor()
+
+        # 1. Try to detect from DB first
+        dim = GraphSchema.get_embedding_dimension(cursor)
+        if dim:
+            return int(dim)
+
+        # 2. Fallback to instance variable if DB detection fails or table doesn't exist
+        if self.embedding_dimension is not None:
+            return self.embedding_dimension
+
+        raise ValueError(
+            "Embedding dimension could not be determined. Please provide it during IRISGraphEngine initialization."
+        )
+
+    def _probe_embedding_support(self) -> bool:
+        """Probe whether the IRIS EMBEDDING() SQL function is available (IRIS 2024.3+).
+
+        Result is cached per engine instance. Probe strategy:
+        - Execute ``SELECT EMBEDDING('__ivg_probe__', '__nonexistent_config__')``
+        - If the error message contains 'not found' / 'does not exist' → function absent → False
+        - Any other error (e.g. config missing) → function present → True
+        - No error → True
+        """
+        if self._embedding_function_available is not None:
+            return self._embedding_function_available
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT EMBEDDING('__ivg_probe__', '__nonexistent_config__')"
+            )
+            self._embedding_function_available = True
+        except Exception as e:
+            err = str(e).lower()
+            if "unknown function" in err or "not a recognized" in err:
+                self._embedding_function_available = False
             else:
-                rows.append([label, None, "STRING", "node", False, False, False])
-        cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
-        for (rel_type,) in cursor.fetchall():
-            rows.append(
-                [
-                    rel_type,
-                    None,
-                    "RELATIONSHIP",
-                    "relationship",
-                    False,
-                    False,
-                    False,
+                self._embedding_function_available = True
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return bool(self._embedding_function_available)
+
+    def _probe_native_vec(self) -> bool:
+        if self._native_vec_available is not None:
+            return self._native_vec_available
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT TOP 1 VECTOR_COSINE(emb, TO_VECTOR('[0]', DOUBLE)) "
+                f"FROM {_table('kg_NodeEmbeddings')} WHERE 1=0"
+            )
+            self._native_vec_available = True
+        except Exception as e:
+            err = str(e).lower()
+            self._native_vec_available = not (
+                "unknown function" in err
+                or "not a recognized" in err
+                or "not found" in err
+                or "no such" in err
+            )
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return bool(self._native_vec_available)
+
+    def _assert_node_exists(self, node_id: str) -> None:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?", [node_id]
+            )
+            result = cursor.fetchone()
+            if not result or result[0] == 0:
+                raise ValueError(f"Node does not exist: {node_id}")
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        finally:
+            if hasattr(cursor, 'close'):
+                cursor.close()
+
+    def execute_aql(
+        self,
+        aql: str,
+        bind_vars: Optional[Dict[str, Any]] = None,
+    ) -> "IVGResult":
+        from iris_vector_graph.cypher.aql import translate_aql
+        cypher_query, params = translate_aql(aql, bind_vars or {})
+        return self.execute_cypher(cypher_query, parameters=params)
+
+    def execute_cypher(
+        self, cypher_query: str, parameters: Dict[str, Any] = None,
+        read_only: bool = False,
+    ) -> "IVGResult":
+        """
+        Execute a Cypher query by translating it to IRIS SQL.
+
+        Args:
+            cypher_query: Cypher query string
+            parameters: Optional query parameters
+            read_only: If True, rejects any mutation (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH)
+
+        Returns:
+            Dict containing 'columns', 'rows', and 'metadata'
+        """
+        CypherInput(cypher_query=cypher_query)
+        import re as _re_ec
+        _APPROX_RE = _re_ec.compile(
+            r'\bapprox_count_distinct\s*\(\s*(\w+)\s*\)\s+AS\s+(\w+)',
+            _re_ec.IGNORECASE,
+        )
+        _approx_m = _APPROX_RE.search(cypher_query)
+        if _approx_m:
+            return self._execute_approx_count_distinct(cypher_query, parameters, _approx_m)
+
+        _fast = self._try_khop_fast_path(cypher_query, parameters)
+        if _fast is not None:
+            return _fast
+
+        stripped = cypher_query.strip().upper()
+
+        if "CALL DB.LABELS() YIELD" in stripped and "UNION" in stripped:
+            labels = self._try_system_procedure(
+                type("P", (), {"procedure_name": "db.labels"})()
+            ).get("rows", [])
+            rels = self._try_system_procedure(
+                type("P", (), {"procedure_name": "db.relationshipTypes"})()
+            ).get("rows", [])
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
+            )
+            prop_keys = [r[0] for r in cursor.fetchall()]
+            return IVGResult(                columns= ["result"],
+                rows= [
+                    [{"name": "labels", "data": [r[0] for r in labels]}],
+                    [{"name": "relationshipTypes", "data": [r[0] for r in rels]}],
+                    [{"name": "propertyKeys", "data": prop_keys}],
                 ]
             )
-        return IVGResult(
-            columns=[
-                "label",
-                "property",
-                "type",
-                "elementType",
-                "unique",
-                "index",
-                "existence",
-            ],
-            rows=rows
+
+        if (
+            "RETURN DISTINCT" in stripped
+            and "UNION ALL" in stripped
+            and "ENTITY" in stripped
+        ):
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT TOP 25 node_id FROM Graph_KG.nodes")
+            node_rows = [["node", r[0]] for r in cursor.fetchall()]
+            cursor.execute("SELECT DISTINCT TOP 25 p FROM Graph_KG.rdf_edges")
+            rel_rows = [["relationship", r[0]] for r in cursor.fetchall()]
+            return IVGResult(columns=["entity", "id"], rows=node_rows + rel_rows)
+
+        if (
+            "MATCH ()" in stripped
+            and "COUNT(*)" in stripped
+            and "UNION ALL" in stripped
+        ):
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            node_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            edge_count = cursor.fetchone()[0]
+            return IVGResult(                columns= ["result"],
+                rows= [
+                    [{"name": "nodes", "data": node_count}],
+                    [{"name": "relationships", "data": edge_count}],
+                ]
+            )
+
+        if ";" in cypher_query and "CALL " in cypher_query.upper():
+            parts = [p.strip() for p in cypher_query.split(";") if p.strip()]
+            if len(parts) > 1:
+                all_rows = []
+                all_cols = None
+                for part in parts:
+                    try:
+                        sub = self.execute_cypher(part, parameters=parameters)
+                        if all_cols is None:
+                            all_cols = sub.get("columns", [])
+                        all_rows.extend(sub.get("rows", []))
+                    except Exception:
+                        pass
+                return IVGResult(columns=all_cols or ["result"], rows=all_rows)
+
+        if stripped.startswith("EXPLAIN "):
+            return IVGResult(                columns= ["Plan"],
+                rows= [["No execution plan available (IRIS backend)"]]
+            )
+
+        if stripped.startswith("SHOW "):
+            return self._handle_show_command(stripped)
+
+        if (stripped.startswith("CREATE CONSTRAINT")
+                or stripped.startswith("DROP CONSTRAINT")
+                or stripped.startswith("CREATE INDEX")
+                or stripped.startswith("CREATE TEXT INDEX")
+                or stripped.startswith("CREATE RANGE INDEX")
+                or stripped.startswith("CREATE POINT INDEX")
+                or stripped.startswith("DROP INDEX")
+                or stripped.startswith("CREATE FULLTEXT")
+                or stripped.startswith("CREATE LOOKUP")):
+            return IVGResult(columns=[], rows=[], sql=cypher_query, params=[])
+
+        parsed = parse_query(cypher_query)
+
+        self._reconnect_if_stale()
+
+        if read_only and parsed.is_mutation:
+            raise PermissionError(
+                f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH) "
+                f"are not allowed. Query: {cypher_query[:100]}"
+            )
+
+        if parsed.subsequent_queries:
+            result = None
+            current_params = dict(parameters) if parameters else {}
+            for part_query in [parsed] + parsed.subsequent_queries:
+                part_query.subsequent_queries = []
+                result = self._execute_parsed(part_query, current_params)
+                if result and result.get("rows") and result.get("columns"):
+                    first_row = result["rows"][0] if result["rows"] else []
+                    for col, val in zip(result["columns"], first_row):
+                        if isinstance(val, (str, int, float, bool, type(None))):
+                            current_params[col] = val
+            return result
+
+        return self._execute_parsed(parsed, parameters)
+
+    def _execute_parsed(self, parsed, parameters):
+        if parsed.procedure_call is not None:
+            result = self._try_system_procedure(parsed.procedure_call)
+            if result is not None:
+                return result
+        sql_query = translate_to_sql(parsed, parameters, engine=self)
+        if sql_query.var_length_paths:
+            return self._route_var_length(sql_query, parameters)
+        metadata = sql_query.query_metadata
+        if sql_query.is_transactional:
+            result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
+            result.metadata = metadata
+            return result
+        if self._store_capabilities.get("native_sql", True):
+            sql_str = sql_query.sql
+            p = sql_query.parameters[0] if sql_query.parameters else []
+            result = self._store.execute_sql(sql_str, p)
+            result.metadata = metadata
+            return result
+        traversal = self._extract_traversal(parsed, parameters)
+        if traversal is not None:
+            return self._execute_traversal(traversal, sql_query, parsed, parameters)
+        label_filter = None
+        return_props = None
+        limit = 0
+        try:
+            if parsed.query_parts:
+                clause = parsed.query_parts[0].clauses[0]
+                if hasattr(clause, "patterns") and clause.patterns:
+                    node = clause.patterns[0].nodes[0] if clause.patterns[0].nodes else None
+                    if node and node.labels:
+                        label_filter = node.labels[0]
+            if parsed.return_clause:
+                return_props = [
+                    item.expression.property_name
+                    for item in parsed.return_clause.items
+                    if hasattr(item.expression, "property_name")
+                ]
+            if parsed.limit:
+                limit = int(parsed.limit)
+        except Exception:
+            pass
+        return self._store.query_nodes(
+            label_filter=label_filter,
+            property_filters=None,
+            return_properties=return_props,
+            limit=limit,
         )
 
-    def _proc_apoc_meta_schema(self, proc) -> Optional[Dict[str, Any]]:
-        result = self._try_system_procedure(
-            type("P", (), {"procedure_name": "apoc.meta.data"})()
+    def _extract_traversal(self, parsed, parameters):
+        from iris_vector_graph.cypher.ast import Direction
+        try:
+            clause = parsed.query_parts[0].clauses[0]
+            if not (hasattr(clause, "patterns") and clause.patterns):
+                return None
+            pat = clause.patterns[0]
+            if len(pat.nodes) < 2 or len(pat.relationships) < 1:
+                return None
+            rel = pat.relationships[0]
+            if rel.variable_length is not None:
+                return None
+            src_node = pat.nodes[0]
+            src_id = None
+            if src_node.properties:
+                for k, v in src_node.properties.items():
+                    if k == "id":
+                        if isinstance(v, str) and v.startswith("$"):
+                            src_id = parameters.get(v[1:])
+                        elif hasattr(v, 'name'):
+                            src_id = parameters.get(v.name)
+                        elif isinstance(v, str):
+                            src_id = v
+                        else:
+                            src_id = str(v)
+                        break
+            if src_id is None:
+                return None
+            direction_map = {Direction.OUTGOING: "out", Direction.INCOMING: "in", Direction.BOTH: "both"}
+            is_count = bool(
+                parsed.return_clause and
+                any(hasattr(item.expression, "function_name") and
+                    item.expression.function_name.upper() == "COUNT"
+                    for item in parsed.return_clause.items)
+            )
+            return {
+                "source_id": str(src_id),
+                "predicates": rel.types or [],
+                "direction": direction_map.get(rel.direction, "out"),
+                "is_count": is_count,
+                "return_col": (
+                    (parsed.return_clause.items[0].alias or "count") if is_count
+                    else (parsed.return_clause.items[0].alias or "id") if (parsed.return_clause and parsed.return_clause.items)
+                    else "id"
+                ),
+            }
+        except Exception:
+            return None
+
+    def _execute_traversal(self, traversal, sql_query, parsed, parameters):
+        raw = self._store.execute_bfs(
+            traversal["source_id"],
+            traversal["predicates"],
+            1,
+            traversal["direction"],
+            0,
         )
-        return IVGResult(columns=["value"], rows=[[result or {}]])
+        if isinstance(raw, list):
+            rows = [[r.get("node_id", r.get("id", "")), r.get("hops", 1)] for r in raw]
+        else:
+            rows = raw.rows if not raw.error else []
+        if traversal["is_count"]:
+            return IVGResult(columns=[traversal["return_col"]], rows=[[len(rows)]], metadata=sql_query.query_metadata)
+        return IVGResult(columns=[traversal["return_col"]], rows=[[r[0]] for r in rows], metadata=sql_query.query_metadata)
+
+    def _route_var_length(self, sql_query, parameters):
+        if self._nkg_dirty:
+            from iris_vector_graph.errors import IndexNotSyncedError
+            raise IndexNotSyncedError()
+        vl0 = sql_query.var_length_paths[0]
+        if vl0.get("weighted"):
+            return self._execute_weighted_shortest_path(sql_query, parameters)
+        if vl0.get("shortest") or vl0.get("all_shortest"):
+            return self._execute_shortest_path_cypher(sql_query, parameters)
+
+        import re as _re
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
+        count_match = _re.search(r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
+
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        source_id = None
+        for item in params:
+            if isinstance(item, str) and not item.startswith("Graph_KG"):
+                source_id = item
+                break
+        if source_id is None and parameters:
+            src_var = vl0.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(iter(parameters.values()), None)
+
+        if source_id is None:
+            return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
+
+        predicates = vl0.get("types", [])
+        max_hops = vl0.get("max_hops", 5)
+        direction = vl0.get("direction", "out")
+        max_results = 0
+        if sql_str:
+            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            if m:
+                max_results = int(m.group(1))
+
+        if count_match:
+            col_name = count_match.group(1)
+            bfs_result = self._store.execute_bfs(source_id, predicates, max_hops, direction, 0)
+            cnt = len(bfs_result.rows) if not bfs_result.error else 0
+            return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
+        max_results = 0
+        if sql_str:
+            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            if m:
+                max_results = int(m.group(1))
+
+        direction = vl0.get("direction", "out")
+        predicates = vl0.get("types", [])
+        max_hops = vl0.get("max_hops", 5)
+
+        if vl0.get("temporal_window"):
+            ts_start = vl0.get("ts_start", 0)
+            ts_end = vl0.get("ts_end", 9999999999)
+            result = self._store.execute_temporal_cypher(
+                source_id, predicates, ts_start, ts_end, direction, max_hops
+            )
+        else:
+            result = self._store.execute_bfs(source_id, predicates, max_hops, direction, max_results)
+
+        return_properties = getattr(sql_query.query_metadata, "return_properties", None)
+        if return_properties and result.rows:
+            node_ids = [row[0] for row in result.rows if row]
+            if node_ids:
+                props_result = self._store.get_nodes(node_ids, return_properties)
+                props_by_id = {r[0]: r[2:] for r in props_result.rows}
+                enriched = [[r[0], r[1]] + list(props_by_id.get(r[0], [None] * len(return_properties))) for r in result.rows]
+                result = IVGResult(
+                    columns=result.columns + return_properties,
+                    rows=enriched,
+                    metadata=result.metadata,
+                )
+        return result
+
+
+    def _execute_weighted_shortest_path(
+        self, sql_query, parameters=None
+    ) -> Dict[str, Any]:
+        import json as _json
+
+        vl = sql_query.var_length_paths[0]
+
+        def _resolve(param_ref):
+            if param_ref is None:
+                return None
+            s = str(param_ref)
+            if s.startswith("'") and s.endswith("'"):
+                return s[1:-1]
+            if s.startswith("$"):
+                name = s[1:]
+                if parameters and name in parameters:
+                    return str(parameters[name])
+                return None
+            return s
+
+        source_id = _resolve(vl.get("src_id_param"))
+        target_id = _resolve(vl.get("dst_id_param"))
+
+        if source_id is None or target_id is None:
+            raise ValueError(
+                "ivg.shortestPath.weighted requires both from and to to be bound IDs"
+            )
+
+        weight_prop = vl.get("weight_property", "weight")
+        max_hops = int(vl.get("max_hops", 10))
+        return self._store.execute_weighted_shortest_path(source_id, target_id, weight_prop, max_hops)
+
+    def _execute_shortest_path_cypher(
+        self, sql_query, parameters=None
+    ) -> Dict[str, Any]:
+        import json as _json
+
+        vl = sql_query.var_length_paths[0]
+        preds_json = _json.dumps(vl["types"]) if vl.get("types") else "[]"
+        max_hops = vl.get("max_hops", 5)
+        direction = vl.get("direction", "both")
+        find_all = 1 if vl.get("all_shortest") else 0
+
+        def _resolve(param_ref):
+            if param_ref is None:
+                return None
+            if isinstance(param_ref, str) and param_ref.startswith("$"):
+                name = param_ref[1:]
+                if parameters and name in parameters:
+                    return str(parameters[name])
+                return None
+            return str(param_ref)
+
+        source_id = _resolve(vl.get("src_id_param"))
+        target_id = _resolve(vl.get("dst_id_param"))
+
+        if source_id is None and parameters:
+            src_var = vl.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(
+                    (str(v) for v in parameters.values() if isinstance(v, str)), None
+                )
+
+        if target_id is None and parameters:
+            dst_var = vl.get("target_var")
+            if dst_var and dst_var in parameters:
+                target_id = str(parameters[dst_var])
+            else:
+                vals = [str(v) for v in parameters.values() if isinstance(v, str)]
+                target_id = vals[1] if len(vals) > 1 else None
+
+        if source_id is None or target_id is None:
+            sql_params = sql_query.parameters[0] if sql_query.parameters else []
+            str_params = [p for p in sql_params if isinstance(p, str) and not p.startswith("Graph_KG")]
+            if source_id is None and len(str_params) >= 1:
+                source_id = str_params[0]
+            if target_id is None and len(str_params) >= 2:
+                target_id = str_params[1]
+
+        if source_id is None or target_id is None:
+            raise ValueError(
+                "shortestPath requires both source and target node IDs to be bound. "
+                "Use {id: $from} / {id: $to} or {id: 'literal'} on both endpoints."
+            )
+
+        predicates = vl.get("types", [])
+        return self._store.execute_shortest_path(
+            source_id, target_id, predicates, max_hops, direction, bool(find_all)
+        )
+
+        if not paths:
+            return IVGResult(                columns= ["p"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
+
+        return_funcs = vl.get("return_path_funcs", [])
+        rows = []
+        for path in paths:
+            row = []
+            if not return_funcs or "path" in return_funcs:
+                row.append(
+                    _json.dumps(
+                        {
+                            "nodes": path.get("nodes", []),
+                            "rels": path.get("rels", []),
+                            "length": path.get("length", 0),
+                        }
+                    )
+                )
+            if "length" in return_funcs:
+                row.append(path.get("length", 0))
+            if "nodes" in return_funcs:
+                row.append(path.get("nodes", []))
+            if "relationships" in return_funcs:
+                row.append(path.get("rels", []))
+            if not row:
+                row.append(
+                    _json.dumps(
+                        {
+                            "nodes": path.get("nodes", []),
+                            "rels": path.get("rels", []),
+                            "length": path.get("length", 0),
+                        }
+                    )
+                )
+            rows.append(row)
+
+        columns = []
+        if not return_funcs or "path" in return_funcs:
+            columns.append("p")
+        if "length" in return_funcs:
+            columns.append("length")
+        if "nodes" in return_funcs:
+            columns.append("nodes")
+        if "relationships" in return_funcs:
+            columns.append("relationships")
+        if not columns:
+            columns = ["p"]
+
+        return IVGResult(            columns= columns,
+            rows= rows,
+            sql= f"ShortestPathJson({source_id}, {target_id}, {max_hops})",
+            params= [],
+            metadata= sql_query.query_metadata
+        )
+
+    def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
+        import json as _json
+        import warnings as _warnings
+
+        if self._nkg_dirty:
+            from iris_vector_graph.errors import IndexNotSyncedError
+            raise IndexNotSyncedError()
+
+        vl = sql_query.var_length_paths[0]
+        predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
+        max_hops = vl["max_hops"]
+        min_hops = vl["min_hops"]
+        rel_props_filter = vl.get("properties", {})
+
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        source_id = None
+        for item in params:
+            if isinstance(item, str) and not item.startswith("Graph_KG"):
+                source_id = item
+                break
+        if source_id is None and parameters:
+            src_var = vl.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(iter(parameters.values()), None)
+
+        if source_id is None:
+            return IVGResult(                columns= [],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
+
+        max_results = 0
+        import re as _re
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
+        if sql_query.sql:
+            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            if m:
+                max_results = int(m.group(1))
+
+        count_match = _re.search(r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
+        if count_match:
+            col_name = count_match.group(1)
+            try:
+                cnt = int(str(_call_classmethod(
+                    self.conn, "Graph.KG.Traversal", "BFSFastCountDistinct",
+                    source_id, predicates_json, max_hops, "", vl.get("direction", "out"),
+                )))
+            except Exception:
+                cnt = 0
+            return IVGResult(                columns= [col_name],
+                rows= [[cnt]],
+                sql= f"BFSFastCountDistinct({source_id}, {predicates_json}, {max_hops})",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
+
+        bfs_results = None
+        direction = vl.get("direction", "out")
+        arno_usable = (
+            self._detect_arno()
+            and self._arno_capabilities.get("bfs")
+            and self._arno_capabilities.get("rust_callout")
+            and direction == "out"
+        )
+        if arno_usable:
+            try:
+                bfs_json = self._arno_call(
+                    "Graph.KG.NKGAccel",
+                    "BFSJson",
+                    source_id,
+                    predicates_json,
+                    max_hops,
+                    max_results,
+                )
+                bfs_str = str(bfs_json) if bfs_json else ""
+                if bfs_str.startswith("SORTED:") and bfs_str != "SORTED:0":
+                    tag = bfs_str.split(":")[1]
+                    if max_results == 0:
+                        bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                    else:
+                        try:
+                            results_str = str(_call_classmethod(
+                                self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                            ))
+                            bfs_results = _json.loads(results_str)
+                        except Exception:
+                            bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                elif bfs_str:
+                    bfs_results = _json.loads(bfs_str)
+                else:
+                    bfs_results = []
+                logger.debug("Arno BFSJson: %d results for %s", len(bfs_results), source_id)
+            except Exception as e:
+                logger.warning(f"Arno BFSJson failed, falling back to BFSFastJsonSorted: {e}")
+                bfs_results = None
+
+        if bfs_results is None:
+            direction = vl.get("direction", "out")
+            try:
+                resp = str(_call_classmethod(
+                    self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
+                    source_id, predicates_json, max_hops, "", direction, max_results,
+                ))
+                if resp.startswith("SORTED:") and resp != "SORTED:0":
+                    tag = resp.split(":", 2)[1]
+                    if max_results == 0:
+                        bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                    else:
+                        try:
+                            results_str = str(_call_classmethod(
+                                self.conn, "Graph.KG.Traversal", "ReadBFSResults", tag
+                            ))
+                            bfs_results = _json.loads(results_str)
+                        except Exception:
+                            bfs_results = list(_bfs_stream_pages(self.conn, tag))
+                else:
+                    bfs_results = []
+            except Exception as e:
+                logger.warning(f"BFSFastJsonSorted failed: {e}")
+                return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
+
+
+        if min_hops > 1:
+            min_step_per_node: dict = {}
+            for r in bfs_results:
+                oid = r.get("o")
+                if oid:
+                    s = r.get("step", 1)
+                    if oid not in min_step_per_node or s < min_step_per_node[oid]:
+                        min_step_per_node[oid] = s
+            bfs_results = [
+                r
+                for r in bfs_results
+                if min_step_per_node.get(r.get("o"), 0) >= min_hops
+            ]
+
+        if rel_props_filter and bfs_results:
+            bfs_results = self._filter_edges_by_properties(bfs_results, rel_props_filter)
+
+        seen = set()
+        target_ids = []
+        for r in bfs_results:
+            oid = r.get("o")
+            if oid and oid not in seen:
+                seen.add(oid)
+                target_ids.append(oid)
+
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+
+        # Fast path: if query only needs node IDs (RETURN DISTINCT b.node_id or RETURN b.node_id),
+        # skip get_nodes() entirely — BFS already has the IDs.
+        id_only_match = _re.search(
+            r'SELECT\s+(?:DISTINCT\s+)?(?:\S+\.node_id|\S+\.id)\s+AS\s+(\w+)',
+            sql_str, _re.IGNORECASE
+        )
+        # Count path: COUNT(DISTINCT ...) — just return the count
+        count_match = _re.search(
+            r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)',
+            sql_str, _re.IGNORECASE
+        )
+
+        if count_match:
+            col_name = count_match.group(1)
+            return IVGResult(                columns= [col_name],
+                rows= [[len(target_ids)]],
+                sql= f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
+
+        if id_only_match:
+            col_name = id_only_match.group(1)
+            # Apply LIMIT from SQL if present
+            limit_match = _re.search(r'\bLIMIT\s+(\d+)', sql_str, _re.IGNORECASE)
+            limit = int(limit_match.group(1)) if limit_match else None
+            result_ids = target_ids[:limit] if limit else target_ids
+            return IVGResult(                columns= [col_name],
+                rows= [[nid] for nid in result_ids],
+                sql= f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
+
+        # Full path: caller wants labels/props — fall through to get_nodes()
+        alias_match = _re.search(r'SELECT\s+DISTINCT\s+\S+\s+AS\s+(\w+)|SELECT\s+\S+\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
+        col_name = (alias_match.group(1) or alias_match.group(2)) if alias_match else "b_id"
+
+        if not target_ids:
+            return IVGResult(                columns= [col_name, "b_labels", "b_props"],
+                rows= [],
+                sql= "",
+                params= [],
+                metadata= sql_query.query_metadata
+            )
+
+        nodes = self.get_nodes(target_ids)
+        rows = []
+        for data in nodes:
+            node_id = data.get("id", "")
+            rows.append(
+                (
+                    node_id,
+                    data.get("labels", []),
+                    {k: v for k, v in data.items() if k not in ("labels", "id")},
+                )
+            )
+
+        return IVGResult(            columns= [col_name, "b_labels", "b_props"],
+            rows= [list(r) for r in rows],
+            sql= f"BFSFastJson({source_id}, {predicates_json}, {max_hops})",
+            params= [],
+            metadata= sql_query.query_metadata
+        )
+
+    def _try_khop_fast_path(self, cypher_query: str, parameters) -> Optional[Dict[str, Any]]:
+        import re as _re
+
+        _1HOP_COUNT_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+count\s*\(\s*\3\s*\)\s+AS\s+(\w+)\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        _1HOP_IDS_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+\3\.node_id(?:\s+AS\s+(\w+))?\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        _2HOP_COUNT_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\*2\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+count\s*\(\s*\3\s*\)\s+AS\s+(\w+)\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        _2HOP_IDS_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*:\s*(\w+)\s*\*2\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+\3\.node_id(?:\s+AS\s+(\w+))?(?:\s+LIMIT\s+(\d+))?\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+
+        params = parameters or {}
+
+        m = _1HOP_COUNT_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, col = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            try:
+                cnt = int(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "KHopCount", str(src_id), pred
+                ))
+                return IVGResult(columns=[col], rows=[(cnt,)])
+            except Exception:
+                return None
+
+        m = _1HOP_IDS_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, alias = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            try:
+                raw = str(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "KHopNeighborIds", str(src_id), pred
+                ))
+                ids = [x for x in raw.split("\n") if x]
+                col = alias or "node_id"
+                return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
+            except Exception:
+                return None
+
+        m = _2HOP_COUNT_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, col = m.group(1), m.group(2), m.group(3), m.group(4)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            try:
+                cnt = int(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "KHop2CountExact", str(src_id), pred
+                ))
+                return IVGResult(columns=[col], rows=[(cnt,)])
+            except Exception:
+                return None
+
+        m = _2HOP_IDS_RE.match(cypher_query)
+        if m:
+            src_param, pred, _nvar, alias, limit_str = (
+                m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
+            )
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            limit = int(limit_str) if limit_str else 0
+            try:
+                raw = str(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
+                ))
+                ids = [x for x in raw.split("\n") if x]
+                col = alias or "node_id"
+                return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
+            except Exception:
+                return None
+
+        return None
+
+        return None
+
+    def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> Dict[str, Any]:
+        import json as _json
+        import re as _re
+        from .schema import _call_classmethod
+
+        col_name = match.group(2)
+
+        from .cypher.parser import parse_query
+        from .cypher.translator import translate_to_sql
+        try:
+            q = parse_query(cypher_query)
+            sql_query = translate_to_sql(q, params=parameters or {})
+        except Exception:
+            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
+
+        if not sql_query.var_length_paths:
+            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
+
+        vl = sql_query.var_length_paths[0]
+        predicates_json = _json.dumps(vl["types"]) if vl["types"] else ""
+        max_hops = vl["max_hops"]
+        direction = vl.get("direction", "both")
+
+        params = sql_query.parameters[0] if sql_query.parameters else []
+        source_id = None
+        for item in params:
+            if isinstance(item, str) and not item.startswith("Graph_KG"):
+                source_id = item
+                break
+        if source_id is None and parameters:
+            src_var = vl.get("source_var")
+            if src_var and src_var in parameters:
+                source_id = str(parameters[src_var])
+            else:
+                source_id = next(iter(parameters.values()), None) if parameters else None
+
+        if not source_id:
+            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
+
+        try:
+            raw = str(_call_classmethod(
+                self.conn, "Graph.KG.NKGAccel", "CountDistinctKHop",
+                source_id, predicates_json, max_hops, direction,
+            ))
+            result = _json.loads(raw)
+            estimate = result.get("estimate", 0)
+            registers = result.get("registers", 256)
+            std_error = result.get("std_error", 0.065)
+        except Exception as e:
+            logger.warning(f"CountDistinctKHop failed: {e}")
+            estimate = 0
+            registers = 256
+            std_error = 0.065
+
+        from .cypher.translator import QueryMetadata
+        meta = QueryMetadata(
+            warnings=[
+                f"approx_count_distinct: HLL-{registers}, "
+                f"std_error={std_error*100:.1f}%, registers={registers}"
+            ]
+        )
+        return IVGResult(            columns= [col_name],
+            rows= [[estimate]],
+            sql= f"CountDistinctKHop({source_id}, {predicates_json}, {max_hops})",
+            params= [],
+            metadata= meta
+        )
+
+    def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
+        if "DATABASES" in cmd:
+            return IVGResult(                columns= [
+                    "name",
+                    "type",
+                    "aliases",
+                    "access",
+                    "address",
+                    "role",
+                    "writer",
+                    "requestedStatus",
+                    "currentStatus",
+                    "statusMessage",
+                    "default",
+                    "home",
+                    "constituents",
+                ],
+                rows= [
+                    [
+                        "neo4j",
+                        "standard",
+                        [],
+                        "read-write",
+                        "localhost:7687",
+                        "primary",
+                        True,
+                        "online",
+                        "online",
+                        "",
+                        True,
+                        True,
+                        [],
+                    ]
+                ]
+            )
+        if "PROCEDURES" in cmd:
+            procs = self._try_system_procedure(
+                type("P", (), {"procedure_name": "dbms.procedures"})()
+            )
+            if procs:
+                return IVGResult(                    columns= ["name", "description", "signature"],
+                    rows= [[r[0], r[2], r[1]] for r in procs.get("rows", [])]
+                )
+            return IVGResult(columns=["name", "description", "signature"], rows=[])
+        if "FUNCTIONS" in cmd:
+            fns = self._try_system_procedure(
+                type("P", (), {"procedure_name": "dbms.functions"})()
+            )
+            if fns:
+                return IVGResult(                    columns= ["name", "description", "signature"],
+                    rows= [[r[0], r[2], r[1]] for r in fns.get("rows", [])]
+                )
+            return IVGResult(columns=["name", "description", "signature"], rows=[])
+        if "INDEXES" in cmd:
+            return self._show_indexes()
+        if "CONSTRAINTS" in cmd:
+            return self._show_constraints()
+        return IVGResult(columns=["value"], rows=[])
+
+    def _show_indexes(self) -> "IVGResult":
+        cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "state"]
+        rows = []
+        cursor = self.conn.cursor()
+
+        def _try(sql, default=None):
+            try:
+                cursor.execute(sql)
+                return cursor.fetchall()
+            except Exception:
+                return default or []
+
+        # HNSW vector index on kg_NodeEmbeddings
+        hnsw_count = 0
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings_optimized')}")
+            r = cursor.fetchone()
+            hnsw_count = int(r[0]) if r else 0
+        except Exception:
+            pass
+        rows.append([
+            "hnsw_node_embeddings", "VECTOR(HNSW)", "NODE", ["*"], ["emb"],
+            "ONLINE" if hnsw_count > 0 else "BUILDING",
+        ])
+
+        for (name,) in _try(f"SELECT DISTINCT name FROM {_table('kg_IVFMeta')}"):
+            rows.append([name, "VECTOR(IVF)", "NODE", ["*"], ["emb"], "ONLINE"])
+
+        for (name,) in _try(f"SELECT DISTINCT name FROM {_table('kg_BM25Meta')}"):
+            rows.append([name, "FULLTEXT(BM25)", "NODE", ["*"], ["*"], "ONLINE"])
+
+        for (idx_name,) in _try(f"SELECT DISTINCT idx_name FROM {_table('kg_PlaidMeta')}"):
+            rows.append([idx_name, "VECTOR(PLAID)", "NODE", ["*"], ["emb"], "ONLINE"])
+
+        try:
+            native = self._iris_obj()
+            nkg_ok = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
+        except Exception:
+            nkg_ok = False
+        rows.append([
+            "nkg_adjacency", "ADJACENCY(^NKG)", "RELATIONSHIP", ["*"], ["*"],
+            "ONLINE" if nkg_ok else "NOT_BUILT",
+        ])
+
+        kg_ok = False
+        try:
+            native = self._iris_obj()
+            kg_ok = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 1)) > 0
+        except Exception:
+            pass
+        rows.append([
+            "kg_adjacency", "ADJACENCY(^KG)", "RELATIONSHIP", ["*"], ["*"],
+            "ONLINE" if kg_ok else "NOT_BUILT",
+        ])
+
+        rows.append(["pk_nodes", "UNIQUE", "NODE", ["*"], ["node_id"], "ONLINE"])
+        rows.append(["pk_rdf_edges", "UNIQUE", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "ONLINE"])
+
+        return IVGResult(columns=cols, rows=rows)
+
+    def _show_constraints(self) -> "IVGResult":
+        cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "ownedIndex"]
+        rows = [
+            ["node_id_unique", "UNIQUENESS", "NODE", ["*"], ["node_id"], "pk_nodes"],
+            ["edge_spo_unique", "UNIQUENESS", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "pk_rdf_edges"],
+        ]
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('fhir_bridges')} FETCH FIRST 1 ROWS ONLY")
+            rows.append(["fhir_bridge_unique", "UNIQUENESS", "NODE",
+                          ["*"], ["external_id", "bridge_type", "node_id"], "pk_fhir_bridges"])
+        except Exception:
+            pass
+        return IVGResult(columns=cols, rows=rows)
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
-        handler_method_name = self._SYSTEM_PROCEDURES.get(name)
-        if handler_method_name is not None:
-            handler = getattr(self, handler_method_name)
-            return handler(proc)
+        if name == "ivg.vector.search":
+            from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
+            args = proc.arguments
+            label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
+            k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
+            vec_arg = args[2] if len(args) > 2 else None
+            query_vector = None
+            if isinstance(vec_arg, CypherLiteral) and isinstance(vec_arg.value, list):
+                query_vector = vec_arg.value
+            return self._store.execute_knn_vec(query_vector or [], k, label_filter)
+
+        if name == "ivg.shortestpath.weighted":
+            args = proc.arguments
+            from iris_vector_graph.cypher import ast as cypher_ast
+
+            def _arg_str(a, params=None):
+                if isinstance(a, cypher_ast.Literal):
+                    return str(a.value)
+                if isinstance(a, cypher_ast.Variable):
+                    if params and a.name in params:
+                        return str(params[a.name])
+                    return a.name
+                return str(a)
+
+            source_id = _arg_str(args[0]) if len(args) > 0 else None
+            target_id = _arg_str(args[1]) if len(args) > 1 else None
+            weight_prop = _arg_str(args[2]) if len(args) > 2 else "weight"
+            max_cost = float(_arg_str(args[3])) if len(args) > 3 else 9999.0
+            max_hops = int(float(_arg_str(args[4]))) if len(args) > 4 else 10
+            direction = _arg_str(args[5]) if len(args) > 5 else "out"
+
+            if not source_id or not target_id:
+                return IVGResult(columns=["path", "totalCost"], rows=[])
+
+            import json as _json
+
+            try:
+                raw = _call_classmethod(
+                    self.conn,
+                    "Graph.KG.Traversal",
+                    "DijkstraJson",
+                    source_id,
+                    target_id,
+                    weight_prop,
+                    max_cost,
+                    max_hops,
+                    direction,
+                )
+                result_str = str(raw) if raw else "{}"
+            except Exception as e:
+                logger.warning(f"DijkstraJson failed: {e}")
+                return IVGResult(columns=["path", "totalCost"], rows=[])
+
+            if not result_str or result_str == "{}":
+                return IVGResult(columns=["path", "totalCost"], rows=[])
+
+            try:
+                path_obj = _json.loads(result_str)
+            except Exception:
+                return IVGResult(columns=["path", "totalCost"], rows=[])
+
+            total_cost = float(path_obj.get("totalCost", 0))
+            return IVGResult(                columns= ["path", "totalCost"],
+                rows= [[result_str, total_cost]]
+            )
+
+        if name == "db.labels":
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
+            labels = [row[0] for row in cursor.fetchall()]
+            return IVGResult(columns=["label"], rows=[[l] for l in labels])
+
+        if name == "db.relationshiptypes":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+            types = [row[0] for row in cursor.fetchall()]
+            return IVGResult(columns=["relationshipType"], rows=[[t] for t in types])
+
+        if name == "db.schema.visualization":
+            schema = self.get_schema_visualization()
+            nodes = schema.get("nodes", [])
+            rels = schema.get("relationships", [])
+            return IVGResult(columns=["nodes", "relationships"], rows=[[nodes, rels]])
+
+        if name == "db.schema.nodetypeproperties":
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
+            labels = [row[0] for row in cursor.fetchall()]
+            rows = []
+            for label in labels:
+                cursor.execute(
+                    "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                    [label],
+                )
+                sample = cursor.fetchone()
+                if sample:
+                    cursor.execute(
+                        'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props '
+                        'WHERE s = ? ORDER BY "key"',
+                        [sample[0]],
+                    )
+                    for (prop_name,) in cursor.fetchall():
+                        rows.append(
+                            [
+                                f":`{label}`",
+                                [label],
+                                prop_name,
+                                ["String"],
+                                False,
+                            ]
+                        )
+            return IVGResult(                columns= [
+                    "nodeType",
+                    "nodeLabels",
+                    "propertyName",
+                    "propertyTypes",
+                    "mandatory",
+                ],
+                rows= rows
+            )
+
+        if name == "db.schema.reltypeproperties":
+            cursor = self.conn.cursor()
+            rows = []
+            try:
+                cursor.execute(
+                    "SELECT DISTINCT p FROM Graph_KG.rdf_edges WHERE p IS NOT NULL ORDER BY p"
+                )
+                rel_types = [r[0] for r in cursor.fetchall()]
+                for rel_type in rel_types[:50]:
+                    props = {"weight"}
+                    cursor.execute(
+                        "SELECT TOP 1 qualifiers FROM Graph_KG.rdf_edges WHERE p = ? AND qualifiers IS NOT NULL",
+                        [rel_type],
+                    )
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        try:
+                            keys = list(json.loads(str(row[0])).keys())
+                            props.update(keys[:20])
+                        except Exception:
+                            pass
+                    for prop in sorted(props):
+                        rows.append([rel_type, prop, ["STRING"], False])
+            except Exception as e:
+                logger.debug("relTypeProperties query failed: %s", e)
+            return IVGResult(                columns= ["relType", "propertyName", "propertyTypes", "mandatory"],
+                rows= rows
+            )
+
+        if name == "dbms.components":
+            return IVGResult(                columns= ["name", "versions", "edition"],
+                rows= [["iris-vector-graph", ["5.0.0"], "community"]]
+            )
+
+        if name == "dbms.procedures":
+
+            def _proc(n, sig, desc, mode="READ"):
+                return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
+
+            procs = [
+                _proc(
+                    "db.labels", "db.labels() :: (label :: STRING)", "List all labels"
+                ),
+                _proc(
+                    "db.relationshipTypes",
+                    "db.relationshipTypes() :: (relationshipType :: STRING)",
+                    "List all rel types",
+                ),
+                _proc(
+                    "db.schema.visualization",
+                    "db.schema.visualization() :: (nodes :: LIST, relationships :: LIST)",
+                    "Schema visualization",
+                ),
+                _proc(
+                    "db.schema.nodeTypeProperties",
+                    "db.schema.nodeTypeProperties() :: (nodeType :: STRING, nodeLabels :: LIST, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
+                    "Node type props",
+                ),
+                _proc(
+                    "db.schema.relTypeProperties",
+                    "db.schema.relTypeProperties() :: (relType :: STRING, propertyName :: STRING, propertyTypes :: LIST, mandatory :: BOOLEAN)",
+                    "Rel type props",
+                ),
+                _proc(
+                    "dbms.components",
+                    "dbms.components() :: (name :: STRING, versions :: LIST, edition :: STRING)",
+                    "Server components",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.procedures",
+                    "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                    "List procedures",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.functions",
+                    "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                    "List functions",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.clientConfig",
+                    "dbms.clientConfig() :: (key :: STRING, value :: STRING)",
+                    "Client config",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.security.showCurrentUser",
+                    "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)",
+                    "Current user",
+                    "DBMS",
+                ),
+                _proc(
+                    "dbms.queryJmx",
+                    "dbms.queryJmx(query :: STRING) :: (name :: STRING, description :: STRING, attributes :: MAP)",
+                    "Query JMX management data",
+                    "DBMS",
+                ),
+            ]
+            return IVGResult(                columns= [
+                    "name",
+                    "signature",
+                    "description",
+                    "mode",
+                    "admin",
+                    "option",
+                    "defaultBuiltInRoles",
+                    "isDeprecated",
+                    "worksOnSystem",
+                    "argumentDescription",
+                ],
+                rows= procs
+            )
+
+        if name == "db.propertykeys":
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
+            )
+            keys = [row[0] for row in cursor.fetchall()]
+            return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
+
+        if name == "dbms.clientconfig":
+            return IVGResult(                columns= ["key", "value"],
+                rows= [
+                    ["browser.allow_outgoing_connections", "false"],
+                    ["browser.credential_timeout", "0"],
+                    ["browser.retain_connection_credentials", "true"],
+                    ["browser.retain_editor_history", "true"],
+                    ["browser.post_connect_cmd", ""],
+                    ["dbms.security.auth_enabled", "false"],
+                ]
+            )
+
+        if name == "dbms.security.showcurrentuser" or name == "dbms.showcurrentuser":
+            return IVGResult(                columns= ["username", "roles", "flags"],
+                rows= [["neo4j", [], []]]
+            )
+
+        if name == "dbms.functions":
+            return IVGResult(                columns= [
+                    "name",
+                    "signature",
+                    "description",
+                    "aggregating",
+                    "defaultBuiltInRoles",
+                    "isDeprecated",
+                    "argumentDescription",
+                    "returnDescription",
+                    "category",
+                ],
+                rows= []
+            )
+
+        if name == "dbms.queryjmx":
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+            node_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+            edge_count = cursor.fetchone()[0]
+            pfx = "org.neo4j:instance=kernel#0"
+            return IVGResult(                columns= ["name", "description", "attributes"],
+                rows= [
+                    [
+                        f"{pfx},name=Store file sizes",
+                        "Store file sizes",
+                        {
+                            "TotalStoreSize": {"value": node_count * 200},
+                            "NodeStoreSize": {"value": node_count * 100},
+                            "RelationshipStoreSize": {"value": edge_count * 100},
+                            "PropertyStoreSize": {"value": node_count * 50},
+                            "StringStoreSize": {"value": node_count * 30},
+                            "ArrayStoreSize": {"value": 0},
+                            "IndexStoreSize": {"value": 0},
+                            "LabelStoreSize": {"value": node_count * 10},
+                            "SchemaStoreSize": {"value": 4096},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Primitive count",
+                        "Primitive count",
+                        {
+                            "NumberOfNodeIdsInUse": {"value": node_count},
+                            "NumberOfRelationshipIdsInUse": {"value": edge_count},
+                            "NumberOfPropertyIdsInUse": {"value": node_count * 3},
+                            "NumberOfRelationshipTypeIdsInUse": {"value": 20},
+                            "NumberOfLabelIdsInUse": {"value": 5},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Page cache",
+                        "Page cache statistics",
+                        {
+                            "Hits": {"value": 1000},
+                            "Faults": {"value": 10},
+                            "HitRatio": {"value": 0.99},
+                            "UsageRatio": {"value": 0.5},
+                            "FileMappings": {"value": 5},
+                            "FileUnmappings": {"value": 0},
+                            "BytesRead": {"value": 1024 * 1024},
+                            "BytesWritten": {"value": 1024},
+                            "FlushEvents": {"value": 0},
+                            "EvictionExceptions": {"value": 0},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Transactions",
+                        "Transaction statistics",
+                        {
+                            "LastCommittedTxId": {"value": 1},
+                            "CurrentCommittedTxId": {"value": 1},
+                            "LastClosedTxId": {"value": 1},
+                            "NumberOfOpenTransactions": {"value": 0},
+                            "PeakNumberOfConcurrentTransactions": {"value": 1},
+                            "NumberOfOpenedTransactions": {"value": 1},
+                            "NumberOfCommittedTransactions": {"value": 1},
+                            "NumberOfRolledBackTransactions": {"value": 0},
+                            "NumberOfTerminatedTransactions": {"value": 0},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Kernel",
+                        "Kernel information",
+                        {
+                            "KernelVersion": {"value": "iris-vector-graph-1.47.0"},
+                            "StoreId": {"value": "store-001"},
+                            "DatabaseName": {"value": "neo4j"},
+                            "ReadOnly": {"value": False},
+                            "MBeanQuery": {"value": pfx},
+                        },
+                    ],
+                    [
+                        f"{pfx},name=Configuration",
+                        "Configuration",
+                        {
+                            "dbms.jvm.heap.initial_size": {"value": "256m"},
+                            "dbms.jvm.heap.max_size": {"value": "512m"},
+                            "dbms.logs.native.size": {"value": "20m"},
+                        },
+                    ],
+                ]
+            )
+
+        if name == "apoc.meta.data":
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
+            )
+            labels = [row[0] for row in cursor.fetchall()]
+            rows = []
+            for label in labels[:50]:
+                cursor.execute(
+                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props rp '
+                    "JOIN Graph_KG.rdf_labels rl ON rl.s = rp.s "
+                    'WHERE rl.label = ? ORDER BY "key"',
+                    [label],
+                )
+                props = [row[0] for row in cursor.fetchall()]
+                if props:
+                    for prop_name in props:
+                        rows.append(
+                            [label, prop_name, "STRING", "node", False, False, False]
+                        )
+                else:
+                    rows.append([label, None, "STRING", "node", False, False, False])
+            cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+            for (rel_type,) in cursor.fetchall():
+                rows.append(
+                    [
+                        rel_type,
+                        None,
+                        "RELATIONSHIP",
+                        "relationship",
+                        False,
+                        False,
+                        False,
+                    ]
+                )
+            return IVGResult(                columns= [
+                    "label",
+                    "property",
+                    "type",
+                    "elementType",
+                    "unique",
+                    "index",
+                    "existence",
+                ],
+                rows= rows
+            )
+
+        if name == "apoc.meta.schema":
+            result = self._try_system_procedure(
+                type("P", (), {"procedure_name": "apoc.meta.data"})()
+            )
+            return IVGResult(columns=["value"], rows=[[result or {}]])
 
         if name.startswith("apoc."):
             return IVGResult(columns=["value"], rows=[])
@@ -734,7 +2570,913 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
 
         return None
 
+    def get_schema_visualization(self) -> dict:
+        cursor = self.conn.cursor()
 
+        cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
+        labels = [r[0] for r in cursor.fetchall()]
+
+        cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
+        rel_types = [r[0] for r in cursor.fetchall()]
+
+        nodes = []
+        for i, label in enumerate(labels):
+            cursor.execute(
+                "SELECT TOP 1 rl.s FROM Graph_KG.rdf_labels rl WHERE rl.label = ?",
+                [label],
+            )
+            row = cursor.fetchone()
+            sample_id = row[0] if row else None
+
+            prop_names = []
+            if sample_id:
+                cursor.execute(
+                    'SELECT DISTINCT TOP 20 "key" FROM Graph_KG.rdf_props WHERE s = ? '
+                    'ORDER BY "key"',
+                    [sample_id],
+                )
+                prop_names = [r[0] for r in cursor.fetchall()]
+
+            nodes.append(
+                {
+                    "id": i,
+                    "name": label,
+                    "labels": [label],
+                    "properties": [{"name": p, "type": "String"} for p in prop_names],
+                }
+            )
+
+        label_to_id = {n["name"]: n["id"] for n in nodes}
+
+        rels = []
+        for i, rel_type in enumerate(rel_types):
+            cursor.execute(
+                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ?", [rel_type]
+            )
+            row = cursor.fetchone()
+            start_label_id = 0
+            end_label_id = 0
+            if row:
+                src_id, tgt_id = row
+                cursor.execute(
+                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?", [src_id]
+                )
+                src_row = cursor.fetchone()
+                if src_row:
+                    start_label_id = label_to_id.get(src_row[0], 0)
+                cursor.execute(
+                    "SELECT TOP 1 label FROM Graph_KG.rdf_labels WHERE s = ?", [tgt_id]
+                )
+                tgt_row = cursor.fetchone()
+                if tgt_row:
+                    end_label_id = label_to_id.get(tgt_row[0], 0)
+
+            rels.append(
+                {
+                    "id": i,
+                    "name": rel_type,
+                    "type": rel_type,
+                    "properties": [],
+                    "startNode": start_label_id,
+                    "endNode": end_label_id,
+                }
+            )
+
+        return {"nodes": nodes, "relationships": rels}
+
+    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve a node by ID using optimized direct SQL.
+
+        Bypasses Cypher translation for 80x+ faster single-node lookups.
+
+        Args:
+            node_id: Node identifier
+
+        Returns:
+            Dict with 'id', 'labels', and properties, or None if not found
+        """
+        nodes = self.get_nodes([node_id])
+        return nodes[0] if nodes else None
+
+    def _filter_edges_by_properties(
+        self, bfs_results: list, prop_filter: dict
+    ) -> list:
+        if not prop_filter:
+            return bfs_results
+        import json as _json
+        edges = [(r["s"], r["p"], r["o"]) for r in bfs_results if r.get("s") and r.get("p") and r.get("o")]
+        if not edges:
+            return bfs_results
+
+        cursor = self.conn.cursor()
+        try:
+            results = []
+            for s, p, o in edges:
+                # arno 1d75d97 bug: predicate is written as "R" placeholder.
+                # Fall back to matching by (s, o) only when p is the sentinel.
+                if p == "R":
+                    cursor.execute(
+                        f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                        "WHERE s=? AND o_id=?",
+                        [s, o],
+                    )
+                else:
+                    cursor.execute(
+                        f"SELECT qualifiers FROM {_table('rdf_edges')} "
+                        "WHERE s=? AND p=? AND o_id=?",
+                        [s, p, o],
+                    )
+                row = cursor.fetchone()
+                qual_json = row[0] if row else None
+                try:
+                    qualifiers = _json.loads(qual_json) if qual_json else {}
+                except Exception:
+                    qualifiers = {}
+                if all(str(qualifiers.get(k)) == str(v) for k, v in prop_filter.items()):
+                    results.append((s, p, o))
+        except Exception as e:
+            logger.warning("_filter_edges_by_properties query failed: %s", e)
+            return bfs_results
+
+        passing = set(results)
+
+        if not passing:
+            logger.debug(
+                "_filter_edges_by_properties: no edges match filter %s", prop_filter
+            )
+
+        return [
+            r for r in bfs_results
+            if (r.get("s"), r.get("p"), r.get("o")) in passing
+        ]
+
+    def get_nodes(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Retrieve multiple nodes by ID using optimized batch SQL.
+
+        Eliminates N+1 query patterns by fetching all labels and properties
+        for a set of nodes in two efficient queries.
+
+        Args:
+            node_ids: List of node identifiers
+
+        Returns:
+            List of node dicts with 'id', 'labels', and properties
+        """
+        if not node_ids:
+            return []
+
+        _IN_CHUNK = 499
+
+        try:
+            cursor = self.conn.cursor()
+            node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
+
+            for i in range(0, len(node_ids), _IN_CHUNK):
+                chunk = node_ids[i : i + _IN_CHUNK]
+                placeholders = ",".join(["?"] * len(chunk))
+
+                cursor.execute(
+                    f"SELECT s, label FROM {_table('rdf_labels')} WHERE s IN ({placeholders})",
+                    chunk,
+                )
+                for s, label in cursor.fetchall():
+                    if s in node_map:
+                        node_map[s]["labels"].append(label)
+
+                cursor.execute(
+                    f'SELECT s, "key", val FROM {_table("rdf_props")} WHERE s IN ({placeholders})',
+                    chunk,
+                )
+                _STRUCTURAL_KEYS = ("id", "labels")
+                for s, key, val in cursor.fetchall():
+                    if s in node_map:
+                        store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
+                        if val is not None:
+                            parsed_val = val
+                            try:
+                                if (
+                                    str(val).startswith("{") and str(val).endswith("}")
+                                ) or (
+                                    str(val).startswith("[") and str(val).endswith("]")
+                                ):
+                                    parsed_val = json.loads(val)
+                            except Exception:
+                                pass
+                            node_map[s][store_key] = parsed_val
+                        else:
+                            node_map[s][store_key] = val
+
+            empty_nids = [
+                nid
+                for nid, data in node_map.items()
+                if not data["labels"] and len(data) <= 2
+            ]
+            if empty_nids:
+                existing_empty: set = set()
+                for i in range(0, len(empty_nids), _IN_CHUNK):
+                    chunk = empty_nids[i : i + _IN_CHUNK]
+                    e_placeholders = ",".join(["?"] * len(chunk))
+                    cursor.execute(
+                        f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({e_placeholders})",
+                        chunk,
+                    )
+                    existing_empty.update(row[0] for row in cursor.fetchall())
+                return [
+                    node_map[nid]
+                    for nid in node_ids
+                    if nid in existing_empty or nid not in empty_nids
+                ]
+
+            return [node_map[nid] for nid in node_ids if nid in node_map]
+
+        except Exception as e:
+            logger.error(f"Batch get_nodes failed: {str(e)}")
+            # Fallback to individual lookups (which might use Cypher fallback)
+            results = []
+            for nid in node_ids:
+                node = self._get_node_cypher_fallback(nid)
+                if node:
+                    results.append(node)
+            return results
+
+    def _get_node_cypher_fallback(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Original Cypher-based get_node implementation as safety fallback."""
+        # Use parameters to prevent Cypher injection
+        cypher = "MATCH (n) WHERE n.id = $node_id RETURN n"
+        result = self.execute_cypher(cypher, parameters={"node_id": node_id})
+
+        if not result.get("rows"):
+            return None
+
+        row = result["rows"][0]
+        columns = result["columns"]
+        row_map = dict(zip(columns, row))
+
+        id_key = next((k for k in row_map if k.endswith("_id")), None)
+        if not id_key:
+            return None
+
+        prefix = id_key[:-3]
+        labels_key = f"{prefix}_labels"
+        props_key = f"{prefix}_props"
+
+        labels_raw = row_map.get(labels_key)
+        props_raw = row_map.get(props_key)
+
+        labels = (
+            json.loads(labels_raw)
+            if isinstance(labels_raw, str)
+            else (labels_raw or [])
+        )
+        props_items = (
+            json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or [])
+        )
+
+        if props_items and isinstance(props_items[0], str):
+            props_items = [json.loads(item) for item in props_items]
+
+        props = {
+            item["key"]: item["value"] for item in props_items if isinstance(item, dict)
+        }
+
+        return {"id": row_map[id_key], "labels": labels, "properties": props}
+
+    def status(self, internals: bool = False) -> "EngineStatus":
+        import time as _time
+        t0 = _time.perf_counter()
+        errors: list = []
+        cursor = self.conn.cursor()
+
+        def _count(sql):
+            try:
+                cursor.execute(sql)
+                row = cursor.fetchone()
+                return int(row[0]) if row else 0
+            except Exception as e:
+                errors.append(f"count probe failed: {e}")
+                return 0
+
+        tables = TableCounts(
+            nodes=_count(f"SELECT COUNT(*) FROM {_table('nodes')}"),
+            edges=_count(f"SELECT COUNT(*) FROM {_table('rdf_edges')}"),
+            labels=_count(f"SELECT COUNT(*) FROM {_table('rdf_labels')}"),
+            props=_count(f"SELECT COUNT(*) FROM {_table('rdf_props')}"),
+            node_embeddings=_count(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings')}"),
+            edge_embeddings=_count(f"SELECT COUNT(*) FROM {_table('kg_EdgeEmbeddings')}"),
+        )
+
+        kg_count = 0
+        kg_capped = False
+        kg_populated = False
+        nkg_populated = False
+        try:
+            native = self._iris_obj()
+            kg_count = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 10000))
+            kg_populated = kg_count > 0
+            kg_capped = kg_count >= 10000
+            nkg_populated = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
+        except Exception as e:
+            try:
+                iris_native = self._iris_obj()
+                kg_populated = bool(iris_native.isDefined(["KG", "out"]))
+            except Exception:
+                errors.append(f"adjacency probe failed: {e}")
+
+        kg_predicates_consistent = True
+        if kg_populated and tables.edges > 0:
+            try:
+                native = self._iris_obj()
+                kg_pred = str(native.get(["KG", "out", 0, ""])) or ""
+                if not kg_pred:
+                    s_val = ""
+                    kg_pred_node = native.orderAll(["KG", "out", 0, s_val])
+                    if kg_pred_node:
+                        kg_pred = str(native.orderAll(
+                            ["KG", "out", 0, str(kg_pred_node), ""]
+                        ) or "")
+            except Exception:
+                kg_pred = ""
+
+            if kg_pred:
+                try:
+                    cursor.execute(
+                        f"SELECT COUNT(*) FROM {_table('rdf_edges')} WHERE p = ?",
+                        [kg_pred],
+                    )
+                    row = cursor.fetchone()
+                    if row and int(row[0]) == 0:
+                        kg_predicates_consistent = False
+                        errors.append(
+                            "Index mismatch: adjacency index predicate does not match current edges. "
+                            "Call engine.sync() after reloading graph data."
+                        )
+                except Exception:
+                    pass
+
+        adjacency = AdjacencyStatus(
+            kg_populated=kg_populated,
+            kg_edge_count=kg_count,
+            kg_edge_count_capped=kg_capped,
+            nkg_populated=nkg_populated,
+            kg_predicates_consistent=kg_predicates_consistent,
+            bfs_path="none",
+        )
+
+        os_classes = []
+        os_deployed = self.capabilities.objectscript_deployed
+        _known_classes = [
+            "Graph.KG.Traversal", "Graph.KG.PageRank", "Graph.KG.IVFIndex",
+            "Graph.KG.BM25Index", "Graph.KG.ArnoAccel", "Graph.KG.Snapshot",
+            "Graph.KG.Dijkstra",
+        ]
+        if os_deployed:
+            for cls in _known_classes:
+                try:
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = ?",
+                        [cls],
+                    )
+                    row = cursor.fetchone()
+                    if row and int(row[0]) > 0:
+                        os_classes.append(cls)
+                except Exception:
+                    pass
+
+        objectscript = ObjectScriptStatus(deployed=os_deployed, classes=os_classes)
+
+        self._detect_arno()
+        arno = ArnoStatus(
+            loaded=bool(self._arno_available),
+            capabilities=dict(self._arno_capabilities),
+        )
+
+        hnsw_built = _count(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings_optimized')}") > 0
+
+        def _list_index(sql):
+            try:
+                cursor.execute(sql)
+                return [row[0] for row in cursor.fetchall() if row[0]]
+            except Exception:
+                return []
+
+        ivf = _list_index(f"SELECT DISTINCT name FROM {_table('kg_IVFMeta')}")
+        bm25 = _list_index(f"SELECT DISTINCT name FROM {_table('kg_BM25Meta')}")
+        plaid = _list_index(f"SELECT DISTINCT idx_name FROM {_table('kg_PlaidMeta')}")
+
+        indexes = IndexInventory(
+            hnsw_built=hnsw_built,
+            ivf_indexes=ivf,
+            bm25_indexes=bm25,
+            plaid_indexes=plaid,
+        )
+
+        if arno.loaded and arno.capabilities.get("bfs") and adjacency.nkg_populated:
+            adjacency.bfs_path = "arno"
+        elif objectscript.deployed and adjacency.kg_populated:
+            adjacency.bfs_path = "objectscript"
+
+        probe_ms = (_time.perf_counter() - t0) * 1000
+        return EngineStatus(
+            tables=tables,
+            adjacency=adjacency,
+            objectscript=objectscript,
+            arno=arno,
+            indexes=indexes,
+            embedding_dimension=self.embedding_dimension,
+            probe_ms=probe_ms,
+            errors=errors,
+            pending_sync=self._nkg_dirty,
+            internals={"^KG_populated": adjacency.kg_populated,
+                       "^NKG_populated": adjacency.nkg_populated} if internals else None,
+        )
+
+    def count_nodes(self, label: Optional[str] = None) -> int:
+        """
+        Count nodes in the graph using optimized SQL.
+
+        Args:
+            label: Optional label filter
+
+        Returns:
+            Total node count (filtered by label if provided)
+        """
+        cursor = self.conn.cursor()
+        try:
+            if label:
+                # Use constant table names
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
+                )
+            else:
+                cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
+
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Count nodes failed: {e}")
+            return 0
+
+    def create_node(
+        self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None,
+        graph: Optional[str] = None,
+    ) -> bool:
+        """Create a node in the knowledge graph.
+
+        Args:
+            node_id: Unique string identifier for the node.
+            labels: Optional list of label strings (e.g., ["Person", "Employee"]).
+            properties: Optional dict of property key-value pairs.
+            graph: Optional named graph identifier.
+
+        Returns:
+            True if the node was created or already existed, False on error.
+
+        Example:
+            >>> engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53"})
+            True
+        """
+        NodeIdInput(node_id=node_id)
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("START TRANSACTION")
+
+            cursor.execute(
+                f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
+            )
+
+            if labels:
+                label_data = [[node_id, label] for label in labels]
+                cursor.executemany(
+                    f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
+                    label_data,
+                )
+
+            props = dict(properties) if properties else {}
+            if "id" not in props:
+                props["id"] = node_id
+            if graph:
+                props["__graph"] = graph
+
+            prop_data = []
+            for k, v in props.items():
+                val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                prop_data.append([node_id, k, val_str, node_id, k])
+
+            prop_sql = f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)'
+            cursor.executemany(prop_sql, prop_data)
+
+            cursor.execute("COMMIT")
+            return True
+        except Exception as e:
+            cursor.execute("ROLLBACK")
+            err_lower = str(e).lower()
+            if (
+                "unique" in err_lower
+                or "-119" in str(e)
+                or "validation failed" in err_lower
+            ):
+                logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
+            else:
+                logger.error(f"create_node failed: {e}")
+            return False
+
+    def create_edge(
+        self,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        weight: float = 1.0,
+        qualifiers: Dict[str, Any] = None,
+        graph: Optional[str] = None,
+    ) -> bool:
+        """Create an edge in the knowledge graph.
+
+        Args:
+            source_id: Source node identifier.
+            predicate: Relationship type (e.g., "KNOWS", "CALLS").
+            target_id: Target node identifier.
+            weight: Edge weight used by weighted shortest-path / cost traversals (default 1.0).
+            qualifiers: Optional relationship properties.
+            graph: Optional named graph identifier.
+
+        Returns:
+            True if the edge was created or already existed, False on error.
+        """
+        EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
+        cursor = self.conn.cursor()
+        try:
+            qual_json = json.dumps(qualifiers) if qualifiers else None
+            if graph:
+                cursor.execute(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                    [source_id, predicate, target_id, qual_json, graph],
+                )
+            else:
+                cursor.execute(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                    [source_id, predicate, target_id, qual_json],
+                )
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            err_lower = str(e).lower()
+            if "unique" in err_lower or "-119" in str(e):
+                logger.debug(
+                    f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}"
+                )
+            else:
+                logger.error(f"create_edge failed: {e}")
+            return False
+        try:
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.EdgeScan",
+                "WriteAdjacency",
+                source_id,
+                predicate,
+                target_id,
+                str(float(weight)),
+            )
+        except Exception as e:
+            logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
+        return True
+
+    def set_edge_weight(
+        self, source: str, predicate: str, target: str, weight: float
+    ) -> bool:
+        """Set or update the weight of an existing edge.
+
+        Used by weighted shortest-path / cost traversals.
+
+        Args:
+            source: Source node identifier.
+            predicate: Relationship type.
+            target: Target node identifier.
+            weight: New edge weight.
+
+        Returns:
+            True on success, False if the edge could not be updated.
+        """
+        EdgeInput(source_id=source, predicate=predicate, target_id=target)
+        try:
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.EdgeScan",
+                "WriteAdjacency",
+                source,
+                predicate,
+                target,
+                str(float(weight)),
+            )
+            return True
+        except Exception as e:
+            logger.warning(f"set_edge_weight failed: {e}")
+            return False
+
+    def delete_edge(self, source_id: str, predicate: str, target_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
+                [source_id, predicate, target_id],
+            )
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"delete_edge failed: {e}")
+            return False
+        try:
+            self._iris_obj().classMethodVoid(
+                "Graph.KG.EdgeScan", "DeleteAdjacency", source_id, predicate, target_id
+            )
+        except Exception as e:
+            logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
+        return True
+
+    def list_graphs(self) -> List[str]:
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT DISTINCT graph_id FROM Graph_KG.rdf_edges WHERE graph_id IS NOT NULL ORDER BY graph_id"
+        )
+        return [row[0] for row in cursor.fetchall()]
+
+    def drop_graph(self, graph_id: str) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE graph_id = ?", [graph_id])
+        deleted = cursor.rowcount if cursor.rowcount is not None else 0
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        return deleted
+
+    def bulk_create_nodes(
+        self,
+        nodes: List[Dict[str, Any]],
+        disable_indexes: bool = True,
+    ) -> List[str]:
+        """
+        Bulk create nodes using high-performance batch SQL.
+
+        Uses %NOINDEX hints and batch parameter binding for 5,000+ entities/sec.
+        Best for initial data loads or large syncs (10k+ entities).
+
+        Args:
+            nodes: List of node dicts, each with:
+                - id: Node ID (required)
+                - labels: List of labels (optional)
+                - properties: Dict of properties (optional)
+            disable_indexes: Drop indexes before load, rebuild after (default True)
+
+        Returns:
+            List of successfully created node IDs
+        """
+        if not nodes:
+            return []
+
+        if self.capabilities.objectscript_deployed:
+            try:
+                import json as _json
+                from iris_vector_graph.schema import _call_classmethod_large
+                iris_obj = self._iris_obj()
+                normalized = [
+                    {
+                        "id": n.get("id", ""),
+                        "labels": n.get("labels", []),
+                        "props": n.get("properties", {}),
+                    }
+                    for n in nodes if n.get("id")
+                ]
+                created = []
+                for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
+                    chunk = normalized[i:i + _BULK_CHUNK_SIZE]
+                    count = int(_call_classmethod_large(
+                        iris_obj, "Graph.KG.EdgeScan", "BulkIngestNodesSQL",
+                        _json.dumps(chunk),
+                    ))
+                    created.extend(c["id"] for c in chunk[:count])
+                return created
+            except Exception as e:
+                logger.warning("BulkIngestNodesSQL failed (%s), falling back to SQL path", e)
+
+        cursor = self.conn.cursor()
+        created_ids = []
+
+        try:
+            # 1. Pre-load setup
+            if disable_indexes:
+                GraphSchema.disable_indexes(cursor)
+
+            # 2. SQL templates (using %NOINDEX for speed)
+            node_sql = GraphSchema.get_bulk_insert_sql("nodes")
+            label_sql = GraphSchema.get_bulk_insert_sql("rdf_labels")
+            prop_sql = GraphSchema.get_bulk_insert_sql("rdf_props")
+
+            # 3. Collect and prepare data
+            all_labels = []
+            all_props = []
+            valid_nodes = []
+
+            for node in nodes:
+                node_id = node.get("id")
+                if not node_id:
+                    continue
+
+                created_ids.append(node_id)
+                # params: [node_id, node_id] for WHERE NOT EXISTS
+                valid_nodes.append([node_id, node_id])
+
+                for label in node.get("labels", []):
+                    # params: [s, label, s, label]
+                    all_labels.append((node_id, label, node_id, label))
+
+                props = node.get("properties", {})
+                if "id" not in props:
+                    props["id"] = node_id
+                if node.get("graph"):
+                    props["__graph"] = node["graph"]
+
+                for k, v in props.items():
+                    if v is None:
+                        continue
+                    val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                    # params: [s, key, val, s, key]
+                    all_props.append((node_id, k, val_str, node_id, k))
+
+            # 4. Batch Execution (Transactional phases for FK safety)
+            # Phase 1: Nodes
+            cursor.executemany(node_sql, valid_nodes)
+            self.conn.commit()
+
+            # Phase 2: Labels
+            if all_labels:
+                cursor.executemany(label_sql, all_labels)
+
+            # Phase 3: Properties
+            if all_props:
+                cursor.executemany(prop_sql, all_props)
+
+            self.conn.commit()
+            return created_ids
+
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Bulk load failed: {e}")
+            raise
+        finally:
+            if disable_indexes:
+                GraphSchema.rebuild_indexes(cursor)
+                self.conn.commit()
+
+    def bulk_create_edges(
+        self,
+        edges: List[Dict[str, Any]],
+        disable_indexes: bool = True,
+        graph: Optional[str] = None,
+        auto_sync: bool = True,
+        auto_rebuild_kg: bool = None,
+    ) -> int:
+        if auto_rebuild_kg is not None:
+            import warnings
+            warnings.warn(
+                "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            auto_sync = auto_rebuild_kg
+
+        if len(edges) > 250_000 and disable_indexes and not getattr(self, "_large_load_hinted", False):
+            self._large_load_hinted = True
+            logger.info(
+                "bulk_create_edges called with %d edges and per-call index rebuild "
+                "(disable_indexes=True). For multi-million-edge loads use "
+                "engine.bulk_load_session() — it disables/rebuilds indexes once and "
+                "syncs once, avoiding O(table-size) per-batch rebuilds.",
+                len(edges),
+            )
+
+        if not edges:
+            return 0
+
+        cursor = self.conn.cursor()
+        try:
+            if disable_indexes:
+                GraphSchema.disable_indexes(cursor)
+
+            edge_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
+            edge_params = []
+            has_graph = graph is not None or any(e.get("graph") for e in edges)
+            if has_graph:
+                graph_sql = GraphSchema.get_bulk_insert_sql("rdf_edges_with_graph")
+                plain_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
+                for e in edges:
+                    if all(k in e for k in ("source_id", "predicate", "target_id")):
+                        s, p, o = e["source_id"], e["predicate"], e["target_id"]
+                        g = e.get("graph", graph)
+                        if g is not None:
+                            edge_params.append([s, p, o, g, s, p, o, g, g])
+                            cursor.execute(graph_sql, [s, p, o, g, s, p, o, g, g])
+                        else:
+                            cursor.execute(plain_sql, [s, p, o, s, p, o])
+            else:
+                for e in edges:
+                    if all(k in e for k in ("source_id", "predicate", "target_id")):
+                        s, p, o = e["source_id"], e["predicate"], e["target_id"]
+                        edge_params.append([s, p, o, s, p, o])
+                cursor.executemany(edge_sql, edge_params)
+
+            self.conn.commit()
+            return len(edge_params)
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"Bulk edge load failed: {e}")
+            raise
+        finally:
+            if disable_indexes:
+                GraphSchema.rebuild_indexes(cursor)
+                self.conn.commit()
+            if auto_sync:
+                self.sync()
+
+    def _detect_stored_vector_dtype(self) -> str:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                f"SELECT TOP 1 emb FROM {_table('kg_NodeEmbeddings')} WHERE emb IS NOT NULL"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            if row is None:
+                return "DOUBLE"
+            emb_csv = str(row[0])
+            sample = ",".join(emb_csv.split(",")[:2])
+            for dtype in ("FLOAT", "DOUBLE"):
+                try:
+                    c2 = self.conn.cursor()
+                    c2.execute(
+                        f"SELECT VECTOR_COSINE(emb, TO_VECTOR(?, {dtype})) FROM {_table('kg_NodeEmbeddings')} WHERE emb IS NOT NULL LIMIT 1",
+                        [sample],
+                    )
+                    c2.fetchone()
+                    c2.close()
+                    logger.info("Auto-detected stored vector dtype: %s", dtype)
+                    return dtype
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return "DOUBLE"
+
+    def _build_index_registry(self) -> Dict[str, str]:
+        registry: Dict[str, str] = {}
+        try:
+            import iris as _iris_pkg
+            if not callable(getattr(_iris_pkg, "gref", None)):
+                raise AttributeError("iris.gref not available")
+            for global_name, type_str in (
+                ("^IVF",      "ivf"),
+                ("^VecIdx",   "vec"),
+                ("^BM25Idx",  "bm25"),
+                ("^PLAID",    "plaid"),
+            ):
+                gref = _iris_pkg.gref(global_name)
+                name = ""
+                for _ in range(10000):
+                    name = gref.order([name])
+                    if not isinstance(name, str) or name == "":
+                        break
+                    registry[name] = type_str
+        except Exception:
+            pass
+        if not registry:
+            try:
+                from iris_vector_graph.schema import _call_classmethod
+                for cls_name, type_str in (
+                    ("Graph.KG.IVFIndex",   "ivf"),
+                    ("Graph.KG.BM25Index",  "bm25"),
+                    ("Graph.KG.PLAIDSearch", "plaid"),
+                ):
+                    raw = str(_call_classmethod(self.conn, cls_name, "List"))
+                    for name in (n.strip() for n in raw.split(",") if n.strip()):
+                        registry[name] = type_str
+            except Exception:
+                pass
+                for sql_query, type_str in (
+                    ("SELECT DISTINCT name FROM Graph_KG.ivf_indexes", "ivf"),
+                    ("SELECT DISTINCT name FROM Graph_KG.bm25_indexes", "bm25"),
+                    ("SELECT DISTINCT name FROM Graph_KG.plaid_indexes", "plaid"),
+                ):
+                    try:
+                        cur.execute(sql_query)
+                        for row in cur.fetchall():
+                            registry[str(row[0])] = type_str
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        if self._probe_native_vec():
+            registry["hnsw"] = "hnsw"
+        return registry
 
     _LEGACY_TO_CONCEPT = {
         "ivf": "vector", "vec": "vector", "bm25": "fulltext",
@@ -742,53 +3484,2821 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
         "neighborhood_vector": "neighborhood_vector",
     }
 
+    def index(self, name: str) -> "Index":
+        from iris_vector_graph.index_protocol import Index
+        from iris_vector_graph.errors import IndexNotFoundError
+        if name not in self._index_registry:
+            raise IndexNotFoundError(name, known=list(self._index_registry))
+        concept = self._LEGACY_TO_CONCEPT.get(
+            self._index_registry[name], self._index_registry[name]
+        )
+        return Index(name=name, type=concept, engine=self)
 
+    def create_index(self, config, replace: bool = False) -> "Index":
+        from iris_vector_graph.index_protocol import Index
+        if config.name in self._index_registry:
+            if not replace:
+                raise ValueError(
+                    f"Index '{config.name}' already exists; pass replace=True to recreate."
+                )
+            self.index(config.name).drop()
+        self._pending_index_config[config.name] = config
+        self._index_registry[config.name] = config.type
+        return Index(name=config.name, type=config.type, engine=self)
 
+    def list_indexes(self) -> "List[Index]":
+        return [self.index(n) for n in sorted(self._index_registry)]
 
+    def _index_config(self, name: str):
+        return self._pending_index_config.get(name)
 
+    def _build_vector_index(self, name: str, **kw) -> dict:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            self.vec_create_index(name, dim=kw.get("dim") or cfg.dim, metric=cfg.metric)
+            return self.vec_build(name)
+        nlist = kw.get("nlist", getattr(cfg, "nlist", 256))
+        metric = kw.get("metric", getattr(cfg, "metric", "cosine"))
+        return self.ivf_build(name, nlist=nlist, metric=metric, node_ids=kw.get("node_ids"))
 
+    def _search_vector_index(self, name: str, q, k: int = 10, **kw) -> list:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            return self.vec_search(name, q, k, **kw)
+        return self.ivf_search(name, q, k, **kw)
 
+    def _vector_index_insert(self, name: str, id_: str, vec) -> None:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            self.vec_insert(name, id_, vec)
+        else:
+            self.ivf_insert(name, id_, vec)
 
+    def _vector_index_drop(self, name: str) -> None:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            self.vec_drop(name)
+        else:
+            self.ivf_drop(name)
 
+    def _vector_index_info(self, name: str) -> dict:
+        cfg = self._index_config(name)
+        if cfg is not None and getattr(cfg, "method", "ivf") == "vec":
+            return self.vec_info(name)
+        return self.ivf_info(name)
 
+    def _build_fulltext_index(self, name: str, **kw) -> dict:
+        cfg = self._index_config(name)
+        props = kw.get("properties") or (cfg.properties if cfg else ["name"])
+        k1 = kw.get("k1", getattr(cfg, "k1", 1.5))
+        b = kw.get("b", getattr(cfg, "b", 0.75))
+        info = self.bm25_build(name, props, k1=k1, b=b)
+        from iris_vector_graph.index_protocol import _rows_of
+        from iris_vector_graph.errors import IndexNotBuiltError
+        if _rows_of(info or {}) == 0:
+            raise IndexNotBuiltError(name, rows=0)
+        return info
 
+    def _build_multivector_index(self, name: str, **kw) -> dict:
+        docs = kw.get("docs")
+        if not docs:
+            from iris_vector_graph.errors import IndexNotBuiltError
+            raise IndexNotBuiltError(name, rows=0)
+        cfg = self._index_config(name)
+        return self.plaid_build(
+            name, docs,
+            n_clusters=kw.get("n_clusters", getattr(cfg, "n_clusters", None)),
+            dim=kw.get("dim", getattr(cfg, "dim", 128)),
+        )
 
+    def _build_neighborhood_index(self, name: str, **kw) -> dict:
+        raise NotImplementedError(
+            "neighborhood_vector index build lands in spec 181; "
+            "config registered but build not yet wired."
+        )
 
+    def _search_neighborhood_index(self, name: str, q, k: int = 10, **kw) -> list:
+        raise NotImplementedError("neighborhood_vector search lands in spec 181.")
 
+    def _neighborhood_index_drop(self, name: str) -> None:
+        self._iris_obj().kill("^NKG", "q")
 
+    def _neighborhood_index_info(self, name: str) -> dict:
+        return {"type": "neighborhood_vector", "rows": 0}
 
+    def sync(self) -> bool:
+        """Unified sync of adjacency and acceleration indexes (^KG + ^NKG).
 
+        Idempotent. Chooses Rust accelerator for ^NKG when arno is available.
+        Always clears the pending-sync flag after the attempt completes.
 
+        Returns:
+            True on success, False if a fatal error prevented completion.
+        """
+        kg_ok = self._sync_kg()
+        nkg_ok = self._sync_nkg()
+        self._nkg_dirty = False
+        return kg_ok and nkg_ok
 
+    def _sync_kg(self) -> bool:
+        from iris_vector_graph.schema import _call_classmethod
+        try:
+            _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
+            self.capabilities.kg_built = True
+            self._nkg_dirty = True
+            logger.info("^KG adjacency index rebuilt successfully")
+            return True
+        except Exception as e:
+            logger.warning("_sync_kg failed: %s", e)
+            return False
 
+    def _sync_nkg(self) -> bool:
+        try:
+            iris_obj = self._iris_obj()
+            rust_succeeded = False
+            if self._detect_arno() and self._arno_capabilities.get("rust_callout"):
+                try:
+                    import json as _json
+                    raw = str(iris_obj.classMethodValue("Graph.KG.NKGAccel", "BuildNKGRust"))
+                    result = _json.loads(raw)
+                    if "error" not in result:
+                        logger.info("^NKG rebuilt via Rust: %s", result)
+                        rust_succeeded = True
+                    else:
+                        logger.warning("BuildNKGRust returned error (%s), falling back to ObjectScript", result["error"])
+                except Exception as rust_exc:
+                    logger.warning("BuildNKGRust raised (%s), falling back to ObjectScript", rust_exc)
+            if not rust_succeeded:
+                iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildNKG")
+            iris_obj.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+            try:
+                iris_obj.classMethodVoid("Graph.KG.NKGAccel", "InvalidateAdjCache")
+            except Exception:
+                pass
+            self._nkg_dirty = False
+            return True
+        except Exception as e:
+            logger.warning("_sync_nkg failed: %s", e)
+            return False
 
+    def rebuild_kg(self) -> bool:
+        """Deprecated: use ``engine.sync()`` instead."""
+        import warnings
+        warnings.warn(
+            "rebuild_kg() is deprecated. Use engine.sync() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._sync_kg()
 
+    def rebuild_nkg(self) -> bool:
+        """Deprecated: use ``engine.sync()`` instead."""
+        import warnings
+        warnings.warn(
+            "rebuild_nkg() is deprecated. Use engine.sync() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._sync_nkg()
 
+    def backfill_degp(self) -> int:
+        try:
+            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "BackfillDegp")
+            return int(result)
+        except Exception as e:
+            logger.warning("backfill_degp failed: %s", e)
+            return 0
+
+    def backfill_deg2p_exact(self) -> int:
+        try:
+            result = self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            return int(result)
+        except Exception as e:
+            logger.warning("backfill_deg2p_exact failed: %s", e)
+            return 0
+
+    def khop2_count_fast(self, node_id: str, predicate: str = "") -> int:
+        KHop2Input(node_id=node_id)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.Traversal", "KHop2CountFast", node_id, predicate
+        )
+        return int(result)
+
+    def khop2_count_exact(self, node_id: str, predicate: str = "") -> int:
+        KHop2Input(node_id=node_id)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.Traversal", "KHop2CountExact", node_id, predicate
+        )
+        return int(result)
+
+    def bulk_ingest_edges(
+        self,
+        edges: List[Dict[str, Any]],
+        predicate: str = "KNOWS",
+        auto_sync: bool = True,
+    ) -> int:
+        if not edges:
+            return 0
+        import json as _json
+        normalized = []
+        for e in edges:
+            if isinstance(e, (list, tuple)):
+                s, o = str(e[0]), str(e[1])
+                p = str(e[2]) if len(e) > 2 else predicate
+            else:
+                s = str(e.get("s", e.get("source", "")))
+                p = str(e.get("p", e.get("predicate", predicate)))
+                o = str(e.get("o", e.get("target", "")))
+            if s and o:
+                normalized.append({"s": s, "p": p, "o": o})
+
+        if self.capabilities.objectscript_deployed:
+            try:
+                from iris_vector_graph.schema import _call_classmethod_large
+                iris_obj = self._iris_obj()
+                n = 0
+                for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
+                    chunk = normalized[i:i + _BULK_CHUNK_SIZE]
+                    n += int(_call_classmethod_large(
+                        iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdgesSQL",
+                        _json.dumps(chunk), predicate,
+                    ))
+                self._nkg_dirty = True
+                if auto_sync:
+                    self.sync()
+                return n
+            except Exception as e:
+                logger.warning("BulkIngestEdgesSQL failed (%s), falling back to SQL path", e)
+
+        cursor = self.conn.cursor()
+        n = 0
+        err_lower = lambda ex: ("unique" in str(ex).lower() or "-119" in str(ex))
+        for edge in normalized:
+            s, p, o = edge["s"], edge["p"], edge["o"]
+            try:
+                cursor.execute(
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                    [s, p, o],
+                )
+            except Exception as ex:
+                if not err_lower(ex):
+                    continue
+            try:
+                self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0")
+            except Exception:
+                pass
+            n += 1
+        self.conn.commit()
+        self._nkg_dirty = True
+        if auto_sync:
+            self.sync()
+        return n
+
+    def load_networkx(
+        self,
+        G,
+        label_attr: str = "type",
+        skip_existing: bool = True,
+        progress_callback=None,
+        auto_sync: bool = True,
+        auto_rebuild_kg: bool = None,
+    ) -> dict:
+        if auto_rebuild_kg is not None:
+            import warnings
+            warnings.warn(
+                "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            auto_sync = auto_rebuild_kg
+        added_nodes = 0
+        added_edges = 0
+        skipped_nodes = 0
+        skipped_edges = 0
+        total_nodes = G.number_of_nodes()
+        total_edges = G.number_of_edges()
+        for node_id, data in G.nodes(data=True):
+            labels = []
+            if label_attr and label_attr in data:
+                val = data[label_attr]
+                labels = [val] if isinstance(val, str) else list(val)
+            elif "namespace" in data:
+                labels = [data["namespace"]]
+            props = {}
+            for k, v in data.items():
+                if k in (label_attr, "namespace") or v is None:
+                    continue
+                s = str(v) if not isinstance(v, str) else v
+                if len(s) > 60000:
+                    s = s[:60000]
+                props[k] = s
+            if self.create_node(node_id=str(node_id), labels=labels, properties=props):
+                added_nodes += 1
+            else:
+                skipped_nodes += 1
+            n_done = added_nodes + skipped_nodes
+            if n_done % 10000 == 0:
+                logger.info(
+                    f"Nodes: {n_done:,}/{total_nodes:,} ({added_nodes:,} added, {skipped_nodes:,} skipped)"
+                )
+                if progress_callback:
+                    progress_callback(n_done, added_edges + skipped_edges)
+        logger.info(f"Nodes complete: {added_nodes:,} added, {skipped_nodes:,} skipped")
+        if progress_callback:
+            progress_callback(added_nodes + skipped_nodes, 0)
+        for src, dst, data in G.edges(data=True):
+            predicate = data.get(
+                "predicate", data.get("label", data.get("key", "is_a"))
+            )
+            qualifiers = {
+                k: v for k, v in data.items() if k not in ("predicate", "label", "key")
+            }
+            if self.create_edge(
+                source_id=str(src),
+                predicate=str(predicate),
+                target_id=str(dst),
+                qualifiers=qualifiers or None,
+            ):
+                added_edges += 1
+            else:
+                skipped_edges += 1
+            e_done = added_edges + skipped_edges
+            if e_done % 10000 == 0:
+                logger.info(
+                    f"Edges: {e_done:,}/{total_edges:,} ({added_edges:,} added, {skipped_edges:,} skipped)"
+                )
+                if progress_callback:
+                    progress_callback(added_nodes + skipped_nodes, e_done)
+        logger.info(f"Edges complete: {added_edges:,} added, {skipped_edges:,} skipped")
+        if progress_callback:
+            progress_callback(added_nodes + skipped_nodes, added_edges + skipped_edges)
+        stats = {
+            "nodes": added_nodes,
+            "edges": added_edges,
+            "skipped_nodes": skipped_nodes,
+            "skipped_edges": skipped_edges,
+        }
+        if auto_sync and (added_nodes > 0 or added_edges > 0):
+            self.sync()
+        return stats
+
+    def import_rdf(
+        self,
+        path: str,
+        format: Optional[str] = None,
+        batch_size: int = 10000,
+        progress=None,
+        infer=False,
+        graph: Optional[str] = None,
+    ) -> Dict[str, int]:
+        try:
+            import rdflib
+            from rdflib import (
+                Graph,
+                ConjunctiveGraph,
+                URIRef,
+                Literal as RDFLiteral,
+                BNode,
+            )
+        except ImportError:
+            raise ImportError("import_rdf requires rdflib: pip install rdflib")
+
+        if format is None:
+            ext = path.rsplit(".", 1)[-1].lower()
+            format = {
+                "ttl": "turtle",
+                "nt": "nt",
+                "nq": "nquads",
+                "n3": "n3",
+                "trig": "trig",
+                "jsonld": "json-ld",
+            }.get(ext, "turtle")
+
+        is_quads = format in ("nquads", "trig")
+        if is_quads:
+            g = ConjunctiveGraph()
+        else:
+            g = Graph()
+        g.parse(path, format=format)
+
+        cursor = self.conn.cursor()
+        nodes_inserted = 0
+        edges_inserted = 0
+        props_inserted = 0
+        triple_count = 0
+        blank_prefix = f"_:{abs(hash(path)) % 10**8}:"
+
+        def _node_id(term):
+            if isinstance(term, URIRef):
+                return str(term)
+            if isinstance(term, BNode):
+                return f"{blank_prefix}{term}"
+            return str(term)
+
+        def _ensure_node(nid):
+            try:
+                cursor.execute(
+                    f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+                    [nid, nid],
+                )
+                return True
+            except Exception:
+                return False
+
+        batch_nodes: set = set()
+        batch_edges: List = []
+        batch_props: List = []
+
+        def _flush():
+            nonlocal nodes_inserted, edges_inserted, props_inserted
+            for nid in batch_nodes:
+                if _ensure_node(nid):
+                    nodes_inserted += 1
+            for s, p, o, edge_graph in batch_edges:
+                try:
+                    if edge_graph:
+                        cursor.execute(
+                            f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?)",
+                            [s, p, o, edge_graph, s, p, o, edge_graph],
+                        )
+                    else:
+                        cursor.execute(
+                            f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id IS NULL)",
+                            [s, p, o, s, p, o],
+                        )
+                    edges_inserted += 1
+                except Exception:
+                    pass
+            for s, k, v in batch_props:
+                try:
+                    cursor.execute(
+                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
+                        [s, k, v[:64000]],
+                    )
+                    props_inserted += 1
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            batch_nodes.clear()
+            batch_edges.clear()
+            batch_props.clear()
+
+        triples_iter = g.quads() if is_quads else ((s, p, o, None) for s, p, o in g)
+
+        for s, p, o, graph_ctx in triples_iter:
+            triple_count += 1
+            s_id = _node_id(s)
+            p_str = _node_id(p)
+            batch_nodes.add(s_id)
+
+            effective_graph = graph
+            if graph_ctx is not None:
+                ctx_str = str(graph_ctx)
+                if ctx_str and ctx_str not in ("", "DEFAULT", "urn:x-rdflib:default"):
+                    effective_graph = ctx_str
+
+            if isinstance(o, RDFLiteral):
+                key = p_str.rsplit("/", 1)[-1].rsplit("#", 1)[-1][:128]
+                val = str(o)
+                lang = getattr(o, "language", None)
+                if lang:
+                    batch_props.append((s_id, key, val))
+                    batch_props.append((s_id, f"{key}_lang", lang))
+                else:
+                    batch_props.append((s_id, key, val))
+            elif isinstance(o, (URIRef, BNode)):
+                o_id = _node_id(o)
+                batch_nodes.add(o_id)
+                batch_edges.append((s_id, p_str, o_id, effective_graph))
+            else:
+                batch_props.append((s_id, p_str[:128], str(o)[:64000]))
+
+            if triple_count % batch_size == 0:
+                _flush()
+                if progress:
+                    progress(triple_count, 0)
+
+        _flush()
+
+        try:
+            self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
+        except Exception as e:
+            logger.warning(f"import_rdf BuildKG failed (^KG may be stale): {e}")
+
+        result = {
+            "triples": triple_count,
+            "nodes": nodes_inserted,
+            "edges": edges_inserted,
+            "properties": props_inserted,
+        }
+
+        if infer:
+            rules = infer if isinstance(infer, str) else "rdfs"
+            inf_result = self.materialize_inference(rules=rules, graph=graph)
+            result["inferred"] = inf_result.get("inferred", 0)
+
+        return result
+
+    def materialize_inference(
+        self, rules: str = "rdfs", graph: Optional[str] = None
+    ) -> Dict[str, int]:
+        RDFS_SUBCLASSOF = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
+        RDFS_SUBPROPOF = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf"
+        RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        RDFS_DOMAIN = "http://www.w3.org/2000/01/rdf-schema#domain"
+        RDFS_RANGE = "http://www.w3.org/2000/01/rdf-schema#range"
+        OWL_EQUIV_CLASS = "http://www.w3.org/2002/07/owl#equivalentClass"
+        OWL_EQUIV_PROP = "http://www.w3.org/2002/07/owl#equivalentProperty"
+        OWL_INVERSE = "http://www.w3.org/2002/07/owl#inverseOf"
+        OWL_SAME_AS = "http://www.w3.org/2002/07/owl#sameAs"
+        OWL_TRANS_PROP = "http://www.w3.org/2002/07/owl#TransitiveProperty"
+        OWL_SYM_PROP = "http://www.w3.org/2002/07/owl#SymmetricProperty"
+        INFERRED_JSON = '{"inferred":true}'
+
+        cursor = self.conn.cursor()
+        inferred_count = 0
+
+        graph_filter_sql = " AND graph_id = ?" if graph else " AND (graph_id IS NULL)"
+        graph_filter_params = [graph] if graph else []
+
+        def _fetch_edges(predicate):
+            cursor.execute(
+                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ? "
+                "AND (qualifiers IS NULL OR qualifiers NOT LIKE '%\"inferred\"%')"
+                + graph_filter_sql,
+                [predicate] + graph_filter_params,
+            )
+            return set((r[0], r[1]) for r in cursor.fetchall())
+
+        def _exists(s, p, o):
+            if graph:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND graph_id=?",
+                    [s, p, o, graph],
+                )
+            else:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND (graph_id IS NULL)",
+                    [s, p, o],
+                )
+            row = cursor.fetchone()
+            return row is not None and int(row[0]) > 0
+
+        def _insert_inferred(triples):
+            nonlocal inferred_count
+            for s, p, o in triples:
+                if not _exists(s, p, o):
+                    try:
+                        if graph:
+                            cursor.execute(
+                                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                                [s, p, o, INFERRED_JSON, graph],
+                            )
+                        else:
+                            cursor.execute(
+                                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                                [s, p, o, INFERRED_JSON],
+                            )
+                        inferred_count += 1
+                    except Exception:
+                        pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+
+        def _transitive_closure(direct_edges):
+            closure = set(direct_edges)
+            changed = True
+            while changed:
+                changed = False
+                new = set()
+                for a, b in closure:
+                    for b2, c in closure:
+                        if b == b2 and (a, c) not in closure and a != c:
+                            new.add((a, c))
+                if new:
+                    closure |= new
+                    changed = True
+            return closure - direct_edges
+
+        subclass_direct = _fetch_edges(RDFS_SUBCLASSOF)
+        subprop_direct = _fetch_edges(RDFS_SUBPROPOF)
+
+        inferred = set()
+        inferred |= {
+            (a, RDFS_SUBCLASSOF, c) for a, c in _transitive_closure(subclass_direct)
+        }
+        inferred |= {
+            (a, RDFS_SUBPROPOF, c) for a, c in _transitive_closure(subprop_direct)
+        }
+
+        rdf_type_edges = _fetch_edges(RDF_TYPE)
+        all_subclass = subclass_direct | {
+            (a, c) for a, _, c in inferred if _ == RDFS_SUBCLASSOF
+        }
+        for x, cls_a in list(rdf_type_edges):
+            for a, b in all_subclass:
+                if a == cls_a:
+                    inferred.add((x, RDF_TYPE, b))
+
+        domain_edges = _fetch_edges(RDFS_DOMAIN)
+        range_edges = _fetch_edges(RDFS_RANGE)
+        all_predicate_edges = {}
+        cursor.execute(
+            "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE p NOT IN (?, ?, ?, ?, ?) LIMIT 50000",
+            [RDFS_SUBCLASSOF, RDFS_SUBPROPOF, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE],
+        )
+        for s, p, o in cursor.fetchall():
+            all_predicate_edges.setdefault(p, []).append((s, o))
+
+        for p, domain in domain_edges:
+            for s, _ in all_predicate_edges.get(p, []):
+                inferred.add((s, RDF_TYPE, domain))
+
+        for p, rng in range_edges:
+            for _, o in all_predicate_edges.get(p, []):
+                inferred.add((o, RDF_TYPE, rng))
+
+        if rules == "owl":
+            equiv_class = _fetch_edges(OWL_EQUIV_CLASS)
+            for a, b in equiv_class:
+                inferred.add((a, RDFS_SUBCLASSOF, b))
+                inferred.add((b, RDFS_SUBCLASSOF, a))
+
+            equiv_prop = _fetch_edges(OWL_EQUIV_PROP)
+            for p, q in equiv_prop:
+                inferred.add((p, RDFS_SUBPROPOF, q))
+                inferred.add((q, RDFS_SUBPROPOF, p))
+
+            inverse_edges = _fetch_edges(OWL_INVERSE)
+            for p, q in inverse_edges:
+                for x, y in all_predicate_edges.get(p, []):
+                    inferred.add((y, q, x))
+                for x, y in all_predicate_edges.get(q, []):
+                    inferred.add((y, p, x))
+
+            cursor.execute(
+                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?",
+                [RDF_TYPE, OWL_TRANS_PROP],
+            )
+            trans_props = {r[0] for r in cursor.fetchall()}
+            for tp in trans_props:
+                tp_edges = _fetch_edges(tp)
+                inferred |= {(a, tp, c) for a, c in _transitive_closure(tp_edges)}
+
+            cursor.execute(
+                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?",
+                [RDF_TYPE, OWL_SYM_PROP],
+            )
+            sym_props = {r[0] for r in cursor.fetchall()}
+            for sp in sym_props:
+                for x, y in all_predicate_edges.get(sp, []):
+                    inferred.add((y, sp, x))
+
+        _insert_inferred(inferred)
+        return {"inferred": inferred_count}
+
+    def retract_inference(self, graph: Optional[str] = None) -> int:
+        cursor = self.conn.cursor()
+        if graph:
+            cursor.execute(
+                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%' AND graph_id = ?",
+                [graph],
+            )
+        else:
+            cursor.execute(
+                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%'"
+            )
+        deleted = cursor.rowcount or 0
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        return deleted
+
+    def save_snapshot(
+        self,
+        path: str,
+        layers: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        import zipfile as _zipfile
+        import json as _json
+        import time as _time
+        import uuid as _uuid
+
+        if layers is None:
+            layers = ["sql", "globals"]
+
+        ts = int(_time.time() * 1000)
+        run_id = _uuid.uuid4().hex[:8]
+        import sys as _sys
+
+        try:
+            iris_ver = str(
+                _call_classmethod(self.conn, "%SYSTEM.Version", "GetVersion")
+            )
+        except Exception:
+            iris_ver = "unknown"
+        metadata: Dict[str, Any] = {
+            "version": "1.1",
+            "globals_format": "ndjson",
+            "created_ts": ts,
+            "ivg_version": "1.58.0",
+            "iris_version": iris_ver,
+            "python_version": f"{_sys.version_info.major}.{_sys.version_info.minor}",
+            "has_vector_sql": False,
+            "embedding_dim": self.embedding_dimension or 0,
+            "layers": layers,
+            "tables": {},
+            "globals": {},
+        }
+
+        sql_data: Dict[str, str] = {}
+        globals_data: Dict[str, bytes] = {}
+
+        SQL_TABLES_EXPORT = [
+            ("Graph_KG.nodes", "node_id"),
+            ("Graph_KG.rdf_edges", "s"),
+            ("Graph_KG.rdf_labels", "s"),
+            ("Graph_KG.rdf_props", "s"),
+            ("Graph_KG.rdf_reifications", "subject_s"),
+        ]
+        VECTOR_TABLE = "Graph_KG.kg_NodeEmbeddings"
+
+        if "sql" in layers:
+            cursor = self.conn.cursor()
+            for table, _ in SQL_TABLES_EXPORT:
+                try:
+                    cursor.execute(f"SELECT * FROM {table}")
+                    all_desc = cursor.description
+                    rows = cursor.fetchall()
+                    _ROWID_NAMES = {"edge_id", "reification_id", "label_id", "prop_id"}
+                    skip = {
+                        i
+                        for i, d in enumerate(all_desc)
+                        if d[0].lower() in _ROWID_NAMES
+                    }
+                    cols = [
+                        d[0].lower() for i, d in enumerate(all_desc) if i not in skip
+                    ]
+                    lines = []
+                    for row in rows:
+                        lines.append(
+                            _json.dumps(
+                                {
+                                    k: (
+                                        None
+                                        if v is None
+                                        else v.isoformat()
+                                        if hasattr(v, "isoformat")
+                                        else float(v)
+                                        if hasattr(v, "__float__")
+                                        and not isinstance(v, (int, str, bool))
+                                        else v
+                                    )
+                                    for k, v in zip(
+                                        cols,
+                                        [
+                                            val
+                                            for i, val in enumerate(row)
+                                            if i not in skip
+                                        ],
+                                    )
+                                }
+                            )
+                        )
+                    sql_data[table] = "\n".join(lines)
+                    metadata["tables"][table] = len(rows)
+                except Exception as e:
+                    logger.debug("Snapshot: skipping table %s: %s", table, e)
+                    metadata["tables"][table] = 0
+
+            try:
+                cursor.execute(f"SELECT id, emb, metadata FROM {VECTOR_TABLE}")
+                cols = ["id", "emb", "metadata"]
+                rows = cursor.fetchall()
+                lines = []
+                for row in rows:
+                    nid, emb_val, meta_val = row[0], row[1], row[2]
+                    emb_str = str(emb_val) if emb_val is not None else None
+                    lines.append(
+                        _json.dumps({"id": nid, "emb": emb_str, "metadata": meta_val})
+                    )
+                sql_data[VECTOR_TABLE] = "\n".join(lines)
+                metadata["tables"][VECTOR_TABLE] = len(rows)
+                metadata["has_vector_sql"] = True
+            except Exception as e:
+                logger.debug("Snapshot: kg_NodeEmbeddings not available: %s", e)
+                metadata["has_vector_sql"] = False
+
+            EDGE_VECTOR_TABLE = "Graph_KG.kg_EdgeEmbeddings"
+            try:
+                cursor.execute(f"SELECT s, p, o_id, emb FROM {EDGE_VECTOR_TABLE}")
+                rows = cursor.fetchall()
+                lines = []
+                for row in rows:
+                    s_val, p_val, o_val, emb_val = row[0], row[1], row[2], row[3]
+                    emb_str = str(emb_val) if emb_val is not None else None
+                    lines.append(
+                        _json.dumps({"s": s_val, "p": p_val, "o_id": o_val, "emb": emb_str})
+                    )
+                sql_data[EDGE_VECTOR_TABLE] = "\n".join(lines)
+                metadata["tables"][EDGE_VECTOR_TABLE] = len(rows)
+            except Exception as e:
+                logger.debug("Snapshot: kg_EdgeEmbeddings not available: %s", e)
+
+        if "globals" in layers:
+            GLOBALS_EXPORT = [
+                ("KG", [["out"], ["in"]]),
+                ("BM25Idx", [[]]),
+                ("IVF", [[]]),
+                ("PLAID", [[]]),
+                ("VecIdx", [[]]),
+                ("NKG", [[]]),
+                ("IVG.CDC", [[]]),
+            ]
+            try:
+                iris_obj = self._iris_obj()
+                for gname, subscript_prefixes in GLOBALS_EXPORT:
+                    lines = []
+                    for prefix_subs in subscript_prefixes:
+                        try:
+                            lines.extend(
+                                self._export_global_to_ndjson(
+                                    iris_obj, f"^{gname}", prefix_subs
+                                )
+                            )
+                        except Exception as eg:
+                            logger.debug(
+                                "Snapshot: skip global ^%s%s: %s",
+                                gname,
+                                prefix_subs,
+                                eg,
+                            )
+                    if lines:
+                        content = "\n".join(lines).encode("utf-8")
+                        globals_data[gname] = content
+                        metadata["globals"][gname] = {
+                            "format": "ndjson",
+                            "subscripts": [s for sl in subscript_prefixes for s in sl],
+                            "size": len(content),
+                        }
+            except Exception as e:
+                logger.warning(
+                    "Snapshot: global export failed (globals layer skipped): %s", e
+                )
+        with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("metadata.json", _json.dumps(metadata, indent=2))
+            for table, content in sql_data.items():
+                safe_name = table.replace(".", "_").replace("/", "_")
+                zf.writestr(f"sql/{safe_name}.ndjson", content)
+            for gname, content in globals_data.items():
+                zf.writestr(f"globals/{gname}.ndjson", content)
+
+        return {
+            "path": path,
+            "tables": metadata["tables"],
+            "globals": list(globals_data.keys()),
+            "snapshot_ts": ts,
+        }
+
+    @staticmethod
+    def snapshot_info(path: str) -> Dict[str, Any]:
+        import zipfile as _zipfile
+        import json as _json
+
+        with _zipfile.ZipFile(path, "r") as zf:
+            with zf.open("metadata.json") as f:
+                metadata = _json.loads(f.read())
+        return {
+            "metadata": metadata,
+            "tables": metadata.get("tables", {}),
+            "has_vector_sql": metadata.get("has_vector_sql", False),
+            "version": metadata.get("version", "unknown"),
+            "snapshot_ts": metadata.get("created_ts", 0),
+            "globals": metadata.get("globals", {}),
+        }
+
+    def restore_snapshot(
+        self,
+        path: str,
+        merge: bool = False,
+    ) -> Dict[str, Any]:
+        import zipfile as _zipfile
+        import json as _json
+        import uuid as _uuid
+
+        run_id = _uuid.uuid4().hex[:8]
+
+        with _zipfile.ZipFile(path, "r") as zf:
+            names = zf.namelist()
+            metadata = _json.loads(zf.read("metadata.json"))
+
+            sql_files = {
+                n: zf.read(n).decode("utf-8") for n in names if n.startswith("sql/")
+            }
+            global_files = {n: zf.read(n) for n in names if n.startswith("globals/")}
+
+        restored_tables: Dict[str, int] = {}
+        restored_globals: List[str] = []
+        cursor = self.conn.cursor()
+
+        TABLE_ORDER = [
+            "Graph_KG_nodes.ndjson",
+            "Graph_KG_rdf_edges.ndjson",
+            "Graph_KG_rdf_labels.ndjson",
+            "Graph_KG_rdf_props.ndjson",
+            "Graph_KG_rdf_reifications.ndjson",
+        ]
+        VECTOR_FILE = "Graph_KG_kg_NodeEmbeddings.ndjson"
+
+        if not merge:
+            table_clear_order = [
+                "Graph_KG.rdf_reifications",
+                "Graph_KG.rdf_labels",
+                "Graph_KG.rdf_props",
+                "Graph_KG.rdf_edges",
+                "Graph_KG.kg_NodeEmbeddings",
+                "Graph_KG.nodes",
+            ]
+            globals_in_snapshot = metadata.get("globals", {})
+            for gname, ginfo in globals_in_snapshot.items():
+                subscripts = (
+                    ginfo.get("subscripts", []) if isinstance(ginfo, dict) else []
+                )
+                try:
+                    iris_obj = self._iris_obj()
+                    if subscripts:
+                        for sub in subscripts:
+                            iris_obj.kill(f"^{gname}", sub)
+                    else:
+                        iris_obj.kill(f"^{gname}")
+                except Exception as e:
+                    logger.debug("restore: kill ^%s failed: %s", gname, e)
+            for table in table_clear_order:
+                try:
+                    cursor.execute(f"DELETE FROM {table}")
+                    self.conn.commit()
+                except Exception:
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
+
+        def _insert_row(table: str, row: Dict[str, Any]) -> bool:
+            if not row:
+                return False
+            cols = list(row.keys())
+            vals = list(row.values())
+            placeholders = ", ".join(["?"] * len(cols))
+            col_list = ", ".join(cols)
+            try:
+                cursor.execute(
+                    f"INSERT INTO {table} ({col_list}) SELECT {placeholders} "
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE "
+                    + " AND ".join(
+                        f"{c} = ?" if row[c] is not None else f"{c} IS NULL"
+                        for c in cols[:1]
+                    )
+                    + ")",
+                    vals + [vals[0]],
+                )
+                return True
+            except Exception:
+                return False
+
+        for fname_short in TABLE_ORDER:
+            fname = f"sql/{fname_short}"
+            if fname not in sql_files:
+                continue
+            table_name = fname_short.replace("Graph_KG_", "Graph_KG.").replace(
+                ".ndjson", ""
+            )
+            count = 0
+            for line in sql_files[fname].splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                    cols = list(row.keys())
+                    vals = list(row.values())
+                    placeholders = ", ".join(["?"] * len(cols))
+                    col_list = ", ".join(cols)
+                    if merge:
+                        cursor.execute(
+                            f"INSERT INTO {table_name} ({col_list}) SELECT {placeholders} "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {table_name} WHERE {cols[0]} = ?)",
+                            vals + [vals[0]],
+                        )
+                    else:
+                        cursor.execute(
+                            f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})",
+                            vals,
+                        )
+                    count += 1
+                except Exception as e:
+                    logger.debug("restore: row insert failed for %s: %s", table_name, e)
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables[table_name] = count
+
+        if f"sql/{VECTOR_FILE}" in sql_files:
+            count = 0
+            for line in sql_files[f"sql/{VECTOR_FILE}"].splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                    nid = row.get("id")
+                    emb_str = row.get("emb")
+                    meta_val = row.get("metadata")
+                    if nid and emb_str:
+                        try:
+                            if merge:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
+                                    f"SELECT ?, TO_VECTOR(?, {self.vector_dtype}) "
+                                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
+                                    [nid, emb_str, nid],
+                                )
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
+                                    f"VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
+                                    [nid, emb_str],
+                                )
+                            count += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables["Graph_KG.kg_NodeEmbeddings"] = count
+
+        EDGE_VECTOR_FILE = "Graph_KG_kg_EdgeEmbeddings.ndjson"
+        if f"sql/{EDGE_VECTOR_FILE}" in sql_files:
+            count = 0
+            for line in sql_files[f"sql/{EDGE_VECTOR_FILE}"].splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = _json.loads(line)
+                    s_val = row.get("s")
+                    p_val = row.get("p")
+                    o_val = row.get("o_id")
+                    emb_str = row.get("emb")
+                    if s_val and p_val and o_val and emb_str:
+                        try:
+                            if merge:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
+                                    f"SELECT ?, ?, ?, TO_VECTOR(?, {self.vector_dtype}) "
+                                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_EdgeEmbeddings "
+                                    "WHERE s=? AND p=? AND o_id=?)",
+                                    [s_val, p_val, o_val, emb_str, s_val, p_val, o_val],
+                                )
+                            else:
+                                cursor.execute(
+                                    "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
+                                    f"VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
+                                    [s_val, p_val, o_val, emb_str],
+                                )
+                            count += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables["Graph_KG.kg_EdgeEmbeddings"] = count
+
+        if global_files:
+            try:
+                iris_obj = self._iris_obj()
+                for gfile_path, content in global_files.items():
+                    gname = (
+                        gfile_path.replace("globals/", "")
+                        .replace(".ndjson", "")
+                        .replace(".xml", "")
+                        .replace(".gof", "")
+                    )
+                    ndjson = content.decode("utf-8", errors="replace")
+                    count = self._import_global_from_ndjson(
+                        iris_obj, f"^{gname}", ndjson
+                    )
+                    if count > 0:
+                        restored_globals.append(gname)
+            except Exception as e:
+                logger.warning("restore: global import failed: %s", e)
+
+        restored_layers = []
+        if restored_tables:
+            restored_layers.append("sql")
+        if restored_globals:
+            restored_layers.append("globals")
+
+        if (
+            not restored_tables
+            and not restored_globals
+            and "globals" in restored_layers
+        ):
+            logger.warning(
+                "Globals-only restore: SQL tables are empty — rdf_edges queries will return no results"
+            )
+
+        return {
+            "restored_tables": restored_tables,
+            "restored_globals": restored_globals,
+            "restored_layers": restored_layers,
+            "snapshot_ts": metadata.get("created_ts", 0),
+        }
+
+    def get_unembedded_nodes(self) -> List[str]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT n.node_id FROM Graph_KG.nodes n "
+                "LEFT JOIN Graph_KG.kg_NodeEmbeddings e ON e.id = n.node_id "
+                "WHERE e.id IS NULL"
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except Exception:
+            return []
+
+    def _export_global_to_ndjson(
+        self, iris_obj, global_name: str, prefix_subs: list
+    ) -> list:
+        import json as _json
+
+        lines = []
+        gname_clean = global_name.lstrip("^")
+
+        def _recurse(subs: list):
+            cur = subs[-1] if subs else 0
+            while True:
+                nxt = (
+                    iris_obj.nextSubscript(False, global_name, *subs[:-1], cur)
+                    if subs
+                    else iris_obj.nextSubscript(False, global_name, cur)
+                )
+                if not nxt:
+                    break
+                new_subs = (subs[:-1] if subs else []) + [nxt]
+                val = iris_obj.get(global_name, *new_subs)
+                if val is not None:
+                    lines.append(_json.dumps({"k": new_subs, "v": str(val)}))
+                _recurse(new_subs + [0])
+                cur = nxt
+
+        seed = prefix_subs + [0] if prefix_subs else [0]
+        _recurse(seed)
+        return lines
+
+    def _import_global_from_ndjson(
+        self, iris_obj, global_name: str, ndjson: str
+    ) -> int:
+        import json as _json
+
+        count = 0
+        for line in ndjson.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = _json.loads(line)
+                subs = entry["k"]
+                val = entry["v"]
+                iris_obj.set(val, global_name, *subs)
+                count += 1
+            except Exception as e:
+                logger.debug("global import line failed: %s", e)
+        return count
+
+    def load_obo(
+        self,
+        path_or_url: str,
+        prefix: str = None,
+        encoding: str = "utf-8",
+        encoding_errors: str = "replace",
+        progress_callback=None,
+    ) -> dict:
+        try:
+            import obonet
+        except ImportError:
+            raise ImportError("load_obo requires obonet: pip install obonet")
+        import io
+
+        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+            G = obonet.read_obo(path_or_url)
+        else:
+            with open(path_or_url, "rb") as raw:
+                content = raw.read().decode(encoding, errors=encoding_errors)
+            G = obonet.read_obo(io.StringIO(content))
+        if prefix:
+            import networkx as nx
+
+            mapping = {n: f"{prefix}:{n}" for n in G.nodes()}
+            G = nx.relabel_nodes(G, mapping)
+        return self.load_networkx(
+            G, label_attr="namespace", progress_callback=progress_callback
+        )
+
+    def store_embedding(
+        self,
+        node_id: str,
+        embedding: List[float],
+        metadata: Optional[Dict[str, Any]] = None,
+        dtype: Optional[str] = None,
+    ) -> bool:
+        _dtype = (dtype or self.vector_dtype).upper()
+        self._assert_node_exists(node_id)
+
+        try:
+            dim = self._get_embedding_dimension()
+        except ValueError:
+            # Infer dimension from input if auto-detection fails
+            dim = len(embedding)
+            self.embedding_dimension = dim
+            logger.warning(
+                f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input."
+            )
+
+        if len(embedding) != dim:
+            raise ValueError(
+                f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}"
+            )
+
+        cursor = self.conn.cursor()
+        emb_str = ",".join(str(x) for x in embedding)
+        meta_json = json.dumps(metadata) if metadata else None
+
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+            )
+        except Exception:
+            pass
+        cursor.execute(
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {self.vector_dtype}), ?)",
+            [node_id, emb_str, meta_json],
+        )
+        self.conn.commit()
+        return True
+
+    def store_embeddings(self, items: List[Dict[str, Any]], dtype: Optional[str] = None) -> bool:
+        _dtype = (dtype or self.vector_dtype).upper()
+        if not items:
+            return True
+
+        try:
+            dim = self._get_embedding_dimension()
+        except ValueError:
+            # Infer dimension from first item if auto-detection fails
+            dim = len(items[0]["embedding"])
+            self.embedding_dimension = dim
+            logger.warning(
+                f"Embedding dimension auto-detection failed. Inferred dimension {dim} from input."
+            )
+
+        for item in items:
+            node_id = item["node_id"]
+            embedding = item["embedding"]
+            if len(embedding) != dim:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {dim}, got {len(embedding)}"
+                )
+            self._assert_node_exists(node_id)
+
+        cursor = self.conn.cursor()
+        cursor.execute("START TRANSACTION")
+        try:
+            for item in items:
+                node_id = item["node_id"]
+                embedding = item["embedding"]
+                metadata = item.get("metadata")
+
+                emb_str = ",".join(str(x) for x in embedding)
+                meta_json = json.dumps(metadata) if metadata else None
+
+                try:
+                    cursor.execute(
+                        f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+                    )
+                except Exception:
+                    pass
+                cursor.execute(
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {_dtype}), ?)",
+                    [node_id, emb_str, meta_json],
+                )
+            cursor.execute("COMMIT")
+            return True
+        except Exception:
+            cursor.execute("ROLLBACK")
+            raise
+
+    def embed_nodes(
+        self,
+        model=None,
+        text_fn=None,
+        batch_size: int = 500,
+        force: bool = False,
+        progress_callback=None,
+        label: str = None,
+        node_ids: List[str] = None,
+        exclude_pattern: str = None,
+        missing_only: bool = False,
+    ) -> dict:
+        from iris_vector_graph.embed_selector import EmbedSelector, build_node_where
+        from iris_vector_graph.cypher import get_schema_prefix
+
+        sel = EmbedSelector(
+            label=label,
+            node_ids=node_ids,
+            exclude_pattern=exclude_pattern,
+            missing_only=missing_only,
+        )
+        where = build_node_where(sel, schema_prefix=get_schema_prefix())
+
+        orig_embedder = self.embedder
+        if model is not None:
+            if isinstance(model, str):
+                self.embedder = _load_sentence_transformer(model)
+            else:
+                self.embedder = model
+
+        try:
+            cursor = self.conn.cursor()
+
+            where_clause = f"WHERE {where}" if where else ""
+            cursor.execute(f"SELECT node_id FROM {_table('nodes')} {where_clause}")
+            all_node_ids = [row[0] for row in cursor.fetchall()]
+            n_total = len(all_node_ids)
+
+            if not force and not missing_only:
+                cursor.execute(f"SELECT id FROM {_table('kg_NodeEmbeddings')}")
+                already_embedded = {row[0] for row in cursor.fetchall()}
+                to_embed = [nid for nid in all_node_ids if nid not in already_embedded]
+            else:
+                to_embed = all_node_ids
+
+            n_to_embed = len(to_embed)
+            embedded = skipped = errors = 0
+
+            for batch_start in range(0, n_to_embed, batch_size):
+                batch_ids = to_embed[batch_start : batch_start + batch_size]
+
+                placeholders = ", ".join("?" * len(batch_ids))
+                cursor.execute(
+                    f'SELECT s, "key", val FROM {_table("rdf_props")} WHERE s IN ({placeholders})',
+                    batch_ids,
+                )
+                props_by_node: Dict[str, Dict[str, Any]] = {}
+                for row in cursor.fetchall():
+                    node_id, key, val = row[0], row[1], row[2]
+                    props_by_node.setdefault(node_id, {})[key] = val
+
+                texts: List[str] = []
+                valid_ids: List[str] = []
+                for node_id in batch_ids:
+                    props = props_by_node.get(node_id, {})
+                    if text_fn is not None:
+                        try:
+                            text = text_fn(node_id, props)
+                        except Exception as ex:
+                            logger.warning(
+                                f"embed_nodes: text_fn raised for {node_id}: {ex}"
+                            )
+                            errors += 1
+                            continue
+                    else:
+                        text = node_id
+
+                    if not text:
+                        skipped += 1
+                        continue
+
+                    texts.append(text)
+                    valid_ids.append(node_id)
+
+                if not texts:
+                    self.conn.commit()
+                    n_done = batch_start + len(batch_ids)
+                    if progress_callback:
+                        progress_callback(n_done, n_to_embed)
+                    continue
+
+                try:
+                    use_batch = False
+                    if not self.embedding_config and self.embedder is not None:
+                        try:
+                            use_batch = _is_sentence_transformer(self.embedder)
+                        except ImportError:
+                            pass
+                    if use_batch:
+                        raw = self.embedder.encode(
+                            texts, batch_size=min(64, len(texts)), show_progress_bar=False
+                        )
+                        embeddings = [row.tolist() for row in raw]
+                    else:
+                        embeddings = [self.embed_text(t) for t in texts]
+                except Exception as ex:
+                    logger.warning(f"embed_nodes: batch encode failed, falling back per-node: {ex}")
+                    embeddings = []
+                    for t in texts:
+                        try:
+                            embeddings.append(self.embed_text(t))
+                        except Exception as ex2:
+                            logger.warning(f"embed_nodes: embed_text failed: {ex2}")
+                            embeddings.append(None)
+
+                insert_params = []
+                for node_id, emb in zip(valid_ids, embeddings):
+                    if emb is None:
+                        errors += 1
+                        continue
+                    emb_str = ",".join(str(x) for x in emb)
+                    insert_params.append((node_id, emb_str))
+
+                if insert_params:
+                    ids_to_delete = [p[0] for p in insert_params]
+                    del_placeholders = ", ".join("?" * len(ids_to_delete))
+                    try:
+                        cursor.execute(
+                            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({del_placeholders})",
+                            ids_to_delete,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        cursor.executemany(
+                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
+                            insert_params,
+                        )
+                        embedded += len(insert_params)
+                    except Exception as ex:
+                        logger.warning(f"embed_nodes: executemany failed, falling back per-row: {ex}")
+                        for node_id, emb_str in insert_params:
+                            try:
+                                cursor.execute(
+                                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
+                                    [node_id, emb_str],
+                                )
+                                embedded += 1
+                            except Exception as ex2:
+                                logger.warning(f"embed_nodes: insert failed for {node_id}: {ex2}")
+                                errors += 1
+
+                self.conn.commit()
+                n_done = batch_start + len(batch_ids)
+                logger.info(
+                    f"embed_nodes: {n_done}/{n_to_embed} processed ({embedded} embedded)"
+                )
+                if progress_callback:
+                    progress_callback(n_done, n_to_embed)
+
+            skipped += n_total - n_to_embed
+            return {
+                "embedded": embedded,
+                "skipped": skipped,
+                "errors": errors,
+                "total": n_total,
+            }
+        finally:
+            self.embedder = orig_embedder
+
+    def embed_edges(
+        self,
+        model=None,
+        text_fn=None,
+        batch_size: int = 500,
+        force: bool = False,
+        progress_callback=None,
+        predicate: str = None,
+        source_label: str = None,
+        target_label: str = None,
+        exclude_pattern: str = None,
+        missing_only: bool = False,
+    ) -> dict:
+        from iris_vector_graph.embed_selector import EmbedSelector, build_edge_where
+        from iris_vector_graph.cypher import get_schema_prefix
+
+        sel = EmbedSelector(
+            predicate=predicate,
+            source_label=source_label,
+            target_label=target_label,
+            exclude_pattern=exclude_pattern,
+            missing_only=missing_only,
+        )
+        where = build_edge_where(sel, schema_prefix=get_schema_prefix())
+
+        orig_embedder = self.embedder
+        if model is not None:
+            if isinstance(model, str):
+                self.embedder = _load_sentence_transformer(model)
+            else:
+                self.embedder = model
+
+        try:
+            cursor = self.conn.cursor()
+
+            where_clause = f"WHERE {where}" if where else ""
+            cursor.execute(
+                f"SELECT s, p, o_id FROM {_table('rdf_edges')} {where_clause}"
+            )
+            all_edges = [(row[0], row[1], row[2]) for row in cursor.fetchall()]
+            n_total = len(all_edges)
+
+            if not force:
+                cursor.execute(
+                    f"SELECT s, p, o_id FROM {_table('kg_EdgeEmbeddings')}"
+                )
+                already_embedded = {
+                    (row[0], row[1], row[2]) for row in cursor.fetchall()
+                }
+                to_embed = [e for e in all_edges if e not in already_embedded]
+            else:
+                to_embed = all_edges
+
+            n_to_embed = len(to_embed)
+            embedded = skipped = errors = 0
+
+            for batch_start in range(0, n_to_embed, batch_size):
+                batch = to_embed[batch_start : batch_start + batch_size]
+
+                texts: List[str] = []
+                valid_edges: List[tuple] = []
+                for s, p, o_id in batch:
+                    if text_fn is not None:
+                        try:
+                            text = text_fn(s, p, o_id)
+                        except Exception as ex:
+                            logger.warning(
+                                "embed_edges: text_fn raised for (%s, %s, %s): %s",
+                                s, p, o_id, ex,
+                            )
+                            errors += 1
+                            continue
+                    else:
+                        text = f"{s} {p} {o_id}"
+
+                    if not text:
+                        skipped += 1
+                        continue
+
+                    texts.append(text)
+                    valid_edges.append((s, p, o_id))
+
+                if not texts:
+                    self.conn.commit()
+                    n_done = batch_start + len(batch)
+                    if progress_callback:
+                        progress_callback(n_done, n_to_embed)
+                    continue
+
+                try:
+                    use_batch = False
+                    if not self.embedding_config and self.embedder is not None:
+                        try:
+                            use_batch = _is_sentence_transformer(self.embedder)
+                        except ImportError:
+                            pass
+                    if use_batch:
+                        raw = self.embedder.encode(texts, batch_size=min(64, len(texts)), show_progress_bar=False)
+                        embeddings = [row.tolist() for row in raw]
+                    else:
+                        embeddings = [self.embed_text(t) for t in texts]
+                except Exception as ex:
+                    logger.warning(f"embed_edges: batch encode failed, falling back per-edge: {ex}")
+                    embeddings = []
+                    for t in texts:
+                        try:
+                            embeddings.append(self.embed_text(t))
+                        except Exception as ex2:
+                            logger.warning(f"embed_edges: embed_text failed: {ex2}")
+                            embeddings.append(None)
+
+                insert_params = []
+                for (s, p, o_id), emb in zip(valid_edges, embeddings):
+                    if emb is None:
+                        errors += 1
+                        continue
+                    emb_str = ",".join(str(x) for x in emb)
+                    insert_params.append((s, p, o_id, emb_str))
+
+                if insert_params:
+                    try:
+                        del_params = [(p[0], p[1], p[2]) for p in insert_params]
+                        for s, p, o_id in del_params:
+                            try:
+                                cursor.execute(
+                                    f"DELETE FROM {_table('kg_EdgeEmbeddings')} "
+                                    "WHERE s=? AND p=? AND o_id=?",
+                                    [s, p, o_id],
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    try:
+                        cursor.executemany(
+                            f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
+                            f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
+                            insert_params,
+                        )
+                        embedded += len(insert_params)
+                    except Exception as ex:
+                        logger.warning(f"embed_edges: executemany failed, falling back per-row: {ex}")
+                        for s, p, o_id, emb_str in insert_params:
+                            try:
+                                cursor.execute(
+                                    f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
+                                    f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
+                                    [s, p, o_id, emb_str],
+                                )
+                                embedded += 1
+                            except Exception as ex2:
+                                logger.warning(
+                                    "embed_edges: insert failed for (%s, %s, %s): %s",
+                                    s, p, o_id, ex2,
+                                )
+                                errors += 1
+
+                self.conn.commit()
+                n_done = batch_start + len(batch)
+                logger.info(
+                    "embed_edges: %d/%d processed (%d embedded)",
+                    n_done, n_to_embed, embedded,
+                )
+                if progress_callback:
+                    progress_callback(n_done, n_to_embed)
+
+            skipped += n_total - n_to_embed
+            return {
+                "embedded": embedded,
+                "skipped": skipped,
+                "errors": errors,
+                "total": n_total,
+            }
+        finally:
+            self.embedder = orig_embedder
+
+    def edge_vector_search(
+        self,
+        query_embedding,
+        top_k: int = 10,
+        score_threshold: float = None,
+    ) -> List[dict]:
+        if isinstance(query_embedding, list):
+            import json as _json
+            query_vec_str = _json.dumps(query_embedding)
+            dim = len(query_embedding)
+        else:
+            query_vec_str = query_embedding
+            dim = str(query_embedding).count(",") + 1
+
+        query_cast = f"TO_VECTOR(?, {self.vector_dtype}, {dim})"
+
+        having = (
+            f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
+        )
+        sql = (
+            f"SELECT TOP {int(top_k)} s, p, o_id, "
+            f"VECTOR_COSINE(emb, {query_cast}) AS score "
+            f"FROM {_table('kg_EdgeEmbeddings')} "
+            f"ORDER BY score DESC "
+            f"{having}"
+        )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql, [query_vec_str])
+        except Exception as e:
+            if "-30" in str(e) or "not found" in str(e).lower() or "empty" in str(e).lower():
+                return []
+            raise
+        rows = cursor.fetchall()
+        if not rows:
+            return []
+        return [
+            {"s": row[0], "p": row[1], "o_id": row[2], "score": float(row[3])}
+            for row in rows
+        ]
+
+    def get_embedding(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve embedding for a node.
+
+        Args:
+            node_id: The node ID to get embedding for
+
+        Returns:
+            Dict with 'id', 'embedding' (as list of floats), and 'metadata' (if present)
+            None if node has no embedding
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            f"SELECT id, emb, metadata FROM {_table('kg_NodeEmbeddings')} WHERE id = ?",
+            [node_id],
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        node_id, emb_csv, metadata_json = row
+        embedding = [float(x) for x in emb_csv.split(",")] if emb_csv else []
+        metadata = json.loads(metadata_json) if metadata_json else None
+
+        result = {"id": node_id, "embedding": embedding}
+        if metadata:
+            result["metadata"] = metadata
+        return result
+
+    def get_embeddings(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        """
+        Retrieve embeddings for multiple nodes.
+
+        Args:
+            node_ids: List of node IDs
+
+        Returns:
+            List of dicts with 'id', 'embedding', and 'metadata' for nodes that have embeddings
+        """
+        if not node_ids:
+            return []
+
+        cursor = self.conn.cursor()
+        placeholders = ",".join(["?"] * len(node_ids))
+        cursor.execute(
+            f"SELECT id, emb, metadata FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({placeholders})",
+            node_ids,
+        )
+
+        results = []
+        for row in cursor.fetchall():
+            node_id, emb_csv, metadata_json = row
+            embedding = [float(x) for x in emb_csv.split(",")] if emb_csv else []
+            metadata = json.loads(metadata_json) if metadata_json else None
+
+            result = {"id": node_id, "embedding": embedding}
+            if metadata:
+                result["metadata"] = metadata
+            results.append(result)
+
+        return results
+
+    def delete_node(self, node_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+            )
+            cursor.execute(
+                f"SELECT edge_id FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?",
+                [node_id, node_id],
+            )
+            edge_ids = [row[0] for row in cursor.fetchall()]
+            for eid in edge_ids:
+                cursor.execute(
+                    f"SELECT reifier_id FROM {_table('rdf_reifications')} WHERE edge_id = ?",
+                    [eid],
+                )
+                for (reif_id,) in cursor.fetchall():
+                    cursor.execute(
+                        f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?",
+                        [reif_id],
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reif_id]
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reif_id]
+                    )
+                    cursor.execute(
+                        f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reif_id]
+                    )
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_edges')} WHERE s = ? OR o_id = ?",
+                [node_id, node_id],
+            )
+            cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id])
+            cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [node_id])
+            cursor.execute(
+                f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [node_id]
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"delete_node({node_id}) failed: {e}")
+            return False
+        finally:
+            cursor.close()
+
+    def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = 200) -> int:
+        deleted = 0
+        for i in range(0, len(node_ids), batch_size):
+            batch = node_ids[i : i + batch_size]
+            phs = ",".join(["?"] * len(batch))
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute(
+                    f"DELETE FROM {_table('rdf_reifications')} WHERE edge_id IN "
+                    f"(SELECT edge_id FROM {_table('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs}))",
+                    batch + batch,
+                )
+                cursor.execute(
+                    f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({phs})", batch
+                )
+                cursor.execute(
+                    f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs})",
+                    batch + batch,
+                )
+                cursor.execute(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({phs})", batch)
+                cursor.execute(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({phs})", batch)
+                cursor.execute(
+                    f"DELETE FROM {_table('nodes')} WHERE node_id IN ({phs})", batch
+                )
+                self.conn.commit()
+                deleted += len(batch)
+            except Exception as e:
+                logger.warning(f"bulk_delete_nodes batch failed: {e}")
+            finally:
+                cursor.close()
+        return deleted
+
+    def get_kg_anchors(
+        self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
+    ) -> List[str]:
+        if not icd_codes:
+            return []
+        _IN_CHUNK = 499
+        results: list = []
+        cursor = self.conn.cursor()
+        try:
+            for i in range(0, len(icd_codes), _IN_CHUNK):
+                chunk = icd_codes[i : i + _IN_CHUNK]
+                placeholders = ", ".join(["?"] * len(chunk))
+                sql = (
+                    f"SELECT DISTINCT b.kg_node_id "
+                    f"FROM {_table('fhir_bridges')} b "
+                    f"JOIN {_table('nodes')} n ON n.node_id = b.kg_node_id "
+                    f"WHERE b.fhir_code IN ({placeholders}) "
+                    f"AND b.bridge_type = ?"
+                )
+                cursor.execute(sql, chunk + [bridge_type])
+                results.extend(row[0] for row in cursor.fetchall())
+            return results
+        except Exception as e:
+            logger.warning(f"get_kg_anchors failed: {e}")
+            return []
+        finally:
+            cursor.close()
+
+    def reify_edge(
+        self,
+        edge_id: int,
+        reifier_id: str = None,
+        label: str = "Reification",
+        props: Dict[str, str] = None,
+    ) -> Optional[str]:
+        if reifier_id is None:
+            reifier_id = f"reif:{edge_id}"
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT edge_id FROM {_table('rdf_edges')} WHERE edge_id = ?",
+                [edge_id],
+            )
+            if not cursor.fetchone():
+                logger.warning(f"reify_edge: edge_id={edge_id} not found")
+                return None
+            self.create_node(reifier_id)
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_labels')} (s, label) "
+                f"SELECT ?, ? WHERE NOT EXISTS "
+                f"(SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
+                [reifier_id, label, reifier_id, label],
+            )
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_reifications')} (reifier_id, edge_id) VALUES (?, ?)",
+                [reifier_id, edge_id],
+            )
+            if props:
+                for key, val in props.items():
+                    cursor.execute(
+                        f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
+                        f"SELECT ?, ?, ? WHERE NOT EXISTS "
+                        f'(SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+                        [reifier_id, key, str(val), reifier_id, key],
+                    )
+            self.conn.commit()
+            return reifier_id
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"reify_edge({edge_id}) failed: {e}")
+            return None
+        finally:
+            cursor.close()
+
+    def get_reifications(self, edge_id: int) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f'SELECT r.reifier_id, p."key", p.val '
+                f"FROM {_table('rdf_reifications')} r "
+                f"LEFT JOIN {_table('rdf_props')} p ON p.s = r.reifier_id "
+                f"WHERE r.edge_id = ?",
+                [edge_id],
+            )
+            rows = cursor.fetchall()
+            result: Dict[str, dict] = {}
+            for reifier_id, key, val in rows:
+                if reifier_id not in result:
+                    result[reifier_id] = {"reifier_id": reifier_id, "properties": {}}
+                if key is not None:
+                    result[reifier_id]["properties"][key] = val
+            return list(result.values())
+        except Exception as e:
+            logger.warning(f"get_reifications({edge_id}) failed: {e}")
+            return []
+        finally:
+            cursor.close()
+
+    def delete_reification(self, reifier_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id = ?",
+                [reifier_id],
+            )
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_props')} WHERE s = ?", [reifier_id]
+            )
+            cursor.execute(
+                f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [reifier_id]
+            )
+            cursor.execute(
+                f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [reifier_id]
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            logger.warning(f"delete_reification({reifier_id}) failed: {e}")
+            return False
+        finally:
+            cursor.close()
+
+    def _validate_k(self, k: Any) -> int:
+        """
+        Validates and caps the 'k' parameter (TOP clause limit)
+        1 <= k <= 1000, defaults to 50.
+        Handles non-numeric strings by failing safe to 50.
+        """
+        try:
+            k = int(k or 50)
+        except (ValueError, TypeError):
+            return 50
+        return min(max(1, k), 1000)
+
+    def kg_KNN_VEC(
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None,
+        dtype: Optional[str] = None,
+    ) -> List[Tuple[str, float]]:
+        _dtype = (dtype or self.vector_dtype).upper()
+        cursor = self.conn.cursor()
+        try:
+            emb_table = _table("kg_NodeEmbeddings")
+            labels_table = _table("rdf_labels")
+
+            qv = query_vector.strip() if isinstance(query_vector, str) else query_vector
+            exclude_id: Optional[str] = None
+            if isinstance(qv, str) and not qv.startswith("["):
+                exclude_id = qv
+                cursor.execute(
+                    f"SELECT emb FROM {emb_table} WHERE id = ?", [exclude_id]
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return []
+                query_vector = f"[{str(row[0])}]"
+
+            if label_filter and exclude_id:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                    f" FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE L.label = ? AND n.id != ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, label_filter, exclude_id],
+                )
+            elif label_filter:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                    f" FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE L.label = ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, label_filter],
+                )
+            elif exclude_id:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                    f" FROM {emb_table} n"
+                    f" WHERE n.id != ?"
+                    f" ORDER BY score DESC",
+                    [k, query_vector, exclude_id],
+                )
+            else:
+                cursor.execute(
+                    f"SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                    f" FROM {emb_table} n"
+                    f" ORDER BY score DESC",
+                    [k, query_vector],
+                )
+            results = cursor.fetchall()
+            return [(entity_id, float(similarity)) for entity_id, similarity in results]
+        except Exception as e:
+            logger.warning(
+                f"Server-side kg_KNN_VEC failed: {e}. Falling back to client-side logic."
+            )
+            return self._kg_KNN_VEC_python_optimized(query_vector, k, label_filter)
+
+    def search_nodes_by_vector(
+        self,
+        query: "Union[List[float], str]",
+        k: int = 10,
+        label_filter: Optional[str] = None,
+        ivf_name: Optional[str] = None,
+        nprobe: int = 8,
+    ) -> List[Tuple[str, float]]:
+        if not isinstance(query, str):
+            VecSearchInput(query=list(query), k=k, nprobe=nprobe)
+        if self._probe_native_vec():
+            query_json = json.dumps([float(v) for v in query]) if not isinstance(query, str) else query
+            return self.kg_KNN_VEC(query_json, k=k, label_filter=label_filter)
+        if ivf_name is not None:
+            query_list = json.loads(query) if isinstance(query, str) else query
+            return self.ivf_search(ivf_name, query_list, k=k, nprobe=nprobe)
+        query_list = json.loads(query) if isinstance(query, str) else query
+        return self.ivf_search("default", query_list, k=k, nprobe=nprobe)
+
+    def _kg_KNN_VEC_python_optimized(
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
+    ) -> List[Tuple[str, float]]:
+        _dtype = getattr(self, 'vector_dtype', 'DOUBLE')
+        emb_table = _table("kg_NodeEmbeddings")
+        labels_table = _table("rdf_labels")
+
+        if label_filter:
+            sql = (
+                f"SELECT TOP {int(k)} n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                f" FROM {emb_table} n"
+                f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                f" WHERE L.label = ?"
+                f" ORDER BY score DESC"
+            )
+            params = [query_vector, label_filter]
+        else:
+            sql = (
+                f"SELECT TOP {int(k)} n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?, {_dtype})) AS score"
+                f" FROM {emb_table} n"
+                f" ORDER BY score DESC"
+            )
+            params = [query_vector]
+
+        try:
+            from iris_vector_graph.embedded import _sql_statement_execute, _is_ddtab_error
+            rs = _sql_statement_execute(sql, params)
+            results = [(row[0], float(row[1])) for row in rs if row[0] is not None]
+            return results
+        except Exception:
+            pass
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, params)
+            results = [(row[0], float(row[1])) for row in cursor.fetchall()]
+            cursor.close()
+            return results
+        except Exception:
+            pass
+
+        return self._kg_KNN_VEC_client_side(query_vector, k, label_filter)
+
+    def _kg_KNN_VEC_client_side(
+        self, query_vector: str, k: int = 50, label_filter: Optional[str] = None
+    ) -> List[Tuple[str, float]]:
+        cursor = self.conn.cursor()
+        try:
+            import numpy as np
+
+            query_array = np.array(json.loads(query_vector))
+
+            emb_table = _table("kg_NodeEmbeddings")
+            labels_table = _table("rdf_labels")
+            if label_filter is None:
+                cursor.execute(f"SELECT n.id, n.emb FROM {emb_table} n WHERE n.emb IS NOT NULL")
+            else:
+                cursor.execute(
+                    f"SELECT n.id, n.emb FROM {emb_table} n"
+                    f" LEFT JOIN {labels_table} L ON L.s = n.id"
+                    f" WHERE n.emb IS NOT NULL AND L.label = ?",
+                    [label_filter],
+                )
+
+            similarities = []
+            while True:
+                batch = cursor.fetchmany(1000)
+                if not batch:
+                    break
+                for entity_id, emb_csv in batch:
+                    try:
+                        emb_array = np.fromstring(str(emb_csv), dtype=float, sep=",")
+                        dot_product = np.dot(query_array, emb_array)
+                        query_norm = np.linalg.norm(query_array)
+                        emb_norm = np.linalg.norm(emb_array)
+                        if query_norm > 0 and emb_norm > 0:
+                            cos_sim = dot_product / (query_norm * emb_norm)
+                            similarities.append((entity_id, float(cos_sim)))
+                    except Exception:
+                        continue
+
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            return similarities[:k]
+
+        except Exception as e:
+            logger.error(f"Client-side kg_KNN_VEC failed: {e}")
+            raise
+        finally:
+            cursor.close()
 
     # Text Search Operations
+    def kg_TXT(
+        self, query_text: str, k: int = 50, min_confidence: int = 0
+    ) -> List[Tuple[str, float]]:
+        """
+        Enhanced text search using server-side SQL procedure
+
+        Args:
+            query_text: Text query string
+            k: Number of results to return
+            min_confidence: Minimum confidence score (0-1000 scale)
+
+        Returns:
+            List of (entity_id, relevance_score) tuples
+        """
+        cursor = self.conn.cursor()
+        try:
+            # Call server-side procedure for unified logic
+            # Signature: (queryText, k, minConfidence)
+            cursor.execute(
+                "CALL iris_vector_graph.kg_TXT(?, ?, ?)",
+                [query_text, k, min_confidence],
+            )
+            results = cursor.fetchall()
+            return [(entity_id, float(score)) for entity_id, score in results]
+
+        except Exception as e:
+            logger.error(f"kg_TXT failed: {e}")
+            raise
+        finally:
+            cursor.close()
 
     # Graph Traversal Operations
+    def kg_NEIGHBORHOOD_EXPANSION(
+        self,
+        entity_list: List[str],
+        expansion_depth: int = 1,
+        confidence_threshold: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """
+        Efficient neighborhood expansion for multiple entities using JSON_TABLE filtering
 
+        Args:
+            entity_list: List of seed entity IDs
+            expansion_depth: Number of hops to expand (1-3 recommended)
+            confidence_threshold: Minimum confidence for edges (0-1000 scale)
 
+        Returns:
+            List of expanded entities with metadata
+        """
+        if not entity_list:
+            return []
 
+        cursor = self.conn.cursor()
+        try:
+            # Build parameterized query for multiple entities
+            entity_placeholders = ",".join(["?" for _ in entity_list])
 
+            sql = f"""
+                SELECT DISTINCT e.s, e.p, e.o_id, jt.confidence
+                FROM rdf_edges e,
+                     JSON_TABLE(e.qualifiers, '$' COLUMNS(confidence INTEGER PATH '$.confidence')) jt
+                WHERE e.s IN ({entity_placeholders}) AND jt.confidence >= ?
+                ORDER BY confidence DESC, e.s, e.p
+            """
 
+            params = entity_list + [confidence_threshold]
+            cursor.execute(sql, params)
+
+            results = []
+            for row in cursor.fetchall():
+                results.append(
+                    {
+                        "source": row[0],
+                        "predicate": row[1],
+                        "target": row[2],
+                        "confidence": row[3],
+                    }
+                )
+
+            return results
+
+        except Exception as e:
+            logger.error(f"kg_NEIGHBORHOOD_EXPANSION failed: {e}")
+            raise
+        finally:
+            cursor.close()
+
+    def validate_vector_table(self, table: str, vector_col: str) -> dict:
+        from iris_vector_graph.security import sanitize_identifier
+
+        sanitize_identifier(table)
+        sanitize_identifier(vector_col)
+        schema, tbl = (table.split(".", 1) + [""])[:2] if "." in table else ("", table)
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                [schema or "USER", tbl or table, vector_col],
+            )
+            row = cursor.fetchone()
+            if not row or int(row[0]) == 0:
+                raise ValueError(f"Column '{vector_col}' not found in table '{table}'")
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            row_count = int(cursor.fetchone()[0])
+            cursor.execute(f"SELECT TOP 1 {vector_col} FROM {table}")
+            sample = cursor.fetchone()
+            dimension = None
+            if sample and sample[0]:
+                try:
+                    import json
+
+                    v = (
+                        json.loads(sample[0])
+                        if isinstance(sample[0], str)
+                        else sample[0]
+                    )
+                    dimension = len(v)
+                except Exception:
+                    pass
+            return {
+                "table": table,
+                "vector_col": vector_col,
+                "dimension": dimension,
+                "row_count": row_count,
+            }
+        finally:
+            cursor.close()
+
+    def vector_search(
+        self,
+        table: str,
+        vector_col: str,
+        query_embedding,
+        top_k: int = 10,
+        id_col: str = "id",
+        return_cols: List[str] = None,
+        score_threshold: float = None,
+    ) -> List[dict]:
+        from iris_vector_graph.security import sanitize_identifier
+
+        sanitize_identifier(table)
+        sanitize_identifier(vector_col)
+        sanitize_identifier(id_col)
+        if return_cols:
+            for col in return_cols:
+                sanitize_identifier(col)
+
+        if isinstance(query_embedding, list):
+            import json
+
+            query_vec_str = json.dumps(query_embedding)
+        else:
+            query_vec_str = query_embedding
+
+        extra = ", ".join(
+            sanitize_identifier(c) for c in (return_cols or []) if c != id_col
+        )
+
+        dim = None
+        if isinstance(query_embedding, list):
+            dim = len(query_embedding)
+        elif isinstance(query_embedding, str):
+            dim = query_embedding.count(",") + 1
+
+        if dim:
+            query_cast = f"TO_VECTOR(?, {self.vector_dtype}, {dim})"
+        else:
+            query_cast = f"TO_VECTOR(?, {self.vector_dtype})"
+
+        select_cols = (
+            f"t.{id_col}, VECTOR_COSINE(t.{vector_col}, {query_cast}) AS score"
+        )
+        if extra:
+            select_cols += f", {extra}"
+
+        having = (
+            f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
+        )
+        sql = (
+            f"SELECT TOP {int(top_k)} {select_cols} "
+            f"FROM {table} t "
+            f"ORDER BY score DESC "
+            f"{having}"
+        )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql, [query_vec_str])
+            cols = [d[0].lower() for d in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                r = dict(zip(cols, row))
+                r["id"] = r.pop(id_col.lower(), r.get("id"))
+                results.append(r)
+            return results
+        except Exception as ex:
+            raise ValueError(
+                f"vector_search failed on {table}.{vector_col}: {ex}. "
+                f"Ensure the column is a VECTOR type and query_embedding has the correct dimension."
+            ) from ex
+        finally:
+            cursor.close()
+
+    def multi_vector_search(
+        self,
+        sources: List[dict],
+        query_embedding,
+        top_k: int = 10,
+        fusion: str = "rrf",
+        rrf_k: int = 60,
+    ) -> List[dict]:
+        if isinstance(query_embedding, list):
+            import json
+
+            query_vec_str = json.dumps(query_embedding)
+        else:
+            query_vec_str = query_embedding
+
+        per_source_k = top_k * 2
+
+        all_results: List[dict] = []
+        for source in sources:
+            tbl = source["table"]
+            col = source.get("col") or source.get("vector_col", "emb")
+            id_c = source.get("id_col", "id")
+            weight = float(source.get("weight", 1.0))
+            return_c = source.get("return_cols")
+            try:
+                rows = self.vector_search(
+                    table=tbl,
+                    vector_col=col,
+                    query_embedding=query_vec_str,
+                    top_k=per_source_k,
+                    id_col=id_c,
+                    return_cols=return_c,
+                )
+                for i, r in enumerate(rows):
+                    r["source_table"] = tbl
+                    r["_rank"] = i + 1
+                    r["_weight"] = weight
+                all_results.extend(rows)
+            except Exception as ex:
+                logger.warning(f"multi_vector_search: skipping {tbl}: {ex}")
+
+        if not all_results:
+            return []
+
+        if fusion == "rrf":
+            scores: Dict[str, float] = {}
+            meta: Dict[str, dict] = {}
+            for r in all_results:
+                node_id = str(r["id"])
+                weight = r["_weight"]
+                rank = r["_rank"]
+                rrf_score = weight * (1.0 / (rrf_k + rank))
+                scores[node_id] = scores.get(node_id, 0.0) + rrf_score
+                if node_id not in meta:
+                    meta[node_id] = {
+                        k: v for k, v in r.items() if not k.startswith("_")
+                    }
+            ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            results = []
+            for rank_i, (node_id, score) in enumerate(ranked, 1):
+                row = meta[node_id].copy()
+                row["score"] = round(score, 6)
+                row["rank"] = rank_i
+                results.append(row)
+            return results
+        else:
+            seen: set = set()
+            merged = []
+            for r in sorted(all_results, key=lambda x: x.get("score", 0), reverse=True):
+                nid = str(r["id"])
+                if nid not in seen:
+                    seen.add(nid)
+                    clean = {k: v for k, v in r.items() if not k.startswith("_")}
+                    merged.append(clean)
+                    if len(merged) >= top_k:
+                        break
+            return merged
+
+    def kg_RRF_FUSE(
+        self, k: int, k1: int, k2: int, c: int, query_vector: str, query_text: str
+    ) -> List[Tuple[str, float, float, float]]:
+        vec_results: List[Tuple[str, float]] = []
+        txt_results: List[Tuple[str, float]] = []
+
+        import json as _json
+        vec_list = _json.loads(query_vector) if isinstance(query_vector, str) else query_vector
+
+        try:
+            for idx_name in self._index_registry:
+                if self._index_registry[idx_name] == "ivf":
+                    raw = self.ivf_search(idx_name, vec_list, k=k1)
+                    vec_results = [(r["id"], float(r.get("score", 0))) for r in raw]
+                    break
+            for idx_name in self._index_registry:
+                if self._index_registry[idx_name] == "bm25":
+                    txt_results = self.bm25_search(idx_name, query_text, k=k2)
+                    break
+        except Exception as e:
+            logger.error(f"kg_RRF_FUSE index search failed: {e}")
+
+        vec_rank = {nid: i + 1 for i, (nid, _) in enumerate(vec_results)}
+        txt_rank = {nid: i + 1 for i, (nid, _) in enumerate(txt_results)}
+        all_ids = set(vec_rank) | set(txt_rank)
+
+        fused = []
+        for nid in all_ids:
+            v_r = vec_rank.get(nid, len(vec_results) + c)
+            t_r = txt_rank.get(nid, len(txt_results) + c)
+            rrf = 1.0 / (c + v_r) + 1.0 / (c + t_r)
+            v_score = dict(vec_results).get(nid, 0.0)
+            t_score = dict(txt_results).get(nid, 0.0)
+            fused.append((nid, rrf, v_score, t_score))
+
+        fused.sort(key=lambda x: -x[1])
+        return fused[:k]
+
+    def kg_VECTOR_GRAPH_SEARCH(
+        self,
+        query_vector: str,
+        query_text: str = None,
+        k: int = 15,
+        expansion_depth: int = 1,
+        min_confidence: float = 0.5,
+    ) -> List[Dict[str, Any]]:
+        """
+        Multi-modal search combining vector similarity, graph expansion, and text relevance
+
+        Args:
+            query_vector: Vector query as JSON string
+            query_text: Optional text query
+            k: Number of final results
+            expansion_depth: Graph expansion depth
+            min_confidence: Minimum confidence threshold
+
+        Returns:
+            List of ranked entities with combined scores
+        """
+        try:
+            # Step 1: Vector search for semantic similarity
+            k_vector = min(k * 2, 50)  # Get more candidates for fusion
+            vector_results = self.kg_KNN_VEC(query_vector, k=k_vector)
+            vector_entities = [entity_id for entity_id, _ in vector_results]
+
+            # Step 2: Graph expansion around vector results
+            if vector_entities:
+                graph_expansion = self.kg_NEIGHBORHOOD_EXPANSION(
+                    vector_entities, expansion_depth, int(min_confidence * 1000)
+                )
+                expanded_entities = list(
+                    set([item["target"] for item in graph_expansion])
+                )
+            else:
+                expanded_entities = []
+
+            # Step 3: Combine with text search if provided
+            if query_text:
+                text_results = self.kg_TXT(
+                    query_text,
+                    k=k_vector * 2,
+                    min_confidence=int(min_confidence * 1000),
+                )
+                text_entities = [entity_id for entity_id, _ in text_results]
+                all_entities = list(
+                    set(vector_entities + expanded_entities + text_entities)
+                )
+            else:
+                all_entities = list(set(vector_entities + expanded_entities))
+
+            # Step 4: Score combination (simplified)
+            combined_results = []
+            for entity_id in all_entities[:k]:
+                # Get scores from different sources
+                vector_sim = next(
+                    (score for eid, score in vector_results if eid == entity_id), 0.0
+                )
+
+                # Simple weighted combination
+                combined_score = (
+                    vector_sim  # Can be enhanced with graph centrality, text relevance
+                )
+
+                combined_results.append(
+                    {
+                        "entity_id": entity_id,
+                        "combined_score": combined_score,
+                        "vector_similarity": vector_sim,
+                        "in_graph_expansion": entity_id in expanded_entities,
+                    }
+                )
+
+            # Sort by combined score
+            combined_results.sort(key=lambda x: x["combined_score"], reverse=True)
+            return combined_results[:k]
+
+        except Exception as e:
+            logger.error(f"kg_VECTOR_GRAPH_SEARCH failed: {e}")
+            raise
 
     # Personalized PageRank Operations
+    def kg_PERSONALIZED_PAGERANK(
+        self,
+        seed_entities: List[str],
+        damping_factor: float = 0.85,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        return_top_k: Optional[int] = None,
+        bidirectional: bool = False,
+        reverse_edge_weight: float = 1.0,
+    ) -> Dict[str, float]:
+        """
+        Personalized PageRank with optional bidirectional edge traversal.
 
+        Implements personalized PageRank biased toward seed entities, with optional
+        reverse edge traversal for enhanced multi-hop reasoning in knowledge graphs.
+
+        Architecture: Python API -> SQL Function -> ObjectScript Embedded Python
+        Falls back to pure Python if SQL function is unavailable.
+
+        Args:
+            seed_entities: List of entity IDs to use as seeds (personalization)
+            damping_factor: PageRank damping factor (default 0.85)
+            max_iterations: Maximum iterations before stopping (default 100)
+            tolerance: Convergence threshold (default 1e-6)
+            return_top_k: Limit results to top K entities (None = all)
+            bidirectional: Enable reverse edge traversal (default False)
+            reverse_edge_weight: Weight multiplier for reverse edges (default 1.0)
+
+        Returns:
+            Dict mapping entity_id to PageRank score
+
+        Raises:
+            ValueError: If reverse_edge_weight is negative
+            ValueError: If seed_entities is empty
+
+        Note:
+            Uses IRIS embedded Python for 10-50x performance (10-50ms for 10K nodes).
+            Falls back to pure Python if SQL function unavailable.
+        """
+        # Input validation
+        if reverse_edge_weight < 0:
+            raise ValueError(
+                f"reverse_edge_weight must be non-negative, got: {reverse_edge_weight}"
+            )
+        if not seed_entities:
+            raise ValueError("seed_entities must contain at least one entity")
+
+        if self._store_capabilities.get("ppr", True):
+            result = self._store.execute_ppr(seed_entities, damping_factor, max_iterations)
+            if not result.error:
+                top_k = return_top_k
+                rows = result.rows
+                if top_k:
+                    rows = rows[:top_k]
+                return {r[0]: float(r[1]) for r in rows if len(r) >= 2}
+
+        # --- Fast path: Graph.KG.PageRank.RunJson() via .cls layer ---
+        if self.capabilities.objectscript_deployed and self.capabilities.kg_built:
+            try:
+                seed_json = json.dumps(seed_entities)
+                iris_obj = self._iris_obj()
+                result_json = iris_obj.classMethodValue(
+                    "Graph.KG.PageRank",
+                    "RunJson",
+                    seed_json,
+                    damping_factor,
+                    max_iterations,
+                    1 if bidirectional else 0,
+                    reverse_edge_weight,
+                )
+                if result_json:
+                    items = json.loads(str(result_json))
+                    scores = {
+                        item["id"]: item["score"]
+                        for item in items
+                        if item.get("score", 0) > 0
+                    }
+                    if return_top_k is not None and return_top_k > 0:
+                        scores = dict(
+                            sorted(scores.items(), key=lambda x: x[1], reverse=True)[
+                                :return_top_k
+                            ]
+                        )
+                    logger.debug(
+                        "PageRank via Graph.KG.PageRank.RunJson(): %d results",
+                        len(scores),
+                    )
+                    return scores
+            except Exception as exc:
+                logger.warning(
+                    "Graph.KG.PageRank.RunJson() failed, falling back: %s", exc
+                )
+
+        return self._kg_PERSONALIZED_PAGERANK_python_fallback(
+            seed_entities,
+            damping_factor,
+            max_iterations,
+            tolerance,
+            return_top_k,
+            bidirectional,
+            reverse_edge_weight,
+        )
+
+    def _kg_PERSONALIZED_PAGERANK_python_fallback(
+        self,
+        seed_entities: List[str],
+        damping_factor: float = 0.85,
+        max_iterations: int = 100,
+        tolerance: float = 1e-6,
+        return_top_k: Optional[int] = None,
+        bidirectional: bool = False,
+        reverse_edge_weight: float = 1.0,
+    ) -> Dict[str, float]:
+        """
+        Pure Python fallback for Personalized PageRank.
+
+        Used when IRIS SQL function kg_PPR is unavailable.
+        Performance: ~25ms for 1K nodes (vs 2-5ms with embedded Python).
+        """
+        from iris_vector_graph.cypher.translator import _table as _t
+
+        cursor = self.conn.cursor()
+        try:
+            # Step 1: Get all nodes
+            cursor.execute(f"SELECT node_id FROM {_t('nodes')}")
+            nodes = [row[0] for row in cursor.fetchall()]
+            num_nodes = len(nodes)
+
+            if num_nodes == 0:
+                return {}
+
+            node_set = set(nodes)
+            valid_seeds = [s for s in seed_entities if s in node_set]
+            if not valid_seeds:
+                # No valid seeds found - return empty
+                logger.warning(f"No valid seeds found in graph: {seed_entities}")
+                return {}
+
+            # Step 2: Build adjacency lists
+            cursor.execute(f"SELECT s, o_id FROM {_t('rdf_edges')}")
+
+            in_edges = {}  # target -> [(source, weight)]
+            out_degree = {}
+
+            for src, dst in cursor.fetchall():
+                # Forward edge: weight = 1.0
+                if dst not in in_edges:
+                    in_edges[dst] = []
+                in_edges[dst].append((src, 1.0))
+                out_degree[src] = out_degree.get(src, 0) + 1
+
+            # Step 2b: Build reverse edges if bidirectional mode enabled
+            if bidirectional and reverse_edge_weight > 0:
+                cursor.execute(f"SELECT o_id, s FROM {_t('rdf_edges')}")
+                for o_id, s in cursor.fetchall():
+                    # Reverse edge: o_id -> s with weighted contribution
+                    if s not in in_edges:
+                        in_edges[s] = []
+                    in_edges[s].append((o_id, reverse_edge_weight))
+                    out_degree[o_id] = out_degree.get(o_id, 0) + 1
+
+            # Initialize out_degree for nodes with no outgoing edges
+            for node in nodes:
+                if node not in out_degree:
+                    out_degree[node] = 0
+
+            # Step 3: Initialize PageRank scores (Personalized)
+            seed_count = len(valid_seeds)
+            seed_set = set(valid_seeds)
+            ranks = {
+                node: (1.0 / seed_count if node in seed_set else 0.0) for node in nodes
+            }
+
+            # Step 4: Iterative computation with personalization
+            teleport_prob = (1.0 - damping_factor) / seed_count
+
+            for iteration in range(max_iterations):
+                new_ranks = {}
+                max_diff = 0.0
+
+                for node in nodes:
+                    # Teleport: jump to seed nodes (personalized)
+                    if node in seed_set:
+                        rank = teleport_prob
+                    else:
+                        rank = 0.0
+
+                    # Add contributions from incoming edges (with weights)
+                    if node in in_edges:
+                        for src, weight in in_edges[node]:
+                            if out_degree.get(src, 0) > 0:
+                                rank += (
+                                    damping_factor
+                                    * weight
+                                    * (ranks.get(src, 0) / out_degree[src])
+                                )
+
+                    new_ranks[node] = rank
+                    max_diff = max(max_diff, abs(rank - ranks.get(node, 0)))
+
+                ranks = new_ranks
+
+                # Check convergence
+                if max_diff < tolerance:
+                    logger.debug(
+                        f"PageRank converged after {iteration + 1} iterations (Python fallback)"
+                    )
+                    break
+
+            # Filter out zero scores and apply top_k limit
+            results = {node: score for node, score in ranks.items() if score > 0}
+
+            if return_top_k is not None and return_top_k > 0:
+                sorted_items = sorted(results.items(), key=lambda x: x[1], reverse=True)
+                results = dict(sorted_items[:return_top_k])
+
+            return results
+
+        except Exception as e:
+            logger.error(f"kg_PERSONALIZED_PAGERANK Python fallback failed: {e}")
+            raise
+        finally:
+            cursor.close()
 
     # --- Arno acceleration (optional) ---
 
     def _detect_arno(self) -> bool:
         if self._arno_available is not None:
             return self._arno_available
-        detector = getattr(self._store, "_detect_arno", None)
-        if detector is None:
+        try:
+            iris_obj = self._iris_obj()
+            try:
+                iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
+            except Exception:
+                pass
+            try:
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
+            except Exception:
+                pass
+            cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
+            self._arno_capabilities = json.loads(str(cap_json))
+            self._arno_available = True
+            if not self._arno_capabilities.get("nkg_data", False):
+                logger.warning(
+                    "Arno detected but ^NKG not populated — run BuildKG() to enable acceleration"
+                )
+        except Exception:
             self._arno_available = False
             self._arno_capabilities = {}
-            return False
-        self._arno_available = detector()
-        self._arno_capabilities = dict(getattr(self._store, "_arno_capabilities", {}) or {})
         return self._arno_available
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
@@ -803,9 +6313,78 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
             for i in range(1, n + 1)
         )
 
+    def khop(self, seed: str, hops: int = 2, max_nodes: int = 500) -> dict:
+        if hops > 1 and self._detect_arno() and "khop" in self._arno_capabilities.get(
+            "algorithms", []
+        ):
+            result = self._arno_call(
+                "Graph.KG.NKGAccel", "KHopNeighbors", seed, str(hops), str(max_nodes)
+            )
+            parsed = json.loads(result)
+            if "error" not in parsed:
+                return parsed
+            logger.warning(f"Arno khop error: {parsed['error']}")
+        return self._khop_fallback(seed, hops, max_nodes)
 
+    def _khop_fallback(self, seed: str, hops: int, max_nodes: int) -> dict:
+        if self.capabilities.objectscript_deployed:
+            try:
+                iris_obj = self._iris_obj()
+                result = iris_obj.classMethodValue(
+                    "Graph.KG.Traversal", "BFSFastJson", seed, "", hops, "", "out"
+                )
+                if result:
+                    edges = json.loads(str(result))
+                    nodes = set()
+                    for e in edges:
+                        nodes.add(e["s"])
+                        nodes.add(e["o"])
+                    return {"nodes": list(nodes)[:max_nodes], "edges": edges}
+            except Exception as e:
+                logger.debug(f"BFSFastJson fallback failed: {e}")
+        return {"nodes": [], "edges": []}
 
+    def ppr(
+        self, seed: str, alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
+    ) -> dict:
+        if self._detect_arno() and "ppr" in self._arno_capabilities.get(
+            "algorithms", []
+        ):
+            result = self._arno_call(
+                "Graph.KG.NKGAccel",
+                "PPRNative",
+                seed,
+                str(alpha),
+                str(max_iter),
+                str(top_k),
+            )
+            parsed = json.loads(result)
+            if "error" not in parsed:
+                return parsed
+            logger.warning(f"Arno ppr error: {parsed['error']}")
+        scores = self.kg_PERSONALIZED_PAGERANK(
+            [seed], damping_factor=alpha, max_iterations=max_iter, return_top_k=top_k
+        )
+        return {
+            "scores": [
+                {"id": k, "score": v}
+                for k, v in sorted(scores.items(), key=lambda x: -x[1])
+            ]
+        }
 
+    def random_walk(self, seed: str, length: int = 20, num_walks: int = 10) -> list:
+        if self._detect_arno() and "random_walk" in self._arno_capabilities.get(
+            "algorithms", []
+        ):
+            result = self._arno_call(
+                "Graph.KG.NKGAccel", "RandomWalkJson", seed, str(length), str(num_walks)
+            )
+            parsed = json.loads(result)
+            if isinstance(parsed, list):
+                return parsed
+            if isinstance(parsed, dict) and "error" in parsed:
+                logger.warning(f"Arno random_walk error: {parsed['error']}")
+        return []
 
     # ── VecIndex: lightweight ANN vector search in globals ──
 
@@ -813,52 +6392,1682 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
         import iris
         return iris.createIRIS(self.conn)
 
+    def vec_create_index(
+        self,
+        name: str,
+        dim: int,
+        metric: str = "cosine",
+        num_trees: int = 4,
+        leaf_size: int = 50,
+    ) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex",
+            "Create",
+            name,
+            str(dim),
+            metric,
+            str(num_trees),
+            str(leaf_size),
+        )
+        info = json.loads(str(result))
+        self._index_registry[name] = "vec"
+        return info
 
+    def vec_insert(self, index_name: str, doc_id: str, embedding) -> None:
+        vec_json = json.dumps([float(v) for v in embedding])
+        self._iris_obj().classMethodVoid(
+            "Graph.KG.VecIndex", "InsertJSON", index_name, doc_id, vec_json
+        )
 
+    def vec_bulk_insert(self, index_name: str, items: list) -> int:
+        batch = [
+            {"id": item["id"], "vec": [float(v) for v in item["embedding"]]}
+            for item in items
+        ]
+        batch_json = json.dumps(batch)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "InsertBatchJSON", index_name, batch_json
+        )
+        return json.loads(str(result)).get("inserted", 0)
 
+    def vec_build(self, index_name: str) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "Build", index_name
+        )
+        return json.loads(str(result))
 
+    def vec_search(
+        self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8
+    ) -> list:
+        vec_json = json.dumps([float(v) for v in query_embedding])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe
+        )
+        return json.loads(str(result))
 
+    def vec_search_multi(
+        self, index_name: str, query_embeddings: list, k: int = 10, nprobe: int = 8
+    ) -> list:
+        queries_json = json.dumps([[float(v) for v in q] for q in query_embeddings])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "SearchMultiJSON", index_name, queries_json, k, nprobe
+        )
+        return json.loads(str(result))
 
+    def vec_info(self, index_name: str) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "Info", index_name
+        )
+        info = json.loads(str(result))
+        info.setdefault("type", "vec")
+        return info
 
+    def vec_drop(self, index_name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.VecIndex", "Drop", index_name)
 
+    def vec_expand(self, index_name: str, seed_id: str, k: int = 5) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.VecIndex", "SeededVectorExpand", seed_id, index_name, k
+        )
+        return json.loads(str(result))
 
     # ── PLAID: multi-vector retrieval (ColBERT-style) ──
 
+    def plaid_build(
+        self, name: str, docs: list, n_clusters: int = None, dim: int = 128
+    ) -> dict:
+        try:
+            import numpy as np
+            from sklearn.cluster import KMeans
+        except ImportError:
+            raise ImportError(
+                "plaid_build requires numpy and sklearn: pip install numpy scikit-learn"
+            )
 
+        all_tokens = []
+        doc_token_map = []
+        for doc in docs:
+            tokens = doc["tokens"]
+            for tok_pos, tok in enumerate(tokens):
+                all_tokens.append(tok)
+                doc_token_map.append(
+                    {"docId": doc["id"], "tokPos": tok_pos, "centroid": 0}
+                )
 
+        all_tokens_np = np.array(all_tokens, dtype=np.float64)
+        K = n_clusters or max(1, int(np.sqrt(len(all_tokens_np))))
+        K = min(K, len(all_tokens_np))
 
+        kmeans = KMeans(n_clusters=K, n_init=1, max_iter=20, random_state=42).fit(
+            all_tokens_np
+        )
+        labels = kmeans.labels_.tolist()
 
+        for i, label in enumerate(labels):
+            doc_token_map[i]["centroid"] = int(label)
 
+        centroids_json = json.dumps(kmeans.cluster_centers_.tolist())
+        docs_json = json.dumps([
+            {
+                "id": doc["id"],
+                "tokens": [[float(v) for v in tok] for tok in doc["tokens"]],
+            }
+            for doc in docs
+        ])
+        assignments_json = json.dumps(doc_token_map)
 
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.PLAIDSearch", "Build", name,
+            centroids_json, docs_json, assignments_json
+        )
+        info = json.loads(str(result))
+        self._index_registry[name] = "plaid"
+        return info
 
+    def plaid_search(
+        self, name: str, query_tokens: list, k: int = 10, nprobe: int = 4
+    ) -> list:
+        tokens_json = json.dumps([[float(v) for v in tok] for tok in query_tokens])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.PLAIDSearch", "Search", name, tokens_json, k, nprobe
+        )
+        return json.loads(str(result))
 
+    def plaid_insert(self, name: str, doc_id: str, token_embeddings: list) -> None:
+        tokens_json = json.dumps([[float(v) for v in tok] for tok in token_embeddings])
+        self._iris_obj().classMethodVoid(
+            "Graph.KG.PLAIDSearch", "Insert", name, doc_id, tokens_json
+        )
 
+    def plaid_info(self, name: str) -> dict:
+        result = self._iris_obj().classMethodValue("Graph.KG.PLAIDSearch", "Info", name)
+        return json.loads(str(result))
 
+    def plaid_drop(self, name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.PLAIDSearch", "Drop", name)
 
+    # ── Temporal edges ──
 
+    def create_edge_temporal(
+        self,
+        source: str,
+        predicate: str,
+        target: str,
+        timestamp: int = None,
+        weight: float = 1.0,
+        attrs: dict = None,
+        upsert: bool = False,
+        graph: Optional[str] = None,
+    ) -> bool:
+        if timestamp is not None:
+            TemporalEdgeInput(source=source, predicate=predicate, target=target,
+                              timestamp=int(timestamp), weight=weight)
+        result = self._store.write_temporal_edge(
+            source, predicate, target,
+            timestamp=int(timestamp) if timestamp is not None else 0,
+            weight=weight, attrs=attrs, upsert=upsert,
+        )
+        return result.error is None
 
+    def bulk_create_edges_temporal(
+        self, edges: list, upsert: bool = False, graph: Optional[str] = None
+    ) -> int:
+        normalized = [
+            {
+                "source": e.get("s") or e.get("source_id") or e.get("source", ""),
+                "predicate": e.get("p") or e.get("predicate", ""),
+                "target": e.get("o") or e.get("target_id") or e.get("target", ""),
+                "timestamp": int(e.get("ts") or e.get("timestamp", 0)),
+                "weight": float(e.get("w") or e.get("weight", 1.0)),
+                "attrs": e.get("attrs") or {},
+            }
+            for e in edges
+        ]
+        result = self._store.bulk_write_temporal_edges(normalized, upsert=upsert)
+        return result.rows[0][0] if result.rows else 0
 
+    def get_edges_in_window(
+        self,
+        source: str = "",
+        predicate: str = "",
+        start: int = 0,
+        end: int = 0,
+        direction: str = "out",
+    ) -> list:
+        result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
+        return result.rows if not result.error else []
+    def purge_before(self, ts: int) -> None:
+        self._iris_obj().classMethodVoid(
+            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
+        )
 
+    def get_edge_velocity(self, node_id: str, window_seconds: int = 300) -> int:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetVelocity", node_id, window_seconds
+        )
+        return int(result)
 
+    def find_burst_nodes(
+        self, predicate: str = "", window_seconds: int = 300, threshold: int = 50
+    ) -> list:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold
+        )
+        return json.loads(str(result))
 
+    def get_edge_attrs(self, ts: int, source: str, predicate: str, target: str) -> dict:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target
+        )
+        return json.loads(str(result))
 
+    def get_temporal_aggregate(
+        self,
+        source: str,
+        predicate: str,
+        metric: str,
+        ts_start: int,
+        ts_end: int,
+    ):
+        result = self._store.get_temporal_aggregate(source, predicate, metric, ts_start, ts_end)
+        if result.rows:
+            val = result.rows[0][0]
+            return int(val) if metric == "count" else float(val)
+        return 0 if metric == "count" else None
 
+    def get_bucket_groups(
+        self,
+        predicate: str = "",
+        ts_start: int = 0,
+        ts_end: int = 0,
+        source_prefix: str = "",
+    ) -> list:
+        """Return pre-aggregated statistics per (source, predicate) pair over a time window.
 
+        Args:
+            predicate: Edge type to filter on. Empty string matches all predicates.
+            ts_start: Window start as Unix timestamp (inclusive).
+            ts_end: Window end as Unix timestamp (inclusive).
+            source_prefix: If non-empty, only include entries whose source node ID
+                starts with this prefix. Use for tenant-scoped queries. Default "".
 
+        Returns:
+            list[dict]: Each dict has keys:
+                source    (str)   — source node ID
+                predicate (str)   — edge type
+                count     (int)   — number of edges in window
+                sum       (float) — total weight across all edges
+                avg       (float) — mean weight (None if count == 0)
+                min       (float) — minimum weight (None if no edges)
+                max       (float) — maximum weight (None if no edges)
+        """
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex",
+            "GetBucketGroups",
+            predicate,
+            ts_start,
+            ts_end,
+            source_prefix,
+        )
+        return json.loads(str(result))
 
+    def get_bucket_group_targets(
+        self,
+        source: str,
+        predicate: str,
+        ts_start: int,
+        ts_end: int,
+    ) -> list[str]:
+        """Return distinct target node IDs for a source+predicate over a time window."""
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex",
+            "GetBucketGroupTargets",
+            source,
+            predicate,
+            ts_start,
+            ts_end,
+        )
+        return json.loads(str(result))
 
+    def get_distinct_count(
+        self,
+        source: str,
+        predicate: str,
+        ts_start: int,
+        ts_end: int,
+    ) -> int:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex",
+            "GetDistinctCount",
+            source,
+            predicate,
+            ts_start,
+            ts_end,
+        )
+        return int(str(result))
 
+    def import_graph_ndjson(
+        self, path: str, upsert_nodes: bool = True, batch_size: int = 10000
+    ) -> dict:
+        nodes = 0
+        edges = 0
+        temporal_edges = 0
+        temporal_batch = []
 
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.warning(f"Skipping malformed NDJSON line")
+                    continue
 
+                kind = event.get("kind", "")
 
+                if kind == "node":
+                    node_id = event.get("id", "")
+                    labels = event.get("labels", [])
+                    props = event.get("properties", {})
+                    if node_id:
+                        self.create_node(node_id, labels=labels, properties=props)
+                        nodes += 1
 
+                elif kind == "edge":
+                    src = event.get("source", "")
+                    pred = event.get("predicate", "")
+                    tgt = event.get("target", "")
+                    if src and pred and tgt:
+                        self.create_edge(src, pred, tgt)
+                        edges += 1
 
+                elif kind == "temporal_edge":
+                    src = event.get("source", "")
+                    pred = event.get("predicate", "")
+                    tgt = event.get("target", "")
+                    ts = event.get("timestamp", 0)
+                    w = event.get("weight", 1.0)
+                    attrs = event.get("attrs", {})
+                    src_labels = event.get("source_labels", [])
+                    tgt_labels = event.get("target_labels", [])
+                    if upsert_nodes:
+                        if src:
+                            self.create_node(src, labels=src_labels)
+                        if tgt:
+                            self.create_node(tgt, labels=tgt_labels)
+                    item = {"s": src, "p": pred, "o": tgt, "ts": ts, "w": w}
+                    if attrs:
+                        item["attrs"] = {k: str(v) for k, v in attrs.items()}
+                    temporal_batch.append(item)
+                    if len(temporal_batch) >= batch_size:
+                        self.bulk_create_edges_temporal(temporal_batch)
+                        temporal_edges += len(temporal_batch)
+                        temporal_batch = []
+                else:
+                    logger.warning(f"Skipping unknown NDJSON kind: {kind}")
 
+        if temporal_batch:
+            self.bulk_create_edges_temporal(temporal_batch)
+            temporal_edges += len(temporal_batch)
 
+        return {"nodes": nodes, "edges": edges, "temporal_edges": temporal_edges}
 
+    def export_graph_ndjson(self, path: str) -> dict:
+        nodes_written = 0
+        edges_written = 0
 
+        cursor = self.conn.cursor()
+        with open(path, "w") as f:
+            cursor.execute(f"SELECT node_id FROM {_table('nodes')}")
+            for (node_id,) in cursor.fetchall():
+                node_data = self.get_node(node_id)
+                if node_data:
+                    event = {
+                        "kind": "node",
+                        "id": node_id,
+                        "labels": node_data.get("labels", []),
+                        "properties": {
+                            k: v
+                            for k, v in node_data.items()
+                            if k not in ("id", "labels")
+                        },
+                    }
+                    f.write(json.dumps(event) + "\n")
+                    nodes_written += 1
 
+        cursor.close()
+        return {"nodes": nodes_written, "edges": edges_written}
 
+    def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
+                "WHERE Command IS NOT NULL FETCH FIRST ? ROWS ONLY",
+                [limit],
+            )
+            return [
+                {"id": str(r[0]), "state": str(r[1]), "client": str(r[2]),
+                 "command": str(r[3])[:200]}
+                for r in cursor.fetchall()
+            ]
+        except Exception as e:
+            logger.warning("list_active_queries failed: %s", e)
+            return []
 
+    def kill_query(self, query_id: str) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute("SELECT %SYSTEM.SYS.KillProcess(?)", [int(query_id)])
+            return True
+        except Exception as e:
+            logger.warning("kill_query %s failed: %s", query_id, e)
+            return False
 
+    def enqueue_for_embedding(
+        self,
+        node_ids: List[str],
+        embedding_config: str = "",
+    ) -> int:
+        try:
+            import json as _json
+            ids_json = _json.dumps(node_ids)
+            result = self._call_classmethod(
+                "Graph.KG.EmbedQueue", "BulkEnqueue",
+                ids_json, embedding_config,
+            )
+            return int(str(result))
+        except Exception as e:
+            logger.warning("enqueue_for_embedding failed: %s", e)
+            return 0
 
+    def process_embed_queue(self, batch_size: int = 100) -> dict:
+        try:
+            import json as _json
+            result_json = str(self._call_classmethod(
+                "Graph.KG.EmbedQueue", "ProcessBatch",
+                batch_size, 30,
+            ))
+            return _json.loads(result_json)
+        except Exception as e:
+            logger.warning("process_embed_queue failed: %s", e)
+            return {"processed": 0, "errors": 0}
+
+    def embed_queue_pending(self) -> int:
+        try:
+            return int(str(self._call_classmethod("Graph.KG.EmbedQueue", "PendingCount")))
+        except Exception:
+            return 0
+
+    def start_background_embedding(self, batch_size: int = 100) -> str:
+        try:
+            return str(self._call_classmethod("Graph.KG.EmbedQueue", "StartBackgroundTask", batch_size))
+        except Exception as e:
+            logger.warning("start_background_embedding failed: %s", e)
+            return ""
+
+    def export_temporal_edges_ndjson(
+        self, path: str, start: int = None, end: int = None, predicate: str = None
+    ) -> dict:
+        s_filter = ""
+        p_filter = predicate or ""
+        ts_start = start or 0
+        ts_end = end or 9999999999
+        result_json = self._iris_obj().classMethodValue(
+            "Graph.KG.TemporalIndex",
+            "QueryWindow",
+            s_filter,
+            p_filter,
+            ts_start,
+            ts_end,
+        )
+        edges = json.loads(str(result_json))
+
+        with open(path, "w") as f:
+            for edge in edges:
+                attrs = self.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
+                event = {
+                    "kind": "temporal_edge",
+                    "source": edge["s"],
+                    "predicate": edge["p"],
+                    "target": edge["o"],
+                    "timestamp": edge["ts"],
+                    "weight": edge.get("w", 1.0),
+                    "attrs": attrs,
+                }
+                f.write(json.dumps(event) + "\n")
+
+        return {"temporal_edges": len(edges)}
+
+    # ── BM25Index: pure ObjectScript lexical search ──
+
+    def bm25_build(
+        self, name: str, text_props: list, k1: float = 1.5, b: float = 0.75
+    ) -> dict:
+        BM25BuildInput(name=name, text_props=text_props, k1=k1, b=b)
+        props_csv = ",".join(text_props)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Build", name, props_csv, k1, b
+        )
+        info = json.loads(str(result))
+        self._index_registry[name] = "bm25"
+        return info
+
+    def bm25_search(self, name: str, query: str, k: int = 10) -> list:
+        BM25SearchInput(name=name, query=query, k=k)
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Search", name, query, k
+        )
+        import re as _re
+        raw = str(result)
+        raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', raw)
+        rows = json.loads(raw)
+        return [(r["id"], float(r["score"])) for r in rows]
+
+    def bm25_insert(self, name: str, doc_id: str, text: str) -> bool:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.BM25Index", "Insert", name, doc_id, text
+        )
+        return bool(int(str(result)))
+
+    def bm25_drop(self, name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.BM25Index", "Drop", name)
+
+    def bm25_info(self, name: str) -> dict:
+        result = self._iris_obj().classMethodValue("Graph.KG.BM25Index", "Info", name)
+        info = json.loads(str(result))
+        info.setdefault("type", "bm25")
+        return info
+
+    def ivf_build(
+        self,
+        name: str,
+        nlist: int = 256,
+        metric: str = "cosine",
+        batch_size: int = 10000,
+        build_batch_size: int = 500,
+        node_ids: Optional[List[str]] = None,
+    ) -> dict:
+        IVFBuildInput(name=name, nlist=nlist, metric=metric, batch_size=batch_size, build_batch_size=build_batch_size)
+        try:
+            import numpy as np
+            from sklearn.cluster import MiniBatchKMeans
+        except ImportError:
+            raise ImportError(
+                "ivf_build requires numpy and sklearn: pip install numpy scikit-learn"
+            )
+
+        import base64
+        import json as _json
+        import struct
+
+        cursor = self.conn.cursor()
+        if node_ids is not None:
+            if not node_ids:
+                raise ValueError("ivf_build: node_ids list is empty")
+            placeholders = ",".join(["?"] * len(node_ids))
+            cursor.execute(
+                f"SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings WHERE id IN ({placeholders})",
+                node_ids,
+            )
+        else:
+            cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings")
+        rows = cursor.fetchall()
+        if not rows:
+            raise ValueError("ivf_build: no vectors found in kg_NodeEmbeddings")
+
+        node_ids = []
+        vecs = []
+        for row in rows:
+            nid, emb_val = row[0], row[1]
+            if emb_val is None:
+                continue
+            emb_str = str(emb_val)
+            if "," in emb_str:
+                vec = [float(v) for v in emb_str.split(",")]
+            else:
+                raw = base64.b64decode(emb_str)
+                dim = len(raw) // 4
+                vec = list(struct.unpack(f"{dim}f", raw))
+            node_ids.append(nid)
+            vecs.append(vec)
+
+        X = np.array(vecs, dtype=np.float32)
+        n_nodes, dim = X.shape
+        effective_nlist = min(nlist, n_nodes)
+
+        km = MiniBatchKMeans(
+            n_clusters=effective_nlist,
+            batch_size=batch_size,
+            random_state=42,
+            n_init=3,
+        ).fit(X)
+
+        centroids = km.cluster_centers_.tolist()
+        labels = km.labels_.tolist()
+
+        iris_obj = self._iris_obj()
+
+        result = iris_obj.classMethodValue(
+            "Graph.KG.IVFIndex",
+            "Build",
+            name,
+            _json.dumps(effective_nlist),
+            _json.dumps(metric),
+            _json.dumps(centroids),
+            "[]",
+        )
+
+        for batch_start in range(0, n_nodes, build_batch_size):
+            batch = []
+            for i in range(batch_start, min(batch_start + build_batch_size, n_nodes)):
+                batch.append(
+                    {"nodeId": node_ids[i], "cellIdx": int(labels[i]), "vec": vecs[i]}
+                )
+            iris_obj.classMethodValue(
+                "Graph.KG.IVFIndex", "AddBatch", name, _json.dumps(batch)
+            )
+
+        iris_obj.classMethodValue("Graph.KG.IVFIndex", "FinalizeIndex", name)
+        info = iris_obj.classMethodValue("Graph.KG.IVFIndex", "Info", name)
+        result = _json.loads(str(info))
+        self._index_registry[name] = "ivf"
+        return result
+
+    def ivf_search(self, name: str, query: list, k: int = 10, nprobe: int = 8) -> list:
+        VectorSearchInput(name=name, query=query, k=k, nprobe=nprobe)
+        query_json = json.dumps([float(v) for v in query])
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Search", name, query_json, k, nprobe
+        )
+        rows = json.loads(str(result))
+        return [(r["id"], float(r["score"])) for r in rows]
+
+    def ivf_insert(self, name: str, node_id: str, vector: list) -> int:
+        vec_json = json.dumps([float(v) for v in vector])
+        cell = int(self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Insert", name, node_id, vec_json
+        ))
+        if cell < 0:
+            raise ValueError(f"ivf_insert: index '{name}' not found — call ivf_build first")
+        return cell
+
+    def ivf_delete(self, name: str, node_id: str) -> bool:
+        removed = int(self._iris_obj().classMethodValue(
+            "Graph.KG.IVFIndex", "Delete", name, node_id
+        ))
+        return bool(removed)
+
+    def ivf_drop(self, name: str) -> None:
+        self._iris_obj().classMethodVoid("Graph.KG.IVFIndex", "Drop", name)
+
+    def ivf_info(self, name: str) -> dict:
+        result = self._iris_obj().classMethodValue("Graph.KG.IVFIndex", "Info", name)
+        info = json.loads(str(result))
+        if info:
+            info.setdefault("type", "ivf")
+        return info
+
+    def kg_GRAPH_PATH(self, src_id: str, pred1: str, pred2: str, max_hops: int = 2):
+        result = self.execute_cypher(
+            "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
+            "WHERE type(r1) = $p1 AND type(r2) = $p2 "
+            "RETURN 1 AS path_id, 1 AS step, a.node_id, type(r1), b.node_id "
+            "UNION ALL "
+            "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
+            "WHERE type(r1) = $p1 AND type(r2) = $p2 "
+            "RETURN 1 AS path_id, 2 AS step, b.node_id, type(r2), c.node_id",
+            {"src": src_id, "p1": pred1, "p2": pred2},
+        )
+        return [(int(r[0]), int(r[1]), r[2], r[3], r[4]) for r in (result.get("rows") or [])]
+
+    def kg_GRAPH_WALK(self, start_entity: str, max_depth: int = 3,
+                      edge_types: Optional[List[str]] = None,
+                      max_results: int = 100):
+        preds_json = json.dumps(edge_types) if edge_types else "[]"
+        from iris_vector_graph.schema import _call_classmethod, _call_classmethod_large
+        raw = str(_call_classmethod(
+            self.conn, "Graph.KG.Traversal", "BFSFastJsonSorted",
+            start_entity, preds_json, max_depth, "", "out", max_results
+        ))
+        if raw.startswith("SORTED:") and raw != "SORTED:0":
+            tag = raw.split(":")[1]
+            json_str = str(_call_classmethod_large(
+                self._iris_obj(), "Graph.KG.Traversal", "ReadBFSResults", tag))
+            rows = json.loads(json_str) if json_str else []
+            return [(r.get("s", ""), r.get("p", ""), r.get("o", ""), r.get("step", 1))
+                    for r in rows]
+        return []
+
+    def kg_GRAPH_WALK_TVF(self, start_entity: str, max_depth: int = 3,
+                           edge_types: Optional[List[str]] = None,
+                           max_results: int = 100):
+        return self.kg_GRAPH_WALK(start_entity, max_depth, edge_types, max_results)
+
+    def kg_PAGERANK(self, seed_entities: Optional[List[str]] = None,
+                    damping: float = 0.85, max_iterations: int = 20,
+                    bidirectional: bool = False, reverse_weight: float = 1.0):
+        if seed_entities is not None:
+            return self.kg_PERSONALIZED_PAGERANK(
+                seed_entities, damping_factor=damping, max_iterations=max_iterations,
+            )
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.PageRank", "PageRankGlobalJson",
+                                    damping, max_iterations))
+        parsed = json.loads(raw) if raw else []
+        return [(item["id"], float(item["score"])) for item in parsed]
+
+    def kg_WCC(self, max_iterations: int = 100) -> Dict[str, Any]:
+        if self._store_capabilities.get("wcc", True):
+            result = self._store.execute_wcc()
+            if not result.error:
+                return {r[0]: r[1] for r in result.rows if len(r) >= 2}
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "WCCJson", max_iterations))
+        return json.loads(raw) if raw else {}
+
+    def kg_CDLP(self, max_iterations: int = 10) -> Dict[str, Any]:
+        if self._store_capabilities.get("cdlp", True):
+            result = self._store.execute_cdlp(max_iterations)
+            if not result.error:
+                return {r[0]: r[1] for r in result.rows if len(r) >= 2}
+        from iris_vector_graph.schema import _call_classmethod
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "CDLPJson", max_iterations))
+        return json.loads(raw) if raw else {}
+
+    def kg_SUBGRAPH(self, seed_ids: List[str], k_hops: int = 2,
+                    edge_types: Optional[List[str]] = None,
+                    include_properties: bool = True,
+                    include_embeddings: bool = False,
+                    max_nodes: int = 10000):
+        from iris_vector_graph.models import SubgraphData
+        if not seed_ids:
+            return SubgraphData(seed_ids=list(seed_ids))
+        if self._store_capabilities.get("subgraph", True):
+            result = self._store.execute_subgraph(seed_ids, k_hops, edge_types or [], max_nodes)
+            if result.error is None:
+                import json as _j
+                if result.rows:
+                    nodes = _j.loads(result.rows[0][0]) if result.rows[0][0] else []
+                    edges = _j.loads(result.rows[0][1]) if result.rows[0][1] else []
+                else:
+                    nodes, edges = [], []
+                return SubgraphData(nodes=nodes, edges=edges, seed_ids=list(seed_ids))
+        from iris_vector_graph.schema import _call_classmethod
+        seed_json = json.dumps(seed_ids)
+        edge_types_json = json.dumps(edge_types) if edge_types else ""
+        raw = str(_call_classmethod(self.conn, "Graph.KG.Subgraph", "SubgraphJson",
+                                    seed_json, k_hops, edge_types_json, max_nodes))
+        if raw:
+            parsed = json.loads(raw)
+            nodes = parsed.get("nodes", [])
+            edges = [(e["s"], e["p"], e["o"]) for e in parsed.get("edges", [])]
+            node_properties = parsed.get("properties", {})
+            node_labels = parsed.get("labels", {})
+            node_embeddings: Dict[str, Any] = {}
+            if include_embeddings and nodes:
+                emb_table = _table("kg_NodeEmbeddings")
+                cursor = self.conn.cursor()
+                phs = ",".join(["?"] * len(nodes))
+                cursor.execute(
+                    f"SELECT id, emb FROM {emb_table} WHERE id IN ({phs})", nodes
+                )
+                for row in cursor.fetchall():
+                    nid, emb_csv = row[0], str(row[1])
+                    try:
+                        import numpy as _np
+                        node_embeddings[nid] = list(_np.fromstring(emb_csv, dtype=float, sep=","))
+                    except Exception:
+                        pass
+                cursor.close()
+            return SubgraphData(
+                seed_ids=seed_ids, nodes=nodes, edges=edges,
+                node_properties=node_properties, node_labels=node_labels,
+                node_embeddings=node_embeddings,
+            )
+        return SubgraphData(seed_ids=seed_ids)
+
+    def kg_PPR_GUIDED_SUBGRAPH(self, seed_ids: List[str], ppr_top_k: int = 50,
+                                k_hops: int = 1, damping: float = 0.85,
+                                max_iterations: int = 10,
+                                edge_types: Optional[List[str]] = None,
+                                max_nodes: int = 5000):
+        from iris_vector_graph.models import PprGuidedSubgraphData
+        if not seed_ids:
+            return PprGuidedSubgraphData(seed_ids=[], nodes=[], edges=[], ppr_scores=[])
+        ppr_scores = self.kg_PERSONALIZED_PAGERANK(seed_ids, damping_factor=damping,
+                                                     max_iterations=max_iterations)
+        if isinstance(ppr_scores, dict):
+            sorted_scores = sorted(ppr_scores.items(), key=lambda x: -x[1])
+            top_ids = [k for k, _ in sorted_scores[:ppr_top_k]]
+        else:
+            sorted_scores = sorted(ppr_scores, key=lambda x: -x[1])
+            top_ids = [item[0] for item in sorted_scores[:ppr_top_k]]
+        all_seeds = list(dict.fromkeys(seed_ids + top_ids))
+        subgraph = self.kg_SUBGRAPH(all_seeds, k_hops=k_hops, edge_types=edge_types,
+                                    max_nodes=min(max_nodes, ppr_top_k))
+        return PprGuidedSubgraphData(
+            seed_ids=seed_ids,
+            nodes=subgraph.nodes,
+            edges=[{"src": e[0], "dst": e[2], "type": e[1]} for e in subgraph.edges if isinstance(e, (list, tuple)) and len(e) == 3]
+                  if subgraph.edges and isinstance(subgraph.edges[0], (list, tuple))
+                  else subgraph.edges,
+            ppr_scores=sorted_scores[:ppr_top_k],
+            nodes_before_pruning=len(subgraph.nodes),
+            nodes_after_pruning=len(subgraph.nodes),
+        )
+
+    def kg_NEIGHBORS(self, source_ids: List[str], predicate: Optional[str] = None,
+                     direction: str = "out", distinct: bool = True,
+                     chunk_size: int = 500) -> List[str]:
+        if not source_ids:
+            return []
+        if direction not in ("out", "in", "both"):
+            raise ValueError(f"direction must be 'out', 'in', or 'both', got {direction!r}")
+        all_targets: List[str] = []
+        seen: set = set()
+        for i in range(0, len(source_ids), chunk_size):
+            chunk = source_ids[i:i + chunk_size]
+            for src in chunk:
+                dirs = ["out", "in"] if direction == "both" else [direction]
+                for d in dirs:
+                    if d == "out":
+                        q = ("MATCH (s {node_id: $id})-[r]->(t) " +
+                             ("WHERE type(r)=$p " if predicate else "") +
+                             "RETURN t.node_id")
+                    else:
+                        q = ("MATCH (t)-[r]->(s {node_id: $id}) " +
+                             ("WHERE type(r)=$p " if predicate else "") +
+                             "RETURN t.node_id")
+                    params: Dict[str, Any] = {"id": src}
+                    if predicate:
+                        params["p"] = predicate
+                    r = self.execute_cypher(q, params)
+                    for row in (r.get("rows") or []):
+                        t = row[0]
+                        if t and (not distinct or t not in seen):
+                            all_targets.append(t)
+                            seen.add(t)
+        return all_targets
+
+    def kg_MENTIONS(self, source_ids: List[str], predicate: str = "MENTIONS",
+                    direction: str = "out") -> List[str]:
+        return self.kg_NEIGHBORS(source_ids, predicate=predicate, direction=direction)
+
+    def kg_PPR(self, seed_entities: List[str], damping: float = 0.85,
+               max_iterations: int = 20) -> List[Tuple[str, float]]:
+        if not seed_entities:
+            return []
+        result = self.kg_PERSONALIZED_PAGERANK(seed_entities, damping_factor=damping,
+                                                max_iterations=max_iterations)
+        if isinstance(result, dict):
+            return sorted(result.items(), key=lambda x: -x[1])
+        return result
+
+    def kg_RERANK(self, top_n: int, query_vector: str, query_text: str):
+        return self.kg_RRF_FUSE(k=top_n, k1=top_n * 2, k2=top_n * 2, c=60,
+                                 query_vector=query_vector, query_text=query_text)
+
+    def get_node_properties(self, node_id: str) -> Dict[str, Any]:
+        node = self.get_node(node_id)
+        if not node:
+            return {}
+        return {k: v for k, v in node.items() if k not in ("id", "labels")}
+
+    def get_node_name(self, node_id: str) -> Optional[str]:
+        props = self.get_node_properties(node_id)
+        return props.get("name") or props.get("label") or props.get("title")
+
+    def get_nodes_by_ids(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+        if not node_ids:
+            return []
+        return self.get_nodes(node_ids)
+
+    def node_count(self) -> int:
+        result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
+        rows = result.get("rows") or []
+        return int(rows[0][0]) if rows else 0
+
+    def edge_count(self) -> int:
+        result = self.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
+        rows = result.get("rows") or []
+        return int(rows[0][0]) if rows else 0
+
+    def embedding_count(self) -> int:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('kg_NodeEmbeddings')}")
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+        finally:
+            cursor.close()
+
+    def store_node(self, node_id: str, properties: Optional[Dict[str, Any]] = None,
+                   labels: Optional[List[str]] = None) -> bool:
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"INSERT INTO {_table('nodes')} (node_id) VALUES (?)", [node_id]
+            )
+            self.conn.commit()
+        except Exception as e:
+            err_lower = str(e).lower()
+            if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
+                raise
+        finally:
+            cursor.close()
+        if properties:
+            for k, v in (properties or {}).items():
+                val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                cursor2 = self.conn.cursor()
+                try:
+                    cursor2.execute(
+                        f"DELETE FROM {_table('rdf_props')} WHERE s = ? AND \"key\" = ?",
+                        [node_id, k]
+                    )
+                    cursor2.execute(
+                        f"INSERT INTO {_table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)",
+                        [node_id, k, val_str]
+                    )
+                    self.conn.commit()
+                except Exception:
+                    pass
+                finally:
+                    cursor2.close()
+        if labels:
+            for lbl in labels:
+                cursor3 = self.conn.cursor()
+                try:
+                    cursor3.execute(
+                        f"INSERT INTO {_table('rdf_labels')} (s, label) VALUES (?, ?)",
+                        [node_id, lbl]
+                    )
+                    self.conn.commit()
+                except Exception as e:
+                    err_lower = str(e).lower()
+                    if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
+                        raise
+                finally:
+                    cursor3.close()
+        return True
+
+    def store_edge(self, source_id: str, predicate: str, target_id: str,
+                   qualifiers: Optional[Dict[str, Any]] = None) -> bool:
+        self.store_node(source_id)
+        self.store_node(target_id)
+        cursor = self.conn.cursor()
+        try:
+            qual_json = json.dumps(qualifiers) if qualifiers else None
+            cursor.execute(
+                f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                [source_id, predicate, target_id, qual_json],
+            )
+            self.conn.commit()
+        except Exception as e:
+            err_lower = str(e).lower()
+            if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
+                raise
+        finally:
+            cursor.close()
+        return True
+
+    def nodes_exist(self, node_ids: List[str]) -> set:
+        if not node_ids:
+            return set()
+        existing: set = set()
+        cursor = self.conn.cursor()
+        try:
+            for i in range(0, len(node_ids), 200):
+                batch = node_ids[i:i + 200]
+                phs = ",".join(["?"] * len(batch))
+                try:
+                    cursor.execute(
+                        f"SELECT node_id FROM {_table('nodes')} WHERE node_id IN ({phs})",
+                        batch,
+                    )
+                    for row in cursor.fetchall():
+                        existing.add(row[0])
+                except Exception:
+                    for nid in batch:
+                        try:
+                            cursor.execute(
+                                f"SELECT COUNT(*) FROM {_table('nodes')} WHERE node_id = ?",
+                                [nid],
+                            )
+                            row = cursor.fetchone()
+                            if row and int(row[0]) > 0:
+                                existing.add(nid)
+                        except Exception:
+                            pass
+        finally:
+            cursor.close()
+        return existing
+
+    def degree_centrality(
+        self,
+        direction: str = "out",
+        predicate: Optional[str] = None,
+        top_k: int = 10000,
+    ) -> List[Dict[str, Any]]:
+        """Degree centrality — node connectivity.
+
+        Measures how many edges connect to each node (in/out/bidirectional). Useful for 
+        identifying hubs and peripheral nodes. Normalized to (n-1).
+
+        Args:
+            direction: Edge direction — "out" (outbound), "in" (inbound), or "both" (undirected). Default "out".
+            predicate: Optional relationship type to filter by (e.g., "DEPENDS_ON"). None = all predicates.
+            top_k: Maximum results to return. 0 = all nodes (with warning if > 100K).
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Normalized degree (value / (n-1)).
+                - degree (int): Raw edge count.
+
+        Example:
+            >>> scores = engine.degree_centrality(direction="out", top_k=20)
+            >>> print(scores[0])  # {"id": "hub-node", "score": 0.847, "degree": 12}
+
+        Note:
+            Performance tier: ObjectScript parallel (8× workers) when `^NKG` built, 
+            otherwise Python LazyKG. See docs/performance/GRAPH_ALGORITHMS.md.
+        """
+        from iris_vector_graph._validate import DegreeCentralityInput
+        validated = DegreeCentralityInput(
+            direction=direction,
+            predicate=predicate,
+            top_k=top_k,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("degree_centrality", False):
+            raise NotImplementedError(
+                f"Centrality.degree_centrality not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"degree_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_degree_centrality(
+            validated.direction,
+            validated.predicate or "",
+            validated.top_k,
+        )
+        if result.error:
+            return []
+        return [
+            {"id": row[0], "score": row[1], "degree": row[2]}
+            for row in result.rows
+        ]
+
+    def betweenness_centrality(
+        self,
+        sample_size: int = 0,
+        direction: str = "out",
+        max_hops: int = 0,
+        top_k: int = 10000,
+        mem_budget_mb: int = 256,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Betweenness centrality via Brandes (2001) algorithm.
+
+        Measures how often a node appears on shortest paths between other nodes.
+        Uses three-tier dispatch: Rust accelerator (fastest) → ObjectScript parallel 
+        (8× workers) → Python LazyKG (always works).
+
+        Args:
+            sample_size: Number of source nodes for Brandes-Pich approximation.
+                0 uses the maxSources cap (default 200). Set equal to node count
+                for exact full Brandes.
+            direction: Edge direction — "out", "in", or "both". Default "out".
+            max_hops: Maximum BFS depth per source. 0 = unbounded.
+            top_k: Maximum results to return. 0 = all nodes.
+            mem_budget_mb: Memory budget in MB for predecessor accumulator.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Raw betweenness score (sum of dependency values
+                  scaled by n/sample_size if sampled).
+
+        Example:
+            >>> scores = engine.betweenness_centrality(sample_size=200, top_k=20)
+            >>> print(scores[0])  # {"id": "hub-node", "score": 4821.3}
+
+        Note:
+            Performance tiers require `^NKG` to be built (`engine.rebuild_nkg()`).
+            Without the accelerator library, falls back to ObjectScript parallel
+            (~500ms on ER(2000)). See docs/performance/GRAPH_ALGORITHMS.md.
+        """
+        from iris_vector_graph._validate import BetweennessInput
+        validated = BetweennessInput(
+            sample_size=sample_size,
+            direction=direction,
+            max_hops=max_hops,
+            top_k=top_k,
+            mem_budget_mb=mem_budget_mb,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("betweenness", False):
+            raise NotImplementedError(
+                f"Centrality.betweenness not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"betweenness_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_betweenness(
+            validated.sample_size,
+            validated.direction,
+            validated.max_hops,
+            validated.top_k,
+            validated.mem_budget_mb,
+            progress_callback,
+        )
+        if result.error:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for row in result.rows:
+            if len(row) == 2 and row[0] == "_meta" and isinstance(row[1], dict):
+                out.append(row[1])
+            else:
+                out.append({"id": row[0], "score": row[1]})
+        return out
+
+    def betweenness_centrality_neighborhood(
+        self,
+        seed: str,
+        hops: int = 2,
+        sample_size: int = 200,
+        top_k: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Betweenness centrality within a node's neighborhood.
+
+        Extracts a k-hop neighborhood around a seed node and computes Brandes 
+        betweenness only on that subgraph. Scales to biomedical KGs: performance depends 
+        on neighborhood size, not total graph size.
+
+        Args:
+            seed: Seed node ID (e.g., "MESH:D009101" for Multiple Myeloma).
+            hops: Neighborhood radius in hops (default 2). Typical biomedical: 2–3 hops = 500–5K nodes.
+            sample_size: Number of source nodes for Brandes approximation (default 200).
+            top_k: Maximum results to return (default 20).
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Betweenness within the neighborhood subgraph.
+                - hops (int): Distance from seed node.
+
+        Example:
+            >>> scores = engine.betweenness_centrality_neighborhood(
+            ...     seed="MESH:D009101", hops=2, top_k=20
+            ... )
+            >>> print(scores[0])  # {"id": "TP53", "score": 1234.5, "hops": 1}
+
+        Note:
+            Use this for disease-gene bottleneck analysis. Rust accelerator extracts 
+            subgraph via process-static adjacency cache (~microseconds), then runs 
+            rayon parallel Brandes on the subgraph only.
+        """
+        if not getattr(self, "_store", None):
+            raise NotImplementedError("No store configured")
+        result = self._store.execute_betweenness_neighborhood(seed, hops, sample_size, top_k)
+        if result.error:
+            return []
+        return [{"id": r[0], "score": r[1]} for r in result.rows]
+
+    def bfs_vector_rerank(
+        self,
+        seed: str,
+        query_vec: List[float],
+        hops: int = 2,
+        top_k: int = 10,
+        max_buckets: int = 32,
+    ) -> List[Dict[str, Any]]:
+        """Graph-filtered semantic search: fused BFS + vector reranking.
+
+        Finds nodes that are BOTH reachable from a seed within `hops` BFS steps
+        AND semantically similar to `query_vec`. Graph topology defines the
+        candidate scope; vector similarity defines relevance. This is the
+        biomedical drug-discovery pattern — "which genes are connected to this
+        disease AND similar to my target gene?"
+
+        Uses the NICHE quantized bucket index (`^NKG("q",...)`): the BFS frontier
+        is pruned to nodes in the query's nearest IVF buckets before full-precision
+        cosine reranking.
+
+        Args:
+            seed: Seed node ID to start the BFS from (e.g., "Gene::7157" for TP53).
+            query_vec: Query embedding vector (same dimension as node embeddings).
+            hops: BFS radius (default 2). Larger neighborhoods cost more.
+            top_k: Maximum results to return (default 10).
+            max_buckets: Number of nearest IVF buckets to scan (default 32).
+                Higher = better recall, slower. 32 gives recall@10 ≈ 0.90 on
+                400-dim TransE embeddings.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Cosine similarity to query_vec.
+                - hops (int): BFS distance from seed.
+
+        Example:
+            >>> tp53_vec = engine.get_node_embedding("Gene::7157")
+            >>> hits = engine.bfs_vector_rerank(
+            ...     seed="Gene::7157", query_vec=tp53_vec, hops=1, top_k=10
+            ... )
+            >>> print(hits[0])  # {"id": "Gene::8626", "score": 0.63, "hops": 1}
+
+        Note:
+            Requires the NICHE bucket index to be built (see scripts/niche/).
+            Returns [] if the bucket index is absent or the seed is not found.
+            Performance: ObjectScript path ~28ms for hops=1 on a 18K-node graph.
+            The sub-millisecond Rust accelerator path is planned for v2.1.x.
+        """
+        if not getattr(self, "_store", None):
+            raise NotImplementedError("No store configured")
+        result = self._store.execute_bfs_vector_rerank(seed, query_vec, hops, top_k, max_buckets)
+        if result.error:
+            return []
+        return [{"id": r[0], "score": r[1], "hops": r[2]} for r in result.rows]
+
+    def closeness_centrality(
+        self,
+        formula: str = "harmonic",
+        direction: str = "out",
+        max_hops: int = 0,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Closeness centrality — how close a node is to all other nodes.
+
+        Measures how quickly a node can reach other nodes via shortest paths.
+        Uses either the classical formula (undefined for disconnected graphs) or 
+        the harmonic formula (robust for disconnected graphs).
+
+        Args:
+            formula: "harmonic" (default, Beauchamp 1965, works on disconnected) 
+                or "classical" (standard Bavelas-Freeman, undefined for disconnected).
+            direction: Edge direction — "out", "in", or "both". Default "out".
+            max_hops: Maximum BFS depth. 0 = unbounded (full graph).
+            top_k: Maximum results to return. 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): Closeness score (depends on formula choice).
+
+        Example:
+            >>> scores = engine.closeness_centrality(formula="harmonic", top_k=20)
+            >>> print(scores[0])  # {"id": "central-node", "score": 0.823}
+
+        Note:
+            Harmonic formula = 1 / (average shortest-path distance), so it works 
+            on disconnected components. Classical formula is undefined when any node 
+            is unreachable.
+        """
+        from iris_vector_graph._validate import ClosenessInput
+        validated = ClosenessInput(
+            formula=formula,
+            direction=direction,
+            max_hops=max_hops,
+            top_k=top_k,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("closeness", False):
+            raise NotImplementedError(
+                f"Centrality.closeness not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"closeness_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_closeness(
+            validated.formula,
+            validated.direction,
+            validated.max_hops,
+            validated.top_k,
+            progress_callback,
+        )
+        if result.error:
+            return []
+        return [{"id": row[0], "score": row[1]} for row in result.rows]
+
+    def eigenvector_centrality(
+        self,
+        max_iter: int = 30,
+        tol: float = 1e-6,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Eigenvector centrality — influence by neighbor influence.
+
+        Iterative power method over the raw adjacency matrix A (not the transition 
+        matrix). Measures influence: a node is important if it's connected to other 
+        important nodes. L2-normalized output. Matches `networkx.eigenvector_centrality_numpy`.
+
+        Args:
+            max_iter: Maximum power iterations (default 30). Typical convergence: 5–15 iters.
+            tol: Convergence tolerance for L2 norm change (default 1e-6).
+            top_k: Maximum results to return. 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by score descending, each containing:
+                - id (str): Node identifier.
+                - score (float): L2-normalized eigenvector component (range 0–1).
+
+        Example:
+            >>> scores = engine.eigenvector_centrality(max_iter=30, top_k=20)
+            >>> print(scores[0])  # {"id": "influential-node", "score": 0.894}
+
+        Note:
+            Convergence requires the largest eigenvalue to be unique (no symmetry).
+            Falls back to Python LazyKG if ObjectScript or Rust path unavailable.
+        """
+        from iris_vector_graph._validate import EigenvectorInput
+        validated = EigenvectorInput(
+            max_iter=max_iter,
+            tol=tol,
+            top_k=top_k,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("eigenvector", False):
+            raise NotImplementedError(
+                f"Centrality.eigenvector not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"eigenvector_centrality(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_eigenvector(
+            validated.max_iter,
+            validated.tol,
+            validated.top_k,
+            progress_callback,
+        )
+        if result.error:
+            return []
+        return [{"id": row[0], "score": row[1]} for row in result.rows]
+
+    def get_centrality_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
+        try:
+            import iris as _iris
+            iris_inst = self._iris_obj()
+        except Exception as e:
+            logger.debug("get_centrality_warnings: createIRIS failed: %s", e)
+            return []
+
+        warnings_list: List[Dict[str, Any]] = []
+        try:
+            ts = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", "")
+            while ts is not None and ts != "":
+                src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, "")
+                while src is not None and src != "":
+                    reason = iris_inst.get("^IVG.warnings", "centrality", ts, src)
+                    warnings_list.append({
+                        "timestamp": str(ts),
+                        "source": str(src),
+                        "reason": str(reason) if reason is not None else "",
+                    })
+                    if len(warnings_list) >= max_entries:
+                        return warnings_list
+                    src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, src)
+                ts = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts)
+        except Exception as e:
+            logger.debug("get_centrality_warnings: ^IVG.warnings traversal failed: %s", e)
+        return warnings_list
+
+    def leiden_communities(
+        self,
+        max_levels: int = 10,
+        gamma: float = 1.0,
+        tol: float = 1e-4,
+        top_k: int = 10000,
+        mem_budget_mb: int = 256,
+        random_seed: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Leiden community detection (Traag et al. 2019).
+
+        Partitions the graph into densely-connected communities using the Leiden
+        algorithm, which fixes the "badly connected community" problem in Louvain.
+        Supports modularity (gamma=1.0) and CPM (resolution parameter) quality functions.
+
+        Args:
+            max_levels: Maximum number of aggregation levels (default 10).
+            gamma: Resolution parameter. 1.0 = ModularityVertexPartition (default,
+                canonical Leiden). Values < 1.0 produce fewer, larger communities;
+                values > 1.0 produce more, smaller communities.
+            tol: Convergence tolerance (default 1e-4).
+            top_k: Maximum results to return. 0 = all nodes.
+            mem_budget_mb: Memory budget in MB for community tracking.
+            random_seed: Seed for reproducibility. None = stochastic.
+            progress_callback: Optional callable(completed, total).
+
+        Returns:
+            List of dicts sorted by community ascending, each containing:
+                - id (str): Node identifier.
+                - community (int): Community index (0 = largest, 1 = second-largest, ...).
+                - size (int): Number of nodes in this community.
+
+        Example:
+            >>> communities = engine.leiden_communities(gamma=1.0, top_k=100)
+            >>> print(communities[0])  # {"id": "node-a", "community": 0, "size": 23}
+
+        Note:
+            Uses Rust accelerator (leiden-rs) when libarno_callout.so is deployed.
+            Falls back to Python leidenalg or networkx Louvain. Quality matches 
+            leidenalg reference (ARI=1.0 on karate club).
+        """
+        from iris_vector_graph._validate import LeidenInput
+        validated = LeidenInput(
+            max_levels=max_levels, gamma=gamma, tol=tol, top_k=top_k,
+            mem_budget_mb=mem_budget_mb, random_seed=random_seed,
+        )
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("leiden", False):
+            raise NotImplementedError(
+                f"Communities.leiden not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        if validated.top_k == 0:
+            try:
+                count_result = self._store.get_node_count()
+                node_count = int(count_result.rows[0][0]) if count_result.rows else 0
+                if node_count > 100_000:
+                    import warnings
+                    warnings.warn(
+                        f"leiden_communities(top_k=0) on {node_count}-node graph may produce large JSON",
+                        RuntimeWarning, stacklevel=2,
+                    )
+            except Exception:
+                pass
+
+        result = self._store.execute_leiden(
+            validated.max_levels, validated.gamma, validated.tol,
+            validated.top_k, validated.mem_budget_mb,
+            validated.random_seed, progress_callback,
+        )
+        if result.error:
+            return []
+
+        out: List[Dict[str, Any]] = []
+        for row in result.rows:
+            if len(row) >= 1 and row[0] == "_meta":
+                import json as _json
+                meta = _json.loads(row[1]) if isinstance(row[1], str) else row[1]
+                out.append(meta if isinstance(meta, dict) else {"_meta": row[1]})
+            else:
+                out.append({"id": row[0], "community": row[1], "size": row[2]})
+        return out
+
+    def triangle_count(
+        self,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Triangle count and local clustering coefficient.
+
+        Counts triangles incident to each node and computes the local clustering 
+        coefficient (LCC) — fraction of a node's neighbors that are also connected 
+        to each other. High LCC indicates tightly-knit local neighborhoods.
+
+        Args:
+            top_k: Maximum results to return (default 10000). 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by triangle count descending, each containing:
+                - id (str): Node identifier.
+                - triangles (int): Number of triangles involving this node.
+                - lcc (float): Local clustering coefficient (0–1).
+
+        Example:
+            >>> results = engine.triangle_count(top_k=50)
+            >>> print(results[0])  # {"id": "hub-node", "triangles": 45, "lcc": 0.73}
+
+        Note:
+            Uses symmetrized adjacency (treats graph as undirected for deduplication).
+            LCC = 2 * triangles / (k * (k-1)) where k is node degree.
+        """
+        from iris_vector_graph._validate import TriangleCountInput
+        validated = TriangleCountInput(top_k=top_k)
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("triangle_count", False):
+            raise NotImplementedError(
+                f"Communities.triangle_count not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        result = self._store.execute_triangle_count(validated.top_k, progress_callback)
+        if result.error:
+            return []
+        return [{"id": row[0], "triangles": row[1], "lcc": row[2]} for row in result.rows]
+
+    def strongly_connected_components(
+        self,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Strongly connected components (Tarjan 1972, iterative).
+
+        Partitions directed graph into SCCs — maximal sets of nodes where every node 
+        is reachable from every other node. Detects feedback loops and cycles in workflows.
+
+        Args:
+            top_k: Maximum results to return (default 10000). 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by component ascending, each containing:
+                - id (str): Node identifier.
+                - component (int): Component index (0 = first SCC, etc.).
+                - size (int): Number of nodes in this SCC.
+
+        Example:
+            >>> sccs = engine.strongly_connected_components(top_k=100)
+            >>> print(sccs[0])  # {"id": "node-a", "component": 0, "size": 8}
+
+        Note:
+            Iterative Tarjan (1972) with explicit DFS stack to avoid Python recursion limits.
+            Matches `networkx.strongly_connected_components` exactly.
+        """
+        from iris_vector_graph._validate import SCCInput
+        validated = SCCInput(top_k=top_k)
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("scc", False):
+            raise NotImplementedError(
+                f"Communities.scc not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        result = self._store.execute_scc(validated.top_k, progress_callback)
+        if result.error:
+            return []
+        return [{"id": row[0], "component": row[1], "size": row[2]} for row in result.rows]
+
+    def k_core(
+        self,
+        top_k: int = 10000,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> List[Dict[str, Any]]:
+        """K-core decomposition (Batagelj-Zaversnik 2003, O(V+E)).
+
+        Recursively removes nodes with degree < k, iteratively increasing k. The k-core 
+        is the maximal subgraph where all nodes have degree ≥ k. High coreness nodes form 
+        the network's structural core; low coreness nodes are peripheral.
+
+        Args:
+            top_k: Maximum results to return (default 10000). 0 = all nodes.
+            progress_callback: Optional callable(completed, total) for progress reporting.
+
+        Returns:
+            List of dicts sorted by coreness descending, each containing:
+                - id (str): Node identifier.
+                - coreness (int): K-core index (higher = more central/core).
+
+        Example:
+            >>> cores = engine.k_core(top_k=100)
+            >>> print(cores[0])  # {"id": "core-hub", "coreness": 5}
+
+        Note:
+            Uses bucket-sort O(V+E) algorithm (Batagelj-Zaversnik 2003) over symmetrized 
+            adjacency. Matches `networkx.core_number` per-node values exactly.
+        """
+        from iris_vector_graph._validate import KCoreInput
+        validated = KCoreInput(top_k=top_k)
+
+        if not getattr(self, "_store", None) or not self._store.capabilities().get("k_core", False):
+            raise NotImplementedError(
+                f"Communities.k_core not supported by store "
+                f"{type(self._store).__name__ if getattr(self, '_store', None) else 'None'}"
+            )
+
+        result = self._store.execute_k_core(validated.top_k, progress_callback)
+        if result.error:
+            return []
+        return [{"id": row[0], "coreness": row[1]} for row in result.rows]
+
+    def get_community_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
+        try:
+            import iris as _iris
+            iris_inst = self._iris_obj()
+        except Exception:
+            return []
+        warnings_list: List[Dict[str, Any]] = []
+        try:
+            ts = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", "")
+            while ts is not None and ts != "":
+                src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, "")
+                while src is not None and src != "":
+                    reason = iris_inst.get("^IVG.warnings", "communities", ts, src)
+                    warnings_list.append({
+                        "timestamp": str(ts),
+                        "source": str(src),
+                        "reason": str(reason) if reason is not None else "",
+                    })
+                    if len(warnings_list) >= max_entries:
+                        return warnings_list
+                    src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, src)
+                ts = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts)
+        except Exception as e:
+            logger.debug("get_community_warnings: ^IVG.warnings traversal failed: %s", e)
+        return warnings_list

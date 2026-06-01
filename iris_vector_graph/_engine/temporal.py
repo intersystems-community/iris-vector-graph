@@ -74,6 +74,15 @@ class TemporalMixin:
             from iris_vector_graph.cypher.translator import _table
             cursor = self.conn.cursor()
             for e in normalized:
+                for nid in (e["source"], e["target"]):
+                    try:
+                        cursor.execute(
+                            f"INSERT INTO {_table('nodes')} (node_id) SELECT ? "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id=?)",
+                            [nid, nid],
+                        )
+                    except Exception:
+                        pass
                 try:
                     cursor.execute(
                         f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
