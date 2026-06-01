@@ -33,6 +33,12 @@ case "$cmd" in
     fi
     echo "Starting $CONTAINER (edition=$EDITION) via iris-devtester..."
     idt container up --name "$CONTAINER" --edition "$EDITION"
+    echo "Waiting for IRIS to be ready..."
+    sleep 15
+    "$0" deploy
+    echo "Recompiling Graph.KG.* after container start..."
+    "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
+    echo "✓ $CONTAINER ready"
     ;;
 
   down)
