@@ -75,8 +75,7 @@ class TestVarLengthE2E:
             self.engine.create_node(nid)
         for i in range(4):
             self.engine.create_edge(nodes[i], "NEXT", nodes[i+1])
-        self.engine.rebuild_kg()
-        self.engine.rebuild_nkg()
+        assert self.engine.sync() is True, "sync() failed — ^KG/^NKG index not built; BFS will return empty"
         self.nodes = nodes
         yield
         p = f"{self.PREFIX}%"
