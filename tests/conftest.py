@@ -92,11 +92,38 @@ def iris_connection(iris_test_container):
         )
         logger.info("Connected to %s via container IP %s (avoids SSH tunnel conflicts)", container_name, cip)
     else:
+        # No Docker IP (e.g. OrbStack env). Use iris_devtester's connection but
+        # verify we're NOT on los-iris (the SSH tunnel on localhost:1972).
+        # Check for a known los-iris class as a canary.
         try:
-            conn = iris_test_container.get_connection()
-        except Exception as e:
-            logger.error("Could not connect to %s: %s", container_name, e)
+            import iris.dbapi as _dbapi
+            _probe = _dbapi.connect(
+                hostname="localhost", port=1972, namespace="USER",
+                username="_SYSTEM", password="SYS",
+            )
+            _c = _probe.cursor()
+            _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
+            _los_count = _c.fetchone()[0]
+            _probe.close()
+            if _los_count > 0:
+                raise RuntimeError(
+                    "localhost:1972 is los-iris (SSH tunnel), NOT ivg-iris. "
+                    "Stop the SSH tunnel or configure ivg-iris on a different host port."
+                )
+            import iris.dbapi as _dbapi2
+            conn = _dbapi2.connect(
+                hostname="localhost", port=1972, namespace="USER",
+                username="_SYSTEM", password="SYS",
+            )
+            logger.info("Connected to %s via localhost:1972", container_name)
+        except RuntimeError:
             raise
+        except Exception as e:
+            try:
+                conn = iris_test_container.get_connection()
+            except Exception as e2:
+                logger.error("Could not connect to %s: %s / %s", container_name, e, e2)
+                raise
 
     from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import GraphSchema
