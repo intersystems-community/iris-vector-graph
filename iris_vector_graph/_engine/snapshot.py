@@ -397,7 +397,7 @@ class SnapshotMixin:
 
         if "globals" in layers:
             GLOBALS_EXPORT = [
-                ("KG", [["out"], ["in"]]),
+                ("KG", [["out", 0], ["in", 0]]),
                 ("BM25Idx", [[]]),
                 ("IVF", [[]]),
                 ("PLAID", [[]]),
