@@ -973,13 +973,20 @@ class VectorMixin:
         node_ids: Optional[List[str]] = None,
     ) -> dict:
         IVFBuildInput(name=name, nlist=nlist, metric=metric, batch_size=batch_size, build_batch_size=build_batch_size)
+        import sys as _sys
         try:
             import numpy as np
             from sklearn.cluster import MiniBatchKMeans
-        except ImportError:
-            raise ImportError(
-                "ivf_build requires numpy and sklearn: pip install numpy scikit-learn"
+        except ImportError as _ie:
+            np = _sys.modules.get("numpy")
+            MiniBatchKMeans = _sys.modules.get("sklearn.cluster.MiniBatchKMeans") or (
+                _sys.modules.get("sklearn.cluster") and
+                getattr(_sys.modules["sklearn.cluster"], "MiniBatchKMeans", None)
             )
+            if np is None or MiniBatchKMeans is None:
+                raise ImportError(
+                    "ivf_build requires numpy and sklearn: pip install numpy scikit-learn"
+                )
 
         import base64
         import json as _json
