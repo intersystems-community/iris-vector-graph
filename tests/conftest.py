@@ -50,9 +50,10 @@ def _deploy_objectscript(container_name: str) -> None:
         ]:
             subprocess.run(
                 ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
-                input=f'Do $system.OBJ.Compile("{_cls}","cuk")\nH\n',
+                input=f'Do $system.OBJ.Compile("{_cls}","cdk")\nH\n',
                 capture_output=True, text=True, timeout=30,
             )
+        _conn.close()
     except Exception:
         pass
 

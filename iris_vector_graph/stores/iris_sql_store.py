@@ -615,7 +615,7 @@ class IRISGraphStore:
         import json as _json
         attrs_json = _json.dumps(attrs) if attrs else ""
         try:
-            self._iris_obj().classMethodVoid(
+            self._call_classmethod(
                 "Graph.KG.TemporalIndex", "InsertEdge",
                 source_id, predicate, target_id,
                 str(timestamp), str(weight), attrs_json, str(int(upsert)),
