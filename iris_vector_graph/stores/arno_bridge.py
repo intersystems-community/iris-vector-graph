@@ -25,8 +25,11 @@ Environment overrides:
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_LIB_PATH = "/usr/irissys/mgr/libarno_callout.so"
