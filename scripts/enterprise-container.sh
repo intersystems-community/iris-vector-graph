@@ -57,11 +57,14 @@ print('✓ schema initialized')
 " 2>&1 | grep -E 'schema initialized|ERROR|CRITICAL' | grep -v 'Embedding dimension'
     echo "Deploying and compiling ObjectScript..."
     "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
+    docker exec -i "$CONTAINER" iris session IRIS -U USER <<'OSEOF' > /dev/null 2>&1 || true
+Do $system.OBJ.Delete("Graph.KG.funckgDegreeCentrality","-d")
+Do $system.OBJ.Load("/tmp/src/Graph/KG/Centrality.cls","ck")
+H
+OSEOF
     for _cls in Graph.KG.ArnoAccel Graph.KG.TraversalBuild Graph.KG.TraversalBFS Graph.KG.TraversalPaths Graph.KG.TraversalKHop Graph.KG.Traversal Graph.KG.NKGAccelLoader Graph.KG.NKGAccelAdjacency Graph.KG.NKGAccelTraversal Graph.KG.NKGAccelCentrality Graph.KG.NKGAccel; do
       "$0" compile "$_cls" > /dev/null 2>&1 || true
     done
-    echo "Copying libarno_callout.so into container..."
-    docker cp "$REPO_ROOT/docker/enterprise/libarno_callout.so" "$CONTAINER:/tmp/libarno_callout.so"
     echo "Loading libarno_callout.so..."
     python3 -c "
 import subprocess, iris, json
