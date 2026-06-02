@@ -155,9 +155,7 @@ class TestBFSArnoE2E:
         self.engine.create_edge(s, p, o)
 
     def _rebuild_indexes(self):
-        # Use engine API only — no direct ObjectScript calls
-        self.engine.rebuild_kg()
-        self.engine.rebuild_nkg()
+        self.engine.sync()
 
     def test_bfs_arno_correctness(self):
         a = self._node("A")
