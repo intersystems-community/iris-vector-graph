@@ -118,24 +118,17 @@ class TestBFSArnoUnit:
 class TestBFSArnoE2E:
 
     @pytest.fixture(autouse=True)
-    def setup(self, iris_connection):
+    def setup(self, arno_iris_connection):
         from iris_vector_graph.engine import IRISGraphEngine
-        self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.conn = arno_iris_connection
+        self.engine = IRISGraphEngine(arno_iris_connection, embedding_dimension=4)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
-        # Check Arno is actually available — fail explicitly if not, do not silently skip
         self.engine._detect_arno()
         if not self.engine._arno_capabilities.get("rust_callout"):
-            # FLAG: If Community Edition ships rzf/$ZF callout support in the future,
-            # this check needs updating — currently Community does NOT support rzf
-            # despite having VECTOR_COSINE. Monitor ISC release notes for rzf availability
-            # on Community and update the test infrastructure accordingly.
             pytest.fail(
-                "Arno rust_callout not available — deploy libarno_callout.so to /tmp/ "
-                "on the test container and ensure ArnoAccel.Load() succeeds. "
-                "If on Community Edition: rzf/ callout is not currently available on Community. "
-                "This is a real infrastructure failure, not an expected skip."
+                "Arno rust_callout not available on ivg-iris-enterprise. "
+                "Deploy libarno_callout.so: scripts/enterprise-container.sh up"
             )
         yield
         cursor = self.conn.cursor()

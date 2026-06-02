@@ -156,6 +156,60 @@ def iris_connection(iris_test_container):
     conn.close()
 
 
+_ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
+_ARNO_PORT = int(os.environ.get("IVG_ARNO_PORT", "31972"))
+
+
+@pytest.fixture(scope="session")
+def arno_iris_connection():
+    import subprocess as _sp
+
+    ps = _sp.run(
+        ["docker", "ps", "--filter", f"name={_ARNO_CONTAINER}", "--format", "{{.Names}}"],
+        capture_output=True, text=True,
+    )
+    if _ARNO_CONTAINER not in ps.stdout:
+        pytest.skip(
+            f"{_ARNO_CONTAINER} not running. "
+            f"Start with: scripts/enterprise-container.sh up"
+        )
+
+    cip = _sp.run(
+        ["docker", "inspect", _ARNO_CONTAINER,
+         "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    if cip:
+        import iris.dbapi as _dbapi
+        conn = _dbapi.connect(
+            hostname=cip, port=1972, namespace="USER",
+            username="_SYSTEM", password="SYS",
+        )
+    else:
+        from iris_devtester import IRISContainer as _IRC
+        _fresh = _IRC.attach(_ARNO_CONTAINER)
+        _fresh._connection = None
+        conn = _fresh.get_connection()
+
+    _c = conn.cursor()
+    _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
+    if _c.fetchone()[0] > 0:
+        raise RuntimeError(
+            f"{_ARNO_CONTAINER} appears to be los-iris. "
+            "Wrong container — check port and container name."
+        )
+
+    from iris_vector_graph.engine import IRISGraphEngine
+    try:
+        IRISGraphEngine(conn, embedding_dimension=128).initialize_schema()
+    except Exception as e:
+        logger.warning("arno container schema init: %s", e)
+
+    yield conn
+    conn.close()
+
+
 @pytest.fixture(scope="function")
 def iris_master_cleanup(iris_connection):
     cursor = iris_connection.cursor()
@@ -236,9 +290,10 @@ def pytest_collect_file(parent, file_path):
                     )
             for match in ATTACH_PATTERN.finditer(content):
                 name = match.group(1)
-                if name != _GQS_CONTAINER:
+                if name not in (_GQS_CONTAINER, _ARNO_CONTAINER):
                     raise pytest.PytestCollectionWarning(
-                        f"Wrong container IRISContainer.attach('{name}') in {file_path}. Use '{_GQS_CONTAINER}'."
+                        f"Wrong container IRISContainer.attach('{name}') in {file_path}. "
+                        f"Use '{_GQS_CONTAINER}' (Community) or '{_ARNO_CONTAINER}' (Enterprise/Arno)."
                     )
         except (OSError, UnicodeDecodeError):
             pass
