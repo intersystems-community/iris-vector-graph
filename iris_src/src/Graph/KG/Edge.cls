@@ -21,6 +21,9 @@ Property oId As %String(MAXLEN = 256) [ Required, SqlColumnNumber = 4, SqlFieldN
 /// Optional qualifiers (JSON or other metadata)
 Property qualifiers As %String(MAXLEN = "") [ SqlColumnNumber = 5 ];
 
+/// Named graph identifier for USE GRAPH filtering
+Property graphId As %String(COLLATION = "EXACT", MAXLEN = 500) [ SqlColumnNumber = 6, SqlFieldName = graph_id ];
+
 /// Functional index that populates ^KG graph global
 Index GraphIdx On (s, p, oId, qualifiers) As Graph.KG.GraphIndex;
 
