@@ -199,6 +199,10 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
 {
 	Quit ##class(Graph.KG.NKGAccelCentrality).ClosenessGlobal(formula, direction, maxHops, topK)
 }
+ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
+{
+	Quit ##class(Graph.KG.NKGAccelCentrality).ClosenessGlobalMSBFS(formula, direction, maxHops, topK)
+}
 ClassMethod EigenvectorGlobal(maxIter As %Integer = 30, tol As %Float = 0.0001, topK As %Integer = 10000) As %String
 {
 	Quit ##class(Graph.KG.NKGAccelCentrality).EigenvectorGlobal(maxIter, tol, topK)
