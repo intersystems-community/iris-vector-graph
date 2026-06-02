@@ -161,11 +161,4 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
     Return result.%ToJSON()
 }
 
-/// SQL stored procedure wrapper for DegreeCentralityJson.
-/// Used by the Cypher translator's ivg.degreeCentrality CTE.
-ClassMethod kgDegreeCentrality(direction As %String, predicate As %String, topK As %Integer) As %String [ SqlName = kg_DegreeCentrality, SqlProc ]
-{
-    Return ..DegreeCentralityJson(direction, predicate, topK)
-}
-
 }
