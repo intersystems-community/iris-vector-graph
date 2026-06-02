@@ -26,6 +26,15 @@
 **Port**: 1972 (mapped via iris-devtester; do NOT hardcode in test code)
 **Registry**: `~/ws/productivity-framework/tools/lab_manager/config/iris-container-registry.yaml` — entry `iris-vector-graph` → `container: ivg-iris`, `status: active`
 
+## Enterprise Test Container (Arno/rzf)
+
+**Container name**: `ivg-iris-enterprise`  
+**Lifecycle**: persistent — managed by `scripts/enterprise-container.sh`  
+**Port**: 31972 host → 1972 container  
+**Registry entry**: `iris-vector-graph-enterprise` → `container: ivg-iris-enterprise`, `status: active`  
+**Purpose**: Enterprise IRIS with `libarno_callout.so` loaded — enables Arno Rust BFS/PPR acceleration. Required for `TestBFSArnoE2E` (5 tests in `tests/unit/test_bfs_arno.py`).  
+**Fixture**: `arno_iris_connection` in `tests/conftest.py` — auto-skips when container not running. Tests using this fixture NEVER hard-fail on Community-only machines.
+
 ### Container ops — use the script, not raw docker
 
 ```bash

@@ -47,11 +47,16 @@ Any feature that includes IRIS as a backend component MUST include comprehensive
 (e2e) tests that run against a live IRIS container. The following rules are non-negotiable:
 
 - The IRIS container MUST be named and dedicated to this project (not shared or anonymous).
-  The container name for this project is `iris_vector_graph` (defined in `docker-compose.yml`).
-  NEVER use a container name from another project.
-- Container lifecycle (start, stop, port resolution, credentials) MUST be managed exclusively
-  by `iris-devtester` (`IRISContainer.attach("iris_vector_graph")` pattern). IRIS ports MUST
-  NOT be hardcoded in test code or fixtures.
+  This project uses two containers:
+  - `ivg-iris` (Community Edition) — primary test container, port 21972.
+  - `ivg-iris-enterprise` (Enterprise + Arno callout) — Arno/rzf acceleration tests, port 31972.
+  NEVER use a container name from another project (e.g. `los-iris`, `posos-iris`).
+- Container lifecycle MUST be managed exclusively via `scripts/test-container.sh` (Community)
+  or `scripts/enterprise-container.sh` (Enterprise). IRIS ports MUST NOT be hardcoded in
+  test code — use `IVG_PORT` / `IVG_ARNO_PORT` env vars with the registry defaults.
+- Enterprise Arno callout tests MUST use the `arno_iris_connection` fixture, which auto-skips
+  when `ivg-iris-enterprise` is not running. NEVER use `iris_connection` (Community) for tests
+  requiring `libarno_callout.so`.
 - The environment variable `SKIP_IRIS_TESTS` MUST default to `"false"`. Tests always hit the
   live database unless explicitly overridden by the developer.
 - Changes that affect database behavior or SQL translation MUST additionally include
