@@ -69,7 +69,10 @@ class TemporalMixin:
             for e in edges
         ]
         result = self._store.bulk_write_temporal_edges(normalized, upsert=upsert)
-        count = result.rows[0][0] if result.rows else 0
+        try:
+            count = int(result.rows[0][0]) if result.rows else 0
+        except (TypeError, ValueError, IndexError):
+            count = 0
         if count > 0 and graph is not None:
             from iris_vector_graph.cypher.translator import _table
             cursor = self.conn.cursor()

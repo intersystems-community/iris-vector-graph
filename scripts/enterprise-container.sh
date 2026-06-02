@@ -57,12 +57,14 @@ print('✓ schema initialized')
 " 2>&1 | grep -E 'schema initialized|ERROR|CRITICAL' | grep -v 'Embedding dimension'
     echo "Deploying and compiling ObjectScript..."
     "$0" compile-all 2>&1 | grep -v '^$' | grep -iE 'ERROR|Finish' | grep -v '%AI\|Graph.KG.Meta\|User.PageRankEmbed\|TestEdge' | head -5 || true
-    for _cls in Graph.KG.TraversalBuild Graph.KG.TraversalBFS Graph.KG.TraversalPaths Graph.KG.TraversalKHop Graph.KG.Traversal Graph.KG.NKGAccelLoader Graph.KG.NKGAccelAdjacency Graph.KG.NKGAccelTraversal Graph.KG.NKGAccelCentrality Graph.KG.NKGAccel; do
+    for _cls in Graph.KG.ArnoAccel Graph.KG.TraversalBuild Graph.KG.TraversalBFS Graph.KG.TraversalPaths Graph.KG.TraversalKHop Graph.KG.Traversal Graph.KG.NKGAccelLoader Graph.KG.NKGAccelAdjacency Graph.KG.NKGAccelTraversal Graph.KG.NKGAccelCentrality Graph.KG.NKGAccel; do
       "$0" compile "$_cls" > /dev/null 2>&1 || true
     done
+    echo "Copying libarno_callout.so into container..."
+    docker cp "$REPO_ROOT/docker/enterprise/libarno_callout.so" "$CONTAINER:/tmp/libarno_callout.so"
     echo "Loading libarno_callout.so..."
     python3 -c "
-import subprocess, iris
+import subprocess, iris, json
 ip = subprocess.run(['docker','inspect','$CONTAINER','--format',
     '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'],
     capture_output=True, text=True).stdout.strip()
@@ -72,9 +74,16 @@ else:
     from iris_devtester import IRISContainer as C
     c = C.attach('$CONTAINER'); c._connection = None; conn = c.get_connection()
 irisobj = iris.createIRIS(conn)
-result = irisobj.classMethodValue('Graph.KG.NKGAccelLoader', 'Load', '/tmp/libarno_callout.so')
-if result:
-    print('✓ libarno_callout.so loaded (rust_callout available)')
+# Load via ArnoAccel (rzf-style, sets rust_callout capability)
+r1 = irisobj.classMethodValue('Graph.KG.ArnoAccel', 'Load', '/tmp/libarno_callout.so')
+# Also load via NKGAccelLoader for legacy compat
+irisobj.classMethodValue('Graph.KG.NKGAccelLoader', 'Load', '/tmp/libarno_callout.so')
+# Verify rust_callout is now True
+caps = json.loads(str(irisobj.classMethodValue('Graph.KG.NKGAccel', 'Capabilities')))
+if caps.get('rust_callout'):
+    print('✓ libarno_callout.so loaded (rust_callout=True, bfs=True)')
+elif r1:
+    print('⚠ libarno_callout.so loaded but rust_callout=False (capabilities:', caps.get('rust_callout'), ')')
 else:
     print('✗ libarno_callout.so load FAILED — check /tmp/libarno_callout.so exists in container')
     exit(1)
@@ -92,7 +101,7 @@ else:
     if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
       echo "$CONTAINER	$(docker ps --filter "name=$CONTAINER" --format '{{.Status}}')"
       python3 -c "
-import subprocess, iris
+import subprocess, iris, json
 ip = subprocess.run(['docker','inspect','$CONTAINER','--format',
     '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'],
     capture_output=True, text=True).stdout.strip()
@@ -103,8 +112,11 @@ try:
         from iris_devtester import IRISContainer as C
         c = C.attach('$CONTAINER'); c._connection = None; conn = c.get_connection()
     irisobj = iris.createIRIS(conn)
+    # Load arno to get accurate rust_callout status
+    try: irisobj.classMethodValue('Graph.KG.ArnoAccel', 'Load', '/tmp/libarno_callout.so')
+    except: pass
     caps = irisobj.classMethodValue('Graph.KG.NKGAccel','Capabilities')
-    import json; d = json.loads(str(caps))
+    d = json.loads(str(caps))
     print('  arno rust_callout:', d.get('rust_callout', False))
     print('  arno bfs:', d.get('bfs', False))
 except Exception as e:
