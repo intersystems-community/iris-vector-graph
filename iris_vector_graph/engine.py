@@ -1559,69 +1559,44 @@ class IRISGraphEngine:
             )
 
         predicates = vl.get("types", [])
-        return self._store.execute_shortest_path(
+        result = self._store.execute_shortest_path(
             source_id, target_id, predicates, max_hops, direction, bool(find_all)
         )
 
-        if not paths:
-            return IVGResult(                columns= ["p"],
-                rows= [],
-                sql= "",
-                params= [],
-                metadata= sql_query.query_metadata
-            )
-
         return_funcs = vl.get("return_path_funcs", [])
-        rows = []
-        for path in paths:
-            row = []
-            if not return_funcs or "path" in return_funcs:
-                row.append(
-                    _json.dumps(
-                        {
-                            "nodes": path.get("nodes", []),
-                            "rels": path.get("rels", []),
-                            "length": path.get("length", 0),
-                        }
-                    )
-                )
-            if "length" in return_funcs:
-                row.append(path.get("length", 0))
-            if "nodes" in return_funcs:
-                row.append(path.get("nodes", []))
-            if "relationships" in return_funcs:
-                row.append(path.get("rels", []))
-            if not row:
-                row.append(
-                    _json.dumps(
-                        {
-                            "nodes": path.get("nodes", []),
-                            "rels": path.get("rels", []),
-                            "length": path.get("length", 0),
-                        }
-                    )
-                )
-            rows.append(row)
-
-        columns = []
         if not return_funcs or "path" in return_funcs:
-            columns.append("p")
-        if "length" in return_funcs:
-            columns.append("length")
-        if "nodes" in return_funcs:
-            columns.append("nodes")
-        if "relationships" in return_funcs:
-            columns.append("relationships")
-        if not columns:
-            columns = ["p"]
+            return result
 
-        return IVGResult(            columns= columns,
-            rows= rows,
-            sql= f"ShortestPathJson({source_id}, {target_id}, {max_hops})",
-            params= [],
-            metadata= sql_query.query_metadata
+        cols_out = []
+        rows_out = []
+        for row in result.rows:
+            path_json, length = row[0], row[1]
+            r = []
+            if "length" in return_funcs:
+                r.append(length)
+                cols_out = ["length"] if not cols_out else cols_out
+            if "nodes" in return_funcs:
+                import json as _jj
+                nodes = _jj.loads(path_json).get("nodes", []) if path_json else []
+                r.append(nodes)
+                if "nodes" not in cols_out:
+                    cols_out.append("nodes")
+            if "relationships" in return_funcs:
+                import json as _jj
+                rels = _jj.loads(path_json).get("rels", []) if path_json else []
+                r.append(rels)
+                if "relationships" not in cols_out:
+                    cols_out.append("relationships")
+            if r:
+                rows_out.append(r)
+
+        return IVGResult(
+            columns=cols_out or ["p"],
+            rows=rows_out,
+            sql=result.sql,
+            params=result.params,
+            metadata=sql_query.query_metadata,
         )
-
     def _execute_var_length_cypher(self, sql_query, parameters=None) -> Dict[str, Any]:
         import json as _json
         import warnings as _warnings
@@ -6597,7 +6572,21 @@ class IRISGraphEngine:
         direction: str = "out",
     ) -> list:
         result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
-        return result.rows if not result.error else []
+        if result.error:
+            return []
+        cols = result.columns
+        if cols and result.rows and isinstance(result.rows[0], (list, tuple)):
+            long_to_short = {"source": "s", "predicate": "p", "target": "o", "timestamp": "ts", "weight": "w"}
+            short_to_long = {v: k for k, v in long_to_short.items()}
+            out = []
+            for row in result.rows:
+                d = dict(zip(cols, row))
+                extras = {long_to_short[k]: v for k, v in d.items() if k in long_to_short}
+                extras.update({short_to_long[k]: v for k, v in d.items() if k in short_to_long})
+                d.update(extras)
+                out.append(d)
+            return out
+        return result.rows
     def purge_before(self, ts: int) -> None:
         self._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
