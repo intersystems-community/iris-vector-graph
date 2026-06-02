@@ -1,9 +1,9 @@
 # IVG Performance Benchmarks
 
-**Updated**: 2026-05-29  
+**Updated**: 2026-06-02  
 **Platform**: MacBook Pro M3 Ultra, 128GB RAM  
-**IRIS**: Community Edition 2026.1 (Docker container, localhost)  
-**Methodology**: 3-run average after cache warm, unless noted.
+**IRIS**: Community Edition 2026.1 + Enterprise 2026.2.0AI (Docker, localhost)  
+**Methodology**: 3–5-run average after cache warm, unless noted.
 
 ---
 
@@ -45,11 +45,16 @@ The neighborhood method's performance depends only on the extracted subgraph siz
 
 ### Community Detection
 
-| Algorithm | Fixture | IVG Rust | IVG OS | networkx |
-|-----------|---------|----------|--------|---------|
-| Leiden | karate (34n) | **<1ms** | — | ~2ms (Louvain) |
-| Leiden | ER(500, 2437e) | **6ms** | — | ~200ms |
-| Leiden | ER(2000, 9941e) | **60ms** | — | ~2s |
+Leiden runs via `leidenalg` (igraph backend) in IRIS embedded Python when
+available — canonical Leiden (Traag 2019). Without igraph+leidenalg it falls back
+to networkx Louvain, a **different, lower-quality** algorithm (karate ARI ≈ 0.62
+vs Leiden's ≈ 1.0).
+
+| Algorithm | Fixture | IVG (leidenalg, embedded) | Fallback | networkx |
+|-----------|---------|---------------------------|----------|---------|
+| Leiden | karate (34n) | **14ms** (4 communities, ARI≈1.0) | Louvain (ARI≈0.62) | ~2ms (Louvain) |
+| Leiden | ER(500, 2437e) | ~50ms | — | ~200ms |
+| Leiden | ER(2000, 9941e) | ~265ms | — | ~2s |
 | Triangle count | karate | **<1ms** | — | ~0.5ms |
 | SCC | karate | **<1ms** | — | ~0.5ms |
 | K-core | karate | **<1ms** | — | ~0.3ms |
@@ -58,10 +63,31 @@ The neighborhood method's performance depends only on the extracted subgraph siz
 
 ### Closeness & Eigenvector Centrality
 
-| Algorithm | Fixture | IVG Rust | IVG OS | networkx |
-|-----------|---------|----------|--------|---------|
-| Closeness (harmonic) | karate | **<1ms** | ~2ms | ~0.5ms |
-| Eigenvector | karate | **<1ms** | ~2ms | ~1ms |
+Closeness has two server-side tiers, selected automatically. Correctness is
+identical (Pearson r = 1.000000 vs `networkx.harmonic_centrality` in both tiers);
+only speed differs.
+
+| Tier | Requires | Implementation |
+|------|----------|----------------|
+| Fast | igraph in IRIS embedded Python | `Graph.KG.Communities.ClosenessJsonPy` — C-backed igraph closeness, in-process |
+| Fallback | nothing | `Graph.KG.NKGAccel.ClosenessGlobal` — pure-ObjectScript sequential all-pairs BFS over `^NKG` |
+
+**Closeness (harmonic), measured 2026-06-02 on `ivg-iris-enterprise` (IRIS 2026.2.0AI):**
+
+| Fixture | Fast (igraph) | Fallback (ObjectScript) | Speedup | Pearson vs networkx |
+|---------|---------------|-------------------------|---------|---------------------|
+| ER(500, 2437e)  | **19ms**  | 840ms     | 44×  | 1.000000 |
+| ER(2000, 9941e) | **119ms** | 22,131ms  | 186× | 1.000000 |
+
+The ObjectScript fallback is O(V·(V+E)) (one BFS per node). For deployments that
+cannot install igraph into embedded Python, spec 191 Path B replaces it with a
+Multi-Source BFS (MSBFS, 64-source bit-packed frontiers) to close most of this gap
+with no dependency.
+
+| Algorithm | Fixture | Fast | Fallback | networkx |
+|-----------|---------|------|----------|---------|
+| Closeness (harmonic) | karate (34n) | **<1ms** | ~2ms | ~0.5ms |
+| Eigenvector | karate (34n) | **<1ms** | ~2ms | ~1ms |
 
 ---
 
@@ -100,9 +126,16 @@ From the earlier v1.97.0 benchmark run (8.9K nodes, 31K edges, M3 Ultra, Communi
 
 ## Methodology Notes
 
-- All algorithm benchmarks run against `ivg-iris` (Community Edition container, localhost, no network overhead).
-- "arno" benchmarks require `accelerator_callout.so` to be deployed and `^NKG` to be built.
-- networkx comparisons run on the same Python process with the same input graph (networkx Graph/DiGraph).
+- All algorithm benchmarks run against `ivg-iris` (Community) or
+  `ivg-iris-enterprise` (Enterprise + arno) containers, localhost, no network overhead.
+- "arno" benchmarks require `libarno_callout.so` deployed and `^NKG` built. Note:
+  the currently-shipped `.so` registers only `kg_bfs_global`; betweenness, closeness,
+  Leiden, and NKG-build Rust functions are not in that build, so those run via their
+  ObjectScript / embedded-Python tiers regardless of arno being loaded (see spec 191 R8).
+- Closeness (fast tier) and Leiden run in IRIS **embedded Python** via igraph /
+  leidenalg — in-process, no data leaves the database. They fall back to ObjectScript /
+  networkx when those packages are absent.
+- networkx comparisons run on the same Python process with the same input graph.
 - Betweenness "sampled=200" uses the same 200-source budget for all engines.
 - Betweenness "exact" uses all N sources (full Brandes).
 - ER(n, p) = Erdős-Rényi random graph, seed=42.

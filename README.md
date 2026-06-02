@@ -862,7 +862,11 @@ exactly). Timings are wall-clock medians.
 - On read-side graph analytics — **degree and betweenness centrality, and Leiden
   community detection** — IVG is competitive with or faster than Neo4j GDS, while
   producing identical results to networkx.
-- **Closeness centrality** is within a small constant factor of GDS.
+- **Closeness centrality** runs in IRIS embedded Python (igraph): ~19ms on
+  ER(500) and ~119ms on ER(2000), bit-identical to networkx (Pearson r = 1.0),
+  within a small constant factor of GDS. Without igraph it falls back to a
+  pure-ObjectScript all-pairs BFS — correct but markedly slower at scale
+  (~22s on ER(2000)); spec 191 adds a dependency-free MSBFS path to close that gap.
 - IVG reaches this by running the heavy algorithms server-side: pure-ObjectScript
   over its integer adjacency index for traversal-style work, and IRIS *embedded
   Python* (igraph / leidenalg) for the algorithms where a mature parallel C
