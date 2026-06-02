@@ -44,7 +44,20 @@ scripts/test-container.sh deploy     # docker cp iris_src/src/ → container:/tm
 scripts/test-container.sh compile Graph.KG.Centrality   # compile one class
 scripts/test-container.sh compile-all                   # compile entire iris_src/src/ tree
 scripts/test-container.sh down       # remove container (rare; persists across sessions)
+scripts/install-embedded-deps.sh ivg-iris               # igraph+leidenalg into embedded Python
 ```
+
+**Embedded-Python deps (igraph + leidenalg)**: closeness centrality and canonical
+Leiden run in IRIS embedded Python via `igraph`/`leidenalg` when present (closeness
+~119ms vs ~22s ObjectScript fallback on ER-2000; Leiden canonical ARI~1.0 vs Louvain
+fallback ARI~0.62). `scripts/test-container.sh up` and `enterprise-container.sh up`
+run `install-embedded-deps.sh` automatically. The install lives in
+`/usr/irissys/mgr/python`, which is **NOT on a persistent volume** — it survives
+`docker stop/start` but is lost on container recreation (`down`+`up`), where `up`
+reinstalls it. If you attach to a container created before spec 191, run
+`scripts/install-embedded-deps.sh <container>` once. Without these packages everything
+still works via the ObjectScript/networkx fallbacks — just slower. NEVER `--upgrade`
+during install: it can replace `intersystems-irispython` and break the embedded runtime.
 
 **Why a wrapper script**: `IRISContainer.community().with_name(...).start()` from the
 `iris-devtester` Python API creates a container that vanishes when the Python process
