@@ -1138,16 +1138,17 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
+            import json as _json
             iris_obj = self._iris_obj()
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.NKGAccel", "ClosenessGlobal",
-                formula, direction, max_hops, top_k,
-            ))
-            if raw.startswith("OK:"):
-                import json as _json
-                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in _json.loads(raw[3:])]
-                return IVGResult(columns=["id", "score"], rows=rows)
+            for _method in ("ClosenessGlobalMSBFS", "ClosenessGlobal"):
+                raw = str(iris_obj.classMethodValue(
+                    "Graph.KG.NKGAccel", _method,
+                    formula, direction, max_hops, top_k,
+                ))
+                if raw.startswith("OK:"):
+                    rows = [[r.get("id", ""), float(r.get("score", 0.0))]
+                            for r in _json.loads(raw[3:])]
+                    return IVGResult(columns=["id", "score"], rows=rows)
         except Exception:
             pass
 
