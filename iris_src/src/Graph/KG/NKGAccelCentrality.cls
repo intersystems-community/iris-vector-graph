@@ -159,23 +159,26 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
 
-    If ##class(Graph.KG.NKGAccel).IsLoaded() {
-        Set dllid = $Get(^||NKGAccel("dllid"), 0)
-        If dllid '= 0 {
-            If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
-            Set fnidV = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
-            If fnidV > 0 {
-                Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
-                Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
-                If $Extract(raw, 1, 3) = "OK:" Quit raw
-            } Else {
-                Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
-                If fnid > 0 {
-                    Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
+    Try {
+        If ##class(Graph.KG.NKGAccel).IsLoaded() {
+            Set dllid = $Get(^||NKGAccel("dllid"), 0)
+            If dllid '= 0 {
+                If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
+                Set fnidV = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
+                If fnidV > 0 {
+                    Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
+                    Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
                     If $Extract(raw, 1, 3) = "OK:" Quit raw
+                } Else {
+                    Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
+                    If fnid > 0 {
+                        Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
+                        If $Extract(raw, 1, 3) = "OK:" Quit raw
+                    }
                 }
             }
         }
+    } Catch ex {
     }
 
     Quit ..BetweennessGlobalParallel(sampleSize, topK, maxSources)
@@ -412,32 +415,34 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
     If n = 0 Quit "ERROR:no valid nodes in neighborhood"
 
     // Try arno fast path — reuses BETWEENNESS_ADJ_CACHE, extracts subgraph in Rust
-    If ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
-        Set dllid = $Get(^||NKGAccel("dllid"), 0)
-        If dllid '= 0 {
-            If '$Data(^ArnoKG("KG","nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
-            Set fnidN = $ZF(-4, 3, dllid, "kg_betweenness_neighborhood_v")
-            If fnidN > 0 {
-                Set idxList = "", idx = ""
-                For {
-                    Set idx = $Order(^||nbhIdx(idx))
-                    Quit:idx=""
-                    Set:idxList'="" idxList = idxList_","
-                    Set idxList = idxList_idx
-                }
-                Set nkgVer = +$Get(^NKG("$meta","version"),-1)
-                // Ensure full adj is cached in Rust (warm if needed)
-                Set fnidG = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
-                If fnidG > 0 {
-                    Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
-                }
-                Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
-                If $Extract(raw,1,3) = "OK:" {
-                    Kill ^||nbhIdx, ^||nbhNodes
-                    Quit raw
+    Try {
+        If ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
+            Set dllid = $Get(^||NKGAccel("dllid"), 0)
+            If dllid '= 0 {
+                If '$Data(^ArnoKG("KG","nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
+                Set fnidN = $ZF(-4, 3, dllid, "kg_betweenness_neighborhood_v")
+                If fnidN > 0 {
+                    Set idxList = "", idx = ""
+                    For {
+                        Set idx = $Order(^||nbhIdx(idx))
+                        Quit:idx=""
+                        Set:idxList'="" idxList = idxList_","
+                        Set idxList = idxList_idx
+                    }
+                    Set nkgVer = +$Get(^NKG("$meta","version"),-1)
+                    Set fnidG = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
+                    If fnidG > 0 {
+                        Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
+                    }
+                    Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
+                    If $Extract(raw,1,3) = "OK:" {
+                        Kill ^||nbhIdx, ^||nbhNodes
+                        Quit raw
+                    }
                 }
             }
         }
+    } Catch ex {
     }
 
     // OS fallback: $BITLOGIC parallel Brandes on subgraph

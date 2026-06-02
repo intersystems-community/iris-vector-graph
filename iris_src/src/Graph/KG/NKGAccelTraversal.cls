@@ -570,7 +570,11 @@ ClassMethod Build2HopExact() As %Boolean
     If '##class(Graph.KG.NKGAccelLoader).IsLoaded() Return 0
     Set dllid = $Get(^||NKGAccel("dllid"), 0)
     If dllid = 0 Return 0
-    Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact_stream")
+    Try {
+        Set fid = $ZF(-4, 3, dllid, "kg_build_2hop_exact_stream")
+    } Catch ex {
+        Return 0
+    }
     If fid = 0 Return 0
     Kill ^ArnoKG("2hs")
     Set raw = $ZF(-5, dllid, fid)
