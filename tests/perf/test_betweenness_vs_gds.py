@@ -68,13 +68,19 @@ def _pearson(a: Dict[str, float], b: Dict[str, float]) -> float:
     return num / (sx * sy)
 
 
+_ARNO_SO = os.environ.get("IVG_ARNO_SO_PATH", "/tmp/libarno_callout.so")
+
+
 def _load_into_ivg(engine, nodes: List[str], edges: List[Tuple[str, str]]) -> None:
     import contextlib
     from iris_vector_graph.schema import _call_classmethod
     import iris as _iris
     iris_obj = _iris.createIRIS(engine.conn)
     iris_obj.classMethodVoid("Graph.KG.NKGAccel", "Unload")
-    iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
+    try:
+        iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", _ARNO_SO)
+    except Exception:
+        pass
     iris_obj.tStart()
     iris_obj.kill("^KG")
     iris_obj.kill("^NKG")
@@ -105,8 +111,11 @@ def _bench_ivg(
     _load_into_ivg(engine, nodes, edges)
     iris_obj = _iris.createIRIS(engine.conn)
     if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
-        iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", "/usr/irissys/mgr/libarno_callout.so")
-        iris_obj.classMethodVoid("Graph.KG.NKGAccel", "WarmAdjCache")
+        try:
+            iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", _ARNO_SO)
+            iris_obj.classMethodVoid("Graph.KG.NKGAccel", "WarmAdjCache")
+        except Exception:
+            pass
     times: List[float] = []
     last_scores: Dict[str, float] = {}
     for _ in range(n_runs):
