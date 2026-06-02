@@ -3856,7 +3856,11 @@ class IRISGraphEngine:
             g = ConjunctiveGraph()
         else:
             g = Graph()
-        g.parse(path, format=format)
+        import os as _os
+        if isinstance(path, str) and "\n" in path or (isinstance(path, str) and not _os.path.exists(path) and not path.startswith(("http://", "https://", "file://"))):
+            g.parse(data=path, format=format)
+        else:
+            g.parse(path, format=format)
 
         cursor = self.conn.cursor()
         nodes_inserted = 0
@@ -4290,7 +4294,7 @@ class IRISGraphEngine:
 
         if "globals" in layers:
             GLOBALS_EXPORT = [
-                ("KG", [["out"], ["in"]]),
+                ("KG", [["out", 0], ["in", 0]]),
                 ("BM25Idx", [[]]),
                 ("IVF", [[]]),
                 ("PLAID", [[]]),
@@ -4462,6 +4466,8 @@ class IRISGraphEngine:
                     continue
                 try:
                     row = _json.loads(line)
+                    if table_name == "Graph_KG.rdf_edges":
+                        row = {k: v for k, v in row.items() if k.lower() != "id"}
                     cols = list(row.keys())
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
@@ -6544,6 +6550,28 @@ class IRISGraphEngine:
             timestamp=int(timestamp) if timestamp is not None else 0,
             weight=weight, attrs=attrs, upsert=upsert,
         )
+        if result.error is None and graph is not None:
+            from iris_vector_graph.cypher.translator import _table
+            cursor = self.conn.cursor()
+            for nid in (source, target):
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {_table('nodes')} (node_id) SELECT ? "
+                        f"WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id=?)",
+                        [nid, nid],
+                    )
+                except Exception:
+                    pass
+            try:
+                cursor.execute(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
+                    f"SELECT ?, ?, ?, ? WHERE NOT EXISTS "
+                    f"(SELECT 1 FROM {_table('rdf_edges')} WHERE s=? AND p=? AND o_id=? AND graph_id=?)",
+                    [source, predicate, target, graph, source, predicate, target, graph],
+                )
+                self.conn.commit()
+            except Exception:
+                pass
         return result.error is None
 
     def bulk_create_edges_temporal(
@@ -6561,7 +6589,35 @@ class IRISGraphEngine:
             for e in edges
         ]
         result = self._store.bulk_write_temporal_edges(normalized, upsert=upsert)
-        return result.rows[0][0] if result.rows else 0
+        count = result.rows[0][0] if result.rows else 0
+        if count > 0 and graph is not None:
+            from iris_vector_graph.cypher.translator import _table
+            cursor = self.conn.cursor()
+            for e in normalized:
+                for nid in (e["source"], e["target"]):
+                    try:
+                        cursor.execute(
+                            f"INSERT INTO {_table('nodes')} (node_id) SELECT ? "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id=?)",
+                            [nid, nid],
+                        )
+                    except Exception:
+                        pass
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
+                        f"SELECT ?, ?, ?, ? WHERE NOT EXISTS "
+                        f"(SELECT 1 FROM {_table('rdf_edges')} WHERE s=? AND p=? AND o_id=? AND graph_id=?)",
+                        [e["source"], e["predicate"], e["target"], graph,
+                         e["source"], e["predicate"], e["target"], graph],
+                    )
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+        return count
 
     def get_edges_in_window(
         self,
