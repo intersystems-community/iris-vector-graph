@@ -843,6 +843,58 @@ For global structure, SQL schema, and ObjectScript class reference, see [docs/ar
 
 For graph algorithm benchmarks (betweenness, Leiden, centrality vs networkx, tier comparison), see **[docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md)**.
 
+### Comparative performance & scale
+
+IVG has been validated end-to-end on a real biomedical knowledge graph
+([DRKG](https://github.com/gnn4dr/DRKG): ~97K nodes / ~5.9M edges) and compared
+head-to-head against Neo4j Graph Data Science and networkx on shared fixtures.
+
+**Methodology** — same machine, same graphs (Zachary karate club, Erdős–Rényi
+random graphs, and DRKG), same Community-edition core budget for both engines.
+Each engine loads the identical edge set, then runs degree / betweenness /
+closeness centrality and Leiden community detection. Correctness is checked by
+correlating every IVG result against networkx as a reference (results match
+exactly). Timings are wall-clock medians.
+
+**Rough findings** (full numbers in
+[DRKG_SCALE.md](docs/performance/DRKG_SCALE.md)):
+
+- On read-side graph analytics — **degree and betweenness centrality, and Leiden
+  community detection** — IVG is competitive with or faster than Neo4j GDS, while
+  producing identical results to networkx.
+- **Closeness centrality** is within a small constant factor of GDS.
+- IVG reaches this by running the heavy algorithms server-side: pure-ObjectScript
+  over its integer adjacency index for traversal-style work, and IRIS *embedded
+  Python* (igraph / leidenalg) for the algorithms where a mature parallel C
+  library wins — in-process, with no data leaving the database.
+- At biomedical-KG scale, the full DRKG (5.9M edges) loads, indexes, and becomes
+  query-ready in single-digit minutes, with adjacency maintained incrementally
+  during ingest (no separate post-load build phase).
+
+These are indicative engineering benchmarks on a developer machine, not a
+formal audited comparison; numbers vary with hardware, graph shape, and tuning.
+
+### Running the benchmarks
+
+```bash
+# Algorithm parity vs networkx (no external services needed)
+pytest tests/e2e/test_centrality_e2e.py
+
+# Head-to-head IVG vs Neo4j GDS vs networkx (needs a Neo4j+GDS instance)
+IVG_HEADTOHEAD=1 \
+  NEO4J_URI=bolt://localhost:7687 NEO4J_USER=neo4j NEO4J_PASSWORD=<pw> \
+  pytest tests/perf/test_head_to_head.py -s
+# (the Neo4j leg is skipped automatically if no instance is reachable)
+
+# Biomedical-scale load (downloads DRKG ~217MB, loads into the IRIS container)
+python scripts/load_drkg.py --embeddings
+```
+
+JSON results are written under `benchmarks/`. See
+[DRKG_SCALE.md](docs/performance/DRKG_SCALE.md) for the full methodology, the
+per-metric numbers, and the IRIS tuning notes (global buffer pool, journaling,
+embedded-Python dispatch).
+
 ---
 
 ## Documentation
