@@ -36,26 +36,18 @@ def _deploy_objectscript(container_name: str) -> None:
         errors="replace",
         timeout=120,
     )
-    try:
-        from iris_devtester import IRISContainer as _IRC
-        _c = _IRC.attach(container_name); _c._connection = None
-        _conn = _c.get_connection()
-        from iris_vector_graph import IRISGraphEngine as _E
-        _E(_conn, embedding_dimension=128).initialize_schema()
-        for _cls in [
-            "Graph.KG.TraversalBuild", "Graph.KG.TraversalBFS",
-            "Graph.KG.TraversalPaths", "Graph.KG.TraversalKHop", "Graph.KG.Traversal",
-            "Graph.KG.NKGAccelLoader", "Graph.KG.NKGAccelAdjacency",
-            "Graph.KG.NKGAccelTraversal", "Graph.KG.NKGAccelCentrality", "Graph.KG.NKGAccel",
-        ]:
-            subprocess.run(
-                ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
-                input=f'Do $system.OBJ.Compile("{_cls}","cdk")\nH\n',
-                capture_output=True, text=True, timeout=30,
-            )
-        _conn.close()
-    except Exception:
-        pass
+    for _cls in [
+        "Graph.KG.ArnoAccel",
+        "Graph.KG.TraversalBuild", "Graph.KG.TraversalBFS",
+        "Graph.KG.TraversalPaths", "Graph.KG.TraversalKHop", "Graph.KG.Traversal",
+        "Graph.KG.NKGAccelLoader", "Graph.KG.NKGAccelAdjacency",
+        "Graph.KG.NKGAccelTraversal", "Graph.KG.NKGAccelCentrality", "Graph.KG.NKGAccel",
+    ]:
+        subprocess.run(
+            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
+            input=f'Do $system.OBJ.Compile("{_cls}","cdk")\nH\n',
+            capture_output=True, text=True, timeout=30,
+        )
 
 
 @pytest.fixture(scope="session")
@@ -148,7 +140,7 @@ def iris_connection(iris_test_container):
 
     try:
         eng = IRISGraphEngine(conn, embedding_dimension=128)
-        eng.initialize_schema(auto_deploy_objectscript=True)
+        eng.initialize_schema(auto_deploy_objectscript=False)
     except Exception as e:
         logger.warning("Schema init failed (may already exist): %s", e)
 
@@ -201,10 +193,16 @@ def arno_iris_connection():
         )
 
     from iris_vector_graph.engine import IRISGraphEngine
-    try:
-        IRISGraphEngine(conn, embedding_dimension=128).initialize_schema()
-    except Exception as e:
-        logger.warning("arno container schema init: %s", e)
+    # Skip schema init if enterprise container is already the primary test container
+    # (iris_connection fixture will have already deployed + initialized it). Running
+    # initialize_schema() concurrently from two connections causes SQLCODE -110
+    # (lock on Graph.KG.Edge class definition during CREATE INDEX).
+    _primary = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
+    if _primary != _ARNO_CONTAINER:
+        try:
+            IRISGraphEngine(conn, embedding_dimension=128).initialize_schema()
+        except Exception as e:
+            logger.warning("arno container schema init: %s", e)
 
     yield conn
     conn.close()

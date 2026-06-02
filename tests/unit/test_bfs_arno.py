@@ -119,10 +119,14 @@ class TestBFSArnoE2E:
 
     @pytest.fixture(autouse=True)
     def setup(self, arno_iris_connection):
+        import os
         from iris_vector_graph.engine import IRISGraphEngine
         self.conn = arno_iris_connection
         self.engine = IRISGraphEngine(arno_iris_connection, embedding_dimension=4)
-        self.engine.initialize_schema()
+        _primary = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
+        _arno = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
+        if _primary != _arno:
+            self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
         self.engine._detect_arno()
         if not self.engine._arno_capabilities.get("rust_callout"):
