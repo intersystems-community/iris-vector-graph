@@ -174,6 +174,15 @@ class TestIVFIndexE2E:
         import uuid
         from iris_vector_graph.engine import IRISGraphEngine
 
+        cursor = iris_connection.cursor()
+        for tbl in ("Graph_KG.nodes", "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props",
+                    "Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings"):
+            try:
+                cursor.execute(f"DELETE FROM {tbl}")
+            except Exception:
+                pass
+        iris_connection.commit()
+
         try:
             import iris as _iris
             _iris_obj = _iris.createIRIS(iris_connection)
@@ -181,15 +190,6 @@ class TestIVFIndexE2E:
             _iris_obj.kill("^NKG")
         except Exception:
             pass
-        iris_connection.commit()
-
-        cursor = iris_connection.cursor()
-        for tbl in ("Graph_KG.nodes", "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props",
-                    "Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings"):
-            try:
-                cursor.execute(f"TRUNCATE TABLE {tbl}")
-            except Exception:
-                pass
         iris_connection.commit()
 
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
