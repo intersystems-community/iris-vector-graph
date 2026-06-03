@@ -1094,10 +1094,6 @@ class IRISGraphStore:
 
     def execute_closeness(self, formula: str, direction: str, max_hops: int, top_k: int,
                            progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
-        if max_hops == 0:
-            srv = self._closeness_serverside(formula, top_k)
-            if srv is not None:
-                return srv
         try:
             return self._closeness_gref(formula, direction, max_hops, top_k, progress_callback)
         except Exception as e:
@@ -1138,16 +1134,17 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
+            import json as _json
             iris_obj = self._iris_obj()
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.NKGAccel", "ClosenessGlobal",
-                formula, direction, max_hops, top_k,
-            ))
-            if raw.startswith("OK:"):
-                import json as _json
-                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in _json.loads(raw[3:])]
-                return IVGResult(columns=["id", "score"], rows=rows)
+            for _method in ("ClosenessGlobalMSBFS", "ClosenessGlobal"):
+                raw = str(iris_obj.classMethodValue(
+                    "Graph.KG.NKGAccel", _method,
+                    formula, direction, max_hops, top_k,
+                ))
+                if raw.startswith("OK:"):
+                    rows = [[r.get("id", ""), float(r.get("score", 0.0))]
+                            for r in _json.loads(raw[3:])]
+                    return IVGResult(columns=["id", "score"], rows=rows)
         except Exception:
             pass
 

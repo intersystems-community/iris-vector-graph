@@ -63,10 +63,27 @@ print(result["rows"])  # [('Bob',)]
 ## Install
 
 ```bash
-pip install iris-vector-graph              # Core: just intersystems-irispython
+pip install iris-vector-graph              # Core: 266KB — just intersystems-irispython
 pip install iris-vector-graph[full]        # Full: + FastAPI, GraphQL, numpy, networkx
+pip install iris-vector-graph[communities] # + igraph, leidenalg (fast Leiden + closeness)
 pip install iris-vector-graph[plaid]       # + sklearn for PLAID K-means build
 ```
+
+**Graph Browser** (interactive UI at `/browser/`) — the browser static files are not
+included in the default wheel to keep it small (266KB vs 30MB). To enable the browser:
+
+```bash
+# Install from source — includes browser_static/ automatically
+pip install 'iris-vector-graph[browser]' --no-binary iris-vector-graph
+
+# Or: clone the repo and copy the assets next to your installed package
+git clone https://github.com/intersystems-community/iris-vector-graph
+cp -r iris-vector-graph/iris_vector_graph/browser_static \
+      $(python -c "import iris_vector_graph; print(iris_vector_graph.__file__[:-11])")
+```
+
+The API server works fine without the browser assets — the `/browser/` route returns
+a helpful message if `browser_static/` is not present.
 
 ### ObjectScript Only (IPM)
 
@@ -175,7 +192,7 @@ IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
 python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
 ```
 
-- **Browser** — `http://localhost:8000/browser/` (force-directed graph visualization)
+- **Browser** — `http://localhost:8000/browser/` (force-directed graph visualization — requires browser assets, see [Install](#install))
 - **Bolt TCP** — `bolt://localhost:7687` (Python/Java/Go/.NET drivers, LangChain, cypher-shell)
 - **HTTP API** — `http://localhost:8000/api/cypher` (curl, httpie, REST clients)
 
@@ -602,13 +619,34 @@ RETURN node, score
 
 ## Graph Analytics
 
-IVG ships a full graph algorithm suite backed by a three-tier dispatch chain:
+IVG ships a full graph algorithm suite backed by automatic dispatch chains — the fastest available tier runs transparently.
 
-| Tier | Backend | When it fires | ER(2000) sampled |
-|------|---------|---------------|-----------------|
-| 1 | **Native Rust accelerator** | accelerator library deployed + `^NKG` built | ~8ms |
-| 2 | **ObjectScript parallel** (`%SYSTEM.WorkMgr` 8×) | accelerator absent; `^NKG` built | ~500ms |
+#### Betweenness dispatch (ER-2000, sampled 200 sources)
+
+| Tier | Backend | When it fires | Latency |
+|------|---------|---------------|---------|
+| 1 | **Native Rust accelerator** | arno library deployed + `^NKG` built | ~8ms |
+| 2 | **ObjectScript Brandes** | arno absent; `^NKG` built | ~70ms |
 | 3 | **Python LazyKG** | `^NKG` not built | slow, always works |
+
+#### Closeness dispatch (ER-2000, harmonic)
+
+| Tier | Backend | When it fires | Latency |
+|------|---------|---------------|---------|
+| 1 | **igraph C closeness** | igraph installed in IRIS embedded Python | ~115ms |
+| 2 | **ObjectScript MSBFS** | igraph absent; dependency-free 64-bit frontier BFS | ~400ms |
+| 3 | **Python LazyKG** | fallback of last resort | slow, always works |
+
+igraph closeness is **bit-identical to networkx** (Pearson r = 1.0). Install into IRIS embedded Python with `irispython -m pip install igraph` — see [scripts/install-embedded-deps.sh](scripts/install-embedded-deps.sh).
+
+#### Leiden dispatch
+
+| Tier | Backend | When it fires | Latency (ER-2000) |
+|------|---------|---------------|---------|
+| 1 | **arno Rust** | arno library + leidenalg compiled | ~8ms |
+| 2 | **leidenalg server-side** | leidenalg installed in IRIS embedded Python | ~137ms |
+| 3 | **LazyKG + leidenalg** | leidenalg in external Python | ~137ms |
+| 4 | **networkx Louvain** | no leidenalg anywhere | degraded quality |
 
 Dispatch is **automatic and transparent** — call the engine method, get the fastest path available.
 
@@ -862,7 +900,13 @@ exactly). Timings are wall-clock medians.
 - On read-side graph analytics — **degree and betweenness centrality, and Leiden
   community detection** — IVG is competitive with or faster than Neo4j GDS, while
   producing identical results to networkx.
-- **Closeness centrality** is within a small constant factor of GDS.
+- **Closeness centrality** uses a three-tier dispatch. With igraph installed in
+  IRIS embedded Python: ~10ms on ER(500) and ~115ms on ER(2000), bit-identical
+  to networkx (Pearson r = 1.0), competitive with GDS (~9ms / ~138ms). Without
+  igraph, the second tier is a dependency-free pure-ObjectScript MSBFS (64-source
+  batching, `$BITLOGIC` frontiers) — substantially faster than the old sequential
+  all-pairs BFS while remaining 100% correct (Pearson r ≥ 0.9999 vs networkx).
+  Both tiers degrade gracefully to Python LazyKG as a final fallback.
 - IVG reaches this by running the heavy algorithms server-side: pure-ObjectScript
   over its integer adjacency index for traversal-style work, and IRIS *embedded
   Python* (igraph / leidenalg) for the algorithms where a mature parallel C
