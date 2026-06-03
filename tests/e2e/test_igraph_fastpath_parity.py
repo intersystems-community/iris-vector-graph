@@ -91,6 +91,8 @@ class TestIgraphClosenessParity:
 class TestIgraphLeidenParity:
     def test_karate_ari_vs_leidenalg(self, iris_connection, iris_master_cleanup):
         nx = pytest.importorskip("networkx")
+        pytest.importorskip("igraph")
+        pytest.importorskip("leidenalg")
         if not _embedded_igraph_available(iris_connection):
             pytest.skip("igraph not installed in IRIS embedded Python")
         sklearn_metrics = pytest.importorskip("sklearn.metrics")

@@ -241,7 +241,9 @@ class TestClosenessCentrality:
         result = engine.closeness_centrality(formula="classical", top_k=20)
 
         assert isinstance(result, list)
-        for row in result:
+        prefix_rows = [r for r in result if r["id"].startswith(prefix)]
+        assert len(prefix_rows) > 0, f"No rows returned for prefix {prefix!r}"
+        for row in prefix_rows:
             assert row["score"] == 0.0, (
                 f"classical Closeness on disconnected graph should give 0 to all nodes "
                 f"(none can reach the full graph), got {row['id']}={row['score']}"

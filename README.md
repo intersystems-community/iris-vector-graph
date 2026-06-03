@@ -619,13 +619,34 @@ RETURN node, score
 
 ## Graph Analytics
 
-IVG ships a full graph algorithm suite backed by a three-tier dispatch chain:
+IVG ships a full graph algorithm suite backed by automatic dispatch chains — the fastest available tier runs transparently.
 
-| Tier | Backend | When it fires | ER(2000) sampled |
-|------|---------|---------------|-----------------|
-| 1 | **Native Rust accelerator** | accelerator library deployed + `^NKG` built | ~8ms |
-| 2 | **ObjectScript parallel** (`%SYSTEM.WorkMgr` 8×) | accelerator absent; `^NKG` built | ~500ms |
+#### Betweenness dispatch (ER-2000, sampled 200 sources)
+
+| Tier | Backend | When it fires | Latency |
+|------|---------|---------------|---------|
+| 1 | **Native Rust accelerator** | arno library deployed + `^NKG` built | ~8ms |
+| 2 | **ObjectScript Brandes** | arno absent; `^NKG` built | ~70ms |
 | 3 | **Python LazyKG** | `^NKG` not built | slow, always works |
+
+#### Closeness dispatch (ER-2000, harmonic)
+
+| Tier | Backend | When it fires | Latency |
+|------|---------|---------------|---------|
+| 1 | **igraph C closeness** | igraph installed in IRIS embedded Python | ~115ms |
+| 2 | **ObjectScript MSBFS** | igraph absent; dependency-free 64-bit frontier BFS | ~400ms |
+| 3 | **Python LazyKG** | fallback of last resort | slow, always works |
+
+igraph closeness is **bit-identical to networkx** (Pearson r = 1.0). Install into IRIS embedded Python with `irispython -m pip install igraph` — see [scripts/install-embedded-deps.sh](scripts/install-embedded-deps.sh).
+
+#### Leiden dispatch
+
+| Tier | Backend | When it fires | Latency (ER-2000) |
+|------|---------|---------------|---------|
+| 1 | **arno Rust** | arno library + leidenalg compiled | ~8ms |
+| 2 | **leidenalg server-side** | leidenalg installed in IRIS embedded Python | ~137ms |
+| 3 | **LazyKG + leidenalg** | leidenalg in external Python | ~137ms |
+| 4 | **networkx Louvain** | no leidenalg anywhere | degraded quality |
 
 Dispatch is **automatic and transparent** — call the engine method, get the fastest path available.
 
@@ -879,11 +900,13 @@ exactly). Timings are wall-clock medians.
 - On read-side graph analytics — **degree and betweenness centrality, and Leiden
   community detection** — IVG is competitive with or faster than Neo4j GDS, while
   producing identical results to networkx.
-- **Closeness centrality** runs in IRIS embedded Python (igraph): ~19ms on
-  ER(500) and ~119ms on ER(2000), bit-identical to networkx (Pearson r = 1.0),
-  within a small constant factor of GDS. Without igraph it falls back to a
-  pure-ObjectScript all-pairs BFS — correct but markedly slower at scale
-  (~22s on ER(2000)); spec 191 adds a dependency-free MSBFS path to close that gap.
+- **Closeness centrality** uses a three-tier dispatch. With igraph installed in
+  IRIS embedded Python: ~10ms on ER(500) and ~115ms on ER(2000), bit-identical
+  to networkx (Pearson r = 1.0), competitive with GDS (~9ms / ~138ms). Without
+  igraph, the second tier is a dependency-free pure-ObjectScript MSBFS (64-source
+  batching, `$BITLOGIC` frontiers) — substantially faster than the old sequential
+  all-pairs BFS while remaining 100% correct (Pearson r ≥ 0.9999 vs networkx).
+  Both tiers degrade gracefully to Python LazyKG as a final fallback.
 - IVG reaches this by running the heavy algorithms server-side: pure-ObjectScript
   over its integer adjacency index for traversal-style work, and IRIS *embedded
   Python* (igraph / leidenalg) for the algorithms where a mature parallel C

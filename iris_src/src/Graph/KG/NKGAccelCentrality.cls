@@ -5,8 +5,14 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
 {
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
-    Set n = $Get(^NKG("$meta","nodeCount"), 0)
-    If n = 0 Quit "ERROR:^NKG nodeCount=0"
+    Set n = 0
+    Set nidTmp = ""
+    For {
+        Set nidTmp = $Order(^NKG("$NI",nidTmp))
+        Quit:nidTmp=""
+        Set n = n + 1
+    }
+    If n = 0 { Quit "ERROR:^NKG nodeCount=0" }
 
     Set json = "["
     Set sep = ""
@@ -168,12 +174,12 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
                 If fnidV > 0 {
                     Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
                     Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
-                    If $Extract(raw, 1, 3) = "OK:" Quit raw
+                    If $Extract(raw, 1, 3) = "OK:" Return raw
                 } Else {
                     Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
                     If fnid > 0 {
                         Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
-                        If $Extract(raw, 1, 3) = "OK:" Quit raw
+                        If $Extract(raw, 1, 3) = "OK:" Return raw
                     }
                 }
             }
@@ -437,7 +443,7 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
                     Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
                     If $Extract(raw,1,3) = "OK:" {
                         Kill ^||nbhIdx, ^||nbhNodes
-                        Quit raw
+                        Return raw
                     }
                 }
             }
