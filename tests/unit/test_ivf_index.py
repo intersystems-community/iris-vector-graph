@@ -174,15 +174,26 @@ class TestIVFIndexE2E:
         import uuid
         from iris_vector_graph.engine import IRISGraphEngine
 
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
-        self._run = uuid.uuid4().hex[:8]
+        try:
+            import iris as _iris
+            _iris_obj = _iris.createIRIS(iris_connection)
+            _iris_obj.kill("^KG")
+            _iris_obj.kill("^NKG")
+        except Exception:
+            pass
+        iris_connection.commit()
+
         cursor = iris_connection.cursor()
-        for tbl in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_EdgeEmbeddings"):
+        for tbl in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings",
+                    "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props", "Graph_KG.nodes"):
             try:
-                cursor.execute(f"DROP TABLE {tbl}")
+                cursor.execute(f"TRUNCATE TABLE {tbl}")
             except Exception:
                 pass
         iris_connection.commit()
+
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
+        self._run = uuid.uuid4().hex[:8]
         self.engine.initialize_schema()
         yield
         for idx in [f"test46a_{self._run}", f"test46b_{self._run}",
