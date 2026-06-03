@@ -36,6 +36,7 @@ def _cosine(a, b):
     return dot / (na * nb)
 
 
+@pytest.mark.requires_clean_isolation
 class TestIVFIndexUnit:
 
     def test_ivf_build_calls_classmethod(self):
@@ -167,6 +168,7 @@ class TestIVFIndexUnit:
 
 
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+@pytest.mark.requires_clean_isolation
 class TestIVFIndexE2E:
 
     @pytest.fixture(autouse=True)
@@ -175,12 +177,15 @@ class TestIVFIndexE2E:
         from iris_vector_graph.engine import IRISGraphEngine
 
         cursor = iris_connection.cursor()
-        for tbl in ("Graph_KG.kg_EdgeEmbeddings",):
+        for tbl in ("Graph_KG.kg_EdgeEmbeddings", "Graph_KG.docs"):
             try:
                 cursor.execute(f"DELETE FROM {tbl}")
             except Exception:
                 pass
-        iris_connection.commit()
+        try:
+            iris_connection.commit()
+        except Exception:
+            pass
 
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self._run = uuid.uuid4().hex[:8]
