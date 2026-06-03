@@ -108,6 +108,10 @@ biodata = [
 demo = [
     "python-fasthtml>=0.12.0"
 ]
+browser = [
+    "fastapi>=0.118.0",
+    "uvicorn>=0.37.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/intersystems-community/iris-vector-graph"
@@ -126,6 +130,9 @@ include = ["/iris_vector_graph", "/iris_src", "/sql", "/examples", "/tests", "/R
 [tool.hatch.build.targets.wheel]
 packages = ["iris_vector_graph"]
 artifacts = ["iris_src/src/**/*.cls"]
+exclude = [
+    "iris_vector_graph/browser_static",
+]
 
 # Tool configurations
 [tool.black]
