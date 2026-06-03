@@ -12,6 +12,18 @@ def engine(iris_connection):
     return IRISGraphEngine(iris_connection)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def require_arno(engine):
+    """Skip entire module when libarno_callout.so is not loaded (community containers)."""
+    o = engine._iris_obj()
+    try:
+        loaded = str(o.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"))
+    except Exception:
+        loaded = "0"
+    if loaded != "1":
+        pytest.skip("libarno_callout.so not loaded — enterprise only")
+
+
 @pytest.fixture(scope="module")
 def bfs_test_graph(engine, iris_connection):
     o = engine._iris_obj()

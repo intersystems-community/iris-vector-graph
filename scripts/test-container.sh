@@ -57,6 +57,7 @@ print('✓ schema initialized')
     for _cls in Graph.KG.TraversalBuild Graph.KG.TraversalBFS Graph.KG.TraversalPaths Graph.KG.TraversalKHop Graph.KG.Traversal Graph.KG.NKGAccelLoader Graph.KG.NKGAccelAdjacency Graph.KG.NKGAccelTraversal Graph.KG.NKGAccelCentrality Graph.KG.NKGAccel; do
       "$0" compile "$_cls" > /dev/null 2>&1 || true
     done
+    "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
     echo "✓ $CONTAINER ready"
     ;;
 

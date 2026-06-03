@@ -1,0 +1,113 @@
+{
+  "generated": "2026-06-02T15:55:25.278487",
+  "graphs": {
+    "karate": {
+      "nodes": 34,
+      "edges": 78,
+      "engines": {
+        "networkx": {
+          "degree_ms": 0.1,
+          "betweenness_ms": 0.8,
+          "closeness_ms": 0.4,
+          "leiden_ms": 0.8,
+          "communities": 4,
+          "load_ms": 0.0
+        },
+        "ivg": {
+          "load_ms": 9774.2,
+          "degree_ms": 0.7,
+          "betweenness_ms": 22.0,
+          "betweenness_sample_size": 0,
+          "closeness_ms": 60.0,
+          "leiden_ms": 7.6,
+          "communities": 4,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0,
+          "closeness_pearson_vs_nx": 1.0
+        },
+        "neo4j_gds": {
+          "load_ms": 5.6,
+          "degree_ms": 3.8,
+          "betweenness_ms": 1.7,
+          "closeness_ms": 2.0,
+          "leiden_ms": 217.6,
+          "communities": 4,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0
+        }
+      }
+    },
+    "er_500": {
+      "nodes": 500,
+      "edges": 2437,
+      "engines": {
+        "networkx": {
+          "degree_ms": 0.1,
+          "betweenness_ms": 225.8,
+          "closeness_ms": 56.8,
+          "leiden_ms": 22.7,
+          "communities": 14,
+          "load_ms": 0.0
+        },
+        "ivg": {
+          "load_ms": 10430.7,
+          "degree_ms": 2.5,
+          "betweenness_ms": 34.0,
+          "betweenness_sample_size": 0,
+          "closeness_ms": 10.7,
+          "leiden_ms": 26.5,
+          "communities": 10,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0,
+          "closeness_pearson_vs_nx": 1.0
+        },
+        "neo4j_gds": {
+          "load_ms": 156.2,
+          "degree_ms": 8.7,
+          "betweenness_ms": 18.7,
+          "closeness_ms": 8.9,
+          "leiden_ms": 237.7,
+          "communities": 12,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0
+        }
+      }
+    },
+    "er_2000": {
+      "nodes": 2000,
+      "edges": 9941,
+      "engines": {
+        "networkx": {
+          "degree_ms": 0.2,
+          "betweenness_ms": 471.9,
+          "closeness_ms": 1011.3,
+          "leiden_ms": 142.7,
+          "communities": 17,
+          "load_ms": 0.0
+        },
+        "ivg": {
+          "load_ms": 12051.0,
+          "degree_ms": 10.5,
+          "betweenness_ms": 53.5,
+          "betweenness_sample_size": 200,
+          "closeness_ms": 113.9,
+          "leiden_ms": 132.1,
+          "communities": 12,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0,
+          "closeness_pearson_vs_nx": 1.0
+        },
+        "neo4j_gds": {
+          "load_ms": 2330.2,
+          "degree_ms": 24.3,
+          "betweenness_ms": 175.8,
+          "closeness_ms": 137.5,
+          "leiden_ms": 182.2,
+          "communities": 14,
+          "degree_pearson_vs_nx": 1.0,
+          "betweenness_pearson_vs_nx": 1.0
+        }
+      }
+    }
+  }
+}

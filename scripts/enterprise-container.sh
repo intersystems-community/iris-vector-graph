@@ -91,6 +91,7 @@ else:
     print('✗ libarno_callout.so load FAILED — check /tmp/libarno_callout.so exists in container')
     exit(1)
 " 2>&1 | grep -vE 'swigvarlink|IVG setup|Deprecat'
+    "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
     echo "✓ $CONTAINER ready (Enterprise + Arno)"
     ;;
 

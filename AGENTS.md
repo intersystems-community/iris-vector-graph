@@ -44,7 +44,31 @@ scripts/test-container.sh deploy     # docker cp iris_src/src/ → container:/tm
 scripts/test-container.sh compile Graph.KG.Centrality   # compile one class
 scripts/test-container.sh compile-all                   # compile entire iris_src/src/ tree
 scripts/test-container.sh down       # remove container (rare; persists across sessions)
+scripts/install-embedded-deps.sh ivg-iris               # igraph+leidenalg into embedded Python
 ```
+
+**Embedded-Python deps (igraph + leidenalg)**: closeness centrality and canonical
+Leiden run in IRIS embedded Python via `igraph`/`leidenalg` when present. Both
+`scripts/test-container.sh up` and `enterprise-container.sh up` run
+`install-embedded-deps.sh` automatically. The install lives in
+`/usr/irissys/mgr/python`, which is **NOT on a persistent volume** — it survives
+`docker stop/start` but is lost on container recreation (`down`+`up`), where `up`
+reinstalls it. If you attach to a container created before spec 191, run
+`scripts/install-embedded-deps.sh <container>` once. NEVER `--upgrade`
+during install: it can replace `intersystems-irispython` and break the embedded runtime.
+
+**Three-tier closeness dispatch** (ER-2000 harmonic, measured on M3 Ultra):
+
+| Tier | Backend | Fires when | Latency |
+|------|---------|------------|---------|
+| 1 | igraph C closeness (`Graph.KG.Communities.ClosenessJsonPy`) | igraph in IRIS embedded Python | ~115ms |
+| 2 | ObjectScript MSBFS (`NKGAccelCentrality.ClosenessGlobal`) | igraph absent; `^NKG` built | ~400ms |
+| 3 | Python LazyKG per-source BFS | always works | slow |
+
+Tier 1 is bit-identical to networkx (Pearson r = 1.0). Tier 2 uses 64-source
+batching with `$BITLOGIC` frontiers and `$BITCOUNT` popcount — 13–25× faster than
+the old sequential all-pairs BFS with zero additional dependencies. Without these
+packages everything degrades gracefully through the chain — no exceptions to callers.
 
 **Why a wrapper script**: `IRISContainer.community().with_name(...).start()` from the
 `iris-devtester` Python API creates a container that vanishes when the Python process

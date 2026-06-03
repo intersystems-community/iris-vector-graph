@@ -5,8 +5,14 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
 {
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
-    Set n = $Get(^NKG("$meta","nodeCount"), 0)
-    If n = 0 Quit "ERROR:^NKG nodeCount=0"
+    Set n = 0
+    Set nidTmp = ""
+    For {
+        Set nidTmp = $Order(^NKG("$NI",nidTmp))
+        Quit:nidTmp=""
+        Set n = n + 1
+    }
+    If n = 0 { Quit "ERROR:^NKG nodeCount=0" }
 
     Set json = "["
     Set sep = ""
@@ -79,6 +85,8 @@ ClassMethod ClosenessGlobal(formula As %String = "harmonic", direction As %Strin
             // Harmonic centrality: raw sum of 1/d — matches networkx.harmonic_centrality default
             Set score = $Select(reached > 0: sumInv, 1: 0)
         }
+        If $Extract(score)="." Set score = "0"_score
+        If $Extract(score,1,2)="-." Set score = "-0"_$Extract(score,2,*)
         Set json = json_sep_"{""id"":"""_nid_""",""score"":"_score_"}"
         Set sep = ","
         Set emitted = emitted + 1
@@ -157,23 +165,26 @@ ClassMethod BetweennessGlobal(sampleSize As %Integer = 0, topK As %Integer = 100
     Set firstNode = $Order(^NKG("$NI",""))
     If firstNode = "" Quit "ERROR:^NKG not built"
 
-    If ##class(Graph.KG.NKGAccel).IsLoaded() {
-        Set dllid = $Get(^||NKGAccel("dllid"), 0)
-        If dllid '= 0 {
-            If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
-            Set fnidV = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
-            If fnidV > 0 {
-                Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
-                Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
-                If $Extract(raw, 1, 3) = "OK:" Quit raw
-            } Else {
-                Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
-                If fnid > 0 {
-                    Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
-                    If $Extract(raw, 1, 3) = "OK:" Quit raw
+    Try {
+        If ##class(Graph.KG.NKGAccel).IsLoaded() {
+            Set dllid = $Get(^||NKGAccel("dllid"), 0)
+            If dllid '= 0 {
+                If '$Data(^ArnoKG("KG", "nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
+                Set fnidV = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
+                If fnidV > 0 {
+                    Set nkgVer = +$Get(^NKG("$meta", "version"), -1)
+                    Set raw = $ZF(-5, dllid, fnidV, "^NKG", sampleSize, topK, nkgVer)
+                    If $Extract(raw, 1, 3) = "OK:" Return raw
+                } Else {
+                    Set fnid = $ZF(-4, 3, dllid, "kg_betweenness_global")
+                    If fnid > 0 {
+                        Set raw = $ZF(-5, dllid, fnid, "^NKG", sampleSize, topK)
+                        If $Extract(raw, 1, 3) = "OK:" Return raw
+                    }
                 }
             }
         }
+    } Catch ex {
     }
 
     Quit ..BetweennessGlobalParallel(sampleSize, topK, maxSources)
@@ -410,32 +421,34 @@ ClassMethod BetweennessNeighborhood(seedId As %String, hops As %Integer = 2, sam
     If n = 0 Quit "ERROR:no valid nodes in neighborhood"
 
     // Try arno fast path — reuses BETWEENNESS_ADJ_CACHE, extracts subgraph in Rust
-    If ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
-        Set dllid = $Get(^||NKGAccel("dllid"), 0)
-        If dllid '= 0 {
-            If '$Data(^ArnoKG("KG","nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
-            Set fnidN = $ZF(-4, 3, dllid, "kg_betweenness_neighborhood_v")
-            If fnidN > 0 {
-                Set idxList = "", idx = ""
-                For {
-                    Set idx = $Order(^||nbhIdx(idx))
-                    Quit:idx=""
-                    Set:idxList'="" idxList = idxList_","
-                    Set idxList = idxList_idx
-                }
-                Set nkgVer = +$Get(^NKG("$meta","version"),-1)
-                // Ensure full adj is cached in Rust (warm if needed)
-                Set fnidG = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
-                If fnidG > 0 {
-                    Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
-                }
-                Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
-                If $Extract(raw,1,3) = "OK:" {
-                    Kill ^||nbhIdx, ^||nbhNodes
-                    Quit raw
+    Try {
+        If ##class(Graph.KG.NKGAccelLoader).IsLoaded() {
+            Set dllid = $Get(^||NKGAccel("dllid"), 0)
+            If dllid '= 0 {
+                If '$Data(^ArnoKG("KG","nkg_adj")) { Do ##class(Graph.KG.NKGAccelLoader).WarmAdjCache() }
+                Set fnidN = $ZF(-4, 3, dllid, "kg_betweenness_neighborhood_v")
+                If fnidN > 0 {
+                    Set idxList = "", idx = ""
+                    For {
+                        Set idx = $Order(^||nbhIdx(idx))
+                        Quit:idx=""
+                        Set:idxList'="" idxList = idxList_","
+                        Set idxList = idxList_idx
+                    }
+                    Set nkgVer = +$Get(^NKG("$meta","version"),-1)
+                    Set fnidG = $ZF(-4, 3, dllid, "kg_betweenness_global_v")
+                    If fnidG > 0 {
+                        Set warmRaw = $ZF(-5, dllid, fnidG, "^NKG", 1, 1, nkgVer)
+                    }
+                    Set raw = $ZF(-5, dllid, fnidN, "^NKG", idxList, sampleSize, topK, nkgVer)
+                    If $Extract(raw,1,3) = "OK:" {
+                        Kill ^||nbhIdx, ^||nbhNodes
+                        Return raw
+                    }
                 }
             }
         }
+    } Catch ex {
     }
 
     // OS fallback: $BITLOGIC parallel Brandes on subgraph
@@ -510,6 +523,118 @@ ClassMethod BetweennessNeighborhoodOS(n As %Integer, sampleSize As %Integer, top
     }
 
     Kill ^bcParScore(parentPid), ^||nbhIdx, ^||nbhNodes
+    Quit "OK:"_json_"]"
+}
+
+ClassMethod ClosenessGlobalMSBFS(formula As %String = "harmonic", direction As %String = "out", maxHops As %Integer = 0, topK As %Integer = 10000) As %String
+{
+    Set firstNode = $Order(^NKG("$NI",""))
+    If firstNode = "" Quit "ERROR:^NKG not built"
+    Set n = $Get(^NKG("$meta","nodeCount"), 0)
+    If n = 0 Quit "ERROR:^NKG nodeCount=0"
+
+    Kill ^||msAdj, ^||msVisit, ^||msNext, ^||msSeen, ^||msFar, ^||msReach, ^||msIdxNid
+    Set adjDir = $Select(direction="in": -2, 1: -1)
+    Set nid = ""
+    For {
+        Set nid = $Order(^NKG("$NI",nid))
+        Quit:nid=""
+        Set vIdx = ^NKG("$NI",nid)
+        Set ^||msIdxNid(vIdx) = nid
+        Set negP = $Order(^NKG(adjDir,vIdx,""))
+        While negP '= "" {
+            Set oIdx = $Order(^NKG(adjDir,vIdx,negP,""))
+            While oIdx '= "" {
+                Set $BIT(^||msAdj(vIdx), oIdx+1) = 1
+                Set oIdx = $Order(^NKG(adjDir,vIdx,negP,oIdx))
+            }
+            Set negP = $Order(^NKG(adjDir,vIdx,negP))
+        }
+    }
+
+    Set sIdx = ""
+    For {
+        Set sIdx = $Order(^||msIdxNid(sIdx))
+        Quit:sIdx=""
+        Set $BIT(^||msVisit(sIdx), sIdx+1) = 1
+        Set $BIT(^||msSeen(sIdx), sIdx+1) = 1
+    }
+
+    Set hop = 0
+    For {
+        Quit:(maxHops>0)&&(hop>=maxHops)
+        Set hop = hop + 1
+        Kill ^||msNext
+        Set anyFrontier = 0
+        Set v = ""
+        For {
+            Set v = $Order(^||msVisit(v))
+            Quit:v=""
+            Set vb = ^||msVisit(v)
+            If $BITCOUNT(vb,1)=0 Continue
+            If '$Data(^||msAdj(v)) Continue
+            Set adj = ^||msAdj(v)
+            Set wpos = 0
+            For {
+                Set wpos = $BITFIND(adj, 1, wpos+1)
+                Quit:wpos=0
+                Set w = wpos-1
+                Set nxw = $Get(^||msNext(w))
+                Set ^||msNext(w) = $BITLOGIC(nxw|vb)
+                Set anyFrontier = 1
+            }
+        }
+        Quit:anyFrontier=0
+
+        Kill ^||msVisit
+        Set w = ""
+        For {
+            Set w = $Order(^||msNext(w))
+            Quit:w=""
+            Set nb = ^||msNext(w)
+            Set seenw = $Get(^||msSeen(w))
+            Set new = $BITLOGIC(nb&~seenw)
+            If $BITCOUNT(new,1)=0 Continue
+            Set ^||msSeen(w) = $BITLOGIC(seenw|new)
+            Set ^||msVisit(w) = new
+            Set spos = 0
+            For {
+                Set spos = $BITFIND(new, 1, spos+1)
+                Quit:spos=0
+                Set s = spos-1
+                If formula = "classical" {
+                    Set ^||msFar(s) = $Get(^||msFar(s),0) + hop
+                    Set ^||msReach(s) = $Get(^||msReach(s),0) + 1
+                } Else {
+                    Set ^||msFar(s) = $Get(^||msFar(s),0) + (1/hop)
+                }
+            }
+        }
+    }
+
+    Set json = "["
+    Set sep = ""
+    Set emitted = 0
+    Set sIdx = ""
+    For {
+        Set sIdx = $Order(^||msIdxNid(sIdx))
+        Quit:sIdx=""
+        Set snid = ^||msIdxNid(sIdx)
+        If formula = "classical" {
+            Set reached = $Get(^||msReach(sIdx),0)
+            Set fdist = $Get(^||msFar(sIdx),0)
+            Set score = $Select((fdist>0)&&(reached=(n-1)): reached/fdist, 1: 0)
+        } Else {
+            Set score = $Get(^||msFar(sIdx),0)
+        }
+        If $Extract(score)="." Set score = "0"_score
+        If $Extract(score,1,2)="-." Set score = "-0"_$Extract(score,2,*)
+        Set json = json_sep_"{""id"":"""_snid_""",""score"":"_score_"}"
+        Set sep = ","
+        Set emitted = emitted + 1
+        If (topK>0)&&(emitted>=topK) Quit
+    }
+    Kill ^||msAdj, ^||msVisit, ^||msNext, ^||msSeen, ^||msFar, ^||msReach, ^||msIdxNid
     Quit "OK:"_json_"]"
 }
 

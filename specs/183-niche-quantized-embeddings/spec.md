@@ -1,7 +1,7 @@
 # Feature Specification: NICHE-Quantized Embeddings — Fused Graph+Vector Pruning via `^NKG("q",...)`
 
 **Status**: Research / Phase 0 design (prototype gate before v2.0.0 inclusion)
-**Spec ID**: 168-niche-quantized-embeddings
+**Spec ID**: 183-niche-quantized-embeddings
 **Owner**: Tom Dyar
 **Predecessor**: spec 163 (community detection), spec 028 (NKG integer index)
 **Target release**: v2.0.0 (with prototype gate; ship-or-defer decision after Phase 1)
