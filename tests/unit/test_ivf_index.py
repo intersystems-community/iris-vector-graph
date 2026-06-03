@@ -170,7 +170,7 @@ class TestIVFIndexUnit:
 class TestIVFIndexE2E:
 
     @pytest.fixture(autouse=True)
-    def setup(self, iris_connection):
+    def setup(self, iris_connection, request):
         import uuid
         from iris_vector_graph.engine import IRISGraphEngine
 
@@ -196,13 +196,15 @@ class TestIVFIndexE2E:
         self._run = uuid.uuid4().hex[:8]
         self.engine.initialize_schema()
         yield
-        for idx in [f"test46a_{self._run}", f"test46b_{self._run}",
-                    f"test46c_{self._run}", f"test46d_{self._run}",
-                    f"test46e_{self._run}"]:
-            try:
-                self.engine.ivf_drop(idx)
-            except Exception:
-                pass
+
+        if "E2E" in request.node.cls.__name__:
+            for idx in [f"test46a_{self._run}", f"test46b_{self._run}",
+                        f"test46c_{self._run}", f"test46d_{self._run}",
+                        f"test46e_{self._run}"]:
+                try:
+                    self.engine.ivf_drop(idx)
+                except Exception:
+                    pass
 
     def _make_nodes_with_embeddings(self, n: int, dim: int = 4):
         import random
