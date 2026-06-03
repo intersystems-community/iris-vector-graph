@@ -63,10 +63,27 @@ print(result["rows"])  # [('Bob',)]
 ## Install
 
 ```bash
-pip install iris-vector-graph              # Core: just intersystems-irispython
+pip install iris-vector-graph              # Core: 266KB — just intersystems-irispython
 pip install iris-vector-graph[full]        # Full: + FastAPI, GraphQL, numpy, networkx
+pip install iris-vector-graph[communities] # + igraph, leidenalg (fast Leiden + closeness)
 pip install iris-vector-graph[plaid]       # + sklearn for PLAID K-means build
 ```
+
+**Graph Browser** (interactive UI at `/browser/`) — the browser static files are not
+included in the default wheel to keep it small (266KB vs 30MB). To enable the browser:
+
+```bash
+# Install from source — includes browser_static/ automatically
+pip install 'iris-vector-graph[browser]' --no-binary iris-vector-graph
+
+# Or: clone the repo and copy the assets next to your installed package
+git clone https://github.com/intersystems-community/iris-vector-graph
+cp -r iris-vector-graph/iris_vector_graph/browser_static \
+      $(python -c "import iris_vector_graph; print(iris_vector_graph.__file__[:-11])")
+```
+
+The API server works fine without the browser assets — the `/browser/` route returns
+a helpful message if `browser_static/` is not present.
 
 ### ObjectScript Only (IPM)
 
@@ -175,7 +192,7 @@ IRIS_USERNAME=_SYSTEM IRIS_PASSWORD=SYS \
 python3 -m uvicorn iris_vector_graph.cypher_api:app --port 8000
 ```
 
-- **Browser** — `http://localhost:8000/browser/` (force-directed graph visualization)
+- **Browser** — `http://localhost:8000/browser/` (force-directed graph visualization — requires browser assets, see [Install](#install))
 - **Bolt TCP** — `bolt://localhost:7687` (Python/Java/Go/.NET drivers, LangChain, cypher-shell)
 - **HTTP API** — `http://localhost:8000/api/cypher` (curl, httpie, REST clients)
 

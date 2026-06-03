@@ -71,6 +71,16 @@ if _BROWSER_DIR.exists():
 
 @app.get("/browser")
 def browser_redirect():
+    if not _BROWSER_DIR.exists():
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(
+            "<h2>Graph Browser not installed</h2>"
+            "<p>Install browser assets from source:<br>"
+            "<code>pip install 'iris-vector-graph[browser]' --no-binary iris-vector-graph</code><br>"
+            "or clone the repo and copy <code>iris_vector_graph/browser_static/</code> "
+            "next to your installed package.</p>",
+            status_code=200,
+        )
     return RedirectResponse("/browser/")
 
 
