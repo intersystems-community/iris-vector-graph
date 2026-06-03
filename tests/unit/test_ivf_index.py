@@ -170,26 +170,16 @@ class TestIVFIndexUnit:
 class TestIVFIndexE2E:
 
     @pytest.fixture(autouse=True)
-    def setup(self, iris_connection, request):
+    def setup(self, iris_master_cleanup, iris_connection):
         import uuid
         from iris_vector_graph.engine import IRISGraphEngine
 
         cursor = iris_connection.cursor()
-        for tbl in ("Graph_KG.nodes", "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props",
-                    "Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings"):
+        for tbl in ("Graph_KG.kg_EdgeEmbeddings",):
             try:
                 cursor.execute(f"DELETE FROM {tbl}")
             except Exception:
                 pass
-        iris_connection.commit()
-
-        try:
-            import iris as _iris
-            _iris_obj = _iris.createIRIS(iris_connection)
-            _iris_obj.kill("^KG")
-            _iris_obj.kill("^NKG")
-        except Exception:
-            pass
         iris_connection.commit()
 
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
@@ -197,14 +187,13 @@ class TestIVFIndexE2E:
         self.engine.initialize_schema()
         yield
 
-        if "E2E" in request.node.cls.__name__:
-            for idx in [f"test46a_{self._run}", f"test46b_{self._run}",
-                        f"test46c_{self._run}", f"test46d_{self._run}",
-                        f"test46e_{self._run}"]:
-                try:
-                    self.engine.ivf_drop(idx)
-                except Exception:
-                    pass
+        for idx in [f"test46a_{self._run}", f"test46b_{self._run}",
+                    f"test46c_{self._run}", f"test46d_{self._run}",
+                    f"test46e_{self._run}"]:
+            try:
+                self.engine.ivf_drop(idx)
+            except Exception:
+                pass
 
     def _make_nodes_with_embeddings(self, n: int, dim: int = 4):
         import random
