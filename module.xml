@@ -4,13 +4,13 @@
     <Module>
       <Name>iris-vector-graph</Name>
       <Description>Knowledge graph engine for InterSystems IRIS — temporal property graph, openCypher queries, vector search (HNSW/IVFFlat/BM25/PLAID), graph analytics (PageRank, WCC, PPR), and pre-aggregated time-series analytics. Python SDK on PyPI: iris-vector-graph.</Description>
-      <Version>1.86.0</Version>
+      <Version>2.0.0</Version>
       <Packaging>module</Packaging>
       <SourcesRoot>iris_src/src</SourcesRoot>
       <Dependencies>
         <ModuleReference>
           <Name>iris-vector-graph-core</Name>
-          <Version>1.86.0</Version>
+          <Version>2.0.0</Version>
         </ModuleReference>
       </Dependencies>
       <Resource Name="Graph.KG.Edge.CLS"/>
