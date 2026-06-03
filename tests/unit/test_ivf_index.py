@@ -184,8 +184,8 @@ class TestIVFIndexE2E:
         iris_connection.commit()
 
         cursor = iris_connection.cursor()
-        for tbl in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings",
-                    "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props", "Graph_KG.nodes"):
+        for tbl in ("Graph_KG.nodes", "Graph_KG.rdf_edges", "Graph_KG.rdf_labels", "Graph_KG.rdf_props",
+                    "Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings"):
             try:
                 cursor.execute(f"TRUNCATE TABLE {tbl}")
             except Exception:
