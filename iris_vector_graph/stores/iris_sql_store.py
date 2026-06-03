@@ -1094,10 +1094,6 @@ class IRISGraphStore:
 
     def execute_closeness(self, formula: str, direction: str, max_hops: int, top_k: int,
                            progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
-        if max_hops == 0:
-            srv = self._closeness_serverside(formula, top_k)
-            if srv is not None:
-                return srv
         try:
             return self._closeness_gref(formula, direction, max_hops, top_k, progress_callback)
         except Exception as e:
