@@ -416,7 +416,7 @@ class TestEngineInitializeSchema:
         engine.embedding_dimension = 384
         cursor.execute.return_value = None
         cursor.fetchone.return_value = None
-        with patch("iris_vector_graph.engine.GraphSchema") as mock_schema:
+        with patch("iris_vector_graph.schema.GraphSchema") as mock_schema:
             mock_schema.get_base_schema_sql.return_value = "SELECT 1"
             mock_schema.get_indexes_sql.return_value = ""
             mock_schema.get_procedures_sql_list.return_value = []
