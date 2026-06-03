@@ -1,8 +1,9 @@
 """Tests for: paths.py, utils.py, vector_utils.py, text_search.py, dbapi_utils.py, gql modules, cypher_api.py, schema.py extra paths."""
-import json
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
+
+pytestmark = pytest.mark.asyncio
 
 
 # ─── cypher/algorithms/paths.py ──────────────────────────────────────────────
@@ -439,7 +440,7 @@ class TestGQLPooling:
     @pytest.mark.asyncio
     async def test_get_pool_returns_existing(self):
         from iris_vector_graph.gql import pooling as p_mod
-        from iris_vector_graph.gql.pooling import get_pool, AsyncConnectionPool
+        from iris_vector_graph.gql.pooling import get_pool
         engine = MagicMock()
         engine.conn = MagicMock()
         p_mod._pool_instance = None
