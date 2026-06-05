@@ -8,7 +8,9 @@ Replaces the temporary regex-based implementation.
 from typing import List, Optional, Any, Dict
 from .lexer import Lexer, Token, TokenType
 from . import ast
+import copy
 import logging
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -1359,10 +1361,22 @@ class Parser:
         return None
 
 
-def parse_query(
-    query_str: str, params: Optional[Dict[str, Any]] = None
-) -> ast.CypherQuery:
-    """Convenience function to parse a Cypher query string"""
+@lru_cache(maxsize=256)
+def _parse_query_cached(query_str: str) -> ast.CypherQuery:
+    """Internal cached parse — returns a pristine AST. Callers must deepcopy before mutating."""
     lexer = Lexer(query_str)
     parser = Parser(lexer)
     return parser.parse()
+
+
+def parse_query(
+    query_str: str, params: Optional[Dict[str, Any]] = None
+) -> ast.CypherQuery:
+    """Convenience function to parse a Cypher query string.
+
+    Uses an LRU cache (maxsize=256) keyed on query_str to avoid re-parsing
+    identical queries. A deep copy of the cached AST is returned so callers
+    may freely mutate it (e.g. for parameter binding) without poisoning the
+    cache entry.
+    """
+    return copy.deepcopy(_parse_query_cached(query_str))
