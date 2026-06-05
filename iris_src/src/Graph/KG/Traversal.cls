@@ -83,6 +83,11 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
 	Quit ##class(Graph.KG.TraversalBFS).BFSFastJson(srcId, predsJson, maxHops, dstLabel, direction)
 }
 
+ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
+{
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonDirect(srcId, predsJson, maxHops, dstLabel, direction)
+}
+
 ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
 {
 	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonChunked(srcId, predsJson, maxHops, dstLabel, direction, maxResults)

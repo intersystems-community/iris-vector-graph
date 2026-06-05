@@ -156,6 +156,39 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
 
     Return result.%ToJSON()
 }
+/// BFSFastJsonDirect — same semantics as BFSFastJson but builds the JSON string
+/// via direct concatenation instead of %DynamicObject allocation (one per row).
+/// Drop-in replacement: identical signature, identical output format.
+ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
+{
+    Set preds = ""
+    If (predsJson '= "") && (predsJson '= "null") {
+        Try { Set preds = ##class(%DynamicArray).%FromJSON(predsJson) } Catch { Set preds = "" }
+    }
+
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
+    If count = 0 Return "[]"
+
+    Set result = "["
+    Set first = 1
+    For i = 1:1:count {
+        Set lb = $Get(^||BFS.Results(i))
+        If lb = "" Continue
+        If 'first Set result = result _ ","
+        Set first = 0
+        // Escape quotes in string fields (node IDs rarely contain quotes, but be safe)
+        Set s = $Replace($ListGet(lb, 1), """", "\""")
+        Set p = $Replace($ListGet(lb, 2), """", "\""")
+        Set o = $Replace($ListGet(lb, 3), """", "\""")
+        Set result = result
+            _ "{""s"":""" _ s _ ""","
+            _ """p"":""" _ p _ ""","
+            _ """o"":""" _ o _ ""","
+            _ """w"":" _ +$ListGet(lb, 4) _ ","
+            _ """step"":" _ +$ListGet(lb, 5) _ "}"
+    }
+    Return result _ "]"
+}
 ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
 {
     Set preds = ""
