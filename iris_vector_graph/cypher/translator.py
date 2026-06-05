@@ -277,6 +277,17 @@ class TranslationContext:
             return 3
         return 4
 
+    @staticmethod
+    def _structural_guard_sql(node_alias: str, prop_name: str) -> str:
+        """EXISTS guard confirming a property key exists before JOIN fetches value (OPT-3)."""
+        props_tbl = _table("rdf_props")
+        safe_key = prop_name.replace("'", "''")
+        return (
+            f"EXISTS (SELECT 1 FROM {props_tbl} _sg{node_alias} "
+            f"WHERE _sg{node_alias}.s = {node_alias}.node_id "
+            f"AND _sg{node_alias}.\"key\" = '{safe_key}')"
+        )
+
     def build_stage_sql(
         self, distinct: bool = False, select_override: Optional[str] = None
     ) -> tuple[str, List[Any]]:
@@ -2162,6 +2173,10 @@ def translate_node_pattern(node, context, metadata, optional=False):
         if k in ("node_id", "id"):
             context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
+            if not optional:
+                context.where_conditions.append(
+                    TranslationContext._structural_guard_sql(alias, k)
+                )
             p_alias = context.next_alias("p")
             context.join_clauses.append(
                 f"{jt} {_table('rdf_props')} {p_alias} "
@@ -3096,6 +3111,10 @@ def _expr_property_reference(expr, context, segment):
         return _expr_propref_edge_alias(expr, context, alias)
     if expr.property_name in ("node_id", "id"):
         return f"{alias}.node_id"
+    if segment == "where":
+        context.where_conditions.append(
+            TranslationContext._structural_guard_sql(alias, expr.property_name)
+        )
     p_alias = context.next_alias("p")
     context.join_clauses.append(
         f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(expr.property_name)}'
