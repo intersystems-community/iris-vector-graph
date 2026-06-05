@@ -229,8 +229,9 @@ ClassMethod ExportAdjacencyFromSeed(seed As %String, maxHops As %Integer = 4, pr
     Kill ^||seedBFS
     Return result
 }
-ClassMethod ExportAdjacencyWithPreds() As %String [ Private ]
+ClassMethod ExportAdjacencyWithPreds(requiredPreds As %List = "") As %String [ Private ]
 {
+    Set hasGuard = (requiredPreds '= "") && ($ListLength(requiredPreds) > 0)
     Set result = "", chunk = "", chunkNum = 0
     Set src = ""
     For {
@@ -246,6 +247,7 @@ ClassMethod ExportAdjacencyWithPreds() As %String [ Private ]
             For {
                 Set dst = $Order(^NKG(-1, src, pred, dst))
                 Quit:dst=""
+                If hasGuard && '##class(Graph.KG.NKGAccelTraversal).StructuralGuard(dst, requiredPreds) Continue
                 Set dstStr = $Get(^NKG("$ND", dst), dst)
                 Set line = srcStr _ $Char(31) _ predStr _ $Char(31) _ dstStr _ $Char(10)
                 If $Length(result) + $Length(line) > 3000000 {
