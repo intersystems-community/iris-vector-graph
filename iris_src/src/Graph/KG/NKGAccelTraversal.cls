@@ -26,10 +26,10 @@ ClassMethod KHopNeighbors(seedId As %String, k As %Integer = 2, maxNodes As %Int
             Set node = $Order(^||frontier(node))
             Quit:node=""
             If useNKG {
-                Set pred = ""
+                Set pred = -99999999
                 For {
                     Set pred = $Order(^NKG(-1, node, pred))
-                    Quit:pred=""
+                    Quit:(pred="")!(pred>=0)
                     Set dst = ""
                     For {
                         Set dst = $Order(^NKG(-1, node, pred, dst))
@@ -109,10 +109,10 @@ ClassMethod KHopNeighborsSorted(seedId As %String, k As %Integer = 2, maxNodes A
             Set node = $Order(^||frontier(node))
             Quit:node=""
             If useNKG {
-                Set pred = ""
+                Set pred = -99999999
                 For {
                     Set pred = $Order(^NKG(-1, node, pred))
-                    Quit:pred=""
+                    Quit:(pred="")!(pred>=0)
                     Set dst = ""
                     For {
                         Set dst = $Order(^NKG(-1, node, pred, dst))
@@ -196,10 +196,10 @@ ClassMethod PPRNative(seedId As %String, alpha As %Double = 0.85, maxIter As %In
         If useNKG {
             Set nkgIdx = $Get(^NKG("$NI", nodeId), "")
             If nkgIdx '= "" {
-                Set pred = ""
+                Set pred = -99999999
                 For {
                     Set pred = $Order(^NKG(-1, nkgIdx, pred))
-                    Quit:pred=""
+                    Quit:(pred="")!(pred>=0)
                     Set dst = ""
                     For {
                         Set dst = $Order(^NKG(-1, nkgIdx, pred, dst))
@@ -308,7 +308,7 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
             Kill ^||walkNbrs
             Set nbrCount = 0
             If useNKG && (currentIdx '= "") {
-                Set pred = "" For { Set pred=$Order(^NKG(-1,currentIdx,pred)) Quit:pred=""  Set dst="" For { Set dst=$Order(^NKG(-1,currentIdx,pred,dst)) Quit:dst=""  Set nbrCount=nbrCount+1, ^||walkNbrs(nbrCount)=dst } }
+                Set pred = -99999999  For { Set pred=$Order(^NKG(-1,currentIdx,pred)) Quit:(pred="")||(pred>=0)  Set dst="" For { Set dst=$Order(^NKG(-1,currentIdx,pred,dst)) Quit:dst=""  Set nbrCount=nbrCount+1, ^||walkNbrs(nbrCount)=dst } }
             } Else {
                 Set pred="" For { Set pred=$Order(^KG("out",current,pred)) Quit:pred=""  Set dst="" For { Set dst=$Order(^KG("out",current,pred,dst)) Quit:dst=""  Set nbrCount=nbrCount+1, ^||walkNbrs(nbrCount)=dst } }
             }
@@ -387,10 +387,10 @@ ClassMethod ShortestPathNKG(srcId As %String, dstId As %String, maxHops As %Inte
         For {
             Set ni = $Order(^||BF(ni))
             Quit:ni=""
-            Set pred = ""
+            Set pred = -99999999
             For {
                 Set pred = $Order(^NKG(-1, ni, pred))
-                Quit:pred=""
+                Quit:(pred="")!(pred>=0)
                 Set di = ""
                 For {
                     Set di = $Order(^NKG(-1, ni, pred, di))
@@ -413,10 +413,10 @@ ClassMethod ShortestPathNKG(srcId As %String, dstId As %String, maxHops As %Inte
         For {
             Set ni = $Order(^||BB(ni))
             Quit:ni=""
-            Set pred = ""
+            Set pred = -99999999
             For {
                 Set pred = $Order(^NKG(-2, ni, pred))
-                Quit:pred=""
+                Quit:(pred="")!(pred>=0)
                 Set si = ""
                 For {
                     Set si = $Order(^NKG(-2, ni, pred, si))
@@ -479,11 +479,10 @@ ClassMethod CountDistinctKHop(srcId As %String, predsJson As %String = "", maxHo
             Set s = $Order(frontier(s))
             Quit:s=""
             If direction = "out" || (direction = "both") {
-                Set pIdx2 = ""
+                Set pIdx2 = -99999999
                 For {
                     Set pIdx2 = $Order(^NKG(-1, s, pIdx2))
-                    Quit:pIdx2=""
-                    If pIdx2 >= 0 Quit
+                    Quit:(pIdx2="")!(pIdx2>=0)
                     If $IsObject(predsIdxArr) {
                         Set matched = 0
                         For pi = 0:1:(predsIdxArr.%Size()-1) {
@@ -503,11 +502,10 @@ ClassMethod CountDistinctKHop(srcId As %String, predsJson As %String = "", maxHo
                 }
             }
             If direction = "in" || (direction = "both") {
-                Set pIdx2 = ""
+                Set pIdx2 = -99999999
                 For {
                     Set pIdx2 = $Order(^NKG(-2, s, pIdx2))
-                    Quit:pIdx2=""
-                    If pIdx2 >= 0 Quit
+                    Quit:(pIdx2="")!(pIdx2>=0)
                     If $IsObject(predsIdxArr) {
                         Set matched = 0
                         For pi = 0:1:(predsIdxArr.%Size()-1) {
@@ -565,7 +563,8 @@ ClassMethod StructuralGuard(nodeIdx As %Integer, requiredPreds As %List) As %Boo
     If len = 0 Return 1
     For i = 1:1:len {
         Set predIdx = $List(requiredPreds, i)
-        If '$Data(^NKG(-1, nodeIdx, predIdx)) Return 0
+        // NKG stores pred keys as -(pIdx+1) to keep them negative (sort before "")
+        If '$Data(^NKG(-1, nodeIdx, -(predIdx+1))) Return 0
     }
     Return 1
 }
