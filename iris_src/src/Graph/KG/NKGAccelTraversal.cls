@@ -557,6 +557,19 @@ ClassMethod CountDistinctKHop(srcId As %String, predsJson As %String = "", maxHo
     Set estimate = ##class(Graph.KG.GraphIndex).EstimateHLL(merged)
     Return "{""estimate"":"_estimate_",""registers"":256,""std_error"":0.065}"
 }
+/// Returns 1 if nodeIdx has at least one edge for every predicate index in requiredPreds.
+/// Uses $Data — no value fetch — for structural check only.
+ClassMethod StructuralGuard(nodeIdx As %Integer, requiredPreds As %List) As %Boolean
+{
+    Set len = $ListLength(requiredPreds)
+    If len = 0 Return 1
+    For i = 1:1:len {
+        Set predIdx = $List(requiredPreds, i)
+        If '$Data(^NKG(-1, nodeIdx, predIdx)) Return 0
+    }
+    Return 1
+}
+
 ClassMethod Build2HopExact() As %Boolean
 {
     If '##class(Graph.KG.NKGAccelLoader).IsLoaded() {

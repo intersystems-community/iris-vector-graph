@@ -33,14 +33,19 @@ ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
     }
     Return cnt
 }
-ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "") As %String
+ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPreds As %List = "") As %String
 {
     Set result = ""
+    Set hasGuard = (requiredPreds '= "") && ($ListLength(requiredPreds) > 0)
     If pred '= "" {
         Set o = ""
         For {
             Set o = $Order(^KG("out", 0, srcId, pred, o))
             Quit:o=""
+            If hasGuard {
+                Set dstIdx = $Get(^NKG("$NI", o))
+                If dstIdx = "" || '##class(Graph.KG.NKGAccelTraversal).StructuralGuard(dstIdx, requiredPreds) Continue
+            }
             Set result = result _ o _ $Char(10)
         }
     } Else {
@@ -52,6 +57,10 @@ ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "") As %String
             For {
                 Set o = $Order(^KG("out", 0, srcId, p, o))
                 Quit:o=""
+                If hasGuard {
+                    Set dstIdx = $Get(^NKG("$NI", o))
+                    If dstIdx = "" || '##class(Graph.KG.NKGAccelTraversal).StructuralGuard(dstIdx, requiredPreds) Continue
+                }
                 Set result = result _ o _ $Char(10)
             }
         }
