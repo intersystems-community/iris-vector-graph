@@ -263,6 +263,20 @@ class TranslationContext:
         self.where_params.append(value)
         return "?"
 
+    @staticmethod
+    def _predicate_cost(cond: str) -> int:
+        """Heuristic cost for SQL WHERE condition ordering (Morrison OPT-4).
+        EXISTS structural guards cheapest; string scans most expensive."""
+        if "EXISTS" in cond:
+            return 0
+        if " = " in cond or " IS " in cond:
+            return 1
+        if " > " in cond or " < " in cond or " >= " in cond or " <= " in cond:
+            return 2
+        if "LIKE" in cond or "%CONTAINS" in cond or "LOWER(" in cond:
+            return 3
+        return 4
+
     def build_stage_sql(
         self, distinct: bool = False, select_override: Optional[str] = None
     ) -> tuple[str, List[Any]]:
@@ -290,7 +304,8 @@ class TranslationContext:
         if expanded_joins:
             parts.extend(expanded_joins)
         if self.where_conditions:
-            parts.append(f"WHERE {' AND '.join(self.where_conditions)}")
+            ordered = sorted(self.where_conditions, key=self._predicate_cost)
+            parts.append(f"WHERE {' AND '.join(ordered)}")
         if self.group_by_items:
             parts.append(f"GROUP BY {', '.join(self.group_by_items)}")
         if self.having_conditions:
