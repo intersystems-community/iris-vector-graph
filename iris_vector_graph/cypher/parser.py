@@ -1372,11 +1372,10 @@ def _parse_query_cached(query_str: str) -> ast.CypherQuery:
 def parse_query(
     query_str: str, params: Optional[Dict[str, Any]] = None
 ) -> ast.CypherQuery:
-    """Convenience function to parse a Cypher query string.
+    """Parse a Cypher query string, returning a cached AST.
 
-    Uses an LRU cache (maxsize=256) keyed on query_str to avoid re-parsing
-    identical queries. A deep copy of the cached AST is returned so callers
-    may freely mutate it (e.g. for parameter binding) without poisoning the
-    cache entry.
+    The cached AST is returned directly — callers must not mutate it.
+    The translator is read-only w.r.t. the AST; params are bound in
+    TranslationContext, not written into AST nodes.
     """
-    return copy.deepcopy(_parse_query_cached(query_str))
+    return _parse_query_cached(query_str)

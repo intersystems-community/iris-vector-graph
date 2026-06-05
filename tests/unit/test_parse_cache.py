@@ -13,14 +13,13 @@ def test_cache_hit_rate():
     assert hit_rate >= 0.90, f"Cache hit rate {hit_rate:.0%} < 90%"
 
 
-def test_cached_result_is_independent_copy():
-    """Mutating one returned AST must not affect the next call."""
+def test_cached_result_is_same_object():
+    """parse_query returns the cached AST directly (no deepcopy overhead)."""
     _parse_query_cached.cache_clear()
     query = "MATCH (n) RETURN n"
     ast1 = parse_query(query)
-    ast1.query_parts.clear()
     ast2 = parse_query(query)
-    assert ast2.query_parts, "Cache returned a shared reference — deepcopy is broken"
+    assert ast1 is ast2, "parse_query should return the cached object directly"
 
 
 def test_different_queries_cached_independently():
