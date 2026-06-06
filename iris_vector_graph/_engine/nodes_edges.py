@@ -415,6 +415,8 @@ class NodesEdgesMixin:
 
             prop_data = []
             for k, v in props.items():
+                if v is None:
+                    continue
                 val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                 prop_data.append([node_id, k, val_str, node_id, k])
 
