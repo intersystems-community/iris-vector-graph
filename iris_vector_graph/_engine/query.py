@@ -784,7 +784,53 @@ class QueryMixin:
             except Exception:
                 return None
 
-        return None
+        # NKG fast-path: variable-length patterns [*1..K] or [:PRED*1..K] for K up to 5.
+        # Routes to NKGAccelTraversal.KHopNeighbors when ^NKG is populated.
+        # Handles: MATCH (n {node_id: $x})-[*1..K]->(m) RETURN m.node_id [AS alias] [LIMIT N]
+        #          MATCH (n {node_id: $x})-[:PRED*1..K]->(m) RETURN m.node_id [AS alias] [LIMIT N]
+        _KHOP_VAR_RE = _re.compile(
+            r'''^\s*MATCH\s*\(\s*\w+\s*\{\s*node_id\s*:\s*\$(\w+)\s*\}\s*\)
+                \s*-\s*\[\s*(?::\s*(\w+)\s*)?\*\s*1\s*\.\.\s*([2-5])\s*\]\s*->\s*\(\s*(\w+)\s*\)
+                \s*RETURN\s+\4\.node_id(?:\s+AS\s+(\w+))?(?:\s+LIMIT\s+(\d+))?\s*$''',
+            _re.IGNORECASE | _re.VERBOSE,
+        )
+        m = _KHOP_VAR_RE.match(cypher_query)
+        if m:
+            src_param = m.group(1)
+            _pred_type = m.group(2)  # may be None (untyped)
+            max_hops = int(m.group(3))
+            _nvar = m.group(4)
+            alias = m.group(5)
+            limit_str = m.group(6)
+            src_id = params.get(src_param)
+            if src_id is None:
+                return None
+            # Only route through NKG if ^NKG is populated
+            try:
+                nkg_ok = bool(int(str(self._iris_obj().classMethodValue(
+                    "Graph.KG.Traversal", "NKGPopulated"
+                ))))
+            except Exception:
+                nkg_ok = False
+            if not nkg_ok:
+                return None
+            limit = int(limit_str) if limit_str else 0
+            max_nodes = max(limit, 100_000) if limit else 100_000
+            try:
+                import json as _json
+                raw = str(self._iris_obj().classMethodValue(
+                    "Graph.KG.NKGAccelTraversal", "KHopNeighbors",
+                    str(src_id), max_hops, max_nodes,
+                ))
+                r = _json.loads(raw)
+                col = alias or "node_id"
+                # Exclude seed (dist == 0); apply limit if specified
+                ids = [n["id"] for n in r.get("nodes", []) if n.get("dist", 0) > 0]
+                if limit:
+                    ids = ids[:limit]
+                return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
+            except Exception:
+                return None
 
         return None
     def _execute_approx_count_distinct(self, cypher_query: str, parameters, match) -> Dict[str, Any]:
