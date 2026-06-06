@@ -214,8 +214,9 @@ class TestObjectScriptPageRankPath:
         scores = [{"id": "a", "score": 0.9}, {"id": "b", "score": 0.5}]
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = json.dumps(scores)
+        # Must set objectscript_deployed=True to reach lines 69-100
+        eng.capabilities = MagicMock(objectscript_deployed=True, kg_built=True)
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            # Mock store to not interfere
             eng._store._store_capabilities = {"ppr": False}
             result = eng.kg_PERSONALIZED_PAGERANK(["a"])
         assert isinstance(result, dict)
