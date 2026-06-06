@@ -213,3 +213,51 @@ class TestExecuteAQLBranches:
             assert result is not None
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Lines 180-205: _extract_traversal + _execute_traversal
+# (only reached when native_sql capability is False)
+# ---------------------------------------------------------------------------
+
+class TestExtractTraversalPath:
+
+    def test_extract_traversal_with_native_sql_disabled(self, eng):
+        """_extract_traversal is called when native_sql=False in store capabilities."""
+        # Temporarily disable native_sql to route through _extract_traversal
+        old_caps = eng._store_capabilities.get("native_sql", True)
+        eng._store_capabilities["native_sql"] = False
+        try:
+            result = eng.execute_cypher(
+                "MATCH (n {node_id: $id})-[:R]->(m) RETURN m.node_id",
+                {"id": "sp_0"}
+            )
+            assert result is not None
+        finally:
+            eng._store_capabilities["native_sql"] = old_caps
+
+    def test_extract_traversal_count_with_native_sql_disabled(self, eng):
+        """_extract_traversal count branch via native_sql=False."""
+        old_caps = eng._store_capabilities.get("native_sql", True)
+        eng._store_capabilities["native_sql"] = False
+        try:
+            result = eng.execute_cypher(
+                "MATCH (n {node_id: $id})-[:R]->(m) RETURN count(m) AS cnt",
+                {"id": "sp_0"}
+            )
+            assert result is not None
+        finally:
+            eng._store_capabilities["native_sql"] = old_caps
+
+    def test_extract_traversal_id_key_branch(self, eng):
+        """_extract_traversal k=='id' branch."""
+        old_caps = eng._store_capabilities.get("native_sql", True)
+        eng._store_capabilities["native_sql"] = False
+        try:
+            result = eng.execute_cypher(
+                "MATCH (n {id: $x})-[:R]->(m) RETURN m.node_id",
+                {"x": "sp_0"}
+            )
+            assert result is not None
+        finally:
+            eng._store_capabilities["native_sql"] = old_caps
