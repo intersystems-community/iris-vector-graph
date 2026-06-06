@@ -308,10 +308,12 @@ class AdminMixin:
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
         cursor = self.conn.cursor()
         try:
+            # IRIS Python driver (ARM64) segfaults on FETCH FIRST ? ROWS ONLY with
+            # a parameterized placeholder. Inline the limit as a literal integer.
+            safe_limit = max(1, int(limit))
             cursor.execute(
-                "SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
-                "WHERE Command IS NOT NULL FETCH FIRST ? ROWS ONLY",
-                [limit],
+                f"SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
+                f"WHERE Command IS NOT NULL FETCH FIRST {safe_limit} ROWS ONLY",
             )
             return [
                 {"id": str(r[0]), "state": str(r[1]), "client": str(r[2]),

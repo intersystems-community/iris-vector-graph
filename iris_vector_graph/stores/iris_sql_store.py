@@ -163,8 +163,10 @@ class IRISGraphStore:
             )
             node_ids = [r[0] for r in cursor.fetchall()]
         else:
-            cursor.execute("SELECT node_id FROM Graph_KG.nodes" + (" FETCH FIRST ? ROWS ONLY" if limit else ""),
-                           [limit] if limit else [])
+            # IRIS Python driver (ARM64) segfaults on FETCH FIRST ? ROWS ONLY with
+            # a parameterized placeholder. Inline as literal integer.
+            fetch_clause = f" FETCH FIRST {int(limit)} ROWS ONLY" if limit else ""
+            cursor.execute(f"SELECT node_id FROM Graph_KG.nodes{fetch_clause}")
             node_ids = [r[0] for r in cursor.fetchall()]
 
         if property_filters:
