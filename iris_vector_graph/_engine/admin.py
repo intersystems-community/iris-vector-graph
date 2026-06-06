@@ -143,9 +143,15 @@ class AdminMixin:
         ]
         try:
             cursor = self.conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM {_table('fhir_bridges')} FETCH FIRST 1 ROWS ONLY")
-            rows.append(["fhir_bridge_unique", "UNIQUENESS", "NODE",
-                          ["*"], ["external_id", "bridge_type", "node_id"], "pk_fhir_bridges"])
+            # Check table existence via %Dictionary before querying it — the IRIS
+            # Python driver segfaults on SELECT against a non-existent table.
+            cursor.execute(
+                "SELECT COUNT(*) FROM %Dictionary.CompiledClass "
+                "WHERE Name='Graph.KG.FHIRBridge'"
+            )
+            if int((cursor.fetchone() or [0])[0]) > 0:
+                rows.append(["fhir_bridge_unique", "UNIQUENESS", "NODE",
+                              ["*"], ["external_id", "bridge_type", "node_id"], "pk_fhir_bridges"])
         except Exception:
             pass
         return IVGResult(columns=cols, rows=rows)
