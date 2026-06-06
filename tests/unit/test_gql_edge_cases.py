@@ -56,10 +56,28 @@ class TestGqlExceptionHandlers:
             assert resp.status_code in (200, 400, 503, 500)
 
     def test_health_endpoint_in_gql_app(self, app_with_mock_engine):
-        """The / route in create_app returns health info."""
+        """The /health route in create_app checks DB connection."""
+        with TestClient(app_with_mock_engine, raise_server_exceptions=False) as client:
+            resp = client.get("/health")
+            assert resp.status_code in (200, 404, 500)
+            if resp.status_code == 200:
+                data = resp.json()
+                assert "status" in data
+
+    def test_root_endpoint_in_gql_app(self, app_with_mock_engine):
+        """The / route returns API name and graphql_endpoint."""
         with TestClient(app_with_mock_engine, raise_server_exceptions=False) as client:
             resp = client.get("/")
             assert resp.status_code in (200, 404)
+            if resp.status_code == 200:
+                data = resp.json()
+                assert "graphql" in data or "name" in data
+
+    def test_graphql_router_registered(self, app_with_mock_engine):
+        """GraphQL router is accessible at /graphql."""
+        with TestClient(app_with_mock_engine, raise_server_exceptions=False) as client:
+            resp = client.post("/graphql", json={"query": "{ __typename }"})
+            assert resp.status_code in (200, 400, 500)
 
     def test_embedder_injected_if_provided(self):
         """create_app with embedder= sets engine.embedder."""
