@@ -169,6 +169,10 @@ ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHo
     Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
     If count = 0 Return "[]"
 
+    // Build JSON without per-row %DynamicObject allocation.
+    // NOTE: wins at hops=1 (small row counts); at hops>=2 %DynamicArray's C-level
+    // internal builder is faster than ObjectScript string concat regardless of strategy.
+    // Beating it for large result sets requires a C callout (libarno or similar).
     Set result = "["
     Set first = 1
     For i = 1:1:count {
@@ -179,16 +183,11 @@ ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHo
         Set s = $ListGet(lb, 1)
         Set p = $ListGet(lb, 2)
         Set o = $ListGet(lb, 3)
-        // Only escape when a quote is actually present (fast $Find check before $Replace)
         If $Find(s, """") Set s = $Replace(s, """", "\""")
         If $Find(p, """") Set p = $Replace(p, """", "\""")
         If $Find(o, """") Set o = $Replace(o, """", "\""")
         Set result = result
-            _ "{""s"":""" _ s _ ""","
-            _ """p"":""" _ p _ ""","
-            _ """o"":""" _ o _ ""","
-            _ """w"":" _ +$ListGet(lb, 4) _ ","
-            _ """step"":" _ +$ListGet(lb, 5) _ "}"
+            _ "{""s"":""" _ s _ """,""p"":""" _ p _ """,""o"":""" _ o _ """,""w"":" _ +$ListGet(lb, 4) _ ",""step"":" _ +$ListGet(lb, 5) _ "}"
     }
     Return result _ "]"
 }
