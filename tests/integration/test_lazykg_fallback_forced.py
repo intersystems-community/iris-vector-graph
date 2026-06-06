@@ -19,7 +19,10 @@ from iris_vector_graph.result import IVGResult
 @pytest.fixture
 def store_no_nkg(iris_connection, iris_master_cleanup):
     """Store with ^KG built but ^NKG NOT populated.
-    Forces LazyKG fallback in betweenness/closeness/eigenvector."""
+    Forces LazyKG fallback in betweenness/closeness/eigenvector.
+
+    Teardown rebuilds ^NKG so subsequent tests using NKG fast-path work correctly.
+    """
     eng = IRISGraphEngine(iris_connection, embedding_dimension=4)
     iris_obj = _iris.createIRIS(iris_connection)
 
@@ -38,7 +41,14 @@ def store_no_nkg(iris_connection, iris_master_cleanup):
     # Kill ^NKG to ensure ObjectScript fails
     iris_obj.kill("^NKG")
 
-    return eng._store
+    yield eng._store
+
+    # Teardown: restore ^NKG so session stays healthy for subsequent tests
+    try:
+        iris_obj.classMethodValue("Graph.KG.Traversal", "BuildNKG")
+        iris_connection.commit()
+    except Exception:
+        pass
 
 
 # ===========================================================================
