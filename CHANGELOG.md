@@ -1,5 +1,21 @@
 # Changelog
 
+### v2.1.0 (2026-06-06)
+
+**NKG fast-path + structural guard + collation fix**
+
+- feat(193): `_try_khop_fast_path` extension — `MATCH (n)-[*1..N]->(m)` Cypher patterns
+  route to integer-keyed `^NKG` index, bypassing SQL translation entirely.
+  4.9–13.4x faster than SQL path at hops 2–5 (dataset S).
+- feat(193): `BFSFastJsonDirect` — eliminates `%DynamicObject` allocation at hops=1
+  (1.51x faster for small result sets).
+- feat(192): Structural guard pre-filter — confirms node adjacency exists before
+  evaluating predicate values; 287–378x parse cache speedup via `lru_cache`.
+- fix: NKG traversal collation bug — `$Order(^NKG(-1, node, ""))` skipped all negative
+  predicate keys; fixed by starting from `-99999999`.
+- docs: README rewrite — 1766 → 169 lines; CHANGELOG.md extracted (104 versions).
+- docs: `PRE_RELEASE_CHECKLIST.md` with ≥90% coverage gate and benchmark regression gate.
+
 All notable changes to `iris-vector-graph`.
 
 ### v2.0.0 (2026-05-29)
