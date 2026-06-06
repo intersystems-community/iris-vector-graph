@@ -745,7 +745,8 @@ class QueryMixin:
                 raw = str(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHopNeighborIds", str(src_id), pred
                 ))
-                ids = [x for x in raw.split("\n") if x]
+                # KHopNeighborIds returns "" for no results; ObjectScript None → "None"
+                ids = [x for x in raw.split("\n") if x and x != "None"]
                 col = alias or "node_id"
                 return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
             except Exception:
@@ -778,7 +779,8 @@ class QueryMixin:
                 raw = str(self._iris_obj().classMethodValue(
                     "Graph.KG.Traversal", "KHop2NeighborIds", str(src_id), pred, limit
                 ))
-                ids = [x for x in raw.split("\n") if x]
+                # KHopNeighborIds returns "" for no results; ObjectScript None → "None"
+                ids = [x for x in raw.split("\n") if x and x != "None"]
                 col = alias or "node_id"
                 return IVGResult(columns=[col], rows=[(nid,) for nid in ids])
             except Exception:
