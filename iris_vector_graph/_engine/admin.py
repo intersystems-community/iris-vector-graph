@@ -306,10 +306,24 @@ class AdminMixin:
         )
 
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Return active IRIS SQL queries.
+
+        Requires IRIS Enterprise — returns [] on Community Edition.
+        The IRIS Python driver segfaults when %SYS.ProcessQuery is queried
+        on Community (insufficient privilege causes a C-level crash, not a
+        Python exception). We detect Community via GetISCProduct() == 4.
+        """
+        try:
+            iris_obj = self._iris_obj()
+            product = int(str(iris_obj.classMethodValue("%SYSTEM.Version", "GetISCProduct")))
+            if product == 4:  # Community Edition — unsafe to query %SYS.ProcessQuery
+                return []
+        except Exception:
+            return []  # cannot determine edition — play safe
         cursor = self.conn.cursor()
         try:
-            # IRIS Python driver (ARM64) segfaults on FETCH FIRST ? ROWS ONLY with
-            # a parameterized placeholder. Inline the limit as a literal integer.
+            # Inline limit — IRIS Python driver (ARM64) segfaults on
+            # FETCH FIRST ? ROWS ONLY with a parameterized placeholder.
             safe_limit = max(1, int(limit))
             cursor.execute(
                 f"SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "

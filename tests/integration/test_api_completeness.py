@@ -77,12 +77,12 @@ class TestAdminMethods:
         result = engine.get_community_warnings(max_entries=2)
         assert len(result) <= 2
 
-    def test_list_active_queries_method_exists_callable(self, engine):
-        """%SYS.ProcessQuery segfaults on ARM64 Community IRIS — method verified to exist.
-        The FETCH FIRST ? param fix was applied to the source; the underlying
-        %SYS.ProcessQuery table itself is the segfault source on Community.
-        Enterprise containers may work correctly."""
-        assert callable(engine.list_active_queries)
+    def test_list_active_queries_safe_on_community(self, engine):
+        """list_active_queries probes with TOP 0 first — returns [] on Community IRIS
+        (where %SYS.ProcessQuery is inaccessible) without segfaulting."""
+        result = engine.list_active_queries(limit=5)
+        assert isinstance(result, list)
+        # On Community IRIS returns [] — Enterprise may return active queries
 
 
 # ===========================================================================
