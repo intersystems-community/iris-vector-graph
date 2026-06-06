@@ -810,8 +810,8 @@ class NodesEdgesMixin:
                     [s, p, o],
                 )
             except Exception as ex:
-                if not err_lower(ex):
-                    continue
+                if err_lower(ex):
+                    continue  # duplicate edge — skip silently
             try:
                 self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0")
             except Exception:

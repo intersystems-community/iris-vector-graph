@@ -290,14 +290,17 @@ class AlgorithmsMixin:
         if self._detect_arno() and "random_walk" in self._arno_capabilities.get(
             "algorithms", []
         ):
-            result = self._arno_call(
-                "Graph.KG.NKGAccel", "RandomWalkJson", seed, str(length), str(num_walks)
-            )
-            parsed = json.loads(result)
-            if isinstance(parsed, list):
-                return parsed
-            if isinstance(parsed, dict) and "error" in parsed:
-                logger.warning(f"Arno random_walk error: {parsed['error']}")
+            try:
+                result = self._arno_call(
+                    "Graph.KG.NKGAccel", "RandomWalkJson", seed, str(length), str(num_walks)
+                )
+                parsed = json.loads(result)
+                if isinstance(parsed, list):
+                    return parsed
+                if isinstance(parsed, dict) and "error" in parsed:
+                    logger.warning(f"Arno random_walk error: {parsed['error']}")
+            except Exception as exc:
+                logger.warning("random_walk arno call failed (%s), returning []", exc)
         return []
     def kg_GRAPH_PATH(self, src_id: str, pred1: str, pred2: str, max_hops: int = 2):
         result = self.execute_cypher(
@@ -401,7 +404,7 @@ class AlgorithmsMixin:
                     nid, emb_csv = row[0], str(row[1])
                     try:
                         import numpy as _np
-                        node_embeddings[nid] = list(_np.fromstring(emb_csv, dtype=float, sep=","))
+                        node_embeddings[nid] = [float(x) for x in emb_csv.split(",")]
                     except Exception:
                         pass
                 cursor.close()
