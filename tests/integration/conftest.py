@@ -6,6 +6,18 @@ from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.engine import IRISGraphEngine
 
 
+def pytest_collection_modifyitems(items):
+    """Run test_lazykg_fallback_forced tests last.
+
+    These tests kill ^NKG which can contaminate the session-scoped iris_connection
+    for subsequent tests that rely on NKG fast-path. Running them last avoids
+    ordering-dependent failures.
+    """
+    forced = [i for i in items if "lazykg_fallback_forced" in str(getattr(i, "fspath", ""))]
+    other = [i for i in items if "lazykg_fallback_forced" not in str(getattr(i, "fspath", ""))]
+    items[:] = other + forced
+
+
 def _cleanup_prefix(engine, prefix: str) -> None:
     cursor = engine.conn.cursor()
     pattern = f"{prefix}%"
