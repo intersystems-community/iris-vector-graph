@@ -236,6 +236,34 @@ def iris_master_cleanup(iris_connection):
 
 
 @pytest.fixture(scope="function")
+def arno_master_cleanup(arno_iris_connection):
+    """Enterprise-side cleanup: wipe all tables and globals, same as iris_master_cleanup."""
+    cursor = arno_iris_connection.cursor()
+    for table in [
+        "Graph_KG.rdf_edges",
+        "Graph_KG.rdf_labels",
+        "Graph_KG.rdf_props",
+        "Graph_KG.kg_NodeEmbeddings",
+        "Graph_KG.kg_NodeEmbeddings_optimized",
+        "Graph_KG.nodes",
+        "Graph_KG.docs",
+    ]:
+        with contextlib.suppress(Exception):
+            cursor.execute(f"DELETE FROM {table}")
+    with contextlib.suppress(Exception):
+        arno_iris_connection.commit()
+    with contextlib.suppress(Exception):
+        import iris as _iris
+        _iris_obj = _iris.createIRIS(arno_iris_connection)
+        _iris_obj.kill("^KG")
+        _iris_obj.kill("^NKG")
+    with contextlib.suppress(Exception):
+        cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
+    arno_iris_connection.commit()
+    yield
+
+
+@pytest.fixture(scope="function")
 def iris_cursor(iris_connection):
     cursor = iris_connection.cursor()
     with contextlib.suppress(Exception):
