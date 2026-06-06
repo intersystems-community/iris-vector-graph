@@ -176,10 +176,13 @@ ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHo
         If lb = "" Continue
         If 'first Set result = result _ ","
         Set first = 0
-        // Escape quotes in string fields (node IDs rarely contain quotes, but be safe)
-        Set s = $Replace($ListGet(lb, 1), """", "\""")
-        Set p = $Replace($ListGet(lb, 2), """", "\""")
-        Set o = $Replace($ListGet(lb, 3), """", "\""")
+        Set s = $ListGet(lb, 1)
+        Set p = $ListGet(lb, 2)
+        Set o = $ListGet(lb, 3)
+        // Only escape when a quote is actually present (fast $Find check before $Replace)
+        If $Find(s, """") Set s = $Replace(s, """", "\""")
+        If $Find(p, """") Set p = $Replace(p, """", "\""")
+        If $Find(o, """") Set o = $Replace(o, """", "\""")
         Set result = result
             _ "{""s"":""" _ s _ ""","
             _ """p"":""" _ p _ ""","
