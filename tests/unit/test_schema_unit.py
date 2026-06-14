@@ -207,7 +207,9 @@ class TestSync:
 
     def test_sync_kg_success(self):
         eng, conn, cursor = _make_eng()
-        with patch("iris_vector_graph.schema._call_classmethod", return_value=None):
+        mock_iris = MagicMock()
+        mock_iris.classMethodVoid.return_value = None
+        with patch.object(eng, "_iris_obj", return_value=mock_iris):
             result = eng._sync_kg()
         assert result is True
         assert eng.capabilities.kg_built is True

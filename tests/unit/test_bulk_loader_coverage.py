@@ -28,13 +28,9 @@ class TestBulkLoaderInit:
         loader, _, _ = _make_loader(batch_size=500)
         assert loader is not None
 
-    def test_iris_obj_cached(self):
+    def test_conn_stored(self):
         loader, conn, _ = _make_loader()
-        io = MagicMock()
-        with patch("iris.createIRIS", return_value=io):
-            obj1 = loader._iris_obj()
-            obj2 = loader._iris_obj()
-        assert obj1 is obj2  # cached
+        assert loader.conn is conn
 
 
 class TestBulkLoaderLoadNodes:

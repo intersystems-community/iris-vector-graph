@@ -2,7 +2,7 @@
 E2E tests using the real 10K HLA immunology knowledge graph.
 
 Data: examples/expanded_mindwalk_KG_10000.{graphml,vectors.npy,vectors.ids.txt}
-Container: gqs-ivg-test (local, managed by conftest.py)
+Container: ivg-iris (local, managed by conftest.py)
 
 The session fixture loads the graph + embeddings once, then all test classes
 run against it. Re-run with SKIP_DATA_LOAD=true to skip the ~3min ingest.

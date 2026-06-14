@@ -2,7 +2,7 @@
 E2E tests for Personalized PageRank via the ObjectScript .cls fast path.
 
 Feature: 021-deploy-cls-layer
-Container: gqs-ivg-test (iris-devtester managed, image: intersystemsdc/iris-community:latest-em)
+Container: ivg-iris (iris-devtester managed, image: intersystemsdc/iris-community:latest-em)
 
 Validates the full stack:
   initialize_schema() → .cls deployed → ^KG bootstrapped →

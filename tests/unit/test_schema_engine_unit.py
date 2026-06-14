@@ -81,8 +81,9 @@ class TestInitializeSchema:
                                    return_value=MagicMock(objectscript_deployed=False, kg_built=False)):
                             result = eng.initialize_schema(auto_deploy_objectscript=False)
 
-        drop_sqls = [s for s in sqls if isinstance(s, str) and "DROP TABLE" in s]
-        assert len(drop_sqls) >= 1
+        # Empty-table dim mismatch → ALTER TABLE (not DROP TABLE)
+        alter_sqls = [s for s in sqls if isinstance(s, str) and "ALTER" in s.upper()]
+        assert len(alter_sqls) >= 1
 
     def test_db_dim_mismatch_nonempty_table_no_drop(self):
         """Non-empty table with dim mismatch → error logged, no DROP."""

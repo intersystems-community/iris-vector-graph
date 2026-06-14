@@ -27,7 +27,7 @@ import uuid
 import pytest
 
 ENTERPRISE_CONTAINER = os.environ.get("IVG_ENTERPRISE_CONTAINER", "iris-vector-graph-enterprise")
-COMMUNITY_CONTAINER = os.environ.get("IVG_COMMUNITY_CONTAINER", "gqs-ivg-test")
+COMMUNITY_CONTAINER = os.environ.get("IVG_COMMUNITY_CONTAINER", "ivg-iris")
 
 _enterprise_running = subprocess.run(
     ["docker", "inspect", ENTERPRISE_CONTAINER],

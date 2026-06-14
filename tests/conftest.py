@@ -98,16 +98,29 @@ def iris_connection(iris_test_container):
 
     _IVG_PORT = int(os.environ.get("IVG_PORT", "21972"))
 
+    conn = None
+
+    # Try container IP first (Linux Docker where container IPs are routable from host).
+    # On macOS Docker Desktop / OrbStack the container IP is NOT routable from the host,
+    # so we catch the connection error and fall through to the iris_devtester path.
     if cip:
         import iris.dbapi as _dbapi
-        conn = _dbapi.connect(
-            hostname=cip, port=1972, namespace="USER",
-            username="_SYSTEM", password="SYS",
-        )
-        logger.info("Connected to %s via container IP %s:1972 (avoids SSH tunnel conflicts)", container_name, cip)
-    else:
-        # No Docker IP (e.g. OrbStack env). Use iris_devtester for password-reset-safe
-        # connection, then verify we're NOT on los-iris (SSH tunnel on localhost:1972/21972).
+        try:
+            conn = _dbapi.connect(
+                hostname=cip, port=1972, namespace="USER",
+                username="_SYSTEM", password="SYS",
+            )
+            logger.info("Connected to %s via container IP %s:1972", container_name, cip)
+        except Exception as _e:
+            logger.info(
+                "Container IP %s:1972 not routable from host (%s) — falling back to iris_devtester",
+                cip, _e,
+            )
+            conn = None
+
+    if conn is None:
+        # iris_devtester path: works on macOS Docker Desktop, OrbStack, and Linux.
+        # Also verifies we're NOT accidentally hitting los-iris via an SSH tunnel.
         try:
             from iris_devtester import IRISContainer as _IRC
             _fresh = _IRC.attach(container_name)
@@ -125,7 +138,7 @@ def iris_connection(iris_test_container):
                     f"localhost:{_IVG_PORT} is los-iris (SSH tunnel), NOT ivg-iris. "
                     "Stop the SSH tunnel or configure ivg-iris on a different host port."
                 )
-            logger.info("Connected to %s via iris_devtester fallback (OrbStack env)", container_name)
+            logger.info("Connected to %s via iris_devtester", container_name)
         except RuntimeError:
             raise
         except Exception as e:

@@ -91,16 +91,12 @@ class TestRebuildIndices:
         result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
         assert result is True
 
-    def test_sql_fail_tune_success_returns_true(self):
+    def test_execute_exception_returns_false(self):
+        # _rebuild_indices has no fallback: any execute exception → False
         loader, conn, cursor = _make_loader()
-        call_seq = iter([Exception("BuildIndices failed"), None])
-        cursor.execute.side_effect = lambda *a: (_ for _ in ()).throw(next(call_seq)) if isinstance(next_val := next(call_seq), Exception) else None
-
-        # Simpler approach: first call raises, second doesn't
-        calls = [Exception("BuildIndices failed"), None]
-        cursor.execute.side_effect = calls
+        cursor.execute.side_effect = Exception("BuildIndices failed")
         result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
-        assert result is True
+        assert result is False
 
     def test_total_failure_returns_false(self):
         loader, conn, cursor = _make_loader()
@@ -217,24 +213,22 @@ class TestRebuildAllIndices:
 
     def test_success_all_true(self):
         loader, conn, cursor = _make_loader()
-        iris_obj = MagicMock()
-        iris_obj.classMethodVoid.return_value = None
-        with patch.object(loader, "_iris_obj", return_value=iris_obj):
-            result = loader.rebuild_all_indices()
+        cursor.execute.return_value = None
+        cursor.fetchall.return_value = []
+        result = loader.rebuild_all_indices()
         assert all(v is True for v in result.values())
         assert len(result) == 4
 
     def test_partial_failure(self):
         loader, conn, cursor = _make_loader()
-        iris_obj = MagicMock()
         call_count = [0]
-        def side(cls, method):
+        def side(*a):
             call_count[0] += 1
             if call_count[0] == 2:
                 raise RuntimeError("BuildIndices failed")
-        iris_obj.classMethodVoid.side_effect = side
-        with patch.object(loader, "_iris_obj", return_value=iris_obj):
-            result = loader.rebuild_all_indices()
+        cursor.execute.side_effect = side
+        cursor.fetchall.return_value = []
+        result = loader.rebuild_all_indices()
         assert False in result.values()
 
 
@@ -246,21 +240,14 @@ class TestBuildGraphGlobals:
 
     def test_success_returns_true(self):
         loader, conn, cursor = _make_loader()
-        iris_obj = MagicMock()
-        iris_obj.classMethodVoid.return_value = None
-        iris_obj.get.side_effect = ["100", "500"]
-        with patch.object(loader, "_iris_obj", return_value=iris_obj):
-            with patch.dict("sys.modules", {"iris": MagicMock()}):
-                result = loader.build_graph_globals()
+        cursor.execute.return_value = None
+        result = loader.build_graph_globals()
         assert result is True
 
     def test_failure_returns_false(self):
         loader, conn, cursor = _make_loader()
-        iris_obj = MagicMock()
-        iris_obj.classMethodVoid.side_effect = RuntimeError("class not found")
-        with patch.object(loader, "_iris_obj", return_value=iris_obj):
-            with patch.dict("sys.modules", {"iris": MagicMock()}):
-                result = loader.build_graph_globals()
+        cursor.execute.side_effect = RuntimeError("class not found")
+        result = loader.build_graph_globals()
         assert result is False
 
 

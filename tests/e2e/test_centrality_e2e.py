@@ -1,4 +1,4 @@
-"""Spec 162 — End-to-end Centrality tests against live gqs-ivg-test container.
+"""Spec 162 — End-to-end Centrality tests against live ivg-iris container.
 
 Test-first (Constitution Principle III): all tests below are authored BEFORE
 the corresponding ObjectScript classmethods + Python wrappers exist.
