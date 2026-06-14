@@ -151,25 +151,36 @@ def iris_connection(iris_test_container):
     # binding state.  All code paths that call createIRIS — including schema init,
     # _call_classmethod, engine._iris_obj() — must be redirected to a dedicated
     # native connection that never receives cursor DDL.
+    #
+    # Community Edition has a 5-connection limit.  To avoid exhausting it, we use
+    # lazy native-connection creation: the native slot is opened on first demand,
+    # then reused for the life of the session.  This avoids holding an extra
+    # connection open during the large chunks of a test session where _iris_obj()
+    # is never called.
     import iris as _iris_module
     _original_createIRIS = _iris_module.createIRIS
-    _native_conn_for_session = None
-    try:
-        import iris.dbapi as _dbapi2
-        _native_conn_for_session = _dbapi2.connect(
-            hostname=conn.hostname,
-            port=conn.port,
-            namespace=conn.namespace,
-            username="_SYSTEM",
-            password="SYS",
-        )
-    except Exception as _e:
-        logger.warning("Could not create native conn for session isolation: %s", _e)
-        _native_conn_for_session = None
+    _native_conn_holder: list = [None]  # mutable cell so the closure can update it
+
+    def _get_or_open_native_conn():
+        if _native_conn_holder[0] is None:
+            try:
+                import iris.dbapi as _dbapi2
+                _native_conn_holder[0] = _dbapi2.connect(
+                    hostname=conn.hostname,
+                    port=conn.port,
+                    namespace=conn.namespace,
+                    username="_SYSTEM",
+                    password="SYS",
+                )
+            except Exception as _e:
+                logger.warning("Could not create native conn for session isolation: %s", _e)
+        return _native_conn_holder[0]
 
     def _safe_createIRIS(target_conn):
-        if _native_conn_for_session is not None and target_conn is conn:
-            return _original_createIRIS(_native_conn_for_session)
+        if target_conn is conn:
+            native = _get_or_open_native_conn()
+            if native is not None:
+                return _original_createIRIS(native)
         return _original_createIRIS(target_conn)
 
     _iris_module.createIRIS = _safe_createIRIS
@@ -198,8 +209,8 @@ def iris_connection(iris_test_container):
 
     _iris_module.createIRIS = _original_createIRIS
     with contextlib.suppress(Exception):
-        if _native_conn_for_session is not None:
-            _native_conn_for_session.close()
+        if _native_conn_holder[0] is not None:
+            _native_conn_holder[0].close()
     conn.close()
 
 
