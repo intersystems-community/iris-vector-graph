@@ -825,7 +825,18 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
         # Use a dedicated connection so that iris.createIRIS() never touches self.conn.
         # Mixing createIRIS() and cursor DDL (DROP/CREATE INDEX) on the same connection
         # permanently corrupts the IRIS Python driver's parameter binding state.
+        #
+        # In test contexts the pytest conftest monkeypatches iris.createIRIS to redirect
+        # createIRIS(self.conn) to a shared session-level native connection, avoiding
+        # redundant open connections under Community Edition's 5-connection limit.
+        # We detect the monkeypatch by checking the function name: the real createIRIS
+        # is a C extension; the monkeypatch is a Python closure named "_safe_createIRIS".
         import iris
+        _create = iris.createIRIS
+        if getattr(_create, "__name__", "") == "_safe_createIRIS":
+            # Test context: monkeypatch handles isolation — call directly.
+            return _create(self.conn)
+        # Production path: open a dedicated native connection (never used for cursor DDL).
         if self._native_conn is None or getattr(self._native_conn, "isClosed", lambda: True)():
             try:
                 hostname = getattr(self.conn, "hostname", None)
@@ -841,10 +852,10 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
                         password="SYS",
                     )
                 else:
-                    return iris.createIRIS(self.conn)
+                    return _create(self.conn)
             except Exception:
-                return iris.createIRIS(self.conn)
-        return iris.createIRIS(self._native_conn)
+                return _create(self.conn)
+        return _create(self._native_conn)
 
 
 
