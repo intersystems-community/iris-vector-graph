@@ -12,8 +12,9 @@ from typing import Optional
 try:
     from api.gql.schema import schema
     from api.gql.loaders import ProteinLoader, GeneLoader, PathwayLoader
-    SCHEMA_EXISTS = True
-except ImportError as e:
+    from examples.domains.biomedical.resolver import BiomedicalDomainResolver
+    SCHEMA_EXISTS = BiomedicalDomainResolver is not None
+except ImportError:
     SCHEMA_EXISTS = False
     schema = None
 
@@ -25,7 +26,7 @@ except ImportError as e:
 class TestProteinQueryResolver:
     """Integration tests for protein query resolver"""
 
-    async def test_protein_query_simple_lookup(self, engine):
+    async def test_protein_query_simple_lookup(self, iris_connection, engine):
         """Test protein(id) query returns correct fields"""
         # Setup: Create test protein in database
         cursor = iris_connection.cursor()
@@ -94,7 +95,7 @@ class TestProteinQueryResolver:
         assert protein["function"] == "Tumor suppressor protein"
         assert "Protein" in protein["labels"]
 
-    async def test_protein_query_not_found(self, engine):
+    async def test_protein_query_not_found(self, iris_connection, engine):
         """Test protein(id) query returns None for non-existent protein"""
         query = """
             query GetProtein($id: ID!) {
@@ -119,7 +120,7 @@ class TestProteinQueryResolver:
         assert result.errors is None
         assert result.data["protein"] is None
 
-    async def test_protein_query_optional_fields(self, engine):
+    async def test_protein_query_optional_fields(self, iris_connection, engine):
         """Test protein query handles missing optional fields gracefully"""
         cursor = iris_connection.cursor()
 
@@ -180,7 +181,7 @@ class TestProteinQueryResolver:
 class TestGeneQueryResolver:
     """Integration tests for gene query resolver"""
 
-    async def test_gene_query_simple_lookup(self, engine):
+    async def test_gene_query_simple_lookup(self, iris_connection, engine):
         """Test gene(id) query returns correct fields"""
         cursor = iris_connection.cursor()
 
@@ -247,7 +248,7 @@ class TestGeneQueryResolver:
 class TestPathwayQueryResolver:
     """Integration tests for pathway query resolver"""
 
-    async def test_pathway_query_simple_lookup(self, engine):
+    async def test_pathway_query_simple_lookup(self, iris_connection, engine):
         """Test pathway(id) query returns correct fields"""
         cursor = iris_connection.cursor()
 

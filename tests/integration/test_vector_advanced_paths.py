@@ -33,6 +33,7 @@ def _make_vec(seed: str, dim=128):
 def vec_graph_eng(iris_connection, iris_master_cleanup):
     """Engine with 8 nodes, edges, and embeddings stored."""
     eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+    eng.initialize_schema(auto_deploy_objectscript=False)
     for i in range(8):
         eng.create_node(f"vg_{i}", labels=["Doc"], properties={"text": f"topic {i}"})
     for i in range(7):
@@ -152,6 +153,7 @@ class TestEmbedNodesCallable:
     def test_embed_nodes_missing_only(self, iris_connection, iris_master_cleanup):
         """embed_nodes missing_only=True only embeds unembedded nodes."""
         eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+        eng.initialize_schema(auto_deploy_objectscript=False)
         for i in range(3):
             eng.create_node(f"emn_{i}", labels=["X"])
         # Store embedding for just one

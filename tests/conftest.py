@@ -114,8 +114,12 @@ def iris_connection(iris_test_container):
             _fresh._connection = None
             conn = _fresh.get_connection()
             _c = conn.cursor()
-            _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
-            _los_count = _c.fetchone()[0]
+            try:
+                _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
+                _los_count = _c.fetchone()[0]
+            finally:
+                with contextlib.suppress(Exception):
+                    _c.close()
             if _los_count > 0:
                 raise RuntimeError(
                     f"localhost:{_IVG_PORT} is los-iris (SSH tunnel), NOT ivg-iris. "
@@ -128,15 +132,48 @@ def iris_connection(iris_test_container):
             logger.error("Could not connect to %s: %s", container_name, e)
             raise
 
+    # Install the createIRIS monkeypatch BEFORE any operation touches the session
+    # connection via the native IRIS API.  iris.createIRIS(conn) + cursor DDL on
+    # the same connection permanently corrupts the IRIS Python driver's parameter
+    # binding state.  All code paths that call createIRIS — including schema init,
+    # _call_classmethod, engine._iris_obj() — must be redirected to a dedicated
+    # native connection that never receives cursor DDL.
+    import iris as _iris_module
+    _original_createIRIS = _iris_module.createIRIS
+    _native_conn_for_session = None
+    try:
+        import iris.dbapi as _dbapi2
+        _native_conn_for_session = _dbapi2.connect(
+            hostname=conn.hostname,
+            port=conn.port,
+            namespace=conn.namespace,
+            username="_SYSTEM",
+            password="SYS",
+        )
+    except Exception as _e:
+        logger.warning("Could not create native conn for session isolation: %s", _e)
+        _native_conn_for_session = None
+
+    def _safe_createIRIS(target_conn):
+        if _native_conn_for_session is not None and target_conn is conn:
+            return _original_createIRIS(_native_conn_for_session)
+        return _original_createIRIS(target_conn)
+
+    _iris_module.createIRIS = _safe_createIRIS
+
     from iris_vector_graph.engine import IRISGraphEngine
     from iris_vector_graph.schema import GraphSchema
 
     with contextlib.suppress(Exception):
         cur = conn.cursor()
-        GraphSchema.add_graph_id_column(cur)
-        GraphSchema.update_spo_unique_constraint(cur)
-        GraphSchema.add_graph_id_index(cur)
-        conn.commit()
+        try:
+            GraphSchema.add_graph_id_column(cur)
+            GraphSchema.update_spo_unique_constraint(cur)
+            GraphSchema.add_graph_id_index(cur)
+            conn.commit()
+        finally:
+            with contextlib.suppress(Exception):
+                cur.close()
 
     try:
         eng = IRISGraphEngine(conn, embedding_dimension=128)
@@ -145,6 +182,11 @@ def iris_connection(iris_test_container):
         logger.warning("Schema init failed (may already exist): %s", e)
 
     yield conn
+
+    _iris_module.createIRIS = _original_createIRIS
+    with contextlib.suppress(Exception):
+        if _native_conn_for_session is not None:
+            _native_conn_for_session.close()
     conn.close()
 
 
@@ -172,21 +214,49 @@ def arno_iris_connection():
         capture_output=True, text=True,
     ).stdout.strip()
 
-    if cip:
-        import iris.dbapi as _dbapi
-        conn = _dbapi.connect(
-            hostname=cip, port=1972, namespace="USER",
-            username="_SYSTEM", password="SYS",
-        )
+    import iris.dbapi as _dbapi
+
+    # Prefer the Docker-internal IP (container-to-container path), but many
+    # Docker network configurations on macOS make the internal IP unreachable
+    # from the host.  Probe with a quick TCP connect first; if it fails, look
+    # up the host-mapped port via `docker port` and connect via localhost.
+    def _tcp_reachable(host: str, port: int, timeout: float = 1.0) -> bool:
+        import socket
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    hostname, port = "localhost", 21972  # fallback
+    if cip and _tcp_reachable(cip, 1972):
+        hostname, port = cip, 1972
     else:
-        from iris_devtester import IRISContainer as _IRC
-        _fresh = _IRC.attach(_ARNO_CONTAINER)
-        _fresh._connection = None
-        conn = _fresh.get_connection()
+        # Ask Docker for the host-mapped port for 1972/tcp
+        port_out = _sp.run(
+            ["docker", "port", _ARNO_CONTAINER, "1972/tcp"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        # docker port output: "0.0.0.0:31972" or "[::]:31972" (possibly multiple lines)
+        for line in port_out.splitlines():
+            candidate = line.split(":")[-1].strip()
+            if candidate.isdigit():
+                hostname, port = "localhost", int(candidate)
+                break
+
+    conn = _dbapi.connect(
+        hostname=hostname, port=port, namespace="USER",
+        username="_SYSTEM", password="SYS",
+    )
 
     _c = conn.cursor()
-    _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
-    if _c.fetchone()[0] > 0:
+    try:
+        _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
+        _los_count = _c.fetchone()[0]
+    finally:
+        with contextlib.suppress(Exception):
+            _c.close()
+    if _los_count > 0:
         raise RuntimeError(
             f"{_ARNO_CONTAINER} appears to be los-iris. "
             "Wrong container — check port and container name."
@@ -211,27 +281,49 @@ def arno_iris_connection():
 @pytest.fixture(scope="function")
 def iris_master_cleanup(iris_connection):
     cursor = iris_connection.cursor()
-    for table in [
-        "Graph_KG.rdf_edges",
-        "Graph_KG.rdf_labels",
-        "Graph_KG.rdf_props",
-        "Graph_KG.kg_NodeEmbeddings",
-        "Graph_KG.kg_NodeEmbeddings_optimized",
-        "Graph_KG.nodes",
-        "Graph_KG.docs",
-    ]:
+    try:
+        for table in [
+            "Graph_KG.rdf_edges",
+            "Graph_KG.rdf_labels",
+            "Graph_KG.rdf_props",
+            "Graph_KG.kg_NodeEmbeddings",
+            "Graph_KG.kg_NodeEmbeddings_optimized",
+            "Graph_KG.kg_EdgeEmbeddings",
+            "Graph_KG.nodes",
+            "Graph_KG.docs",
+        ]:
+            with contextlib.suppress(Exception):
+                cursor.execute(f"DELETE FROM {table}")
         with contextlib.suppress(Exception):
-            cursor.execute(f"DELETE FROM {table}")
-    with contextlib.suppress(Exception):
+            iris_connection.commit()
+        with contextlib.suppress(Exception):
+            # Use a short-lived *separate* connection for createIRIS so the
+            # session-scoped iris_connection is never touched by the native API.
+            # Calling createIRIS() on a connection and then executing cursor DDL
+            # (DROP INDEX / CREATE INDEX) on the same connection permanently
+            # corrupts the IRIS driver's parameter binding state for that connection.
+            import iris as _iris
+            import iris.dbapi as _tmp_dbapi
+            _tmp_conn = _tmp_dbapi.connect(
+                hostname=iris_connection.hostname,
+                port=iris_connection.port,
+                namespace=iris_connection.namespace,
+                username="_SYSTEM",
+                password="SYS",
+            )
+            try:
+                _iris_obj = _iris.createIRIS(_tmp_conn)
+                _iris_obj.kill("^KG")
+                _iris_obj.kill("^NKG")
+            finally:
+                with contextlib.suppress(Exception):
+                    _tmp_conn.close()
+        with contextlib.suppress(Exception):
+            cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
         iris_connection.commit()
-    with contextlib.suppress(Exception):
-        import iris as _iris
-        _iris_obj = _iris.createIRIS(iris_connection)
-        _iris_obj.kill("^KG")
-        _iris_obj.kill("^NKG")
-    with contextlib.suppress(Exception):
-        cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
-    iris_connection.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
     yield
 
 
@@ -239,27 +331,32 @@ def iris_master_cleanup(iris_connection):
 def arno_master_cleanup(arno_iris_connection):
     """Enterprise-side cleanup: wipe all tables and globals, same as iris_master_cleanup."""
     cursor = arno_iris_connection.cursor()
-    for table in [
-        "Graph_KG.rdf_edges",
-        "Graph_KG.rdf_labels",
-        "Graph_KG.rdf_props",
-        "Graph_KG.kg_NodeEmbeddings",
-        "Graph_KG.kg_NodeEmbeddings_optimized",
-        "Graph_KG.nodes",
-        "Graph_KG.docs",
-    ]:
+    try:
+        for table in [
+            "Graph_KG.rdf_edges",
+            "Graph_KG.rdf_labels",
+            "Graph_KG.rdf_props",
+            "Graph_KG.kg_NodeEmbeddings",
+            "Graph_KG.kg_NodeEmbeddings_optimized",
+            "Graph_KG.kg_EdgeEmbeddings",
+            "Graph_KG.nodes",
+            "Graph_KG.docs",
+        ]:
+            with contextlib.suppress(Exception):
+                cursor.execute(f"DELETE FROM {table}")
         with contextlib.suppress(Exception):
-            cursor.execute(f"DELETE FROM {table}")
-    with contextlib.suppress(Exception):
+            arno_iris_connection.commit()
+        with contextlib.suppress(Exception):
+            import iris as _iris
+            _iris_obj = _iris.createIRIS(arno_iris_connection)
+            _iris_obj.kill("^KG")
+            _iris_obj.kill("^NKG")
+        with contextlib.suppress(Exception):
+            cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
         arno_iris_connection.commit()
-    with contextlib.suppress(Exception):
-        import iris as _iris
-        _iris_obj = _iris.createIRIS(arno_iris_connection)
-        _iris_obj.kill("^KG")
-        _iris_obj.kill("^NKG")
-    with contextlib.suppress(Exception):
-        cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
-    arno_iris_connection.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
     yield
 
 
@@ -268,9 +365,13 @@ def iris_cursor(iris_connection):
     cursor = iris_connection.cursor()
     with contextlib.suppress(Exception):
         cursor.execute("SET SCHEMA SQLUser")
-    yield cursor
-    with contextlib.suppress(Exception):
-        iris_connection.rollback()
+    try:
+        yield cursor
+    finally:
+        with contextlib.suppress(Exception):
+            iris_connection.rollback()
+        with contextlib.suppress(Exception):
+            cursor.close()
 
 
 @pytest.fixture(scope="function")
@@ -278,11 +379,15 @@ def clean_test_data(iris_connection):
     prefix = f"TEST_{uuid.uuid4().hex[:8]}:"
     yield prefix
     cursor = iris_connection.cursor()
-    with contextlib.suppress(Exception):
-        for t in ["kg_NodeEmbeddings", "rdf_edges", "rdf_props", "rdf_labels", "nodes"]:
-            col = "id" if "Emb" in t else "node_id" if t == "nodes" else "s"
-            cursor.execute(f"DELETE FROM {t} WHERE {col} LIKE ?", (f"{prefix}%",))
-        iris_connection.commit()
+    try:
+        with contextlib.suppress(Exception):
+            for t in ["kg_NodeEmbeddings", "rdf_edges", "rdf_props", "rdf_labels", "nodes"]:
+                col = "id" if "Emb" in t else "node_id" if t == "nodes" else "s"
+                cursor.execute(f"DELETE FROM {t} WHERE {col} LIKE ?", (f"{prefix}%",))
+            iris_connection.commit()
+    finally:
+        with contextlib.suppress(Exception):
+            cursor.close()
 
 
 from iris_vector_graph.utils import _split_sql_statements  # noqa: E402

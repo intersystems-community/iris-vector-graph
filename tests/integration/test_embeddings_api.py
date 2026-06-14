@@ -27,7 +27,7 @@ def test_store_embedding_and_knn(engine):
 
     assert engine.store_embedding("EMB_TEST:1", embedding, metadata={"source": "test"})
 
-    results = engine.kg_KNN_VEC(",".join(str(x) for x in embedding), k=1)
+    results = engine.kg_KNN_VEC(json.dumps(embedding), k=1)
     assert results
     assert results[0][0] == "EMB_TEST:1"
 

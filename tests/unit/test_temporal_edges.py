@@ -97,6 +97,52 @@ class TestTemporalEdgeUnit:
         result = engine.find_burst_nodes("REL", 60, 9999)
         assert result == []
 
+    def test_create_edge_temporal_with_graph_param(self):
+        engine, mock = self._make_engine()
+        cursor = MagicMock()
+        engine.conn.cursor.return_value = cursor
+        result = engine.create_edge_temporal("A", "REL", "B", 1712000000, graph="my_graph")
+        assert result is True
+        assert cursor.execute.called
+
+    def test_create_edge_temporal_with_graph_cursor_exception(self):
+        engine, mock = self._make_engine()
+        cursor = MagicMock()
+        cursor.execute.side_effect = Exception("db error")
+        engine.conn.cursor.return_value = cursor
+        result = engine.create_edge_temporal("A", "REL", "B", 1712000000, graph="g1")
+        assert result is True  # errors are silently swallowed
+
+    def test_bulk_create_edges_temporal_with_graph_param(self):
+        engine, mock = self._make_engine()
+        cursor = MagicMock()
+        engine.conn.cursor.return_value = cursor
+        result = engine.bulk_create_edges_temporal([
+            {"s": "A", "p": "REL", "o": "B", "ts": 100},
+        ], graph="my_graph")
+        assert result == 3
+        assert cursor.execute.called
+
+    def test_get_edges_in_window_error_returns_empty(self):
+        engine, mock = self._make_engine()
+        result_obj = MagicMock()
+        result_obj.error = "some error"
+        engine._store.execute_temporal_window_query.return_value = result_obj
+        result = engine.get_edges_in_window("X", "REL", 0, 100)
+        assert result == []
+
+    def test_get_edges_in_window_with_column_mapping(self):
+        engine, mock = self._make_engine()
+        result_obj = MagicMock()
+        result_obj.error = None
+        result_obj.columns = ["source", "predicate", "target", "timestamp", "weight"]
+        result_obj.rows = [["A", "REL", "B", 100, 1.0]]
+        engine._store.execute_temporal_window_query.return_value = result_obj
+        result = engine.get_edges_in_window("A", "REL", 0, 200)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["s"] == "A"
+
 
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 class TestTemporalEdgeE2E:

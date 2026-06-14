@@ -18,16 +18,16 @@ import pytest
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 
-# Embedding dimension must match the kg_NodeEmbeddings table created by conftest
-_EMB_DIM = 768
 
-# Canonical test vectors (unit vectors in 768-d space)
-_VEC_GENE_A = [1.0] + [0.0] * (_EMB_DIM - 1)          # [1, 0, 0, ...]
-_VEC_GENE_B = [0.9, 0.1] + [0.0] * (_EMB_DIM - 2)     # close to gene-a
-_VEC_GENE_C = [0.0, 1.0] + [0.0] * (_EMB_DIM - 2)     # orthogonal
-_VEC_DRUG_A = [0.8, 0.2] + [0.0] * (_EMB_DIM - 2)     # close to gene-a
-_VEC_DRUG_B = [0.0, 0.0, 1.0] + [0.0] * (_EMB_DIM - 3)# orthogonal
-_QUERY_VEC  = [1.0] + [0.0] * (_EMB_DIM - 1)           # same as gene-a
+def _make_vecs(dim: int):
+    """Build canonical test vectors for the given embedding dimension."""
+    gene_a = [1.0] + [0.0] * (dim - 1)
+    gene_b = [0.9, 0.1] + [0.0] * (dim - 2)
+    gene_c = [0.0, 1.0] + [0.0] * (dim - 2)
+    drug_a = [0.8, 0.2] + [0.0] * (dim - 2)
+    drug_b = [0.0, 0.0, 1.0] + [0.0] * (dim - 3)
+    query  = [1.0] + [0.0] * (dim - 1)
+    return gene_a, gene_b, gene_c, drug_a, drug_b, query
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,21 +38,29 @@ _QUERY_VEC  = [1.0] + [0.0] * (_EMB_DIM - 1)           # same as gene-a
 def vec_search_data(iris_connection):
     """Seed minimal test data for vector search integration tests.
 
-    Creates 3 Gene nodes and 2 Drug nodes with 3-d embeddings in
-    Graph_KG.kg_NodeEmbeddings. Nodes closest to [1, 0, 0] are
-    gene-a and gene-b (by cosine similarity).
+    Creates 3 Gene nodes and 2 Drug nodes with embeddings matching the live
+    schema dimension in Graph_KG.kg_NodeEmbeddings. Nodes closest to
+    [1, 0, ...] are gene-a and gene-b (by cosine similarity).
 
     Cleans up after the module.
     """
+    from iris_vector_graph.engine import IRISGraphEngine
+
     cursor = iris_connection.cursor()
     prefix = "ivg_vs_test:"
 
+    # Detect actual embedding dimension from live schema
+    eng = IRISGraphEngine(iris_connection)
+    dim = eng._get_embedding_dimension()
+    vecs = _make_vecs(dim)
+    gene_a, gene_b, gene_c, drug_a, drug_b, query_vec = vecs
+
     nodes = [
-        (f"{prefix}gene-a", "Gene", _VEC_GENE_A),
-        (f"{prefix}gene-b", "Gene", _VEC_GENE_B),
-        (f"{prefix}gene-c", "Gene", _VEC_GENE_C),
-        (f"{prefix}drug-a", "Drug", _VEC_DRUG_A),
-        (f"{prefix}drug-b", "Drug", _VEC_DRUG_B),
+        (f"{prefix}gene-a", "Gene", gene_a),
+        (f"{prefix}gene-b", "Gene", gene_b),
+        (f"{prefix}gene-c", "Gene", gene_c),
+        (f"{prefix}drug-a", "Drug", drug_a),
+        (f"{prefix}drug-b", "Drug", drug_b),
     ]
 
     try:
@@ -71,13 +79,12 @@ def vec_search_data(iris_connection):
                 )
             except Exception:
                 pass
-            # Insert embedding (3-d)
-            # NOTE: kg_NodeEmbeddings uses 'id' as PK column (not 'node_id')
-            vec_json = json.dumps(vec)
+            # Insert embedding using inline vector string to avoid IRIS driver parameter bug
+            emb_str = ",".join(str(x) for x in vec)
             try:
                 cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
-                    [node_id, vec_json],
+                    f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR('{emb_str}', DOUBLE))",
+                    [node_id],
                 )
             except Exception:
                 pass
@@ -100,7 +107,7 @@ def vec_search_data(iris_connection):
         except Exception:
             pass
 
-    yield iris_connection
+    yield {"conn": iris_connection, "query_vec": query_vec}
 
     # Cleanup
     node_ids = [n[0] for n in nodes]
@@ -152,20 +159,22 @@ def _run_cypher(conn, cypher: str, params: dict = None) -> dict:
 class TestVectorSearchSQL:
     def test_returns_rows(self, vec_search_data):
         """Vector search returns at least one row when embeddings exist."""
-        conn = vec_search_data
+        conn = vec_search_data["conn"]
+        query_vec = vec_search_data["query_vec"]
         result = _run_cypher(
             conn,
-            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(query_vec)}, 3) "
             "YIELD node, score RETURN node, score",
         )
         assert len(result["rows"]) > 0
 
     def test_results_ordered_by_score_descending(self, vec_search_data):
         """Results must be ordered by similarity score descending."""
-        conn = vec_search_data
+        conn = vec_search_data["conn"]
+        query_vec = vec_search_data["query_vec"]
         result = _run_cypher(
             conn,
-            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(query_vec)}, 3) "
             "YIELD node, score RETURN node, score",
         )
         scores = [float(row[result["columns"].index("score")]) for row in result["rows"]]
@@ -173,11 +182,12 @@ class TestVectorSearchSQL:
 
     def test_label_filter_restricts_results(self, vec_search_data):
         """Only nodes with the specified label are returned."""
-        conn = vec_search_data
+        conn = vec_search_data["conn"]
+        query_vec = vec_search_data["query_vec"]
         # Search Drug label — should not return Gene nodes
         result = _run_cypher(
             conn,
-            f"CALL ivg.vector.search('Drug', 'embedding', {json.dumps(_QUERY_VEC)}, 5) "
+            f"CALL ivg.vector.search('Drug', 'embedding', {json.dumps(query_vec)}, 5) "
             "YIELD node, score RETURN node, score",
         )
         prefix = "ivg_vs_test:"
@@ -190,20 +200,22 @@ class TestVectorSearchSQL:
 
     def test_limit_respected(self, vec_search_data):
         """Result count must not exceed the specified limit."""
-        conn = vec_search_data
+        conn = vec_search_data["conn"]
+        query_vec = vec_search_data["query_vec"]
         result = _run_cypher(
             conn,
-            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 2) "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(query_vec)}, 2) "
             "YIELD node, score RETURN node, score",
         )
         assert len(result["rows"]) <= 2
 
     def test_dot_product_similarity_executes(self, vec_search_data):
         """dot_product similarity option executes without error."""
-        conn = vec_search_data
+        conn = vec_search_data["conn"]
+        query_vec = vec_search_data["query_vec"]
         result = _run_cypher(
             conn,
-            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3, "
+            f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(query_vec)}, 3, "
             "{similarity: 'dot_product'}) YIELD node, score RETURN node, score",
         )
         assert "columns" in result
@@ -211,12 +223,13 @@ class TestVectorSearchSQL:
 
     def test_vecsearch_cte_composable_with_match(self, vec_search_data):
         """CALL followed by MATCH compiles and executes without error."""
-        conn = vec_search_data
+        conn = vec_search_data["conn"]
+        query_vec = vec_search_data["query_vec"]
         # Even if no edges exist between test nodes, the query must not raise
         try:
             result = _run_cypher(
                 conn,
-                f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(_QUERY_VEC)}, 3) "
+                f"CALL ivg.vector.search('Gene', 'embedding', {json.dumps(query_vec)}, 3) "
                 "YIELD node, score "
                 "MATCH (node)-[:RELATED]->(m:Drug) "
                 "RETURN node, score",

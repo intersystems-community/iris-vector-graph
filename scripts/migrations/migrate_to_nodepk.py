@@ -204,9 +204,12 @@ def discover_nodes(connection) -> List[str]:
     cursor.execute(query)
     nodes = [row[0] for row in cursor.fetchall()]
 
-    # Try to add kg_NodeEmbeddings if it exists
+    # Try to add kg_NodeEmbeddings if it exists (try Graph_KG schema first, then unqualified)
     try:
-        cursor.execute("SELECT DISTINCT id FROM kg_NodeEmbeddings")
+        try:
+            cursor.execute("SELECT DISTINCT id FROM Graph_KG.kg_NodeEmbeddings")
+        except Exception:
+            cursor.execute("SELECT DISTINCT id FROM kg_NodeEmbeddings")
         embedding_nodes = [row[0] for row in cursor.fetchall()]
         # Add any new nodes from embeddings
         nodes_set = set(nodes)

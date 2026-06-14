@@ -78,6 +78,19 @@ def arno_graph(arno_engine_session, arno_iris_connection, arno_master_cleanup):
     if not nkg_ok:
         pytest.skip("^NKG not populated after sync on enterprise")
 
+    # Reset the process-local UseNKG boolean cache so _detect_arno() re-reads
+    # ^NKG("$meta") after BuildNKG populates it. ResetCache kills ^||NKGAccel,
+    # so we must reload the callout immediately after to restore IsLoaded() state.
+    try:
+        iris_obj.classMethodVoid("Graph.KG.NKGAccelLoader", "ResetCache")
+    except Exception:
+        pass
+    for cls in ("Graph.KG.ArnoAccel", "Graph.KG.NKGAccelLoader"):
+        try:
+            iris_obj.classMethodValue(cls, "Load", "/tmp/libarno_callout.so")
+        except Exception:
+            pass
+
     # Invalidate store's cached arno state so it re-detects on this fresh graph
     store = eng._store
     store._arno_available = None

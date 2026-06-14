@@ -29,6 +29,7 @@ def _make_vec(seed: str, dim=128):
 def opt_eng(iris_connection, iris_master_cleanup):
     """Engine + VectorOptimizer with embeddings stored."""
     eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+    eng.initialize_schema(auto_deploy_objectscript=False)
     for i in range(5):
         eng.create_node(f"vo_{i}", labels=["Doc"])
     for i in range(5):

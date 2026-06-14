@@ -201,11 +201,16 @@ class BiomedicalDomainResolver(DomainResolver):
         if input.organism:
             properties["organism"] = input.organism
 
-        engine.create_node(
+        if engine.node_exists(str(input.id)):
+            raise Exception(f"Protein with ID {input.id} already exists")
+
+        created = engine.create_node(
             node_id=str(input.id),
             labels=["Protein"],
             properties=properties
         )
+        if not created:
+            raise Exception(f"Protein with ID {input.id} already exists")
 
         if input.embedding and len(input.embedding) > 0:
             if len(input.embedding) != 768:
@@ -232,11 +237,7 @@ class BiomedicalDomainResolver(DomainResolver):
     async def _update_protein_mutation(
         self, info: Info, id: strawberry.ID, input: UpdateProteinInput
     ) -> Protein:
-        """
-        Update an existing protein's fields.
-
-        Uses engine.update_node for properties.
-        """
+        """Update an existing protein's fields."""
         from iris_vector_graph.engine import IRISGraphEngine
         db_connection = info.context.get("db_connection")
         engine = IRISGraphEngine(db_connection)
@@ -244,7 +245,7 @@ class BiomedicalDomainResolver(DomainResolver):
         if not engine.node_exists(str(id)):
             raise Exception(f"Protein with ID {id} not found")
 
-        updates = {}
+        updates: Dict[str, str] = {}
         if input.name is not None:
             updates["name"] = input.name
         if input.function is not None:
@@ -253,7 +254,23 @@ class BiomedicalDomainResolver(DomainResolver):
             updates["confidence"] = str(input.confidence)
 
         if updates:
-            engine.update_node(str(id), properties=updates)
+            cursor = db_connection.cursor()
+            for key, val in updates.items():
+                try:
+                    cursor.execute(
+                        "UPDATE Graph_KG.rdf_props SET val = ? WHERE s = ? AND key = ?",
+                        [val, str(id), key],
+                    )
+                    if cursor.rowcount == 0:
+                        cursor.execute(
+                            "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
+                            [str(id), key, val],
+                        )
+                except Exception:
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.rdf_props (s, key, val) VALUES (?, ?, ?)",
+                        [str(id), key, val],
+                    )
 
         db_connection.commit()
 

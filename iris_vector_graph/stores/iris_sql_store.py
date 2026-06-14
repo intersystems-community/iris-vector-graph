@@ -511,7 +511,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "score"], rows=rows)
         except Exception as e:
             logger.warning("PPR failed: %s", e)
-            return IVGResult(columns=["id", "score"], rows=[])
+            return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult:
         import json as _json

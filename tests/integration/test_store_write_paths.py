@@ -37,6 +37,7 @@ from iris_vector_graph.result import IVGResult
 @pytest.fixture
 def eng(iris_connection, iris_master_cleanup):
     e = IRISGraphEngine(iris_connection, embedding_dimension=128)
+    e.initialize_schema(auto_deploy_objectscript=False)
     for i in range(10):
         e.create_node(f"sw_{i}", labels=["Entity"], properties={"score": str(i * 0.1)})
     for i in range(9):

@@ -121,6 +121,24 @@ class TestBuildEdgeWhere:
         assert "rdf_labels" in sql
         assert "Gene" in sql
 
+    def test_target_label_generates_o_id_filter(self):
+        from iris_vector_graph import EmbedSelector
+        from iris_vector_graph.embed_selector import build_edge_where
+        sel = EmbedSelector(target_label="Disease")
+        sql = build_edge_where(sel)
+        assert "o_id" in sql
+        assert "Disease" in sql
+        assert "rdf_labels" in sql
+
+    def test_exclude_pattern_generates_not_like_on_s_and_o_id(self):
+        from iris_vector_graph import EmbedSelector
+        from iris_vector_graph.embed_selector import build_edge_where
+        sel = EmbedSelector(exclude_pattern="NCIT:*")
+        sql = build_edge_where(sel)
+        assert "NOT LIKE" in sql.upper()
+        assert "o_id" in sql
+        assert "%" in sql
+
     def test_missing_only_handled_at_python_level(self):
         from iris_vector_graph import EmbedSelector
         from iris_vector_graph.embed_selector import build_edge_where

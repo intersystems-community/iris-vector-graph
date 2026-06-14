@@ -207,22 +207,23 @@ class SchemaMixin:
                 if row_count == 0:
                     logger.info(
                         "Embedding dimension mismatch (DB=%d, configured=%d) on EMPTY table — "
-                        "recreating kg_NodeEmbeddings/kg_EdgeEmbeddings at %d",
+                        "altering VECTOR column to %d",
                         db_dim, dim, dim,
                     )
-                    for _t in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized", "Graph_KG.kg_EdgeEmbeddings"):
+                    for _t in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized"):
                         try:
-                            cursor.execute(f"DROP TABLE {_t}")
+                            cursor.execute(
+                                f"ALTER TABLE {_t} ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                            )
+                        except Exception as _ae:
+                            logger.warning("Could not ALTER %s to dim %d: %s", _t, dim, _ae)
+                    for _t in ("Graph_KG.kg_EdgeEmbeddings",):
+                        try:
+                            cursor.execute(
+                                f"ALTER TABLE {_t} ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                            )
                         except Exception:
                             pass
-                    self.conn.commit()
-                    for _stmt in GraphSchema.get_base_schema_sql(embedding_dimension=dim).split(";"):
-                        _s = _stmt.strip()
-                        if _s.upper().startswith("CREATE TABLE") and "EMBEDDINGS" in _s.upper():
-                            try:
-                                cursor.execute(_s)
-                            except Exception:
-                                pass
                     self.conn.commit()
                 else:
                     logger.error(
@@ -486,9 +487,9 @@ class SchemaMixin:
 
 
     def _sync_kg(self) -> bool:
-        from iris_vector_graph.schema import _call_classmethod
         try:
-            _call_classmethod(self.conn, "Graph.KG.Traversal", "BuildKG")
+            iris_obj = self._iris_obj()
+            iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
             self.capabilities.kg_built = True
             self._nkg_dirty = True
             logger.info("^KG adjacency index rebuilt successfully")

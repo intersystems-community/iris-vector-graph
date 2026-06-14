@@ -614,15 +614,15 @@ class SnapshotMixin:
                             if merge:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
-                                    f"SELECT ?, TO_VECTOR(?, {self.vector_dtype}) "
+                                    f"SELECT ?, TO_VECTOR('{emb_str}', {self.vector_dtype}) "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
-                                    [nid, emb_str, nid],
+                                    [nid, nid],
                                 )
                             else:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
-                                    f"VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
-                                    [nid, emb_str],
+                                    f"VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                                    [nid],
                                 )
                             count += 1
                         except Exception:
@@ -653,16 +653,16 @@ class SnapshotMixin:
                             if merge:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
-                                    f"SELECT ?, ?, ?, TO_VECTOR(?, {self.vector_dtype}) "
+                                    f"SELECT ?, ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}) "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_EdgeEmbeddings "
                                     "WHERE s=? AND p=? AND o_id=?)",
-                                    [s_val, p_val, o_val, emb_str, s_val, p_val, o_val],
+                                    [s_val, p_val, o_val, s_val, p_val, o_val],
                                 )
                             else:
                                 cursor.execute(
                                     "INSERT INTO Graph_KG.kg_EdgeEmbeddings (s, p, o_id, emb) "
-                                    f"VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
-                                    [s_val, p_val, o_val, emb_str],
+                                    f"VALUES (?, ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                                    [s_val, p_val, o_val],
                                 )
                             count += 1
                         except Exception:

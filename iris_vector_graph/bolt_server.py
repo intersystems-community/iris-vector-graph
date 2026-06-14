@@ -547,17 +547,25 @@ class BoltSession:
             rows = result.get("rows", [])
             col_types = result.get("_bolt_column_types", ["scalar"] * len(columns))
 
+            # Use AST-derived column types (from translate_to_sql) to detect
+            # relationship columns, supplemented by the heuristic node-triplet detector.
+            has_rel_col = any(t == "relationship" for t in col_types)
             graph_cols = self._detect_graph_columns(columns)
-            if graph_cols:
+            if graph_cols or has_rel_col:
                 self._pending_columns = columns
                 self._pending_graph_cols = graph_cols
-                bolt_fields = [g["name"] for g in graph_cols]
+                self._pending_col_types = col_types
+                # Bolt fields: for node triplets use the var name; for rel/scalar use the column name.
+                if graph_cols:
+                    bolt_fields = [g["name"] for g in graph_cols]
+                else:
+                    bolt_fields = columns
             else:
                 self._pending_graph_cols = None
+                self._pending_col_types = col_types
                 bolt_fields = columns
 
             self._pending_result = rows
-            self._pending_col_types = col_types
             self.state = BoltState.STREAMING
             await self._send_message(TAG_SUCCESS, {
                 "fields": bolt_fields,
@@ -586,9 +594,14 @@ class BoltSession:
         columns = self._pending_columns or []
         graph_cols = getattr(self, "_pending_graph_cols", None)
 
+        col_types = getattr(self, "_pending_col_types", None) or []
+        has_rel_col = any(t == "relationship" for t in col_types)
         for row in rows:
             if graph_cols:
                 _, encoded = self._recompose_graph_row(columns, row)
+                await self._send_message(TAG_RECORD, encoded)
+            elif has_rel_col:
+                encoded = self._encode_typed_row(row, columns, col_types)
                 await self._send_message(TAG_RECORD, encoded)
             else:
                 coerced = [self._coerce_scalar(v) for v in (list(row) if not isinstance(row, list) else row)]
@@ -742,6 +755,62 @@ class BoltSession:
                 i += 1
 
         return new_cols, new_row
+
+    def _encode_typed_row(self, row, columns: list, col_types: list) -> list:
+        """Encode a result row using AST-derived bolt_column_types.
+
+        For "relationship" columns, emits a TAG_RELATIONSHIP PackStream struct
+        built from the dict fields {s, p, o, ts, weight} (temporal edges) or
+        {s, p, o_id} (standard rdf_edges). All other columns are coerced as scalars.
+        """
+        row = list(row) if not isinstance(row, list) else row
+        out = []
+        for i, val in enumerate(row):
+            ctype = col_types[i] if i < len(col_types) else "scalar"
+            if ctype == "relationship":
+                out.append(RawPackedBytes(self._pack_rel_from_value(val, columns[i] if i < len(columns) else "")))
+            else:
+                out.append(self._coerce_scalar(val))
+        return out
+
+    def _pack_rel_from_value(self, val, col_name: str) -> bytes:
+        """Build a TAG_RELATIONSHIP struct from a row value.
+
+        val may be a dict (temporal edge CTE row) or a string (e.g. predicate).
+        """
+        import json as _json
+        if isinstance(val, (bytes, RawPackedBytes)):
+            return val.data if isinstance(val, RawPackedBytes) else val
+        if isinstance(val, str):
+            try:
+                val = _json.loads(val)
+            except Exception:
+                # Bare string — treat as relationship type with no node context.
+                rel_id = hash(val) & 0x7FFFFFFF
+                return PackStream._pack_struct(TAG_RELATIONSHIP, [rel_id, 0, 0, val, {}])
+        if isinstance(val, dict):
+            src = str(val.get("s", val.get("source", "")))
+            pred = str(val.get("p", val.get("predicate", col_name)))
+            tgt = str(val.get("o", val.get("o_id", val.get("target", ""))))
+            ts = val.get("ts", val.get("timestamp"))
+            weight = val.get("w", val.get("weight"))
+            props: dict = {}
+            if ts is not None:
+                try:
+                    props["ts"] = int(ts)
+                except (TypeError, ValueError):
+                    pass
+            if weight is not None:
+                try:
+                    props["weight"] = float(weight)
+                except (TypeError, ValueError):
+                    pass
+            rel_id = hash(f"{src}:{pred}:{tgt}") & 0x7FFFFFFF
+            start_id = _node_int_id(src)
+            end_id = _node_int_id(tgt)
+            return PackStream._pack_struct(TAG_RELATIONSHIP, [rel_id, start_id, end_id, pred, props])
+        # Fallback: empty relationship struct.
+        return PackStream._pack_struct(TAG_RELATIONSHIP, [0, 0, 0, str(col_name), {}])
 
     def _parse_json_field(self, raw, default):
         if raw is None:

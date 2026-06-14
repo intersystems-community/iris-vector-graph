@@ -61,16 +61,22 @@ class TestBulkIngestEdgesDuplicateSkip:
         when graph_id is NULL, because SQL NULL != NULL in unique indexes.
         This is a known schema issue — not a bulk_ingest bug per se."""
         cur = iris_connection.cursor()
-        # The unique constraint u_spo_graph covers (s, p, o_id, graph_id)
-        # Two rows with graph_id=NULL satisfy it because NULL != NULL
-        cur.execute(
-            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-            "WHERE CONSTRAINT_NAME='u_spo_graph'"
-        )
-        constraint_exists = int(cur.fetchone()[0]) >= 1
-        assert constraint_exists, "u_spo_graph constraint should exist"
-        # Document: constraint is ineffective for NULL graph_id
-        # (this test acts as a regression canary if the schema is fixed)
+        try:
+            # The unique constraint u_spo_graph covers (s, p, o_id, graph_id)
+            # Two rows with graph_id=NULL satisfy it because NULL != NULL
+            cur.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
+                "WHERE CONSTRAINT_NAME='u_spo_graph'"
+            )
+            constraint_exists = int(cur.fetchone()[0]) >= 1
+            assert constraint_exists, "u_spo_graph constraint should exist"
+            # Document: constraint is ineffective for NULL graph_id
+            # (this test acts as a regression canary if the schema is fixed)
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
     def test_new_edges_inserted_correctly(self, engine, iris_connection):
         """Valid distinct edges (different SPO) are all inserted."""
@@ -81,8 +87,14 @@ class TestBulkIngestEdgesDuplicateSkip:
         ]
         engine.bulk_ingest_edges(edges, auto_sync=False)
         cur = iris_connection.cursor()
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'err_%'")
-        assert int(cur.fetchone()[0]) == 2
+        try:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s LIKE 'err_%'")
+            assert int(cur.fetchone()[0]) == 2
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -262,18 +274,30 @@ class TestBulkCreateNodesEdgeCases:
         ]
         result = engine.bulk_create_nodes(nodes)
         cur = iris_connection.cursor()
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'valid_node'")
-        assert int(cur.fetchone()[0]) == 1
+        try:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'valid_node'")
+            assert int(cur.fetchone()[0]) == 1
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
     def test_bulk_create_nodes_with_properties(self, engine, iris_connection):
         """Properties are correctly inserted into rdf_props."""
         nodes = [{"id": "prop_node", "labels": ["Doc"], "properties": {"color": "red", "size": "5"}}]
         engine.bulk_create_nodes(nodes)
         cur = iris_connection.cursor()
-        cur.execute("SELECT val FROM Graph_KG.rdf_props WHERE s='prop_node' AND key='color'")
-        row = cur.fetchone()
-        assert row is not None
-        assert row[0] == "red"
+        try:
+            cur.execute("SELECT val FROM Graph_KG.rdf_props WHERE s='prop_node' AND key='color'")
+            row = cur.fetchone()
+            assert row is not None
+            assert row[0] == "red"
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
     def test_bulk_create_nodes_empty_list(self, engine):
         """Empty list is a no-op and returns empty list."""
@@ -286,5 +310,11 @@ class TestBulkCreateNodesEdgeCases:
         engine.bulk_create_nodes(nodes)
         engine.bulk_create_nodes(nodes)  # second time
         cur = iris_connection.cursor()
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'idem_node'")
-        assert int(cur.fetchone()[0]) == 1
+        try:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'idem_node'")
+            assert int(cur.fetchone()[0]) == 1
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass

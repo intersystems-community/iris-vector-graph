@@ -311,22 +311,30 @@ class TestNodeDiscovery:
 
     def test_discover_nodes_from_embeddings(self, iris_connection):
         """Test discovering nodes from kg_NodeEmbeddings."""
+        from iris_vector_graph.engine import IRISGraphEngine
+
         cursor = iris_connection.cursor()
 
+        # Get actual embedding dimension from live schema
+        eng = IRISGraphEngine(iris_connection)
+        dim = eng._get_embedding_dimension()
+        emb_str = ','.join(['0.1'] * dim)
+
         # Create node first (FK constraint requires this)
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", ['TEST:emb_node1'])
-        # Create test data
-        dummy_vector = '[' + ','.join(['0.1'] * 768) + ']'
-        cursor.execute("INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
-                      ['TEST:emb_node1', dummy_vector])
+        cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:emb_node1'])
+        # Store embedding using fully-qualified table and inline vector (avoids driver bug)
+        cursor.execute(
+            f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR('{emb_str}', DOUBLE))",
+            ['TEST:emb_node1'],
+        )
         iris_connection.commit()
 
-        # Discover nodes
+        # Discover nodes — relies on SET SCHEMA Graph_KG being set on this connection
         nodes = discover_nodes(iris_connection)
 
         # Cleanup
-        cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'TEST:emb_node%'")
-        cursor.execute("DELETE FROM nodes WHERE node_id LIKE 'TEST:emb_node%'")
+        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'TEST:emb_node%'")
+        cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST:emb_node%'")
         iris_connection.commit()
 
         # IRIS uppercases VARCHAR values

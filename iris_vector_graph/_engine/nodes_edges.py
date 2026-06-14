@@ -596,6 +596,13 @@ class NodesEdgesMixin:
         if not nodes:
             return []
 
+        # Index drop/rebuild (disable_indexes) calls DDL via cursor. On IRIS, DDL after
+        # a createIRIS() native API call on the same connection corrupts parameter binding
+        # state. Skip for small batches where the overhead is not justified anyway.
+        _DISABLE_IDX_THRESHOLD = 500
+        if disable_indexes and len(nodes) < _DISABLE_IDX_THRESHOLD:
+            disable_indexes = False
+
         if self.capabilities.objectscript_deployed:
             try:
                 import json as _json
@@ -720,6 +727,12 @@ class NodesEdgesMixin:
 
         if not edges:
             return 0
+
+        # Same guard as bulk_create_nodes: DDL after createIRIS() on the same connection
+        # permanently corrupts IRIS driver parameter binding state. Skip for small batches.
+        _DISABLE_IDX_THRESHOLD = 500
+        if disable_indexes and len(edges) < _DISABLE_IDX_THRESHOLD:
+            disable_indexes = False
 
         cursor = self.conn.cursor()
         try:

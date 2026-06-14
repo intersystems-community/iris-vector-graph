@@ -272,8 +272,8 @@ class FhirMixin:
                         "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id]
                     )
                     cur.execute(
-                        f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
-                        [node_id, emb_str],
+                        f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                        [node_id],
                     )
                     embedded += 1
                 except Exception as ex:

@@ -199,8 +199,8 @@ class EmbeddingsMixin:
         except Exception:
             pass
         cursor.execute(
-            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {self.vector_dtype}), ?)",
-            [node_id, emb_str, meta_json],
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ?)",
+            [node_id, meta_json],
         )
         self.conn.commit()
         return True
@@ -248,8 +248,8 @@ class EmbeddingsMixin:
                 except Exception:
                     pass
                 cursor.execute(
-            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR(?, {_dtype}), ?)",
-                    [node_id, emb_str, meta_json],
+            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb, metadata) VALUES (?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
+                    [node_id, meta_json],
                 )
             cursor.execute("COMMIT")
             return True
@@ -391,24 +391,16 @@ class EmbeddingsMixin:
                         )
                     except Exception:
                         pass
-                    try:
-                        cursor.executemany(
-                            f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
-                            insert_params,
-                        )
-                        embedded += len(insert_params)
-                    except Exception as ex:
-                        logger.warning(f"embed_nodes: executemany failed, falling back per-row: {ex}")
-                        for node_id, emb_str in insert_params:
-                            try:
-                                cursor.execute(
-                                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR(?, {self.vector_dtype}))",
-                                    [node_id, emb_str],
-                                )
-                                embedded += 1
-                            except Exception as ex2:
-                                logger.warning(f"embed_nodes: insert failed for {node_id}: {ex2}")
-                                errors += 1
+                    for node_id, emb_str in insert_params:
+                        try:
+                            cursor.execute(
+                                f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                                [node_id],
+                            )
+                            embedded += 1
+                        except Exception as ex2:
+                            logger.warning(f"embed_nodes: insert failed for {node_id}: {ex2}")
+                            errors += 1
 
                 self.conn.commit()
                 n_done = batch_start + len(batch_ids)
@@ -562,29 +554,20 @@ class EmbeddingsMixin:
                                 pass
                     except Exception:
                         pass
-                    try:
-                        cursor.executemany(
-                            f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
-                            f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
-                            insert_params,
-                        )
-                        embedded += len(insert_params)
-                    except Exception as ex:
-                        logger.warning(f"embed_edges: executemany failed, falling back per-row: {ex}")
-                        for s, p, o_id, emb_str in insert_params:
-                            try:
-                                cursor.execute(
-                                    f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
-                                    f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR(?, {self.vector_dtype}))",
-                                    [s, p, o_id, emb_str],
-                                )
-                                embedded += 1
-                            except Exception as ex2:
-                                logger.warning(
-                                    "embed_edges: insert failed for (%s, %s, %s): %s",
-                                    s, p, o_id, ex2,
-                                )
-                                errors += 1
+                    for s, p, o_id, emb_str in insert_params:
+                        try:
+                            cursor.execute(
+                                f"INSERT INTO {_table('kg_EdgeEmbeddings')} "
+                                f"(s, p, o_id, emb) VALUES (?, ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                                [s, p, o_id],
+                            )
+                            embedded += 1
+                        except Exception as ex2:
+                            logger.warning(
+                                "embed_edges: insert failed for (%s, %s, %s): %s",
+                                s, p, o_id, ex2,
+                            )
+                            errors += 1
 
                 self.conn.commit()
                 n_done = batch_start + len(batch)

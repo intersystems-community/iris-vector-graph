@@ -23,6 +23,7 @@ def vec_eng(iris_connection, iris_master_cleanup):
     """Engine with 6 nodes and 128-dim embeddings stored."""
     import hashlib
     eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+    eng.initialize_schema(auto_deploy_objectscript=False)
 
     def make_vec(seed: str, dim=128):
         h = hashlib.md5(seed.encode()).digest()
@@ -183,6 +184,7 @@ class TestKNNVecClientSide:
     def test_kg_knn_vec_client_side_empty_returns_empty(self, iris_connection, iris_master_cleanup):
         """No embeddings stored → returns empty."""
         eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+        eng.initialize_schema(auto_deploy_objectscript=False)
         query_vec = [0.1] * 128
         result = eng._store._kg_KNN_VEC_client_side(query_vec, k=5, label_filter=None)
         assert isinstance(result, IVGResult)

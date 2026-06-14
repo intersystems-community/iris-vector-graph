@@ -234,3 +234,7 @@ schema = strawberry.Schema(
     mutation=Mutation if BIOMEDICAL_AVAILABLE else None,
     extensions=[DatabaseConnectionExtension],
 )
+
+# Expose graphql_schema as an alias for _schema (graphql-core GraphQLSchema object)
+# Tests use schema.graphql_schema.mutation_type to check if mutations are wired.
+schema.graphql_schema = schema._schema

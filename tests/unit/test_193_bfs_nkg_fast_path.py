@@ -52,6 +52,11 @@ def _load_test_graph(iris_connection, iris_obj, n_nodes=20, n_edges=60):
 
     iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
     iris_obj.classMethodValue("Graph.KG.TraversalBuild", "BuildNKG")
+    # Reload NKGAccel so capabilities reflect the newly built ^NKG
+    try:
+        iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
+    except Exception:
+        pass
     return nodes
 
 

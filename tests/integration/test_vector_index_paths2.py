@@ -35,6 +35,7 @@ def _make_vec(seed: str, dim=128):
 def vec_eng(iris_connection, iris_master_cleanup):
     """Engine with 6 nodes + embeddings."""
     eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+    eng.initialize_schema(auto_deploy_objectscript=False)
     for i in range(6):
         eng.create_node(f"vi2_{i}", labels=["Cat" if i < 3 else "Dog"],
                         properties={"name": f"item_{i}"})
@@ -181,6 +182,7 @@ class TestSearchNodesByVector:
     def test_search_nodes_empty_for_no_embeddings(self, iris_connection, iris_master_cleanup):
         """search_nodes_by_vector with no embeddings returns empty."""
         eng = IRISGraphEngine(iris_connection, embedding_dimension=128)
+        eng.initialize_schema(auto_deploy_objectscript=False)
         query_vec = [0.1] * 128
         try:
             result = eng.search_nodes_by_vector(query_vec, k=5)

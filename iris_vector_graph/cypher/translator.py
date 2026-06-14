@@ -171,6 +171,9 @@ class SQLQuery(BaseModel):
     query_metadata: QueryMetadata = Field(default_factory=QueryMetadata)
     is_transactional: bool = False
     var_length_paths: Optional[List[dict]] = None
+    # Parallel list to the result columns: each entry is "scalar", "node", or "relationship".
+    # Consumed by the Bolt server to emit correct PackStream struct tags (TAG_NODE / TAG_RELATIONSHIP).
+    bolt_column_types: List[str] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -234,6 +237,11 @@ class TranslationContext:
         )
         self.temporal_derived: Dict[str, str] = (
             {} if parent is None else parent.temporal_derived.copy()
+        )
+        # Variables bound to relationship patterns in MATCH clauses.
+        # Used by translate_to_sql() to tag Bolt column types as "relationship".
+        self.rel_variables: set = (
+            set() if parent is None else parent.rel_variables.copy()
         )
         self.system_procedure_call: Optional[Any] = None
         self.pending_where = None
@@ -1354,6 +1362,30 @@ def _tts_collect_path_funcs(cypher_query, vl):
         vl[0]["return_path_funcs"] = path_funcs
 
 
+def _build_bolt_column_types(cypher_query, context) -> List[str]:
+    """Return a list of Bolt column type tags parallel to the RETURN clause columns.
+
+    Tags: "relationship" for variables bound in MATCH relationship patterns,
+    "node" for node variables, "scalar" for everything else.
+    """
+    if not cypher_query or not cypher_query.return_clause:
+        return []
+    types = []
+    node_vars = set(context.variable_aliases.keys()) - context.rel_variables
+    for item in cypher_query.return_clause.items:
+        expr = item.expression
+        if isinstance(expr, ast.Variable):
+            if expr.name in context.rel_variables:
+                types.append("relationship")
+            elif expr.name in node_vars:
+                types.append("node")
+            else:
+                types.append("scalar")
+        else:
+            types.append("scalar")
+    return types
+
+
 def _tts_select_result(cypher_query, context, metadata, order_by_items):
     """Assemble SQLQuery for SELECT queries."""
     sql, p = context.build_stage_sql(
@@ -1399,12 +1431,14 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
             parameters=[context.all_stage_params + p],
             query_metadata=metadata,
             var_length_paths=vl,
+            bolt_column_types=_build_bolt_column_types(cypher_query, context),
         )
 
     sql = _maybe_split_deep_joins(sql, p, context)
 
     return SQLQuery(
-        sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl
+        sql=sql, parameters=[p], query_metadata=metadata, var_length_paths=vl,
+        bolt_column_types=_build_bolt_column_types(cypher_query, context),
     )
 
 
@@ -2588,6 +2622,9 @@ def translate_relationship_pattern(
     source_alias, target_alias, edge_alias, is_anon_source, is_new_target = (
         _trp_setup_aliases(rel, source_node, target_node, context)
     )
+    # Track named relationship variables for Bolt column-type tagging.
+    if rel.variable:
+        context.rel_variables.add(rel.variable)
     def _node_col(variable, alias):
         if alias.startswith("Stage") or alias == "VecSearch":
             return variable

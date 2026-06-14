@@ -377,7 +377,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         Returns:
             Dict mapping index name to success status
         """
-        # IRIS: ALTER INDEX ... DISABLE or DROP INDEX
+        # Only drop indexes on tables that support DDL from a cursor connection.
+        # rdf_edges is backed by Graph.KG.Edge (a persistent class) and its indexes
+        # cannot be dropped/recreated via SQL DDL — attempting it returns SQLCODE -400
+        # which corrupts the connection's parameter binding state across calls.
         indexes = [
             "idx_labels_s",
             "idx_labels_label",
@@ -385,36 +388,75 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "idx_props_s",
             "idx_props_key",
             "idx_props_s_key",
-            "idx_edges_s",
-            "idx_edges_oid",
-            "idx_edges_p",
-            "idx_edges_s_p",
-            "idx_edges_p_oid",
         ]
 
         status = {}
         for name in indexes:
             try:
-                # Sanitize index name to prevent SQL injection
                 safe_name = sanitize_identifier(name)
                 cursor.execute(f"DROP INDEX {safe_name}")
                 status[name] = True
             except Exception as e:
-                if "does not exist" in str(e).lower():
+                err = str(e).lower()
+                if "does not exist" in err or "not found" in err:
                     status[name] = True  # Already gone
                 else:
                     status[name] = False
         return status
 
+    # The exact CREATE INDEX statements for indexes that disable_indexes() drops.
+    # Must stay in sync with the list in disable_indexes().
+    # rdf_edges indexes are NOT included — that table is backed by Graph.KG.Edge (a
+    # persistent class) and DDL on it via cursor returns SQLCODE -400, corrupting the
+    # connection's parameter binding state. Those indexes are managed by IRIS class compilation.
+    _BULK_INDEX_DDL = [
+        ("idx_labels_s", "CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s)"),
+        ("idx_labels_label", "CREATE INDEX idx_labels_label ON Graph_KG.rdf_labels (label)"),
+        ("idx_labels_s_label", "CREATE INDEX idx_labels_s_label ON Graph_KG.rdf_labels (s, label)"),
+        ("idx_props_s", "CREATE INDEX idx_props_s ON Graph_KG.rdf_props (s)"),
+        ("idx_props_key", "CREATE INDEX idx_props_key ON Graph_KG.rdf_props (key)"),
+        ("idx_props_s_key", "CREATE INDEX idx_props_s_key ON Graph_KG.rdf_props (s, key)"),
+    ]
+
     @staticmethod
     def rebuild_indexes(cursor) -> Dict[str, bool]:
         """
-        Rebuild all indexes after bulk loading. Call this after disable_indexes() + bulk INSERT.
+        Rebuild only the indexes that disable_indexes() dropped. Does NOT run schema
+        migrations (ALTER TABLE, ADD COLUMN, etc.) — callers rely on this being
+        a pure CREATE INDEX operation that doesn't corrupt driver parameter state.
 
         Returns:
             Dict mapping index name to success status
         """
-        return GraphSchema.ensure_indexes(cursor)
+        status = {}
+        for name, sql in GraphSchema._BULK_INDEX_DDL:
+            try:
+                safe_name = sanitize_identifier(name)
+                cursor.execute(sql)
+                status[name] = True
+            except Exception as e:
+                err = str(e).lower()
+                if "already exists" in err or "already has" in err:
+                    status[name] = True
+                elif "sqlcode: <-400>" in err or "<-400>" in err:
+                    # IRIS: try ALTER TABLE ADD INDEX fallback for rdf_edges
+                    alt = GraphSchema._create_index_alter_table(name, sql)
+                    if alt:
+                        try:
+                            cursor.execute(alt)
+                            status[name] = True
+                            continue
+                        except Exception as e2:
+                            e2_err = str(e2).lower()
+                            if "already exists" in e2_err or "already has" in e2_err:
+                                status[name] = True
+                            else:
+                                status[name] = False
+                    else:
+                        status[name] = False
+                else:
+                    status[name] = False
+        return status
 
     @staticmethod
     def get_bulk_insert_sql(table: str) -> str:
@@ -503,14 +545,13 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         # Table Graph_KG.kg_NodeEmbeddings is usually class Graph.KG.kgNodeEmbeddings
         # We'll search for the 'emb' property across classes containing 'Graph' and 'NodeEmbeddings'
         try:
-            # Query IRIS CompiledProperty metadata directly for the most reliable dimension info
+            # Query IRIS CompiledProperty metadata — restrict to kgNodeEmbeddings only
             cursor.execute(
                 """
-                SELECT Parameters 
-                FROM %Dictionary.CompiledProperty 
-                WHERE Name = 'emb' 
-                  AND (Parent [ 'Graph' OR Parent [ 'graph' )
-                  AND (Parent [ 'Embeddings' OR Parent [ 'embeddings' )
+                SELECT Parameters
+                FROM %Dictionary.CompiledProperty
+                WHERE Name = 'emb'
+                  AND Parent = 'Graph.KG.kgNodeEmbeddings'
                 """
             )
             rows = cursor.fetchall()

@@ -69,12 +69,27 @@ class SemanticSearchResult:
     score: float
     node: Node
 
+_VALID_GQL_NAME = __import__("re").compile(r"[^_a-zA-Z0-9]")
+
+
+def _sanitize_gql_name(name: str) -> str:
+    """Convert an arbitrary string to a valid GraphQL type name."""
+    sanitized = _VALID_GQL_NAME.sub("_", name)
+    if sanitized and sanitized[0].isdigit():
+        sanitized = f"T_{sanitized}"
+    return sanitized or "Unknown"
+
+
 def create_dynamic_node_type(label: str, properties: List[str]) -> Type:
     """
     Creates a dynamic Strawberry type for a specific node label.
     """
     if label in DYNAMIC_TYPES:
         return DYNAMIC_TYPES[label]
+
+    type_name = _sanitize_gql_name(label)
+    if not type_name:
+        return None
 
     annotations = {
         "id": strawberry.ID,
@@ -99,11 +114,11 @@ def create_dynamic_node_type(label: str, properties: List[str]) -> Type:
         defaults[field_name] = None
 
     dynamic_type = type(
-        label,
+        type_name,
         (Node,),
         {"__annotations__": annotations, **defaults}
     )
-    
+
     st_type = strawberry.type(dynamic_type)
     DYNAMIC_TYPES[label] = st_type
     return st_type
@@ -118,7 +133,10 @@ def build_schema(engine: GQLGraphEngine) -> strawberry.Schema:
     metadata = engine.get_schema_metadata()
     
     for label, props in metadata.items():
-        create_dynamic_node_type(label, list(props))
+        try:
+            create_dynamic_node_type(label, list(props))
+        except Exception:
+            pass
 
     @strawberry.type
     class Query:

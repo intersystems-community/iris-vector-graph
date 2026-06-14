@@ -12,7 +12,7 @@ from iris_vector_graph.engine import IRISGraphEngine
 
 @pytest.fixture
 def engine(iris_connection, iris_master_cleanup):
-    return IRISGraphEngine(iris_connection, embedding_dimension=4)
+    return IRISGraphEngine(iris_connection, embedding_dimension=384)
 
 
 # ---------------------------------------------------------------------------

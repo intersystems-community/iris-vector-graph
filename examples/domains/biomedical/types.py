@@ -130,24 +130,21 @@ class Protein(Node):
         # Check if embeddings exist for this protein
         try:
             cursor.execute(
-                "SELECT COUNT(*) FROM kg_NodeEmbeddings WHERE id = ?",
+                "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?",
                 (str(self.id),)
             )
             count = cursor.fetchone()[0]
             if count == 0:
-                # No embedding for this protein
                 return []
         except Exception:
             return []
 
-        # Try to use VECTOR functions if available (IRIS 2025.1+)
-        # Query using HNSW vector search with VECTOR_DOT_PRODUCT
         query = """
             SELECT TOP ?
                 e2.id,
                 VECTOR_DOT_PRODUCT(e1.emb, e2.emb) as similarity
-            FROM kg_NodeEmbeddings e1,
-                 kg_NodeEmbeddings e2
+            FROM Graph_KG.kg_NodeEmbeddings e1,
+                 Graph_KG.kg_NodeEmbeddings e2
             WHERE e1.id = ?
               AND e2.id != ?
               AND VECTOR_DOT_PRODUCT(e1.emb, e2.emb) >= ?

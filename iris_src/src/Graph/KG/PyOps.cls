@@ -124,7 +124,7 @@ ClassMethod HybridSearch(vec As %DynamicArray, text As %String, k As %Integer = 
 ClassMethod MetaPath(srcId As %String, preds As %DynamicArray, maxHops As %Integer = 2, dstLabel As %String = "") As %DynamicArray [ Language = python ]
 {
     import iris
-    res = iris.cls("Graph.KG.Traversal").BFS_JSON(srcId, preds, int(maxHops), str(dstLabel) if dstLabel else "")
+    res = iris.cls("Graph.KG.Traversal").BFSJSON(srcId, preds, int(maxHops), str(dstLabel) if dstLabel else "")
     return res
 }
 

@@ -23,6 +23,40 @@ class GenericNodeLoader(DataLoader):
             return []
 
         nodes_data = self.engine.get_nodes(keys)
-        
+
         result_map = {n["id"]: n for n in nodes_data if n}
         return [result_map.get(key) for key in keys]
+
+
+class PropertyLoader(DataLoader):
+    """Batch load properties by node ID"""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[Dict[str, str]]:
+        if not keys:
+            return []
+        nodes_data = self.engine.get_nodes(keys)
+        props_by_node: Dict[str, Dict[str, str]] = {
+            n["id"]: n.get("properties", {}) for n in nodes_data if n
+        }
+        return [props_by_node.get(key, {}) for key in keys]
+
+
+class LabelLoader(DataLoader):
+    """Batch load labels by node ID"""
+
+    def __init__(self, engine: Any) -> None:
+        self.engine = engine
+        super().__init__(load_fn=self.batch_load_fn)
+
+    async def batch_load_fn(self, keys: List[str]) -> List[List[str]]:
+        if not keys:
+            return []
+        nodes_data = self.engine.get_nodes(keys)
+        labels_by_node: Dict[str, List[str]] = {
+            n["id"]: n.get("labels", []) for n in nodes_data if n
+        }
+        return [labels_by_node.get(key, []) for key in keys]

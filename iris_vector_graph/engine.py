@@ -140,6 +140,7 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
+        self._native_conn = None  # dedicated connection for iris.createIRIS — never used for cursor DDL
         self._index_registry: Dict[str, str] = self._build_index_registry()
         self._pending_index_config: Dict[str, Any] = {}
         if vector_dtype == "DOUBLE":
@@ -721,6 +722,17 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
+        # GDS → ivg shim: intercept gds.* calls before normal dispatch.
+        if name.startswith("gds."):
+            from iris_vector_graph._engine.query import _handle_gds_shim
+            gds_result = _handle_gds_shim(proc)
+            if gds_result is not None:
+                if isinstance(gds_result, tuple):
+                    # (shimmed_proc, None) sentinel — re-dispatch with ivg procedure name.
+                    return self._try_system_procedure(gds_result[0])
+                # IVGResult with error — return as-is.
+                return gds_result
+
         handler_method_name = self._SYSTEM_PROCEDURES.get(name)
         if handler_method_name is not None:
             handler = getattr(self, handler_method_name)
@@ -810,8 +822,29 @@ class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, Embed
     # ── VecIndex: lightweight ANN vector search in globals ──
 
     def _iris_obj(self):
+        # Use a dedicated connection so that iris.createIRIS() never touches self.conn.
+        # Mixing createIRIS() and cursor DDL (DROP/CREATE INDEX) on the same connection
+        # permanently corrupts the IRIS Python driver's parameter binding state.
         import iris
-        return iris.createIRIS(self.conn)
+        if self._native_conn is None or getattr(self._native_conn, "isClosed", lambda: True)():
+            try:
+                hostname = getattr(self.conn, "hostname", None)
+                port = getattr(self.conn, "port", None)
+                namespace = getattr(self.conn, "namespace", None)
+                if hostname and port and namespace:
+                    import iris.dbapi as _dbapi
+                    self._native_conn = _dbapi.connect(
+                        hostname=hostname,
+                        port=port,
+                        namespace=namespace,
+                        username="_SYSTEM",
+                        password="SYS",
+                    )
+                else:
+                    return iris.createIRIS(self.conn)
+            except Exception:
+                return iris.createIRIS(self.conn)
+        return iris.createIRIS(self._native_conn)
 
 
 

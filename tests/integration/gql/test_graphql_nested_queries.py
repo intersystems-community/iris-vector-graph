@@ -12,8 +12,9 @@ from typing import Optional
 try:
     from api.gql.schema import schema
     from api.gql.loaders import ProteinLoader, GeneLoader, PathwayLoader, EdgeLoader
-    SCHEMA_EXISTS = True
-except ImportError as e:
+    from examples.domains.biomedical.resolver import BiomedicalDomainResolver
+    SCHEMA_EXISTS = BiomedicalDomainResolver is not None
+except ImportError:
     SCHEMA_EXISTS = False
     schema = None
 

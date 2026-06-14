@@ -38,6 +38,7 @@ def _sql(cypher, params=None):
 @pytest.fixture
 def eng(iris_connection, iris_master_cleanup):
     e = IRISGraphEngine(iris_connection, embedding_dimension=128)
+    e.initialize_schema(auto_deploy_objectscript=False)
     for i in range(8):
         e.create_node(f"cp_{i}", labels=["N"], properties={"score": str(i * 0.5)})
     for i in range(7):
@@ -401,10 +402,18 @@ class TestSchemaUtilities:
     def test_disable_and_rebuild_indexes(self, iris_connection):
         from iris_vector_graph.schema import GraphSchema
         cur = iris_connection.cursor()
-        GraphSchema.disable_indexes(cur)
-        iris_connection.commit()
-        GraphSchema.rebuild_indexes(cur)
-        iris_connection.commit()
+        try:
+            status = GraphSchema.disable_indexes(cur)
+            iris_connection.commit()
+            assert isinstance(status, dict)
+            rebuild_status = GraphSchema.rebuild_indexes(cur)
+            iris_connection.commit()
+            assert isinstance(rebuild_status, dict)
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
 
 # ===========================================================================

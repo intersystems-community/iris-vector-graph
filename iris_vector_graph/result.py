@@ -13,6 +13,8 @@ class IVGResult(BaseModel):
     metadata: QueryMetadata = Field(default_factory=QueryMetadata)
     sql: Optional[str] = None
     params: Optional[list] = None
+    # Parallel to columns: "scalar", "node", or "relationship" for Bolt encoding.
+    bolt_column_types: list = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -26,6 +28,8 @@ class IVGResult(BaseModel):
             return self.rows
         if key == "metadata":
             return self.metadata
+        if key == "_bolt_column_types":
+            return self.bolt_column_types
         if key == "sql":
             if self.sql is None:
                 raise KeyError(key)
@@ -47,7 +51,7 @@ class IVGResult(BaseModel):
             return self.sql is not None
         if key == "params":
             return self.params is not None
-        return key in {"columns", "rows", "metadata"}
+        return key in {"columns", "rows", "metadata", "_bolt_column_types"}
 
     def get(self, key: str, default: Any = None) -> Any:
         try:

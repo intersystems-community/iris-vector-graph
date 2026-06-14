@@ -36,6 +36,24 @@ def engine(iris_connection):
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
     engine.initialize_schema(auto_deploy_objectscript=True)
     yield engine
+    # Restore dimension to 128 (session default) so subsequent fixtures aren't confused.
+    # Must clear embedding tables first so ALTER TABLE (dim 384→128) can proceed on empty tables.
+    cursor = iris_connection.cursor()
+    for emb_table in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_EdgeEmbeddings"):
+        try:
+            cursor.execute(f"DELETE FROM {emb_table}")
+        except Exception:
+            pass
+    try:
+        iris_connection.commit()
+    except Exception:
+        pass
+    try:
+        IRISGraphEngine(iris_connection, embedding_dimension=128).initialize_schema(
+            auto_deploy_objectscript=False
+        )
+    except Exception:
+        pass
 
 
 @pytest.fixture

@@ -189,8 +189,9 @@ class TestEnsureEmbeddedIrisFirst:
             _ensure_embedded_iris_first()
             assert sys.modules.get('iris') is mock_iris
         finally:
-            sys.modules.clear()
-            sys.modules.update(original_modules)
+            sys.modules.pop('iris', None)
+            if 'iris' in original_modules:
+                sys.modules['iris'] = original_modules['iris']
             sys.path[:] = original_path
 
     def test_skips_eviction_when_iris_sql_is_none_but_in_modules(self):
@@ -208,8 +209,9 @@ class TestEnsureEmbeddedIrisFirst:
             _ensure_embedded_iris_first()
             assert sys.modules.get('iris') is not mock_iris
         finally:
-            sys.modules.clear()
-            sys.modules.update(original_modules)
+            sys.modules.pop('iris', None)
+            if 'iris' in original_modules:
+                sys.modules['iris'] = original_modules['iris']
             sys.path[:] = original_path
 
     def test_evicts_and_reorders_when_iris_not_loaded(self):
@@ -225,8 +227,9 @@ class TestEnsureEmbeddedIrisFirst:
             _ensure_embedded_iris_first()
             assert sys.path[0] == embedded_path
         finally:
-            sys.modules.clear()
-            sys.modules.update(original_modules)
+            sys.modules.pop('iris', None)
+            if 'iris' in original_modules:
+                sys.modules['iris'] = original_modules['iris']
             sys.path[:] = original_path
 
     def test_no_sigsegv_risk_when_called_twice_with_live_iris(self):
@@ -240,8 +243,9 @@ class TestEnsureEmbeddedIrisFirst:
             _ensure_embedded_iris_first()
             assert sys.modules.get('iris') is mock_iris
         finally:
-            sys.modules.clear()
-            sys.modules.update(original_modules)
+            sys.modules.pop('iris', None)
+            if 'iris' in original_modules:
+                sys.modules['iris'] = original_modules['iris']
 
 
 class TestVectorDtypeConsistency:

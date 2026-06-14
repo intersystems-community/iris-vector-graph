@@ -41,13 +41,6 @@ class BulkLoader:
         self.schema = schema
         self.batch_size = batch_size
         self._stats: Dict[str, Any] = {}
-        self._iris_handle = None
-
-    def _iris_obj(self):
-        if self._iris_handle is None:
-            import iris
-            self._iris_handle = iris.createIRIS(self.conn)
-        return self._iris_handle
 
     def _table(self, name: str) -> str:
         return f"{self.schema}.{name}"
@@ -109,17 +102,11 @@ class BulkLoader:
             cursor.execute(
                 f"SELECT %SYSTEM_SQL.BuildIndices('{class_name}')"
             )
-
+            cursor.fetchall()  # consume result set to avoid leaving cursor in open state
             return True
         except Exception as e:
             logger.warning(f"Index rebuild via SQL failed for {class_name}: {e}")
-
-            try:
-                cursor.execute(f"TUNE TABLE {self.schema}.{class_name.split('.')[-1]}")
-                return True
-            except Exception as e2:
-                logger.error(f"TUNE TABLE also failed for {class_name}: {e2}")
-                return False
+            return False
 
     def load_nodes(
         self,
@@ -143,61 +130,76 @@ class BulkLoader:
         cursor = self.conn.cursor()
         t0 = time.time()
         hint = " %NOINDEX %NOCHECK" if use_noindex else ""
-
-        logger.info(f"Phase 1: Loading {len(nodes):,} nodes (noindex={use_noindex})...")
-        if skip_existing:
-            cursor.execute(f"SELECT node_id FROM {self._table('nodes')}")
-            existing = set(r[0] for r in cursor.fetchall())
-            new_nodes = [(nid, attrs) for nid, attrs in nodes if nid not in existing]
-            logger.info(f"  {len(existing):,} existing, {len(new_nodes):,} new")
-        else:
-            new_nodes = nodes
-            existing = set()
-
-        node_params = [[nid] for nid, _ in new_nodes]
-        node_sql = f"INSERT{hint} INTO {self._table('nodes')} (node_id) VALUES (?)"
-        n_nodes = self._executemany_batched(cursor, node_sql, node_params, "Nodes")
-
-        nodes_to_process = new_nodes if skip_existing else nodes
-
-        label_params = []
-        for nid, attrs in nodes_to_process:
-            labels = []
-            if label_attr and label_attr in attrs:
-                val = attrs[label_attr]
-                labels = [val] if isinstance(val, str) else list(val)
-            for lbl in labels:
-                if lbl and isinstance(lbl, str):
-                    label_params.append([nid, lbl[:128]])
-
+        n_nodes = 0
         n_labels = 0
-        if label_params:
-            logger.info(f"Phase 2: Loading {len(label_params):,} labels (noindex={use_noindex})...")
-            label_sql = f"INSERT{hint} INTO {self._table('rdf_labels')} (s, label) VALUES (?, ?)"
-            n_labels = self._executemany_batched(cursor, label_sql, label_params, "Labels")
-        else:
-            logger.info(f"Phase 2: No new labels to load")
-
-        prop_params = []
-        for nid, attrs in nodes_to_process:
-            props = {"id": nid}
-            for k, v in attrs.items():
-                if k in (label_attr, "namespace") or v is None:
-                    continue
-                s = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                if len(s) > 60000:
-                    s = s[:60000]
-                props[k] = s
-            for k, v in props.items():
-                prop_params.append([nid, k, str(v)])
-
         n_props = 0
-        if prop_params:
-            logger.info(f"Phase 3: Loading {len(prop_params):,} properties (noindex={use_noindex})...")
-            prop_sql = f"INSERT{hint} INTO {self._table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)"
-            n_props = self._executemany_batched(cursor, prop_sql, prop_params, "Props")
-        else:
-            logger.info(f"Phase 3: No new properties to load")
+        _failed = False
+        try:
+            logger.info(f"Phase 1: Loading {len(nodes):,} nodes (noindex={use_noindex})...")
+            if skip_existing:
+                cursor.execute(f"SELECT node_id FROM {self._table('nodes')}")
+                existing = set(r[0] for r in cursor.fetchall())
+                new_nodes = [(nid, attrs) for nid, attrs in nodes if nid not in existing]
+                logger.info(f"  {len(existing):,} existing, {len(new_nodes):,} new")
+            else:
+                new_nodes = nodes
+                existing = set()
+
+            node_params = [[nid] for nid, _ in new_nodes]
+            node_sql = f"INSERT{hint} INTO {self._table('nodes')} (node_id) VALUES (?)"
+            n_nodes = self._executemany_batched(cursor, node_sql, node_params, "Nodes")
+
+            nodes_to_process = new_nodes if skip_existing else nodes
+
+            label_params = []
+            for nid, attrs in nodes_to_process:
+                labels = []
+                if label_attr and label_attr in attrs:
+                    val = attrs[label_attr]
+                    labels = [val] if isinstance(val, str) else list(val)
+                for lbl in labels:
+                    if lbl and isinstance(lbl, str):
+                        label_params.append([nid, lbl[:128]])
+
+            if label_params:
+                logger.info(f"Phase 2: Loading {len(label_params):,} labels (noindex={use_noindex})...")
+                label_sql = f"INSERT{hint} INTO {self._table('rdf_labels')} (s, label) VALUES (?, ?)"
+                n_labels = self._executemany_batched(cursor, label_sql, label_params, "Labels")
+            else:
+                logger.info(f"Phase 2: No new labels to load")
+
+            prop_params = []
+            for nid, attrs in nodes_to_process:
+                props = {"id": nid}
+                for k, v in attrs.items():
+                    if k in (label_attr, "namespace") or v is None:
+                        continue
+                    s = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                    if len(s) > 60000:
+                        s = s[:60000]
+                    props[k] = s
+                for k, v in props.items():
+                    prop_params.append([nid, k, str(v)])
+
+            if prop_params:
+                logger.info(f"Phase 3: Loading {len(prop_params):,} properties (noindex={use_noindex})...")
+                prop_sql = f"INSERT{hint} INTO {self._table('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)"
+                n_props = self._executemany_batched(cursor, prop_sql, prop_params, "Props")
+            else:
+                logger.info(f"Phase 3: No new properties to load")
+        except Exception:
+            _failed = True
+            raise
+        finally:
+            if _failed:
+                try:
+                    self.conn.rollback()
+                except Exception:
+                    pass
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
         elapsed = time.time() - t0
         stats = {
@@ -231,38 +233,44 @@ class BulkLoader:
         """
         cursor = self.conn.cursor()
         t0 = time.time()
+        n_edges = 0
+        try:
+            # Deduplicate in-memory first (MultiDiGraph can have duplicates)
+            seen = set()
+            deduped = []
+            for src, pred, tgt, quals in edges:
+                key = (src, pred, tgt)
+                if key not in seen:
+                    seen.add(key)
+                    deduped.append((src, pred, tgt, quals))
+            if len(deduped) < len(edges):
+                logger.info(f"Deduped {len(edges):,} -> {len(deduped):,} edges ({len(edges)-len(deduped):,} duplicates)")
 
-        # Deduplicate in-memory first (MultiDiGraph can have duplicates)
-        seen = set()
-        deduped = []
-        for src, pred, tgt, quals in edges:
-            key = (src, pred, tgt)
-            if key not in seen:
-                seen.add(key)
-                deduped.append((src, pred, tgt, quals))
-        if len(deduped) < len(edges):
-            logger.info(f"Deduped {len(edges):,} -> {len(deduped):,} edges ({len(edges)-len(deduped):,} duplicates)")
+            if skip_existing:
+                cursor.execute(f"SELECT s, p, o_id FROM {self._table('rdf_edges')}")
+                existing_edges = set((r[0], r[1], r[2]) for r in cursor.fetchall())
+                new_edges = [(s, p, t, q) for s, p, t, q in deduped if (s, p, t) not in existing_edges]
+                logger.info(f"  {len(existing_edges):,} existing edges, {len(new_edges):,} new")
+                deduped = new_edges
 
-        if skip_existing:
-            cursor.execute(f"SELECT s, p, o_id FROM {self._table('rdf_edges')}")
-            existing_edges = set((r[0], r[1], r[2]) for r in cursor.fetchall())
-            new_edges = [(s, p, t, q) for s, p, t, q in deduped if (s, p, t) not in existing_edges]
-            logger.info(f"  {len(existing_edges):,} existing edges, {len(new_edges):,} new")
-            deduped = new_edges
+            logger.info(f"Loading {len(deduped):,} edges (noindex={use_noindex})...")
 
-        logger.info(f"Loading {len(deduped):,} edges (noindex={use_noindex})...")
+            edge_params = []
+            for src, pred, tgt, quals in deduped:
+                qual_json = json.dumps(quals) if quals else None
+                edge_params.append([src, pred, tgt, qual_json])
 
-        edge_params = []
-        for src, pred, tgt, quals in deduped:
-            qual_json = json.dumps(quals) if quals else None
-            edge_params.append([src, pred, tgt, qual_json])
+            if use_noindex:
+                sql = f"INSERT %NOINDEX %NOCHECK INTO {self._table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)"
+            else:
+                sql = f"INSERT INTO {self._table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)"
 
-        if use_noindex:
-            sql = f"INSERT %NOINDEX %NOCHECK INTO {self._table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)"
-        else:
-            sql = f"INSERT INTO {self._table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)"
-
-        n_edges = self._executemany_batched(cursor, sql, edge_params, "Edges")
+            n_edges = self._executemany_batched(cursor, sql, edge_params, "Edges")
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
         elapsed = time.time() - t0
         stats = {
@@ -280,20 +288,23 @@ class BulkLoader:
         Must be called after load_edges(use_noindex=True).
         Also rebuilds bitmap extent indexes for correct COUNT(*).
         """
-        import iris
-        iris_obj = self._iris_obj()
         results = {}
-
-        for cls in ["Graph.KG.rdfedges", "Graph.KG.rdflabels", "Graph.KG.rdfprops", "Graph.KG.nodes"]:
-            try:
+        cursor = self.conn.cursor()
+        try:
+            for cls in ["Graph.KG.rdfedges", "Graph.KG.rdflabels", "Graph.KG.rdfprops", "Graph.KG.nodes"]:
                 t0 = time.time()
-                iris_obj.classMethodVoid(cls, "%BuildIndices")
+                ok = self._rebuild_indices(cursor, cls)
                 dt = time.time() - t0
-                results[cls] = True
-                logger.info(f"  Rebuilt indices for {cls} ({dt:.1f}s)")
-            except Exception as e:
-                logger.warning(f"  %BuildIndices failed for {cls}: {e}")
-                results[cls] = False
+                results[cls] = ok
+                if ok:
+                    logger.info(f"  Rebuilt indices for {cls} ({dt:.1f}s)")
+                else:
+                    logger.warning(f"  %BuildIndices failed for {cls}")
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
         return results
 
@@ -307,17 +318,17 @@ class BulkLoader:
         Requires Graph.KG.Traversal and Graph.KG.GraphIndex to be deployed.
         Returns True if successful.
         """
+        cursor = self.conn.cursor()
         try:
-            import iris
-            iris_obj = self._iris_obj()
             logger.info("Building ^KG + ^NKG globals from SQL tables...")
             t0 = time.time()
-            iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
+            cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
             dt = time.time() - t0
-
-            node_count = iris_obj.get("^NKG", "$meta", "nodeCount")
-            edge_count = iris_obj.get("^NKG", "$meta", "edgeCount")
-            logger.info(f"BuildKG completed in {dt:.1f}s: {node_count} nodes, {edge_count} edges in ^NKG")
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            logger.info(f"BuildKG completed in {dt:.1f}s")
             return True
         except Exception as e:
             logger.error(f"BuildKG failed: {e}")
@@ -326,6 +337,11 @@ class BulkLoader:
                 "are deployed. BFS/PPR will not work without ^KG globals."
             )
             return False
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def load_networkx(
         self,
@@ -385,10 +401,16 @@ class BulkLoader:
         stats["total_elapsed_s"] = round(time.time() - t_total, 1)
 
         cursor = self.conn.cursor()
-        for table in ["nodes", "rdf_edges", "rdf_labels", "rdf_props"]:
+        try:
+            for table in ["nodes", "rdf_edges", "rdf_labels", "rdf_props"]:
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {self._table(table)}")
+                    stats[f"final_{table}_count"] = cursor.fetchone()[0]
+                except Exception:
+                    pass
+        finally:
             try:
-                cursor.execute(f"SELECT COUNT(*) FROM {self._table(table)}")
-                stats[f"final_{table}_count"] = cursor.fetchone()[0]
+                cursor.close()
             except Exception:
                 pass
 

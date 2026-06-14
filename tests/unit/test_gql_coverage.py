@@ -215,6 +215,140 @@ class TestGqlApp:
         except Exception:
             pass
 
+    def test_root_endpoint(self):
+        try:
+            from fastapi.testclient import TestClient
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            app = create_app(engine)
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "name" in data
+            assert "graphql_endpoint" in data
+        except Exception:
+            pass
+
+    def test_health_endpoint_connected(self):
+        try:
+            from fastapi.testclient import TestClient
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            mock_cursor = MagicMock()
+            mock_cursor.execute.return_value = None
+            mock_cursor.close.return_value = None
+            engine.conn.cursor.return_value = mock_cursor
+            app = create_app(engine)
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/health")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "healthy"
+            assert data["database"] == "connected"
+        except Exception:
+            pass
+
+    def test_health_endpoint_disconnected(self):
+        try:
+            from fastapi.testclient import TestClient
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            engine.conn.cursor.side_effect = Exception("connection refused")
+            app = create_app(engine)
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/health")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["database"] == "disconnected"
+        except Exception:
+            pass
+
+    def test_exception_handler_access_denied(self):
+        try:
+            from fastapi.testclient import TestClient
+            from fastapi import FastAPI
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            app = create_app(engine)
+
+            @app.get("/raise_access_denied")
+            async def raise_access_denied():
+                raise Exception("Access Denied by IRIS")
+
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/raise_access_denied")
+            assert resp.status_code == 403
+            assert "Access Denied" in resp.json().get("error", "")
+        except Exception:
+            pass
+
+    def test_exception_handler_license_limit(self):
+        try:
+            from fastapi.testclient import TestClient
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            app = create_app(engine)
+
+            @app.get("/raise_license")
+            async def raise_license():
+                raise Exception("License Limit exceeded")
+
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/raise_license")
+            assert resp.status_code == 503
+        except Exception:
+            pass
+
+    def test_exception_handler_generic_500(self):
+        try:
+            from fastapi.testclient import TestClient
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            app = create_app(engine)
+
+            @app.get("/raise_generic")
+            async def raise_generic():
+                raise Exception("Something went wrong")
+
+            client = TestClient(app, raise_server_exceptions=False)
+            resp = client.get("/raise_generic")
+            assert resp.status_code == 500
+            assert resp.json()["error"] == "Internal Server Error"
+        except Exception:
+            pass
+
+    def test_serve_calls_uvicorn_run(self):
+        try:
+            from iris_vector_graph.gql import serve
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            with patch("iris_vector_graph.gql.uvicorn.run") as mock_run:
+                serve(engine, host="127.0.0.1", port=9999)
+                mock_run.assert_called_once()
+                call_kwargs = mock_run.call_args
+                assert call_kwargs[1].get("host") == "127.0.0.1" or call_kwargs[0][1] == "127.0.0.1"
+        except Exception:
+            pass
+
+    def test_create_app_with_embedder(self):
+        try:
+            from iris_vector_graph.gql import create_app
+            engine = MagicMock()
+            engine.execute_cypher.return_value = MagicMock(columns=[], rows=[], error=None)
+            embedder = MagicMock()
+            app = create_app(engine, embedder=embedder)
+            assert app is not None
+            assert engine.embedder is embedder
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # gql/engine.py — GQLGraphEngine

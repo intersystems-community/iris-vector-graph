@@ -11,6 +11,54 @@ from iris_vector_graph._validate import CypherInput, KHop2Input
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# GDS → ivg procedure shim map
+# Keys are lowercase gds.* procedure names; values are ivg.* equivalents.
+# ---------------------------------------------------------------------------
+
+GDS_SHIM_MAP: Dict[str, str] = {
+    "gds.pagerank.stream":              "ivg.ppr",
+    "gds.shortestpath.dijkstra.stream": "ivg.shortestPath.weighted",
+    "gds.shortestpath.dijkstra":        "ivg.shortestPath.weighted",
+    "gds.betweenness.stream":           "ivg.betweenness",
+    "gds.louvain.stream":               "ivg.leiden",
+    "gds.nodesimilarity.stream":        "ivg.vector.search",
+}
+
+
+def _handle_gds_shim(proc) -> Optional["IVGResult"]:
+    """Handle a gds.* procedure call: shim to ivg.* or return an error result.
+
+    Returns None for non-gds procedures (caller should continue normal dispatch).
+    Returns an IVGResult for gds.* procedures (either shimmed result or error).
+    """
+    name = proc.procedure_name.lower()
+    if not name.startswith("gds."):
+        return None
+
+    ivg_equiv = GDS_SHIM_MAP.get(name)
+    if ivg_equiv is None:
+        suggestions = ", ".join(sorted(set(GDS_SHIM_MAP.values())))
+        return IVGResult(
+            columns=["error"],
+            rows=[],
+            error=(
+                f"gds procedure '{proc.procedure_name}' not shimmed; "
+                f"use ivg equivalent. Available: {suggestions}"
+            ),
+        )
+
+    # Build a shimmed proc object with the ivg equivalent name.
+    # Return it as a tuple sentinel so the caller can re-dispatch.
+    shimmed = type("ShimmedProc", (), {
+        "procedure_name": ivg_equiv,
+        "arguments": proc.arguments,
+        "yield_items": getattr(proc, "yield_items", []),
+    })()
+    # (shimmed_proc, None) sentinel tuple — caller checks isinstance(result, tuple)
+    return (shimmed, None)  # type: ignore[return-value]
+
+
 class QueryMixin:
     def execute_aql(
         self,
@@ -176,6 +224,8 @@ class QueryMixin:
             p = sql_query.parameters[0] if sql_query.parameters else []
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
+            if sql_query.bolt_column_types:
+                result.bolt_column_types = sql_query.bolt_column_types
             return result
         traversal = self._extract_traversal(parsed, parameters)
         if traversal is not None:

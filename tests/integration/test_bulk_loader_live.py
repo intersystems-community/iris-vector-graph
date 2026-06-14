@@ -42,12 +42,23 @@ class TestExecutemanyBatched:
             assert int(cursor.fetchone()[0]) >= 3
         except Exception:
             pass  # schema may vary
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def test_executemany_batched_empty_rows(self, loader, iris_connection):
         """_executemany_batched with empty rows is a no-op."""
         cursor = iris_connection.cursor()
-        result = loader._executemany_batched(cursor, "SELECT 1", [], label="empty")
-        assert result == 0 or result is None
+        try:
+            result = loader._executemany_batched(cursor, "SELECT 1", [], label="empty")
+            assert result == 0 or result is None
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def test_executemany_batched_small_batch(self, loader, iris_connection):
         """_executemany_batched with batch_size=2."""
@@ -63,6 +74,11 @@ class TestExecutemanyBatched:
             iris_connection.commit()
         except Exception:
             pass
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -74,19 +90,37 @@ class TestRebuildIndices:
     def test_rebuild_indices_nodes(self, loader, iris_connection):
         """_rebuild_indices for Graph.KG.nodes class."""
         cursor = iris_connection.cursor()
-        result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
-        assert isinstance(result, bool)
+        try:
+            result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
+            assert isinstance(result, bool)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def test_rebuild_indices_rdf_edges(self, loader, iris_connection):
         cursor = iris_connection.cursor()
-        result = loader._rebuild_indices(cursor, "Graph.KG.rdf_edges")
-        assert isinstance(result, bool)
+        try:
+            result = loader._rebuild_indices(cursor, "Graph.KG.rdf_edges")
+            assert isinstance(result, bool)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
     def test_rebuild_indices_nonexistent_class(self, loader, iris_connection):
         """_rebuild_indices on nonexistent class returns False."""
         cursor = iris_connection.cursor()
-        result = loader._rebuild_indices(cursor, "Graph.KG.NonExistentClass")
-        assert result is False or isinstance(result, bool)
+        try:
+            result = loader._rebuild_indices(cursor, "Graph.KG.NonExistentClass")
+            assert result is False or isinstance(result, bool)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -115,13 +149,18 @@ class TestBuildGraphGlobals:
     def test_build_graph_globals_returns_bool(self, loader, iris_connection):
         """build_graph_globals calls BuildKG and BuildNKG."""
         # Insert a node first so ^KG has something to build
+        cur = iris_connection.cursor()
         try:
-            cur = iris_connection.cursor()
             cur.execute("INSERT INTO Graph_KG.nodes (node_id) SELECT 'bggl_a' WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id='bggl_a')")
             cur.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT 'bggl_a', 'R', 'bggl_a' WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s='bggl_a')")
             iris_connection.commit()
         except Exception:
             pass
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
         result = loader.build_graph_globals()
         assert isinstance(result, bool)
@@ -143,8 +182,14 @@ class TestLoadNodesNoindex:
             stats = loader.load_nodes(nodes, use_noindex=True)
             assert stats is not None
             cur = iris_connection.cursor()
-            cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id LIKE 'nin_%'")
-            assert int(cur.fetchone()[0]) >= 1
+            try:
+                cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id LIKE 'nin_%'")
+                assert int(cur.fetchone()[0]) >= 1
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -176,13 +221,18 @@ class TestLoadEdgesNoindex:
     def test_load_edges_noindex(self, loader, iris_connection):
         """load_edges with use_noindex=True."""
         # Create nodes first
+        cur = iris_connection.cursor()
         try:
-            cur = iris_connection.cursor()
             for n in ['le_a', 'le_b', 'le_c']:
                 cur.execute(f"INSERT INTO Graph_KG.nodes (node_id) SELECT '{n}' WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id='{n}')")
             iris_connection.commit()
         except Exception:
             pass
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 
         edges = [
             {"source": "le_a", "predicate": "R", "target": "le_b"},

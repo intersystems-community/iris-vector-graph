@@ -572,6 +572,12 @@ class TestEngineVectorAndGraphMethods:
     def test_plaid_build_returns_dict(self):
         self._mock_iris.classMethodValue.return_value = "{}"
         import numpy as np
+        # Pre-load sklearn/scipy so patch.dict doesn't evict numpy.fft C extension
+        try:
+            import sklearn.cluster  # noqa: F401
+            import numpy.fft  # noqa: F401
+        except ImportError:
+            pass
         docs = [{"id": "d1", "token_embeddings": np.array([[0.1, 0.2]])}]
         with self._with_iris():
             try:
