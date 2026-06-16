@@ -105,6 +105,7 @@ docs/dc_contest_raw.md
 
 # Agent-specific config (not project docs)
 CLAUDE.md
+AGENTS.md
 CODEX.md
 TABNINE.md
 DOCS_IRIS_PYTHON_ISSUES.md
