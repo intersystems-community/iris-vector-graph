@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "2.1.1"
+version = "2.2.0"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -201,7 +201,8 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--disable-warnings"
+    "--disable-warnings",
+    "-m", "not perf"
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -221,7 +222,13 @@ omit = [
     "*/.venv/*",
     "*/build/*",
     "*/dist/*",
+    # Bolt server: network I/O — covered by integration tests (ivg-iris container required)
     "iris_vector_graph/bolt_server.py",
+    # IRIS-native store layer: ~95% of lines call IRIS ObjectScript directly;
+    # meaningful coverage only via integration tests (ivg-iris or ivg-iris-enterprise).
+    # Unit coverage intentionally omitted — see docs/coverage.md
+    "iris_vector_graph/stores/iris_sql_store.py",
+    "iris_vector_graph/stores/arno_bridge.py",
 ]
 
 [tool.coverage.report]

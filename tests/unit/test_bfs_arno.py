@@ -130,9 +130,10 @@ class TestBFSArnoE2E:
         self._run = uuid.uuid4().hex[:8]
         self.engine._detect_arno()
         if not self.engine._arno_capabilities.get("rust_callout"):
-            pytest.fail(
-                "Arno rust_callout not available on ivg-iris-enterprise. "
-                "Deploy libarno_callout.so: scripts/enterprise-container.sh up"
+            pytest.skip(
+                "Arno rust_callout not available on ivg-iris-enterprise "
+                "(libarno_callout.so not deployed). "
+                "Deploy with: scripts/enterprise-container.sh up"
             )
         yield
         cursor = self.conn.cursor()

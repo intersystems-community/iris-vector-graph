@@ -354,22 +354,21 @@ class QueryMixin:
         predicates = vl0.get("types", [])
         max_hops = vl0.get("max_hops", 5)
         direction = vl0.get("direction", "out")
-        max_results = 0
-        if sql_str:
-            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
-            if m:
-                max_results = int(m.group(1))
+        def _extract_limit(s: str) -> int:
+            # IRIS SQL uses FETCH FIRST N ROWS ONLY; fall back to LIMIT N
+            m = _re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", s, _re.IGNORECASE)
+            if not m:
+                m = _re.search(r"\bLIMIT\s+(\d+)", s, _re.IGNORECASE)
+            return int(m.group(1)) if m else 0
+
+        max_results = _extract_limit(sql_str) if sql_str else 0
 
         if count_match:
             col_name = count_match.group(1)
             bfs_result = self._store.execute_bfs(source_id, predicates, max_hops, direction, 0)
             cnt = len(bfs_result.rows) if not bfs_result.error else 0
             return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
-        max_results = 0
-        if sql_str:
-            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
-            if m:
-                max_results = int(m.group(1))
+        max_results = _extract_limit(sql_str) if sql_str else 0
 
         direction = vl0.get("direction", "out")
         predicates = vl0.get("types", [])
@@ -564,7 +563,10 @@ class QueryMixin:
         import re as _re
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
         if sql_query.sql:
-            m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
+            # IRIS SQL uses "FETCH FIRST N ROWS ONLY" (not LIMIT N)
+            m = _re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", sql_str, _re.IGNORECASE)
+            if not m:
+                m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
             if m:
                 max_results = int(m.group(1))
 
