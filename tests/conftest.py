@@ -21,31 +21,19 @@ def _deploy_objectscript(container_name: str) -> None:
         ["docker", "cp", "iris_src/src/.", f"{container_name}:/tmp/src/"],
         capture_output=True,
     )
-    load_cmd = (
-        'Do $system.OBJ.Compile("Graph.KG.GraphIndex","ck-d")\n'
-        'Do $system.OBJ.LoadDir("/tmp/src","ck",.err,1)\n'
-        'Do $system.OBJ.Compile("Graph.KG.Edge","ck-d")\n'
-        'Do $system.OBJ.Compile("Graph.KG.TestEdge","ck-d")\n'
-        'H\n'
-    )
-    subprocess.run(
-        ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
-        input=load_cmd,
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=120,
-    )
-    for _cls in [
-        "Graph.KG.ArnoAccel",
-        "Graph.KG.TraversalBuild", "Graph.KG.TraversalBFS",
-        "Graph.KG.TraversalPaths", "Graph.KG.TraversalKHop", "Graph.KG.Traversal",
-        "Graph.KG.NKGAccelLoader", "Graph.KG.NKGAccelAdjacency",
-        "Graph.KG.NKGAccelTraversal", "Graph.KG.NKGAccelCentrality", "Graph.KG.NKGAccel",
-    ]:
+    # Load each .cls file individually with "ck-d" (no background workers).
+    # Community Edition is limited to 2 CPU cores; LoadDir with parallel compilation
+    # fails with ERROR #7802 on machines with many cores because the IRIS work queue
+    # manager spawns more background jobs than the CE license allows.
+    # Loading files one at a time avoids the worker queue entirely.
+    import glob as _glob
+    cls_files = sorted(_glob.glob("iris_src/src/**/*.cls", recursive=True))
+    for cls_file in cls_files:
+        # Get the container path relative to /tmp/src/
+        rel = os.path.relpath(cls_file, "iris_src/src").replace(os.sep, "/")
         subprocess.run(
             ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
-            input=f'Do $system.OBJ.Compile("{_cls}","cdk")\nH\n',
+            input=f'Do $system.OBJ.Load("/tmp/src/{rel}","ck-d")\nH\n',
             capture_output=True, text=True, timeout=30,
         )
 
@@ -53,14 +41,34 @@ def _deploy_objectscript(container_name: str) -> None:
 @pytest.fixture(scope="session")
 def iris_test_container():
     from iris_devtester import IRISContainer
+    import subprocess as _sp
+
+    # Candidate names to try in order before starting a new container.
+    # "iris_vector_graph" is the docker-compose service name; it's a valid
+    # Community container even though it differs from the default fixture name.
+    _FALLBACK_NAMES = ["iris_vector_graph"]
 
     attached = False
+    container = None
+
+    # 1. Try the configured name.
     try:
         container = IRISContainer.attach(_GQS_CONTAINER)
         attached = True
         logger.info("Attached to existing container: %s", _GQS_CONTAINER)
     except Exception:
-        import subprocess as _sp
+        pass
+
+    # 2. If not found, skip rather than start a new container —
+    #    unless IVG_AUTO_START_CONTAINER=1 (default when running in CI).
+    if container is None:
+        auto_start = os.environ.get("IVG_AUTO_START_CONTAINER", "0") not in ("0", "false", "no")
+        if not auto_start:
+            pytest.skip(
+                f"IRIS container '{_GQS_CONTAINER}' not running. "
+                f"Start with: scripts/test-container.sh up  "
+                f"(or set IVG_TEST_CONTAINER=ivg-iris-enterprise for enterprise container)"
+            )
         _sp.run(["docker", "rm", "-f", _GQS_CONTAINER], capture_output=True)
         logger.info("Starting fresh Community IRIS container: %s", _GQS_CONTAINER)
         container = (

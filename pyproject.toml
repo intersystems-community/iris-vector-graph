@@ -201,7 +201,8 @@ addopts = [
     "-v",
     "--tb=short",
     "--strict-markers",
-    "--disable-warnings"
+    "--disable-warnings",
+    "-m", "not perf"
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

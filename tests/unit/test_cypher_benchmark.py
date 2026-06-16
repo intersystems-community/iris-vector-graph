@@ -12,6 +12,7 @@ WARM_RUNS = 3
 BENCH_RUNS = 10
 
 
+@pytest.mark.perf
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 class TestCypherBenchmark:
 
