@@ -1,6 +1,6 @@
 services:
   iris-enterprise:
-    image: docker.iscinternal.com/docker-intersystems/intersystems/irishealth:2026.2.0AI.161.0
+    image: containers.intersystems.com/intersystems/irishealth:2026.2.0AI.161.0
     container_name: ivg-iris-enterprise
     ports:
       - "31972:1972"
