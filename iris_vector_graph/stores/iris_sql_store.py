@@ -348,7 +348,7 @@ class IRISGraphStore:
                 raw = self._arno_call(
                     "Graph.KG.NKGAccel", "BFSJson",
                     source_id, predicates_json, str(max_hops),
-                    str(max_results), direction,
+                    str(max_results),
                 )
                 raw_val = raw if isinstance(raw, str) else str(raw)
                 if raw_val.startswith("SORTED:"):
