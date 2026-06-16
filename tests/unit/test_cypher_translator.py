@@ -42,7 +42,7 @@ def test_translate_order_by_limit():
     assert "ORDER BY" in sql
     assert "DESC" in sql
     # IRIS doesn't support NULLS LAST, so we don't emit it
-    assert "LIMIT 10" in sql
+    assert "FETCH FIRST 10 ROWS ONLY" in sql
 
 
 def test_translate_numeric_comparison_cast():

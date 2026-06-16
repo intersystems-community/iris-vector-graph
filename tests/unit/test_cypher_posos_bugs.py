@@ -75,20 +75,20 @@ class TestParameterizedPagination:
         """LIMIT $limit should resolve from params dict"""
         q = parse_query("MATCH (n:Drug) RETURN n LIMIT $limit")
         sql = translate_to_sql(q, params={"limit": 25})
-        assert "LIMIT 25" in sql.sql
+        assert "FETCH FIRST 25 ROWS ONLY" in sql.sql
 
     def test_skip_and_limit_both_parameterized(self):
         """SKIP $offset LIMIT $limit — both params should resolve"""
         q = parse_query("MATCH (n:Drug) RETURN n SKIP $offset LIMIT $limit")
         sql = translate_to_sql(q, params={"offset": 20, "limit": 50})
-        assert "LIMIT 50" in sql.sql
+        assert "FETCH FIRST 50 ROWS ONLY" in sql.sql
         assert "OFFSET 20" in sql.sql
 
     def test_integer_literal_skip_still_works(self):
         """Integer literal SKIP/LIMIT should still work unchanged"""
         q = parse_query("MATCH (n:Drug) RETURN n SKIP 5 LIMIT 10")
         sql = translate_to_sql(q)
-        assert "LIMIT 10" in sql.sql
+        assert "FETCH FIRST 10 ROWS ONLY" in sql.sql
         assert "OFFSET 5" in sql.sql
 
     def test_missing_param_raises(self):
@@ -102,7 +102,7 @@ class TestParameterizedPagination:
         q = parse_query("MATCH (n:Drug) RETURN n SKIP $offset LIMIT $limit")
         sql = translate_to_sql(q, params={"offset": 0, "limit": 100})
         assert "OFFSET 0" in sql.sql
-        assert "LIMIT 100" in sql.sql
+        assert "FETCH FIRST 100 ROWS ONLY" in sql.sql
 
     def test_no_sql_injection_via_param(self):
         """Pagination params must be cast to int — non-numeric values should raise"""

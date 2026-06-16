@@ -34,8 +34,13 @@ class TestIvgRetrieveSQL:
         assert "FULL OUTER JOIN" not in sql
 
     def test_retrieve_embedding_config_passthrough(self):
-        sql = _sql("CALL ivg.retrieve('insulin', 5, 'myidx', '*', 60, 'my-model') YIELD node, score RETURN node, score")
-        assert "my-model" in sql
+        from iris_vector_graph.cypher.parser import Parser
+        from iris_vector_graph.cypher.lexer import Lexer
+        parsed = Parser(Lexer("CALL ivg.retrieve('insulin', 5, 'myidx', '*', 60, 'my-model') YIELD node, score RETURN node, score")).parse()
+        result = translate_to_sql(parsed, {})
+        # embedding_config is passed as a bound parameter (not inline) after SQL parameterization fix
+        params_flat = [p for group in (result.parameters or []) for p in (group if isinstance(group, list) else [group])]
+        assert any("my-model" in str(p) for p in params_flat)
 
     def test_retrieve_default_config_empty(self):
         sql = _sql("CALL ivg.retrieve('insulin', 5) YIELD node, score RETURN node, score")
