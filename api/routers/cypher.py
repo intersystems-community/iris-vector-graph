@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 import time
@@ -6,8 +7,8 @@ import uuid
 from typing import List, Any, Dict, Optional, Union
 
 from ..models.cypher import (
-    CypherQueryRequest, 
-    CypherQueryResponse, 
+    CypherQueryRequest,
+    CypherQueryResponse,
     CypherErrorResponse,
     QueryMetadata,
     ErrorCode
@@ -16,6 +17,7 @@ from ..dependencies import get_db_connection
 from iris_vector_graph.cypher.parser import parse_query, CypherParseError
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher import ast
+from iris_vector_graph.api_auth import is_mutation_cypher
 
 # Use iris-devtester dbapi_compat for IRIS connectivity
 try:
@@ -34,7 +36,20 @@ async def execute_cypher_query(
     """Execute an openCypher query against InterSystems IRIS"""
     trace_id = f"cypher-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     translation_start = time.time()
-    
+
+    # Read-only mode: reject mutation Cypher queries.
+    if os.environ.get("IVG_READ_ONLY", "").lower() == "true":
+        if is_mutation_cypher(request.query):
+            return JSONResponse(
+                status_code=403,
+                content=CypherErrorResponse(
+                    errorType="access",
+                    message="mutation queries not allowed in read-only mode",
+                    errorCode=ErrorCode.INTERNAL_ERROR,
+                    traceId=trace_id,
+                ).model_dump(by_alias=True),
+            )
+
     try:
         # 1. Parse Cypher query
         query_ast = parse_query(request.query)
@@ -110,20 +125,15 @@ async def execute_cypher_query(
             )
 
         except Exception as e:
-            # SQL execution error
-            error_msg = str(e)
-            error_code = ErrorCode.SQL_EXECUTION_ERROR
-            if "FOREIGN KEY" in error_msg.upper():
-                error_code = ErrorCode.FK_CONSTRAINT_VIOLATION
-                
+            # Log the full error server-side for debugging; return generic message to client.
+            logger.error("SQL execution error [%s]: %s", trace_id, str(e), exc_info=True)
             return JSONResponse(
                 status_code=500,
                 content=CypherErrorResponse(
                     errorType="execution",
-                    message=f"SQL execution failed: {error_msg}",
-                    errorCode=error_code,
+                    message="query execution failed",
+                    errorCode=ErrorCode.SQL_EXECUTION_ERROR,
                     traceId=trace_id,
-                    sqlQuery=sql_text
                 ).model_dump(by_alias=True)
             )
 
@@ -160,11 +170,12 @@ async def execute_cypher_query(
         )
 
     except Exception as e:
+        logger.error("Unexpected error [%s]: %s", trace_id, str(e), exc_info=True)
         return JSONResponse(
             status_code=500,
             content=CypherErrorResponse(
                 errorType="execution",
-                message=f"Internal error: {str(e)}",
+                message="query execution failed",
                 errorCode=ErrorCode.INTERNAL_ERROR,
                 traceId=trace_id
             ).model_dump(by_alias=True)

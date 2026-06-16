@@ -84,18 +84,10 @@ def browser_redirect():
     return RedirectResponse("/browser/")
 
 
-@app.middleware("http")
-async def api_key_middleware(request: Request, call_next):
-    path = request.url.path
-    if path.startswith("/api/") or path.startswith("/db/"):
-        expected = os.environ.get("IVG_API_KEY", "")
-        provided = request.headers.get("X-API-Key", "")
-        if expected and provided != expected:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "unauthorized", "message": "X-API-Key required"},
-            )
-    return await call_next(request)
+# API key authentication — shared implementation from iris_vector_graph.api_auth.
+# Uses X-Api-Key header (canonical form); IVG_API_KEY env var activates it.
+from iris_vector_graph.api_auth import ApiKeyMiddleware as _ApiKeyMiddleware
+app.add_middleware(_ApiKeyMiddleware)
 
 
 from iris_vector_graph.bolt_server import BoltSession

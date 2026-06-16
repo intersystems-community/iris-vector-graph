@@ -187,12 +187,24 @@ class Query(CoreQuery):
                 pass
 
 
+def _check_read_only(operation: str) -> None:
+    """Raise PermissionError if IVG_READ_ONLY=true (used by mutation resolvers)."""
+    import os
+    if os.environ.get("IVG_READ_ONLY", "").lower() == "true":
+        raise PermissionError(
+            f"GraphQL mutation '{operation}' is not allowed in read-only mode. "
+            "Unset IVG_READ_ONLY to enable mutations."
+        )
+
+
 @strawberry.type
 class Mutation:
     """
     Mutation type with biomedical domain mutations.
 
     Biomedical mutations: createProtein, updateProtein, deleteProtein
+
+    All mutations respect IVG_READ_ONLY — raise PermissionError when set.
     """
 
     if BIOMEDICAL_AVAILABLE:
@@ -202,6 +214,7 @@ class Mutation:
             info: strawberry.Info, input: CreateProteinInput
         ) -> Protein:
             """Create a new protein."""
+            _check_read_only("createProtein")
             biomed_resolver = BiomedicalDomainResolver(
                 info.context.get("db_connection")
             )
@@ -212,6 +225,7 @@ class Mutation:
             info: strawberry.Info, id: strawberry.ID, input: UpdateProteinInput
         ) -> Protein:
             """Update an existing protein."""
+            _check_read_only("updateProtein")
             biomed_resolver = BiomedicalDomainResolver(
                 info.context.get("db_connection")
             )
@@ -222,6 +236,7 @@ class Mutation:
             info: strawberry.Info, id: strawberry.ID
         ) -> bool:
             """Delete a protein."""
+            _check_read_only("deleteProtein")
             biomed_resolver = BiomedicalDomainResolver(
                 info.context.get("db_connection")
             )

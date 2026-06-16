@@ -112,4 +112,7 @@ __all__ = [
     "EmbeddingsMissingError",
     "IndexNotSyncedError",
     "NodeNotFoundError",
+    "ApiKeyMiddleware",
+    "ReadOnlyMiddleware",
+    "is_mutation_cypher",
 ]

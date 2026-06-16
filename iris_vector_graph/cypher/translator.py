@@ -670,12 +670,13 @@ def _translate_bm25_search(
         )
 
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "kg_BM25"
-    safe_idx = idx_name.replace("'", "''")
-    safe_query = str(query).replace("'", "''")
+    # Bind idx_name and query as parameters (? placeholders) rather than
+    # interpolating them inline.  k_int is an integer cast — safe as inline literal.
+    context.all_stage_params.extend([str(idx_name), str(query)])
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {bm25_fn}('{safe_idx}', '{safe_query}', {k_int}),\n"
+        f"  {bm25_fn}(?, ?, {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -713,16 +714,16 @@ def _translate_retrieve(
     bm25_limit = limit * 2
     emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "Graph_KG.kg_BM25"
-    safe_query = str(query).replace("'", "''")
-    safe_bm25 = bm25_name.replace("'", "''")
-    safe_config = embedding_config.replace("'", "''")
 
-    vec_where = "" if vec_label == "*" else f" WHERE n.label = '{vec_label.replace(chr(39), chr(39)*2)}'"
+    # Bind all string user inputs as ? parameters; integer args stay inline (safe).
+    # Order: bm25_name, query (for BM25 CTE), then query again (for Vec EMBEDDING()),
+    # then embedding_config, then vec_label filter (if not wildcard).
+    context.all_stage_params.extend([str(bm25_name), str(query)])
 
     bm25_cte = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {bm25_fn}('{safe_bm25}', '{safe_query}', {bm25_limit}),\n"
+        f"  {bm25_fn}(?, ?, {bm25_limit}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -730,9 +731,17 @@ def _translate_retrieve(
         f") j"
     )
 
-    context.all_stage_params.append(str(query))
+    context.all_stage_params.append(str(query))   # for EMBEDDING(?, ...)
+    context.all_stage_params.append(str(embedding_config))
+
+    if vec_label == "*":
+        vec_where = ""
+    else:
+        vec_where = " WHERE n.label = ?"
+        context.all_stage_params.append(str(vec_label))
+
     vec_cte = (
-        f"SELECT TOP {vec_limit} e.id AS node, VECTOR_COSINE(e.emb, EMBEDDING(?, '{safe_config}')) AS score\n"
+        f"SELECT TOP {vec_limit} e.id AS node, VECTOR_COSINE(e.emb, EMBEDDING(?, ?)) AS score\n"
         f"FROM {emb_table} e{vec_where}\n"
         f"ORDER BY score DESC"
     )
@@ -803,12 +812,13 @@ def _translate_ivf_search(
         )
 
     ivf_fn = f"{_schema_prefix}.kg_IVF" if _schema_prefix else "kg_IVF"
-    safe_idx = idx_name.replace("'", "''")
+    # Bind idx_name and query_json as ? parameters; k_int/nprobe_int are safe int literals.
+    context.all_stage_params.extend([str(idx_name), _json.dumps(floats)])
 
     cte_sql = (
         f"SELECT j.node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {ivf_fn}('{safe_idx}', '{query_json}', {k_int}, {nprobe_int}),\n"
+        f"  {ivf_fn}(?, ?, {k_int}, {nprobe_int}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
