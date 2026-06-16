@@ -50,3 +50,15 @@ IVG_PORT=31972 IVG_TEST_CONTAINER=ivg-iris-enterprise coverage run -m pytest tes
 GitHub Actions CI (`ci.yml`) runs unit tests only and enforces `--fail-under=70` on the
 `iris_vector_graph/**` scope (after excluding IRIS-native modules). The coverage gate is
 intentionally set at unit-testable code only.
+
+## Known: Python 3.13 segfault with live IRIS
+
+`intersystems_irispython 5.3.2` segfaults in its C extension when running IRIS E2E tests
+sequentially under Python 3.13 (macOS, arm64). The crash occurs at
+`iris_devtester/connections/cursor_wrapper.py:15` during `execute()` in a session that
+has already run several IRIS SQL queries.
+
+**Workaround**: run the full suite with Python 3.11, or run individual E2E test files
+in isolation (`pytest tests/unit/test_cypher_case_when.py`).
+
+CI runs on Python 3.11 via GitHub Actions and is not affected.
