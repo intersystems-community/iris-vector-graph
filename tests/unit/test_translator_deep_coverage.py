@@ -659,7 +659,8 @@ class TestOrderByPreprocessing:
 
     def test_order_by_with_limit_offset(self):
         sql = _sql("MATCH (n) RETURN n.node_id SKIP 5 LIMIT 10")
-        assert "LIMIT" in sql
+        assert "FETCH FIRST 10 ROWS ONLY" in sql
+        assert "OFFSET 5" in sql
 
 
 # ===========================================================================

@@ -1061,7 +1061,7 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
         return sql
     outer_sql = f"WITH _MR AS (\n{inner_sql}\n)\n{select_prefix}{outer_cols}\nFROM _MR"
     order_m = _re.search(r'\nORDER BY .+', sql, _re.DOTALL)
-    limit_m = _re.search(r'\nLIMIT \d+', sql)
+    limit_m = _re.search(r'\nFETCH FIRST (\d+) ROWS ONLY', sql)
     offset_m = _re.search(r'\nOFFSET \d+', sql)
     suffix = ""
     if order_m:
@@ -1069,7 +1069,7 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
         end = limit_m.start() if limit_m and limit_m.start() > start else len(sql)
         suffix += sql[start:end]
     if limit_m:
-        suffix += f"\nLIMIT {limit_m.group(0).split()[1]}"
+        suffix += f"\nFETCH FIRST {limit_m.group(1)} ROWS ONLY"
     if offset_m:
         suffix += f"\nOFFSET {offset_m.group(0).split()[1]}"
     outer_sql += suffix
@@ -1398,7 +1398,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
             sql = sql.replace("SELECT DISTINCT \nFROM", f"SELECT DISTINCT *\nFROM", 1)
     if hasattr(context, '_percentile_queries') and context._percentile_queries:
         import re as _re
-        from_match = _re.search(r'\nFROM\s+(.*?)(?:\nWHERE|\nORDER|\nLIMIT|\nGROUP|\nHAVING|$)', sql, _re.DOTALL)
+        from_match = _re.search(r'\nFROM\s+(.*?)(?:\nWHERE|\nORDER|\nFETCH|\nGROUP|\nHAVING|$)', sql, _re.DOTALL)
         if from_match and len(context._percentile_queries) == 1:
             from_clause = from_match.group(0).strip()
             val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
@@ -1534,7 +1534,7 @@ def apply_pagination(
         if "\nFROM " not in sql and "FROM " not in sql.split("\n")[0]:
             sql = sql.rstrip() + "\nFROM (SELECT 1) __dual"
     if limit is not None:
-        sql += f"\nLIMIT {limit}"
+        sql += f"\nFETCH FIRST {limit} ROWS ONLY"
     if skip is not None:
         sql += f"\nOFFSET {skip}"
     return sql
