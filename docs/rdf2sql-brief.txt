@@ -1,0 +1,37 @@
+rdf2sql / SQL Table Bridge — State and Future Directions
+=========================================================
+Updated: 2026-06-17 (after spec-198 / v2.3.0)
+
+Current state. ivg has two complementary layers for working with SQL tables
+as graphs without ETL:
+
+Layer 1 — SQL Table Bridge (map_sql_table / map_sql_relationship in
+_engine/fhir.py, ~300 lines, test_sql_table_bridge.py). Register an existing
+IRIS SQL table against a graph label, pointing ivg at the id_column and
+optional property_columns. The mapping persists in Graph_KG.table_mappings.
+Cypher queries against that label are transparently translated to JOINs on
+the real table — rows never copied into rdf_edges/nodes. Relationship mappings
+(map_sql_relationship) support FK-style edges between two mapped tables.
+Read-only graph view over live SQL, not ETL.
+
+Layer 2 — RDF Export (v2.3.0, spec-198). engine.export_rdf() reads from the
+universal SPO triple store (rdf_edges / rdf_props / rdf_labels) and serializes
+to Turtle, N-Triples, N-Quads, or JSON-LD via rdflib. Named graphs preserved
+in N-Quads. Namespace prefix registry persisted in Graph_KG.rdf_namespaces.
+export_rdf_from_cypher() projects any Cypher query result as RDF triples.
+Combine the two layers: map a live SQL table → Cypher label → export_rdf()
+gives you RDF triples from live SQL data without any intermediate copy. The
+"live RDF endpoint over any IRIS schema without moving data" goal from the
+previous version of this brief is now achievable in two API calls.
+
+Remaining gaps (the true future directions now). At the narrow end: auto-
+discovery of candidate tables via INFORMATION_SCHEMA, a CLI command (ivg map
+auto --table SQLUser.Patient --label Patient --id PatientID), and write-back
+(Cypher SET / MERGE pushing changes back to the source table). At the medium
+tier: schema mapping — ingest an OWL/RDFS ontology or a dbt YAML model and
+auto-generate the map_sql_* calls, bridging to HIMrk/dbt workflows. At the
+ambitious end: a live SPARQL endpoint — wire export_rdf_from_cypher() into
+rdflib's SPARQLUpdateStore or serve it behind Oxigraph/Jena Fuseki reload
+hooks, so external SPARQL clients see up-to-date triples from live IRIS SQL
+with zero data movement. SHACL validation (also v2.3.0) closes the data
+quality loop: map table → export → validate against published shapes.
