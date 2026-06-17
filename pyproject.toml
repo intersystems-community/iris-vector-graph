@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "2.2.0"
+version = "2.3.0"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -54,6 +54,7 @@ full = [
     "leidenalg>=0.10",
     "requests>=2.28.0",
     "rdflib>=6.0.0",
+    "pyshacl>=0.25.0",
     "python-dotenv>=1.0.0",
     "fastapi>=0.118.0",
     "uvicorn>=0.37.0",
@@ -61,6 +62,10 @@ full = [
     "httpx>=0.28.1",
     "strawberry-graphql[fastapi]>=0.280.0",
     "iris-embedded-python-wrapper>=0.5.20",
+]
+rdf = [
+    "rdflib>=6.0.0",
+    "pyshacl>=0.25.0",
 ]
 communities = [
     "python-igraph>=0.11",

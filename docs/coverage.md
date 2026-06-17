@@ -8,24 +8,24 @@ This project distinguishes between two test tiers with different coverage expect
 
 Run without a live IRIS container. Fast, always-on in CI.
 
-| Module | Unit coverage target | Notes |
-|--------|---------------------|-------|
-| `iris_vector_graph/sdk.py` | ≥95% | HTTP client, mocked via `unittest.mock` |
-| `iris_vector_graph/cypher/` | ≥85% | Lexer, parser, translator — pure Python |
-| `iris_vector_graph/api_auth.py` | ≥98% | FastAPI middleware — testable with `TestClient` |
-| `iris_vector_graph/_engine/` | ≥75% | Mixed: logic mocked, IRIS callin skipped |
-| `iris_vector_graph/result.py` | ≥90% | Pure dataclass |
+| Module                          | Unit coverage target | Notes                                           |
+| ------------------------------- | -------------------- | ----------------------------------------------- |
+| `iris_vector_graph/sdk.py`      | ≥95%                 | HTTP client, mocked via `unittest.mock`         |
+| `iris_vector_graph/cypher/`     | ≥85%                 | Lexer, parser, translator — pure Python         |
+| `iris_vector_graph/api_auth.py` | ≥98%                 | FastAPI middleware — testable with `TestClient` |
+| `iris_vector_graph/_engine/`    | ≥75%                 | Mixed: logic mocked, IRIS callin skipped        |
+| `iris_vector_graph/result.py`   | ≥90%                 | Pure dataclass                                  |
 
 ### Integration tests (`tests/integration/`, `tests/unit/` with IRIS fixtures)
 
 Require a live IRIS container (`ivg-iris` or `ivg-iris-enterprise`). These provide the meaningful
 coverage for IRIS-native modules.
 
-| Module | Coverage tier | Reason |
-|--------|--------------|--------|
-| `iris_vector_graph/stores/iris_sql_store.py` | Integration only | ~95% of lines execute IRIS SQL/globals directly |
-| `iris_vector_graph/stores/arno_bridge.py` | Integration only | Calls `^%SYS.zf` IRIS callin — no mock equivalent |
-| `iris_vector_graph/bolt_server.py` | Integration only | Bolt network I/O |
+| Module                                       | Coverage tier    | Reason                                            |
+| -------------------------------------------- | ---------------- | ------------------------------------------------- |
+| `iris_vector_graph/stores/iris_sql_store.py` | Integration only | ~95% of lines execute IRIS SQL/globals directly   |
+| `iris_vector_graph/stores/arno_bridge.py`    | Integration only | Calls `^%SYS.zf` IRIS callin — no mock equivalent |
+| `iris_vector_graph/bolt_server.py`           | Integration only | Bolt network I/O                                  |
 
 These modules are excluded from unit coverage reporting in `pyproject.toml` under
 `[tool.coverage.run].omit`. Low unit-only numbers for these files are **expected and correct**.

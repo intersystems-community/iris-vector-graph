@@ -150,6 +150,12 @@ CREATE TABLE IF NOT EXISTS Graph_KG.relationship_mappings (
     CONSTRAINT pk_rel_mappings PRIMARY KEY (source_label, predicate, target_label)
 );
 
+CREATE TABLE IF NOT EXISTS Graph_KG.rdf_namespaces (
+    prefix  VARCHAR(64)  NOT NULL,
+    uri     VARCHAR(512) NOT NULL,
+    CONSTRAINT pk_rdf_namespaces PRIMARY KEY (prefix)
+);
+
 -- Indexes for graph traversal performance (based on TrustGraph patterns)
 -- Single-column indexes for basic lookups
 CREATE INDEX idx_labels_s ON Graph_KG.rdf_labels (s);

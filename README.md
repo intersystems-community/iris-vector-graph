@@ -56,19 +56,22 @@ print(result["rows"])  # [('Bob',)]
 
 ## What It Does
 
-| Feature | Notes |
-|---------|-------|
-| **openCypher** | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries |
-| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries |
-| **Vector search** | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text |
-| **Graph analytics** | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR |
-| **Shortest path** | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`) |
-| **NKG fast-path** | `[*1..N]` Cypher patterns route to integer-keyed `^NKG` index, bypassing SQL translation |
-| **Bulk loader** | 190–312K edges/s direct `^KG` write; incremental `^NKG` rebuild |
-| **FHIR bridge** | ICD-10 → knowledge graph mapping via FHIR R4 |
-| **Bolt protocol** | neo4j-driver compatible wire protocol (TCP + WebSocket) |
-| **Embedded Python** | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg) |
-| **IPM / ZPM** | ObjectScript-only install via InterSystems Package Manager |
+| Feature                     | Notes                                                                                                |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries            |
+| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                            |
+| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                               |
+| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR |
+| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                     |
+| **NKG fast-path**           | `[*1..N]` Cypher patterns route to integer-keyed `^NKG` index, bypassing SQL translation             |
+| **Bulk loader**             | 190–312K edges/s direct `^KG` write; incremental `^NKG` rebuild                                      |
+| **FHIR bridge**             | ICD-10 → knowledge graph mapping via FHIR R4                                                         |
+| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                              |
+| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                        |
+| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                           |
+| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                  |
+| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                            |
+| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                      |
 
 ---
 
@@ -78,16 +81,16 @@ Hardware: M3 Ultra, Community IRIS 2026.1, ARM64 Docker.
 
 ### Query latency
 
-| Query | Latency | Notes |
-|-------|---------|-------|
-| 1-hop neighbor lookup | ~0.4ms | `$Order` on `^KG` |
-| NKG fast-path `[*1..N]`, hops 2–5 | 1.4–2.0ms | **4.9–13.4x faster than SQL path** |
-| IC3 2-hop with LIMIT (LDBC SF10) | 1.2ms | 3.5x faster than GES/GraphScope |
-| IC13 shortest path (LDBC SF10) | 2.1–3.2ms | Comparable to GES at SF1000 on cluster |
-| HNSW vector search (768-dim) | 1.7ms | Native IRIS VECTOR index |
-| BM25 full-text (174 nodes, 3-term) | 0.3ms | Posting-list `$Order` |
-| Temporal window query | 0.1ms | O(results), B-tree |
-| Pre-aggregated bucket (24hr/288 buckets) | 0.16ms | O(buckets), not O(edges) |
+| Query                                    | Latency   | Notes                                  |
+| ---------------------------------------- | --------- | -------------------------------------- |
+| 1-hop neighbor lookup                    | ~0.4ms    | `$Order` on `^KG`                      |
+| NKG fast-path `[*1..N]`, hops 2–5        | 1.4–2.0ms | **4.9–13.4x faster than SQL path**     |
+| IC3 2-hop with LIMIT (LDBC SF10)         | 1.2ms     | 3.5x faster than GES/GraphScope        |
+| IC13 shortest path (LDBC SF10)           | 2.1–3.2ms | Comparable to GES at SF1000 on cluster |
+| HNSW vector search (768-dim)             | 1.7ms     | Native IRIS VECTOR index               |
+| BM25 full-text (174 nodes, 3-term)       | 0.3ms     | Posting-list `$Order`                  |
+| Temporal window query                    | 0.1ms     | O(results), B-tree                     |
+| Pre-aggregated bucket (24hr/288 buckets) | 0.16ms    | O(buckets), not O(edges)               |
 
 ### Algorithm comparison (vs Neo4j GDS and networkx)
 
@@ -151,16 +154,50 @@ Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md
 
 ---
 
+## Semantic Layer (RDF / SHACL / PROV-O)
+
+```bash
+pip install 'iris-vector-graph[rdf]'
+```
+
+```python
+# Export graph as Turtle (full or filtered)
+engine.export_rdf("kg.ttl")
+engine.export_rdf("proteins.nt", format="nt", label_filter=["Protein", "Disease"])
+engine.export_rdf_from_cypher("MATCH (p:Patient)-[r]->(e) RETURN p,r,e", "patients.ttl")
+
+# Persistent namespace prefixes
+engine.register_namespace("fhir", "http://hl7.org/fhir/")
+
+# SHACL Core validation
+report = engine.validate_shacl("shapes/patient.ttl")
+if not report.conforms:
+    for v in report.violations:
+        print(f"{v.focus_node}: {v.message} [{v.severity}]")
+
+# PROV-O temporal provenance
+engine.prov_export("provenance.ttl", ts_start=1700000000)
+prov = engine.prov_as_dict(edge_id=42)
+```
+
+Every write to ivg is stored as W3C-aligned SPO triples (`rdf_edges`, `rdf_props`, `rdf_labels`)
+with OWL 2 RL inference, named graph support, and RDF-star style edge qualifiers.
+See [docs/SEMANTIC_LAYER.md](docs/SEMANTIC_LAYER.md) for the full guide: format
+reference, SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
+
+---
+
 ## Documentation
 
-| Document | Contents |
-|----------|----------|
-| [User Guide](docs/USER_GUIDE.md) | Cypher examples, temporal edges, vector search, bulk loader |
-| [Admin Guide](docs/ADMIN_GUIDE.md) | Container setup, schema management, index rebuilding |
-| [Admin API](docs/ADMIN_API.md) | Python API reference for engine administration |
-| [Benchmarks](docs/performance/BENCHMARKS.md) | Full methodology, LDBC SNB results, ingestion throughput |
-| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details |
-| [Changelog](CHANGELOG.md) | Full version history |
+| Document                                                 | Contents                                                    |
+| -------------------------------------------------------- | ----------------------------------------------------------- |
+| [User Guide](docs/USER_GUIDE.md)                         | Cypher examples, temporal edges, vector search, bulk loader |
+| [Admin Guide](docs/ADMIN_GUIDE.md)                       | Container setup, schema management, index rebuilding        |
+| [Admin API](docs/ADMIN_API.md)                           | Python API reference for engine administration              |
+| [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput    |
+| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details        |
+| [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance             |
+| [Changelog](CHANGELOG.md)                                | Full version history                                        |
 
 ---
 
