@@ -1,8 +1,35 @@
 """SHACL Core validation mixin for IRISGraphEngine.
 
-Provides:
-- validate_shacl(): validate the graph against SHACL Core shapes
-- ValidationReport / Violation dataclasses
+Validates IVG graph data against W3C SHACL (Shapes Constraint Language) shapes
+using PySHACL. No JVM required — pure Python validation.
+
+Requires: pip install 'iris-vector-graph[rdf]'   (rdflib + pyshacl >= 0.25.0)
+
+Public API (added to IRISGraphEngine via ShaclMixin):
+
+    validate_shacl(shapes_source, node_ids) → ValidationReport
+        Validate the data graph against SHACL Core shapes. shapes_source accepts:
+          - file path (Turtle or JSON-LD shapes file)
+          - HTTP/HTTPS URL (fetched at call time; IOError on 4xx/5xx)
+          - Turtle/JSON-LD string
+          - rdflib.Graph object
+        node_ids scopes validation to specific focus nodes (memory-efficient).
+
+Data classes:
+
+    ValidationReport(conforms: bool, violations: List[Violation])
+        .to_dict()   → JSON-serializable dict
+        bool(report) → True if conforms
+
+    Violation(focus_node, shape, message, severity, path, value)
+        severity is one of "Violation", "Warning", "Info"
+        .to_dict()   → JSON-serializable dict
+
+Supports all SHACL Core constraint components: sh:minCount, sh:maxCount,
+sh:datatype, sh:nodeKind, sh:pattern, sh:in, sh:class, sh:node, sh:property,
+sh:or, sh:and, sh:not, sh:xone, and cardinality/range constraints.
+
+See: docs/SEMANTIC_LAYER.md for shape writing guide and ingestion patterns.
 """
 from __future__ import annotations
 

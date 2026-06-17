@@ -65,21 +65,25 @@ All notable changes to `iris-vector-graph`.
 **Major release: all centrality algorithms accelerated to Rust rayon parallel. New neighborhood betweenness for biomedical KGs.**
 
 **Centrality ObjectScript fast paths (specs 168-170):**
+
 - **`ClosenessGlobal`** — harmonic/classical closeness via BFS over `^NKG`; matches `networkx.harmonic_centrality` (raw `sumInv`). Fix: was incorrectly dividing by `(n-1)` total container count.
 - **`EigenvectorGlobal`** — L2-normalized power iteration; matches `networkx.eigenvector_centrality_numpy`.
 - **`BetweennessGlobal`** — Brandes (2001) with sampled approximation (`maxSources=200` default) and `%SYSTEM.WorkMgr` 8-way ObjectScript parallelism; `$BITLOGIC` BFS cuts per-source cost 2×.
 
 **Native Rust accelerator: parallel Brandes (spec 171):**
+
 - Rust function reads adjacency cache once (version-keyed), stores in process-static memory, runs rayon parallel Brandes — zero IRIS I/O on cache hits.
 - Benchmark: karate **6×**, ER(500) **68×**, ER(2000) **5×** faster than networkx on sampled=200.
 - Exact Brandes: karate **4×**, ER(500) **5×** faster than networkx; see [performance doc](docs/performance/GRAPH_ALGORITHMS.md) for full numbers.
 
 **Neighborhood betweenness for biomedical KGs (spec 173):**
+
 - `engine.betweenness_centrality_neighborhood(seed, hops=2, sample_size=200, top_k=20)` — extracts 2-hop disease neighborhood (~500-5K nodes), runs Brandes on subgraph only. **Performance scales with neighborhood size, not total KG size.** A 10M-node biomedical KG with a 5K-node disease neighborhood runs in ~10ms.
 - Rust implementation extracts subgraph from in-process adjacency cache (microseconds) then runs rayon Brandes on the subgraph. Zero IRIS I/O after first call.
 - Biomedical use case: "Which genes are the bottlenecks between Multiple Myeloma and its known drug targets?"
 
 **Bug fixes:**
+
 - `<MAXNUMBER>` overflow in ObjectScript Brandes — replaced O(N²) comma-string BFS queue with `^||bfsQueue` global; capped all intermediate arithmetic with `+$Number(expr,15)`.
 - `$Number(x,15)` doesn't cap magnitude (only precision) — added `+` unary prefix to force numeric evaluation before storage.
 - IRIS emits `"score":.666` (no leading zero) for fractional scores — `_fix_iris_json()` regex patches all JSON output before `json.loads()`.
@@ -110,6 +114,7 @@ All notable changes to `iris-vector-graph`.
 - **docs**: ENGINEERING_DEBT.md Bug S marked MITIGATED (LazyKG + Native API gref bypass on production path; SQL function path remains xfail-blocked pending kernel-team fix to `%SYS.DBSRV` user-class XDCall lookup).
 
 ### v1.98.0 (2026-05-28)
+
 - **feat**: Spec 162 — Centrality Suite. Four new graph centrality algorithms shipping via the GraphStore protocol + Cypher procedures, closing the biggest coverage gap vs Neo4j GDS:
   - `engine.degree_centrality(direction, predicate, top_k)` — out/in/both, predicate-filtered, normalized to (n-1)
   - `engine.betweenness_centrality(sample_size, direction, max_hops, top_k, mem_budget_mb, progress_callback)` — Brandes (2001), Brandes-Pich approximation when sampled, per-source memory budget, progress reporting
@@ -130,6 +135,7 @@ All notable changes to `iris-vector-graph`.
 - **docs**: `ENGINEERING_DEBT.md` Bug S + Bug T entries with reproduction steps and resolution context.
 
 ### v1.88.0 (2026-05-07)
+
 - **feat**: `ffi_kg_build_2hop_exact_int` Rust function — integer-indexed single-pass 2-hop dedup from `^KG("out")`. Writes results to `^ArnoKG("2h")` temp global; `DecodeBuildResults()` ObjectScript method converts to `^KG("deg2p_exact")`
 - **feat**: `KHop2CountExact(src, pred)` ObjectScript method — O(1) `$Get(^KG("deg2p_exact"))`, fallback to `KHop2Count` when not populated. 0.14ms p50 on SF10 (was 70ms)
 - **feat**: `Build2HopExactStats()` — Rust-first (tries `kg_build_2hop_exact_int`), ObjectScript fallback. Called automatically by `BuildNKG` and `engine.rebuild_nkg()`
@@ -140,12 +146,14 @@ All notable changes to `iris-vector-graph`.
 - **test**: `tests/e2e/test_untested_methods.py` — 113/113 public engine methods now have at least one test (100% coverage)
 
 ### v1.87.0 (2026-05-07)
+
 - **feat**: `iris_vector_graph/_validate.py` — 10 Pydantic `BaseModel` input schemas for high-risk engine methods: `NodeIdInput`, `EdgeInput`, `CypherInput`, `IVFBuildInput`, `VectorSearchInput`, `BM25BuildInput`, `BM25SearchInput`, `KHop2Input`, `TemporalEdgeInput`, `VecSearchInput`
 - **feat**: Input validation at call entry on `execute_cypher`, `create_node`, `create_edge`, `ivf_build`, `ivf_search`, `bm25_build`, `bm25_search`, `khop2_count_fast`, `create_edge_temporal`, `search_nodes_by_vector`
 - All 10 schemas exported from `iris_vector_graph.__init__`; 44/44 unit tests in `test_validation.py`
 - **chore**: `BulkIngestEdges` marked `[ Internal ]` in `EdgeScan.cls` — safe path is `engine.bulk_ingest_edges()`
 
 ### v1.86.0 (2026-05-07)
+
 - **feat**: `IVGResult` Pydantic `BaseModel` replaces `Dict[str, Any]` as return type of `execute_cypher`
   - Backward-compatible: `result["columns"]`, `result.get("error")`, `"error" in result` all work
   - `bool(result)` = `True` on success, `False` on error
@@ -154,11 +162,13 @@ All notable changes to `iris-vector-graph`.
 - **feat**: Fourth Pydantic increment — `IVGResult` joins `SQLQuery`, `QueryMetadata`, `IndexHandle`
 
 ### v1.85.0 (2026-05-06)
+
 - **fix**: Unbounded variable-length path queries (no LIMIT) now always route to `_bfs_stream_pages` (cursor-based `ReadBFSPage`) instead of `ReadBFSResults` (single JSON string that hits `<MAXSTRING>` at 93K+ results). Bounded queries (LIMIT present) keep `ReadBFSResults` fast path.
 - **fix**: `test_sc003_results_match_bfs` — replaced raw `NKGAccel.BFSJson` call (bypassed engine, `^NKG` stale) with engine determinism check; `knows_data` fixture calls `engine.rebuild_nkg()` for sync guarantee
 - **test**: `tests/e2e/test_streaming_bfs.py` — 3 e2e + 2 routing unit tests for streaming BFS
 
 ### v1.84.0 (2026-05-06)
+
 - **feat**: `engine.index(name)` → `IndexHandle` (Pydantic `BaseModel`) — unified entry point for all index types (`ivf`, `bm25`, `vec`, `plaid`) via `.search()`, `.insert()`, `.info()`, `.drop()`
 - **feat**: `IVGIndex` `@runtime_checkable` Protocol — structural subtyping, no inheritance required
 - **feat**: `_build_index_registry()` — auto-populates `{name: type}` from `^IVF`, `^VecIdx`, `^BM25Idx`, `^PLAID` on `IRISGraphEngine.__init__`; updated by `*_build` methods
@@ -169,6 +179,7 @@ All notable changes to `iris-vector-graph`.
 - **test**: Full PLAID e2e coverage (5/5); `engine.index()` dispatch tests (5 pass, 1 skip)
 
 ### v1.83.0 (2026-05-06)
+
 - **feat**: `KHop2Count` + `KHop2NeighborIds(maxResults)` on `Graph.KG.Traversal` — pure ObjectScript 2-hop traversal with process-private dedup, no JSON serialization
 - **feat**: `execute_cypher` routes `[:PRED*2]` COUNT and LIMIT patterns to fast paths — IC3 LIMIT 1000 now **1.2ms p50** (was 14-22ms; 3.5x faster than GES 4.19ms)
 - **feat**: `create_node(graph=)` — optional named graph param stored as `__graph` property; propagated to `bulk_create_nodes` per-node `graph` key
@@ -178,12 +189,14 @@ All notable changes to `iris-vector-graph`.
 - **feat**: `IVFIndex.FinalizeIndex(name)` — recounts indexed vectors after all `AddBatch` calls and updates `cfg.indexed`
 
 ### v1.82.0 (2026-05-06)
+
 - **feat**: `dbapi_utils.py` — low-level vector utilities for raw DBAPI cursors without requiring `IRISGraphEngine`: `normalize_vector`, `insert_vector`, `create_hnsw_index`, `create_ivfflat_index`, `vector_similarity_search`
 - **feat**: `KHopCount` + `KHopNeighborIds` on `Graph.KG.Traversal` — O(1) 1-hop count via `^KG("degp")` counter; newline-delimited ID list without JSON overhead
 - **feat**: `execute_cypher` fast path routes single-hop COUNT and `node_id`-only patterns to `KHopCount`/`KHopNeighborIds` — IC2 COUNT now **0.29ms p50** (was 2.8ms)
 - **feat**: `_nkg_dirty` instance flag on `IRISGraphEngine` — `_execute_var_length_cypher` emits `RuntimeWarning` when `^NKG` is stale
 
 ### v1.81.0 (2026-05-02)
+
 - **feat**: `IVG.CypherEngine` ObjectScript class — instantiate `Local()` or `Remote()` and submit Cypher from pure ObjectScript; returns `%DynamicObject {columns, rows, error}`
 - **feat**: Python-first introspection API — `get_labels()`, `get_relationship_types()`, `get_node_count(label)`, `get_edge_count(predicate)`, `get_label_distribution()`, `get_property_keys(label)`, `node_exists(node_id)` — no Cypher required
 - **feat**: `embed_nodes(label=, predicate=, node_ids=)` typed params — replaces SQL `where=` fragment; `where=` still works with `DeprecationWarning`
@@ -196,6 +209,7 @@ All notable changes to `iris-vector-graph`.
 - **test**: `tests/e2e/test_introspection_api.py` — e2e coverage for all 7 new introspection methods
 
 ### v1.80.0 (2026-05-02)
+
 - **feat**: `(n:Person|Animal)` label OR — parser handles `|` between labels; translator generates `IN ('A','B')` JOIN instead of two separate JOINs
 - **feat**: `EXISTS { MATCH (p)-[:R]->(f) WHERE f.age > 18 }` full form — WHERE clause inside EXISTS subquery now parsed and included in the EXISTS SQL correlated subquery
 - **fix**: MERGE ON CREATE/ON MATCH now uses the actual node UUID (from `__create_id_*`) not the SQL alias — fixes `n.created` being NULL after `MERGE ... ON CREATE SET n.created = true`
@@ -205,56 +219,70 @@ All notable changes to `iris-vector-graph`.
 - **fix**: `USE graphname` and `USE GRAPH graphname` — recursion bug fixed; now correctly sets `graph_context` on the query (maps to `set_schema_prefix()` for named-graph / multi-namespace support)
 
 ### v1.79.0 (2026-05-02)
+
 - **fix**: `FOREACH (x IN ['a','b'] | MERGE (:N {val: x}))` — loop variable `x` now resolves to the actual list item value instead of raw AST `Variable` object. Literal list FOREACH fully functional.
 
 ### v1.78.0 (2026-05-02)
+
 - **feat**: `CALL { WITH p MATCH (p)-[:R]->(f) RETURN f.name AS n, f.id AS i }` — multi-column correlated subqueries via `CROSS JOIN LATERAL`. Requires IRIS 2026.1+. Inner SQL constants inlined to avoid bind param ordering issues.
 
 ### v1.77.0 (2026-05-01)
+
 - **feat**: openCypher TCK **100% (133/133)** on IRIS 2026.1 community and enterprise, 99.2% on IRIS 2025.1 community
 - **fix**: `CREATE (:A)-[:REL]->(:B)` — anonymous unnamed nodes now track UUIDs in `_anon_node_keys` for correct edge INSERT
 - **feat**: Map projection `n{.name}` — new `MapProjection` AST node, parser, and translator (generates `LEFT JOIN rdf_props` per projected key)
 - **fix**: `MATCH ()-[r:T]->()` anonymous source nodes no longer generate Cartesian product; edge table used directly as FROM
 
 ### v1.76.0 (2026-05-01)
+
 - **fix**: SQLCODE -23 `Stage1.col` in SELECT and ORDER BY — all CTE-qualified references stripped to unqualified column names (IRIS rejects `Stage1.a0` in mixed SELECT contexts)
 
 ### v1.75.0 (2026-05-01)
+
 - **fix**: `IVG.Percentile_PDISC/PCONT` ObjectScript precedence — `lower >= n-1` parsed as `(lower >= n) - 1` in ObjectScript, always true; fixed with explicit parentheses `lower >= (n-1)`
 - **fix**: Bolt server relationship detection — no longer misidentifies scalar columns as relationship type when followed by `_id` column
 
 ### v1.74.0 (2026-05-01)
+
 - **feat**: `percentileDisc/Cont` via `IVG.Percentile` ObjectScript class (new `IVG.*` package avoids `User.func*` name-conflict issue on IRIS 2026.2); correct `(n-1)*p` formula
 - **feat**: `MATCH ()-[r:KNOWS]->()` pattern — `LIST_REVERSE`, `LIST_TAIL` UDFs use While loops (compatible with IRIS 2026.1+)
 
 ### v1.73.0 (2026-05-01)
+
 - **feat**: `SQLUser.LIST_HEAD`, `LIST_LAST`, `LIST_REVERSE`, `LIST_TAIL`, `STR_SPLIT`, `REGEX_MATCH` ObjectScript UDFs — proper typed returns
 - **fix**: `CREATE (a)-[:REL]->(b)` with unnamed nodes — CREATE correctly generates edge INSERT using per-node UUID tracking
 
 ### v1.72.0 (2026-05-01)
+
 - **feat**: openCypher TCK **85%→91.7%** — scalar coercion in Bolt (`Decimal`→`float`, JSON string→list), `SQLUser.RAND()`/`NEWID()` UDFs, `XOR` operator, `UNION/UNION ALL` without MATCH
 
 ### v1.71.0 (2026-05-01)
+
 - **feat**: openCypher TCK **76%→85%** — `CREATE (n) RETURN n.val`, `toString(bool)`→`'true'/'false'`, `substring()` 0-indexed, `round()`, missing math/string functions, `split()`, `reverse(list)`
 
 ### v1.70.0 (2026-05-01)
+
 - **feat**: Graceful degradation on complex SQL errors (SQLCODE -400/-29/-23/-12) — returns empty result with warning instead of propagating exception to caller (GQS sees "wrong answer" not "crash")
 - **feat**: openCypher TCK **47%→76%** — BooleanExpression in RETURN, CREATE without `id`, scalar coercion, `toString`, `XOR`, `UNION` without MATCH
 
 ### v1.69.0 (2026-05-01)
+
 - **fix(089)**: Empty `SELECT FROM Stage1` (SQLCODE -12) — when a recursive `self.parse()` call handles `WITH...ORDER BY...LIMIT...WHERE...RETURN` chains, the top-level query has no `return_clause` and generates `SELECT \nFROM Stage1`. Guard added: if `select_items` is empty AND a Stage CTE exists AND a FROM clause exists, inject `SELECT *` to prevent invalid SQL.
 - **fix(090)**: Auto-CTE split for deep JOIN chains (SQLCODE -400) — when assembled SQL exceeds 20 JOINs (no aggregates, no GROUP BY), wraps the MATCH body in `WITH _MR AS (SELECT explicit_cols ...) SELECT aliases FROM _MR`. Resolves synthetic GQS queries at 21-29 JOINs. Note: IRIS community edition optimizer has a hard limit ~20-24 JOINs; queries beyond this are not fixable without recursive CTEs (forthcoming IRIS feature).
 
 ### v1.68.0 (2026-05-01)
+
 - **fix(086)**: Function argument literal inlining — `RIGHT(?,?)` → `RIGHT('str',1)`. Eliminates "Incorrect number of parameters" in 5/7 unique large multi-path GQS queries. Root cause: `translate_expression` was parameterizing compile-time constant literals passed as function args; these are now inlined using `segment='inline'`.
 - **fix(087)**: SQLCODE -23 `Stage1.col` unqualification — IRIS forbids CTE-qualified column references (`Stage1.a0`) in SELECT or ORDER BY when mixed with derived expressions. Variable resolution, PropertyReference, and ORDER BY all now emit unqualified column names when the alias is a Stage CTE. Also: `r.prop` on a Stage alias uses `SQLUser.JSON_VALUE(col, '$.prop')`.
 - **fix(087)**: ORDER BY strips `StageN.` prefix (from both alias-path and expression-path) so IRIS can resolve CTE columns correctly.
 - **feat**: GQS 10-minute pass rate (v1.68.0): **~98.5%** (target ≥98%)
 
 ### v1.67.1 (2026-05-01)
+
 - fix: SQLCODE -1/-14/-15 — `false`/`true` Cypher literals in boolean context (`WHERE`, `AND`, `OR`, `NOT`) now emit `(1=0)`/`(1=1)` instead of raw `0`/`1`. IRIS SQL requires a comparison expression for `OR`/`AND` operands; bare `0` was causing SQLCODE -14 "comparison operator required".
 
 ### v1.67.0 (2026-05-01)
+
 - fix: SQLCODE -23 (UNWIND) — `JSON_TABLE` moved to `CROSS JOIN` (after regular JOINs), not comma-separated in FROM. Prevents `Label N0/P97 not listed` when UNWIND references JOIN aliases.
 - fix: SQLCODE -23 (undirected edge in WITH) — `Variable` expression for undirected edge alias now returns `alias._p` not `alias.p`. Fixes `E16.P not found` when undirected edge used in WITH clause.
 - fix: SQLCODE -12 `A term expected` — `WITH...ORDER BY...SKIP...WHERE...RETURN` was parsing RETURN into a `subsequent_query` stub, leaving SELECT list empty (`SELECT FROM ...`). Now merges RETURN back onto main query when `return_clause is None`.
@@ -263,23 +291,29 @@ All notable changes to `iris-vector-graph`.
 - test: `test_cypher_benchmark_scale` skipped by default (set `SKIP_BENCHMARK_SCALE=false` to run), marked `@pytest.mark.slow`.
 
 ### v1.66.5 (2026-04-30)
+
 - fix: `MatchEdges`-derived aliases (`s/p/o_id/w` columns only, no `qualifiers`) now return `NULL` for custom edge properties instead of crashing with SQLCODE -29 `e.QUALIFIERS not found`. Tracked via `_edgescan_aliases` set.
 - fix: Restore outer `else: rdf_edges` JOIN for `use_edgescan=False` case (VecSearch source). Was accidentally dropped when adding edgescan tracking, causing param count mismatch in `CALL...YIELD...MATCH` queries.
 
 ### v1.66.4 (2026-04-30)
+
 - fix: Inline node property filters in `MATCH` patterns now use `rdf_props` JOIN instead of direct column access. `MATCH (n)-[r]-(m {k12:'val'})` previously generated `WHERE n1.k12=?` which fails SQLCODE -29 (`nodes` table only has `node_id`/`created_at`). Now generates `JOIN rdf_props p ON p.s = n1.node_id AND p.key=? WHERE p.val=?`.
 
 ### v1.66.3 (2026-04-30)
+
 - fix: `UNWIND [expr] AS x RETURN x` now emits scalar column access (`u.x`) instead of full node expansion (`u.node_id + rdf_labels + rdf_props`). The UNWIND variable is now registered in `scalar_variables` immediately after JSON_TABLE setup, preventing SQLCODE -23 "label N0 not listed" errors in GQS-style queries.
 
 ### v1.66.2 (2026-04-30)
+
 - fix: `JSON_ARRAYLENGTH`, `JSON_ARRAYGET`, `JSON_VALUE` now installed as `SQLUser.*` user-defined functions during `initialize_schema()`. Previously these bare SQL calls were qualified with the default schema (`Graph_KG.JSON_ARRAYLENGTH`) which IRIS couldn't find, causing SQLCODE -359. All three are now qualified as `SQLUser.*` in generated SQL and work regardless of current default schema.
 - fix: `size([list])`, `head(list)`, `last(list)` Cypher functions now work end-to-end against live IRIS.
 
 ### v1.66.1 (2026-04-30)
+
 - fix: relationship property translation — `r.id`, `r.k1`, etc. now correctly uses `JSON_VALUE(e.qualifiers, '$.property')` for directed edges. Previously returned `e.node_id` (wrong column — edges don't have `node_id`), causing SQLCODE -29 `<Field not found>` for all edge property access. Undirected edges now return `NULL` for custom properties (UNION ALL subquery can't project qualifiers). Fixes the dominant GQS failure class.
 
 ### v1.66.0 (2026-04-30)
+
 - fix: 818/818 tests green on `gqs-ivg-test` live IRIS container (no mocked IRIS in e2e)
 - fix: ObjectScript ^KG shard-0 migration — `Algorithms.cls`, `PageRank.cls`, `Subgraph.cls` updated from `^KG("out",node,...)` to `^KG("out",0,node,...)` — WCC/CDLP/PPR/Subgraph all work against live `^KG` data
 - fix: `kg_NodeEmbeddings` / `kg_EdgeEmbeddings` recreated as `VECTOR(DOUBLE, 768)` — corrects prior schema with wrong column type
@@ -289,28 +323,34 @@ All notable changes to `iris-vector-graph`.
 - fix: CALL+MATCH `rdf_edges` JOIN — when source is a VecSearch CTE and EdgeScan is disabled, the rdf_edges JOIN was silently dropped, causing `e1.o_id` undefined alias errors
 
 ### v1.65.4 (2026-04-30)
+
 - fix: `NKGAccel.BFSJson` per-seed adjacency export — `ExportAdjacencyFromSeed()` exports only the subgraph reachable from the seed node (not the full 299K-edge graph). Fixes `<MAXSTRING>` on Mindwalk-scale graphs, enabling Arno-accelerated multi-hop BFS. Adjacency string now scales with BFS result size (~10KB per seed instead of >3.5MB full graph). Handles outbound + inbound edges for undirected BFS.
 
 ### v1.63.4 (2026-04-26)
+
 - chore: merge 080-engine-status to main; NKGAccel.cls added to iris_src from arno upstream
 
 ### v1.63.3 (2026-04-26)
+
 - feat: `engine.status() -> EngineStatus` — structured runtime snapshot: SQL row counts, `^KG`/`^NKG` population, ObjectScript classes, Arno capabilities, HNSW/IVF/BM25/PLAID index inventory. Readiness properties: `ready_for_bfs`, `ready_for_vector_search`, `ready_for_edge_search`, `ready_for_full_text`. Detects `^KG`/`rdf_edges` predicate mismatch (stale ^KG from different data snapshot). (spec 080)
 - fix: `BuildKG()` `Traversal.cls` SQL cursors now use fully-qualified `Graph_KG.rdf_edges`, `Graph_KG.rdf_labels`, `Graph_KG.rdf_props` — fixes predicate mismatch when IRIS namespace default SQL schema is not `Graph_KG` (e.g. MINDWALK namespace with `SQLUser` default)
 - fix: `kg_IVFMeta`, `kg_BM25Meta`, `kg_PlaidMeta` added to security allowlist
 - `EngineStatus` exported from top-level `iris_vector_graph`
 
 ### v1.63.2 (2026-04-25)
+
 - fix: `MATCH (a)-[r*1..N]-(b)` undirected BFS now traverses `^KG("in",...)` for inbound edges (was outbound-only)
-- fix: `MATCH (a)<-[r*1..N]-(b)` inbound-only BFS now works  
+- fix: `MATCH (a)<-[r*1..N]-(b)` inbound-only BFS now works
 - fix: `initialize_schema()` ObjectScript LoadDir tries Docker `/tmp/src/` before Mac path — fixes silent compile failure in test containers
 - 4 E2E tests: directed-out, undirected, multihop undirected, directed-in all passing
 - Arno BFSJson falls back gracefully to BFSFastJson for graphs >3.5MB adjacency string (299K+ long-ID edges); per-seed export is spec 079 future work
 
 ### v1.63.0 (2026-04-25)
+
 - feat: Arno/Rust fast path for BFS (`_execute_var_length_cypher`) — when `libarno_callout.so` is loaded with `Graph.KG.NKGAccel.BFSJson`, var-length Cypher queries use Rust BFS over `^NKG` integer adjacency instead of ObjectScript `BFSFastJson`. Projected 128ms → <30ms p50 for 6K+ result BFS at 10K/50K scale. Falls back transparently to `BFSFastJson` when Arno not loaded. (spec 079, arno spec 035)
 
 ### v1.62.1 (2026-04-25)
+
 - fix: `WITH n, count(r) AS cnt WHERE cnt > N` — IRIS SQLCODE -23 fixed; CTEs containing GROUP BY now emit inline subqueries `FROM (...GROUP BY...) Stage1` instead of `WITH Stage1 AS (...GROUP BY...) SELECT ... FROM Stage1` (IRIS 2025.x doesn't support aggregation in CTEs)
 - fix: `WITH HAVING` now uses the full aggregate expression (e.g. `COUNT(e.p) >= 2`) not the alias (`cnt >= 2`) — IRIS doesn't allow column aliases in HAVING
 - fix: `REMOVE n:Label` now parses and translates correctly (was missed in spec 068)
@@ -345,33 +385,39 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - fix: `DELETE r` by relationship variable now emits `WHERE (s,p,o_id) IN (SELECT ...)` instead of broken correlated subquery (spec 071)
 
 ### v1.59.2 (2026-04-24)
+
 - fix: Cypher `WHERE x IN $param` and `WHERE x IN [list]` now correctly emit `IN (?,?,?)` — previously emitted `IN ?` which IRIS DBAPI can't expand. Enables batch multi-node queries like `MATCH (a)-[r]-(b) WHERE a.id IN $node_ids RETURN ...` (20× speedup for 2-hop expansion vs N sequential queries).
 
 ### v1.59.1 (2026-04-21)
+
 - perf: `embed_nodes()` and `embed_edges()` — 4–10x speedup for SentenceTransformer embedders: batch `model.encode(texts_list)` replaces N serial calls; `executemany()` replaces N per-row INSERTs; batch `DELETE WHERE id IN (...)` replaces N individual DELETEs. Estimated 94min → 10–25min for 205K nodes. Falls back gracefully for non-SentenceTransformer embedders and IRIS EMBEDDING() path.
 
 ### v1.59.0 (2026-04-21)
+
 - feat: `embed_edges(model, text_fn, where, batch_size, force, progress_callback)` — embed every `(s, p, o_id)` triple into `kg_EdgeEmbeddings(VECTOR(DOUBLE))` (spec 065)
 - feat: `edge_vector_search(query_embedding, top_k, score_threshold)` — cosine similarity search over edge embeddings
 - feat: `kg_EdgeEmbeddings` added to schema DDL (`CREATE TABLE IF NOT EXISTS`, composite PK), `get_schema_status()` required tables, and snapshot save/restore
 - Default text serialization: `"{s} {p} {o_id}"` — caller-overridable via `text_fn`; `force=False` skips already-embedded edges; mirrors `embed_nodes` API exactly
 
 ### v1.58.1 (2026-04-20)
+
 - feat: `startNode(r)` and `endNode(r)` functions — return source/target node IDs from a relationship variable
 - feat: Property access on function call results — `startNode(r).id`, `endNode(r).name` etc
 - fix: `UNWIND relationships(p) AS r RETURN startNode(r).id, endNode(r).id, type(r)` — canonical path unpacking pattern now works
 
 ### v1.58.0 (2026-04-20)
+
 - feat: `engine.save_snapshot(path)` — portable `.ivg` ZIP: SQL tables as NDJSON + globals as NDJSON (endian-safe, cross-version) (spec 064)
 - feat: `IRISGraphEngine.snapshot_info(path)` — @staticmethod, no connection needed; metadata header with IRIS version, ivg version, has_vector_sql
 - feat: `engine.restore_snapshot(path, merge=False)` — destructive or additive restore; UPSERT on merge
 - feat: `engine.get_unembedded_nodes()` — find nodes with no embedding after restore
-- feat: `embed_fn` and `use_iris_embedding` params on IRISGraphEngine.__init__
+- feat: `embed_fn` and `use_iris_embedding` params on IRISGraphEngine.**init**
 - feat: `Graph.KG.Snapshot` ObjectScript class for file I/O helpers
 - fix: save_snapshot skips IRIS RowID columns (edge_id etc) — prevents non-insertable column errors on restore
 - 5 E2E tests: roundtrip, snapshot_info staticmethod, destructive restore, merge restore, globals BFS after restore
 
 ### v1.56.0 (2026-04-19)
+
 - feat: `CALL ivg.shortestPath.weighted(from, to, weightProp, maxCost, maxHops) YIELD path, totalCost` — Dijkstra minimum-cost path in pure ObjectScript
 - Uses edge weights from `^KG("out",0,...)` globals (set by create_edge WriteAdjacency)
 - Falls back to unit weight 1.0 when weightProp not found
@@ -379,6 +425,7 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - 4 E2E tests: prefer lower-cost longer path, no path, same source/target, unit weight fallback
 
 ### v1.55.3 (2026-04-19)
+
 - fix: Bug 6 final — SQLCODE -400 on rdf_edges CREATE INDEX now debug-level (ALTER TABLE fallback handles it)
 - fix: type(r) now returns edge predicate column (e.p) not node_id
 - fix: id(n) now returns actual node_id column
@@ -386,29 +433,34 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - fix: N-Quads import captures graph URI from quad's 4th element as graph_id
 
 ### v1.55.2 (2026-04-19)
+
 - fix: Bug 6 (final) — SQLCODE -400 on rdf_edges index creation now falls back to ALTER TABLE ADD INDEX; all standard indexes created even when Graph.KG.Edge class was never compiled
 
 ### v1.55.1 (2026-04-19)
+
 - fix: Graph.KG.Edge/TestEdge persistent classes excluded from ObjectScript deploy (fix DDL table ownership conflict — Bug 6)
 - fix: conftest removes conflicting .cls before LoadDir
 - fix: apoc.meta.data() samples all nodes per label via JOIN on rdf_labels (no longer skips labels with no first-node properties)
 
 ### v1.55.0 (2026-04-19)
+
 - feat: import_rdf/bulk_create_edges/create_edge_temporal/bulk_create_edges_temporal all accept graph= parameter
 - feat: USE GRAPH filtering now strict (exact graph_id match, no NULL leakage)
 - feat: UNIQUE constraint updated to (s,p,o_id,graph_id) allowing same triple in multiple named graphs
 - feat: db.schema.relTypeProperties() returns actual relationship property names
-- fix: import_rdf _ensure_node uses WHERE NOT EXISTS (no duplicate key errors)
+- fix: import_rdf_ensure_node uses WHERE NOT EXISTS (no duplicate key errors)
 - fix: import_rdf edge INSERT scoped to graph_id in WHERE NOT EXISTS check
 - fix: graph_id column uses %EXACT for case-sensitive storage
 - test: 8 E2E tests proving fail-before/pass-after for all 5 FRs (spec 061)
 
 ### v1.54.1 (2026-04-18)
+
 - fix: initialize_schema() idempotent — "already has index" suppressed (Bug 1)
 - fix: idx_props_val_ifind (iFind) and idx_edges_confidence (JSON_VALUE) now optional — graceful skip on Community (Bugs 2+3)
 - test: 6 new E2E schema init tests covering idempotency, required tables, optional indexes, core procedures (spec 060)
 
 ### v1.54.0 (2026-04-18)
+
 - fix: materialize_inference respects named graphs — inferred triples use correct graph_id (spec 055)
 - fix: materialize_inference/retract_inference accept graph= parameter
 - feat: Cypher % (modulo → MOD) and ^ (power → POWER) operators (spec 056)
@@ -417,21 +469,25 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - feat: Pattern comprehension `[(a)-[r]->(b) | proj]` collecting edge projections (spec 059)
 
 ### v1.53.1 (2026-04-18)
+
 - feat: `engine.materialize_inference(rules="rdfs"|"owl")` — transitive subClassOf/subPropertyOf closure, rdf:type inheritance, domain/range, OWL equivalentClass/inverseOf/TransitiveProperty/SymmetricProperty
 - feat: `engine.retract_inference()` — removes all inferred triples, restoring asserted-only graph
 - feat: `import_rdf(path, infer="rdfs")` — runs inference automatically after load
 - Inferred triples tagged `qualifiers={"inferred":true}` for easy exclusion
 
 ### v1.53.0 (2026-04-18)
+
 - feat: Named graphs — `create_edge(graph='name')`, `list_graphs()`, `drop_graph(name)`
 - feat: `USE GRAPH 'name' MATCH (a)-[r]->(b)` Cypher syntax adds graph_id filter
 - feat: Schema migration — `graph_id` column added to `rdf_edges` (idempotent, run on initialize_schema)
 
 ### v1.52.1 (2026-04-18)
+
 - feat: `engine.import_rdf(path)` — load Turtle (.ttl), N-Triples (.nt), N-Quads (.nq) into the graph
 - Format auto-detected from extension; streaming batch ingest; blank node synthetic IDs; language tags preserved
 
 ### v1.52.0 (2026-04-18)
+
 - feat: `ALL/ANY/NONE/SINGLE(x IN list WHERE ...)` list predicate expressions
 - feat: `[x IN list WHERE pred | proj]` list comprehensions
 - feat: `reduce(acc = init, x IN list | body)` reduce expressions
@@ -439,27 +495,33 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - feat: Arithmetic operators `+`, `-`, `*`, `/` in Cypher expressions
 
 ### v1.51.1 (2026-04-18)
+
 - feat: `apoc.meta.data()` returns proper schema columns — LangChain `Neo4jGraph()` connects without error
 - feat: `apoc.meta.schema()` returns schema summary
 
 ### v1.51.0 (2026-04-18)
+
 - feat: `keys(n)` returns node property keys via rdf_props subquery
 - feat: `range(start, end)` and `range(start, end, step)` generate integer lists
 - feat: `size(list)` uses JSON_ARRAYLENGTH; `head()`, `last()`, `tail()`, `isEmpty()` implemented
 
 ### v1.50.3 (2026-04-18)
+
 - Fix: `initialize_schema()` creates `SQLUser.*` views automatically — no more manual DEFAULT_SCHEMA workaround
 - Fix: `initialize_schema()` detects pre-compiled ObjectScript classes via `%Dictionary` — fast 0.2ms PPR path activates correctly instead of falling back to 1800ms Python path
 
 ### v1.50.2 (2026-04-18)
+
 - Fix: `MATCH (a)-[r]->(b)` with unbound source falls back to `rdf_edges` SQL (avoids IRIS SqlProc 32KB string limit for large graphs with 88K+ edges)
 - `MatchEdges` is now only used when source node ID is bound — safe path for single-node traversal
 
 ### v1.50.1 (2026-04-18)
+
 - Fix: `bulk_create_edges` now calls `BuildKG()` after batch SQL — bulk-inserted static edges immediately visible to MATCH/BFS
 - Fix: `BuildKG()` already uses shard-0 `^KG("out",0,...)` layout (confirmed, no code change needed)
 
 ### v1.50.0 (2026-04-18)
+
 - **Unified edge store PR-A** — `MATCH (a)-[r]->(b)` now returns both static and temporal edges (spec 048)
 - `Graph.KG.EdgeScan` — `MatchEdges(sourceId, predicate, shard)` SqlProc scans `^KG("out",0,...)` globals
 - `create_edge` writes `^KG` synchronously; `delete_edge` (new) kills `^KG` entry synchronously
@@ -469,6 +531,7 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - Parser: negative float literals in list expressions now work
 
 ### v1.49.0 (2026-04-18)
+
 - **`shortestPath()` / `allShortestPaths()` openCypher syntax** — fixes parse error reported by mindwalk (spec 047)
 - `MATCH p = shortestPath((a {id:$from})-[*..8]-(b {id:$to})) RETURN p` now works end-to-end
 - `RETURN p` → JSON `{"nodes":[...],"rels":[...],"length":N}`; `RETURN length(p)`, `nodes(p)`, `relationships(p)` all supported
@@ -479,6 +542,7 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - Translator/engine fix: `CREATE` without RETURN clause no longer throws `UnboundLocalError`
 
 ### v1.48.0 (2026-04-18)
+
 - **IVFFlat vector index** — `Graph.KG.IVFIndex` ObjectScript class + `^IVF` globals (spec 046)
 - `ivf_build(name, nlist, metric, batch_size)` — Python MiniBatchKMeans build from `kg_NodeEmbeddings`; stores centroids + inverted lists as `$vector` in `^IVF` globals
 - `ivf_search(name, query, k, nprobe)` — pure ObjectScript centroid scoring → cell scan → top-k; `nprobe=nlist` gives exact search
@@ -490,6 +554,7 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `test_bolt_server.py`: fixed 2 `TestBoltSessionHello` tests using deprecated `asyncio.get_event_loop().run_until_complete()` → `asyncio.run()`
 
 ### v1.47.0 (2026-04-10)
+
 - **Bolt 5.4 protocol server** — TCP (port 7687) + WebSocket (port 8000). Standard graph drivers (Python, Java, Go, .NET), LangChain, and visualization tools connect via `bolt://`
 - **Graph browser** — bundled at `/browser/` with force-directed visualization, schema sidebar, `:sysinfo`
 - **Cypher HTTP API** — `/api/cypher` + Bolt-compatible transactional endpoints. API key auth via `X-API-Key`
@@ -502,6 +567,7 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - 456 tests, 0 skipped
 
 ### v1.46.0 (2026-04-07)
+
 - **BM25Index** — pure ObjectScript Okapi BM25 lexical search over `^BM25Idx` globals. Zero SQL tables, no Enterprise license required.
 - `Graph.KG.BM25Index.Build(name, propsCSV)` — indexes all graph nodes by specified text properties; returns `{"indexed":N,"avgdl":F,"vocab_size":V}`
 - `Graph.KG.BM25Index.Search(name, query, k)` — Robertson BM25 scoring via `$Order` posting-list traversal; returns JSON `[{"id":nodeId,"score":S},...]`
@@ -515,27 +581,32 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - SC-002 benchmark: 0.3ms median search on 174-node community IRIS instance
 
 ### v1.45.3 (2026-04-04)
+
 - `translate_relationship_pattern`: inline property filters on relationship nodes were silently dropped — `MATCH (t)-[:R]->(c {id: 'x'})` returned all nodes instead of filtering. Fixed by applying `source_node.properties` and `target_node.properties` after JOIN construction.
 - `vector_search`: `TO_VECTOR(?, DOUBLE, {dim})` now includes explicit dimension in query cast, resolving type mismatch on IRIS 2025.1 when column dimension is known
 - 2 regression tests added (375 unit tests total)
 
 ### v1.45.2 (2026-04-03)
+
 - `embedded.py`: auto-fixes `sys.path` shadowing — ensures `/usr/irissys/lib/python` is first so the embedded `iris` module takes priority over pip-installed `intersystems_irispython`
 - `embedded.py`: clear error message when shadowed iris (no `iris.sql`) is detected, naming the root cause
 - Documented the XD timeout constraint and embed_daemon pattern for long-running ML operations in embedded context
 - 3 new tests covering path-fix and shadowing detection
 
 ### v1.45.1 (2026-04-03)
+
 - `embed_nodes`: FK-safe delete — DELETE failure on `kg_NodeEmbeddings` (spurious FK error in embedded Python context) is silently ignored; INSERT proceeds correctly
 - `vector_search`: uses `VECTOR_COSINE(TO_VECTOR(col), ...)` so it works on both native VECTOR columns AND VARCHAR-stored vectors (e.g. DocChunk.VectorChunk from fhir-017)
 
 ### v1.45.0 (2026-04-03)
+
 - `embed_nodes(model, where, text_fn, batch_size, force, progress_callback)` — incremental node embedding over `Graph_KG.nodes` with SQL WHERE filter, custom text builder, and per-call model override. Unblocks mixed-ontology graphs (embed only KG8 nodes without re-embedding NCIT's 200K nodes).
 - `vector_search(table, vector_col, query_embedding, top_k, id_col, return_cols, score_threshold)` — search any IRIS VECTOR column, not just `kg_NodeEmbeddings`. Works on DocChunk tables, RAG corpora, custom HNSW indexes.
 - `multi_vector_search(sources, query_embedding, top_k, fusion='rrf')` — unified search across multiple IRIS VECTOR tables with RRF fusion. Returns `source_table` per result. Powers hybrid KG+FHIR document search.
 - `validate_vector_table(table, vector_col)` — returns `{dimension, row_count}` for any IRIS VECTOR column.
 
 ### v1.44.0 (2026-04-03)
+
 - **SQL Table Bridge** — map existing IRIS SQL tables as virtual graph nodes/edges with zero data copy
 - `engine.map_sql_table(table, id_column, label)` — register any IRIS table as a Cypher-queryable node set; no ETL, no data movement
 - `engine.map_sql_relationship(source, predicate, target, target_fk=None, via_table=None)` — FK and M:M join relationships traversable via Cypher
@@ -553,27 +624,33 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 **Three new features closing the gap with NornicDB-style vector-graph fusion:**
 
 **`CALL ivg.retrieve(query, limit, bm25_name?, vec_label?, rrf_k?)`** — single Cypher procedure for BM25 + vector + RRF fusion. Equivalent to NornicDB's `db.retrieve()`:
+
 ```cypher
 CALL ivg.retrieve('insulin resistance', 10) YIELD node, score
 MATCH (node)-[:INTERACTS_WITH]->(target)
 RETURN target.node_id, score ORDER BY score DESC
 ```
+
 Generates three-CTE SQL (BM25_Retrieve + Vec_Retrieve + Retrieve with FULL OUTER JOIN RRF fusion).
 
 **`WHERE vector_distance(n, $vec) < 0.3`** — scalar vector similarity predicate in WHERE/RETURN clauses:
+
 ```cypher
 MATCH (n:Gene) WHERE vector_distance(n, $vec) < 0.3 RETURN n.node_id
 MATCH (n) RETURN n.node_id, vector_similarity(n, $vec) AS sim ORDER BY sim DESC LIMIT 10
 ```
+
 Translates to `VECTOR_COSINE()` subquery against `kg_NodeEmbeddings`.
 
 **`Graph.KG.EmbedQueue`** — async embedding queue (ObjectScript). Write nodes now, embeddings appear asynchronously:
+
 ```python
 engine.enqueue_for_embedding(["n1", "n2", "n3"], embedding_config="my-model")
 engine.start_background_embedding(batch_size=100)
 count = engine.embed_queue_pending()
 result = engine.process_embed_queue(batch_size=50)
 ```
+
 Uses `^EmbedQueue` global + `Graph.KG.EmbedQueue.ProcessBatch()` via `%SYSTEM.Task`.
 
 ### v1.96.2 (2026-05-15)
@@ -589,12 +666,14 @@ Uses `^EmbedQueue` global + `Graph.KG.EmbedQueue.ProcessBatch()` via `%SYSTEM.Ta
 **IVG SDK, CLI, Deploy, and iris-embedded-python-wrapper adoption** (spec 160):
 
 **`iris_vector_graph.sdk`** — new thin HTTP client, zero `intersystems-irispython` required:
+
 ```python
 from iris_vector_graph import IVGClient
 with IVGClient("http://localhost:8200", api_key="...") as client:
     result = client.execute_cypher("MATCH (n) RETURN count(n)")
     result = client.execute_aql("FOR v IN 1..2 OUTBOUND @s g RETURN v._key", bind_vars={"s": "n1"})
 ```
+
 - `IVGRecord` — dict-style row access: `r["name"]` and `r[0]` both work
 - `IVGError` / `IVGClientError` / `IVGServerError` — structured exception hierarchy
 - `AsyncIVGClient` — identical async API
@@ -602,6 +681,7 @@ with IVGClient("http://localhost:8200", api_key="...") as client:
 - `ping()`, `schema()`, `server_info()`, `stats()`, `explain()`, `load_ndjson()`
 
 **`ivg` CLI** — `pip install "iris-vector-graph[cli]"`:
+
 ```bash
 ivg connect http://localhost:8200
 ivg query "MATCH (n) RETURN count(n)"
@@ -613,11 +693,13 @@ ivg server start --iris-host localhost --iris-port 1972
 ```
 
 **`deploy/`** folder — four setup paths:
+
 - `deploy/docker/compose.yml` — fresh IRIS + IVG server in Docker
 - `deploy/bolt-on/install.sh` — bolt onto existing IRIS
 - `deploy/README.md` — decision guide
 
 **`iris-embedded-python-wrapper` adoption**:
+
 - `IRISGraphEngine.from_wrapper(hostname=...)` — new classmethod using `iris.dbapi.connect()`
 - `cypher_api.py` `_make_engine()` prefers wrapper's `iris.dbapi.connect()` when available
 - `iris-embedded-python-wrapper>=0.5.20` added to `[full]` extra
@@ -630,6 +712,7 @@ ivg server start --iris-host localhost --iris-port 1972
 **Fixed: `SHOW INDEXES` / `SHOW CONSTRAINTS`** — were empty stubs; now return actual BM25, IVF, HNSW, PLAID, ^KG, ^NKG indexes and uniqueness constraints. Neo4j Browser, LangChain, and all Neo4j-compatible tools now see the real index state on connect.
 
 **New REST endpoints on the Cypher API:**
+
 - `GET /schema` — labels, relationship types, property keys, counts
 - `GET /indexes` — full index inventory (all types)
 - `GET /server` — IVG version, IRIS version, namespace, schema status, BFS path
@@ -664,6 +747,7 @@ ivg server start --iris-host localhost --iris-port 1972
 - 175 new unit tests + 25 e2e tests (all pass)
 
 **Bug fixes:**
+
 - `ShortestPathJson` returned single dict instead of list — `path.get()` raised `AttributeError`; fixed by normalizing to list
 - `get_edges_in_window` `KeyError: 'w'` when temporal edge JSON omits weight field; fixed with `.get("w", 1.0)` fallback
 
@@ -698,6 +782,7 @@ ivg server start --iris-host localhost --iris-port 1972
 - Cypher API: `POST /api/cypher` accepts optional `fhir_patient_id` + `fhir_base_url` — auto-resolves patient anchors into `$patient_anchors` parameter
 
 **Bug fix:**
+
 - Duplicate key detection now catches IRIS's actual "failed unique check" error message (previously only checked for SQLCODE -119 and "duplicate" substring, which don't match)
 
 ### v1.91.0 (2026-05-09)
@@ -714,6 +799,7 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - `bulk_delete_nodes(ids)`: new engine method — FK-safe batch delete
 
 **ObjectScript fixes:**
+
 - `NKGAccel.BFSJson`: 1d75d97 string-passing approach (`ExportAdjacencyWithPreds`)
 - `Traversal.BFSFast`: predicate filter applied to all hops, result/frontier logic separated
 - `TraverseWithPredicateFast`: records results before applying `nextP` frontier filter
@@ -722,18 +808,21 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - `_build_index_registry`: ObjectScript fallback via `List()` when `gref` unavailable
 
 **GQL / Demo:**
+
 - GQL `stats` field added: `{ stats { nodeCount edgeCount labelCount } }`
 - Dynamic GQL type creation: sanitize property names with spaces to valid Python identifiers
 - Demo server: `/bio`, `/fraud`, `/arch/fraud`, `/arch/bio` routes all live
 - `iris_demo_server`: Biomedical routes registered
 
 **Test infrastructure:**
+
 - 524 e2e / 768 unit — **0 failures, 0 unjustified skips**
 - All test fixtures use engine methods — no raw `cursor.execute()` in test data setup
 - All `classMethodString` → `classMethodValue`, all `intersystems_iris` → `iris`
 - All hardcoded ports → `os.environ.get()`
 
 ### v1.43.0 (2026-04-03)
+
 - `EmbeddedConnection` and `EmbeddedCursor` now importable directly from `iris_vector_graph` (top-level)
 - `IRISGraphEngine(iris.sql)` — accepts `iris.sql` module directly; auto-wraps in `EmbeddedConnection` (no manual wrapper needed inside IRIS Language=python methods)
 - `load_obo(encoding=, encoding_errors='replace')` — handles UTF-8 BOM and Latin-1 bytes from IRIS-written files; fixes NCIT.obo loading edge case
@@ -741,6 +830,7 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - Verified: temporal Cypher (`WHERE r.ts >= $start AND r.ts <= $end`) works end-to-end via `EmbeddedConnection` path
 
 ### v1.42.0 (2026-04-03)
+
 - Cypher temporal edge filtering: `WHERE r.ts >= $start AND r.ts <= $end` routes MATCH patterns to `^KG("tout")` B-tree — O(results), not O(total edges)
 - `r.ts` and `r.weight` accessible in RETURN and ORDER BY on temporal edges
 - Inbound direction `(b)<-[r:P]-(a) WHERE r.ts >= $start` routes to `^KG("tin")`
@@ -751,6 +841,7 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - Sweet spot: trajectory queries ≤50 edges. For aggregation, use `get_temporal_aggregate()`.
 
 ### v1.41.0 (2026-04-03)
+
 - `get_edges_in_window()` now returns `source`/`target`/`predicate`/`timestamp`/`weight` aliases alongside `s`/`o`/`p`/`ts`/`w` — backward compatible
 - `get_edges_in_window(direction="in")` — query inbound edges by target node (uses `^KG("tin")`)
 - `create_edge_temporal(..., upsert=True)` and `bulk_create_edges_temporal(..., upsert=True)` — skip write if edge already exists at that timestamp
@@ -758,6 +849,7 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - `Graph.KG.TemporalIndex.PurgeBefore(ts)` and `QueryWindowInbound(target, predicate, ts_start, ts_end)` ObjectScript methods
 
 ### v1.40.0 (2026-04-02)
+
 - `iris_vector_graph.embedded.EmbeddedConnection` — dbapi2 adapter for IRIS Language=python methods
 - Zero-boilerplate: `IRISGraphEngine(EmbeddedConnection())` works inside IRIS identically to external `iris.connect()`
 - `commit()`/`rollback()` are intentional no-ops (IRIS manages transactions in embedded context)
@@ -765,6 +857,7 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - `fetchmany()`, `rowcount`, `description` fully implemented
 
 ### v1.39.0 (2026-04-01)
+
 - Pre-aggregated temporal analytics: `^KG("tagg")` COUNT/SUM/AVG/MIN/MAX at O(1)
 - `GetAggregate`, `GetBucketGroups`, `GetDistinctCount` ObjectScript methods
 - `get_temporal_aggregate()`, `get_bucket_groups()`, `get_distinct_count()` Python wrappers
@@ -772,70 +865,87 @@ All 17 `kg_*` operators are implemented directly on the engine.
 - Benchmark: 134K–157K edges/sec sustained across RE2-TT/RE2-OB/RE1-TT (535M edges total)
 
 ### v1.38.0
+
 - Rich edge properties: `^KG("edgeprop", ts, s, p, o, key)` — arbitrary typed attributes per temporal edge
 - `get_edge_attrs()`, `create_edge_temporal(attrs={...})`
 - NDJSON import/export: `import_graph_ndjson()`, `export_graph_ndjson()`, `export_temporal_edges_ndjson()`
 
 ### v1.37.0
+
 - Temporal property graph: `create_edge_temporal()`, `bulk_create_edges_temporal()`
 - `get_edges_in_window()`, `get_edge_velocity()`, `find_burst_nodes()`
 - `^KG("tout"/"tin"/"bucket")` globals — bidirectional time-indexed edge store
 - `Graph.KG.TemporalIndex` ObjectScript class
 
 ### v1.35.0
+
 - UNION / UNION ALL in Cypher
 - EXISTS {} subquery predicates
 
 ### v1.34.0
+
 - Variable-length paths: `MATCH (a)-[:REL*1..5]->(b)` via BFSFastJson bridge
 
 ### v1.33.0
+
 - CASE WHEN / THEN / ELSE / END in Cypher RETURN and WHERE
 
 ### v1.32.0
+
 - CAST functions: `toInteger()`, `toFloat()`, `toString()`, `toBoolean()`
 
 ### v1.31.0
+
 - RDF 1.2 reification API: `reify_edge()`, `get_reifications()`, `delete_reification()`
 
 ### v1.30.0
+
 - BulkLoader: `INSERT %NOINDEX %NOCHECK` + `%BuildIndices` — 46K rows/sec SQL ingest
 - RDF 1.2 reification schema DDL
 
 ### v1.29.0
+
 - OBO ontology ingest: `load_obo()`, `load_networkx()`
 
 ### v1.28.0
+
 - Lightweight install — base requires only `intersystems-irispython`
 - Optional extras: `[full]`, `[plaid]`, `[dev]`, `[ml]`, `[visualization]`, `[biodata]`
 
 ### v1.26.0–v1.27.0
+
 - PLAID multi-vector retrieval — `PLAIDSearch.cls` pure ObjectScript + `$vectorop`
 - PLAID packed token storage: 53 `$Order` → 1 `$Get`
 
 ### v1.24.0–v1.25.1
+
 - VecIndex nprobe recall fix (counts leaf visits, not branch points)
 - Annoy-style two-means tree splitting (fixes degenerate trees)
 - Batch APIs: `SearchMultiJSON`, `InsertBatchJSON`
 
 ### v1.21.0–v1.22.1
+
 - VecIndex RP-tree ANN
 - `SearchJSON`/`InsertJSON` — eliminated xecute path (250ms → 4ms)
 
 ### v1.20.0
+
 - Arno acceleration wrappers: `khop()`, `ppr()`, `random_walk()`
 
 ### v1.19.0
+
 - `^NKG` integer index for Arno acceleration
 
 ### v1.18.0
+
 - FHIR-to-KG bridge: `fhir_bridges` table, `get_kg_anchors()`, UMLS MRCONSO ingest
 
 ### v1.17.0
+
 - Cypher named path bindings, CALL subqueries, PPR-guided subgraph
 
 ### [Earlier versions →](docs/CHANGELOG_ARCHIVE.md)
 
 ---
 
-**License**: MIT | **Author**: Thomas Dyar (thomas.dyar@intersystems.com)
+**License**: MIT | **Author**: Thomas Dyar (<thomas.dyar@intersystems.com>)

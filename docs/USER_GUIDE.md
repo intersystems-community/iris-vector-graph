@@ -168,11 +168,11 @@ scores = engine.degree_centrality(direction="out", top_k=20)
 
 **Return format**:
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `id` | str | Node identifier |
-| `score` | float | Normalized degree (value / (n-1)) |
-| `degree` | int | Raw edge count |
+| Key      | Type  | Description                       |
+| -------- | ----- | --------------------------------- |
+| `id`     | str   | Node identifier                   |
+| `score`  | float | Normalized degree (value / (n-1)) |
+| `degree` | int   | Raw edge count                    |
 
 **Cypher**:
 
@@ -203,9 +203,9 @@ scores = engine.betweenness_centrality_neighborhood(
 
 **Return format**:
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `id` | str | Node identifier |
+| Key     | Type  | Description                                              |
+| ------- | ----- | -------------------------------------------------------- |
+| `id`    | str   | Node identifier                                          |
 | `score` | float | Betweenness score (scaled by sampling factor if sampled) |
 
 **Cypher**:
@@ -245,9 +245,9 @@ scores = engine.closeness_centrality(formula="classical", top_k=20)
 
 **Return format**:
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `id` | str | Node identifier |
+| Key     | Type  | Description                                    |
+| ------- | ----- | ---------------------------------------------- |
+| `id`    | str   | Node identifier                                |
 | `score` | float | Closeness (harmonic or classical, per formula) |
 
 **Cypher**:
@@ -267,9 +267,9 @@ scores = engine.eigenvector_centrality(max_iter=30, top_k=20)
 
 **Return format**:
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `id` | str | Node identifier |
+| Key     | Type  | Description                               |
+| ------- | ----- | ----------------------------------------- |
+| `id`    | str   | Node identifier                           |
 | `score` | float | L2-normalized eigenvector component (0–1) |
 
 **Cypher**:
@@ -353,11 +353,11 @@ except Exception as e:
 
 Three-tier dispatch for all graph algorithms:
 
-| Tier | Backend | Latency (ER 2000) |
-|------|---------|-------------------|
-| 1 | **Rust accelerator** (if deployed + `^NKG` built) | ~8ms |
-| 2 | **ObjectScript parallel** (8× workers, `^NKG` built) | ~500ms |
-| 3 | **Python LazyKG** (always works, `^NKG` not needed) | slow |
+| Tier | Backend                                              | Latency (ER 2000) |
+| ---- | ---------------------------------------------------- | ----------------- |
+| 1    | **Rust accelerator** (if deployed + `^NKG` built)    | ~8ms              |
+| 2    | **ObjectScript parallel** (8× workers, `^NKG` built) | ~500ms            |
+| 3    | **Python LazyKG** (always works, `^NKG` not needed)  | slow              |
 
 Dispatch is automatic and transparent. See [docs/performance/GRAPH_ALGORITHMS.md](../performance/GRAPH_ALGORITHMS.md) for detailed benchmarks.
 
@@ -404,22 +404,60 @@ RETURN node, score ORDER BY score DESC LIMIT 5
 
 ---
 
+## 9. Semantic Layer (RDF / SHACL / PROV-O)
+
+IVG stores all data as W3C-aligned SPO triples. The semantic layer lets you get
+that data back out as standard RDF, validate it against SHACL shapes, and export
+temporal edge provenance in W3C PROV-O.
+
+```bash
+pip install 'iris-vector-graph[rdf]'
+```
+
+```python
+# Export graph as Turtle (full or filtered)
+engine.export_rdf("graph.ttl")
+engine.export_rdf("proteins.nt", label_filter=["Protein", "Disease"])
+engine.export_rdf_from_cypher("MATCH (p:Patient)-[r]->(e) RETURN p,r,e", "sub.ttl")
+
+# Register namespace prefixes for readable Turtle output
+engine.register_namespace("fhir", "http://hl7.org/fhir/")
+
+# Validate with SHACL shapes
+report = engine.validate_shacl("shapes/patient.shacl.ttl")
+if not report.conforms:
+    for v in report.violations:
+        print(f"{v.focus_node}: {v.message} [{v.severity}]")
+
+# Export temporal edge provenance as PROV-O
+engine.prov_export("provenance.ttl", ts_start=1700000000)
+prov = engine.prov_as_dict(edge_id=42)
+```
+
+**Full documentation**: [SEMANTIC_LAYER.md](SEMANTIC_LAYER.md) — includes format guide,
+SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
+
+---
+
 ## Quick Reference
 
-| Task | Code |
-|------|------|
-| Initialize | `engine.initialize_schema()` |
-| Add node | `engine.create_node("id", labels=[...], properties={...})` |
-| Add edge | `engine.create_edge("src", "pred", "tgt", qualifiers={...})` |
-| Query | `engine.execute_cypher("MATCH (n) RETURN n.name LIMIT 10")` |
-| Degree | `engine.degree_centrality(direction="out", top_k=20)` |
-| Betweenness | `engine.betweenness_centrality(sample_size=200, top_k=20)` |
+| Task                     | Code                                                             |
+| ------------------------ | ---------------------------------------------------------------- |
+| Initialize               | `engine.initialize_schema()`                                     |
+| Add node                 | `engine.create_node("id", labels=[...], properties={...})`       |
+| Add edge                 | `engine.create_edge("src", "pred", "tgt", qualifiers={...})`     |
+| Query                    | `engine.execute_cypher("MATCH (n) RETURN n.name LIMIT 10")`      |
+| Degree                   | `engine.degree_centrality(direction="out", top_k=20)`            |
+| Betweenness              | `engine.betweenness_centrality(sample_size=200, top_k=20)`       |
 | Betweenness neighborhood | `engine.betweenness_centrality_neighborhood(seed="...", hops=2)` |
-| Closeness | `engine.closeness_centrality(formula="harmonic", top_k=20)` |
-| Eigenvector | `engine.eigenvector_centrality(max_iter=30, top_k=20)` |
-| Leiden | `engine.leiden_communities(gamma=1.0, top_k=100)` |
-| Rebuild index | `engine.rebuild_nkg()` |
-| Check status | `engine.status().report()` |
+| Closeness                | `engine.closeness_centrality(formula="harmonic", top_k=20)`      |
+| Eigenvector              | `engine.eigenvector_centrality(max_iter=30, top_k=20)`           |
+| Leiden                   | `engine.leiden_communities(gamma=1.0, top_k=100)`                |
+| Rebuild index            | `engine.rebuild_nkg()`                                           |
+| Check status             | `engine.status().report()`                                       |
+| Export RDF               | `engine.export_rdf("out.ttl", label_filter=[...])`               |
+| Validate SHACL           | `engine.validate_shacl("shapes.ttl")`                            |
+| Export PROV-O            | `engine.prov_export("prov.ttl", ts_start=...)`                   |
 
 ---
 
@@ -428,3 +466,5 @@ RETURN node, score ORDER BY score DESC LIMIT 5
 **For schema reference and ObjectScript class details, see [Architecture](architecture/ARCHITECTURE.md).**
 
 **For performance benchmarks and optimization, see [Performance](performance/GRAPH_ALGORITHMS.md).**
+
+**For RDF export, SHACL validation, and PROV-O provenance, see [Semantic Layer](SEMANTIC_LAYER.md).**

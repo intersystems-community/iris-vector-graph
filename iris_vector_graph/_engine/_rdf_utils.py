@@ -1,6 +1,15 @@
 """Shared RDF utility functions for rdf_export.py and shacl.py.
 
-Kept as a private module to avoid cross-mixin import dependencies.
+Kept as a private module (_rdf_utils) to avoid cross-mixin import dependencies —
+both RdfExportMixin and ShaclMixin need _build_rdflib_graph() without importing
+each other.
+
+Public surface (for internal use only):
+    _build_rdflib_graph(conn, ...) — streaming cursor over rdf_labels/rdf_props/rdf_edges
+                                     → rdflib.ConjunctiveGraph; supports all filter params
+    _infer_format(path)            — file extension → rdflib format string
+    _mint_iri(node_id, base_uri)   — bare string IDs → urn:ivg: URIs; valid IRIs pass through
+    _to_literal(val)               — typed rdflib.Literal from stored string values
 """
 from __future__ import annotations
 

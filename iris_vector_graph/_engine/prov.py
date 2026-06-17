@@ -1,9 +1,36 @@
 """PROV-O temporal alignment mixin for IRISGraphEngine.
 
-Provides:
-- prov_export(): serialize temporal edges as W3C PROV-O Turtle/JSON-LD
-- prov_export_from_cypher(): PROV-O for temporal edges matching a Cypher query
-- prov_as_dict(): PROV-O mapping for a single temporal edge (no file I/O)
+Maps IVG temporal edges (^KG("tout"/"tin") globals) to W3C PROV-O vocabulary
+without migrating storage. Vocabulary projection only — no schema changes.
+
+Requires: pip install 'iris-vector-graph[rdf]'   (rdflib >= 6.0.0)
+
+Vocabulary mapping:
+    temporal edge     → prov:Activity
+    source node       → prov:Entity  (via prov:used)
+    target node       → prov:Entity
+    ts_start (Unix)   → prov:startedAtTime "..."^^xsd:dateTime
+    ts_end (Unix)     → prov:endedAtTime "..."^^xsd:dateTime  (omitted if None)
+    edge predicate    → property on Activity (URI preserved)
+    edge_id           → Activity IRI: urn:ivg:activity/{url-encoded-id}
+    node_id           → Entity IRI: urn:ivg:entity/{id} or bare IRI if valid
+
+Public methods (added to IRISGraphEngine via ProvMixin):
+
+    prov_export(path, format, ts_start, ts_end) → {"activities", "entities", "path"}
+        Serialize temporal edges as PROV-O Turtle or JSON-LD. Supports time-window
+        filtering; empty result produces a valid but empty PROV-O file.
+
+    prov_export_from_cypher(query, path, parameters, format) → {"activities", "path"}
+        Export PROV-O for temporal edges involving nodes matched by a Cypher query.
+
+    prov_as_dict(edge_id) → dict
+        Return the PROV-O mapping for a single temporal edge without file I/O.
+        Keys: activity, type, startedAtTime, endedAtTime (optional), used,
+        predicate, object.
+        Raises KeyError if edge_id not found.
+
+See: docs/SEMANTIC_LAYER.md for vocabulary reference and agentic provenance patterns.
 """
 from __future__ import annotations
 

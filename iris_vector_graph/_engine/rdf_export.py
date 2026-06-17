@@ -1,9 +1,30 @@
 """RDF export mixin for IRISGraphEngine.
 
-Provides:
-- export_rdf(): full or filtered graph export to Turtle/NT/NQuads/JSON-LD
-- export_rdf_from_cypher(): Cypher-result subgraph as RDF
-- register_namespace() / list_namespaces(): persistent prefix registry
+All IVG data is stored as W3C-aligned SPO triples (rdf_edges, rdf_props, rdf_labels).
+This module serializes that storage to standard RDF formats via rdflib.
+
+Requires: pip install 'iris-vector-graph[rdf]'   (rdflib >= 6.0.0)
+
+Public methods (added to IRISGraphEngine via RdfExportMixin):
+
+    export_rdf(path, format, label_filter, graph_id, node_ids, base_uri)
+        Export the full graph or a filtered subgraph to Turtle/N-Triples/
+        N-Quads/JSON-LD. Streaming cursor pattern — memory-bounded for any
+        graph size. Named graphs preserved in N-Quads. Edge qualifiers
+        serialized as reifier nodes via rdf:reifies vocabulary.
+
+    export_rdf_from_cypher(query, path, parameters, format, base_uri)
+        Run a Cypher query and serialize the result nodes/edges as RDF.
+        Columns named s/p/o map directly to subject/predicate/object.
+
+    register_namespace(prefix, uri)
+        Persist a prefix → URI mapping to Graph_KG.rdf_namespaces.
+        Bound automatically in Turtle and JSON-LD output.
+
+    list_namespaces() → {prefix: uri}
+        Return all registered namespace mappings.
+
+See: docs/SEMANTIC_LAYER.md for format guide and integration patterns.
 """
 from __future__ import annotations
 
