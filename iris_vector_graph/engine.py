@@ -42,6 +42,9 @@ from iris_vector_graph._engine.admin import AdminMixin
 from iris_vector_graph._engine.embeddings import EmbeddingsMixin
 from iris_vector_graph._engine.schema import SchemaMixin
 from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
+from iris_vector_graph._engine.rdf_export import RdfExportMixin
+from iris_vector_graph._engine.shacl import ShaclMixin
+from iris_vector_graph._engine.prov import ProvMixin
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +102,7 @@ def _bfs_stream_pages(conn, tag, page_size=500):
         cursor_step = str(next_step)
         cursor_o = page.get("next_o", "")
 
-class IRISGraphEngine(TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, EmbeddingsMixin, SchemaMixin, NodesEdgesMixin, QueryMixin, AlgorithmsMixin, VectorMixin):
+class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, EmbeddingsMixin, SchemaMixin, NodesEdgesMixin, QueryMixin, AlgorithmsMixin, VectorMixin):
     """
     Domain-agnostic IRIS graph engine providing:
     - HNSW-optimized vector search (50ms performance)

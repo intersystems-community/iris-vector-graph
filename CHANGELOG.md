@@ -1,5 +1,47 @@
 # Changelog
 
+### v2.3.0 (2026-06-17)
+
+**RDF Semantic Completeness Layer — export, SHACL, PROV-O**
+
+- feat(198): `engine.export_rdf(path, format, label_filter, graph_id, node_ids)` —
+  export full graph or filtered subgraph to Turtle/N-Triples/N-Quads/JSON-LD via rdflib.
+  Streaming cursor pattern; memory-bounded for graphs of any size.
+- feat(198): `engine.export_rdf_from_cypher(query, path)` — Cypher-result subgraph
+  serialized as RDF triples. Supports s/p/o column mapping and single-node patterns.
+- feat(198): `engine.register_namespace(prefix, uri)` / `list_namespaces()` — persistent
+  namespace prefix registry (new `Graph_KG.rdf_namespaces` table); bound to Turtle/JSON-LD
+  output automatically.
+- feat(198): `engine.validate_shacl(shapes_source, node_ids)` — SHACL Core validation
+  via PySHACL. Returns `ValidationReport(conforms, violations)` with structured
+  `Violation` objects. Accepts file path, URL, Turtle string, or rdflib Graph as shapes.
+- feat(198): `engine.prov_export(path, ts_start, ts_end)` — W3C PROV-O serialization
+  of temporal edges. Each temporal edge → `prov:Activity` with `prov:startedAtTime`,
+  `prov:endedAtTime`, `prov:used`. Entities as `prov:Entity`. URL-safe activity IRIs.
+- feat(198): `engine.prov_as_dict(edge_id)` — PROV-O mapping for a single temporal edge.
+- feat(198): `engine.prov_export_from_cypher(query, path)` — PROV-O for temporal edges
+  matching a Cypher query.
+- chore: New `[rdf]` optional extras group: `rdflib>=6.0.0`, `pyshacl>=0.25.0`.
+  Install: `pip install 'iris-vector-graph[rdf]'`. pyshacl also added to `[full]`.
+- fix(198): URL-encode composite temporal edge IDs in PROV-O activity IRIs (pipes
+  in edge IDs caused invalid Turtle serialization).
+
+### v2.2.0 (2026-06-16)
+
+**CI/CD, test infrastructure, BFS FETCH FIRST fix**
+
+- feat(197): GitHub Actions CI (`.github/workflows/ci.yml`) — unit tests on push+PR,
+  Python 3.11+3.12.
+- feat(197): `sdk.py` unit coverage 91% → 95% (`tests/unit/test_sdk_coverage.py`).
+- fix(197): BFS `max_results` extraction used `LIMIT N` regex; now also matches
+  `FETCH FIRST N ROWS ONLY` (IRIS SQL syntax). Two call sites fixed in `_engine/query.py`.
+- fix(197): `NKGAccel.BFSJson` called with 5 args (spurious `direction`); corrected to 4.
+- fix(conftest): 168 fixture errors → clean skips when IRIS container not running.
+  `IVG_AUTO_START_CONTAINER=1` re-enables auto-start (CI default).
+- fix(test): `TestBFSArnoE2E` — `pytest.fail` → `pytest.skip` when Arno callout absent.
+- chore: `@pytest.mark.perf` on `TestCypherBenchmark`; excluded from default run via
+  `addopts -m "not perf"` to prevent Python 3.13 segfault in default pytest run.
+
 ### v2.1.0 (2026-06-06)
 
 **NKG fast-path + structural guard + collation fix**

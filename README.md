@@ -69,6 +69,9 @@ print(result["rows"])  # [('Bob',)]
 | **Bolt protocol** | neo4j-driver compatible wire protocol (TCP + WebSocket) |
 | **Embedded Python** | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg) |
 | **IPM / ZPM** | ObjectScript-only install via InterSystems Package Manager |
+| **RDF export** | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD |
+| **SHACL validation** | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass |
+| **PROV-O** | `prov_export()` — temporal edges as W3C PROV-O provenance graph |
 
 ---
 
@@ -148,6 +151,39 @@ and [docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md)
 ```
 
 Full schema and ObjectScript class reference: [docs/architecture/ARCHITECTURE.md](docs/architecture/ARCHITECTURE.md).
+
+---
+
+## Semantic Layer (RDF / SHACL / PROV-O)
+
+```bash
+pip install 'iris-vector-graph[rdf]'
+```
+
+```python
+# Export graph as Turtle (full or filtered)
+engine.export_rdf("kg.ttl")
+engine.export_rdf("proteins.nt", format="nt", label_filter=["Protein", "Disease"])
+engine.export_rdf_from_cypher("MATCH (p:Patient)-[r]->(e) RETURN p,r,e", "patients.ttl")
+
+# Persistent namespace prefixes
+engine.register_namespace("fhir", "http://hl7.org/fhir/")
+
+# SHACL Core validation
+report = engine.validate_shacl("shapes/patient.ttl")
+if not report.conforms:
+    for v in report.violations:
+        print(f"{v.focus_node}: {v.message} [{v.severity}]")
+
+# PROV-O temporal provenance
+engine.prov_export("provenance.ttl", ts_start=1700000000)
+prov = engine.prov_as_dict(edge_id=42)
+```
+
+Every write to ivg is stored as W3C-aligned SPO triples (`rdf_edges`, `rdf_props`, `rdf_labels`)
+with OWL 2 RL inference, named graph support, and RDF-star style edge qualifiers.
+See [docs/rdf-landscape-spike-2026.md](docs/rdf-landscape-spike-2026.md) for the full
+semantic layer design and landscape analysis.
 
 ---
 
