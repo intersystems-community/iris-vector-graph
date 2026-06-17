@@ -359,7 +359,7 @@ Three-tier dispatch for all graph algorithms:
 | 2    | **ObjectScript parallel** (8× workers, `^NKG` built) | ~500ms            |
 | 3    | **Python LazyKG** (always works, `^NKG` not needed)  | slow              |
 
-Dispatch is automatic and transparent. See [docs/performance/GRAPH_ALGORITHMS.md](../performance/GRAPH_ALGORITHMS.md) for detailed benchmarks.
+Dispatch is automatic and transparent. See [performance/GRAPH_ALGORITHMS.md](performance/GRAPH_ALGORITHMS.md) for detailed benchmarks.
 
 ---
 
