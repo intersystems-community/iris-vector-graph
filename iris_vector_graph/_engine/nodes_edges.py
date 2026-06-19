@@ -569,6 +569,11 @@ class NodesEdgesMixin:
             self.conn.commit()
         except Exception:
             pass
+        # BYPASS: this deletes SQL rows without touching ^KG/^NKG. Flag the
+        # adjacency index as stale so var-length Cypher guards and verify_sync()
+        # surface the drift; caller should sync() to repair.
+        if deleted:
+            self._nkg_dirty = True
         return deleted
 
 
@@ -881,6 +886,9 @@ class NodesEdgesMixin:
                 f"DELETE FROM {_table('nodes')} WHERE node_id = ?", [node_id]
             )
             self.conn.commit()
+            # BYPASS: edge rows removed from SQL but ^KG/^NKG still hold them.
+            # Flag stale so var-length guards / verify_sync() catch the drift.
+            self._nkg_dirty = True
             return True
         except Exception as e:
             logger.warning(f"delete_node({node_id}) failed: {e}")
@@ -919,6 +927,9 @@ class NodesEdgesMixin:
                 logger.warning(f"bulk_delete_nodes batch failed: {e}")
             finally:
                 cursor.close()
+        # BYPASS: SQL edge rows removed without ^KG/^NKG maintenance.
+        if deleted:
+            self._nkg_dirty = True
         return deleted
 
 

@@ -62,8 +62,12 @@ ClassMethod InsertIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary
 {
 	Set weight = ##class(Graph.KG.GraphIndex).ExtractWeight(qualifiers)
 
-	Set ^KG("out", s, p, o) = weight
-	Set ^KG("in", o, p, s) = weight
+	// Shard-0 layout — MUST match EdgeScan.WriteAdjacency / TraversalBuild.BuildKG.
+	// Every live reader (MatchEdges, Algorithms, Centrality, NKG BFS) scans
+	// ^KG("out", 0, ...). Writing the legacy no-shard layout here would populate
+	// globals nothing reads. See Graph.KG.EdgeScan:WriteAdjacency for the canonical form.
+	Set ^KG("out", 0, s, p, o) = weight
+	Set ^KG("in", 0, o, p, s) = weight
 	Set tmp = $Increment(^KG("deg", s))
 	Set tmp = $Increment(^KG("degp", s, p))
 
@@ -147,8 +151,8 @@ ClassMethod UpdateIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary
 
 ClassMethod DeleteIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "") As %Status [ ServerOnly = 1 ]
 {
-	Kill ^KG("out", s, p, o)
-	Kill ^KG("in", o, p, s)
+	Kill ^KG("out", 0, s, p, o)
+	Kill ^KG("in", 0, o, p, s)
 	Set tmp = $Increment(^KG("deg", s), -1)
 	Set tmp = $Increment(^KG("degp", s, p), -1)
 	If $Get(^KG("deg", s)) <= 0 Kill ^KG("deg", s)

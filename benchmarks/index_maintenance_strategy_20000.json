@@ -1,0 +1,18 @@
+{
+  "edges": 20000,
+  "nodes": 2000,
+  "deferred": {
+    "total_s": 0.979,
+    "insert_s": 0.604,
+    "sync_s": 0.375,
+    "edges_per_s": 20428.7
+  },
+  "per_row": {
+    "measured_edges": 5000,
+    "measured_s": 1.599,
+    "edges_per_s": 3127.7,
+    "extrapolated_total_s": 6.4
+  },
+  "ratio_per_row_over_deferred": 6.53,
+  "hypothesis_per_row_2x_slower": true
+}

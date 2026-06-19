@@ -305,6 +305,99 @@ class AdminMixin:
                        "^NKG_populated": adjacency.nkg_populated} if internals else None,
         )
 
+    def verify_sync(self, heal: bool = False) -> "SyncReport":
+        """Check whether the ^KG/^NKG adjacency indexes agree with the SQL tables.
+
+        The authoritative graph state lives in ``Graph_KG.rdf_edges``. The ^KG/^NKG
+        globals are a derived acceleration index, maintained inline by
+        ``create_edge`` / ``bulk_*`` / ``WriteAdjacency`` but NOT by every write
+        path. BYPASS paths — ``drop_graph``, ``delete_node``, raw SQL inserts, the
+        ``map_sql_table`` bridge, or an interrupted bulk load — mutate the table
+        without touching the globals, leaving BFS / centrality / var-length Cypher
+        silently stale. This compares the SQL edge count against the ^NKG edge
+        count and reports the divergence.
+
+        Args:
+            heal: When True, run ``sync()`` to rebuild the globals if drift is found.
+
+        Returns:
+            SyncReport. ``report.in_sync`` is False when counts diverge OR the
+            in-process ``_nkg_dirty`` flag is set. ``bool(report)`` mirrors
+            ``in_sync`` for ``if not engine.verify_sync(): engine.sync()`` usage.
+        """
+        from iris_vector_graph.status import SyncReport
+
+        sql_edges = 0
+        global_edges = 0
+        global_nodes = 0
+        detail = None
+        indeterminate = False
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {_table('rdf_edges')}")
+            row = cursor.fetchone()
+            sql_edges = int(row[0]) if row else 0
+        except Exception as e:
+            indeterminate = True
+            detail = f"SQL edge count failed: {str(e)[:120]}"
+
+        try:
+            iris_obj = self._iris_obj()
+            global_edges = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGEdgeCount"))
+            global_nodes = int(iris_obj.classMethodValue("Graph.KG.Traversal", "NKGNodeCount"))
+        except Exception as e:
+            indeterminate = True
+            detail = f"NKG count failed (globals likely unbuilt): {str(e)[:120]}"
+
+        pending = bool(getattr(self, "_nkg_dirty", False))
+
+        # Drift oracle. ``_nkg_dirty`` is the authoritative in-process signal: a
+        # write path that bypassed adjacency maintenance set it. The count
+        # comparison is a SECONDARY heuristic and is deliberately one-directional:
+        # we only flag drift when SQL edges *exceed* indexed edges (the
+        # unambiguous "rows exist in the table but not in the index" case).
+        #
+        # We do NOT flag the reverse (globals > SQL), because ^NKG's meta
+        # edgeCount is known to over-count: InternNode/InternLabel are
+        # append-only (never decremented on delete) and NKG interning ignores
+        # graph_id while the SQL UNIQUE is on (s,p,o,graph_id). Treating
+        # globals>SQL as drift would produce false positives on any DB that has
+        # seen deletes. A full rebuild (sync()) is the only way to reconcile
+        # the meta counter, and verify_sync(heal=True) does exactly that.
+        sql_exceeds = sql_edges > global_edges
+        in_sync = (not sql_exceeds) and (not pending) and (not indeterminate)
+
+        if not in_sync and detail is None:
+            if pending and not sql_exceeds:
+                detail = "pending_sync flag set — writes occurred without sync()"
+            else:
+                detail = (
+                    f"drift: {sql_edges} SQL edges vs {global_edges} indexed edges. "
+                    "A write path bypassed adjacency maintenance — call engine.sync()."
+                )
+
+        report = SyncReport(
+            in_sync=in_sync,
+            sql_edges=sql_edges,
+            global_edges=global_edges,
+            global_nodes=global_nodes,
+            pending_sync=pending,
+            healed=False,
+            detail=detail,
+        )
+
+        if heal and not in_sync:
+            try:
+                self.sync()
+                report.healed = True
+                report.in_sync = True
+                report.detail = (detail or "") + " | healed via sync()"
+            except Exception as e:
+                report.detail = (detail or "") + f" | heal failed: {str(e)[:120]}"
+
+        return report
+
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Return active IRIS SQL queries.
 

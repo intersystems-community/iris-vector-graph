@@ -47,6 +47,40 @@ class IndexInventory:
 
 
 @dataclass
+class SyncReport:
+    """Result of engine.verify_sync() — quantitative ^KG/^NKG drift check.
+
+    Compares the authoritative SQL edge count (Graph_KG.rdf_edges) against the
+    adjacency-global edge count (^NKG "$meta" edgeCount). Divergence means a
+    write path bypassed global maintenance (drop_graph, delete_node, raw SQL,
+    the SQL table bridge, or an interrupted bulk load) and the acceleration
+    indexes are stale. ``pending_sync`` reflects the in-process _nkg_dirty flag.
+    """
+
+    in_sync: bool = True
+    sql_edges: int = 0
+    global_edges: int = 0
+    global_nodes: int = 0
+    pending_sync: bool = False
+    healed: bool = False
+    detail: Optional[str] = None
+
+    def __bool__(self) -> bool:
+        return self.in_sync
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "in_sync": self.in_sync,
+            "sql_edges": self.sql_edges,
+            "global_edges": self.global_edges,
+            "global_nodes": self.global_nodes,
+            "pending_sync": self.pending_sync,
+            "healed": self.healed,
+            "detail": self.detail,
+        }
+
+
+@dataclass
 class EngineStatus:
     tables: TableCounts = field(default_factory=TableCounts)
     adjacency: AdjacencyStatus = field(default_factory=AdjacencyStatus)
