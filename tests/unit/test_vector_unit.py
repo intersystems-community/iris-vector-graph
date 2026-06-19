@@ -854,12 +854,14 @@ class TestIvfBuild:
 
     def test_empty_node_ids_raises(self):
         """Line 1002: empty node_ids list raises ValueError."""
+        pytest.importorskip("sklearn")  # ivf_build imports sklearn before validating
         eng, conn, cursor = _make_eng()
         with pytest.raises(ValueError, match="node_ids list is empty"):
             eng.ivf_build("myidx", node_ids=[])
 
     def test_no_rows_raises(self):
         """Line 1012: no vectors found raises ValueError."""
+        pytest.importorskip("sklearn")  # ivf_build imports sklearn before validating
         eng, conn, cursor = _make_eng()
         cursor.fetchall.return_value = []
         with pytest.raises(ValueError, match="no vectors found"):

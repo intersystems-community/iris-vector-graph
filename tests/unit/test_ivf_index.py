@@ -9,6 +9,14 @@ import pytest
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
+# ivf_build imports sklearn (only in the [ml]/[plaid] extras, not [full]); skip
+# the build-path tests when it is absent so CI without those extras stays green.
+try:
+    import sklearn  # noqa: F401
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+
 
 def _make_engine():
     from iris_vector_graph.engine import IRISGraphEngine
@@ -37,6 +45,7 @@ def _cosine(a, b):
 
 
 @pytest.mark.requires_clean_isolation
+@pytest.mark.skipif(not HAS_SKLEARN, reason="sklearn not installed (ivf_build requires it)")
 class TestIVFIndexUnit:
 
     def test_ivf_build_calls_classmethod(self):
