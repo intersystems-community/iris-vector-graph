@@ -1,5 +1,30 @@
 # Changelog
 
+### v2.3.1 (2026-06-19)
+
+**Index-maintenance drift detection + architecture documentation**
+
+- feat: `engine.verify_sync(heal=False)` — detect drift between the `rdf_edges`
+  SQL table and the `^KG`/`^NKG` adjacency globals. Returns a structured
+  `SyncReport` (`in_sync`, `sql_edges`, `global_edges`, `global_nodes`,
+  `pending_sync`, `healed`, `detail`). One-directional count oracle (flags
+  SQL > globals) plus the in-memory `_nkg_dirty` flag for delete-side drift;
+  `heal=True` runs `sync()`.
+- fix: `drop_graph`, `delete_node`, and `bulk_delete_nodes` now set the
+  `_nkg_dirty` flag so deletions that bypass the global index are detected by
+  `verify_sync()`.
+- fix(objectscript): `Graph.KG.GraphIndex` functional-index callbacks now write
+  the production shard-0 layout (`^KG("out", 0, s, p, o)`) instead of the legacy
+  no-shard layout, matching all live readers.
+- docs: declared the `^KG` shard-0 adjacency layout-of-record in
+  `Graph.KG.EdgeScan`; flagged the legacy no-shard `Loader` and the dead
+  `NKGAccel*` fallback branches; documented the BYPASS sync contracts on
+  `map_sql_table` (projected edges absent from `^KG`/`^NKG`) and
+  `create_edge_temporal` (temporal edges in the `^KG` shadow but not `^NKG`).
+- docs: index-maintenance architecture review
+  (`docs/index-maintenance-architecture-review.md`) with a per-row-vs-deferred
+  benchmark quantifying the functional-index tradeoff (6.5×–14.9× slower).
+
 ### v2.3.0 (2026-06-17)
 
 **RDF Semantic Completeness Layer — export, SHACL, PROV-O**
