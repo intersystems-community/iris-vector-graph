@@ -1,3 +1,11 @@
+/// NKG-accelerated traversal (K-hop, BFS) over the interned ^NKG index.
+///
+/// NOTE: the `If useNKG { ^NKG... } Else { ^KG... }` fallback branches read the
+/// LEGACY no-shard ^KG("out", node, pred, dst) layout, NOT the production
+/// shard-0 layout (^KG("out", 0, ...) — see Graph.KG.EdgeScan for the layout of
+/// record). These Else branches are effectively dead in production: UseNKG()
+/// returns true whenever ^NKG("$meta") exists, which is true after any sync().
+/// If you ever make them reachable, fix them to scan the shard-0 layout first.
 Class Graph.KG.NKGAccelTraversal Extends %RegisteredObject
 {
 

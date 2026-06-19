@@ -1,3 +1,10 @@
+/// NKG-accelerated adjacency lookups over the interned ^NKG index.
+///
+/// NOTE: the ^KG fallback branches read the LEGACY no-shard
+/// ^KG("out", node, ...) layout, NOT the production shard-0 layout
+/// (^KG("out", 0, ...) — see Graph.KG.EdgeScan for the layout of record).
+/// They are dead in production (UseNKG() is true after any sync()). Fix them to
+/// the shard-0 layout before relying on them.
 Class Graph.KG.NKGAccelAdjacency Extends %RegisteredObject
 {
 

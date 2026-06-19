@@ -74,6 +74,21 @@ class FhirMixin:
     def map_sql_table(
         self, table: str, id_column: str, label: str, property_columns=None
     ) -> dict:
+        """Map an existing SQL table to a graph label as a read-only projection.
+
+        Cypher queries against ``label`` are translated to JOINs on ``table`` at
+        query time — rows are never copied into rdf_edges/nodes.
+
+        ADJACENCY CONTRACT: because the rows are not materialized into
+        ``Graph_KG.rdf_edges``, edges reached through this mapping (or via
+        ``map_sql_relationship``) are NOT present in the ^KG/^NKG adjacency
+        globals. Property/pattern Cypher sees them; the global-backed algorithms
+        do NOT — BFS, centrality, var-length paths, and the NKG-accelerated
+        traversals will not traverse projected edges. There is no automatic
+        propagation and ``verify_sync()`` cannot see this gap (nothing was
+        written to rdf_edges). If you need these edges in graph algorithms,
+        materialize them (create_edge / bulk_create_edges) rather than mapping.
+        """
         from iris_vector_graph.security import sanitize_identifier
 
         sanitize_identifier(table)

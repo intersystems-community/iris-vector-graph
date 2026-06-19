@@ -1,4 +1,11 @@
-/// Fast CSV loader for Graph data
+/// Fast CSV loader for Graph data.
+///
+/// WARNING — LEGACY NO-SHARD LAYOUT. This loader writes ^KG("out", s, p, o)
+/// (no shard prefix), which is NOT the production layout. Live readers scan
+/// ^KG("out", 0, s, p, o) (see Graph.KG.EdgeScan for the layout of record), so
+/// data loaded here is invisible to BFS / centrality / Cypher. It has no callers
+/// in the engine. Prefer engine.bulk_load_session() / bulk_create_edges(). If you
+/// must use this, run engine.sync() afterward to rebuild the shard-0 globals.
 Class Graph.KG.Loader Extends %RegisteredObject
 {
 

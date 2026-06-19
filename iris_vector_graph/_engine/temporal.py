@@ -22,6 +22,17 @@ class TemporalMixin:
         upsert: bool = False,
         graph: Optional[str] = None,
     ) -> bool:
+        """Create a timestamped edge in the temporal index.
+
+        ADJACENCY CONTRACT: TemporalIndex.InsertEdge writes the temporal globals
+        (^KG "tout"/"tin"/buckets/aggregates) AND a shadow ^KG("out",0,...)
+        adjacency entry — so temporal edges ARE visible to the ^KG-based readers
+        (MatchEdges, Algorithms, Centrality). They are NOT written to the
+        interned ^NKG(-1,...) index, so the NKG-accelerated (arno/Rust) BFS path
+        will not see them until a BuildNKG. Call engine.sync() if you need
+        temporal edges in NKG-accelerated traversals. Edges are only mirrored
+        into the rdf_edges SQL table when ``graph=`` is supplied.
+        """
         if timestamp is not None:
             TemporalEdgeInput(source=source, predicate=predicate, target=target,
                               timestamp=int(timestamp), weight=weight)

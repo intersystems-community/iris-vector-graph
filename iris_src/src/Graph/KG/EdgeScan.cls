@@ -1,3 +1,27 @@
+/// Graph.KG.EdgeScan — adjacency-global maintenance + scan procedures.
+///
+/// ============================================================================
+/// ^KG ADJACENCY LAYOUT OF RECORD (canonical — do not deviate)
+/// ============================================================================
+/// The production adjacency layout is SHARD-PREFIXED:
+///
+///     ^KG("out", 0, s, p, o) = weight     outbound edges
+///     ^KG("in",  0, o, p, s) = weight     inbound edges
+///     ^KG("deg", s)          = out-degree
+///     ^KG("degp", s, p)      = per-predicate out-degree
+///
+/// Every live reader scans this layout: MatchEdges (here), Graph.KG.Algorithms,
+/// Graph.KG.Centrality, Graph.KG.Subgraph, and the NKG builders. WriteAdjacency
+/// (below), TraversalBuild.BuildKG, TemporalIndex.InsertEdge, and the (currently
+/// undeployed) Graph.KG.GraphIndex functional index all WRITE this exact form.
+///
+/// There is a LEGACY no-shard layout — ^KG("out", s, p, o) — still written by
+/// the bench harness (Graph.KG.BenchSeeder / BenchFormat) and the standalone CSV
+/// Graph.KG.Loader, and read by dead Else-fallback branches in NKGAccelTraversal
+/// / NKGAccelAdjacency. Nothing in the production write/read path uses it.
+/// DO NOT add new readers or writers of the no-shard form. If you need adjacency,
+/// use ^KG("out", 0, ...). See docs/index-maintenance-architecture-review.md.
+/// ============================================================================
 Class Graph.KG.EdgeScan Extends %RegisteredObject
 {
 
