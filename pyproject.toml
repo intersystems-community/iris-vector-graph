@@ -216,7 +216,8 @@ markers = [
     "perf: marks tests as opt-in performance benchmarks (run with '-m perf')",
     "requires_iris: marks tests that require IRIS database connection",
     "requires_database: marks tests that require database connection (alias for requires_iris)",
-    "e2e: marks tests as end-to-end system tests (all query engines)"
+    "e2e: marks tests as end-to-end system tests (all query engines)",
+    "requires_clean_isolation: marks tests needing an unpolluted database (run in isolation)"
 ]
 
 [tool.coverage.run]
