@@ -454,56 +454,67 @@ class TestGetEmbeddings:
 
 class TestEmbedQueue:
 
+    # The embed-queue methods call schema._call_classmethod(self.conn, ...) — the
+    # canonical module-function seam (matches algorithms.py). Patch it there.
+    # (A prior create=True patch targeted a self._call_classmethod that does not
+    # exist on the engine; every call AttributeError'd into the except branch and
+    # the queue feature was silently dead. These tests now assert the real value.)
+
     def test_enqueue_success(self):
-        import json
         eng, conn, cursor = _make_eng()
-        with patch("iris_vector_graph._engine.embeddings._call_classmethod", return_value="5", create=True):
-            with patch("iris_vector_graph.schema._call_classmethod", return_value="5"):
-                result = eng.enqueue_for_embedding(["n1", "n2", "n3"])
-        # method may use iris_obj internally — just check it handles the value
-        assert isinstance(result, int)
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="5") as m:
+            result = eng.enqueue_for_embedding(["n1", "n2", "n3"])
+        assert result == 5
+        assert m.call_args.args[1:3] == ("Graph.KG.EmbedQueue", "BulkEnqueue")
 
     def test_enqueue_failure_returns_zero(self):
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = RuntimeError("queue not available")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris_vector_graph.schema._call_classmethod",
+                   side_effect=RuntimeError("queue not available")):
             result = eng.enqueue_for_embedding(["n1"])
         assert result == 0
 
     def test_process_embed_queue_success(self):
         import json
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = json.dumps({"processed": 10, "errors": 0})
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris_vector_graph.schema._call_classmethod",
+                   return_value=json.dumps({"processed": 10, "errors": 0})):
             result = eng.process_embed_queue(batch_size=10)
-        # May succeed or not depending on how _call_classmethod is invoked
-        assert isinstance(result, dict)
+        assert result == {"processed": 10, "errors": 0}
 
     def test_process_embed_queue_failure_returns_defaults(self):
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = RuntimeError("not deployed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris_vector_graph.schema._call_classmethod",
+                   side_effect=RuntimeError("not deployed")):
             result = eng.process_embed_queue()
         assert result == {"processed": 0, "errors": 0}
 
     def test_embed_queue_pending_success(self):
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = "42"
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="42"):
             result = eng.embed_queue_pending()
-        assert isinstance(result, int)
+        assert result == 42
 
     def test_embed_queue_pending_failure_returns_zero(self):
         eng, conn, cursor = _make_eng()
-        iris_obj = MagicMock()
-        iris_obj.classMethodValue.side_effect = RuntimeError("queue gone")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+        with patch("iris_vector_graph.schema._call_classmethod",
+                   side_effect=RuntimeError("queue gone")):
             result = eng.embed_queue_pending()
         assert result == 0
+
+    def test_start_background_embedding_success(self):
+        eng, conn, cursor = _make_eng()
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="task-1") as m:
+            result = eng.start_background_embedding(batch_size=50)
+        assert result == "task-1"
+        assert m.call_args.args[1:3] == ("Graph.KG.EmbedQueue", "StartBackgroundTask")
+
+    def test_start_background_embedding_failure_returns_empty(self):
+        eng, conn, cursor = _make_eng()
+        with patch("iris_vector_graph.schema._call_classmethod",
+                   side_effect=RuntimeError("no bg task")):
+            result = eng.start_background_embedding()
+        assert result == ""
 
 
 # ---------------------------------------------------------------------------
@@ -542,10 +553,41 @@ class TestEmbedTextAutoInit:
         mock_result.tolist.return_value = [0.1, 0.2, 0.3, 0.4]
         mock_st.encode.return_value = mock_result
 
-        with patch("iris_vector_graph._engine.embeddings._load_sentence_transformer", return_value=mock_st, create=True):
+        # Patch at the engine module — embeddings.py resolves the name via a
+        # function-local `from iris_vector_graph.engine import ...`. No create=True:
+        # the symbol must genuinely exist at the patch target. A previous
+        # create=True (against the embeddings module) fabricated a missing name and
+        # masked a production NameError on the auto-init path (agent-bus segfault).
+        with patch("iris_vector_graph.engine._load_sentence_transformer", return_value=mock_st):
             result = eng.embed_text("hello world")
 
         assert mock_st is eng.embedder
+
+    def test_auto_init_symbol_is_resolvable(self):
+        """Regression: _load_sentence_transformer must be resolvable on the
+        no-embedder auto-init path. It was called in embeddings.py but never
+        imported → NameError (not ImportError, so the graceful fallback at
+        embed_text never caught it). agent-bus auto-embed segfault."""
+        from iris_vector_graph.engine import _load_sentence_transformer
+        assert callable(_load_sentence_transformer)
+
+    def test_auto_init_no_embedder_does_not_nameerror(self):
+        """Regression: real auto-init path (embedder=None, transformers present)
+        must not raise NameError. Patches sentence-transformers loading at the
+        engine module (where _load_sentence_transformer is defined), NOT the
+        embeddings module, so the actual name resolution in embeddings.py runs."""
+        eng, conn, cursor = _make_eng()
+        eng.embedder = None
+        eng.embedding_config = None
+
+        mock_st = MagicMock()
+        mock_st.encode.return_value = MagicMock(tolist=lambda: [0.1, 0.2, 0.3, 0.4])
+
+        with patch("iris_vector_graph.engine._load_sentence_transformer", return_value=mock_st):
+            result = eng.embed_text("hello world")
+
+        assert result == [0.1, 0.2, 0.3, 0.4]
+        assert eng.embedder is mock_st
 
     def test_transformers_import_error_swallowed(self):
         """Lines 53-54: ImportError for transformers logging setup is swallowed."""
@@ -566,7 +608,7 @@ class TestEmbedTextAutoInit:
             return real_import(name, *args, **kwargs)
 
         with patch("builtins.__import__", side_effect=mock_import):
-            with patch("iris_vector_graph._engine.embeddings._load_sentence_transformer", return_value=mock_st, create=True):
+            with patch("iris_vector_graph.engine._load_sentence_transformer", return_value=mock_st):
                 result = eng.embed_text("test")
         assert isinstance(result, list)
 
@@ -649,7 +691,7 @@ class TestEmbedNodesBatchPath:
         ]
         cursor.fetchone.return_value = (0,)
 
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=True, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=True):
             result = eng.embed_nodes()
 
         mock_embedder.encode.assert_called()
@@ -674,7 +716,7 @@ class TestEmbedNodesBatchPath:
                 insert_sqls.append(sql)
         cursor.execute.side_effect = exec_side
 
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=False, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
                 result = eng.embed_nodes()
 
@@ -694,7 +736,7 @@ class TestEmbedNodesBatchPath:
         cursor.fetchone.return_value = (0,)
 
         progress_calls = []
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=False, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             result = eng.embed_nodes(
                 text_fn=lambda nid, props: "",  # empty text → skipped
                 progress_callback=lambda done, total: progress_calls.append((done, total))
@@ -725,7 +767,7 @@ class TestEmbedEdgesBatchPath:
             [],                          # already_embedded
         ]
 
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=True, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=True):
             result = eng.embed_edges()
 
         mock_embedder.encode.assert_called()
@@ -748,7 +790,7 @@ class TestEmbedEdgesBatchPath:
                 insert_sqls.append(sql)
         cursor.execute.side_effect = exec_side
 
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=False, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
                 result = eng.embed_edges()
 
@@ -765,7 +807,7 @@ class TestEmbedEdgesBatchPath:
         ]
 
         progress_calls = []
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=False, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             result = eng.embed_edges(
                 text_fn=lambda s, p, o, props: "",
                 progress_callback=lambda done, total: progress_calls.append((done, total))
@@ -790,7 +832,7 @@ class TestEmbedEdgesBatchPath:
                 raise Exception("delete failed")
         cursor.execute.side_effect = exec_side
 
-        with patch("iris_vector_graph._engine.embeddings._is_sentence_transformer", return_value=False, create=True):
+        with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
                 result = eng.embed_edges()
 

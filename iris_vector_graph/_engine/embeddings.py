@@ -52,6 +52,10 @@ class EmbeddingsMixin:
                     _logging.getLogger("safetensors").setLevel(_logging.ERROR)
                 except Exception:
                     pass
+                # Local import avoids a circular import (engine.py imports this
+                # mixin at module load); function-local matches the pattern used
+                # elsewhere in this file (embed_selector, get_schema_prefix).
+                from iris_vector_graph.engine import _load_sentence_transformer, _is_sentence_transformer
                 self.embedder = _load_sentence_transformer("all-MiniLM-L6-v2")
                 logger.info("Auto-initialized SentenceTransformer('all-MiniLM-L6-v2')")
             except ImportError:
@@ -272,6 +276,7 @@ class EmbeddingsMixin:
     ) -> dict:
         from iris_vector_graph.embed_selector import EmbedSelector, build_node_where
         from iris_vector_graph.cypher import get_schema_prefix
+        from iris_vector_graph.engine import _load_sentence_transformer, _is_sentence_transformer
 
         sel = EmbedSelector(
             label=label,
@@ -436,6 +441,7 @@ class EmbeddingsMixin:
     ) -> dict:
         from iris_vector_graph.embed_selector import EmbedSelector, build_edge_where
         from iris_vector_graph.cypher import get_schema_prefix
+        from iris_vector_graph.engine import _load_sentence_transformer, _is_sentence_transformer
 
         sel = EmbedSelector(
             predicate=predicate,
@@ -660,9 +666,10 @@ class EmbeddingsMixin:
     ) -> int:
         try:
             import json as _json
+            from iris_vector_graph.schema import _call_classmethod
             ids_json = _json.dumps(node_ids)
-            result = self._call_classmethod(
-                "Graph.KG.EmbedQueue", "BulkEnqueue",
+            result = _call_classmethod(
+                self.conn, "Graph.KG.EmbedQueue", "BulkEnqueue",
                 ids_json, embedding_config,
             )
             return int(str(result))
@@ -674,8 +681,9 @@ class EmbeddingsMixin:
     def process_embed_queue(self, batch_size: int = 100) -> dict:
         try:
             import json as _json
-            result_json = str(self._call_classmethod(
-                "Graph.KG.EmbedQueue", "ProcessBatch",
+            from iris_vector_graph.schema import _call_classmethod
+            result_json = str(_call_classmethod(
+                self.conn, "Graph.KG.EmbedQueue", "ProcessBatch",
                 batch_size, 30,
             ))
             return _json.loads(result_json)
@@ -686,14 +694,16 @@ class EmbeddingsMixin:
 
     def embed_queue_pending(self) -> int:
         try:
-            return int(str(self._call_classmethod("Graph.KG.EmbedQueue", "PendingCount")))
+            from iris_vector_graph.schema import _call_classmethod
+            return int(str(_call_classmethod(self.conn, "Graph.KG.EmbedQueue", "PendingCount")))
         except Exception:
             return 0
 
 
     def start_background_embedding(self, batch_size: int = 100) -> str:
         try:
-            return str(self._call_classmethod("Graph.KG.EmbedQueue", "StartBackgroundTask", batch_size))
+            from iris_vector_graph.schema import _call_classmethod
+            return str(_call_classmethod(self.conn, "Graph.KG.EmbedQueue", "StartBackgroundTask", batch_size))
         except Exception as e:
             logger.warning("start_background_embedding failed: %s", e)
             return ""
