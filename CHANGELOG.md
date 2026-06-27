@@ -1,5 +1,22 @@
 # Changelog
 
+### v2.4.2 (2026-06-27)
+
+**Driver-SIGSEGV regression guard + create_edge docstring fix**
+
+- test: `tests/integration/test_driver_segfault_guard.py` — subprocess-isolated guard
+  against the `intersystems-iris` 5.3.3 native SIGSEGV (DP-451209 family) on the
+  multi-JOIN + EXISTS + param-concat-LIKE SELECT shape that ivg's translator generates.
+  Runs the shape (raw driver AND via `execute_cypher`) in a child process and asserts no
+  SIGSEGV — the crash is otherwise invisible to pytest (it kills the test process with no
+  FAIL). ivg generates valid SQL; the crash is a driver bug. The original is
+  scale-dependent (~1M rows); a faithful repro is gated behind `IVG_SEGFAULT_SCALE_TEST=1`.
+- docs: corrected `create_edge` docstring. It returns **True only for a NEW edge**;
+  a duplicate (UNIQUE violation, swallowed safely, never raises) returns **False** —
+  indistinguishable from an error by return value. Callers re-creating edges defensively
+  should call `create_edge` unconditionally and not gate on the return value. (Previously
+  the docstring wrongly claimed True-if-already-existed.)
+
 ### v2.4.1 (2026-06-27)
 
 **Standardize on iris-embedded-python-wrapper as the connection seam**

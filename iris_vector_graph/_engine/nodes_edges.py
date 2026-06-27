@@ -459,7 +459,11 @@ class NodesEdgesMixin:
             graph: Optional named graph identifier.
 
         Returns:
-            True if the edge was created or already existed, False on error.
+            True if a NEW edge was created. False if the edge already existed
+            (UNIQUE violation, swallowed safely) OR on error. The duplicate case is
+            safe and never raises — but it is NOT distinguishable from an error by the
+            return value, so callers that re-create edges defensively should call
+            create_edge unconditionally and not gate success on the return value.
         """
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         cursor = self.conn.cursor()
