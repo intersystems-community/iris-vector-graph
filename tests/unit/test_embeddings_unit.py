@@ -474,13 +474,15 @@ class TestEmbedQueue:
             result = eng.enqueue_for_embedding(["n1"])
         assert result == 0
 
-    def test_process_embed_queue_success(self):
-        import json
+    def test_process_embed_queue_empty_claim(self):
+        # spec 199: process_embed_queue now claims a batch (JSON array) then encodes.
+        # Empty claim → nothing to do. (Full batched behavior is covered in
+        # test_embed_queue_unit.py.)
         eng, conn, cursor = _make_eng()
-        with patch("iris_vector_graph.schema._call_classmethod",
-                   return_value=json.dumps({"processed": 10, "errors": 0})):
+        eng.embedder = MagicMock()
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="[]"):
             result = eng.process_embed_queue(batch_size=10)
-        assert result == {"processed": 10, "errors": 0}
+        assert result == {"processed": 0, "errors": 0}
 
     def test_process_embed_queue_failure_returns_defaults(self):
         eng, conn, cursor = _make_eng()

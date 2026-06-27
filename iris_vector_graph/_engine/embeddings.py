@@ -661,35 +661,157 @@ class EmbeddingsMixin:
 
     def enqueue_for_embedding(
         self,
-        node_ids: List[str],
+        node_ids: Optional[List[str]] = None,
         embedding_config: str = "",
+        texts: Optional[List[str]] = None,
     ) -> int:
-        try:
-            import json as _json
-            from iris_vector_graph.schema import _call_classmethod
-            ids_json = _json.dumps(node_ids)
-            result = _call_classmethod(
-                self.conn, "Graph.KG.EmbedQueue", "BulkEnqueue",
-                ids_json, embedding_config,
-            )
-            return int(str(result))
-        except Exception as e:
-            logger.warning("enqueue_for_embedding failed: %s", e)
-            return 0
+        """Enqueue embedding work onto the async queue. Returns the number enqueued.
+
+        Two modes (spec 199):
+          - ``node_ids``: node-keyed entries (re-enqueue overwrites — one entry per
+            node; backward compatible with the prior signature).
+          - ``texts``: free-text entries (always-new; never deduplicated).
+        Both may be supplied; an empty/None pair returns 0. Degrades gracefully
+        (returns 0 + warns) when the queue backend is unavailable.
+        """
+        from iris_vector_graph.schema import _call_classmethod
+        import json as _json
+        total = 0
+        if node_ids:
+            try:
+                ids_json = _json.dumps(node_ids)
+                result = _call_classmethod(
+                    self.conn, "Graph.KG.EmbedQueue", "BulkEnqueue",
+                    ids_json, embedding_config,
+                )
+                total += int(str(result))
+            except Exception as e:
+                logger.warning("enqueue_for_embedding (node_ids) failed: %s", e)
+        if texts:
+            try:
+                texts_json = _json.dumps(texts)
+                result = _call_classmethod(
+                    self.conn, "Graph.KG.EmbedQueue", "BulkEnqueueText",
+                    texts_json, embedding_config,
+                )
+                total += int(str(result))
+            except Exception as e:
+                logger.warning("enqueue_for_embedding (texts) failed: %s", e)
+        return total
 
 
     def process_embed_queue(self, batch_size: int = 100) -> dict:
+        """Process up to ``batch_size`` PENDING queue entries (spec 199).
+
+        Claims a batch of pending entries, embeds ALL of their texts in a SINGLE
+        embedder call (the batched performance win), writes each result back to the
+        queue entry, and — for node-keyed entries — upserts the vector into
+        ``kg_NodeEmbeddings`` so semantic search finds it. A per-entry embedding
+        failure marks only that entry ERROR; the rest of the batch still completes.
+        Returns ``{"processed": int, "errors": int}``. Degrades gracefully when the
+        backend is unavailable.
+        """
+        import json as _json
+        from iris_vector_graph.schema import _call_classmethod
         try:
-            import json as _json
-            from iris_vector_graph.schema import _call_classmethod
-            result_json = str(_call_classmethod(
-                self.conn, "Graph.KG.EmbedQueue", "ProcessBatch",
-                batch_size, 30,
+            claim_json = str(_call_classmethod(
+                self.conn, "Graph.KG.EmbedQueue", "ClaimPendingBatch", batch_size,
             ))
-            return _json.loads(result_json)
+            entries = _json.loads(claim_json) if claim_json else []
         except Exception as e:
-            logger.warning("process_embed_queue failed: %s", e)
+            logger.warning("process_embed_queue claim failed: %s", e)
             return {"processed": 0, "errors": 0}
+
+        if not entries:
+            return {"processed": 0, "errors": 0}
+
+        texts = [e.get("text", "") for e in entries]
+        # Single batched embedder call (SC-002). If the whole call fails, fall back to
+        # per-entry so one poison text does not fail the entire batch (FR-007).
+        vectors = None
+        try:
+            vectors = self._encode_batch(texts)
+        except Exception as e:
+            logger.warning("batch encode failed, falling back per-entry: %s", e)
+
+        processed = 0
+        errors = 0
+        for idx, entry in enumerate(entries):
+            req_id = entry.get("reqId", "")
+            node_id = entry.get("node_id", "") or ""
+            try:
+                if vectors is not None:
+                    vec = vectors[idx]
+                else:
+                    vec = self._encode_batch([entry.get("text", "")])[0]
+                vec_str = ",".join(str(float(x)) for x in vec)
+                _call_classmethod(
+                    self.conn, "Graph.KG.EmbedQueue", "SetResult",
+                    req_id, "DONE", vec_str,
+                )
+                if node_id:
+                    self._upsert_node_embedding(node_id, vec)
+                processed += 1
+            except Exception as e:
+                errors += 1
+                try:
+                    _call_classmethod(
+                        self.conn, "Graph.KG.EmbedQueue", "SetResult",
+                        req_id, "ERROR", str(e)[:500],
+                    )
+                except Exception as se:
+                    logger.warning("SetResult ERROR failed for %s: %s", req_id, se)
+        return {"processed": processed, "errors": errors}
+
+    def _encode_batch(self, texts: List[str]) -> list:
+        """Embed a list of texts in one embedder call, resolving the engine embedder
+        (same auto-init path used by embed_text). Returns a list of vectors."""
+        if not self.embedder:
+            # Reuse embed_text's auto-init by embedding the first item, then encode all.
+            # embed_text resolves/sets self.embedder (or raises a clear RuntimeError).
+            if texts:
+                self.embed_text(texts[0])
+        embedder = self.embedder
+        if hasattr(embedder, "encode"):
+            result = embedder.encode(texts)
+            return [r.tolist() if hasattr(r, "tolist") else list(r) for r in result]
+        if hasattr(embedder, "embed"):
+            return [embedder.embed(t) for t in texts]
+        if callable(embedder):
+            return [embedder(t) for t in texts]
+        raise TypeError(f"Embedder {type(embedder)} has no encode/embed and is not callable")
+
+    def _upsert_node_embedding(self, node_id: str, vec) -> None:
+        """Write a node's embedding into kg_NodeEmbeddings so vector search finds it."""
+        emb_str = ",".join(str(float(x)) for x in vec)
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id=?", [node_id]
+            )
+            cursor.execute(
+                f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) "
+                f"VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
+                [node_id],
+            )
+            self.conn.commit()
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def clear_done(self) -> int:
+        """Remove completed (DONE) queue entries; leave PENDING/ERROR intact (spec 199,
+        FR-009). Returns the number cleared; 0 when the backend is unavailable."""
+        from iris_vector_graph.schema import _call_classmethod
+        try:
+            return int(str(_call_classmethod(
+                self.conn, "Graph.KG.EmbedQueue", "ClearDone",
+            )))
+        except Exception as e:
+            logger.warning("clear_done failed: %s", e)
+            return 0
 
 
     def embed_queue_pending(self) -> int:

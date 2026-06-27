@@ -1,5 +1,32 @@
 # Changelog
 
+### v2.4.0 (2026-06-27)
+
+**Enhanced embedding queue (spec 199) — batched, lifecycle-managed async embedding**
+
+- feat(199): `engine.enqueue_for_embedding(node_ids=None, embedding_config="", texts=None)`
+  — enqueue embedding work. Backward compatible (node_ids positional still works);
+  new `texts=` enqueues free-text entries. Node-id entries are keyed (re-enqueue
+  overwrites, one per node); free-text entries are always-new.
+- feat(199): `engine.process_embed_queue(batch_size=100)` — now claims a batch of
+  PENDING entries and embeds ALL of their texts in a SINGLE embedder call (was a dead
+  per-row path). Writes results back inline, upserts node-keyed vectors into
+  `kg_NodeEmbeddings` so semantic search finds them. A per-entry embedding failure
+  marks only that entry ERROR; the rest of the batch completes.
+- feat(199): `engine.clear_done()` — remove completed (DONE) queue entries; PENDING and
+  ERROR entries are left intact. (NEW engine method.)
+- feat(199): `Graph.KG.EmbedQueue` (ObjectScript) reworked to a subscripted entry schema
+  carrying text, status (PENDING/DONE/ERROR), inline result, error message, node_id, and
+  timestamp. New classmethods `BulkEnqueueText`, `ClaimPendingBatch`, `SetResult`;
+  `BulkEnqueue` now accepts a JSON array string. Single-processor; DONE/ERROR entries
+  persist until cleared (no auto-expiry).
+- fix(199): the embed-queue Python methods (`enqueue_for_embedding`,
+  `process_embed_queue`, `embed_queue_pending`, `start_background_embedding`) were
+  silently dead — they called `self._call_classmethod`, which does not exist on the
+  engine, and `EmbedQueue.cls` called a non-existent `GetNodeDisplayText`. Both
+  surfaced only against a live database. Now routed through the canonical
+  `schema._call_classmethod(self.conn, ...)` seam and verified by live E2E.
+
 ### v2.3.1 (2026-06-19)
 
 **Index-maintenance drift detection + architecture documentation**
