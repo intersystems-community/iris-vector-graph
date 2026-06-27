@@ -138,14 +138,17 @@ def _make_engine() -> IRISGraphEngine:
         namespace = os.environ.get("IRIS_NAMESPACE", "USER")
         username = os.environ.get("IRIS_USERNAME", "_SYSTEM")
         password = os.environ.get("IRIS_PASSWORD", "SYS")
+        # Standard seam: the iris wrapper's dbapi.connect (base dependency). The
+        # fallback also routes through dbapi.connect since the wrapper's top-level
+        # `iris` always provides it.
         if _iris_wrapper and hasattr(_iris_wrapper, "dbapi"):
             conn = _iris_wrapper.dbapi.connect(
                 hostname=host, port=port, namespace=namespace,
                 username=username, password=password,
             )
         else:
-            conn = iris.connect(hostname=host, port=port, namespace=namespace,
-                                username=username, password=password)
+            conn = iris.dbapi.connect(hostname=host, port=port, namespace=namespace,
+                                      username=username, password=password)
         return IRISGraphEngine(conn)
 
     if _state.startswith("embedded") and _iris_wrapper and hasattr(_iris_wrapper, "dbapi"):

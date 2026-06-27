@@ -39,6 +39,40 @@ def _make_proc(name):
 
 
 # ---------------------------------------------------------------------------
+# Connection seam: from_connect must route through the iris wrapper's
+# dbapi.connect (iris-embedded-python-wrapper is the standard connection path).
+# ---------------------------------------------------------------------------
+
+class TestConnectionSeam:
+    def test_from_connect_uses_dbapi_connect(self):
+        fake_conn = MagicMock()
+        fake_conn.cursor.return_value = MagicMock()
+        with patch("iris.dbapi.connect", return_value=fake_conn) as m:
+            eng = IRISGraphEngine.from_connect(
+                hostname="h", port=1972, namespace="USER",
+                username="_SYSTEM", password="SYS", embedding_dimension=4,
+            )
+        m.assert_called_once()
+        # connection params stored for reconnect
+        assert eng._connection_params["hostname"] == "h"
+        assert eng.conn is fake_conn
+
+    def test_reconnect_uses_dbapi_connect(self):
+        eng, conn, cursor = _make_eng()
+        eng._connection_params = dict(
+            hostname="h", port=1972, namespace="USER",
+            username="_SYSTEM", password="SYS",
+        )
+        # First probe raises a broken-pipe error → triggers reconnect
+        cursor.execute.side_effect = Exception("broken pipe")
+        fake_conn = MagicMock()
+        with patch("iris.dbapi.connect", return_value=fake_conn) as m:
+            eng._reconnect_if_stale()
+        m.assert_called_once()
+        assert eng.conn is fake_conn
+
+
+# ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
 

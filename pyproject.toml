@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "2.4.0"
+version = "2.4.1"
 description = "Transactional Graph + Vector retrieval system for InterSystems IRIS with hybrid search, openCypher, and GraphQL APIs"
 readme = "README.md"
 license = "MIT"
@@ -40,6 +40,12 @@ requires-python = ">=3.10"
 # Core dependencies
 dependencies = [
     "intersystems-iris>=1.0.0",
+    # iris-embedded-python-wrapper provides a unified top-level `iris` module that
+    # works both as an external SDK client (iris.dbapi.connect / iris.connect) and
+    # inside IRIS embedded Python (iris.sql / iris.gref / runtime.state). It is the
+    # standard connection seam — base dependency so `import iris` always resolves to
+    # the superset. See iris_vector_graph/embedded.py for the embedded context.
+    "iris-embedded-python-wrapper>=0.5.20",
 ]
 
 [project.optional-dependencies]

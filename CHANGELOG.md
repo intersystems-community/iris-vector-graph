@@ -1,5 +1,20 @@
 # Changelog
 
+### v2.4.1 (2026-06-27)
+
+**Standardize on iris-embedded-python-wrapper as the connection seam**
+
+- chore: `iris-embedded-python-wrapper` promoted from the `[full]` extra to a BASE
+  dependency. Its top-level `iris` module is a superset (external `iris.connect` /
+  `iris.dbapi.connect` AND embedded `iris.sql` / `iris.gref` / `runtime.state`), so
+  `import iris` always resolves to the unified API. This also fixes a dev/test
+  install gap where the wrapper was declared but absent.
+- refactor: `IRISGraphEngine.from_connect`, the EPIPE reconnect path, and the
+  `cypher_api` fallback now connect via `iris.dbapi.connect` (the wrapper seam,
+  drop-in for `iris.connect` with DB-API exception semantics) instead of raw
+  `iris.connect`. `EmbeddedConnection` is retained as the documented legacy fallback
+  for older IRIS without the wrapper.
+
 ### v2.4.0 (2026-06-27)
 
 **Enhanced embedding queue (spec 199) — batched, lifecycle-managed async embedding**

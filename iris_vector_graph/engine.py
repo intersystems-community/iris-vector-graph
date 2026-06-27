@@ -170,7 +170,9 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
     ) -> "IRISGraphEngine":
         import iris as _iris
         conn_params = dict(hostname=hostname, port=port, namespace=namespace, username=username, password=password)
-        conn = _iris.connect(**conn_params)
+        # Standard connection seam: iris-embedded-python-wrapper's dbapi.connect
+        # (drop-in for iris.connect with DB-API exception semantics).
+        conn = _iris.dbapi.connect(**conn_params)
         engine = cls(conn, embedding_dimension=embedding_dimension, **kwargs)
         engine._connection_params = conn_params
         return engine
@@ -216,7 +218,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             if any(x in err_str for x in ("epipe", "broken pipe", "connection reset", "closed")):
                 if self._connection_params:
                     import iris as _iris
-                    self.conn = _iris.connect(**self._connection_params)
+                    self.conn = _iris.dbapi.connect(**self._connection_params)
                     logger.info("IRIS connection re-established after EPIPE")
                 else:
                     raise RuntimeError(
