@@ -1,5 +1,23 @@
 # Changelog
 
+### v2.4.3 (2026-06-30)
+
+**Workaround for IRIS %qaqpre SIGSEGV on FETCH FIRST + JOIN**
+
+- fix: IRIS "AI" builds (verified on 2026.2.0AI build 161 and 2026.3.0AI build 106)
+  hard-SIGSEGV in `%qaqpre` when the driver executes a multi-table JOIN combined with
+  `FETCH FIRST n ROWS ONLY` on VARCHAR-keyed tables (the `Graph_KG` schema). ivg now
+  detects this at connect time (`engine._fetch_first_unsafe`, a subprocess behavioral
+  probe — the crash is an uncatchable native SIGSEGV) and emits `SELECT TOP n` instead of
+  `FETCH FIRST n ROWS ONLY` for LIMIT-only queries, which does not crash. SKIP+LIMIT
+  retains `FETCH FIRST + OFFSET` (TOP cannot express OFFSET; rare, residual risk noted
+  in code). The diagnosis differs from the originally-reported "INNER JOIN keyword"
+  cause: comma-join and LEFT OUTER JOIN crash too — the trigger is FETCH FIRST + JOIN.
+- fix: the row-cap extractors that parse generated SQL — the multi-relationship CTE
+  rewrite and the khop/BFS `_extract_limit` paths (`_engine/query.py`) — now recognize
+  `SELECT TOP n` in addition to `FETCH FIRST n ROWS ONLY`, so the LIMIT is preserved
+  under the workaround.
+
 ### v2.4.2 (2026-06-27)
 
 **Driver-SIGSEGV regression guard + create_edge docstring fix**

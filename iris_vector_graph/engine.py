@@ -143,6 +143,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
+        self._fetch_first_unsafe_cached: Optional[bool] = None  # build-106 %qaqpre probe (lazy)
         self._native_conn = None  # dedicated connection for iris.createIRIS — never used for cursor DDL
         self._index_registry: Dict[str, str] = self._build_index_registry()
         self._pending_index_config: Dict[str, Any] = {}
@@ -208,6 +209,69 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 "No IRIS connection available via wrapper. Provide hostname= or run inside IRIS."
             )
         return cls(conn, embedding_dimension=embedding_dimension, **kwargs)
+
+    @property
+    def _fetch_first_unsafe(self) -> bool:
+        """True when this IRIS build SIGSEGVs in %qaqpre on a multi-table JOIN combined
+        with `FETCH FIRST n ROWS ONLY` (observed on irishealth 2026.3.0AI build 106).
+
+        Detected once and cached. Primary signal is a behavioral probe run in a
+        SUBPROCESS (the crash is a hard SIGSEGV — uncatchable in-process), gated on
+        having stored connection params. Falls back to a $ZVERSION build check when a
+        subprocess probe is not possible (e.g. embedded context). Defaults to safe
+        (False) if neither can determine — `TOP` is only a workaround, never required.
+        """
+        if self._fetch_first_unsafe_cached is None:
+            self._fetch_first_unsafe_cached = self._detect_fetch_first_unsafe()
+        return self._fetch_first_unsafe_cached
+
+    def _detect_fetch_first_unsafe(self) -> bool:
+        # Subprocess behavioral probe (most reliable): run the crashing shape against a
+        # VARCHAR-keyed temp table; SIGSEGV (rc -11 / 139) => unsafe.
+        if self._connection_params:
+            try:
+                import subprocess, sys, json
+                cp = json.dumps(self._connection_params)
+                script = (
+                    "import iris, json, sys\n"
+                    f"cp = json.loads(r'''{cp}''')\n"
+                    "c = iris.dbapi.connect(**cp); cur = c.cursor()\n"
+                    "for d in ['CREATE TABLE ivg_ff_probe_a (id VARCHAR(64))',"
+                    "'CREATE TABLE ivg_ff_probe_b (sid VARCHAR(64))']:\n"
+                    "    try: cur.execute(d)\n"
+                    "    except Exception: pass\n"
+                    "cur.execute('SELECT a.id FROM ivg_ff_probe_a a JOIN ivg_ff_probe_b b "
+                    "ON b.sid=a.id FETCH FIRST 1 ROWS ONLY'); cur.fetchall()\n"
+                    "print('OK')\n"
+                )
+                r = subprocess.run([sys.executable, "-c", script],
+                                   capture_output=True, text=True, timeout=60)
+                if r.returncode in (-11, 139, -6, 134):
+                    logger.warning(
+                        "IRIS build SIGSEGVs in %%qaqpre on FETCH FIRST + multi-table JOIN "
+                        "(observed on 2026.2.0AI and 2026.3.0AI AI builds); ivg will emit "
+                        "TOP for LIMIT-only queries to avoid the crash."
+                    )
+                    return True
+                return False
+            except Exception as e:
+                logger.debug("fetch-first probe failed, falling back to version check: %s", e)
+        # Fallback: $ZVERSION check (no crash risk) when a subprocess probe is not
+        # possible (e.g. embedded context with no stored connection params). The bug
+        # has been observed on the IRIS "AI" build line (2026.2.0AI build 161 and
+        # 2026.3.0AI build 106); treat AI builds as unsafe conservatively. Non-AI
+        # builds are assumed safe (FETCH FIRST retained). If a future build fixes it,
+        # this fallback can be narrowed — the subprocess probe remains authoritative.
+        try:
+            cur = self.conn.cursor()
+            cur.execute("SELECT $ZVERSION")
+            ver = str(cur.fetchone()[0])
+            import re as _re
+            if _re.search(r"20\d\d\.\d+\.\d+AI", ver):
+                return True
+        except Exception:
+            pass
+        return False
 
     def _reconnect_if_stale(self) -> None:
         try:

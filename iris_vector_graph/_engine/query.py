@@ -355,8 +355,11 @@ class QueryMixin:
         max_hops = vl0.get("max_hops", 5)
         direction = vl0.get("direction", "out")
         def _extract_limit(s: str) -> int:
-            # IRIS SQL uses FETCH FIRST N ROWS ONLY; fall back to LIMIT N
+            # IRIS SQL uses FETCH FIRST N ROWS ONLY; the build-106 %qaqpre workaround
+            # emits SELECT TOP N instead; fall back to LIMIT N.
             m = _re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", s, _re.IGNORECASE)
+            if not m:
+                m = _re.search(r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+(\d+)\b", s, _re.IGNORECASE)
             if not m:
                 m = _re.search(r"\bLIMIT\s+(\d+)", s, _re.IGNORECASE)
             return int(m.group(1)) if m else 0
@@ -563,8 +566,11 @@ class QueryMixin:
         import re as _re
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
         if sql_query.sql:
-            # IRIS SQL uses "FETCH FIRST N ROWS ONLY" (not LIMIT N)
+            # IRIS SQL uses "FETCH FIRST N ROWS ONLY"; the build-106 %qaqpre workaround
+            # emits SELECT TOP N instead; fall back to LIMIT N.
             m = _re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", sql_str, _re.IGNORECASE)
+            if not m:
+                m = _re.search(r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+(\d+)\b", sql_str, _re.IGNORECASE)
             if not m:
                 m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
             if m:

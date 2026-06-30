@@ -1044,9 +1044,14 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     if join_count <= JOIN_THRESHOLD:
         return sql
     import re as _re
-    select_m = _re.match(r'(SELECT\s+(?:DISTINCT\s+)?)(.*?)(\nFROM\s)', sql, _re.DOTALL)
+    # Capture an optional `TOP n` in the prefix (the FETCH-FIRST-+-JOIN workaround emits
+    # SELECT [DISTINCT] TOP n) so it stays attached to the SELECT keyword and is not
+    # swept into the column list.
+    select_m = _re.match(r'(SELECT\s+(?:DISTINCT\s+)?(?:TOP\s+\d+\s+)?)(.*?)(\nFROM\s)', sql, _re.DOTALL)
     if not select_m:
         return sql
+    # select_prefix carries any DISTINCT and TOP n; both propagate to the outer wrapper
+    # (line below), so the CTE wrap preserves the row cap from the TOP workaround.
     select_prefix = select_m.group(1)
     select_cols = select_m.group(2).strip()
     has_agg = bool(_re.search(r'\b(AVG|SUM|COUNT|MIN|MAX|STDEV|JSON_ARRAYAGG)\s*\(', select_cols))
@@ -1543,6 +1548,27 @@ def apply_pagination(
     if limit is not None or skip is not None:
         if "\nFROM " not in sql and "FROM " not in sql.split("\n")[0]:
             sql = sql.rstrip() + "\nFROM (SELECT 1) __dual"
+    # Build-106 workaround: IRIS 2026.3.0AI build 106 SIGSEGVs in %qaqpre when a
+    # multi-table JOIN is combined with `FETCH FIRST n ROWS ONLY` on VARCHAR-keyed
+    # tables (the ivg schema). `SELECT TOP n` does NOT crash. When the engine has
+    # detected the bug (engine._fetch_first_unsafe, set by a connect-time probe) and
+    # there is a LIMIT with NO SKIP (TOP cannot express OFFSET), emit TOP instead.
+    engine = getattr(context, "_engine", None)
+    fetch_first_unsafe = bool(getattr(engine, "_fetch_first_unsafe", False))
+    if (
+        limit is not None
+        and skip is None
+        and fetch_first_unsafe
+        and sql.lstrip().upper().startswith("SELECT ")
+        and " TOP " not in sql.split("\n", 1)[0].upper()
+    ):
+        # Inject `TOP n` right after the leading SELECT (and after DISTINCT if present).
+        head, sep, rest = sql.partition("SELECT ")
+        if rest[:9].upper().startswith("DISTINCT "):
+            rest = "DISTINCT " + f"TOP {limit} " + rest[9:]
+        else:
+            rest = f"TOP {limit} " + rest
+        return head + sep + rest
     if limit is not None:
         sql += f"\nFETCH FIRST {limit} ROWS ONLY"
     if skip is not None:
