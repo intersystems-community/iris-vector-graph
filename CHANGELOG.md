@@ -1,5 +1,31 @@
 # Changelog
 
+### v2.7.1 (2026-08-29)
+
+**Zero failing unit tests** (7693 passed, 0 failed)
+
+#### Engine fixes
+
+- `translator.py`: treat `id` node property as `node_id` alias — no EXISTS guard,
+  direct `WHERE node_id = ?`; fixes `MATCH (n {id: 'abc'})` patterns
+- `query.py` `_route_var_length`: extract source node ID from SQL parameters before
+  taking the labeled multi-source path; fixes BFS dispatch for `WHERE a.node_id = $src`
+  patterns where translator doesn't set `src_id_param`
+- `result.py`: `@field_validator("metadata", mode="before")` coerces non-`QueryMetadata`
+  inputs (dicts, MagicMocks) to `QueryMetadata()` rather than raising `ValidationError`
+- `result.py`: add `__len__` returning `len(self.rows)`; `.get()` raises `TypeError`
+  so callers fail loudly instead of silently returning `None`
+- `algorithms.py` `kg_GRAPH_PATH`: fix UNION branch column aliases (`from_id`,
+  `rel_type`, `to_id`) so both branches are consistent
+
+#### Test fixes
+
+- 24 pre-existing failures eliminated: `_schema_prefix` added to remaining engine
+  mock helpers, dict mocks converted to `IVGResult`, `src_id_param` added to
+  var-length path fixtures, MERGE and SKIP+LIMIT assertions made prefix-agnostic
+
+---
+
 ### v2.7.0 (2026-08-08)
 
 **Test coverage: 90%** (21,058 statements, up from ~74% at v2.6.0)
@@ -258,7 +284,7 @@ Six bugs/gaps fixed in `Graph.KG.BM25Index`:
   exceeded 10M (e.g. many-doc indexes with saturated query terms). Fixed by
   scaling to a 12-decimal integer key and using `$Order(..., -1)` native descending
   iteration instead.
-- fix: `Insert` vocab_size increment dead code — `$Data` check fired _after_ the
+- fix: `Insert` vocab*size increment dead code — `$Data` check fired \_after* the
   IDF `Set`, so the condition was always false and vocab_size never grew on insert.
   Fixed by checking `$Data` before the `Set`.
 - fix: `Tokenize` fallback branch had no stopword filtering; now shares the same
