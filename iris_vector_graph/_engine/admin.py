@@ -58,7 +58,7 @@ class AdminMixin:
             )
             if procs:
                 return IVGResult(columns=["name", "description", "signature"],
-                    rows=[[r[0], r[2], r[1]] for r in procs.get("rows", [])])
+                    rows=[[r[0], r[2], r[1]] for r in procs.rows])
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "FUNCTIONS" in cmd:
             fns = self._try_system_procedure(
@@ -66,7 +66,7 @@ class AdminMixin:
             )
             if fns:
                 return IVGResult(columns=["name", "description", "signature"],
-                    rows=[[r[0], r[2], r[1]] for r in fns.get("rows", [])])
+                    rows=[[r[0], r[2], r[1]] for r in fns.rows])
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "INDEXES" in cmd:
             return self._show_indexes()

@@ -6,6 +6,7 @@ T015-T018: BoltSession state machine (mocked WebSocket)
 T021-T022: Graph object encoding
 """
 from __future__ import annotations
+from iris_vector_graph.result import IVGResult
 
 import asyncio
 import struct
@@ -233,7 +234,7 @@ class TestBoltSessionHello:
         monkeypatch.delenv("IVG_API_KEY", raising=False)
         ws = self._make_ws([(0x01, [{"user_agent": "test/1.0", "routing": None}])])
         mock_engine = MagicMock()
-        mock_engine.execute_cypher.return_value = {"columns": ["c"], "rows": [[0]]}
+        mock_engine.execute_cypher.return_value = IVGResult(columns=["c"], rows=[[0]])
         session = BoltSession(ws, lambda: mock_engine)
         try:
             asyncio.run(session.run())

@@ -114,10 +114,10 @@ class TestHandleShowFunctions:
     def test_show_functions_with_results(self):
         """SHOW FUNCTIONS when _try_system_procedure returns rows."""
         eng = _make_eng()
-        mock_result = {
-            "rows": [["ivg.betweenness", "(topK: INTEGER)", "Betweenness centrality"]],
-            "columns": ["name", "signature", "description"],
-        }
+        mock_result = IVGResult(
+            columns=["name", "signature", "description"],
+            rows=[["ivg.betweenness", "(topK: INTEGER)", "Betweenness centrality"]],
+        )
         with patch.object(eng, "_try_system_procedure", return_value=mock_result):
             result = eng._handle_show_command("SHOW FUNCTIONS")
         assert isinstance(result, IVGResult)
@@ -128,10 +128,10 @@ class TestHandleShowFunctions:
     def test_show_procedures_with_results(self):
         """SHOW PROCEDURES when _try_system_procedure returns rows."""
         eng = _make_eng()
-        mock_result = {
-            "rows": [["ivg.leiden", "(gamma: FLOAT)", "Leiden community detection"]],
-            "columns": ["name", "signature", "description"],
-        }
+        mock_result = IVGResult(
+            columns=["name", "signature", "description"],
+            rows=[["ivg.leiden", "(gamma: FLOAT)", "Leiden community detection"]],
+        )
         with patch.object(eng, "_try_system_procedure", return_value=mock_result):
             result = eng._handle_show_command("SHOW PROCEDURES")
         assert isinstance(result, IVGResult)

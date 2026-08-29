@@ -312,7 +312,7 @@ class AlgorithmsMixin:
             "RETURN 1 AS path_id, 2 AS step, b.node_id, type(r2), c.node_id",
             {"src": src_id, "p1": pred1, "p2": pred2},
         )
-        return [(int(r[0]), int(r[1]), r[2], r[3], r[4]) for r in (result.get("rows") or [])]
+        return [(int(r[0]), int(r[1]), r[2], r[3], r[4]) for r in result.rows]
     def kg_GRAPH_WALK(self, start_entity: str, max_depth: int = 3,
                       edge_types: Optional[List[str]] = None,
                       max_results: int = 100):
@@ -468,7 +468,7 @@ class AlgorithmsMixin:
                     if predicate:
                         params["p"] = predicate
                     r = self.execute_cypher(q, params)
-                    for row in (r.get("rows") or []):
+                    for row in r.rows:
                         t = row[0]
                         if t and (not distinct or t not in seen):
                             all_targets.append(t)

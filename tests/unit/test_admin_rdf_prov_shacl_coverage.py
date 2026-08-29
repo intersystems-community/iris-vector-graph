@@ -45,9 +45,11 @@ def make_engine(rows=None, fetchone=None):
 def test_handle_show_command_procedures():
     """SHOW PROCEDURES → _try_system_procedure(dbms.procedures)."""
     eng, cur = make_engine()
-    eng._try_system_procedure = MagicMock(return_value={
-        "rows": [["apoc.create.node", "sig", "desc"]]
-    })
+    from iris_vector_graph.result import IVGResult
+    eng._try_system_procedure = MagicMock(return_value=IVGResult(
+        columns=["name", "signature", "description"],
+        rows=[["apoc.create.node", "sig", "desc"]]
+    ))
     result = eng._handle_show_command("SHOW PROCEDURES")
     assert result is not None
     assert result.columns == ["name", "description", "signature"]
@@ -64,9 +66,11 @@ def test_handle_show_command_procedures_no_result():
 def test_handle_show_command_functions():
     """SHOW FUNCTIONS → _try_system_procedure(dbms.functions)."""
     eng, cur = make_engine()
-    eng._try_system_procedure = MagicMock(return_value={
-        "rows": [["coalesce", "sig", "Returns first non-null"]]
-    })
+    from iris_vector_graph.result import IVGResult
+    eng._try_system_procedure = MagicMock(return_value=IVGResult(
+        columns=["name", "signature", "description"],
+        rows=[["coalesce", "sig", "Returns first non-null"]]
+    ))
     result = eng._handle_show_command("SHOW FUNCTIONS")
     assert result.columns == ["name", "description", "signature"]
 

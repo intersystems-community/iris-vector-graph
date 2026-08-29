@@ -196,8 +196,8 @@ def _run_cypher(query: str, parameters: dict | None = None, limit: int = 1000) -
                     _reset_engine()
                     continue
                 raise
-    columns = result.get("columns", [])
-    rows = result.get("rows", [])
+    columns = result.columns
+    rows = result.rows
     if len(rows) > limit:
         rows = rows[:limit]
     return {
@@ -213,7 +213,7 @@ def health():
     try:
         engine = _get_engine()
         result = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
-        node_count = result["rows"][0][0] if result.get("rows") else 0
+        node_count = result.rows[0][0] if result.rows else 0
         return {"status": "ok", "engine": True, "nodes": node_count}
     except Exception as e:
         return {"status": "ok", "engine": False, "error": str(e)}

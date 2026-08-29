@@ -595,14 +595,16 @@ class TestNewEngineAPIs:
 
     def test_node_count_calls_execute_cypher(self):
         eng = self._make_engine()
-        eng.execute_cypher = MagicMock(return_value={"rows": [(42,)]})
+        from iris_vector_graph.result import IVGResult
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[(42,)]))
         assert eng.node_count() == 42
         eng.execute_cypher.assert_called_once()
         assert "count" in eng.execute_cypher.call_args[0][0].lower()
 
     def test_edge_count_calls_execute_cypher(self):
         eng = self._make_engine()
-        eng.execute_cypher = MagicMock(return_value={"rows": [(100,)]})
+        from iris_vector_graph.result import IVGResult
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[(100,)]))
         assert eng.edge_count() == 100
 
     def test_embedding_count_queries_table(self):

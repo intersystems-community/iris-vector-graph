@@ -1,3 +1,4 @@
+from iris_vector_graph.result import IVGResult
 """Tests for property-side read/write primitives added in v2.5.0.
 
 These mirror the label-side get_node_ids_by_label / get_nodes_by_label pattern,
@@ -241,7 +242,7 @@ class TestKgNeighborsCypherUnit:
     def test_uses_execute_cypher(self):
         """kg_NEIGHBORS routes through execute_cypher — the correct design."""
         engine, _ = _make_engine()
-        engine.execute_cypher = MagicMock(return_value={"rows": [["t1"], ["t2"]]})
+        engine.execute_cypher = MagicMock(return_value=IVGResult(columns=[], rows=[["t1"], ["t2"]]))
         result = engine.kg_NEIGHBORS(["s1"], direction="out")
         assert engine.execute_cypher.called
         assert "t1" in result

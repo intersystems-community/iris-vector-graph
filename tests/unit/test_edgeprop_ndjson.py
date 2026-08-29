@@ -117,7 +117,7 @@ class TestEdgePropNdjsonE2E:
             attrs={"latency_ms": "237", "error": "true", "trace_id": "abc123"})
         attrs = self.engine.get_edge_attrs(now, f"{self.PREFIX}:A", "CALLS", f"{self.PREFIX}:B")
         assert attrs.get("latency_ms") == "237"
-        assert attrs.get("error") == "true"
+        assert attrs.error == "true"
         assert attrs.get("trace_id") == "abc123"
 
     def test_ndjson_import(self):

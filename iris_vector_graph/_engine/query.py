@@ -208,10 +208,10 @@ class QueryMixin:
         if "CALL DB.LABELS() YIELD" in stripped and "UNION" in stripped:
             labels = self._try_system_procedure(
                 type("P", (), {"procedure_name": "db.labels"})()
-            ).get("rows", [])
+            ).rows
             rels = self._try_system_procedure(
                 type("P", (), {"procedure_name": "db.relationshipTypes"})()
-            ).get("rows", [])
+            ).rows
             cursor = self.conn.cursor()
             cursor.execute(
                 'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
@@ -263,8 +263,8 @@ class QueryMixin:
                     try:
                         sub = self.execute_cypher(part, parameters=parameters)
                         if all_cols is None:
-                            all_cols = sub.get("columns", [])
-                        all_rows.extend(sub.get("rows", []))
+                            all_cols = sub.columns
+                        all_rows.extend(sub.rows)
                     except Exception:
                         pass
                 return IVGResult(columns=all_cols or ["result"], rows=all_rows)
@@ -304,7 +304,7 @@ class QueryMixin:
             for part_query in [parsed] + parsed.subsequent_queries:
                 part_query.subsequent_queries = []
                 result = self._execute_parsed(part_query, current_params, procedures)
-                if result and result.get("rows") and result.get("columns"):
+                if result and result.rows and result.columns:
                     first_row = result["rows"][0] if result["rows"] else []
                     for col, val in zip(result["columns"], first_row):
                         if isinstance(val, (str, int, float, bool, type(None))):

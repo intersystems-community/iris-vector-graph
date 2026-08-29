@@ -18,6 +18,9 @@ class IVGResult(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
+    def __len__(self) -> int:
+        return len(self.rows)
+
     def __bool__(self) -> bool:
         return self.error is None
 
@@ -54,7 +57,7 @@ class IVGResult(BaseModel):
         return key in {"columns", "rows", "metadata", "_bolt_column_types"}
 
     def get(self, key: str, default: Any = None) -> Any:
-        try:
-            return self[key]
-        except KeyError:
-            return default
+        raise TypeError(
+            f"IVGResult.get('{key}') is not supported — use attribute access "
+            f"(result.{key}) or subscript (result['{key}']) instead"
+        )

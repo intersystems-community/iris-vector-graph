@@ -467,7 +467,7 @@ class TestIVFIndexE2E:
         result = self.engine.execute_cypher(cypher)
         assert "columns" in result
         assert "node" in result["columns"] or "score" in result["columns"]
-        assert len(result.get("rows", [])) > 0
+        assert len(result.rows) > 0
         self._cleanup_nodes(node_ids)
 
 

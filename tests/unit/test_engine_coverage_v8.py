@@ -1,3 +1,4 @@
+from iris_vector_graph.result import IVGResult
 """Coverage tests for snapshot.py and nodes_edges.py missing lines.
 
 Targets:
@@ -1833,11 +1834,11 @@ class TestMiscNodeMethods:
     def test_node_count_via_cypher(self):
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng.execute_cypher = MagicMock(return_value={"rows": [[10]], "columns": ["c"]})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[[10]]))
         assert eng.node_count() == 10
 
     def test_edge_count_via_cypher(self):
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng.execute_cypher = MagicMock(return_value={"rows": [[5]], "columns": ["c"]})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[[5]]))
         assert eng.edge_count() == 5

@@ -325,7 +325,7 @@ class TestGdsShim:
     def test_unknown_gds_proc_rows_empty(self):
         """Error result for unknown gds procedure has empty rows."""
         result = _handle_gds_shim(_FakeProc("gds.missing"))
-        assert result.rows == [] or result.get("rows", []) == []
+        assert result.rows == [] or result.rows == []
 
 
 # ============================================================================

@@ -75,14 +75,14 @@ class TestNamedGraphsE2E:
         r = self.engine.execute_cypher(
             f"USE GRAPH '{graph_id}' MATCH (a)-[r]->(b) RETURN count(r) AS c"
         )
-        rows = r.get("rows", [])
+        rows = r.rows
         return rows[0][0] if rows else 0
 
     def _use_graph_targets(self, src_id, graph_id):
         r = self.engine.execute_cypher(
             f"USE GRAPH '{graph_id}' MATCH (a {{id:'{src_id}'}})-[r]->(b) RETURN b.id"
         )
-        return [row[0] for row in r.get("rows", [])]
+        return [row[0] for row in r.rows]
 
     def test_import_rdf_graph_id_written(self):
         g = self._g("import")

@@ -15,6 +15,7 @@ Coverage tests for:
 All tests use mocks — no IRIS connection required.
 """
 from __future__ import annotations
+from iris_vector_graph.result import IVGResult
 
 import json
 import os
@@ -67,7 +68,7 @@ class TestCypherAPIHealth:
         eng, conn, cursor = _make_engine()
         cursor.fetchall.return_value = [(5,)]
         cursor.fetchone.return_value = (5,)
-        eng.execute_cypher = MagicMock(return_value={"columns": ["c"], "rows": [[5]]})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[[5]]))
         client = self._client(eng)
         resp = client.get("/health")
         assert resp.status_code == 200
@@ -98,7 +99,7 @@ class TestCypherAPICypherPost:
 
     def test_cypher_post_success(self):
         eng, conn, cursor = _make_engine()
-        eng.execute_cypher = MagicMock(return_value={"columns": ["n"], "rows": [["a"]]})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["n"], rows=[["a"]]))
         client = self._client_with_engine(eng)
         resp = client.post("/api/cypher", json={"query": "MATCH (n) RETURN n"})
         assert resp.status_code == 200
@@ -118,7 +119,7 @@ class TestCypherAPICypherPost:
         from fastapi.testclient import TestClient
         import iris_vector_graph.cypher_api as capi
         eng, conn, cursor = _make_engine()
-        eng.execute_cypher = MagicMock(return_value={"columns": ["n"], "rows": []})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["n"], rows=[]))
         capi._engine_cache = eng
         with patch.object(capi, "_resolve_patient_anchors", return_value=["n1", "n2"]):
             client = TestClient(capi.app, raise_server_exceptions=False)
@@ -131,7 +132,7 @@ class TestCypherAPICypherPost:
     def test_neo4j_tx_commit_success(self):
         """Lines 278-279."""
         eng, conn, cursor = _make_engine()
-        eng.execute_cypher = MagicMock(return_value={"columns": ["c"], "rows": [[1]]})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["c"], rows=[[1]]))
         client = self._client_with_engine(eng)
         resp = client.post("/db/neo4j/tx/commit", json={
             "statements": [{"statement": "RETURN 1", "parameters": {}}]
@@ -166,7 +167,7 @@ class TestCypherAPISchemaEndpoints:
     def test_get_indexes_success(self):
         """Lines 374-375."""
         eng, client = self._eng_client()
-        eng.execute_cypher = MagicMock(return_value={"columns": ["name"], "rows": [["idx1"]]})
+        eng.execute_cypher = MagicMock(return_value=IVGResult(columns=["name"], rows=[["idx1"]]))
         # /indexes calls eng.execute_cypher("SHOW INDEXES") but result has .columns and .rows attrs
         result_mock = MagicMock()
         result_mock.columns = ["name"]

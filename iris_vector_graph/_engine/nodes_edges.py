@@ -306,7 +306,7 @@ class NodesEdgesMixin:
         cypher = "MATCH (n) WHERE n.id = $node_id RETURN n"
         result = self.execute_cypher(cypher, parameters={"node_id": node_id})
 
-        if not result.get("rows"):
+        if not result.rows:
             return None
 
         row = result["rows"][0]
@@ -1186,13 +1186,13 @@ class NodesEdgesMixin:
 
     def node_count(self) -> int:
         result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
-        rows = result.get("rows") or []
+        rows = result.rows
         return int(rows[0][0]) if rows else 0
 
 
     def edge_count(self) -> int:
         result = self.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
-        rows = result.get("rows") or []
+        rows = result.rows
         return int(rows[0][0]) if rows else 0
 
 

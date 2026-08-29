@@ -69,22 +69,23 @@ def test_dict_compat_getitem_error_present():
 
 def test_dict_compat_get_returns_none_for_absent_sql():
     r = make_empty()
-    assert r.get("sql") is None
+    assert r.sql is None
 
 
 def test_dict_compat_get_returns_none_for_absent_error():
     r = make_success()
-    assert r.get("error") is None
+    assert r.error is None
 
 
 def test_dict_compat_get_returns_value_for_present_key():
     r = make_success()
-    assert r.get("columns") == ["id", "name"]
+    assert r.columns == ["id", "name"]
 
 
-def test_dict_compat_get_with_default():
+def test_dict_compat_get_raises_typeerror():
     r = make_empty()
-    assert r.get("nonexistent", "fallback") == "fallback"
+    with pytest.raises(TypeError, match="IVGResult.get"):
+        r.get("nonexistent", "fallback")
 
 
 def test_dict_compat_contains_error_false_on_success():

@@ -144,12 +144,12 @@ async def resolve_cypher(
     
     # Apply recursive serialization to rows
     serialized_rows = []
-    for row in result.get("rows", []):
+    for row in result.rows:
         serialized_rows.append(serialize_value(row))
-        
+
     from .schema import CypherResult
     return CypherResult(
-        columns=result.get("columns", []),
+        columns=result.columns,
         rows=serialized_rows
     )
 

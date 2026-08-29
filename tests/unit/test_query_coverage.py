@@ -1129,7 +1129,7 @@ def test_execute_var_length_labeled_path_funcs_with_target_labels():
     }
     result = eng._execute_var_length_labeled_path_funcs(sql_q, {}, vl0)
     # Only n2 should survive target label filter
-    assert all(row[0] != "n3" or "n3" not in str(result) for row in result.get("rows", []))
+    assert all(row[0] != "n3" or "n3" not in str(result) for row in result.rows)
 
 
 def test_execute_var_length_labeled_path_funcs_no_path_triples():
@@ -2136,7 +2136,7 @@ def test_execute_var_length_cypher_min_hops_filter():
         with patch("iris_vector_graph.engine._bfs_stream_pages", return_value=iter(bfs_data)):
             result = eng._execute_var_length_cypher(sql_q)
             # n2 (step=1) should be excluded; n3 (step=2) included
-            ids = [r[0] for r in result.get("rows", [])]
+            ids = [r[0] for r in result.rows]
             assert "n2" not in ids
             assert "n3" in ids
 

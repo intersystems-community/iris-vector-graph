@@ -543,9 +543,9 @@ class BoltSession:
         try:
             engine = self._get_engine()
             result = engine.execute_cypher(query, parameters=params or {})
-            columns = result.get("columns", [])
-            rows = result.get("rows", [])
-            col_types = result.get("_bolt_column_types", ["scalar"] * len(columns))
+            columns = result.columns
+            rows = result.rows
+            col_types = result.bolt_column_types or ["scalar"] * len(columns)
 
             # Use AST-derived column types (from translate_to_sql) to detect
             # relationship columns, supplemented by the heuristic node-triplet detector.

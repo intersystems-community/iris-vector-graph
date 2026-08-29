@@ -612,7 +612,7 @@ class TestAdjacencyIndexBuilt:
             "MATCH (a)-[r*1..1]->(b) WHERE a.id = $id RETURN b.id",
             {"id": src},
         )
-        rows = result.get("rows", [])
+        rows = result.rows
         ids = {row[0] for row in rows}
         assert dst in ids, (
             f"BFS returned 0 results after create_edge(). "
@@ -635,7 +635,7 @@ class TestAdjacencyIndexBuilt:
             "MATCH (a)-[r*1..3]->(b) WHERE a.id = $id RETURN b.id",
             {"id": nodes[0]},
         )
-        ids = {row[0] for row in result.get("rows", [])}
+        ids = {row[0] for row in result.rows}
         assert nodes[1] in ids and nodes[3] in ids, (
             f"bulk_create_edges BFS returned {ids} — expected all 3 downstream nodes. "
             f"Check that BuildKG() is called in the finally block of bulk_create_edges()."
