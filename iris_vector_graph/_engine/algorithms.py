@@ -305,11 +305,11 @@ class AlgorithmsMixin:
         result = self.execute_cypher(
             "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
             "WHERE type(r1) = $p1 AND type(r2) = $p2 "
-            "RETURN 1 AS path_id, 1 AS step, a.node_id, type(r1), b.node_id "
+            "RETURN 1 AS path_id, 1 AS step, a.node_id AS from_id, type(r1) AS rel_type, b.node_id AS to_id "
             "UNION ALL "
             "MATCH (a {node_id: $src})-[r1]->(b)-[r2]->(c) "
             "WHERE type(r1) = $p1 AND type(r2) = $p2 "
-            "RETURN 1 AS path_id, 2 AS step, b.node_id, type(r2), c.node_id",
+            "RETURN 1 AS path_id, 2 AS step, b.node_id AS from_id, type(r2) AS rel_type, c.node_id AS to_id",
             {"src": src_id, "p1": pred1, "p2": pred2},
         )
         return [(int(r[0]), int(r[1]), r[2], r[3], r[4]) for r in result.rows]

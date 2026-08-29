@@ -15,6 +15,7 @@ class TestTemporalEdgeUnit:
         from iris_vector_graph.engine import IRISGraphEngine
         e = IRISGraphEngine.__new__(IRISGraphEngine)
         e.conn = MagicMock()
+        e._schema_prefix = "Graph_KG"
         iris_mock = MagicMock()
         e._iris_obj = lambda: iris_mock
         
@@ -217,6 +218,7 @@ class TestTemporalPreAggUnit:
         from iris_vector_graph.engine import IRISGraphEngine
         e = IRISGraphEngine.__new__(IRISGraphEngine)
         e.conn = MagicMock()
+        e._schema_prefix = "Graph_KG"
         iris_mock = MagicMock()
         e._iris_obj = lambda: iris_mock
         

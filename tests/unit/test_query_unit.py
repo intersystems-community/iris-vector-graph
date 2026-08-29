@@ -437,6 +437,7 @@ class TestRouteVarLength:
             "ts_start": ts_start,
             "ts_end": ts_end,
             "source_var": src_var,
+            "src_id_param": src,
             "direction": direction,
             "types": types or [],
             "max_hops": max_hops,
@@ -468,7 +469,7 @@ class TestRouteVarLength:
         vl = {
             "weighted": False, "shortest": False, "all_shortest": False,
             "min_hops": 1, "properties": {}, "temporal_window": False,
-            "direction": "out", "types": [], "max_hops": 3,
+            "src_id_param": "n1", "direction": "out", "types": [], "max_hops": 3,
         }
         sq = MagicMock()
         sq.var_length_paths = [vl]
@@ -497,7 +498,7 @@ class TestRouteVarLength:
         vl = {
             "weighted": False, "shortest": False, "all_shortest": False,
             "min_hops": 1, "properties": {}, "temporal_window": False,
-            "direction": "out", "types": [], "max_hops": 3,
+            "src_id_param": "n1", "direction": "out", "types": [], "max_hops": 3,
         }
         sq = MagicMock()
         sq.var_length_paths = [vl]

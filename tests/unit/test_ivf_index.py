@@ -28,6 +28,7 @@ def _make_engine():
     engine._arno_capabilities = {}
     engine._nkg_dirty = False
     engine._native_vec_available = None
+    engine._schema_prefix = "Graph_KG"
     return engine
 
 
@@ -183,6 +184,7 @@ class TestIVFIndexUnit:
         set_schema_prefix("MySchema")
         try:
             engine = _make_engine()
+            engine._schema_prefix = "MySchema"
             iris_mock = MagicMock()
             iris_mock.classMethodValue.return_value = '{"nlist":2,"dim":3,"metric":"cosine","indexed":2}'
             engine._iris_obj = lambda: iris_mock

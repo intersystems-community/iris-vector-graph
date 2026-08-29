@@ -290,8 +290,7 @@ class TestKgNeighbors:
                 rows = next(call_seq)
             except StopIteration:
                 rows = []
-            from iris_vector_graph.result import IVGResult
-            return IVGResult(columns=["node_id"], rows=rows)
+            return IVGResult(columns=[], rows=rows)
 
         with patch.object(eng, "execute_cypher", side_effect=fake_execute_cypher):
             result = eng.kg_NEIGHBORS(["n1"], direction="both")
@@ -300,8 +299,7 @@ class TestKgNeighbors:
     def test_with_predicate(self):
         eng, _, _ = _make_eng()
         def fake_execute_cypher(q, params):
-            from iris_vector_graph.result import IVGResult
-            return IVGResult(columns=["node_id"], rows=[["n2"]])
+            return IVGResult(columns=[], rows=[["n2"]])
         with patch.object(eng, "execute_cypher", side_effect=fake_execute_cypher):
             result = eng.kg_NEIGHBORS(["n1"], predicate="TREATS")
         assert "n2" in result

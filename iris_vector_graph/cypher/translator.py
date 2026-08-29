@@ -5542,7 +5542,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                     )
             for k, v in node.properties.items():
                 val_sql = translate_expression(v, context, segment="where")
-                if k == "node_id":
+                if k in ("node_id", "id"):
                     context.where_conditions.append(f"{node_id_col} = {val_sql}")
                 else:
                     if not optional:
@@ -5645,7 +5645,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                     context.optional_null_row_labels.append(label)
     for k, v in node.properties.items():
         val_sql = translate_expression(v, context, segment="where")
-        if k == "node_id":
+        if k in ("node_id", "id"):
             context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
             if not optional:

@@ -9,6 +9,7 @@ class TestLoadNetworkx:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._schema_prefix = "Graph_KG"
         cursor_mock = MagicMock()
         cursor_mock.fetchone.return_value = (0,)
         engine.conn.cursor.return_value = cursor_mock
@@ -48,6 +49,7 @@ class TestLoadObo:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._schema_prefix = "Graph_KG"
         cursor_mock = MagicMock()
         cursor_mock.fetchone.return_value = (0,)
         engine.conn.cursor.return_value = cursor_mock

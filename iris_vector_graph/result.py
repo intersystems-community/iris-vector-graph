@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from iris_vector_graph.cypher.translator import QueryMetadata
 
@@ -17,6 +17,15 @@ class IVGResult(BaseModel):
     bolt_column_types: list = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _coerce_metadata(cls, v: Any) -> Any:
+        if isinstance(v, QueryMetadata):
+            return v
+        if isinstance(v, dict):
+            return QueryMetadata(**v)
+        return QueryMetadata()
 
     def __len__(self) -> int:
         return len(self.rows)

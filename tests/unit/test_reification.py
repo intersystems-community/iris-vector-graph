@@ -7,6 +7,7 @@ def _make_engine():
     from iris_vector_graph.engine import IRISGraphEngine
     e = IRISGraphEngine.__new__(IRISGraphEngine)
     e.conn = MagicMock()
+    e._schema_prefix = "Graph_KG"
     mock_cur = MagicMock()
     mock_cur.fetchone.return_value = (42,)
     e.conn.cursor.return_value = mock_cur

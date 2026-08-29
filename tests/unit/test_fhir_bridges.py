@@ -77,6 +77,7 @@ class TestGetKgAnchors:
         from iris_vector_graph.engine import IRISGraphEngine
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = MagicMock()
+        engine._schema_prefix = "Graph_KG"
         return engine
 
     def test_returns_mesh_nodes_for_icd_codes(self):

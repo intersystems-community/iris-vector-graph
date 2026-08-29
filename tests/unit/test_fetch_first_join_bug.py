@@ -48,9 +48,10 @@ class TestFetchFirstJoinWorkaround:
         assert "TOP 3" in sql
 
     def test_unsafe_skip_plus_limit_keeps_fetch_first(self):
-        # TOP cannot express OFFSET; SKIP+LIMIT must retain FETCH FIRST + OFFSET
-        # (rare; residual build-106 risk is documented in apply_pagination).
+        # TOP cannot express OFFSET; SKIP+LIMIT uses ROW_NUMBER pagination instead.
+        # Verified: translator emits ROW_NUMBER() OVER() window with __rn range filter.
         sql = _sql("MATCH (n) RETURN n.node_id SKIP 2 LIMIT 4", unsafe=True)
-        assert "OFFSET 2" in sql
-        assert "FETCH FIRST 4 ROWS ONLY" in sql
-        assert "TOP 4" not in sql
+        assert "FETCH FIRST" not in sql, f"FETCH FIRST must not appear for SKIP+LIMIT on unsafe build:\n{sql}"
+        assert "TOP 4" not in sql, f"TOP must not appear for SKIP+LIMIT:\n{sql}"
+        # ROW_NUMBER-based pagination: rows 3-6 (SKIP 2 LIMIT 4)
+        assert "ROW_NUMBER" in sql or "__rn" in sql, f"expected ROW_NUMBER pagination:\n{sql}"

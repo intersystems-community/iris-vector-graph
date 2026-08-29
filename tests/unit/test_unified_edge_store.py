@@ -13,6 +13,7 @@ def _make_engine():
 
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine.conn = MagicMock()
+    engine._schema_prefix = "Graph_KG"
     engine.conn.cursor.return_value = MagicMock()
     return engine
 

@@ -1102,8 +1102,9 @@ class TestMergeSelectSemantics:
         r = self._full_result("MERGE (a:TheLabel) RETURN a.node_id")
         sqls = r.sql if isinstance(r.sql, list) else [r.sql]
         params = r.parameters if isinstance(r.parameters, list) else []
-        # At least the INSERT INTO nodes DML must exist
-        insert_sqls = [s for s in sqls if "INSERT INTO nodes" in s]
+        # At least the INSERT INTO nodes DML must exist (prefix-agnostic check)
+        import re as _re
+        insert_sqls = [s for s in sqls if _re.search(r'INSERT INTO\b.*\bnodes\b', s, _re.IGNORECASE)]
         assert insert_sqls, "Expected INSERT INTO nodes DML statement"
         # DML params (all but the last SELECT params) must contain a UUID
         dml_params = params[:-1] if len(params) > 1 else params
@@ -1118,5 +1119,6 @@ class TestMergeSelectSemantics:
             "MERGE (n:Gene) ON CREATE SET n.source = 'test' RETURN n.node_id"
         )
         sqls = r.sql if isinstance(r.sql, list) else [r.sql]
-        insert_props = [s for s in sqls if "INSERT INTO rdf_props" in s]
+        import re as _re
+        insert_props = [s for s in sqls if _re.search(r'INSERT INTO\b.*\brdf_props\b', s, _re.IGNORECASE)]
         assert insert_props, "ON CREATE SET must generate INSERT INTO rdf_props"

@@ -458,13 +458,28 @@ class QueryMixin:
             if src_var and src_var in parameters:
                 source_id = str(parameters[src_var])
 
+        # When source is not ID-bound, try to resolve from SQL parameters before
+        # falling back to labeled multi-source traversal.
+        source_labels = vl0.get("source_labels") or []
+        if source_id is None and src_id_param is None:
+            # Fallback: extract source_id from the first SQL param that looks like
+            # a node ID (non-schema-prefix string). Covers WHERE a.node_id = $src
+            # patterns where the translator doesn't set src_id_param.
+            params_list = sql_query.parameters[0] if sql_query.parameters else []
+            for item in params_list:
+                if isinstance(item, str) and not item.startswith("Graph_KG"):
+                    source_id = item
+                    break
+            if source_id is None and parameters:
+                source_id = next(iter(parameters.values()), None)
+                if source_id is not None:
+                    source_id = str(source_id)
+
         # When source is not ID-bound, use labeled multi-source traversal.
         # This covers two cases:
         #   (a) source labeled in this pattern: source_labels is populated
         #   (b) source bound in a prior MATCH: source_labels=[] but source_alias
         #       is present in the SQL with label joins we can query.
-        # In both cases src_id_param is None and source_id remains None here.
-        source_labels = vl0.get("source_labels") or []
         if source_id is None and src_id_param is None:
             # When path functions (length/nodes/relationships) are in RETURN,
             # use dedicated method that tracks (source, target, hop) triples.

@@ -202,6 +202,7 @@ class TestRoutingBFS:
         with patch("iris_vector_graph.engine.IRISGraphEngine._build_index_registry", return_value={}), \
              patch("iris_vector_graph.engine.IRISGraphEngine._detect_stored_vector_dtype", return_value="DOUBLE"):
             engine = IRISGraphEngine(conn, store=store)
+        engine._schema_prefix = "Graph_KG"
         return engine
 
     def test_bfs_routes_to_store(self):
