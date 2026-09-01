@@ -68,10 +68,12 @@ class NodesEdgesMixin:
                 incremental_ok = False
 
             session = _BulkLoadSession(self, stats, max_retries)
+            self._in_bulk_load = True
             t0 = _time.perf_counter()
             try:
                 yield session
             finally:
+                self._in_bulk_load = False
                 stats["load_seconds"] = round(_time.perf_counter() - t0, 2)
                 if rebuild_indexes:
                     tr = _time.perf_counter()
@@ -1009,7 +1011,10 @@ class NodesEdgesMixin:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
             if auto_sync:
-                self.sync()
+                if getattr(self, "_in_bulk_load", False):
+                    logger.debug("auto_sync suppressed inside bulk_load_session")
+                else:
+                    self.sync()
 
 
     def bulk_ingest_edges(

@@ -1,7 +1,21 @@
 from __future__ import annotations
 import json
-from typing import Optional
+from typing import NamedTuple, Optional
+
 from iris_vector_graph._validate import TemporalEdgeInput
+
+
+class PurgeResult(NamedTuple):
+    """Return value of purge_raw_before: counts of deleted and skipped edges.
+
+    int(result) == result.deleted for backward-compatible callers.
+    """
+
+    deleted: int
+    skipped: int
+
+    def __int__(self) -> int:
+        return self.deleted
 
 
 class TemporalMixin:
@@ -44,7 +58,6 @@ class TemporalMixin:
             suppress_reverse_index=suppress_reverse_index,
         )
         if result.error is None and graph is not None:
-            from iris_vector_graph.cypher.translator import _table
             cursor = self.conn.cursor()
             for nid in (source, target):
                 try:
@@ -90,7 +103,6 @@ class TemporalMixin:
         except (TypeError, ValueError, IndexError):
             count = 0
         if count > 0 and graph is not None:
-            from iris_vector_graph.cypher.translator import _table
             cursor = self.conn.cursor()
             for e in normalized:
                 for nid in (e["source"], e["target"]):
@@ -126,6 +138,16 @@ class TemporalMixin:
         end: int = 0,
         direction: str = "out",
     ) -> list:
+        """Return edges in a time window.
+
+        direction="in" queries inbound edges (QueryWindowInbound).
+        WARNING: Edges written with suppress_reverse_index=True are NOT visible
+        when direction="in". Those edges have no ^KG("tin") entry by design.
+        Callers mixing suppressed and non-suppressed writes will see only
+        non-suppressed edges in inbound queries.
+
+        source="" returns edges from all sources (QueryWindow all-sources path).
+        """
         result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
         if result.error:
             return []
@@ -148,16 +170,26 @@ class TemporalMixin:
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
         )
 
-    def purge_raw_before(self, ts_end: int) -> int:
-        """Delete raw temporal edges with ts < ts_end. Preserves aggregates.
+    def purge_raw_before(self, ts_end: int, ts_start: int = 0) -> "PurgeResult":
+        """Delete raw temporal edges in [ts_start, ts_end). Preserves aggregates
+        and ^KG("labelset") (append-only, never purged).
 
-        Returns the number of edges deleted.
+        ts_start=0 (default): byte-identical to v2.8.0 behavior.
+        Returns PurgeResult(deleted, skipped). int(result) == result.deleted.
         """
-        return self._store.purge_raw_before(ts_end)
+        return self._store.purge_raw_before(ts_end, ts_start=ts_start)
 
     def intern_label_set(self, attrs: dict) -> str:
-        """Canonicalize, hash, and intern an attribute dict. Returns SHA1 hex hash."""
+        """Canonicalize, hash, and intern an attribute dict. Returns SHA1 hex hash.
+
+        Type fidelity: numeric values intern as numbers, booleans as booleans,
+        nulls as null. {"port": 1972} resolves as integer 1972, not "1972".
+
+        ^KG("labelset") is append-only and never touched by any purge operation.
+        Interned label sets outlive raw edges — safe for long-term retention.
+        """
         import json as _json
+
         return self._store.intern_label_set(_json.dumps(attrs, separators=(",", ":")))
 
     def resolve_label_set(self, hash_hex: str) -> str:

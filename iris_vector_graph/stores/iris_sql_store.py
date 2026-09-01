@@ -743,26 +743,57 @@ class IRISGraphStore:
         self, edges: list, upsert: bool = False, suppress_reverse_index: bool = False
     ) -> IVGResult:
         import json as _json
-        inserted = 0
+
+        batch = []
         for edge in edges:
-            src = edge.get("source", "")
-            pred = edge.get("predicate", "")
-            tgt = edge.get("target", "")
-            ts = edge.get("timestamp", 0)
-            weight = float(edge.get("weight", 1.0))
+            item = {
+                "s": edge.get("source", ""),
+                "p": edge.get("predicate", ""),
+                "o": edge.get("target", ""),
+                "ts": edge.get("timestamp", 0),
+                "w": float(edge.get("weight", 1.0)),
+            }
+            if suppress_reverse_index:
+                item["sri"] = 1
             attrs = edge.get("attrs") or {}
-            result = self.write_temporal_edge(
-                src, pred, tgt, ts, weight, attrs, upsert, suppress_reverse_index
-            )
-            if not result.error:
-                inserted += 1
+            if attrs:
+                item["attrs"] = attrs
+            batch.append(item)
+
+        if not batch:
+            return IVGResult(columns=["inserted"], rows=[[0]])
+
+        try:
+            inserted = int(str(self._call_classmethod(
+                "Graph.KG.TemporalIndex", "BulkInsert",
+                _json.dumps(batch), str(int(upsert)),
+            )))
+        except Exception as e:
+            logger.warning("BulkInsert failed, falling back to per-edge: %s", e)
+            inserted = 0
+            for edge in edges:
+                r = self.write_temporal_edge(
+                    edge.get("source", ""), edge.get("predicate", ""),
+                    edge.get("target", ""), edge.get("timestamp", 0),
+                    float(edge.get("weight", 1.0)), edge.get("attrs") or {},
+                    upsert, suppress_reverse_index,
+                )
+                if not r.error:
+                    inserted += 1
         return IVGResult(columns=["inserted"], rows=[[inserted]])
 
-    def purge_raw_before(self, ts_end: int) -> int:
+    def purge_raw_before(self, ts_end: int, ts_start: int = 0):
+        from iris_vector_graph._engine.temporal import PurgeResult
+
+        ts_start = max(0, int(ts_start))
         result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", str(ts_end)
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", str(ts_end), str(ts_start)
         )
-        return int(str(result))
+        raw = str(result)
+        if ":" in raw:
+            deleted_str, _, skipped_str = raw.partition(":")
+            return PurgeResult(int(deleted_str), int(skipped_str) if skipped_str else 0)
+        return PurgeResult(int(raw), 0)
 
     def intern_label_set(self, attrs_json: str) -> str:
         result = self._call_classmethod(

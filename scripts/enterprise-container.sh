@@ -74,11 +74,13 @@ from iris_vector_graph import IRISGraphEngine
 IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
 print('✓ schema initialized')
 " 2>&1 | grep -E 'schema initialized|ERROR|CRITICAL' | grep -v 'Embedding dimension'
-    echo "Deploying and compiling ObjectScript via TCP..."
-    # The HealthShare enterprise image has a dual-database split: iris session -U USER
-    # routes ^%Dictionary* globals to IRISSYS while TCP connections use the USER IRIS.DAT.
-    # Classes must be deployed via TCP to be visible to test connections (via socat proxy).
-    "$0" tcp-deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
+    echo "Deploying and compiling ObjectScript via irispython..."
+    # Use irispython (embedded Python inside container) — writes to the same compiled
+    # binary store that TCP test connections see. tcp-deploy uses external iris.connect()
+    # + %Stream.FileCharacter + %SYSTEM.OBJ.Load which does NOT update the TCP-visible
+    # dispatch table for new methods on existing classes.
+    "$0" deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
+    "$0" compile-all 2>&1 | grep -iE 'ERROR|failed|Detected' || true
     echo "Loading libarno_callout.so via TCP..."
     "$0" tcp-load-arno 2>&1 | grep -iE 'ERROR|loaded|failed'
     "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
@@ -139,15 +141,14 @@ except Exception as e:
   compile-all)
     echo "Compiling all Graph.KG.* classes..."
     # Use irispython (embedded Python) — it writes to the same database that
-    # iris_devtester/external connections see. The old "iris session -U USER '...'"
-    # form compiled into a different namespace mapping and changes were not visible
-    # to external connections.
-    docker exec "$CONTAINER" /usr/irissys/bin/irispython - << 'PYEOF' 2>&1 \
-      | grep -iE 'ERROR|Compiling class|Detected|LoadDir|error #' | grep -v 'Warning\|PageRankEmbed\|Graph.KG.Edge'
+    # iris_devtester/external connections see. External TCP connections see the
+    # same compiled binaries. Do NOT use "iris session" — it routes to a different
+    # namespace mapping and new methods are not visible to TCP callers.
+    docker exec "$CONTAINER" /usr/irissys/bin/irispython -c "
 import iris
-result = iris.cls("%SYSTEM.OBJ").LoadDir("/tmp/src", "ck", None, 1)
-print("LoadDir:", result)
-PYEOF
+result = iris.cls('%SYSTEM.OBJ').LoadDir('/tmp/src', 'ck', None, 1)
+print('LoadDir:', result)
+" 2>&1 | grep -iE 'ERROR|Compiling class|Detected|LoadDir|error #' | grep -v 'PageRankEmbed\|rdf_edges' || true
     ;;
 
   tcp-deploy)
@@ -255,6 +256,8 @@ PYEOF
 
   *)
     echo "Usage: $0 {up|down|status|deploy|compile <cls>|compile-all|tcp-deploy|tcp-load-arno}"
+    echo "  compile-all  Compile all classes via irispython (recommended over tcp-deploy)"
+    echo "  tcp-deploy   Legacy: compile via external TCP connection (do not use for new methods)"
     exit 1
     ;;
 esac
