@@ -723,7 +723,8 @@ class IRISGraphStore:
     def write_temporal_edge(
         self, source_id: str, predicate: str, target_id: str,
         timestamp: int, weight: float = 1.0, attrs: Optional[dict] = None,
-        upsert: bool = False, suppress_reverse_index: bool = False
+        upsert: bool = False, suppress_reverse_index: bool = False,
+        mode: str = "",
     ) -> IVGResult:
         import json as _json
         attrs_json = _json.dumps(attrs) if attrs else ""
@@ -733,6 +734,7 @@ class IRISGraphStore:
                 source_id, predicate, target_id,
                 str(timestamp), str(weight), attrs_json,
                 str(int(upsert)), str(int(suppress_reverse_index)),
+                mode,
             )
         except Exception as e:
             logger.warning("write_temporal_edge failed: %s", e)
@@ -781,6 +783,12 @@ class IRISGraphStore:
                 if not r.error:
                     inserted += 1
         return IVGResult(columns=["inserted"], rows=[[inserted]])
+
+    def purge_bucket_range(self, bucket_start: int, bucket_end: int) -> int:
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex", "PurgeBucketRange", bucket_start, bucket_end
+        )
+        return int(str(result))
 
     def purge_raw_before(self, ts_end: int, ts_start: int = 0):
         from iris_vector_graph._engine.temporal import PurgeResult

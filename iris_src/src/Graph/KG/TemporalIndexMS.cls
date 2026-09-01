@@ -1,6 +1,6 @@
-/// Test subclass of TemporalIndex with TSUNIT="ms" and BUCKETMS=300000.
-/// Used only in integration tests (spec 204 Phase 6 T046-T048).
-/// Never call this from production code — use Graph.KG.TemporalIndex directly.
+/// Supported ms-precision subclass of TemporalIndex.
+/// TSUNIT="ms" with 300-second (300000ms) bucket width.
+/// Use this class directly for millisecond-precision temporal edge ingest and analytics.
 Class Graph.KG.TemporalIndexMS Extends Graph.KG.TemporalIndex
 {
 

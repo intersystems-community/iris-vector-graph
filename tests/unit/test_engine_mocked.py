@@ -222,12 +222,12 @@ class TestEngineCreateDelete:
 
     def test_bulk_delete_nodes_empty(self):
         result = self.engine.bulk_delete_nodes([])
-        assert result == 0
+        assert int(result) == 0
 
     def test_bulk_delete_nodes_with_data(self):
         self.cursor.rowcount = 2
         result = self.engine.bulk_delete_nodes(["n1", "n2"])
-        assert result >= 0
+        assert int(result) >= 0
 
     def test_drop_graph(self):
         self.cursor.rowcount = 5
@@ -457,7 +457,7 @@ class TestEngineExtraAPIs:
 
     def test_bulk_delete_nodes_empty(self):
         result = self.engine.bulk_delete_nodes([])
-        assert result == 0
+        assert int(result) == 0
 
     def test_drop_graph_calls_delete(self):
         self.cursor.execute.return_value = None

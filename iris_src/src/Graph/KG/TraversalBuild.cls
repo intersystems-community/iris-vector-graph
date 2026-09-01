@@ -7,7 +7,7 @@ ClassMethod BuildKG() As %Status
 		// Disable journaling for this process to maximize speed (requires %Admin_Operate)
 		// Do $System.Process.SetJournaling(0) 
 		
-		Kill ^KG
+		Kill ^KG("label"), ^KG("prop"), ^KG("out"), ^KG("in"), ^KG("deg")
 		TStart
 		
 		// 1. Labels

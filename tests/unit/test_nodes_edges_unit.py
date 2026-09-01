@@ -223,12 +223,12 @@ class TestBulkDeleteNodes:
     def test_deletes_all_nodes_and_returns_count(self):
         eng, conn, cursor = _make_eng()
         result = eng.bulk_delete_nodes(["n1", "n2", "n3"])
-        assert result == 3
+        assert int(result) == 3
 
     def test_empty_list_returns_zero(self):
         eng, conn, cursor = _make_eng()
         result = eng.bulk_delete_nodes([])
-        assert result == 0
+        assert int(result) == 0
 
     def test_batch_failure_skips_but_continues(self):
         eng, conn, cursor = _make_eng()
@@ -241,7 +241,7 @@ class TestBulkDeleteNodes:
         cursor.execute.side_effect = execute_side
         result = eng.bulk_delete_nodes(["n1"])
         # Failed batch → 0 deleted
-        assert result == 0
+        assert int(result) == 0
 
 
 # ---------------------------------------------------------------------------
