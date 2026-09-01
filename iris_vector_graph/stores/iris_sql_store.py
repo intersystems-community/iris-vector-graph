@@ -50,9 +50,26 @@ class IRISGraphStore:
         import iris as _iris
         return _iris.createIRIS(self.conn)
 
+    def _reload_arno_if_needed(self, iris_obj) -> bool:
+        """Reload libarno_callout.so if IsAvailable() returns false.
+
+        Uses the lib_path stored by Load() in ^ArnoAccel("lib_path"), falling
+        back to IVG_ARNO_LIB env var then the production default path.
+        Returns True if Arno is available after the attempt.
+        """
+        if bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "IsAvailable")):
+            return True
+        lib_path = str(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "GetLibPath"))
+        if not lib_path:
+            lib_path = os.environ.get("IVG_ARNO_LIB", "/usr/irissys/mgr/libarno_callout.so")
+        return bool(iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", lib_path))
+
     def _detect_arno(self) -> bool:
         if self._arno_available is not None:
             return self._arno_available
+        if os.environ.get("IVG_DISABLE_ARNO", "").strip() == "1":
+            self._arno_available = False
+            return False
         try:
             iris_obj = self._iris_obj()
             try:
@@ -63,6 +80,7 @@ class IRISGraphStore:
                 iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load")
             except Exception:
                 pass
+            self._reload_arno_if_needed(iris_obj)
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
             self._arno_available = True
@@ -76,7 +94,10 @@ class IRISGraphStore:
         return self._arno_available
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
+        from iris_vector_graph.stores.arno_bridge import ArnoError as _ArnoError
         iris_obj = self._iris_obj()
+        if not self._reload_arno_if_needed(iris_obj):
+            raise _ArnoError("arno not loaded and reload failed")
         raw = str(iris_obj.classMethodValue(cls, method, *args))
         if not raw.startswith("CHUNKED:"):
             return raw

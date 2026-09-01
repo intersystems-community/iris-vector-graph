@@ -11,12 +11,13 @@ ClassMethod Load(libPath As %String = "/tmp/libarno_callout.so") As %Boolean
 	Try {
 		Set dllid = $ZF(-4, 1, libPath)
 		If dllid = 0 Return 0
-		Set ^||ArnoAccel("dllid") = dllid
+		Set ^ArnoAccel("dllid") = dllid
+		Set ^ArnoAccel("lib_path") = libPath
 		For fn = "version","init","kg_pagerank_global","kg_ppr_global","kg_wcc_global","kg_cdlp_global","kg_subgraph_global","kg_khop_sample","kg_random_walk","kg_neighbor_agg" {
 			Set fid = $ZF(-4, 3, dllid, fn)
-			Set ^||ArnoAccel("fid", fn) = fid
+			Set ^ArnoAccel("fid", fn) = fid
 		}
-		Set initfid = ^||ArnoAccel("fid", "init")
+		Set initfid = ^ArnoAccel("fid", "init")
 		Do $ZF(-5, dllid, initfid)
 		Return 1
 	} Catch {
@@ -24,23 +25,29 @@ ClassMethod Load(libPath As %String = "/tmp/libarno_callout.so") As %Boolean
 	}
 }
 
+ClassMethod GetLibPath() As %String
+{
+	Return $Get(^ArnoAccel("lib_path"), "")
+}
+
 ClassMethod IsAvailable() As %Boolean
 {
-	If '$Data(^||ArnoAccel("dllid")) Return 0
-	Try {
-		Set verid = $ZF(-4, 3, ^||ArnoAccel("dllid"), "version")
-		Set ver = $ZF(-5, ^||ArnoAccel("dllid"), verid)
-		Return (ver '= "")
-	} Catch {
-		Return 0
+	If '$Data(^ArnoAccel("lib_path")) Return 0
+	If $Data(^ArnoAccel("dllid")) {
+		Try {
+			Set verid = $ZF(-4, 3, ^ArnoAccel("dllid"), "version")
+			Set ver = $ZF(-5, ^ArnoAccel("dllid"), verid)
+			If ver '= "" Return 1
+		} Catch {}
 	}
+	Return ..Load(^ArnoAccel("lib_path"))
 }
 
 ClassMethod CallFn(fn As %String, a1 As %String = "", a2 As %String = "", a3 As %String = "", a4 As %String = "") As %String [ Private ]
 {
-	Set dllid = $Get(^||ArnoAccel("dllid"), 0)
+	Set dllid = $Get(^ArnoAccel("dllid"), 0)
 	If dllid = 0 $$$ThrowStatus($$$ERROR($$$GeneralError,"arno not loaded"))
-	Set fid = $Get(^||ArnoAccel("fid", fn), 0)
+	Set fid = $Get(^ArnoAccel("fid", fn), 0)
 	If fid = 0 $$$ThrowStatus($$$ERROR($$$GeneralError,"arno function not found: "_fn))
 	If a1 = "" Return $ZF(-5, dllid, fid)
 	If a2 = "" Return $ZF(-5, dllid, fid, a1)

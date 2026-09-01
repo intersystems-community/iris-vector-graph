@@ -80,12 +80,12 @@ availability at the moment of the capabilities call,
 
 | ID | Requirement |
 |----|-------------|
-| FR-001 | `^||ArnoAccel("dllid")` changed to `^ArnoAccel("dllid")` so the handle persists across worker processes (survives until IRIS restart or explicit kill). |
-| FR-002 | `ArnoAccel.Load()` writes dllid to `^ArnoAccel`, not `^||ArnoAccel`. |
+| FR-001 | `^ArnoAccel("dllid")` replaces the process-private global form so the handle persists across IRIS worker processes (cleared only on IRIS restart). |
+| FR-002 | `ArnoAccel.Load()` writes dllid and fid table to `^ArnoAccel`; also stores `libPath` in `^ArnoAccel("lib_path")` for Python auto-reload. |
 | FR-003 | `ArnoAccel.IsAvailable()` reads from `^ArnoAccel`. |
 | FR-004 | `ArnoAccel.CallZF()` (and any internal `$ZF(-5)` calls) reads dllid from `^ArnoAccel`. |
-| FR-005 | `_detect_arno()` in `iris_sql_store.py`: if `IsAvailable()` returns false but `IVG_ARNO_LIB` or default `.so` path exists, call `Load()` before `Capabilities()`. |
-| FR-006 | `_arno_call()` in `iris_sql_store.py`: guard — if `IsAvailable()` false, attempt reload before `$ZF(-5)` dispatch. Raise `ArnoError` only if reload also fails. |
+| FR-005 | `_detect_arno()` in `iris_sql_store.py`: if `IsAvailable()` returns false, attempt reload using path from `^ArnoAccel("lib_path")` (set by `Load()` on success), then `IVG_ARNO_LIB` env var, then default `/usr/irissys/mgr/libarno_callout.so`. Call `Capabilities()` only after successful reload. |
+| FR-006 | `_arno_call()` in `iris_sql_store.py`: before each dispatch, if `IsAvailable()` returns false, attempt reload via same path resolution as FR-005. Raise `ArnoError` only if reload also fails. |
 | FR-007 | `NKGAccelLoader.Capabilities()` adds no new logic — the fix to `^ArnoAccel` is sufficient for `IsAvailable()` to return correct value. |
 | FR-008 | No behaviour change when `IVG_DISABLE_ARNO=1` — must still force false. |
 
@@ -131,3 +131,9 @@ availability at the moment of the capabilities call,
 - Q: Use `^ArnoAccel` (survives restart) or `^||ArnoAccel` in job-private
   namespace? → A: `^ArnoAccel` in USER namespace — persists until IRIS restart
   or explicit kill, visible to all worker processes.
+- Q: Should `^ArnoAccel` be namespace-pinned as `^["USER"]ArnoAccel` to survive
+  cross-namespace calls? → A: No — all IVG operations run in USER namespace;
+  explicit pinning adds complexity with no benefit in the current setup.
+- Q: Store lib path for auto-reload in `^ArnoAccel("lib_path")` or Python
+  instance var? → A: `^ArnoAccel("lib_path")` — survives across store instances
+  and Python restarts; set by `Load()` on success.
