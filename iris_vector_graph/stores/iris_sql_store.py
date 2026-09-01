@@ -782,6 +782,12 @@ class IRISGraphStore:
                     inserted += 1
         return IVGResult(columns=["inserted"], rows=[[inserted]])
 
+    def purge_bucket_range(self, bucket_start: int, bucket_end: int) -> int:
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex", "PurgeBucketRange", bucket_start, bucket_end
+        )
+        return int(str(result))
+
     def purge_raw_before(self, ts_end: int, ts_start: int = 0):
         from iris_vector_graph._engine.temporal import PurgeResult
 

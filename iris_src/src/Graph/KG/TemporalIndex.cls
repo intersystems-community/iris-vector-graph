@@ -385,6 +385,25 @@ ClassMethod PurgeRawBefore(tsEnd As %Integer, tsStart As %Integer = 0) As %Strin
 	Return deleted _ ":" _ skipped
 }
 
+/// Delete ^KG("tagg") and ^KG("bucket") entries in [bucketStart, bucketEnd] (inclusive).
+/// Raw edges (tout/tin/edgeprop) are never touched.
+/// Returns count of buckets removed. Returns 0 if bucketStart > bucketEnd.
+ClassMethod PurgeBucketRange(bucketStart As %Integer, bucketEnd As %Integer) As %Integer
+{
+	Set bucketStart = +bucketStart, bucketEnd = +bucketEnd
+	Set tCount = 0
+	If bucketStart > bucketEnd Quit 0
+	Set bucket = bucketStart - 1
+	For {
+		Set bucket = $Order(^KG("tagg", bucket))
+		Quit:(bucket="")!(bucket > bucketEnd)
+		Kill ^KG("tagg", bucket)
+		Kill ^KG("bucket", bucket)
+		Set tCount = tCount + 1
+	}
+	Quit tCount
+}
+
 /// Intern an attribute JSON object: canonicalize, hash, store once, return SHA1 hex.
 /// Returns "" on invalid JSON input. Idempotent.
 /// Type fidelity: numbers intern as numbers, booleans as booleans, nulls as null.

@@ -170,6 +170,15 @@ class TemporalMixin:
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
         )
 
+    def purge_bucket_range(self, bucket_start: int, bucket_end: int) -> int:
+        """Delete ^KG("tagg") and ^KG("bucket") entries in [bucket_start, bucket_end].
+
+        Raw edges (tout/tin/edgeprop) are never touched.
+        bucket = timestamp // BUCKET_SIZE (300 for seconds, 300000 for ms).
+        Returns count of buckets removed. Returns 0 if bucket_start > bucket_end.
+        """
+        return self._store.purge_bucket_range(bucket_start, bucket_end)
+
     def purge_raw_before(self, ts_end: int, ts_start: int = 0) -> "PurgeResult":
         """Delete raw temporal edges in [ts_start, ts_end). Preserves aggregates
         and ^KG("labelset") (append-only, never purged).

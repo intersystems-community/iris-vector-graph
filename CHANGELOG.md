@@ -1,4 +1,38 @@
+<!-- markdownlint-disable MD001 MD013 MD024 MD036 -->
+
 # Changelog
+
+### v2.10.0 (2026-09-01)
+
+**Engine critical fixes — spec 206**
+
+Three targeted fixes removing a data-loss hazard (A9), a 100x delete slowdown
+(A12), and adding non-destructive aggregate expiry (A8.3).
+
+#### ObjectScript (Graph.KG.TraversalBuild / Graph.KG.TemporalIndex)
+
+- **A9 — `BuildKG` preserves temporal index** — replaced bare `Kill ^KG` with
+  five explicit kills: `Kill ^KG("label"), ^KG("prop"), ^KG("out"), ^KG("in"),
+^KG("deg")`. Previously one `engine.sync()` call permanently and silently
+  destroyed every temporal edge, aggregate, and label set with no rebuild path.
+  Now `sync()` is safe on any container holding temporal data.
+- **A8.3 — `PurgeBucketRange(bucketStart, bucketEnd)`** — new classmethod on
+  `Graph.KG.TemporalIndex`. Deletes `^KG("tagg")` and `^KG("bucket")` entries
+  in the closed range `[bucketStart, bucketEnd]`. Raw edges (`tout`/`tin`) are
+  never touched. Returns count of buckets removed. Unblocks 13-month aggregate
+  retention (~55 GB of the ~80 GB 100-node budget) without touching raw data.
+
+#### Python engine
+
+- **A12 — `bulk_delete_nodes` index speed** — split `DELETE ... WHERE s IN (...) OR
+o_id IN (...)` into four separate single-column DELETEs (two for
+  `rdf_reifications`, two for `rdf_edges`). IRIS can now use the per-column
+  indexes. Measured improvement: ~19 s/batch -> <2 s on 331k-row table; ~20
+  nodes/s -> index-speed (>1000 nodes/s). A 205k-node cleanup shrinks from
+  ~2.5 h to ~3 min.
+- **`purge_bucket_range(bucket_start, bucket_end) -> int`** — Python wrapper for
+  `PurgeBucketRange`. Added to `TemporalMixin`, `IRISGraphStore`, and
+  `StoreProtocol`.
 
 ### v2.9.0 (2026-09-01)
 

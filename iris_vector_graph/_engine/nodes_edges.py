@@ -1143,15 +1143,22 @@ class NodesEdgesMixin:
             try:
                 cursor.execute(
                     f"DELETE FROM {self._t('rdf_reifications')} WHERE edge_id IN "
-                    f"(SELECT edge_id FROM {self._t('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs}))",
-                    batch + batch,
+                    f"(SELECT edge_id FROM {self._t('rdf_edges')} WHERE s IN ({phs}))",
+                    batch,
+                )
+                cursor.execute(
+                    f"DELETE FROM {self._t('rdf_reifications')} WHERE edge_id IN "
+                    f"(SELECT edge_id FROM {self._t('rdf_edges')} WHERE o_id IN ({phs}))",
+                    batch,
                 )
                 cursor.execute(
                     f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE id IN ({phs})", batch
                 )
                 cursor.execute(
-                    f"DELETE FROM {self._t('rdf_edges')} WHERE s IN ({phs}) OR o_id IN ({phs})",
-                    batch + batch,
+                    f"DELETE FROM {self._t('rdf_edges')} WHERE s IN ({phs})", batch
+                )
+                cursor.execute(
+                    f"DELETE FROM {self._t('rdf_edges')} WHERE o_id IN ({phs})", batch
                 )
                 cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s IN ({phs})", batch)
                 cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s IN ({phs})", batch)
