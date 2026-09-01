@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import contextlib
 from pathlib import Path
 
@@ -18,19 +19,35 @@ import pytest
 
 _SO_REPO_PATH = Path(__file__).parent.parent.parent / "docker" / "enterprise" / "libarno_callout.so"
 _SO_CONTAINER_PATH = "/tmp/libarno_tcp_208.so"
+_ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
+
+
+def _make_native_conn():
+    import iris as _iris
+    try:
+        orb_ip = socket.gethostbyname(f"{_ARNO_CONTAINER}.orb.local")
+        return _iris.connect(hostname=orb_ip, port=1972, namespace="USER",
+                             username="_SYSTEM", password="SYS")
+    except socket.gaierror:
+        return _iris.connect(hostname="localhost", port=31971, namespace="USER",
+                             username="_SYSTEM", password="SYS")
 
 
 @pytest.fixture(scope="module")
 def arno_adj_conn(arno_iris_connection):
-    """Module fixture: ensure arno loaded once, insert a 10-node graph, yield conn."""
+    """Module fixture: ensure arno loaded, insert 10-node graph, yield dbapi conn.
+
+    Opens a separate native connection for createIRIS (required — dbapi conn
+    is not compatible with iris.createIRIS). Sets IVG_ARNO_LIB to the loaded path.
+    """
     if not _SO_REPO_PATH.exists():
         pytest.skip(f"libarno_callout.so not found at {_SO_REPO_PATH}")
 
     import iris as _iris
-    iris_obj = _iris.createIRIS(arno_iris_connection)
+    native_conn = _make_native_conn()
+    try:
+        iris_obj = _iris.createIRIS(native_conn)
 
-    # Load .so if not already loaded
-    with contextlib.suppress(Exception):
         so_data = _SO_REPO_PATH.read_bytes()
         stream = iris_obj.classMethodObject("%Stream.FileBinary", "%New")
         stream.invokeVoid("LinkToFile", _SO_CONTAINER_PATH)
@@ -39,9 +56,15 @@ def arno_adj_conn(arno_iris_connection):
         stream.invokeVoid("%Save")
         iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load", _SO_CONTAINER_PATH)
         iris_obj.classMethodValue("Graph.KG.NKGAccelLoader", "Load", _SO_CONTAINER_PATH)
+        iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
+    finally:
+        with contextlib.suppress(Exception):
+            native_conn.close()
+
+    os.environ["IVG_ARNO_LIB"] = _SO_CONTAINER_PATH
+    os.environ.pop("IVG_DISABLE_ARNO", None)
 
     from iris_vector_graph.stores.arno_bridge import clear_probe_cache
-    os.environ.pop("IVG_DISABLE_ARNO", None)
     clear_probe_cache()
 
     # Insert a clean 10-node test graph for adjacency helpers
@@ -55,10 +78,6 @@ def arno_adj_conn(arno_iris_connection):
             )
     arno_iris_connection.commit()
     cursor.close()
-
-    # Build ^KG adjacency (write ^KG("out",...))
-    with contextlib.suppress(Exception):
-        iris_obj.classMethodVoid("Graph.KG.Traversal", "BuildKG")
 
     yield arno_iris_connection
 

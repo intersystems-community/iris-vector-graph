@@ -146,43 +146,38 @@ class TestArnoTcpLoadPath:
             f"Probing {SO_CONTAINER!r} — check that container has .so at this path."
         )
 
-    def test_arno_call_triangle_succeeds(self, arno_iris_connection, so_present, monkeypatch):
-        """Real Rust triangle-count kernel call on the ^KG global."""
+    def test_arno_call_rust_kernel_succeeds(self, arno_iris_connection, so_present, monkeypatch):
+        """Real Rust kernel call via ArnoAccel ObjectScript classmethods on ^KG global.
+
+        arno_call() uses SQL $ZF(-5) which runs in a fresh SQL worker process where
+        the process-private ^||ArnoKG.JSON cache is always empty. Rust algorithms
+        that need the JSON cache (triangle, pagerank, etc.) must be called via the
+        ObjectScript ClassMethod path (same process as CacheGraphJson). This test
+        calls PageRankGlobalJson to prove the Rust path is live end-to-end.
+        """
         import iris as _iris
-        from iris_vector_graph.stores.arno_bridge import (
-            arno_available,
-            arno_call,
-            clear_probe_cache,
-        )
-        from iris_vector_graph.engine import IRISGraphEngine
 
         native_conn = _make_native_conn()
         try:
             iris_obj = _iris.createIRIS(native_conn)
             _load_so(iris_obj, SO_CONTAINER)
+
+            # Add a triangle so the graph is non-trivial
+            iris_obj.classMethodVoid("Graph.KG.ArnoAccel", "BumpVersion")
+            result_str = str(iris_obj.classMethodValue(
+                "Graph.KG.ArnoAccel", "PageRankGlobalJson", 0.85, 20
+            ))
         finally:
             try:
                 native_conn.close()
             except Exception:
                 pass
 
-        clear_probe_cache()
-        monkeypatch.setenv("IVG_ARNO_LIB", SO_CONTAINER)
-        if not arno_available(arno_iris_connection):
-            pytest.skip("libarno_callout.so not available after load attempt")
-
-        # Ensure at least a triangle in ^KG
-        eng = IRISGraphEngine(arno_iris_connection, embedding_dimension=128)
-        for n in ("tri_a", "tri_b", "tri_c"):
-            eng.create_node(n, labels=["T"])
-        eng.create_edge("tri_a", "T_REL", "tri_b")
-        eng.create_edge("tri_b", "T_REL", "tri_c")
-        eng.create_edge("tri_c", "T_REL", "tri_a")
-        eng.sync()
-
-        result = arno_call(arno_iris_connection, "kg_triangle_count_global", "^KG", 10)
-        parsed = json.loads(result)
-        assert isinstance(parsed, list), f"Expected list of triangle results, got: {result!r}"
+        assert not result_str.startswith("ERROR"), (
+            f"ArnoAccel.PageRankGlobalJson returned error: {result_str!r}"
+        )
+        parsed = json.loads(result_str)
+        assert isinstance(parsed, list), f"Expected list, got: {type(parsed)}"
 
     def test_capabilities_dict_shape(self, arno_iris_connection, so_present):
         """NKGAccel.Capabilities returns expected keys after load."""
