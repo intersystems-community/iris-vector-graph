@@ -2,6 +2,40 @@
 
 # Changelog
 
+### v2.13.0 (2026-09-01)
+
+**Arno algorithm dispatch fixes — spec 209**
+
+Three correctness bugs in `iris_vector_graph/stores/iris_sql_store.py` where
+`execute_ppr`, `execute_wcc`, `execute_cdlp`, and `execute_pagerank` routed to
+wrong ObjectScript classes or methods. All four fixes are one-line dispatch
+changes; no ObjectScript changes required.
+
+#### Fixes
+
+- **B1 — PPR dispatch**: `execute_ppr` Arno path now calls
+  `Graph.KG.ArnoAccel.PPRJson(seedJson, damping, maxIter)` instead of
+  `Graph.KG.NKGAccel.PPRJson(seedId)` which expected a plain node ID, not a
+  JSON array, causing silent `%Exception.General Parsing error`.
+- **B2 — WCC/CDLP fallback**: `execute_wcc` and `execute_cdlp` non-Arno
+  fallback now routes to `Graph.KG.Algorithms.WCCJson` / `Graph.KG.Algorithms.CDLPJson`
+  instead of `Graph.KG.PageRank` which has no such methods (`<METHOD DOES NOT EXIST>`).
+- **B3 — PageRank fallback**: `execute_pagerank` non-Arno fallback now calls
+  `Graph.KG.PageRank.PageRankGlobalJson(damping, maxIter)` instead of `RunJson`
+  which is a PPR method taking `(seedJson, alpha, maxIter, ...)`.
+- **FR-006 — error surfacing**: `execute_wcc`, `execute_cdlp`, and
+  `execute_pagerank` except blocks now populate `result.error` field (was `None`).
+- **Empty seed guard**: `execute_ppr([])` raises `ValueError` before any IRIS call.
+
+#### New files
+
+- `tests/unit/test_dispatch_routing.py` — 10 mock-based unit tests; no
+  container required.
+- `tests/integration/test_arno_dispatch_bugs.py` — 7 integration tests against
+  `ivg-iris-enterprise`; covers all three bugs and fallback paths.
+
+---
+
 ### v2.12.0 (2026-09-01)
 
 **Arno deployment flow + codepath tests — spec 208**

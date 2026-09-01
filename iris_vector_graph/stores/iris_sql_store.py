@@ -611,10 +611,12 @@ class IRISGraphStore:
 
     def execute_ppr(self, seed_ids: list, damping: float, max_iterations: int) -> IVGResult:
         import json as _json
+        if not seed_ids:
+            raise ValueError("seed_ids must not be empty")
         seeds_json = _json.dumps(seed_ids)
         try:
             if self._detect_arno() and "ppr" in self._arno_capabilities.get("algorithms", []):
-                raw = self._arno_call("Graph.KG.NKGAccel", "PPRJson", seeds_json, str(damping), str(max_iterations))
+                raw = self._arno_call("Graph.KG.ArnoAccel", "PPRJson", seeds_json, str(damping), str(max_iterations))
             else:
                 raw = str(self._call_classmethod("Graph.KG.PageRank", "PPRJson", seeds_json, str(damping), str(max_iterations)))
             results = _json.loads(raw) if raw else []
@@ -630,13 +632,13 @@ class IRISGraphStore:
             if self._detect_arno() and "pagerank" in self._arno_capabilities.get("algorithms", []):
                 raw = self._arno_call("Graph.KG.NKGAccel", "PageRankJson", str(damping), str(max_iterations))
             else:
-                raw = str(self._call_classmethod("Graph.KG.PageRank", "RunJson", str(damping), str(max_iterations)))
+                raw = str(self._call_classmethod("Graph.KG.PageRank", "PageRankGlobalJson", str(damping), str(max_iterations)))
             results = _json.loads(raw) if raw else []
             rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
             return IVGResult(columns=["id", "score"], rows=rows)
         except Exception as e:
             logger.warning("PageRank failed: %s", e)
-            return IVGResult(columns=["id", "score"], rows=[])
+            return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def execute_wcc(self) -> IVGResult:
         import json as _json
@@ -644,7 +646,7 @@ class IRISGraphStore:
             if self._detect_arno() and "wcc" in self._arno_capabilities.get("algorithms", []):
                 raw = self._arno_call("Graph.KG.NKGAccel", "WCCJson")
             else:
-                raw = str(self._call_classmethod("Graph.KG.PageRank", "WCCJson"))
+                raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson"))
             results = _json.loads(raw) if raw else {}
             if isinstance(results, dict):
                 rows = [[k, v] for k, v in results.items()]
@@ -653,7 +655,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "component_id"], rows=rows)
         except Exception as e:
             logger.warning("WCC failed: %s", e)
-            return IVGResult(columns=["id", "component_id"], rows=[])
+            return IVGResult(columns=["id", "component_id"], rows=[], error=str(e)[:200])
 
     def execute_cdlp(self, max_iterations: int) -> IVGResult:
         import json as _json
@@ -661,7 +663,7 @@ class IRISGraphStore:
             if self._detect_arno() and "cdlp" in self._arno_capabilities.get("algorithms", []):
                 raw = self._arno_call("Graph.KG.NKGAccel", "CDLPJson", str(max_iterations))
             else:
-                raw = str(self._call_classmethod("Graph.KG.PageRank", "CDLPJson", str(max_iterations)))
+                raw = str(self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations)))
             results = _json.loads(raw) if raw else {}
             if isinstance(results, dict):
                 rows = [[k, v] for k, v in results.items()]
@@ -670,7 +672,7 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "community_id"], rows=rows)
         except Exception as e:
             logger.warning("CDLP failed: %s", e)
-            return IVGResult(columns=["id", "community_id"], rows=[])
+            return IVGResult(columns=["id", "community_id"], rows=[], error=str(e)[:200])
 
     def execute_subgraph(
         self, seed_ids: list, k_hops: int, edge_types: list, max_nodes: int
