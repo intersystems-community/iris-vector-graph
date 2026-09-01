@@ -723,7 +723,7 @@ class IRISGraphStore:
     def write_temporal_edge(
         self, source_id: str, predicate: str, target_id: str,
         timestamp: int, weight: float = 1.0, attrs: Optional[dict] = None,
-        upsert: bool = False
+        upsert: bool = False, suppress_reverse_index: bool = False
     ) -> IVGResult:
         import json as _json
         attrs_json = _json.dumps(attrs) if attrs else ""
@@ -731,14 +731,17 @@ class IRISGraphStore:
             self._call_classmethod(
                 "Graph.KG.TemporalIndex", "InsertEdge",
                 source_id, predicate, target_id,
-                str(timestamp), str(weight), attrs_json, str(int(upsert)),
+                str(timestamp), str(weight), attrs_json,
+                str(int(upsert)), str(int(suppress_reverse_index)),
             )
         except Exception as e:
             logger.warning("write_temporal_edge failed: %s", e)
             return IVGResult(columns=[], rows=[], error=str(e)[:200])
         return IVGResult(columns=[], rows=[])
 
-    def bulk_write_temporal_edges(self, edges: list, upsert: bool = False) -> IVGResult:
+    def bulk_write_temporal_edges(
+        self, edges: list, upsert: bool = False, suppress_reverse_index: bool = False
+    ) -> IVGResult:
         import json as _json
         inserted = 0
         for edge in edges:
@@ -748,10 +751,34 @@ class IRISGraphStore:
             ts = edge.get("timestamp", 0)
             weight = float(edge.get("weight", 1.0))
             attrs = edge.get("attrs") or {}
-            result = self.write_temporal_edge(src, pred, tgt, ts, weight, attrs, upsert)
+            result = self.write_temporal_edge(
+                src, pred, tgt, ts, weight, attrs, upsert, suppress_reverse_index
+            )
             if not result.error:
                 inserted += 1
         return IVGResult(columns=["inserted"], rows=[[inserted]])
+
+    def purge_raw_before(self, ts_end: int) -> int:
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", str(ts_end)
+        )
+        return int(str(result))
+
+    def intern_label_set(self, attrs_json: str) -> str:
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex", "InternLabelSet", attrs_json
+        )
+        if result is None:
+            return ""
+        return str(result)
+
+    def resolve_label_set(self, hash_hex: str) -> str:
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex", "ResolveLabelSet", hash_hex
+        )
+        if result is None:
+            return ""
+        return str(result)
 
     def execute_temporal_window_query(
         self, source_id: str, predicate: str,

@@ -1,5 +1,56 @@
 # Changelog
 
+### v2.8.0 (2026-08-31)
+
+**TemporalIndex API gaps — spec 204**
+
+Four additions to `Graph.KG.TemporalIndex` (ObjectScript) and the Python engine
+layer, closing gaps that required opsreview to write into IVG-owned globals.
+
+#### ObjectScript (Graph.KG.TemporalIndex)
+
+- **`PurgeRawBefore(tsEnd)`** — deletes raw edges (`^KG("tout"/"tin"/"edgeprop")`)
+  with `ts < tsEnd` (strict `<`); leaves `^KG("tagg")` and `^KG("bucket")`
+  aggregates intact. Returns deleted edge count. Enables separate raw (48 h)
+  and aggregate (13 month) retention windows without owning the global layout.
+- **`InsertEdge(..., suppressReverseIndex=0)`** — when `1`, skips `^KG("tin")`.
+  All other globals (tout, bucket, out/in, deg, tagg, HLL, edgeprop) unchanged.
+  Default `0` preserves existing behavior. `BulkInsert` items accept the same
+  `suppress_reverse` field.
+- **`InternLabelSet(attrsJSON)`** / **`ResolveLabelSet(hash)`** — canonical JSON
+  (keys sorted ascending, no whitespace), SHA1 hex hash stored once under
+  `^KG("labelset", hash)`. `ResolveLabelSet` returns canonical JSON or `""` if
+  unknown. Label sets outlive raw edges; never purged by `PurgeRawBefore`.
+- **TSUNIT / BUCKETMS parameters** — `Parameter TSUNIT As %String = ""` (seconds)
+  and `Parameter BUCKETMS As %Integer = 300000`. All bucket arithmetic uses
+  `tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)`.
+- **`PurgeBefore` boundary fix** — loop exits at `ts >= tsEnd` (strict `<`);
+  `maxSafeBucket = (tsEnd \ tBucketDiv) - 1` prevents killing live buckets when
+  `tsEnd` lands mid-bucket.
+- **`Graph.KG.TemporalIndexMS`** — test-only subclass (`TSUNIT="ms"`) with
+  `GetBucketCount` helper for Phase 6 integration tests.
+
+#### Python engine / store layer
+
+- `TemporalMixin`: `create_edge_temporal` and `bulk_create_edges_temporal` accept
+  `suppress_reverse_index: bool = False`; new methods `purge_raw_before`,
+  `intern_label_set`, `resolve_label_set`.
+- `IRISGraphStore`: `write_temporal_edge` and `bulk_write_temporal_edges` thread
+  `suppress_reverse_index`; new store methods delegate via `_call_classmethod`.
+- `GraphStore` protocol: signatures updated to include all new methods.
+
+#### Tests
+
+- `tests/unit/test_temporal_index_gaps.py` — 22 unit tests (no IRIS required):
+  `TestPurgeRawBefore` (5), `TestSuppressReverseIndex` (5),
+  `TestInternLabelSet` (6), `TestTSUNITBucketMath` (6).
+- `tests/integration/test_temporal_index_gaps_e2e.py` — 15 integration tests
+  against `ivg-iris-enterprise`: `TestPurgeRawBeforeE2E` (4),
+  `TestSuppressReverseIndexE2E` (3), `TestInternLabelSetE2E` (5),
+  `TestTSUNITMSE2E` (3).
+
+---
+
 ### v2.7.1 (2026-08-29)
 
 **Zero failing unit tests** (7693 passed, 0 failed)
