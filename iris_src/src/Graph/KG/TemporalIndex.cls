@@ -3,13 +3,20 @@ Class Graph.KG.TemporalIndex Extends %RegisteredObject
 
 Parameter BUCKET = 300;
 
-ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0) As %Status
+/// Timestamp precision unit. "" = seconds (default). "ms" = milliseconds.
+Parameter TSUNIT As %String = "";
+
+/// Bucket width in milliseconds when TSUNIT="ms". Derived: BUCKET * 1000.
+Parameter BUCKETMS As %Integer = 300000;
+
+ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0, suppressReverseIndex As %Boolean = 0) As %Status
 {
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
 	If upsert && $Data(^KG("tout", timestamp, source, predicate, target)) { Return 1 }
 	Set ^KG("tout", timestamp, source, predicate, target) = weight
-	Set ^KG("tin", timestamp, target, predicate, source) = weight
-	Set bucket = timestamp \ ..#BUCKET
+	If 'suppressReverseIndex { Set ^KG("tin", timestamp, target, predicate, source) = weight }
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set bucket = timestamp \ tBucketDiv
 	Set tmp = $Increment(^KG("bucket", bucket, source))
 	Set ^KG("out", 0, source, predicate, target) = weight
 	Set ^KG("in", 0, target, predicate, source) = weight
@@ -56,9 +63,11 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 		If weight = "" Set weight = 1
 		If ts = 0 Set ts = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
 		If upsert && $Data(^KG("tout", ts, source, predicate, target)) { Continue }
+		Set suppR = +item.%Get("suppress_reverse")
 		Set ^KG("tout", ts, source, predicate, target) = weight
-		Set ^KG("tin", ts, target, predicate, source) = weight
-		Set bucket = ts \ ..#BUCKET
+		If 'suppR { Set ^KG("tin", ts, target, predicate, source) = weight }
+		Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+		Set bucket = ts \ tBucketDiv
 		Set tmp = $Increment(^KG("bucket", bucket, source))
 		Set ^KG("out", 0, source, predicate, target) = weight
 		Set ^KG("in", 0, target, predicate, source) = weight
@@ -105,8 +114,9 @@ ClassMethod GetDistinctCount(source As %String, predicate As %String, tsStart As
 {
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
-	Set startBucket = tsStart \ ..#BUCKET
-	Set endBucket = tsEnd \ ..#BUCKET
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set startBucket = tsStart \ tBucketDiv
+	Set endBucket = tsEnd \ tBucketDiv
 	// Merge registers across buckets: element-wise max of 16 registers.
 	Set merged = $ListBuild(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
 	For b = startBucket:1:endBucket {
@@ -200,8 +210,9 @@ ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300) As %Inte
 {
 	Set now = $ZTimeStamp
 	Set now = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime(now, 3, 1))
-	Set startBucket = (now - windowSec) \ ..#BUCKET
-	Set endBucket = now \ ..#BUCKET
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set startBucket = (now - windowSec) \ tBucketDiv
+	Set endBucket = now \ tBucketDiv
 	Set total = 0
 	For b = startBucket:1:endBucket {
 		Set total = total + $Get(^KG("bucket", b, nodeId), 0)
@@ -212,8 +223,9 @@ ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300) As %Inte
 ClassMethod FindBursts(predicate As %String, windowSec As %Integer, threshold As %Integer) As %String
 {
 	Set now = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
-	Set startBucket = (now - windowSec) \ ..#BUCKET
-	Set endBucket = now \ ..#BUCKET
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set startBucket = (now - windowSec) \ tBucketDiv
+	Set endBucket = now \ tBucketDiv
 	Set result = "["
 	Set first = 1
 	Set b = startBucket - 1
@@ -254,10 +266,13 @@ ClassMethod Purge()
 ClassMethod PurgeBefore(tsEnd As %Integer)
 {
 	Set tsEnd = +tsEnd
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	// Only kill aggregate buckets strictly before the bucket containing tsEnd.
+	Set maxSafeBucket = (tsEnd \ tBucketDiv) - 1
 	Set ts = ""
 	For {
 		Set ts = $Order(^KG("tout", ts))
-		Quit:(ts = "")!(ts > tsEnd)
+		Quit:(ts = "")!(ts >= tsEnd)
 		Set s = ""
 		For {
 			Set s = $Order(^KG("tout", ts, s))
@@ -276,12 +291,108 @@ ClassMethod PurgeBefore(tsEnd As %Integer)
 				}
 			}
 		}
-		// Remove tagg entries for buckets that are fully before tsEnd
-		Set bucket = ts \ ..#BUCKET
-		Kill ^KG("tagg", bucket)
-		Kill ^KG("bucket", bucket)
+		// Only kill aggregate buckets that are fully expired.
+		Set bucket = ts \ tBucketDiv
+		If bucket <= maxSafeBucket {
+			Kill ^KG("tagg", bucket)
+			Kill ^KG("bucket", bucket)
+		}
 		Kill ^KG("tout", ts)
 	}
+}
+
+/// Delete raw temporal edges with ts < tsEnd, preserving aggregates.
+/// Returns the number of edges deleted. Strict < boundary.
+ClassMethod PurgeRawBefore(tsEnd As %Integer) As %Integer
+{
+	Set tsEnd = +tsEnd
+	Set count = 0
+	Set ts = ""
+	For {
+		Set ts = $Order(^KG("tout", ts))
+		Quit:(ts = "")!(ts >= tsEnd)
+		Set s = ""
+		For {
+			Set s = $Order(^KG("tout", ts, s))
+			Quit:s=""
+			Set p = ""
+			For {
+				Set p = $Order(^KG("tout", ts, s, p))
+				Quit:p=""
+				Set o = ""
+				For {
+					Set o = $Order(^KG("tout", ts, s, p, o))
+					Quit:o=""
+					Kill ^KG("tout", ts, s, p, o)
+					Kill ^KG("tin",  ts, o, p, s)
+					Kill ^KG("edgeprop", ts, s, p, o)
+					Set count = count + 1
+				}
+			}
+		}
+		Kill ^KG("tout", ts)
+	}
+	Return count
+}
+
+/// Intern an attribute JSON object: canonicalize, hash, store once, return SHA1 hex.
+/// Returns "" on invalid JSON input. Idempotent.
+ClassMethod InternLabelSet(attrsJSON As %String) As %String
+{
+	Set tSC = $$$OK
+	Set obj = ##class(%DynamicObject).%FromJSON(attrsJSON)
+	If '$IsObject(obj) { Return "" }
+	// Collect keys into a local array for sorting
+	Set iter = obj.%GetIterator()
+	Kill keys
+	Set keyCount = 0
+	While iter.%GetNext(.key) {
+		Set keyCount = keyCount + 1
+		Set keys(key) = ""
+	}
+	// Build canonical JSON with sorted keys
+	Set canonical = "{"
+	Set first = 1
+	Set k = ""
+	For {
+		Set k = $Order(keys(k))
+		Quit:(k = "")
+		Set val = obj.%Get(k)
+		Set valType = obj.%GetTypeOf(k)
+		If 'first { Set canonical = canonical _ "," }
+		Set first = 0
+		// Encode key
+		Set canonical = canonical _ """" _ k _ """:"
+		// Encode value based on type
+		If valType = "number" {
+			Set canonical = canonical _ val
+		} ElseIf valType = "boolean" {
+			Set canonical = canonical _ $Select(val:"true", 1:"false")
+		} ElseIf valType = "null" {
+			Set canonical = canonical _ "null"
+		} Else {
+			Set canonical = canonical _ """" _ val _ """"
+		}
+	}
+	Set canonical = canonical _ "}"
+	// SHA1 hash → lowercase hex
+	Set hashBytes = $SYSTEM.Encryption.SHA1Hash(canonical)
+	Set hex = ""
+	For i = 1:1:$Length(hashBytes) {
+		Set b = $ASCII(hashBytes, i)
+		Set hex = hex _ $Extract("0123456789abcdef", (b \ 16) + 1) _ $Extract("0123456789abcdef", (b # 16) + 1)
+	}
+	// Store if absent
+	If '$Data(^KG("labelset", hex)) {
+		Set ^KG("labelset", hex) = canonical
+	}
+	Return hex
+}
+
+/// Return the canonical JSON for a known label set hash. Returns "" if unknown.
+ClassMethod ResolveLabelSet(hash As %String) As %String
+{
+	Return $Get(^KG("labelset", hash), "")
 }
 
 ClassMethod QueryWindowInbound(target As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
@@ -323,8 +434,9 @@ ClassMethod GetAggregate(source As %String, predicate As %String, metric As %Str
 {
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
-	Set startBucket = tsStart \ ..#BUCKET
-	Set endBucket = tsEnd \ ..#BUCKET
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set startBucket = tsStart \ tBucketDiv
+	Set endBucket = tsEnd \ tBucketDiv
 	Set totalCount = 0, totalSum = 0
 	Set globalMin = "", globalMax = ""
 	For b = startBucket:1:endBucket {
@@ -349,8 +461,9 @@ ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As 
 {
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
-	Set startBucket = tsStart \ ..#BUCKET
-	Set endBucket = tsEnd \ ..#BUCKET
+	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
+	Set startBucket = tsStart \ tBucketDiv
+	Set endBucket = tsEnd \ tBucketDiv
 	Set prefixLen = $Length(sourcePrefix)
 	Kill totals
 	Set b = startBucket - 1

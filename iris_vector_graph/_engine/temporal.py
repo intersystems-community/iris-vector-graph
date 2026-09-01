@@ -20,6 +20,7 @@ class TemporalMixin:
         weight: float = 1.0,
         attrs: dict = None,
         upsert: bool = False,
+        suppress_reverse_index: bool = False,
         graph: Optional[str] = None,
     ) -> bool:
         """Create a timestamped edge in the temporal index.
@@ -40,6 +41,7 @@ class TemporalMixin:
             source, predicate, target,
             timestamp=int(timestamp) if timestamp is not None else 0,
             weight=weight, attrs=attrs, upsert=upsert,
+            suppress_reverse_index=suppress_reverse_index,
         )
         if result.error is None and graph is not None:
             from iris_vector_graph.cypher.translator import _table
@@ -66,7 +68,8 @@ class TemporalMixin:
         return result.error is None
 
     def bulk_create_edges_temporal(
-        self, edges: list, upsert: bool = False, graph: Optional[str] = None
+        self, edges: list, upsert: bool = False,
+        suppress_reverse_index: bool = False, graph: Optional[str] = None
     ) -> int:
         normalized = [
             {
@@ -79,7 +82,9 @@ class TemporalMixin:
             }
             for e in edges
         ]
-        result = self._store.bulk_write_temporal_edges(normalized, upsert=upsert)
+        result = self._store.bulk_write_temporal_edges(
+            normalized, upsert=upsert, suppress_reverse_index=suppress_reverse_index
+        )
         try:
             count = int(result.rows[0][0]) if result.rows else 0
         except (TypeError, ValueError, IndexError):
@@ -142,6 +147,22 @@ class TemporalMixin:
         self._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
         )
+
+    def purge_raw_before(self, ts_end: int) -> int:
+        """Delete raw temporal edges with ts < ts_end. Preserves aggregates.
+
+        Returns the number of edges deleted.
+        """
+        return self._store.purge_raw_before(ts_end)
+
+    def intern_label_set(self, attrs: dict) -> str:
+        """Canonicalize, hash, and intern an attribute dict. Returns SHA1 hex hash."""
+        import json as _json
+        return self._store.intern_label_set(_json.dumps(attrs, separators=(",", ":")))
+
+    def resolve_label_set(self, hash_hex: str) -> str:
+        """Return the canonical JSON for a known label set hash, or '' if unknown."""
+        return self._store.resolve_label_set(hash_hex)
 
     def get_edge_velocity(self, node_id: str, window_seconds: int = 300) -> int:
         result = self._iris_obj().classMethodValue(
