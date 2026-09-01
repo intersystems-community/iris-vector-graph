@@ -2,6 +2,42 @@
 
 # Changelog
 
+### v2.14.0 (2026-09-01)
+
+**Arno Rust kernel always-on — spec 210**
+
+Fixed a cross-process visibility bug where `^||ArnoAccel("dllid")` (process-private
+global) meant only the IRIS worker that called `Load()` could see `dllid`. All other
+workers saw `dllid=0` → `IsAvailable()=false` → `rust_callout=false` → Rust never
+fired except in the rare case the same worker handled both the deploy and the query.
+
+#### Fixes
+
+- **ObjectScript — `Graph.KG.ArnoAccel`**: All 8 `^||ArnoAccel` references changed
+  to `^ArnoAccel` (persistent global). Added `^ArnoAccel("lib_path")` write in
+  `Load()` so any worker can re-load from the stored path.
+- **ObjectScript — `ArnoAccel.IsAvailable()`**: Now self-healing — if dllid probe
+  fails (stale cross-process handle), auto-reloads from `^ArnoAccel("lib_path")`.
+  `Capabilities()` in any worker now returns `rust_callout: true` after initial load.
+- **ObjectScript — `ArnoAccel.GetLibPath()`**: New classmethod returning
+  `^ArnoAccel("lib_path")` for Python to read.
+- **Python — `IRISGraphStore._reload_arno_if_needed()`**: New helper called in
+  `_detect_arno()` and `_arno_call()` — checks `IsAvailable()`, reads stored
+  lib_path (or falls back to `IVG_ARNO_LIB` env / default path), calls `Load()`.
+- **Python — `_detect_arno()`**: Added `IVG_DISABLE_ARNO=1` short-circuit before
+  any IRIS calls.
+- **Python — `_arno_call()`**: Guard added — if `IsAvailable()` returns false,
+  raises `ArnoError` instead of dispatching to stale handle.
+
+#### Tests
+
+- `tests/unit/test_arno_reload_guard.py` — 5 unit tests; no container required.
+- `tests/integration/test_arno_rust_always_on.py` — 6 integration tests against
+  `ivg-iris-enterprise`; includes cross-process visibility test
+  (`test_capabilities_fresh_connection`).
+
+---
+
 ### v2.13.0 (2026-09-01)
 
 **Arno algorithm dispatch fixes — spec 209**
