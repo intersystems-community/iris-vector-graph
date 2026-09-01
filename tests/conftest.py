@@ -200,8 +200,8 @@ def iris_connection(iris_test_container):
     def _get_or_open_native_conn():
         if _native_conn_holder[0] is None:
             try:
-                import iris.dbapi as _dbapi2
-                _native_conn_holder[0] = _dbapi2.connect(
+                import iris as _iris_native
+                _native_conn_holder[0] = _iris_native.connect(
                     hostname=conn.hostname,
                     port=conn.port,
                     namespace=conn.namespace,

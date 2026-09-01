@@ -1,5 +1,61 @@
 # Changelog
 
+### v2.9.0 (2026-09-01)
+
+**TemporalIndex API gaps — spec 205**
+
+Seven additions and fixes to `Graph.KG.TemporalIndex` (ObjectScript) and the
+Python engine layer, closing A1–A7 gaps found in production use.
+
+#### ObjectScript (Graph.KG.TemporalIndex)
+
+- **`PurgeRawBefore(tsEnd, tsStart=0)`** (A1) — adds `tsStart` floor parameter.
+  Default `0` is byte-identical to v2.8.0. Edges in `[tsStart, tsEnd)` are
+  deleted; edges below `tsStart` are counted as skipped. Returns `"deleted:skipped"`
+  string. Required for mixed-unit graphs (ms metrics vs second-precision edges)
+  to bound the purge window without wiping all second-precision data.
+- **`BulkInsert` per-item `"sri":1`** (A2) — each item in the batch JSON may carry
+  `"sri":1` to suppress `^KG("tin")` write for that item. Enables mixed-batch
+  suppression. Method-level `upsert` parameter unchanged.
+- **`InternLabelSet` / `ResolveLabelSet` type fidelity** (A5) — numeric values
+  intern as IRIS `%Integer`/`%Double`, booleans as `%Boolean`. `{"port":1972}`
+  resolves to integer `1972`, not string `"1972"`.
+- **`GetDistinctCount` / `QueryWindow` all-sources path** (A6) — `source=""`
+  walks all sources (previously required non-empty source). Eliminates per-source
+  round-trips for fleet-wide distinct counting.
+- **`QueryWindowInbound` suppression warning** (A7) — method doc states that
+  edges written with `suppressReverseIndex=1` have no `^KG("tin")` entry and are
+  invisible to inbound queries.
+
+#### Python engine / store layer
+
+- **`_in_bulk_load` flag** (A3) — `IRISGraphEngine.__init__` sets
+  `self._in_bulk_load = False`; `bulk_load_session` sets/clears it; `bulk_create_edges`
+  downgrades `auto_sync=True` to a no-op log when the flag is set. Eliminates
+  per-batch `BuildKG + BuildNKG + Build2HopStats` during large ingests.
+- **`PurgeResult(deleted, skipped)` NamedTuple** — `int(result) == result.deleted`
+  for backward compat. `IRISGraphStore.purge_raw_before` parses the
+  `"deleted:skipped"` return. `bulk_write_temporal_edges` injects `"sri": 1` per
+  item when `suppress_reverse_index=True`.
+- **`get_edges_in_window` docstring** — explicit warning that `direction="in"`
+  queries are blind to edges written with `suppress_reverse_index=True`.
+
+#### Deploy path fix
+
+- `scripts/enterprise-container.sh` `compile-all` now uses `irispython` (embedded
+  Python inside the container) via `-c "..."` rather than a heredoc+grep pipe.
+  The `up` command uses `deploy + compile-all` instead of `tcp-deploy` — TCP
+  `%SYSTEM.OBJ.Load` does not update the XDCall dispatch table for new methods
+  on the HealthShare enterprise NoPWS image; `irispython` does.
+
+#### Tests
+
+- 27 unit tests (`tests/unit/test_temporal_engine_gaps.py`) — all pass, no container.
+- 18 E2E integration tests (`tests/integration/test_temporal_engine_gaps_e2e.py`)
+  against `ivg-iris-enterprise` — all pass.
+
+---
+
 ### v2.8.0 (2026-08-31)
 
 **TemporalIndex API gaps — spec 204**

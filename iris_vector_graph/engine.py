@@ -147,6 +147,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         self._rel_mapping_cache: Optional[Dict[tuple, dict]] = None
         self._connection_params: Optional[Dict[str, Any]] = None
         self._nkg_dirty: bool = False
+        self._in_bulk_load: bool = False
         self._fetch_first_unsafe_cached: Optional[bool] = None  # build-106 %qaqpre probe (lazy)
         self._native_conn = None  # dedicated connection for iris.createIRIS — never used for cursor DDL
         self._index_registry: Dict[str, str] = self._build_index_registry()

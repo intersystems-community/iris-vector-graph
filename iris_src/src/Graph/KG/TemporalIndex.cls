@@ -35,7 +35,7 @@ ClassMethod InsertEdge(source As %String, predicate As %String, target As %Strin
 	}
 	// HLL sketch for COUNT DISTINCT of target values per (bucket, source, predicate).
 	// 16-register HLL using SHA1 hash. $SYSTEM.Encryption.SHA1Hash verified available in IRIS 2025.1.
-	// ~26% error rate for 16 registers — acceptable for fanout burst detection thresholds.
+	// ~26% error rate for 16 registers -- acceptable for fanout burst detection thresholds.
 	// HLL update is also NOT atomic under concurrent writes (same race as min/max above).
 	Do ..UpdateHLL(bucket, source, predicate, target)
 	If attrsJSON '= "" {
@@ -63,7 +63,7 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 		If weight = "" Set weight = 1
 		If ts = 0 Set ts = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
 		If upsert && $Data(^KG("tout", ts, source, predicate, target)) { Continue }
-		Set suppR = +item.%Get("suppress_reverse")
+		Set suppR = +item.%Get("sri")
 		Set ^KG("tout", ts, source, predicate, target) = weight
 		If 'suppR { Set ^KG("tin", ts, target, predicate, source) = weight }
 		Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -74,7 +74,7 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 		Set tmp = $Increment(^KG("deg", source))
 		Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "count"))
 		Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "sum"), weight)
-		// WARNING: min/max not atomic — see InsertEdge comment. Same race condition applies.
+		// WARNING: min/max not atomic -- see InsertEdge comment. Same race condition applies.
 		If '$Data(^KG("tagg", bucket, source, predicate, "min")) || (weight < ^KG("tagg", bucket, source, predicate, "min")) { Set ^KG("tagg", bucket, source, predicate, "min") = weight }
 		If '$Data(^KG("tagg", bucket, source, predicate, "max")) || (weight > ^KG("tagg", bucket, source, predicate, "max")) { Set ^KG("tagg", bucket, source, predicate, "max") = weight }
 		Do ..UpdateHLL(bucket, source, predicate, target)
@@ -92,7 +92,7 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 
 ClassMethod UpdateHLL(bucket As %Integer, source As %String, predicate As %String, value As %String) [ Private ]
 {
-	// 16-register HLL sketch. SHA1 first byte → register index, second byte → leading-zero count.
+	// 16-register HLL sketch. SHA1 first byte -> register index, second byte -> leading-zero count.
 	// Merge rule: keep max leading-zero count per register (standard HLL update).
 	Set hashBytes = $SYSTEM.Encryption.SHA1Hash(value)
 	Set regIdx = ($ASCII(hashBytes, 1) # 16) + 1
@@ -110,6 +110,10 @@ ClassMethod UpdateHLL(bucket As %Integer, source As %String, predicate As %Strin
 	}
 }
 
+/// Count distinct target nodes for source+predicate in a time window via HLL sketch.
+/// When source="" (empty string), counts across ALL sources matching the predicate.
+/// HLL registers are merged element-wise across all matching (source, predicate) pairs.
+/// Same ~26% error rate as per-source mode.
 ClassMethod GetDistinctCount(source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %Integer
 {
 	Set tsStart = +tsStart
@@ -120,11 +124,34 @@ ClassMethod GetDistinctCount(source As %String, predicate As %String, tsStart As
 	// Merge registers across buckets: element-wise max of 16 registers.
 	Set merged = $ListBuild(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
 	For b = startBucket:1:endBucket {
-		Set hll = $Get(^KG("tagg", b, source, predicate, "hll"))
-		If hll = "" Continue
-		For i = 1:1:16 {
-			If $List(hll, i) > $List(merged, i) {
-				Set $List(merged, i) = $List(hll, i)
+		If source '= "" {
+			// Single-source path (original behavior)
+			Set hll = $Get(^KG("tagg", b, source, predicate, "hll"))
+			If hll = "" Continue
+			For i = 1:1:16 {
+				If $List(hll, i) > $List(merged, i) {
+					Set $List(merged, i) = $List(hll, i)
+				}
+			}
+		} Else {
+			// All-sources path: iterate every source key in this bucket
+			Set src = ""
+			For {
+				Set src = $Order(^KG("tagg", b, src))
+				Quit:(src = "")
+				Set p = ""
+				For {
+					Set p = $Order(^KG("tagg", b, src, p))
+					Quit:(p = "")
+					If predicate '= "" && (p '= predicate) { Continue }
+					Set hll = $Get(^KG("tagg", b, src, p, "hll"))
+					If hll = "" Continue
+					For i = 1:1:16 {
+						If $List(hll, i) > $List(merged, i) {
+							Set $List(merged, i) = $List(hll, i)
+						}
+					}
+				}
 			}
 		}
 	}
@@ -301,16 +328,39 @@ ClassMethod PurgeBefore(tsEnd As %Integer)
 	}
 }
 
-/// Delete raw temporal edges with ts < tsEnd, preserving aggregates.
-/// Returns the number of edges deleted. Strict < boundary.
-ClassMethod PurgeRawBefore(tsEnd As %Integer) As %Integer
+/// Delete raw temporal edges in [tsStart, tsEnd), preserving aggregates and labelsets.
+/// tsStart=0 default: byte-identical to the v2.8.0 single-argument call.
+/// Returns "deleted:skipped" -- deleted count and skipped count (below tsStart).
+/// ^KG("labelset") is append-only and never touched by any purge method.
+ClassMethod PurgeRawBefore(tsEnd As %Integer, tsStart As %Integer = 0) As %String
 {
 	Set tsEnd = +tsEnd
-	Set count = 0
+	Set tsStart = $Select(+tsStart < 0: 0, 1: +tsStart)
+	Set deleted = 0
+	Set skipped = 0
 	Set ts = ""
 	For {
 		Set ts = $Order(^KG("tout", ts))
 		Quit:(ts = "")!(ts >= tsEnd)
+		If ts < tsStart {
+			Set s = ""
+			For {
+				Set s = $Order(^KG("tout", ts, s))
+				Quit:s=""
+				Set p = ""
+				For {
+					Set p = $Order(^KG("tout", ts, s, p))
+					Quit:p=""
+					Set o = ""
+					For {
+						Set o = $Order(^KG("tout", ts, s, p, o))
+						Quit:o=""
+						Set skipped = skipped + 1
+					}
+				}
+			}
+			Continue
+		}
 		Set s = ""
 		For {
 			Set s = $Order(^KG("tout", ts, s))
@@ -326,17 +376,20 @@ ClassMethod PurgeRawBefore(tsEnd As %Integer) As %Integer
 					Kill ^KG("tout", ts, s, p, o)
 					Kill ^KG("tin",  ts, o, p, s)
 					Kill ^KG("edgeprop", ts, s, p, o)
-					Set count = count + 1
+					Set deleted = deleted + 1
 				}
 			}
 		}
 		Kill ^KG("tout", ts)
 	}
-	Return count
+	Return deleted _ ":" _ skipped
 }
 
 /// Intern an attribute JSON object: canonicalize, hash, store once, return SHA1 hex.
 /// Returns "" on invalid JSON input. Idempotent.
+/// Type fidelity: numbers intern as numbers, booleans as booleans, nulls as null.
+/// ^KG("labelset") is append-only and NEVER touched by PurgeRawBefore or PurgeBefore.
+/// Interned label sets outlive raw edges -- safe for 13-month aggregate retention.
 ClassMethod InternLabelSet(attrsJSON As %String) As %String
 {
 	Set tSC = $$$OK
@@ -375,7 +428,7 @@ ClassMethod InternLabelSet(attrsJSON As %String) As %String
 		}
 	}
 	Set canonical = canonical _ "}"
-	// SHA1 hash → lowercase hex
+	// SHA1 hash -> lowercase hex
 	Set hashBytes = $SYSTEM.Encryption.SHA1Hash(canonical)
 	Set hex = ""
 	For i = 1:1:$Length(hashBytes) {
@@ -395,6 +448,10 @@ ClassMethod ResolveLabelSet(hash As %String) As %String
 	Return $Get(^KG("labelset", hash), "")
 }
 
+/// WARNING: Edges written with suppressReverseIndex=1 (or "sri":1 in BulkInsert)
+/// are NOT visible via this method. Those edges write only to ^KG("tout") and have
+/// no ^KG("tin") entry. This is intentional. Callers mixing suppressed and
+/// non-suppressed edges will see only non-suppressed edges here.
 ClassMethod QueryWindowInbound(target As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
 	Set tsStart = +tsStart
