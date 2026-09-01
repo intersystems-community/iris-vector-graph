@@ -2,6 +2,40 @@
 
 # Changelog
 
+### v2.12.0 (2026-09-01)
+
+**Arno deployment flow + codepath tests — spec 208**
+
+End-to-end integration tests covering the Arno/Rust deployment path previously untested.
+No production code changes — test coverage only.
+
+#### New test files
+
+- `tests/integration/test_arno_deploy_flow.py` — 9 tests across 3 classes:
+  - `TestArnoTcpLoadPath` (4): binary upload via `%Stream.FileBinary` (exact
+    `tcp-load-arno` path), `arno_available()` returns True after load, real Rust
+    `kg_triangle_count_global` call, `Capabilities()` dict shape.
+  - `TestArnoDegradation` (4): `IVG_DISABLE_ARNO=1` forces False without probing,
+    `arno_call()` raises `ArnoError` when disabled, `IVG_ARNO_LIB` override cached.
+  - `TestArnoSoAbsent` (1): nonexistent `.so` path → `arno_available()` False, no crash.
+
+- `tests/integration/test_arno_deploy.py` — 15 tests across 4 classes:
+  - `TestArnoDeployPath` (4): probe false when disabled, probe true after load,
+    `_detect_arno()` + `_arno_capabilities["rust_callout"]`, Capabilities shape.
+  - `TestArnoAlgorithmPaths` (5): BFS, PPR, PageRank, WCC, CDLP all execute via Arno
+    fast-path on 15-node ring graph, assert non-error non-empty results.
+  - `TestBuildNKGRustPath` (2): `sync()` uses Rust `BuildNKGRust` path when loaded;
+    falls back to ObjectScript `BuildNKG` when `IVG_DISABLE_ARNO=1`.
+  - `TestArnoGracefulFallback` (4): BFS/PPR/PageRank/WCC via ObjectScript fallback
+    — no exception raised.
+
+- `tests/integration/test_arno_adjacency_helpers.py` — 3 tests:
+  - `build_kg_adjacency_json` returns parseable JSON with nodes + edges.
+  - `build_kg_adjacency_chunked` returns `(idx_to_node, edge_count)` both non-negative.
+  - Serverside path node count matches native-API path within 10%.
+
+---
+
 ### v2.11.0 (2026-09-01)
 
 **Temporal engine polish — spec 207**
