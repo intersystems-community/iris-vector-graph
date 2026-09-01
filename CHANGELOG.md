@@ -2,6 +2,52 @@
 
 # Changelog
 
+### v2.11.0 (2026-09-01)
+
+**Temporal engine polish — spec 207**
+
+Four targeted additions covering InsertEdge re-scrape correctness (A13), bulk
+delete failure visibility (A11), adjacency bulk deletion (A10), and ms-mode
+analytics promotion (A8.1/A8.2).
+
+#### ObjectScript (Graph.KG.TemporalIndex / Graph.KG.EdgeScan / Graph.KG.TemporalIndexMS)
+
+- **A13 — `InsertEdge` mode param** — added `mode As %String = ""` parameter.
+  `mode="update"` kills `^KG("edgeprop", ts, s, p, o)` subtree before rewriting
+  attrs, preventing stale attribute accumulation on re-scrape. `mode="skip"`
+  no-ops if edge exists. `mode="insert"` overwrites unconditionally. Existing
+  `upsert` boolean preserved for backward compat (`upsert=True → skip`,
+  `upsert=False → insert`).
+- **A10 — `EdgeScan.BulkDeleteAdjacency(nodeIdsJSON)`** — new classmethod.
+  Removes `^KG("out", 0, node)`, `^KG("in", 0, node)`, and `^KG("deg", node)`
+  for each node ID in the JSON array. Returns count of nodes processed. Symmetric
+  complement to `BulkIngestNodes/Edges`.
+- **A8.2 — `GetVelocity`/`FindBursts` `nowTs` param** — added `nowTs As %Integer = 0`
+  to both methods. When `nowTs > 0`, uses it directly as the epoch for window
+  arithmetic. Fixes the ms-mode bug where `now` computed in seconds divided by
+  300000 always produced `startBucket ≈ 0`, returning 0 velocity for all real ms edges.
+- **A8.1 — `TemporalIndexMS` promoted to public** — removed "test only / never
+  call from production" restriction. Class already works; doc comment now reads
+  "supported ms-precision subclass".
+
+#### Python engine
+
+- **A11 — `bulk_delete_nodes` returns `DeleteResult`** — return type changed from
+  bare `int` to `DeleteResult(deleted, failed)` namedtuple. `int(result)` and
+  `bool(result)` still work for backward compat. Batch size now computed
+  dynamically via `_batch_size_for(ids)` against `_IRIS_MAX_STMT = 16384` to
+  prevent SQLCODE -202 on long IDs. Per-batch exceptions now counted in
+  `result.failed` instead of silently swallowed.
+- **A13 — `create_edge_temporal` mode param** — `mode: str = ""` parameter added
+  to `TemporalMixin.create_edge_temporal` and `bulk_create_edges_temporal`;
+  forwarded to `write_temporal_edge` and then to `InsertEdge`.
+- **A10 — `bulk_delete_adjacency(node_ids)`** — new method on `NodesEdgesMixin`.
+  Calls `Graph.KG.EdgeScan.BulkDeleteAdjacency`. Use after `bulk_delete_nodes`
+  to clean up stale `^KG` adjacency entries.
+- **A8.2 — `get_edge_velocity(node, window, now_ts=0)`** — added `now_ts: int = 0`
+  parameter, passed through to `GetVelocity`. Also accepts `window` alias for
+  `window_seconds`.
+
 ### v2.10.0 (2026-09-01)
 
 **Engine critical fixes — spec 206**

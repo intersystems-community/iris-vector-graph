@@ -1,11 +1,32 @@
 import json
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, NamedTuple, Optional, List
 
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph._validate import NodeIdInput, EdgeInput
 
 logger = logging.getLogger(__name__)
+
+
+class DeleteResult(NamedTuple):
+    deleted: int
+    failed: int
+
+    def __int__(self) -> int:
+        return self.deleted
+
+    def __bool__(self) -> bool:
+        return self.deleted > 0
+
+
+_IRIS_MAX_STMT = 16_384
+
+
+def _batch_size_for(ids: list) -> int:
+    if not ids:
+        return 200
+    avg_len = sum(len(i) for i in ids[:20]) / min(20, len(ids))
+    return max(10, int(_IRIS_MAX_STMT // (avg_len + 3)))
 
 
 class _BulkLoadSession:
@@ -1134,10 +1155,14 @@ class NodesEdgesMixin:
             cursor.close()
 
 
-    def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = 200) -> int:
+    def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = None) -> "DeleteResult":
         deleted = 0
-        for i in range(0, len(node_ids), batch_size):
-            batch = node_ids[i : i + batch_size]
+        failed = 0
+        if not node_ids:
+            return DeleteResult(0, 0)
+        size = batch_size if batch_size is not None else _batch_size_for(node_ids)
+        for i in range(0, len(node_ids), size):
+            batch = node_ids[i : i + size]
             phs = ",".join(["?"] * len(batch))
             cursor = self.conn.cursor()
             try:
@@ -1169,14 +1194,19 @@ class NodesEdgesMixin:
                 deleted += len(batch)
             except Exception as e:
                 logger.warning(f"bulk_delete_nodes batch failed: {e}")
+                failed += len(batch)
             finally:
                 cursor.close()
         # BYPASS: SQL edge rows removed without ^KG/^NKG maintenance.
         if deleted:
             self._nkg_dirty = True
-        return deleted
+        return DeleteResult(deleted, failed)
 
-
+    def bulk_delete_adjacency(self, node_ids: List[str]) -> int:
+        result = self._iris_obj().classMethodValue(
+            "Graph.KG.EdgeScan", "BulkDeleteAdjacency", json.dumps(node_ids)
+        )
+        return int(str(result)) if result is not None else 0
 
     def get_node_properties(self, node_id: str) -> Dict[str, Any]:
         node = self.get_node(node_id)

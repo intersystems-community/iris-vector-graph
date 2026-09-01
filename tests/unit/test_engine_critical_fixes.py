@@ -141,7 +141,7 @@ class TestBulkDeleteNodesNoOrQuery:
         """Empty node_ids list must issue no SQL."""
         store, calls_log = self._make_mixin_with_cursor()
         result = store.bulk_delete_nodes([])
-        assert result == 0
+        assert int(result) == 0
         assert calls_log == [], f"Expected no SQL for empty batch, got: {calls_log}"
 
 

@@ -1425,14 +1425,14 @@ class TestBulkDeleteNodes:
         _patch_t(eng)
 
         result = eng.bulk_delete_nodes(["n1", "n2"])
-        assert result == 2
+        assert int(result) == 2
         assert eng._nkg_dirty is True
 
     def test_bulk_delete_nodes_empty_returns_zero(self):
         eng, conn, cur = make_engine()
         _patch_t(eng)
         result = eng.bulk_delete_nodes([])
-        assert result == 0
+        assert int(result) == 0
         assert eng._nkg_dirty is False
 
     def test_bulk_delete_nodes_exception_logged(self):
@@ -1442,7 +1442,7 @@ class TestBulkDeleteNodes:
         cur.execute.side_effect = Exception("db error")
 
         result = eng.bulk_delete_nodes(["n1"])
-        assert result == 0
+        assert int(result) == 0
 
 
 # ---------------------------------------------------------------------------

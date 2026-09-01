@@ -9,10 +9,17 @@ Parameter TSUNIT As %String = "";
 /// Bucket width in milliseconds when TSUNIT="ms". Derived: BUCKET * 1000.
 Parameter BUCKETMS As %Integer = 300000;
 
-ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0, suppressReverseIndex As %Boolean = 0) As %Status
+ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0, suppressReverseIndex As %Boolean = 0, mode As %String = "") As %Status
 {
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
-	If upsert && $Data(^KG("tout", timestamp, source, predicate, target)) { Return 1 }
+	// Resolve effective mode: explicit mode overrides legacy upsert boolean.
+	// mode="" falls back to upsert semantics for backward compat.
+	If mode = "" { Set mode = $Select(upsert: "skip", 1: "insert") }
+	If mode = "skip" && $Data(^KG("tout", timestamp, source, predicate, target)) { Return 1 }
+	If mode = "update" {
+		// Kill stale edgeprop subtree before rewriting attrs.
+		Kill ^KG("edgeprop", timestamp, source, predicate, target)
+	}
 	Set ^KG("tout", timestamp, source, predicate, target) = weight
 	If 'suppressReverseIndex { Set ^KG("tin", timestamp, target, predicate, source) = weight }
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -233,10 +240,10 @@ ClassMethod QueryWindowSources(predicate As %String, tsStart As %Integer, tsEnd 
 	Return result _ "]"
 }
 
-ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300) As %Integer
+ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300, nowTs As %Integer = 0) As %Integer
 {
-	Set now = $ZTimeStamp
-	Set now = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime(now, 3, 1))
+	Set now = $Select(nowTs > 0: nowTs,
+		1: ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1)))
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set startBucket = (now - windowSec) \ tBucketDiv
 	Set endBucket = now \ tBucketDiv
@@ -247,9 +254,10 @@ ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300) As %Inte
 	Return total
 }
 
-ClassMethod FindBursts(predicate As %String, windowSec As %Integer, threshold As %Integer) As %String
+ClassMethod FindBursts(predicate As %String, windowSec As %Integer, threshold As %Integer, nowTs As %Integer = 0) As %String
 {
-	Set now = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
+	Set now = $Select(nowTs > 0: nowTs,
+		1: ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1)))
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set startBucket = (now - windowSec) \ tBucketDiv
 	Set endBucket = now \ tBucketDiv

@@ -36,6 +36,7 @@ class TemporalMixin:
         upsert: bool = False,
         suppress_reverse_index: bool = False,
         graph: Optional[str] = None,
+        mode: str = "",
     ) -> bool:
         """Create a timestamped edge in the temporal index.
 
@@ -56,6 +57,7 @@ class TemporalMixin:
             timestamp=int(timestamp) if timestamp is not None else 0,
             weight=weight, attrs=attrs, upsert=upsert,
             suppress_reverse_index=suppress_reverse_index,
+            mode=mode,
         )
         if result.error is None and graph is not None:
             cursor = self.conn.cursor()
@@ -82,7 +84,8 @@ class TemporalMixin:
 
     def bulk_create_edges_temporal(
         self, edges: list, upsert: bool = False,
-        suppress_reverse_index: bool = False, graph: Optional[str] = None
+        suppress_reverse_index: bool = False, graph: Optional[str] = None,
+        mode: str = "",
     ) -> int:
         normalized = [
             {
@@ -205,9 +208,10 @@ class TemporalMixin:
         """Return the canonical JSON for a known label set hash, or '' if unknown."""
         return self._store.resolve_label_set(hash_hex)
 
-    def get_edge_velocity(self, node_id: str, window_seconds: int = 300) -> int:
+    def get_edge_velocity(self, node_id: str, window_seconds: int = 300, window: int = None, now_ts: int = 0) -> int:
+        w = window if window is not None else window_seconds
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetVelocity", node_id, window_seconds
+            "Graph.KG.TemporalIndex", "GetVelocity", node_id, w, now_ts
         )
         return int(result)
 

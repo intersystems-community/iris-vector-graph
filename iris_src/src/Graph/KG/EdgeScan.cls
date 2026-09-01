@@ -198,4 +198,22 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 	Quit n
 }
 
+/// Remove ^KG("out"/"in"/"deg") entries for each node ID in the JSON array.
+/// Removes: out-adjacency (node as source), in-adjacency (node as target), degree counter.
+/// Returns count of nodes processed. Dangling in-refs where deleted node was a source are not removed.
+ClassMethod BulkDeleteAdjacency(nodeIdsJSON As %String) As %Integer
+{
+	Set arr = ##class(%DynamicArray).%FromJSON(nodeIdsJSON)
+	Set count = 0
+	Set iter = arr.%GetIterator()
+	While iter.%GetNext(.idx, .nodeId) {
+		If nodeId = "" { Continue }
+		Kill ^KG("out", 0, nodeId)
+		Kill ^KG("in", 0, nodeId)
+		Kill ^KG("deg", nodeId)
+		Set count = count + 1
+	}
+	Quit count
+}
+
 }

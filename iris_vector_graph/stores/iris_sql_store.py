@@ -723,7 +723,8 @@ class IRISGraphStore:
     def write_temporal_edge(
         self, source_id: str, predicate: str, target_id: str,
         timestamp: int, weight: float = 1.0, attrs: Optional[dict] = None,
-        upsert: bool = False, suppress_reverse_index: bool = False
+        upsert: bool = False, suppress_reverse_index: bool = False,
+        mode: str = "",
     ) -> IVGResult:
         import json as _json
         attrs_json = _json.dumps(attrs) if attrs else ""
@@ -733,6 +734,7 @@ class IRISGraphStore:
                 source_id, predicate, target_id,
                 str(timestamp), str(weight), attrs_json,
                 str(int(upsert)), str(int(suppress_reverse_index)),
+                mode,
             )
         except Exception as e:
             logger.warning("write_temporal_edge failed: %s", e)
