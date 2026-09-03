@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # IVG Pre-Release Checklist
 
 Run this checklist before every merge to main, version bump, and PyPI publish.
@@ -15,10 +17,10 @@ Check items off as completed (`[x]`). Items marked **GATE** must pass before pro
 
 ## 2. Test Suite — **GATE**
 
-Run against the `ivg-iris` community container (port 21972).
+Run against `ivg-iris-enterprise` (port 31972). **Do not use `ivg-iris` (community, port 21972) — MaxServerConn=1 causes spurious license failures under concurrent test processes.**
 
 ```bash
-pytest --tb=short -q
+IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest --tb=short -q
 ```
 
 - [ ] Zero failures in `tests/unit/`
@@ -30,10 +32,12 @@ pytest --tb=short -q
 
 ## 3. Test Coverage — **GATE: ≥ 90%**
 
-Coverage is measured across **unit + integration** together against the live `ivg-iris` container.
+Coverage is measured across **unit + integration** together against `ivg-iris-enterprise`
+(port 31972). Never use the community container for coverage — see §2 note.
 
 ```bash
-# From repo root with ivg-iris running
+# From repo root with ivg-iris-enterprise running
+IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
 /Users/tdyar/ws/iris-vector-graph/.venv/bin/python -m coverage run \
     --source=iris_vector_graph \
     -m pytest tests/unit/ tests/integration/ \
@@ -96,8 +100,8 @@ ruff check .
 
 ## 6. ObjectScript Compilation
 
-- [ ] All `.cls` files in `iris_src/src/` compile cleanly on `ivg-iris` (community)
-- [ ] All `.cls` files compile on `ivg-iris-enterprise` if enterprise-only classes changed
+- [ ] All `.cls` files in `iris_src/src/` compile cleanly on `ivg-iris-enterprise` (port 31972)
+- [ ] Enterprise-only classes compile without errors if changed
 - [ ] No compilation errors or warnings in `Graph.KG.*` namespace
 
 ---
@@ -142,4 +146,4 @@ twine upload dist/*
 | Lint clean               |        |       |
 | ObjectScript compiles    |        |       |
 
-Date: ****\_\_\_**** Release: v****\_\_\_****
+Date: \***\*\_\_\_\*\*** Release: v\***\*\_\_\_\*\***
