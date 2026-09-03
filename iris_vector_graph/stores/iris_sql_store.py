@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import warnings
 from typing import Any, Callable, Dict, List, Optional
 
 from iris_vector_graph.result import IVGResult
@@ -34,20 +35,76 @@ _FULL_CAPABILITIES = {
 
 import re as _re_global
 
+
 def _fix_iris_json(raw3: str) -> str:
-    return _re_global.sub(r'(?<=[:\[,])(\.\d)', r'0\1', raw3)
+    return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
 
 class IRISGraphStore:
-    def __init__(self, conn):
+    def __init__(self, conn, namespace: str = "USER"):
         self.conn = conn
+        self._namespace = namespace
+        self._namespace_checked: bool = False
         self._arno_available: Optional[bool] = None
         self._arno_capabilities: Dict[str, Any] = {}
+
+    # ── Namespace awareness (spec 212) ────────────────────────────────────────
+
+    def _check_namespace(self) -> None:
+        """Probe that the connected IRIS namespace has ^KG globals accessible.
+
+        Runs once per store lifetime (cached via _namespace_checked).
+        Suppress with IVG_IGNORE_NAMESPACE_CHECK=1.
+        Upgrade warning to exception with IVG_STRICT_NAMESPACE=1.
+        """
+        from iris_vector_graph.exceptions import NamespaceMismatchWarning
+
+        if os.environ.get("IVG_IGNORE_NAMESPACE_CHECK", "").strip() == "1":
+            return
+        if getattr(self, "_namespace_checked", False):
+            return
+        if not hasattr(self, "_namespace"):
+            # Store created without __init__ (e.g. __new__ in tests) — skip probe
+            return
+
+        self._namespace_checked = True
+        ns = getattr(self, "_namespace", "USER")
+
+        conn_ns = getattr(self.conn, "namespace", None)
+        if conn_ns is not None and conn_ns != ns:
+            w = NamespaceMismatchWarning(conn_ns, ns)
+            logger.warning(str(w))
+            if os.environ.get("IVG_STRICT_NAMESPACE", "").strip() == "1":
+                warnings.warn(w, stacklevel=2)
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT $Data(^KG("deg"))')
+            row = cursor.fetchone()
+            kg_present = row[0] if row else 0
+        except Exception:
+            kg_present = 1  # can't probe — assume ok, don't false-positive
+
+        if not kg_present:
+            w = NamespaceMismatchWarning(
+                ns,
+                ns,
+                hint=(
+                    f"map ^KG globals for '{ns}' in the CPF file, or"
+                    " reconnect to the namespace containing your graph data."
+                    " See README 'Non-USER namespace deployment'."
+                ),
+            )
+            logger.warning(str(w))
+            if os.environ.get("IVG_STRICT_NAMESPACE", "").strip() == "1":
+                warnings.warn(w, stacklevel=2)
 
     # ── Internal helpers (moved from engine) ─────────────────────────────────
 
     def _iris_obj(self):
         import iris as _iris
+
         return _iris.createIRIS(self.conn)
 
     def _reload_arno_if_needed(self, iris_obj) -> bool:
@@ -70,8 +127,16 @@ class IRISGraphStore:
         if os.environ.get("IVG_DISABLE_ARNO", "").strip() == "1":
             self._arno_available = False
             return False
+        self._check_namespace()
         try:
             iris_obj = self._iris_obj()
+            if not iris_obj.classMethodValue("%SYSTEM.OBJ", "Exists", "Graph.KG.ArnoAccel"):
+                logger.warning(
+                    "Arno class not found in namespace %s — Arno unavailable",
+                    getattr(self, "_namespace", "USER"),
+                )
+                self._arno_available = False
+                return False
             try:
                 iris_obj.classMethodValue("Graph.KG.ArnoAccel", "Load")
             except Exception:
@@ -95,6 +160,7 @@ class IRISGraphStore:
 
     def _arno_call(self, cls: str, method: str, *args) -> str:
         from iris_vector_graph.stores.arno_bridge import ArnoError as _ArnoError
+
         iris_obj = self._iris_obj()
         if not self._reload_arno_if_needed(iris_obj):
             raise _ArnoError("arno not loaded and reload failed")
@@ -109,6 +175,7 @@ class IRISGraphStore:
         )
 
     def _call_classmethod(self, cls: str, method: str, *args):
+        self._check_namespace()
         iris_obj = self._iris_obj()
         return iris_obj.classMethodValue(cls, method, *args)
 
@@ -230,13 +297,11 @@ class IRISGraphStore:
                 continue
             err_lower_check = lambda e: ("unique" in str(e).lower() or "-119" in str(e))
             try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid]
-                )
+                cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
             except Exception as e:
                 if not err_lower_check(e):
                     logger.warning("write_nodes insert failed: %s", e)
-            for label in (node.get("labels") or []):
+            for label in node.get("labels") or []:
                 try:
                     cursor.execute(
                         "INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (?, ?)", [nid, label]
@@ -331,10 +396,7 @@ class IRISGraphStore:
             if "__rn" in cols:
                 rn_idx = cols.index("__rn")
                 cols = [c for c in cols if c != "__rn"]
-                rows = [
-                    [v for i, v in enumerate(r) if i != rn_idx]
-                    for r in rows
-                ]
+                rows = [[v for i, v in enumerate(r) if i != rn_idx] for r in rows]
             return IVGResult(columns=cols, rows=[list(r) for r in rows], sql=sql, params=params)
         except Exception as e:
             err = str(e)[:200]
@@ -383,6 +445,7 @@ class IRISGraphStore:
             #                               should see the post-removal state where the
             #                               property is NULL, not the pre-removal value)
             import re as _del_re
+
             # Use re.search (not re.match) so CTE-prefixed DELETE statements like
             # "WITH Stage1 AS (...) DELETE FROM nodes ..." are also detected.
             # Include rdf_edges and rdf_labels so all label/relationship DELETE operations
@@ -391,12 +454,13 @@ class IRISGraphStore:
             # labels() function in the translator excludes removed labels from its result
             # via NOT IN (...) to return the post-deletion view.
             has_delete_dml = any(
-                isinstance(s, str) and
-                _del_re.search(
-                    r'DELETE\s+FROM\s+(?:\w+\.)?(?:nodes|rdf_edges|rdf_labels)\b',
-                    s, _del_re.IGNORECASE
-                ) and
-                not s.startswith("__constraint_check_delete_connected__")
+                isinstance(s, str)
+                and _del_re.search(
+                    r"DELETE\s+FROM\s+(?:\w+\.)?(?:nodes|rdf_edges|rdf_labels)\b",
+                    s,
+                    _del_re.IGNORECASE,
+                )
+                and not s.startswith("__constraint_check_delete_connected__")
                 for s in stmts
             )
             last_is_select = (
@@ -414,8 +478,10 @@ class IRISGraphStore:
 
             for i, stmt in enumerate(stmts):
                 p = params_list[i] if i < len(params_list) else []
-                if isinstance(stmt, str) and stmt.startswith("__constraint_check_delete_connected__"):
-                    actual_sql = stmt[len("__constraint_check_delete_connected__ "):]
+                if isinstance(stmt, str) and stmt.startswith(
+                    "__constraint_check_delete_connected__"
+                ):
+                    actual_sql = stmt[len("__constraint_check_delete_connected__ ") :]
                     cursor.execute(actual_sql, p)
                     count_row = cursor.fetchone()
                     count = count_row[0] if count_row else 0
@@ -440,10 +506,7 @@ class IRISGraphStore:
                 if "__rn" in cols:
                     rn_idx = cols.index("__rn")
                     cols = [c for c in cols if c != "__rn"]
-                    snap_rows = [
-                        [v for j, v in enumerate(r) if j != rn_idx]
-                        for r in snap_rows
-                    ]
+                    snap_rows = [[v for j, v in enumerate(r) if j != rn_idx] for r in snap_rows]
                 return IVGResult(columns=cols, rows=[list(r) for r in snap_rows])
 
             cols = [d[0] for d in cursor.description] if cursor.description else []
@@ -452,10 +515,7 @@ class IRISGraphStore:
                 rn_idx = cols.index("__rn")
                 cols = [c for c in cols if c != "__rn"]
                 if rows is not None:
-                    rows = [
-                        [v for i, v in enumerate(r) if i != rn_idx]
-                        for r in rows
-                    ]
+                    rows = [[v for i, v in enumerate(r) if i != rn_idx] for r in rows]
             if rows is None:
                 rows = []
             return IVGResult(columns=cols, rows=[list(r) for r in rows])
@@ -466,17 +526,20 @@ class IRISGraphStore:
     # ── Traversal ─────────────────────────────────────────────────────────────
 
     def execute_bfs(
-        self, source_id: str, predicates: list, max_hops: int,
-        direction: str, max_results: int
+        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
     ) -> IVGResult:
         import json as _json
+
         predicates_json = _json.dumps(predicates) if predicates else ""
 
         if self._detect_arno() and self._arno_capabilities.get("bfs"):
             try:
                 raw = self._arno_call(
-                    "Graph.KG.NKGAccel", "BFSJson",
-                    source_id, predicates_json, str(max_hops),
+                    "Graph.KG.NKGAccel",
+                    "BFSJson",
+                    source_id,
+                    predicates_json,
+                    str(max_hops),
                     str(max_results),
                 )
                 raw_val = raw if isinstance(raw, str) else str(raw)
@@ -486,9 +549,9 @@ class IRISGraphStore:
                     pages = []
                     i = 1
                     while True:
-                        chunk = str(iris_obj.classMethodValue(
-                            "Graph.KG.NKGAccel", "ReadBFSPage", tag, i
-                        ))
+                        chunk = str(
+                            iris_obj.classMethodValue("Graph.KG.NKGAccel", "ReadBFSPage", tag, i)
+                        )
                         if not chunk or chunk == "":
                             break
                         pages.append(chunk)
@@ -497,17 +560,27 @@ class IRISGraphStore:
                 results = _json.loads(raw_val) if raw_val else []
                 if not isinstance(results, list):
                     results = []
-                rows = [[r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")] for r in results]
+                rows = [
+                    [r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")]
+                    for r in results
+                ]
                 return IVGResult(columns=["id", "hops", "pred"], rows=rows)
             except Exception as e:
                 logger.warning("Arno BFS failed, falling back to ObjectScript: %s", e)
 
         try:
-            bfs_json = str(self._call_classmethod(
-                "Graph.KG.Traversal", "BFSFastJsonSorted",
-                source_id, predicates_json, str(max_hops),
-                "", direction, str(max_results),
-            ))
+            bfs_json = str(
+                self._call_classmethod(
+                    "Graph.KG.Traversal",
+                    "BFSFastJsonSorted",
+                    source_id,
+                    predicates_json,
+                    str(max_hops),
+                    "",
+                    direction,
+                    str(max_results),
+                )
+            )
         except Exception as e:
             logger.warning("BFS ObjectScript failed: %s", e)
             return self._sql_bfs_fallback(source_id, predicates, max_hops, direction, max_results)
@@ -517,10 +590,20 @@ class IRISGraphStore:
             tag = val.split(":", 2)[1]
             if tag == "0":
                 # ^KG not built or source has no edges — fall back to SQL BFS
-                return self._sql_bfs_fallback(source_id, predicates, max_hops, direction, max_results)
+                return self._sql_bfs_fallback(
+                    source_id, predicates, max_hops, direction, max_results
+                )
             from iris_vector_graph.engine import _bfs_stream_pages
+
             results = list(_bfs_stream_pages(self.conn, tag))
-            rows = [[r.get("o", r.get("id", "")), r.get("step", r.get("hops", 0)), r.get("pred", r.get("p", ""))] for r in results]
+            rows = [
+                [
+                    r.get("o", r.get("id", "")),
+                    r.get("step", r.get("hops", 0)),
+                    r.get("pred", r.get("p", "")),
+                ]
+                for r in results
+            ]
             return IVGResult(columns=["id", "hops", "pred"], rows=rows)
 
         try:
@@ -530,12 +613,14 @@ class IRISGraphStore:
         except Exception:
             results = []
 
-        rows = [[r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")] for r in results]
+        rows = [
+            [r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")]
+            for r in results
+        ]
         return IVGResult(columns=["id", "hops", "pred"], rows=rows)
 
     def _sql_bfs_fallback(
-        self, source_id: str, predicates: list, max_hops: int,
-        direction: str, max_results: int
+        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
     ) -> "IVGResult":
         cursor = self.conn.cursor()
         visited: dict[str, int] = {source_id: 0}
@@ -557,7 +642,7 @@ class IRISGraphStore:
                 sql = f"SELECT DISTINCT s, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
             else:
                 sql_out = f"SELECT DISTINCT o_id AS nbr, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}"
-                sql_in  = f"SELECT DISTINCT s AS nbr, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
+                sql_in = f"SELECT DISTINCT s AS nbr, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
                 cursor.execute(sql_out, params)
                 nbrs_out = cursor.fetchall()
                 cursor.execute(sql_in, list(frontier) + (predicates if predicates else []))
@@ -586,23 +671,38 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "hops", "pred"], rows=result_rows)
 
     def execute_shortest_path(
-        self, source_id: str, target_id: str, predicates: list,
-        max_hops: int, direction: str, find_all: bool
+        self,
+        source_id: str,
+        target_id: str,
+        predicates: list,
+        max_hops: int,
+        direction: str,
+        find_all: bool,
     ) -> IVGResult:
         import json as _json
+
         predicates_json = _json.dumps(predicates) if predicates else ""
         try:
-            path_json = str(self._call_classmethod(
-                "Graph.KG.Traversal", "ShortestPathJson",
-                source_id, target_id, str(max_hops),
-                predicates_json, direction, str(int(find_all)),
-            ))
+            path_json = str(
+                self._call_classmethod(
+                    "Graph.KG.Traversal",
+                    "ShortestPathJson",
+                    source_id,
+                    target_id,
+                    str(max_hops),
+                    predicates_json,
+                    direction,
+                    str(int(find_all)),
+                )
+            )
             paths_raw = _json.loads(path_json) if path_json else []
             if isinstance(paths_raw, dict):
                 paths = [paths_raw]
             else:
                 paths = paths_raw
-            rows = [[_json.dumps(p), p.get("length", len(p.get("nodes", [])) - 1)] for p in paths if p]
+            rows = [
+                [_json.dumps(p), p.get("length", len(p.get("nodes", [])) - 1)] for p in paths if p
+            ]
             return IVGResult(columns=["path", "length"], rows=rows)
         except Exception as e:
             logger.warning("ShortestPath failed: %s", e)
@@ -612,11 +712,18 @@ class IRISGraphStore:
         self, source_id: str, target_id: str, weight_property: str, max_hops: int
     ) -> IVGResult:
         import json as _json
+
         try:
-            result_json = str(self._call_classmethod(
-                "Graph.KG.Traversal", "DijkstraJson",
-                source_id, target_id, weight_property, str(max_hops),
-            ))
+            result_json = str(
+                self._call_classmethod(
+                    "Graph.KG.Traversal",
+                    "DijkstraJson",
+                    source_id,
+                    target_id,
+                    weight_property,
+                    str(max_hops),
+                )
+            )
             result = _json.loads(result_json) if result_json else {}
             if not result:
                 return IVGResult(columns=["path", "totalCost"], rows=[])
@@ -632,14 +739,25 @@ class IRISGraphStore:
 
     def execute_ppr(self, seed_ids: list, damping: float, max_iterations: int) -> IVGResult:
         import json as _json
+
         if not seed_ids:
             raise ValueError("seed_ids must not be empty")
         seeds_json = _json.dumps(seed_ids)
         try:
             if self._detect_arno() and "ppr" in self._arno_capabilities.get("algorithms", []):
-                raw = self._arno_call("Graph.KG.ArnoAccel", "PPRJson", seeds_json, str(damping), str(max_iterations))
+                raw = self._arno_call(
+                    "Graph.KG.ArnoAccel", "PPRJson", seeds_json, str(damping), str(max_iterations)
+                )
             else:
-                raw = str(self._call_classmethod("Graph.KG.PageRank", "PPRJson", seeds_json, str(damping), str(max_iterations)))
+                raw = str(
+                    self._call_classmethod(
+                        "Graph.KG.PageRank",
+                        "PPRJson",
+                        seeds_json,
+                        str(damping),
+                        str(max_iterations),
+                    )
+                )
             results = _json.loads(raw) if raw else []
             rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
             return IVGResult(columns=["id", "score"], rows=rows)
@@ -649,11 +767,18 @@ class IRISGraphStore:
 
     def execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult:
         import json as _json
+
         try:
             if self._detect_arno() and "pagerank" in self._arno_capabilities.get("algorithms", []):
-                raw = self._arno_call("Graph.KG.NKGAccel", "PageRankJson", str(damping), str(max_iterations))
+                raw = self._arno_call(
+                    "Graph.KG.NKGAccel", "PageRankJson", str(damping), str(max_iterations)
+                )
             else:
-                raw = str(self._call_classmethod("Graph.KG.PageRank", "PageRankGlobalJson", str(damping), str(max_iterations)))
+                raw = str(
+                    self._call_classmethod(
+                        "Graph.KG.PageRank", "PageRankGlobalJson", str(damping), str(max_iterations)
+                    )
+                )
             results = _json.loads(raw) if raw else []
             rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
             return IVGResult(columns=["id", "score"], rows=rows)
@@ -663,6 +788,7 @@ class IRISGraphStore:
 
     def execute_wcc(self) -> IVGResult:
         import json as _json
+
         try:
             if self._detect_arno() and "wcc" in self._arno_capabilities.get("algorithms", []):
                 raw = self._arno_call("Graph.KG.NKGAccel", "WCCJson")
@@ -680,11 +806,14 @@ class IRISGraphStore:
 
     def execute_cdlp(self, max_iterations: int) -> IVGResult:
         import json as _json
+
         try:
             if self._detect_arno() and "cdlp" in self._arno_capabilities.get("algorithms", []):
                 raw = self._arno_call("Graph.KG.NKGAccel", "CDLPJson", str(max_iterations))
             else:
-                raw = str(self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations)))
+                raw = str(
+                    self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations))
+                )
             results = _json.loads(raw) if raw else {}
             if isinstance(results, dict):
                 rows = [[k, v] for k, v in results.items()]
@@ -699,17 +828,36 @@ class IRISGraphStore:
         self, seed_ids: list, k_hops: int, edge_types: list, max_nodes: int
     ) -> IVGResult:
         import json as _json
+
         seeds_json = _json.dumps(seed_ids)
         edge_json = _json.dumps(edge_types) if edge_types else ""
         try:
             if self._detect_arno() and "subgraph" in self._arno_capabilities.get("algorithms", []):
-                raw = self._arno_call("Graph.KG.NKGAccel", "SubgraphJson", seeds_json, str(k_hops), edge_json, str(max_nodes))
+                raw = self._arno_call(
+                    "Graph.KG.NKGAccel",
+                    "SubgraphJson",
+                    seeds_json,
+                    str(k_hops),
+                    edge_json,
+                    str(max_nodes),
+                )
             else:
-                raw = str(self._call_classmethod("Graph.KG.PageRank", "SubgraphJson", seeds_json, str(k_hops), edge_json, str(max_nodes)))
+                raw = str(
+                    self._call_classmethod(
+                        "Graph.KG.PageRank",
+                        "SubgraphJson",
+                        seeds_json,
+                        str(k_hops),
+                        edge_json,
+                        str(max_nodes),
+                    )
+                )
             result = _json.loads(raw) if raw else {"nodes": [], "edges": []}
             nodes = result.get("nodes", [])
             edges = result.get("edges", [])
-            return IVGResult(columns=["nodes", "edges"], rows=[[_json.dumps(nodes), _json.dumps(edges)]])
+            return IVGResult(
+                columns=["nodes", "edges"], rows=[[_json.dumps(nodes), _json.dumps(edges)]]
+            )
         except Exception as e:
             logger.warning("Subgraph failed: %s", e)
             return IVGResult(columns=["nodes", "edges"], rows=[["[]", "[]"]])
@@ -717,11 +865,17 @@ class IRISGraphStore:
     def execute_knn_vec(self, query_vector: list, k: int, label_filter: Optional[str]) -> IVGResult:
         try:
             vec_str = ",".join(str(x) for x in query_vector)
-            result_json = str(self._call_classmethod(
-                "Graph.KG.TemporalIndex", "kg_KNN_VEC",
-                vec_str, str(k), label_filter or "",
-            ))
+            result_json = str(
+                self._call_classmethod(
+                    "Graph.KG.TemporalIndex",
+                    "kg_KNN_VEC",
+                    vec_str,
+                    str(k),
+                    label_filter or "",
+                )
+            )
             import json as _json
+
             results = _json.loads(result_json) if result_json else []
             rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
             return IVGResult(columns=["id", "score"], rows=rows)
@@ -744,19 +898,32 @@ class IRISGraphStore:
     # ── Temporal Edges ────────────────────────────────────────────────────────
 
     def write_temporal_edge(
-        self, source_id: str, predicate: str, target_id: str,
-        timestamp: int, weight: float = 1.0, attrs: Optional[dict] = None,
-        upsert: bool = False, suppress_reverse_index: bool = False,
+        self,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        timestamp: int,
+        weight: float = 1.0,
+        attrs: Optional[dict] = None,
+        upsert: bool = False,
+        suppress_reverse_index: bool = False,
         mode: str = "",
     ) -> IVGResult:
         import json as _json
+
         attrs_json = _json.dumps(attrs) if attrs else ""
         try:
             self._call_classmethod(
-                "Graph.KG.TemporalIndex", "InsertEdge",
-                source_id, predicate, target_id,
-                str(timestamp), str(weight), attrs_json,
-                str(int(upsert)), str(int(suppress_reverse_index)),
+                "Graph.KG.TemporalIndex",
+                "InsertEdge",
+                source_id,
+                predicate,
+                target_id,
+                str(timestamp),
+                str(weight),
+                attrs_json,
+                str(int(upsert)),
+                str(int(suppress_reverse_index)),
                 mode,
             )
         except Exception as e:
@@ -789,19 +956,29 @@ class IRISGraphStore:
             return IVGResult(columns=["inserted"], rows=[[0]])
 
         try:
-            inserted = int(str(self._call_classmethod(
-                "Graph.KG.TemporalIndex", "BulkInsert",
-                _json.dumps(batch), str(int(upsert)),
-            )))
+            inserted = int(
+                str(
+                    self._call_classmethod(
+                        "Graph.KG.TemporalIndex",
+                        "BulkInsert",
+                        _json.dumps(batch),
+                        str(int(upsert)),
+                    )
+                )
+            )
         except Exception as e:
             logger.warning("BulkInsert failed, falling back to per-edge: %s", e)
             inserted = 0
             for edge in edges:
                 r = self.write_temporal_edge(
-                    edge.get("source", ""), edge.get("predicate", ""),
-                    edge.get("target", ""), edge.get("timestamp", 0),
-                    float(edge.get("weight", 1.0)), edge.get("attrs") or {},
-                    upsert, suppress_reverse_index,
+                    edge.get("source", ""),
+                    edge.get("predicate", ""),
+                    edge.get("target", ""),
+                    edge.get("timestamp", 0),
+                    float(edge.get("weight", 1.0)),
+                    edge.get("attrs") or {},
+                    upsert,
+                    suppress_reverse_index,
                 )
                 if not r.error:
                     inserted += 1
@@ -827,42 +1004,46 @@ class IRISGraphStore:
         return PurgeResult(int(raw), 0)
 
     def intern_label_set(self, attrs_json: str) -> str:
-        result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "InternLabelSet", attrs_json
-        )
+        result = self._call_classmethod("Graph.KG.TemporalIndex", "InternLabelSet", attrs_json)
         if result is None:
             return ""
         return str(result)
 
     def resolve_label_set(self, hash_hex: str) -> str:
-        result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "ResolveLabelSet", hash_hex
-        )
+        result = self._call_classmethod("Graph.KG.TemporalIndex", "ResolveLabelSet", hash_hex)
         if result is None:
             return ""
         return str(result)
 
     def execute_temporal_window_query(
-        self, source_id: str, predicate: str,
-        ts_start: int, ts_end: int, direction: str = "out"
+        self, source_id: str, predicate: str, ts_start: int, ts_end: int, direction: str = "out"
     ) -> IVGResult:
         import json as _json
+
         try:
             method = "QueryWindowInbound" if direction == "in" else "QueryWindow"
-            result_json = str(self._call_classmethod(
-                "Graph.KG.TemporalIndex", method,
-                source_id, predicate, str(ts_start), str(ts_end),
-            ))
+            result_json = str(
+                self._call_classmethod(
+                    "Graph.KG.TemporalIndex",
+                    method,
+                    source_id,
+                    predicate,
+                    str(ts_start),
+                    str(ts_end),
+                )
+            )
             edges = _json.loads(result_json) if result_json else []
             rows = []
             for edge in edges:
-                rows.append([
-                    edge.get("s", source_id),
-                    edge.get("p", predicate),
-                    edge.get("o", ""),
-                    edge.get("ts", 0),
-                    edge.get("w", edge.get("weight", 1.0)),
-                ])
+                rows.append(
+                    [
+                        edge.get("s", source_id),
+                        edge.get("p", predicate),
+                        edge.get("o", ""),
+                        edge.get("ts", 0),
+                        edge.get("w", edge.get("weight", 1.0)),
+                    ]
+                )
             return IVGResult(
                 columns=["source", "predicate", "target", "timestamp", "weight"],
                 rows=rows,
@@ -875,17 +1056,30 @@ class IRISGraphStore:
             )
 
     def execute_temporal_cypher(
-        self, source_id: str, predicates: list, ts_start: int,
-        ts_end: int, direction: str, max_hops: int
+        self,
+        source_id: str,
+        predicates: list,
+        ts_start: int,
+        ts_end: int,
+        direction: str,
+        max_hops: int,
     ) -> IVGResult:
         import json as _json
+
         predicates_json = _json.dumps(predicates) if predicates else ""
         try:
-            result_json = str(self._call_classmethod(
-                "Graph.KG.TemporalIndex", "QueryWindowBFS",
-                source_id, predicates_json, str(ts_start), str(ts_end),
-                direction, str(max_hops),
-            ))
+            result_json = str(
+                self._call_classmethod(
+                    "Graph.KG.TemporalIndex",
+                    "QueryWindowBFS",
+                    source_id,
+                    predicates_json,
+                    str(ts_start),
+                    str(ts_end),
+                    direction,
+                    str(max_hops),
+                )
+            )
             results = _json.loads(result_json) if result_json else []
             rows = [
                 [r.get("id", ""), r.get("hops", 0), r.get("pred", ""), r.get("ts", 0)]
@@ -897,13 +1091,17 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "hops", "pred", "ts"], rows=[])
 
     def get_temporal_aggregate(
-        self, source_id: str, predicate: str, metric: str,
-        ts_start: int, ts_end: int
+        self, source_id: str, predicate: str, metric: str, ts_start: int, ts_end: int
     ) -> IVGResult:
         try:
             val = self._call_classmethod(
-                "Graph.KG.TemporalIndex", "GetAggregate",
-                source_id, predicate, metric, str(ts_start), str(ts_end),
+                "Graph.KG.TemporalIndex",
+                "GetAggregate",
+                source_id,
+                predicate,
+                metric,
+                str(ts_start),
+                str(ts_end),
             )
             return IVGResult(columns=["value"], rows=[[float(str(val))]])
         except Exception as e:
@@ -975,8 +1173,7 @@ class IRISGraphStore:
                 return -1
 
         hnsw = _try_count("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings_optimized")
-        rows.append(["hnsw_node_embeddings", "VECTOR(HNSW)",
-                      "ONLINE" if hnsw > 0 else "NOT_BUILT"])
+        rows.append(["hnsw_node_embeddings", "VECTOR(HNSW)", "ONLINE" if hnsw > 0 else "NOT_BUILT"])
 
         for table, idx_type in [
             ("Graph_KG.kg_IVFMeta", "VECTOR(IVF)"),
@@ -1010,6 +1207,7 @@ class IRISGraphStore:
             iris_ver = "unknown"
         try:
             from importlib.metadata import version as pkg_version
+
             ivg_ver = pkg_version("iris-vector-graph")
         except Exception:
             ivg_ver = "unknown"
@@ -1018,17 +1216,24 @@ class IRISGraphStore:
             rows=[[iris_ver, ivg_ver]],
         )
 
-    def execute_degree_centrality(self, direction: str, predicate: str,
-                                   top_k: int) -> IVGResult:
+    def execute_degree_centrality(self, direction: str, predicate: str, top_k: int) -> IVGResult:
         import json as _json
+
         try:
-            raw = str(self._call_classmethod(
-                "Graph.KG.Centrality", "DegreeCentralityJson",
-                direction, predicate, str(top_k),
-            ))
+            raw = str(
+                self._call_classmethod(
+                    "Graph.KG.Centrality",
+                    "DegreeCentralityJson",
+                    direction,
+                    predicate,
+                    str(top_k),
+                )
+            )
             results = _json.loads(raw) if raw else []
-            rows = [[r.get("id", ""), float(r.get("score", 0)), int(r.get("degree", 0))]
-                    for r in results]
+            rows = [
+                [r.get("id", ""), float(r.get("score", 0)), int(r.get("degree", 0))]
+                for r in results
+            ]
             return IVGResult(columns=["id", "score", "degree"], rows=rows)
         except Exception as e:
             err_str = str(e)
@@ -1038,22 +1243,20 @@ class IRISGraphStore:
                     "falling back to gref-direct ^KG iteration"
                 )
                 try:
-                    return self._degree_centrality_gref_fallback(
-                        direction, predicate, top_k
-                    )
+                    return self._degree_centrality_gref_fallback(direction, predicate, top_k)
                 except Exception as fallback_err:
-                    logger.warning(
-                        "DegreeCentrality gref fallback also failed: %s", fallback_err
-                    )
+                    logger.warning("DegreeCentrality gref fallback also failed: %s", fallback_err)
                     return IVGResult(
-                        columns=["id", "score", "degree"], rows=[],
+                        columns=["id", "score", "degree"],
+                        rows=[],
                         error=str(fallback_err)[:200],
                     )
             logger.warning("DegreeCentrality failed: %s", e)
             return IVGResult(columns=["id", "score", "degree"], rows=[], error=err_str[:200])
 
-    def _degree_centrality_gref_fallback(self, direction: str, predicate: str,
-                                          top_k: int) -> IVGResult:
+    def _degree_centrality_gref_fallback(
+        self, direction: str, predicate: str, top_k: int
+    ) -> IVGResult:
         """Bug S workaround via LazyKG adapter (v1.99.0 retrofit).
 
         Reads ^KG directly via the IRIS Native API rather than
@@ -1063,6 +1266,7 @@ class IRISGraphStore:
         See ENGINEERING_DEBT.md Bug S for diagnosis.
         """
         from iris_vector_graph.stores.lazy_kg import LazyKG
+
         lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
         all_nodes = list(lkg.iter_nodes())
@@ -1086,8 +1290,9 @@ class IRISGraphStore:
                 elif direction == "in":
                     deg = lkg.in_degree_for_predicate(node, predicate)
                 else:
-                    deg = (lkg.degree_for_predicate(node, predicate)
-                           + lkg.in_degree_for_predicate(node, predicate))
+                    deg = lkg.degree_for_predicate(node, predicate) + lkg.in_degree_for_predicate(
+                        node, predicate
+                    )
 
             scored.append((node, deg * norm, deg))
 
@@ -1100,40 +1305,70 @@ class IRISGraphStore:
             rows=[[nid, sc, dg] for (nid, sc, dg) in scored],
         )
 
-    def execute_betweenness(self, sample_size: int, direction: str, max_hops: int,
-                             top_k: int, mem_budget_mb: int,
-                             progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_betweenness(
+        self,
+        sample_size: int,
+        direction: str,
+        max_hops: int,
+        top_k: int,
+        mem_budget_mb: int,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> IVGResult:
         try:
             return self._betweenness_gref(
-                sample_size, direction, max_hops, top_k, mem_budget_mb,
+                sample_size,
+                direction,
+                max_hops,
+                top_k,
+                mem_budget_mb,
                 progress_callback,
             )
         except Exception as e:
             logger.warning("Betweenness failed: %s", e)
             return IVGResult(
-                columns=["id", "score"], rows=[], error=str(e)[:200],
+                columns=["id", "score"],
+                rows=[],
+                error=str(e)[:200],
             )
 
     def execute_betweenness_neighborhood(
-        self, seed: str, hops: int, sample_size: int, top_k: int,
+        self,
+        seed: str,
+        hops: int,
+        sample_size: int,
+        top_k: int,
     ) -> IVGResult:
         try:
-            import iris as _iris
             import json as _json
+
+            import iris as _iris
+
             iris_obj = self._iris_obj()
             if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
                 import warnings
+
                 warnings.warn(
                     "betweenness_centrality_neighborhood: arno not loaded — OS fallback active.",
-                    RuntimeWarning, stacklevel=4,
+                    RuntimeWarning,
+                    stacklevel=4,
                 )
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.NKGAccel", "BetweennessNeighborhood",
-                seed, hops, sample_size, top_k,
-            ))
+            raw = str(
+                iris_obj.classMethodValue(
+                    "Graph.KG.NKGAccel",
+                    "BetweennessNeighborhood",
+                    seed,
+                    hops,
+                    sample_size,
+                    top_k,
+                )
+            )
             if raw.startswith("OK:"):
-                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in sorted(_json.loads(_fix_iris_json(raw[3:])), key=lambda x: -x.get("score", 0))]
+                rows = [
+                    [r.get("id", ""), float(r.get("score", 0.0))]
+                    for r in sorted(
+                        _json.loads(_fix_iris_json(raw[3:])), key=lambda x: -x.get("score", 0)
+                    )
+                ]
                 if top_k > 0:
                     rows = rows[:top_k]
                 return IVGResult(columns=["id", "score"], rows=rows)
@@ -1141,9 +1376,16 @@ class IRISGraphStore:
         except Exception as e:
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
-    def _betweenness_gref(self, sample_size: int, direction: str, max_hops: int,
-                          top_k: int, mem_budget_mb: int,
-                          progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
+    def _betweenness_gref(
+        self,
+        sample_size: int,
+        direction: str,
+        max_hops: int,
+        top_k: int,
+        mem_budget_mb: int,
+        progress_callback: Optional[Callable[[int, int], None]],
+        lkg=None,
+    ) -> IVGResult:
         """Brandes (2001) Betweenness via ObjectScript/arno fast path.
 
         Dispatch order:
@@ -1156,10 +1398,12 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
+
             iris_obj = self._iris_obj()
             # Check if arno is loaded — warn if not, OS fallback is much slower
             if not iris_obj.classMethodValue("Graph.KG.NKGAccel", "IsLoaded"):
                 import warnings
+
                 warnings.warn(
                     "betweenness_centrality: arno callout not loaded — "
                     "falling back to parallel ObjectScript (~100x slower). "
@@ -1168,15 +1412,23 @@ class IRISGraphStore:
                     stacklevel=4,
                 )
             # Pass sampleSize=0 (let OS use maxSources cap), topK, maxSources=200
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.NKGAccel", "BetweennessGlobal",
-                sample_size, top_k, 200,
-            ))
+            raw = str(
+                iris_obj.classMethodValue(
+                    "Graph.KG.NKGAccel",
+                    "BetweennessGlobal",
+                    sample_size,
+                    top_k,
+                    200,
+                )
+            )
             if raw.startswith("OK:"):
                 import json as _json
+
                 parsed = _json.loads(raw[3:])
-                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in sorted(parsed, key=lambda x: -x.get("score", 0))]
+                rows = [
+                    [r.get("id", ""), float(r.get("score", 0.0))]
+                    for r in sorted(parsed, key=lambda x: -x.get("score", 0))
+                ]
                 if top_k > 0:
                     rows = rows[:top_k]
                 if progress_callback:
@@ -1187,7 +1439,9 @@ class IRISGraphStore:
             pass
 
         import random
+
         from iris_vector_graph.stores.lazy_kg import LazyKG
+
         iris_inst = self._iris_obj()
         lkg = LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
 
@@ -1211,6 +1465,7 @@ class IRISGraphStore:
         elif direction == "in":
             forward = lkg.in_neighbors
         else:
+
             def forward(n: str) -> List[str]:
                 seen = set()
                 combined = []
@@ -1260,8 +1515,11 @@ class IRISGraphStore:
                 skipped_sources += 1
                 try:
                     import datetime as _dt
+
                     ts_key = _dt.datetime.now().strftime("%Y%m%d%H%M%S%f")
-                    iris_inst.set("BC mem budget exceeded", "^IVG.warnings", "centrality", ts_key, s)
+                    iris_inst.set(
+                        "BC mem budget exceeded", "^IVG.warnings", "centrality", ts_key, s
+                    )
                 except Exception:
                     pass
                 if progress_callback:
@@ -1273,7 +1531,9 @@ class IRISGraphStore:
                 w = stack.pop()
                 for v in preds.get(w, ()):
                     if sigma.get(w, 0) > 0:
-                        delta[v] = delta.get(v, 0.0) + (sigma.get(v, 0) / sigma[w]) * (1.0 + delta.get(w, 0.0))
+                        delta[v] = delta.get(v, 0.0) + (sigma.get(v, 0) / sigma[w]) * (
+                            1.0 + delta.get(w, 0.0)
+                        )
                 if w != s:
                     bc[w] = bc.get(w, 0.0) + delta.get(w, 0.0)
 
@@ -1294,8 +1554,14 @@ class IRISGraphStore:
 
         return IVGResult(columns=["id", "score"], rows=rows)
 
-    def execute_closeness(self, formula: str, direction: str, max_hops: int, top_k: int,
-                           progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_closeness(
+        self,
+        formula: str,
+        direction: str,
+        max_hops: int,
+        top_k: int,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> IVGResult:
         try:
             return self._closeness_gref(formula, direction, max_hops, top_k, progress_callback)
         except Exception as e:
@@ -1310,9 +1576,13 @@ class IRISGraphStore:
         """
         try:
             import json as _json
+
             iris_obj = self._iris_obj()
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.Communities", "ClosenessJsonPy", formula, int(top_k)))
+            raw = str(
+                iris_obj.classMethodValue(
+                    "Graph.KG.Communities", "ClosenessJsonPy", formula, int(top_k)
+                )
+            )
             if not raw.startswith("OK:"):
                 return None
             data = _json.loads(raw[3:])
@@ -1322,8 +1592,15 @@ class IRISGraphStore:
             logger.debug("Closeness server-side path unavailable, falling back: %s", str(e)[:120])
             return None
 
-    def _closeness_gref(self, formula: str, direction: str, max_hops: int, top_k: int,
-                         progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
+    def _closeness_gref(
+        self,
+        formula: str,
+        direction: str,
+        max_hops: int,
+        top_k: int,
+        progress_callback: Optional[Callable[[int, int], None]],
+        lkg=None,
+    ) -> IVGResult:
         """Closeness Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Per-source BFS sums distances. Two formulas:
@@ -1335,23 +1612,37 @@ class IRISGraphStore:
         v2.0.0 spec 168: try ClosenessGlobal ObjectScript path first (1 round-trip).
         """
         try:
-            import iris as _iris
             import json as _json
+
+            import iris as _iris
+
             iris_obj = self._iris_obj()
             for _method in ("ClosenessGlobalMSBFS", "ClosenessGlobal"):
-                raw = str(iris_obj.classMethodValue(
-                    "Graph.KG.NKGAccel", _method,
-                    formula, direction, max_hops, top_k,
-                ))
+                raw = str(
+                    iris_obj.classMethodValue(
+                        "Graph.KG.NKGAccel",
+                        _method,
+                        formula,
+                        direction,
+                        max_hops,
+                        top_k,
+                    )
+                )
                 if raw.startswith("OK:"):
-                    rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                            for r in _json.loads(raw[3:])]
+                    rows = [
+                        [r.get("id", ""), float(r.get("score", 0.0))] for r in _json.loads(raw[3:])
+                    ]
                     return IVGResult(columns=["id", "score"], rows=rows)
         except Exception:
             pass
 
         from iris_vector_graph.stores.lazy_kg import LazyKG
-        lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+
+        lkg = (
+            lkg
+            if lkg is not None
+            else LazyKG(self.conn, include_sinks=(direction in ("in", "both")))
+        )
 
         all_nodes = list(lkg.iter_nodes())
         if not all_nodes:
@@ -1362,6 +1653,7 @@ class IRISGraphStore:
         elif direction == "in":
             forward = lkg.in_neighbors
         else:
+
             def forward(n: str) -> List[str]:
                 seen_n = set()
                 combined = []
@@ -1413,16 +1705,27 @@ class IRISGraphStore:
             rows=[[nid, sc] for (nid, sc) in scored],
         )
 
-    def execute_eigenvector(self, max_iter: int, tol: float, top_k: int,
-                             progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_eigenvector(
+        self,
+        max_iter: int,
+        tol: float,
+        top_k: int,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> IVGResult:
         try:
             return self._eigenvector_gref(max_iter, tol, top_k, progress_callback)
         except Exception as e:
             logger.warning("Eigenvector failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
-    def _eigenvector_gref(self, max_iter: int, tol: float, top_k: int,
-                           progress_callback: Optional[Callable[[int, int], None]], lkg=None) -> IVGResult:
+    def _eigenvector_gref(
+        self,
+        max_iter: int,
+        tol: float,
+        top_k: int,
+        progress_callback: Optional[Callable[[int, int], None]],
+        lkg=None,
+    ) -> IVGResult:
         """Eigenvector Centrality via LazyKG-backed Native API (Bug S workaround).
 
         Power iteration over RAW adjacency matrix A (NOT the transition matrix
@@ -1435,15 +1738,24 @@ class IRISGraphStore:
         """
         try:
             import iris as _iris
+
             iris_obj = self._iris_obj()
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.NKGAccel", "EigenvectorGlobal",
-                max_iter, tol, top_k,
-            ))
+            raw = str(
+                iris_obj.classMethodValue(
+                    "Graph.KG.NKGAccel",
+                    "EigenvectorGlobal",
+                    max_iter,
+                    tol,
+                    top_k,
+                )
+            )
             if raw.startswith("OK:"):
                 import json as _json
-                rows = [[r.get("id", ""), float(r.get("score", 0.0))]
-                        for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))]
+
+                rows = [
+                    [r.get("id", ""), float(r.get("score", 0.0))]
+                    for r in sorted(_json.loads(raw[3:]), key=lambda x: -x.get("score", 0))
+                ]
                 if top_k > 0:
                     rows = rows[:top_k]
                 return IVGResult(columns=["id", "score"], rows=rows)
@@ -1451,6 +1763,7 @@ class IRISGraphStore:
             pass
 
         from iris_vector_graph.stores.lazy_kg import LazyKG
+
         lkg = lkg if lkg is not None else LazyKG(self.conn, include_sinks=True)
 
         all_nodes = list(lkg.iter_nodes())
@@ -1477,7 +1790,7 @@ class IRISGraphStore:
             norm_sq = sum(v * v for v in x_new.values())
             if norm_sq <= 0.0:
                 break
-            norm = norm_sq ** 0.5
+            norm = norm_sq**0.5
             for k in x_new:
                 x_new[k] /= norm
 
@@ -1498,9 +1811,16 @@ class IRISGraphStore:
             rows=[[nid, sc] for (nid, sc) in scored],
         )
 
-    def execute_leiden(self, max_levels: int, gamma: float, tol: float, top_k: int,
-                       mem_budget_mb: int, random_seed: Optional[int] = None,
-                       progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_leiden(
+        self,
+        max_levels: int,
+        gamma: float,
+        tol: float,
+        top_k: int,
+        mem_budget_mb: int,
+        random_seed: Optional[int] = None,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> IVGResult:
         srv = self._leiden_serverside(gamma, top_k, random_seed)
         if srv is not None:
             return srv
@@ -1509,13 +1829,16 @@ class IRISGraphStore:
                 return self._leiden_arno(max_levels, gamma, tol, top_k, mem_budget_mb, random_seed)
             except Exception as e:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
+
                 if not isinstance(e, ArnoError):
                     logger.warning("Leiden arno path raised non-ArnoError: %s", e)
-        return self._leiden_lazykg(max_levels, gamma, tol, top_k, mem_budget_mb,
-                                    random_seed, progress_callback)
+        return self._leiden_lazykg(
+            max_levels, gamma, tol, top_k, mem_budget_mb, random_seed, progress_callback
+        )
 
-    def _leiden_serverside(self, gamma: float, top_k: int,
-                           random_seed: Optional[int]) -> Optional[IVGResult]:
+    def _leiden_serverside(
+        self, gamma: float, top_k: int, random_seed: Optional[int]
+    ) -> Optional[IVGResult]:
         """Server-side Graph.KG.Communities.LeidenJsonAuto — canonical leidenalg in
         IRIS embedded Python (native multi-core, no data transfer) when igraph+
         leidenalg are installed in mgr/python; greedy ObjectScript otherwise.
@@ -1523,41 +1846,77 @@ class IRISGraphStore:
         """
         try:
             import json as _json
+
             iris_obj = self._iris_obj()
             seed = -1 if random_seed is None else int(random_seed)
-            raw = str(iris_obj.classMethodValue(
-                "Graph.KG.Communities", "LeidenJsonAuto",
-                10, float(gamma), 0.0001, int(top_k), 256, seed,
-            ))
+            raw = str(
+                iris_obj.classMethodValue(
+                    "Graph.KG.Communities",
+                    "LeidenJsonAuto",
+                    10,
+                    float(gamma),
+                    0.0001,
+                    int(top_k),
+                    256,
+                    seed,
+                )
+            )
             if not raw.startswith("OK:"):
                 return None
             data = _json.loads(raw[3:])
-            rows = [[r.get("id", ""), int(r.get("community", 0)), int(r.get("size", 0))]
-                    for r in data]
+            rows = [
+                [r.get("id", ""), int(r.get("community", 0)), int(r.get("size", 0))] for r in data
+            ]
             return IVGResult(columns=["id", "community", "size"], rows=rows)
         except Exception as e:
             logger.debug("Leiden server-side path unavailable, falling back: %s", str(e)[:120])
             return None
 
-    def _leiden_arno(self, max_levels: int, gamma: float, tol: float, top_k: int,
-                     mem_budget_mb: int, random_seed: Optional[int]) -> IVGResult:
+    def _leiden_arno(
+        self,
+        max_levels: int,
+        gamma: float,
+        tol: float,
+        top_k: int,
+        mem_budget_mb: int,
+        random_seed: Optional[int],
+    ) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
         from iris_vector_graph.stores.arno_bridge import (
-            arno_call, build_kg_adjacency_chunked,
+            arno_call,
+            build_kg_adjacency_chunked,
         )
+
         seed_arg = -1 if random_seed is None else int(random_seed)
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn)
-        raw = arno_call(self.conn, "kg_leiden_run",
-                        int(max_levels), float(gamma), float(tol),
-                        int(top_k), int(mem_budget_mb), seed_arg)
-        import json as _json; results = _json.loads(raw) if raw else []
-        rows = [[r.get("id", ""), int(r.get("community", 0)), int(r.get("size", 0))]
-                for r in results]
+        raw = arno_call(
+            self.conn,
+            "kg_leiden_run",
+            int(max_levels),
+            float(gamma),
+            float(tol),
+            int(top_k),
+            int(mem_budget_mb),
+            seed_arg,
+        )
+        import json as _json
+
+        results = _json.loads(raw) if raw else []
+        rows = [
+            [r.get("id", ""), int(r.get("community", 0)), int(r.get("size", 0))] for r in results
+        ]
         return IVGResult(columns=["id", "community", "size"], rows=rows)
 
-    def _leiden_lazykg(self, max_levels: int, gamma: float, tol: float, top_k: int,
-                        mem_budget_mb: int, random_seed: Optional[int],
-                        progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+    def _leiden_lazykg(
+        self,
+        max_levels: int,
+        gamma: float,
+        tol: float,
+        top_k: int,
+        mem_budget_mb: int,
+        random_seed: Optional[int],
+        progress_callback: Optional[Callable[[int, int], None]],
+    ) -> IVGResult:
         """Spec 163 FR-025: LazyKG-backed Leiden community detection.
 
         Reads ^KG via LazyKG (direct gref, no class lookup), builds a symmetrized in-memory
@@ -1602,6 +1961,7 @@ class IRISGraphStore:
         try:
             import igraph as _ig
             import leidenalg as _la
+
             G = _ig.Graph(n=len(all_nodes), edges=list(edge_set), directed=False)
             if abs(gamma - 1.0) < 1e-9:
                 partition = _la.find_partition(
@@ -1618,29 +1978,33 @@ class IRISGraphStore:
                     seed=random_seed if random_seed is not None else 0,
                     n_iterations=max_levels,
                 )
-            communities: List[List[str]] = [
-                [all_nodes[idx] for idx in comm] for comm in partition
-            ]
+            communities: List[List[str]] = [[all_nodes[idx] for idx in comm] for comm in partition]
         except ImportError:
             try:
                 import networkx as _nx
+
                 graph = _nx.Graph()
                 for nid in all_nodes:
                     graph.add_node(nid)
                 for v_idx, w_idx in edge_set:
                     graph.add_edge(all_nodes[v_idx], all_nodes[w_idx])
                 fallback_communities = _nx.community.louvain_communities(
-                    graph, resolution=gamma, threshold=tol, seed=random_seed,
+                    graph,
+                    resolution=gamma,
+                    threshold=tol,
+                    seed=random_seed,
                 )
                 communities = [list(c) for c in fallback_communities]
             except ImportError:
                 return IVGResult(
-                    columns=["id", "community", "size"], rows=[],
+                    columns=["id", "community", "size"],
+                    rows=[],
                     error="Leiden requires python-igraph+leidenalg (preferred) or networkx",
                 )
         except Exception as e:
             return IVGResult(
-                columns=["id", "community", "size"], rows=[],
+                columns=["id", "community", "size"],
+                rows=[],
                 error=f"leidenalg failed: {str(e)[:200]}",
             )
 
@@ -1655,21 +2019,22 @@ class IRISGraphStore:
                 final_label[m_node] = new_id
             sizes[new_id] = len(members)
 
-        rows = [[node, final_label[node], sizes[final_label[node]]]
-                for node in final_label]
+        rows = [[node, final_label[node], sizes[final_label[node]]] for node in final_label]
         rows.sort(key=lambda r: (-r[2], r[1], r[0]))
         if top_k > 0:
             rows = rows[:top_k]
 
         return IVGResult(columns=["id", "community", "size"], rows=rows)
 
-    def execute_triangle_count(self, top_k: int,
-                                progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_triangle_count(
+        self, top_k: int, progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._triangle_count_arno(top_k)
             except Exception as e:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
+
                 if not isinstance(e, ArnoError):
                     logger.warning("TriangleCount arno path raised non-ArnoError: %s", e)
         return self._triangle_count_lazykg(top_k, progress_callback)
@@ -1677,17 +2042,23 @@ class IRISGraphStore:
     def _triangle_count_arno(self, top_k: int) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
         from iris_vector_graph.stores.arno_bridge import (
-            arno_call, build_kg_adjacency_chunked,
+            arno_call,
+            build_kg_adjacency_chunked,
         )
+
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn)
         raw = arno_call(self.conn, "kg_triangle_count_run", int(top_k))
-        import json as _json; results = _json.loads(raw) if raw else []
-        rows = [[r.get("id", ""), int(r.get("triangles", 0)), float(r.get("lcc", 0.0))]
-                for r in results]
+        import json as _json
+
+        results = _json.loads(raw) if raw else []
+        rows = [
+            [r.get("id", ""), int(r.get("triangles", 0)), float(r.get("lcc", 0.0))] for r in results
+        ]
         return IVGResult(columns=["id", "triangles", "lcc"], rows=rows)
 
-    def _triangle_count_lazykg(self, top_k: int,
-                                progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+    def _triangle_count_lazykg(
+        self, top_k: int, progress_callback: Optional[Callable[[int, int], None]]
+    ) -> IVGResult:
         """Spec 163 FR-025: triangle count + LCC over symmetrized neighbors via LazyKG.
 
         For each node v, build N(v) = out_neighbors(v) ∪ in_neighbors(v) (skip
@@ -1744,13 +2115,15 @@ class IRISGraphStore:
             rows=[[v, t, l] for (v, t, l) in scored],
         )
 
-    def execute_scc(self, top_k: int,
-                    progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_scc(
+        self, top_k: int, progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._scc_arno(top_k)
             except Exception as e:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
+
                 if not isinstance(e, ArnoError):
                     logger.warning("SCC arno path raised non-ArnoError: %s", e)
         return self._scc_lazykg(top_k, progress_callback)
@@ -1758,17 +2131,23 @@ class IRISGraphStore:
     def _scc_arno(self, top_k: int) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
         from iris_vector_graph.stores.arno_bridge import (
-            arno_call, build_kg_adjacency_chunked,
+            arno_call,
+            build_kg_adjacency_chunked,
         )
+
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn)
         raw = arno_call(self.conn, "kg_scc_run", int(top_k))
-        import json as _json; results = _json.loads(raw) if raw else []
-        rows = [[r.get("id", ""), int(r.get("component", 0)), int(r.get("size", 0))]
-                for r in results]
+        import json as _json
+
+        results = _json.loads(raw) if raw else []
+        rows = [
+            [r.get("id", ""), int(r.get("component", 0)), int(r.get("size", 0))] for r in results
+        ]
         return IVGResult(columns=["id", "component", "size"], rows=rows)
 
-    def _scc_lazykg(self, top_k: int,
-                     progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+    def _scc_lazykg(
+        self, top_k: int, progress_callback: Optional[Callable[[int, int], None]]
+    ) -> IVGResult:
         """Spec 163 FR-025: Strongly Connected Components via iterative Tarjan.
 
         Tarjan 1972: single DFS pass with low-link tracking. Iterative version
@@ -1851,13 +2230,15 @@ class IRISGraphStore:
             rows = rows[:top_k]
         return IVGResult(columns=["id", "component", "size"], rows=rows)
 
-    def execute_k_core(self, top_k: int,
-                       progress_callback: Optional[Callable[[int, int], None]] = None) -> IVGResult:
+    def execute_k_core(
+        self, top_k: int, progress_callback: Optional[Callable[[int, int], None]] = None
+    ) -> IVGResult:
         if os.environ.get("IVG_DISABLE_ARNO") != "1":
             try:
                 return self._k_core_arno(top_k)
             except Exception as e:
                 from iris_vector_graph.stores.arno_bridge import ArnoError
+
                 if not isinstance(e, ArnoError):
                     logger.warning("K-Core arno path raised non-ArnoError: %s", e)
         return self._k_core_lazykg(top_k, progress_callback)
@@ -1865,16 +2246,21 @@ class IRISGraphStore:
     def _k_core_arno(self, top_k: int) -> IVGResult:
         """Spec 163 FR-024 arno path via chunked NKG-format adjacency upload."""
         from iris_vector_graph.stores.arno_bridge import (
-            arno_call, build_kg_adjacency_chunked,
+            arno_call,
+            build_kg_adjacency_chunked,
         )
+
         idx_to_node, _edge_count = build_kg_adjacency_chunked(self.conn)
         raw = arno_call(self.conn, "kg_kcore_run", int(top_k))
-        import json as _json; results = _json.loads(raw) if raw else []
+        import json as _json
+
+        results = _json.loads(raw) if raw else []
         rows = [[r.get("id", ""), int(r.get("coreness", 0))] for r in results]
         return IVGResult(columns=["id", "coreness"], rows=rows)
 
-    def _k_core_lazykg(self, top_k: int,
-                        progress_callback: Optional[Callable[[int, int], None]]) -> IVGResult:
+    def _k_core_lazykg(
+        self, top_k: int, progress_callback: Optional[Callable[[int, int], None]]
+    ) -> IVGResult:
         """Spec 163 FR-025: K-Core decomposition via Batagelj-Zaversnik (2003).
 
         Linear-time bucket-sort algorithm:

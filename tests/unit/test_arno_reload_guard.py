@@ -3,14 +3,15 @@
 No IRIS container required — _iris_obj() is mocked throughout.
 These tests MUST fail on current iris_sql_store.py and pass after the fix.
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 from iris_vector_graph.stores.arno_bridge import ArnoError
+from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
 
 def _make_store() -> IRISGraphStore:
@@ -30,6 +31,8 @@ def _iris_obj_that_looks_available() -> MagicMock:
 
 
 def _available_side_effect(cls, method, *args):
+    if cls == "%SYSTEM.OBJ" and method == "Exists":
+        return 1  # class exists in namespace
     if cls == "Graph.KG.ArnoAccel" and method == "IsAvailable":
         return 1
     if cls == "Graph.KG.ArnoAccel" and method == "Load":
@@ -49,6 +52,8 @@ class TestReloadGuard:
 
         def side_effect(cls, method, *args):
             call_log.append((cls, method))
+            if cls == "%SYSTEM.OBJ" and method == "Exists":
+                return 1  # class exists in namespace
             if method == "IsAvailable":
                 return 0  # simulates stale worker — dllid gone
             if method == "GetLibPath":
@@ -67,7 +72,9 @@ class TestReloadGuard:
 
         load_calls = [c for c in call_log if c[1] == "Load"]
         assert load_calls, "_detect_arno() must call Load() when IsAvailable() is false"
-        assert result is True, f"_detect_arno() must return True after successful reload, got {result}"
+        assert (
+            result is True
+        ), f"_detect_arno() must return True after successful reload, got {result}"
 
     def test_arno_call_reloads_when_unavailable(self, monkeypatch):
         """_arno_call() MUST reload before dispatch when IsAvailable() is false."""

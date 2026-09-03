@@ -2,6 +2,45 @@
 
 # Changelog
 
+### v2.15.0 (2026-09-03)
+
+**Namespace-aware IVG engine — spec 212**
+
+`IRISGraphEngine` and `IRISGraphStore` now accept a `namespace` parameter and
+probe `^KG` global visibility on first use, surfacing misconfigured namespaces
+as actionable warnings instead of silent wrong-namespace queries.
+
+#### New
+
+- **`IRISGraphEngine(conn, namespace="USER")`**: `namespace` param passed to
+  store; `engine.namespace` property returns the configured value.
+- **`IRISGraphStore._check_namespace()`**: Lazy probe — checks `conn.namespace`
+  vs configured namespace, then runs `SELECT $Data(^KG("deg"))` to verify
+  globals accessible. Fires once per store lifetime, cached in
+  `_namespace_checked`.
+- **`_detect_arno()` class-existence guard**: Calls
+  `%SYSTEM.OBJ.Exists("Graph.KG.ArnoAccel")` before any `$ZF` callout; emits
+  namespaced warning and returns `False` if class not found.
+- **`iris_vector_graph.exceptions`** (new module):
+  - `NamespaceMismatchWarning(UserWarning)` — `actual_ns`, `expected_ns`, `hint`
+  - `NamespaceConsistencyError(ValueError)` — reserved for bridge guard (opsreview)
+- **Env var controls**:
+  - `IVG_IGNORE_NAMESPACE_CHECK=1` — skip probe entirely (takes precedence)
+  - `IVG_STRICT_NAMESPACE=1` — raise `NamespaceMismatchWarning` in addition to
+    `logging.warning`
+- **README** — new "Non-USER Namespace Deployment" section: CPF global mapping
+  example, `IRISGraphEngine(conn, namespace=...)` usage, env var table.
+
+#### Tests
+
+- `tests/unit/test_exceptions.py` — 14 unit tests for both exception types.
+- `tests/unit/test_namespace_aware.py` — 17 unit tests: property, probe,
+  skip-env, Arno class probe; no container required.
+- `tests/integration/test_namespace_integration.py` — 6 integration tests
+  against `ivg-iris-enterprise`; includes IVGTEST namespace fixture.
+
+---
+
 ### v2.14.0 (2026-09-01)
 
 **Arno Rust kernel always-on — spec 210**

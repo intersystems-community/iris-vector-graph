@@ -2,51 +2,72 @@
 IRIS Graph Core - Domain-Agnostic Graph Engine
 """
 
-from .engine import IRISGraphEngine
-from .status import EngineStatus
-from .schema import GraphSchema
-from .index_protocol import IVGIndex, IndexHandle, Index
-from .index_config import (
-    IndexConfig, VectorIndexConfig, FulltextIndexConfig,
-    MultiVectorIndexConfig, NeighborhoodVectorConfig, HNSWIndexConfig,
-)
-from .result import IVGResult
-from .capabilities import IRISCapabilities
-from .store_protocol import GraphStore
-from .stores import IRISGraphStore
-from .cypher.aql import translate_aql, AQLParseError, AQLTranslationError
-from .sdk import IVGClient, AsyncIVGClient, IVGRecord, IVGError, IVGClientError, IVGServerError
-from .embed_selector import EmbedSelector
-from .errors import (
-    PrerequisiteError, IndexNotFoundError, IndexNotBuiltError,
-    EmbeddingsMissingError, IndexNotSyncedError, NodeNotFoundError,
-)
 from ._validate import (
-    NodeIdInput, EdgeInput, CypherInput,
-    IVFBuildInput, VectorSearchInput,
-    BM25BuildInput, BM25SearchInput,
-    KHop2Input, TemporalEdgeInput, VecSearchInput,
-    DegreeCentralityInput, BetweennessInput, ClosenessInput, EigenvectorInput,
-    LeidenInput, TriangleCountInput, SCCInput, KCoreInput,
+    BetweennessInput,
+    BM25BuildInput,
+    BM25SearchInput,
+    ClosenessInput,
+    CypherInput,
+    DegreeCentralityInput,
+    EdgeInput,
+    EigenvectorInput,
+    IVFBuildInput,
+    KCoreInput,
+    KHop2Input,
+    LeidenInput,
+    NodeIdInput,
+    SCCInput,
+    TemporalEdgeInput,
+    TriangleCountInput,
+    VecSearchInput,
+    VectorSearchInput,
 )
-from .vector_utils import VectorOptimizer
-from .text_search import TextSearchEngine
-from .fusion import RRFFusion
+from .capabilities import IRISCapabilities
+from .cypher.aql import AQLParseError, AQLTranslationError, translate_aql
 from .dbapi_utils import (
-    normalize_vector,
-    insert_vector,
     create_hnsw_index,
     create_ivfflat_index,
+    insert_vector,
+    normalize_vector,
     vector_similarity_search,
 )
+from .embed_selector import EmbedSelector
+from .engine import IRISGraphEngine
+from .errors import (
+    EmbeddingsMissingError,
+    IndexNotBuiltError,
+    IndexNotFoundError,
+    IndexNotSyncedError,
+    NodeNotFoundError,
+    PrerequisiteError,
+)
+from .exceptions import NamespaceConsistencyError, NamespaceMismatchWarning
 from .fhir_bridge import (
-    get_kg_anchors,
-    extract_icd_codes,
-    fhir_search_conditions,
-    unified_clinical_pipeline,
     FHIRSearchTool,
     GetPatientKGNeighborhoodTool,
+    extract_icd_codes,
+    fhir_search_conditions,
+    get_kg_anchors,
+    unified_clinical_pipeline,
 )
+from .fusion import RRFFusion
+from .index_config import (
+    FulltextIndexConfig,
+    HNSWIndexConfig,
+    IndexConfig,
+    MultiVectorIndexConfig,
+    NeighborhoodVectorConfig,
+    VectorIndexConfig,
+)
+from .index_protocol import Index, IndexHandle, IVGIndex
+from .result import IVGResult
+from .schema import GraphSchema
+from .sdk import AsyncIVGClient, IVGClient, IVGClientError, IVGError, IVGRecord, IVGServerError
+from .status import EngineStatus
+from .store_protocol import GraphStore
+from .stores import IRISGraphStore
+from .text_search import TextSearchEngine
+from .vector_utils import VectorOptimizer
 
 try:
     from .embedded import EmbeddedConnection, EmbeddedCursor
@@ -55,6 +76,7 @@ except ImportError:
 
 try:
     from importlib.metadata import version
+
     __version__ = version("iris-vector-graph")
 except Exception:
     __version__ = "unknown"

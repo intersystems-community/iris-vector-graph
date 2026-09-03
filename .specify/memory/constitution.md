@@ -47,8 +47,12 @@ Any feature that includes IRIS as a backend component MUST include comprehensive
 
 - The IRIS container MUST be named and dedicated to this project (not shared or anonymous).
   This project uses two containers:
-  - `ivg-iris` (Community Edition) — primary test container, port 21972.
-  - `ivg-iris-enterprise` (Enterprise + Arno callout) — Arno/rzf acceleration tests, port 31972.
+  - `ivg-iris-enterprise` (Enterprise) — **primary test container**, port 31972. Use for
+    ALL integration and unit tests that require a live IRIS connection. `ivg-iris` has
+    MaxServerConn=1, which causes license failures under concurrent test runs.
+  - `ivg-iris` (Community Edition) — **disabled for general use**, port 21972. Only start
+    this container when explicitly testing Community-Edition-specific limits (e.g. ≤2 CPU
+    cores constraint). Never use it as the default test target.
   NEVER use a container name from another project (e.g. `los-iris`, `posos-iris`).
 - Container lifecycle MUST be managed exclusively via `scripts/test-container.sh` (Community)
   or `scripts/enterprise-container.sh` (Enterprise). IRIS ports MUST NOT be hardcoded in
@@ -79,6 +83,7 @@ package names, file paths — written into specs, tests, templates, or commit me
 first be verified against the authoritative source in this repository before use.
 
 **Authoritative sources**:
+
 - Container name → `docker-compose.yml` (`container_name:` field)
 - IRIS port → `docker-compose.yml` (`ports:` field)
 - Package name / version → `pyproject.toml`

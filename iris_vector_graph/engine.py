@@ -8,43 +8,53 @@ that can be used across any domain.
 """
 
 import json
-from pathlib import Path
-from typing import Callable, List, Tuple, Optional, Dict, Any
 import logging
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from iris_vector_graph._engine.admin import AdminMixin
+from iris_vector_graph._engine.algorithms import AlgorithmsMixin
+from iris_vector_graph._engine.embeddings import EmbeddingsMixin
+from iris_vector_graph._engine.fhir import FhirMixin
+from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
+from iris_vector_graph._engine.prov import ProvMixin
+from iris_vector_graph._engine.query import QueryMixin
+from iris_vector_graph._engine.rdf_export import RdfExportMixin
+from iris_vector_graph._engine.schema import SchemaMixin
+from iris_vector_graph._engine.shacl import ShaclMixin
+from iris_vector_graph._engine.snapshot import SnapshotMixin
+from iris_vector_graph._engine.temporal import TemporalMixin
+from iris_vector_graph._engine.vector import VectorMixin
+from iris_vector_graph._validate import (
+    BM25BuildInput,
+    BM25SearchInput,
+    CypherInput,
+    EdgeInput,
+    IVFBuildInput,
+    KHop2Input,
+    NodeIdInput,
+    TemporalEdgeInput,
+    VecSearchInput,
+    VectorSearchInput,
+)
+from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import (
-    translate_to_sql,
     _table,
     set_schema_prefix,
+    translate_to_sql,
 )
-from iris_vector_graph.schema import GraphSchema, _call_classmethod
-from iris_vector_graph.capabilities import IRISCapabilities
-from iris_vector_graph.status import (
-    EngineStatus, TableCounts, AdjacencyStatus,
-    ObjectScriptStatus, ArnoStatus, IndexInventory,
-)
-from iris_vector_graph.security import validate_table_name
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph._validate import (
-    NodeIdInput, EdgeInput, CypherInput,
-    IVFBuildInput, VectorSearchInput,
-    BM25BuildInput, BM25SearchInput,
-    KHop2Input, TemporalEdgeInput, VecSearchInput,
+from iris_vector_graph.schema import GraphSchema, _call_classmethod
+from iris_vector_graph.security import validate_table_name
+from iris_vector_graph.status import (
+    AdjacencyStatus,
+    ArnoStatus,
+    EngineStatus,
+    IndexInventory,
+    ObjectScriptStatus,
+    TableCounts,
 )
-from iris_vector_graph._engine.temporal import TemporalMixin
-from iris_vector_graph._engine.query import QueryMixin
-from iris_vector_graph._engine.algorithms import AlgorithmsMixin
-from iris_vector_graph._engine.vector import VectorMixin
-from iris_vector_graph._engine.snapshot import SnapshotMixin
-from iris_vector_graph._engine.fhir import FhirMixin
-from iris_vector_graph._engine.admin import AdminMixin
-from iris_vector_graph._engine.embeddings import EmbeddingsMixin
-from iris_vector_graph._engine.schema import SchemaMixin
-from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
-from iris_vector_graph._engine.rdf_export import RdfExportMixin
-from iris_vector_graph._engine.shacl import ShaclMixin
-from iris_vector_graph._engine.prov import ProvMixin
 
 logger = logging.getLogger(__name__)
 
@@ -57,22 +67,28 @@ def _get_sentence_transformers():
     global _sentence_transformers
     if _sentence_transformers is None:
         import sentence_transformers as _st
+
         _sentence_transformers = _st
     return _sentence_transformers
+
 
 def _get_torch():
     global _torch
     if _torch is None:
         import torch as _t
+
         _torch = _t
     return _torch
+
 
 def _load_sentence_transformer(model_name: str):
     st = _get_sentence_transformers()
     import warnings as _w
+
     with _w.catch_warnings():
         _w.simplefilter("ignore")
         return st.SentenceTransformer(model_name, local_files_only=False)
+
 
 def _is_sentence_transformer(obj) -> bool:
     try:
@@ -81,15 +97,24 @@ def _is_sentence_transformer(obj) -> bool:
     except ImportError:
         return False
 
+
 def _bfs_stream_pages(conn, tag, page_size=500):
     import json as _j
+
     cursor_step = ""
     cursor_o = ""
     while True:
-        raw = str(_call_classmethod(
-            conn, "Graph.KG.Traversal", "ReadBFSPage",
-            tag, cursor_step, cursor_o, page_size,
-        ))
+        raw = str(
+            _call_classmethod(
+                conn,
+                "Graph.KG.Traversal",
+                "ReadBFSPage",
+                tag,
+                cursor_step,
+                cursor_o,
+                page_size,
+            )
+        )
         if raw.startswith("SORTED:"):
             break
         page = _j.loads(raw)
@@ -102,7 +127,22 @@ def _bfs_stream_pages(conn, tag, page_size=500):
         cursor_step = str(next_step)
         cursor_o = page.get("next_o", "")
 
-class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, SnapshotMixin, FhirMixin, AdminMixin, EmbeddingsMixin, SchemaMixin, NodesEdgesMixin, QueryMixin, AlgorithmsMixin, VectorMixin):
+
+class IRISGraphEngine(
+    RdfExportMixin,
+    ShaclMixin,
+    ProvMixin,
+    TemporalMixin,
+    SnapshotMixin,
+    FhirMixin,
+    AdminMixin,
+    EmbeddingsMixin,
+    SchemaMixin,
+    NodesEdgesMixin,
+    QueryMixin,
+    AlgorithmsMixin,
+    VectorMixin,
+):
     """
     Domain-agnostic IRIS graph engine providing:
     - HNSW-optimized vector search (50ms performance)
@@ -122,7 +162,9 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         vector_dtype: str = "DOUBLE",
         store=None,
         schema_prefix: str = "Graph_KG",
+        namespace: str = "USER",
     ):
+        self._namespace = namespace
         self.conn = connection
         if hasattr(connection, "prepare") and not hasattr(connection, "cursor"):
             from .embedded import EmbeddedConnection
@@ -149,19 +191,32 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         self._nkg_dirty: bool = False
         self._in_bulk_load: bool = False
         self._fetch_first_unsafe_cached: Optional[bool] = None  # build-106 %qaqpre probe (lazy)
-        self._native_conn = None  # dedicated connection for iris.createIRIS — never used for cursor DDL
+        self._native_conn = (
+            None  # dedicated connection for iris.createIRIS — never used for cursor DDL
+        )
         self._index_registry: Dict[str, str] = self._build_index_registry()
         self._pending_index_config: Dict[str, Any] = {}
         if vector_dtype == "DOUBLE":
             self.vector_dtype = self._detect_stored_vector_dtype()
         if store is None:
             from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
-            self._store = IRISGraphStore(self.conn)
+
+            self._store = IRISGraphStore(self.conn, namespace=self._namespace)
         else:
             self._store = store
         self._store_capabilities = self._store.capabilities()
-        logger.debug("IRISGraphEngine initialized (dim=%s dtype=%s)",
-                     embedding_dimension or "auto", self.vector_dtype)
+        logger.debug(
+            "IRISGraphEngine initialized (dim=%s dtype=%s)",
+            embedding_dimension or "auto",
+            self.vector_dtype,
+        )
+
+    @property
+    def namespace(self) -> str:
+        """The IRIS namespace this engine is configured to operate in.
+        Returns the value set at construction time — no live IRIS call made.
+        """
+        return self._namespace
 
     def _t(self, name: str) -> str:
         """Per-instance table qualifier — use this instead of the free _table() in all mixin code."""
@@ -179,11 +234,14 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         **kwargs,
     ) -> "IRISGraphEngine":
         import iris as _iris
-        conn_params = dict(hostname=hostname, port=port, namespace=namespace, username=username, password=password)
+
+        conn_params = dict(
+            hostname=hostname, port=port, namespace=namespace, username=username, password=password
+        )
         # Standard connection seam: iris-embedded-python-wrapper's dbapi.connect
         # (drop-in for iris.connect with DB-API exception semantics).
         conn = _iris.dbapi.connect(**conn_params)
-        engine = cls(conn, embedding_dimension=embedding_dimension, **kwargs)
+        engine = cls(conn, embedding_dimension=embedding_dimension, namespace=namespace, **kwargs)
         engine._connection_params = conn_params
         return engine
 
@@ -200,6 +258,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
     ) -> "IRISGraphEngine":
         try:
             import iris as _iris_wrapper
+
             state = _iris_wrapper.runtime.state
         except ImportError:
             raise ImportError(
@@ -208,8 +267,11 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             )
         if hostname:
             conn = _iris_wrapper.dbapi.connect(
-                hostname=hostname, port=port, namespace=namespace,
-                username=username, password=password,
+                hostname=hostname,
+                port=port,
+                namespace=namespace,
+                username=username,
+                password=password,
             )
         elif state.startswith("embedded"):
             conn = _iris_wrapper.dbapi.connect(mode="embedded", namespace=namespace)
@@ -217,7 +279,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             raise RuntimeError(
                 "No IRIS connection available via wrapper. Provide hostname= or run inside IRIS."
             )
-        return cls(conn, embedding_dimension=embedding_dimension, **kwargs)
+        return cls(conn, embedding_dimension=embedding_dimension, namespace=namespace, **kwargs)
 
     @property
     def _fetch_first_unsafe(self) -> bool:
@@ -239,7 +301,10 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         # VARCHAR-keyed temp table; SIGSEGV (rc -11 / 139) => unsafe.
         if self._connection_params:
             try:
-                import subprocess, sys, json
+                import json
+                import subprocess
+                import sys
+
                 cp = json.dumps(self._connection_params)
                 script = (
                     "import iris, json, sys\n"
@@ -254,8 +319,9 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                     "ON b.sid=a.id FETCH FIRST 1 ROWS ONLY'); cur.fetchall()\n"
                     "print('OK')\n"
                 )
-                r = subprocess.run([sys.executable, "-c", script],
-                                   capture_output=True, text=True, timeout=5)
+                r = subprocess.run(
+                    [sys.executable, "-c", script], capture_output=True, text=True, timeout=5
+                )
                 if r.returncode in (-11, 139, -6, 134):
                     logger.warning(
                         "IRIS build SIGSEGVs in %%qaqpre on FETCH FIRST + multi-table JOIN "
@@ -285,6 +351,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             cur.execute("SELECT $ZVERSION")
             ver = str(cur.fetchone()[0])
             import re as _re
+
             if _re.search(r"2026\.", ver):
                 return True
         except Exception:
@@ -300,6 +367,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             if any(x in err_str for x in ("epipe", "broken pipe", "connection reset", "closed")):
                 if self._connection_params:
                     import iris as _iris
+
                     self.conn = _iris.dbapi.connect(**self._connection_params)
                     logger.info("IRIS connection re-established after EPIPE")
                 else:
@@ -341,22 +409,13 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                     raise
                 logger.warning(
                     "bulk op hit connection drop (attempt %d/%d): %s — reconnecting",
-                    attempt + 1, max_retries, str(e)[:120],
+                    attempt + 1,
+                    max_retries,
+                    str(e)[:120],
                 )
                 self._reconnect_if_stale()
                 _time.sleep(delay)
                 delay *= 2
-
-
-
-
-
-
-
-
-
-
-
 
     _SYSTEM_PROCEDURES = {
         "ivg.vector.search": "_proc_ivg_vector_search",
@@ -379,7 +438,9 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
     }
 
     def _proc_ivg_vector_search(self, proc) -> Optional[Dict[str, Any]]:
-        from iris_vector_graph.cypher.ast import Literal as CypherLiteral, Variable as CypherVariable
+        from iris_vector_graph.cypher.ast import Literal as CypherLiteral
+        from iris_vector_graph.cypher.ast import Variable as CypherVariable
+
         args = proc.arguments
         label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
         k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
@@ -444,9 +505,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
 
     def _proc_db_labels(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-        )
+        cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
         labels = [row[0] for row in cursor.fetchall()]
         return IVGResult(columns=["label"], rows=[[l] for l in labels])
 
@@ -464,9 +523,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
 
     def _proc_db_schema_nodetypeproperties(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-        )
+        cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
         labels = [row[0] for row in cursor.fetchall()]
         rows = []
         for label in labels:
@@ -499,7 +556,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 "propertyTypes",
                 "mandatory",
             ],
-            rows=rows
+            rows=rows,
         )
 
     def _proc_db_schema_reltypeproperties(self, proc) -> Optional[Dict[str, Any]]:
@@ -528,14 +585,13 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         except Exception as e:
             logger.debug("relTypeProperties query failed: %s", e)
         return IVGResult(
-            columns=["relType", "propertyName", "propertyTypes", "mandatory"],
-            rows=rows
+            columns=["relType", "propertyName", "propertyTypes", "mandatory"], rows=rows
         )
 
     def _proc_dbms_components(self, proc) -> Optional[Dict[str, Any]]:
         return IVGResult(
             columns=["name", "versions", "edition"],
-            rows=[["iris-vector-graph", ["5.0.0"], "community"]]
+            rows=[["iris-vector-graph", ["5.0.0"], "community"]],
         )
 
     def _proc_dbms_procedures(self, proc) -> Optional[Dict[str, Any]]:
@@ -543,9 +599,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             return [n, sig, desc, mode, False, {}, "neo4j", False, True, []]
 
         procs = [
-            _proc(
-                "db.labels", "db.labels() :: (label :: STRING)", "List all labels"
-            ),
+            _proc("db.labels", "db.labels() :: (label :: STRING)", "List all labels"),
             _proc(
                 "db.relationshipTypes",
                 "db.relationshipTypes() :: (relationshipType :: STRING)",
@@ -616,14 +670,12 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 "worksOnSystem",
                 "argumentDescription",
             ],
-            rows=procs
+            rows=procs,
         )
 
     def _proc_db_propertykeys(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(
-            'SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"'
-        )
+        cursor.execute('SELECT DISTINCT TOP 1000 "key" FROM Graph_KG.rdf_props ORDER BY "key"')
         keys = [row[0] for row in cursor.fetchall()]
         return IVGResult(columns=["propertyKey"], rows=[[k] for k in keys])
 
@@ -637,14 +689,11 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 ["browser.retain_editor_history", "true"],
                 ["browser.post_connect_cmd", ""],
                 ["dbms.security.auth_enabled", "false"],
-            ]
+            ],
         )
 
     def _proc_dbms_security_showcurrentuser(self, proc) -> Optional[Dict[str, Any]]:
-        return IVGResult(
-            columns=["username", "roles", "flags"],
-            rows=[["neo4j", [], []]]
-        )
+        return IVGResult(columns=["username", "roles", "flags"], rows=[["neo4j", [], []]])
 
     def _proc_dbms_functions(self, proc) -> Optional[Dict[str, Any]]:
         return IVGResult(
@@ -659,7 +708,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 "returnDescription",
                 "category",
             ],
-            rows=[]
+            rows=[],
         )
 
     def _proc_dbms_queryjmx(self, proc) -> Optional[Dict[str, Any]]:
@@ -749,14 +798,12 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                         "dbms.logs.native.size": {"value": "20m"},
                     },
                 ],
-            ]
+            ],
         )
 
     def _proc_apoc_meta_data(self, proc) -> Optional[Dict[str, Any]]:
         cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label"
-        )
+        cursor.execute("SELECT DISTINCT label FROM Graph_KG.rdf_labels ORDER BY label")
         labels = [row[0] for row in cursor.fetchall()]
         rows = []
         for label in labels[:50]:
@@ -769,9 +816,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             props = [row[0] for row in cursor.fetchall()]
             if props:
                 for prop_name in props:
-                    rows.append(
-                        [label, prop_name, "STRING", "node", False, False, False]
-                    )
+                    rows.append([label, prop_name, "STRING", "node", False, False, False])
             else:
                 rows.append([label, None, "STRING", "node", False, False, False])
         cursor.execute("SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p")
@@ -797,13 +842,11 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 "index",
                 "existence",
             ],
-            rows=rows
+            rows=rows,
         )
 
     def _proc_apoc_meta_schema(self, proc) -> Optional[Dict[str, Any]]:
-        result = self._try_system_procedure(
-            type("P", (), {"procedure_name": "apoc.meta.data"})()
-        )
+        result = self._try_system_procedure(type("P", (), {"procedure_name": "apoc.meta.data"})())
         return IVGResult(columns=["value"], rows=[[result or {}]])
 
     def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
@@ -812,6 +855,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         # GDS → ivg shim: intercept gds.* calls before normal dispatch.
         if name.startswith("gds."):
             from iris_vector_graph._engine.query import _handle_gds_shim
+
             gds_result = _handle_gds_shim(proc)
             if gds_result is not None:
                 if isinstance(gds_result, tuple):
@@ -833,48 +877,20 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
 
         return None
 
-
-
     _LEGACY_TO_CONCEPT = {
-        "ivf": "vector", "vec": "vector", "bm25": "fulltext",
-        "plaid": "multivector", "hnsw": "hnsw",
+        "ivf": "vector",
+        "vec": "vector",
+        "bm25": "fulltext",
+        "plaid": "multivector",
+        "hnsw": "hnsw",
         "neighborhood_vector": "neighborhood_vector",
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     # Text Search Operations
 
     # Graph Traversal Operations
 
-
-
-
-
-
     # Personalized PageRank Operations
-
 
     # --- Arno acceleration (optional) ---
 
@@ -902,10 +918,6 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
             for i in range(1, n + 1)
         )
 
-
-
-
-
     # ── VecIndex: lightweight ANN vector search in globals ──
 
     def _iris_obj(self):
@@ -919,6 +931,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
         # We detect the monkeypatch by checking the function name: the real createIRIS
         # is a C extension; the monkeypatch is a Python closure named "_safe_createIRIS".
         import iris
+
         _create = iris.createIRIS
         if getattr(_create, "__name__", "") == "_safe_createIRIS":
             # Test context: monkeypatch handles isolation — call directly.
@@ -931,6 +944,7 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 namespace = getattr(self.conn, "namespace", None)
                 if hostname and port and namespace:
                     import iris.dbapi as _dbapi
+
                     self._native_conn = _dbapi.connect(
                         hostname=hostname,
                         port=port,
@@ -944,52 +958,4 @@ class IRISGraphEngine(RdfExportMixin, ShaclMixin, ProvMixin, TemporalMixin, Snap
                 return _create(self.conn)
         return _create(self._native_conn)
 
-
-
-
-
-
-
-
-
-
     # ── PLAID: multi-vector retrieval (ColBERT-style) ──
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

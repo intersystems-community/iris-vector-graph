@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # iris-vector-graph
 
 **Turn InterSystems IRIS into a graph + vector database** — openCypher queries, HNSW/BM25 hybrid search, temporal property graph, RDF/SHACL/PROV-O semantic layer, and Neo4j Bolt protocol compatibility.
@@ -184,6 +186,50 @@ Every write to ivg is stored as W3C-aligned SPO triples (`rdf_edges`, `rdf_props
 with OWL 2 RL inference, named graph support, and RDF-star style edge qualifiers.
 See [docs/SEMANTIC_LAYER.md](docs/SEMANTIC_LAYER.md) for the full guide: format
 reference, SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
+
+---
+
+## Non-USER Namespace Deployment
+
+By default IVG connects to the `USER` namespace. When deploying against a
+HealthShare, Ensemble, or multi-tenant IRIS instance where data lives in a
+different namespace, pass `namespace=` at engine construction:
+
+```python
+from iris_vector_graph import IRISGraphEngine
+import iris.dbapi as dbapi
+
+conn = dbapi.connect(hostname="...", port=1972, namespace="HSCUSTOM", ...)
+engine = IRISGraphEngine(conn, namespace="HSCUSTOM")
+```
+
+On first use, the engine probes `$Data(^KG("deg"))` to verify the `^KG`
+globals are accessible. If they are absent a `WARNING` is logged naming the
+namespace and the fix. Set `IVG_STRICT_NAMESPACE=1` to upgrade the warning
+to a raised `NamespaceMismatchWarning`.
+
+### CPF global mapping
+
+If your graph data lives in a separate database, map the `^KG` global in the
+IRIS CPF file so the probe passes without copying data:
+
+```ini
+[Map.HSCUSTOM]
+Global=^KG,Directory=/db/IRISLOCALDATA/
+```
+
+After mapping, `$Data(^KG("deg"))` returns non-zero in `HSCUSTOM` and no
+warning is emitted.
+
+### Env var controls
+
+| Env var                        | Effect                                                        |
+| ------------------------------ | ------------------------------------------------------------- |
+| _(neither)_                    | `logging.warning` on mismatch, execution continues            |
+| `IVG_STRICT_NAMESPACE=1`       | `logging.warning` + raises `NamespaceMismatchWarning`         |
+| `IVG_IGNORE_NAMESPACE_CHECK=1` | Skip probe entirely (HealthShare platform-managed namespaces) |
+
+`IVG_IGNORE_NAMESPACE_CHECK=1` takes precedence over `IVG_STRICT_NAMESPACE=1`.
 
 ---
 
