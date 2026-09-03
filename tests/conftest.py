@@ -9,7 +9,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-_GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
+_GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
 
 def _deploy_objectscript(container_name: str) -> None:
@@ -66,8 +66,7 @@ def iris_test_container():
         if not auto_start:
             pytest.skip(
                 f"IRIS container '{_GQS_CONTAINER}' not running. "
-                f"Start with: scripts/test-container.sh up  "
-                f"(or set IVG_TEST_CONTAINER=ivg-iris-enterprise for enterprise container)"
+                f"Start with: scripts/enterprise-container.sh up"
             )
         _sp.run(["docker", "rm", "-f", _GQS_CONTAINER], capture_output=True)
         logger.info("Starting fresh Community IRIS container: %s", _GQS_CONTAINER)
@@ -104,7 +103,7 @@ def iris_connection(iris_test_container):
         capture_output=True, text=True,
     ).stdout.strip()
 
-    _IVG_PORT = int(os.environ.get("IVG_PORT", "21972"))
+    _IVG_PORT = int(os.environ.get("IVG_PORT", "31972"))
 
     conn = None
 
