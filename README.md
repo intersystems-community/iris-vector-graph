@@ -189,6 +189,52 @@ reference, SHACL shape writing, PROV-O vocabulary mapping, and integration patte
 
 ---
 
+## Revision Ledger (Transaction-Time History)
+
+The structural graph (nodes, labels, properties, relationships, qualifiers) can
+be versioned with an opt-in, immutable revision ledger. A changeset applies
+atomically and produces exactly one revision; a failed operation applies
+nothing. This is **transaction time** (when the ledger recorded a change) and is
+independent of the temporal property graph's **event time** (`ts` on temporal
+edges), which is unchanged and unversioned.
+
+```python
+from iris_vector_graph.ledger import Changeset
+
+genesis = engine.ledger.enable()              # idempotent; captures the existing graph
+head = engine.ledger.head()
+
+cs = Changeset(actor="ingest:etl-42", actor_type="ingest",
+               message="equipment sync",
+               expected_head=head.revision_id,      # optimistic concurrency
+               idempotency_key="etl-42-2026-09-05")  # safe retry
+cs.create_node("pump-7", labels=["Equipment"], properties={"status": "ok"})
+cs.create_node("tank-2")
+r = cs.create_relationship("pump-7", "FEEDS", "tank-2", qualifiers={"weight": "1.0"})
+cs.set_qualifier(r, "capacity", "100")
+result = engine.ledger.commit(cs)              # StaleHeadError if another writer won
+
+engine.ledger.history(limit=20)                # deterministic, pageable, filterable
+engine.ledger.get_revision(result.revision.revision_id).records
+engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
+engine.ledger.reconstruct(genesis.revision_id) # read-only graph as of a revision
+engine.ledger.export_reconstruction(result.revision.revision_id, "at-rev.ndjson")
+engine.ledger.verify()                         # replay from genesis == current tables?
+engine.ledger.verify(adopt=True)               # record any unrecorded (legacy) writes
+```
+
+Existing APIs keep working with a ledger enabled; writes made through them are
+"unrecorded" and are surfaced by `verify()`. `enable(strict=True)` (or
+`set_strict(True)`) rejects non-ledger structural writes with
+`LedgerStrictModeError`; reads, temporal writes, and index maintenance are
+unaffected. Relationships get a stable **statement identity** that survives
+qualifier changes and snapshot restore. Counters are in
+`engine.status().ledger`, the `Graph_KG.ledger_stats` table, and a metrics hook
+(`engine.ledger.register_metrics_hook`, see
+[docs/ledger-prometheus-hook.md](docs/ledger-prometheus-hook.md)).
+
+---
+
 ## Non-USER Namespace Deployment
 
 By default IVG connects to the `USER` namespace. When deploying against a

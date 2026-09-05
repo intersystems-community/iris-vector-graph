@@ -81,6 +81,34 @@ class SyncReport:
 
 
 @dataclass
+class LedgerStatus:
+    """Spec 213 (FR-050): revision-ledger counters mirrored into the engine status report."""
+
+    state: str = "never-enabled"
+    strict: bool = False
+    head_seq: int = 0
+    head_id: Optional[str] = None
+    commits_ok: int = 0
+    replays_idem: int = 0
+    rejections: Dict[str, int] = field(default_factory=dict)
+    last_verify_ms: Optional[int] = None
+    last_verify_result: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "state": self.state,
+            "strict": self.strict,
+            "head_seq": self.head_seq,
+            "head_id": self.head_id,
+            "commits_ok": self.commits_ok,
+            "replays_idem": self.replays_idem,
+            "rejections": dict(self.rejections),
+            "last_verify_ms": self.last_verify_ms,
+            "last_verify_result": self.last_verify_result,
+        }
+
+
+@dataclass
 class EngineStatus:
     tables: TableCounts = field(default_factory=TableCounts)
     adjacency: AdjacencyStatus = field(default_factory=AdjacencyStatus)
@@ -92,6 +120,7 @@ class EngineStatus:
     errors: List[str] = field(default_factory=list)
     pending_sync: bool = False
     internals: Optional[Dict[str, Any]] = None
+    ledger: Optional[LedgerStatus] = None
 
     @property
     def vector_index_state(self) -> IndexState:
@@ -166,6 +195,18 @@ class EngineStatus:
             f"Acceleration:    {accel_label}",
             f"Sync state:      {sync_label}",
         ]
+
+        if self.ledger is not None:
+            if self.ledger.state == "never-enabled":
+                lines.append("Ledger:          not enabled")
+            else:
+                rej = sum(self.ledger.rejections.values()) if self.ledger.rejections else 0
+                lines.append(
+                    f"Ledger:          {self.ledger.state}{' (strict)' if self.ledger.strict else ''}"
+                    f" · head seq {self.ledger.head_seq} · {self.ledger.commits_ok:,} commits"
+                    f" · {rej:,} rejections"
+                    + (f" · last verify {self.ledger.last_verify_result}" if self.ledger.last_verify_result else "")
+                )
 
         if self.indexes.ivf_indexes or self.indexes.plaid_indexes:
             lines.append(f"\nAdditional indexes")

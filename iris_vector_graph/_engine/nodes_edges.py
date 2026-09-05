@@ -4,6 +4,7 @@ from typing import Dict, Any, NamedTuple, Optional, List
 
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph._validate import NodeIdInput, EdgeInput
+from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class NodesEdgesMixin:
 
     def bulk_load_session(self, max_retries: int = 3, rebuild_indexes: bool = True,
                           incremental: bool = True):
+        _ledger_check(self, "bulk_load_session")
         from contextlib import contextmanager
 
         @contextmanager
@@ -642,6 +644,7 @@ class NodesEdgesMixin:
             >>> engine.create_node("gene:TP53", labels=["Gene"], properties={"name": "TP53"})
             True
         """
+        _ledger_check(self, "create_node")
         NodeIdInput(node_id=node_id)
         cursor = self.conn.cursor()
         try:
@@ -716,6 +719,7 @@ class NodesEdgesMixin:
             return value, so callers that re-create edges defensively should call
             create_edge unconditionally and not gate success on the return value.
         """
+        _ledger_check(self, "create_edge")
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
         cursor = self.conn.cursor()
         try:
@@ -771,6 +775,7 @@ class NodesEdgesMixin:
         Returns:
             True on success, False if the edge could not be updated.
         """
+        _ledger_check(self, "set_edge_weight")
         EdgeInput(source_id=source, predicate=predicate, target_id=target)
         try:
             self._iris_obj().classMethodVoid(
@@ -788,6 +793,7 @@ class NodesEdgesMixin:
 
 
     def delete_edge(self, source_id: str, predicate: str, target_id: str) -> bool:
+        _ledger_check(self, "delete_edge")
         cursor = self.conn.cursor()
         try:
             cursor.execute(
@@ -817,6 +823,7 @@ class NodesEdgesMixin:
 
 
     def drop_graph(self, graph_id: str) -> int:
+        _ledger_check(self, "drop_graph")
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE graph_id = ?", [graph_id])
         deleted = cursor.rowcount if cursor.rowcount is not None else 0
@@ -853,6 +860,7 @@ class NodesEdgesMixin:
         Returns:
             List of successfully created node IDs
         """
+        _ledger_check(self, "bulk_create_nodes")
         if not nodes:
             return []
 
@@ -966,6 +974,7 @@ class NodesEdgesMixin:
         auto_sync: bool = True,
         auto_rebuild_kg: bool = None,
     ) -> int:
+        _ledger_check(self, "bulk_create_edges")
         if auto_rebuild_kg is not None:
             import warnings
             warnings.warn(
@@ -1044,6 +1053,7 @@ class NodesEdgesMixin:
         predicate: str = "KNOWS",
         auto_sync: bool = True,
     ) -> int:
+        _ledger_check(self, "bulk_ingest_edges")
         if not edges:
             return 0
         import json as _json
@@ -1105,6 +1115,7 @@ class NodesEdgesMixin:
 
 
     def delete_node(self, node_id: str) -> bool:
+        _ledger_check(self, "delete_node")
         cursor = self.conn.cursor()
         try:
             cursor.execute(
@@ -1156,6 +1167,7 @@ class NodesEdgesMixin:
 
 
     def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = None) -> "DeleteResult":
+        _ledger_check(self, "bulk_delete_nodes")
         deleted = 0
         failed = 0
         if not node_ids:
@@ -1240,6 +1252,7 @@ class NodesEdgesMixin:
 
     def store_node(self, node_id: str, properties: Optional[Dict[str, Any]] = None,
                    labels: Optional[List[str]] = None) -> bool:
+        _ledger_check(self, "store_node")
         cursor = self.conn.cursor()
         try:
             cursor.execute(
@@ -1290,6 +1303,7 @@ class NodesEdgesMixin:
 
     def store_edge(self, source_id: str, predicate: str, target_id: str,
                    qualifiers: Optional[Dict[str, Any]] = None) -> bool:
+        _ledger_check(self, "store_edge")
         self.store_node(source_id)
         self.store_node(target_id)
         cursor = self.conn.cursor()

@@ -500,3 +500,51 @@ def pytest_collect_file(parent, file_path):
         except (OSError, UnicodeDecodeError):
             pass
     return None
+
+
+@pytest.fixture(scope="function")
+def ledger_reset(iris_connection, iris_master_cleanup):
+    """Spec 213: wipe ledger storage for isolation, on top of iris_master_cleanup.
+
+    Kills ^IVG.Ledger and truncates Graph_KG.ledger_revisions / ledger_stats.
+    Errors are ignored when the ledger classes are not yet deployed.
+    """
+    def _wipe():
+        cursor = iris_connection.cursor()
+        try:
+            # Rebuild rdf_edges indices first: rows loaded with %NOINDEX leave phantom
+            # entries that DELETE cannot see but a full SELECT (and genesis) can.
+            with contextlib.suppress(Exception):
+                cursor.execute("SELECT Graph_KG.rebuild_edge_indices()")
+            for table in ["Graph_KG.ledger_revisions", "Graph_KG.ledger_stats"]:
+                with contextlib.suppress(Exception):
+                    cursor.execute(f"DELETE FROM {table}")
+            with contextlib.suppress(Exception):
+                iris_connection.commit()
+            with contextlib.suppress(Exception):
+                import iris as _iris
+                import iris.dbapi as _tmp_dbapi
+                _tmp_conn = _tmp_dbapi.connect(
+                    hostname=iris_connection.hostname,
+                    port=iris_connection.port,
+                    namespace=iris_connection.namespace,
+                    username="_SYSTEM",
+                    password="SYS",
+                )
+                try:
+                    _iris_obj = _iris.createIRIS(_tmp_conn)
+                    try:
+                        # bypasses the immutability triggers on ledger_revisions
+                        _iris_obj.classMethodValue("Graph.KG.Ledger", "PurgeAll")
+                    except Exception:
+                        _iris_obj.kill("^IVG.Ledger")
+                finally:
+                    with contextlib.suppress(Exception):
+                        _tmp_conn.close()
+        finally:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+    _wipe()
+    yield
+    _wipe()

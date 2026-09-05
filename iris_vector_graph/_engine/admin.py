@@ -290,7 +290,12 @@ class AdminMixin:
             adjacency.bfs_path = "objectscript"
 
         probe_ms = (_time.perf_counter() - t0) * 1000
+        try:
+            ledger_status = self._ledger_status()  # spec 213 FR-050
+        except Exception:
+            ledger_status = None
         return EngineStatus(
+            ledger=ledger_status,
             tables=tables,
             adjacency=adjacency,
             objectscript=objectscript,

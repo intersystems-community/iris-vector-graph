@@ -2,6 +2,65 @@
 
 # Changelog
 
+### v2.16.0 (2026-09-05)
+
+**Immutable graph revision ledger and atomic changesets — spec 213**
+
+Opt-in transaction-time history for the structural graph. `engine.ledger.commit(changeset)`
+applies an ordered set of node/label/property/relationship/qualifier operations inside one
+IRIS transaction (SQL rows, `^KG` adjacency and ledger storage together) and produces exactly
+one immutable revision, or nothing. Distinct from the temporal property graph (event time).
+
+#### New
+
+- **`iris_vector_graph.ledger`** package: `Changeset` builder (13 operation kinds, canonical
+  JSON, SHA-256 fingerprint over `{actor, actor_type, ops}`), `GraphLedger` client
+  (`enable/disable/set_strict/head/commit/history/get_revision/diff/reconstruct/
+export_reconstruction/verify/stats/register_metrics_hook`), replay engine
+  (`GraphState`, lifecycle-aware `compute_diff`, bounded `reconstruct`, `verify` with
+  `unrecorded_writes` classification and adoption), NDJSON export, strict-mode guard,
+  `LedgerError` hierarchy. `engine.ledger` via new `LedgerMixin`.
+- **ObjectScript** — `Graph.KG.Ledger` (server-side `Commit` with `TSTART`/head lock/
+  `TROLLBACK`, `$TLEVEL>0` fail-closed, idempotency before `expected_head`, chunked
+  transport, `ledger_records` paged query, `PurgeAll`, `RebuildEdgeIndices`),
+  `Graph.KG.LedgerApply` (per-op appliers, prior-value capture, detach cascade in statement
+  order, reification cascade), `Graph.KG.LedgerGenesis` (genesis capture, adoption),
+  `Graph.KG.LedgerRevision` (`Graph_KG.ledger_revisions`, UPDATE/DELETE triggers reject),
+  `Graph.KG.LedgerStats` (`Graph_KG.ledger_stats`).
+- **Schema** (approved 2026-09-05): tables `Graph_KG.ledger_revisions`, `Graph_KG.ledger_stats`;
+  global `^IVG.Ledger`. Existing tables unchanged. Snapshot export includes ledger globals;
+  the never-written `^IVG.CDC` export entry was removed.
+- **Strict mode** guards every legacy structural write, Cypher DML (`_execute_parsed`, no
+  translator change) and the temporal structural mirror (`create_edge_temporal(graph=…)`
+  skips the mirror under strict).
+- **Observability**: log record per commit outcome on `iris_vector_graph.ledger`,
+  `EngineStatus.ledger`, statistics table, metrics hook; `docs/ledger-prometheus-hook.md`.
+- `import_graph_ndjson` accepts reconstruction export lines (`type: node|rel`, `stmt_id`).
+
+#### Fixes
+
+- **Arno probe**: `%SYSTEM.OBJ.Exists` is not callable through the Native API on the
+  enterprise build, so the spec-212 class probe silently reported Arno unavailable over TCP.
+  Now uses `%Dictionary.CompiledClass.%ExistsId`. Detection additionally smoke-tests the
+  callout (`NKGAccel.BFSJson` on a probe seed) and leaves Arno disabled when the `.so`
+  cannot be loaded in the serving process, so `sync()`/BFS take the ObjectScript path
+  instead of failing half-way.
+- **`NKGAccelTraversal.BFSJson` library path**: fell back to a hardcoded
+  `/usr/irissys/mgr/libarno_callout.so` when the process-private `^||NKGAccel("libPath")`
+  was unset (every TCP job process). Now falls back to the persistent
+  `^ArnoAccel("lib_path")` written by `ArnoAccel.Load` (spec 210).
+
+#### Tests
+
+- Unit (no container): `tests/unit/test_ledger_{errors,changeset,client,replay,guard}.py`.
+- Live (`ivg-iris-enterprise`): `tests/integration/test_ledger_us01…us11_*.py`,
+  `test_ledger_snapshot.py`, `test_ledger_embedded.py`, `test_ledger_observability.py`;
+  opt-in `test_ledger_perf.py` (`-m perf`).
+- New fixture `ledger_reset`; `Graph.KG.Ledger.RebuildEdgeIndices` clears phantom rows left
+  by `%NOINDEX` loads without invoking the functional index purge.
+
+---
+
 ### v2.15.0 (2026-09-03)
 
 **Namespace-aware IVG engine — spec 212**

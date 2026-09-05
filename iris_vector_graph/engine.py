@@ -16,6 +16,7 @@ from iris_vector_graph._engine.admin import AdminMixin
 from iris_vector_graph._engine.algorithms import AlgorithmsMixin
 from iris_vector_graph._engine.embeddings import EmbeddingsMixin
 from iris_vector_graph._engine.fhir import FhirMixin
+from iris_vector_graph._engine.ledger import LedgerMixin
 from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
 from iris_vector_graph._engine.prov import ProvMixin
 from iris_vector_graph._engine.query import QueryMixin
@@ -129,6 +130,7 @@ def _bfs_stream_pages(conn, tag, page_size=500):
 
 
 class IRISGraphEngine(
+    LedgerMixin,
     RdfExportMixin,
     ShaclMixin,
     ProvMixin,
@@ -205,6 +207,11 @@ class IRISGraphEngine(
         else:
             self._store = store
         self._store_capabilities = self._store.capabilities()
+        # spec 213: the store shares the engine's strict-mode guard (FR-042)
+        try:
+            self._store._ledger_guard = self._ledger_guard
+        except Exception:  # pragma: no cover - foreign store objects
+            pass
         logger.debug(
             "IRISGraphEngine initialized (dim=%s dtype=%s)",
             embedding_dimension or "auto",

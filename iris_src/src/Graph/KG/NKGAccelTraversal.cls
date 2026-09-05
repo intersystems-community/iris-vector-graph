@@ -341,7 +341,9 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     // arno 1d75d97: kg_bfs_global takes pre-serialized adjacency string as first arg.
     // ExportAdjacencyWithPreds() builds srcStrpredStrdstStr wire format.
     // Rust parses it entirely in memory — no global reads needed from $ZF(-5).
-    Set dllPath = $Get(^||NKGAccel("libPath"), "/usr/irissys/mgr/libarno_callout.so")
+    // spec 210/213: prefer the persistent lib path recorded by ArnoAccel.Load so TCP job
+    // processes (which never ran Load themselves) resolve the same .so as the loader did.
+    Set dllPath = $Get(^||NKGAccel("libPath"), $Get(^ArnoAccel("lib_path"), "/usr/irissys/mgr/libarno_callout.so"))
     If '$Data(^||NKGAccel("bfs_fn")) {
         Set dllid = $ZF(-4, 1, dllPath)
         If dllid = 0 {

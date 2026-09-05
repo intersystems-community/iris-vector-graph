@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.capabilities import IRISCapabilities
+from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +572,7 @@ class SchemaMixin:
     def materialize_inference(
         self, rules: str = "rdfs", graph: Optional[str] = None
     ) -> Dict[str, int]:
+        _ledger_check(self, "materialize_inference")
         RDFS_SUBCLASSOF = "http://www.w3.org/2000/01/rdf-schema#subClassOf"
         RDFS_SUBPROPOF = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf"
         RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
@@ -730,6 +732,7 @@ class SchemaMixin:
 
 
     def retract_inference(self, graph: Optional[str] = None) -> int:
+        _ledger_check(self, "retract_inference")
         cursor = self.conn.cursor()
         if graph:
             cursor.execute(
@@ -757,6 +760,7 @@ class SchemaMixin:
         label: str = "Reification",
         props: Dict[str, str] = None,
     ) -> Optional[str]:
+        _ledger_check(self, "reify_edge")
         if reifier_id is None:
             reifier_id = f"reif:{edge_id}"
         cursor = self.conn.cursor()
@@ -823,6 +827,7 @@ class SchemaMixin:
 
 
     def delete_reification(self, reifier_id: str) -> bool:
+        _ledger_check(self, "delete_reification")
         cursor = self.conn.cursor()
         try:
             cursor.execute(

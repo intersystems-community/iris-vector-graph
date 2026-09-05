@@ -242,7 +242,7 @@ class TestDetectArnoClassProbe:
         result = store._detect_arno()
         # Should proceed past class check (result may vary but no class-not-found log)
         calls = [c.args[:2] for c in mock_iris_obj.classMethodValue.call_args_list]
-        assert ("%SYSTEM.OBJ", "Exists") in calls
+        assert ("%Dictionary.CompiledClass", "%ExistsId") in calls
 
     def test_disable_arno_env_skips_class_probe(self):
         store, mock_iris_obj = self._store_with_iris_obj(exists_return=0)

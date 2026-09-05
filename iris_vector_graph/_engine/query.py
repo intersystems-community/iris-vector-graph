@@ -7,6 +7,7 @@ from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph._validate import CypherInput, KHop2Input
+from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
 
@@ -322,6 +323,7 @@ class QueryMixin:
             return self._route_var_length(sql_query, parameters)
         metadata = sql_query.query_metadata
         if sql_query.is_transactional:
+            _ledger_check(self, "cypher_dml")
             result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
             result.metadata = metadata
             if sql_query.column_name_map and result.columns:

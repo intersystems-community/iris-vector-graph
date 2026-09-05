@@ -1,6 +1,7 @@
 import json
 import logging
 from typing import Optional, Dict, Any, List
+from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class SnapshotMixin:
         auto_sync: bool = True,
         auto_rebuild_kg: bool = None,
     ) -> dict:
+        _ledger_check(self, "load_networkx")
         if auto_rebuild_kg is not None:
             import warnings
             warnings.warn(
@@ -111,6 +113,7 @@ class SnapshotMixin:
         infer=False,
         graph: Optional[str] = None,
     ) -> Dict[str, int]:
+        _ledger_check(self, "import_rdf")
         try:
             import rdflib
             from rdflib import (
@@ -402,7 +405,13 @@ class SnapshotMixin:
                 ("PLAID", [[]]),
                 ("VecIdx", [[]]),
                 ("NKG", [[]]),
-                ("IVG.CDC", [[]]),
+                # spec 213: revision ledger storage (FR-043). ^IVG.Ledger holds head,
+                # records, statement map, tuple index, idempotency; the D/I globals
+                # are the default storage of the two persistent ledger classes.
+                ("IVG.Ledger", [[]]),
+                ("Graph.KG.LedgerRevisionD", [[]]),
+                ("Graph.KG.LedgerRevisionI", [[]]),
+                ("Graph.KG.LedgerStatsD", [[]]),
             ]
             try:
                 iris_obj = self._iris_obj()
@@ -473,6 +482,7 @@ class SnapshotMixin:
         path: str,
         merge: bool = False,
     ) -> Dict[str, Any]:
+        _ledger_check(self, "restore_snapshot")
         import zipfile as _zipfile
         import json as _json
         import uuid as _uuid
@@ -800,6 +810,7 @@ class SnapshotMixin:
     def import_graph_ndjson(
         self, path: str, upsert_nodes: bool = True, batch_size: int = 10000
     ) -> dict:
+        _ledger_check(self, "import_graph_ndjson")
         nodes = 0
         edges = 0
         temporal_edges = 0
@@ -817,6 +828,18 @@ class SnapshotMixin:
                     continue
 
                 kind = event.get("kind", "")
+                # spec 213: reconstruction exports use {"type": "node"|"rel", ...}
+                etype = event.get("type", "")
+                if not kind and etype == "node":
+                    kind = "node"
+                    event = {"kind": "node", "id": event.get("id", ""),
+                             "labels": event.get("labels", []),
+                             "properties": event.get("props", event.get("properties", {}))}
+                elif not kind and etype == "rel":
+                    kind = "edge"
+                    event = {"kind": "edge", "source": event.get("s", ""), "predicate": event.get("p", ""),
+                             "target": event.get("o", ""), "graph": event.get("graph"),
+                             "qualifiers": event.get("quals") or None}
 
                 if kind == "node":
                     node_id = event.get("id", "")
@@ -831,7 +854,12 @@ class SnapshotMixin:
                     pred = event.get("predicate", "")
                     tgt = event.get("target", "")
                     if src and pred and tgt:
-                        self.create_edge(src, pred, tgt)
+                        graph = event.get("graph")
+                        quals = event.get("qualifiers")
+                        if graph is not None or quals:
+                            self.create_edge(src, pred, tgt, qualifiers=quals or None, graph=graph)
+                        else:
+                            self.create_edge(src, pred, tgt)
                         edges += 1
 
                 elif kind == "temporal_edge":

@@ -3,6 +3,7 @@ import json
 from typing import NamedTuple, Optional
 
 from iris_vector_graph._validate import TemporalEdgeInput
+from iris_vector_graph._engine.ledger import ledger_strict as _ledger_strict
 
 
 class PurgeResult(NamedTuple):
@@ -16,6 +17,9 @@ class PurgeResult(NamedTuple):
 
     def __int__(self) -> int:
         return self.deleted
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 class TemporalMixin:
@@ -59,7 +63,9 @@ class TemporalMixin:
             suppress_reverse_index=suppress_reverse_index,
             mode=mode,
         )
-        if result.error is None and graph is not None:
+        if result.error is None and graph is not None and _ledger_strict(self):
+            logger.debug("ledger strict mode: temporal structural mirror skipped for %s -[%s]-> %s", source, predicate, target)
+        elif result.error is None and graph is not None:
             cursor = self.conn.cursor()
             for nid in (source, target):
                 try:

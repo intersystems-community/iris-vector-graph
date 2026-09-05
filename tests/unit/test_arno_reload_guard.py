@@ -31,7 +31,7 @@ def _iris_obj_that_looks_available() -> MagicMock:
 
 
 def _available_side_effect(cls, method, *args):
-    if cls == "%SYSTEM.OBJ" and method == "Exists":
+    if cls == "%Dictionary.CompiledClass" and method == "%ExistsId":
         return 1  # class exists in namespace
     if cls == "Graph.KG.ArnoAccel" and method == "IsAvailable":
         return 1
@@ -52,7 +52,7 @@ class TestReloadGuard:
 
         def side_effect(cls, method, *args):
             call_log.append((cls, method))
-            if cls == "%SYSTEM.OBJ" and method == "Exists":
+            if cls == "%Dictionary.CompiledClass" and method == "%ExistsId":
                 return 1  # class exists in namespace
             if method == "IsAvailable":
                 return 0  # simulates stale worker — dllid gone

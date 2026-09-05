@@ -130,7 +130,8 @@ class IRISGraphStore:
         self._check_namespace()
         try:
             iris_obj = self._iris_obj()
-            if not iris_obj.classMethodValue("%SYSTEM.OBJ", "Exists", "Graph.KG.ArnoAccel"):
+            # %SYSTEM.OBJ.Exists is not callable through the Native API on all builds (spec 213 finding)
+            if not int(str(iris_obj.classMethodValue("%Dictionary.CompiledClass", "%ExistsId", "Graph.KG.ArnoAccel")) or 0):
                 logger.warning(
                     "Arno class not found in namespace %s — Arno unavailable",
                     getattr(self, "_namespace", "USER"),
@@ -148,6 +149,17 @@ class IRISGraphStore:
             self._reload_arno_if_needed(iris_obj)
             cap_json = iris_obj.classMethodValue("Graph.KG.NKGAccel", "Capabilities")
             self._arno_capabilities = json.loads(str(cap_json))
+            # spec 213 finding: the class can be compiled and Capabilities can report
+            # rust_callout=true while the .so is not loadable from this server process
+            # (<DYNAMIC LIBRARY LOAD>). Smoke the callout once; if it cannot run, leave
+            # Arno disabled so sync()/BFS use the ObjectScript path instead of half-failing.
+            try:
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "BFSJson", "__ivg_arno_probe__", "[]", 1, 1)
+            except Exception as probe_err:
+                logger.warning("Arno callout not runnable in this process (%s) — Arno disabled", probe_err)
+                self._arno_available = False
+                self._arno_capabilities = {}
+                return False
             self._arno_available = True
             if not self._arno_capabilities.get("nkg_data", False):
                 logger.warning(
@@ -289,6 +301,9 @@ class IRISGraphStore:
     # ── Mutations ─────────────────────────────────────────────────────────────
 
     def write_nodes(self, nodes: list) -> IVGResult:
+        _guard = getattr(self, "_ledger_guard", None)
+        if _guard is not None:
+            _guard.check_structural_write("store.write_nodes")
         cursor = self.conn.cursor()
         written = 0
         for node in nodes:
@@ -324,6 +339,9 @@ class IRISGraphStore:
         return IVGResult(columns=["written"], rows=[[written]])
 
     def write_edges(self, edges: list) -> IVGResult:
+        _guard = getattr(self, "_ledger_guard", None)
+        if _guard is not None:
+            _guard.check_structural_write("store.write_edges")
         cursor = self.conn.cursor()
         written = 0
         err_lower_check = lambda e: ("unique" in str(e).lower() or "-119" in str(e))
@@ -355,6 +373,9 @@ class IRISGraphStore:
         return IVGResult(columns=["written"], rows=[[written]])
 
     def delete_nodes(self, node_ids: list) -> IVGResult:
+        _guard = getattr(self, "_ledger_guard", None)
+        if _guard is not None:
+            _guard.check_structural_write("store.delete_nodes")
         if not node_ids:
             return IVGResult(columns=["deleted"], rows=[[0]])
         cursor = self.conn.cursor()
@@ -371,6 +392,9 @@ class IRISGraphStore:
         return IVGResult(columns=["deleted"], rows=[[deleted]])
 
     def delete_edges(self, edges: list) -> IVGResult:
+        _guard = getattr(self, "_ledger_guard", None)
+        if _guard is not None:
+            _guard.check_structural_write("store.delete_edges")
         if not edges:
             return IVGResult(columns=["deleted"], rows=[[0]])
         cursor = self.conn.cursor()
