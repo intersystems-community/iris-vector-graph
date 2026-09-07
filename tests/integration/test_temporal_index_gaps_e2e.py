@@ -56,7 +56,8 @@ class TestPurgeRawBeforeE2E:
         agg_before = engine.get_temporal_aggregate(pfx, "METRIC_AT", "count", 0, 1000)
         assert agg_before >= 3
 
-        deleted = engine.purge_raw_before(250)
+        result = engine.purge_raw_before(250)
+        deleted = result.deleted if hasattr(result, "deleted") else int(result)
         assert deleted == 2
 
         # Raw edges: only ts=300 should remain
@@ -74,14 +75,16 @@ class TestPurgeRawBeforeE2E:
         """US1 AC-2: nothing deleted when no edges before tsEnd."""
         pfx = f"{_PREFIX}_prb2"
         engine.create_edge_temporal(pfx, "METRIC_AT", f"{pfx}_t", timestamp=500)
-        deleted = engine.purge_raw_before(100)
+        result = engine.purge_raw_before(100)
+        deleted = result.deleted if hasattr(result, "deleted") else int(result)
         assert deleted == 0
 
     def test_purge_raw_before_boundary_strict(self, engine):
         """US1 AC-3: edge at ts==tsEnd is NOT deleted (strict <)."""
         pfx = f"{_PREFIX}_prb3"
         engine.create_edge_temporal(pfx, "METRIC_AT", f"{pfx}_t", timestamp=250)
-        deleted = engine.purge_raw_before(250)
+        result = engine.purge_raw_before(250)
+        deleted = result.deleted if hasattr(result, "deleted") else int(result)
         assert deleted == 0
         edges = engine.get_edges_in_window(pfx, "METRIC_AT", 0, 1000)
         assert len(edges) == 1
@@ -269,7 +272,7 @@ class TestTSUNITMSE2E:
         )
         deleted = int(str(engine._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "PurgeRawBefore", ts_end
-        )))
+        )).split(":")[0])
         assert deleted >= 1, "at least ts_before edge should be purged"
         # Edge at ts_at_end must survive (strict < boundary)
         surviving_bucket = int(str(engine._iris_obj().classMethodValue(

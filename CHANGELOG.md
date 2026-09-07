@@ -2,6 +2,17 @@
 
 # Changelog
 
+### v2.18.5 (2026-09-07)
+
+**Fix: temporal integration test PurgeResult assertions**
+
+`test_temporal_index_gaps_e2e.py` compared `engine.purge_raw_before(...)` return value
+directly against `int` — but the API returns `PurgeResult(deleted, skipped)` since v2.16.
+Fixed three assertions and one raw `classMethodValue` call to use `.deleted` attribute
+and `.split(":")[0]` respectively.
+
+---
+
 ### v2.18.4 (2026-09-07)
 
 **Spec hygiene: tasks.md sync, integration test fixes, embedding dimension**
@@ -1707,6 +1718,17 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.18.5 (2026-09-07)
+
+**Fix: temporal integration test PurgeResult assertions**
+
+`test_temporal_index_gaps_e2e.py` compared `engine.purge_raw_before(...)` return value
+directly against `int` — but the API returns `PurgeResult(deleted, skipped)` since v2.16.
+Fixed three assertions and one raw `classMethodValue` call to use `.deleted` attribute
+and `.split(":")[0]` respectively.
+
+---
 
 ### v1.97.0 (2026-05-16)
 
