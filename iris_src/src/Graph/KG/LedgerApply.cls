@@ -448,11 +448,12 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     Set tStmt = ..AllocStmt(tSeq, tS, tP, tO, tG, .pFirst, .pLast)
     // Adjacency: when the Graph.KG.GraphIndex functional index is compiled it already
     // wrote ^KG("out"/"in") for this row; only set the weight then. Otherwise maintain it.
-    If $Data(^KG("out", 0, tS, tP, tO)) {
-        Set ^KG("out", 0, tS, tP, tO) = ..WeightOf(tQuals)
-        Set ^KG("in", 0, tO, tP, tS) = ..WeightOf(tQuals)
+    Set tGKey = ##class(Graph.KG.Ledger).GKey(tG)
+    If $Data(^KG("out", tGKey, tS, tP, tO)) {
+        Set ^KG("out", tGKey, tS, tP, tO) = ..WeightOf(tQuals)
+        Set ^KG("in", tGKey, tO, tP, tS) = ..WeightOf(tQuals)
     } Else {
-        Do ##class(Graph.KG.EdgeScan).WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals), ""
+        Do ##class(Graph.KG.EdgeScan).WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals), tGKey)
     }
     Do ..Rec(.pRecords, "create_rel", "rel", tStmt, "", ..EncNull(), ..Enc(..TupleJson(tS, tP, tO, tG)), tG)
     Kill tKeys

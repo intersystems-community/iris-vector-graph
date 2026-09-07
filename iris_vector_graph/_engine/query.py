@@ -460,22 +460,26 @@ class QueryMixin:
             if src_var and src_var in parameters:
                 source_id = str(parameters[src_var])
 
-        # When source is not ID-bound, try to resolve from SQL parameters before
-        # falling back to labeled multi-source traversal.
         source_labels = vl0.get("source_labels") or []
-        if source_id is None and src_id_param is None:
-            # Fallback: extract source_id from the first SQL param that looks like
-            # a node ID (non-schema-prefix string). Covers WHERE a.node_id = $src
-            # patterns where the translator doesn't set src_id_param.
-            params_list = sql_query.parameters[0] if sql_query.parameters else []
-            for item in params_list:
-                if isinstance(item, str) and not item.startswith("Graph_KG"):
-                    source_id = item
-                    break
-            if source_id is None and parameters:
-                source_id = next(iter(parameters.values()), None)
-                if source_id is not None:
-                    source_id = str(source_id)
+        source_alias_r = vl0.get("source_alias") or ""
+
+        # Fast-path: extract source_id when the WHERE clause directly binds
+        # source_alias.node_id = ? with a single parameter. This covers the common
+        # "MATCH (a)-[*..]->(b) WHERE a.node_id = $src" pattern without needing a DB query.
+        if source_id is None and src_id_param is None and source_alias_r:
+            import re as _re_fast
+            sql_str_fast = sql_query.sql if isinstance(sql_query.sql, str) else ""
+            direct_m = _re_fast.search(
+                r'\b' + _re_fast.escape(source_alias_r) + r'\.node_id\s*=\s*\?',
+                sql_str_fast,
+                _re_fast.IGNORECASE,
+            )
+            if direct_m:
+                params_fast = sql_query.parameters[0] if sql_query.parameters else []
+                for pv in params_fast:
+                    if isinstance(pv, str) and pv:
+                        source_id = pv
+                        break
 
         # When source is not ID-bound, use labeled multi-source traversal.
         # This covers two cases:
@@ -612,35 +616,29 @@ class QueryMixin:
                     from_start = sql_str.lower().find('\nfrom ')
                 src_portion = sql_str[from_start:m.start()].strip()
                 src_query = f"SELECT DISTINCT {source_alias}.node_id {src_portion}"
-                # Collect all SQL aliases defined AFTER the Cartesian JOIN boundary
-                post_boundary_sql = sql_str[m.start():]
-                post_aliases = set(_re.findall(
-                    r'\bJOIN\s+\S+\s+(\w+)\s+ON\b',
-                    post_boundary_sql,
-                    _re.IGNORECASE,
-                ))
-                post_aliases.add(target_alias)
-                # Fixed WHERE regex: |$ outside the \n group so end-of-string matches
-                where_m = _re.search(r'\nWHERE\s+(.*?)(?:\n(?:ORDER|HAVING|GROUP)|$)', sql_str, _re.DOTALL)
-                if where_m:
-                    where_raw = where_m.group(1).strip()
-                    # Split on top-level AND (not inside EXISTS or other subqueries)
-                    all_conds = _split_top_level_and(where_raw)
-                    src_conds = []
-                    for c in all_conds:
-                        c = c.strip()
-                        if not c:
-                            continue
-                        if any(_re.search(r'\b' + _re.escape(pa) + r'\b', c) for pa in post_aliases):
-                            post_where_conds.append(c)
-                        else:
-                            src_conds.append(c)
-                    if src_conds:
-                        src_query += "\nWHERE " + " AND ".join(src_conds)
+                # Build source-ID query: use full SQL (preserving all JOINs and
+                # WHERE) but SELECT only DISTINCT source node_id. Post-boundary
+                # target aliases are stripped from SELECT but kept in FROM/WHERE so
+                # all params stay in their original order. DISTINCT collapses the
+                # Cartesian product with target rows.
+                from_start_full = sql_str.find('\nFROM ')
+                if from_start_full == -1:
+                    from_start_full = sql_str.lower().find('\nfrom ')
+                full_from_where = sql_str[from_start_full:].strip()
+                # Identify and strip ORDER/HAVING/GROUP clauses
+                order_m = _re.search(r'\n(?:ORDER|HAVING|GROUP)\b', full_from_where, _re.IGNORECASE)
+                if order_m:
+                    full_from_where = full_from_where[:order_m.start()].strip()
+                src_query = f"SELECT DISTINCT {source_alias}.node_id {full_from_where}"
+                # All original params apply (the Cartesian product with target is
+                # collapsed by DISTINCT; target prop conditions become no-ops for
+                # source-only rows since LEFT JOINs return NULL for unmatched rows).
                 params_list = sql_query.parameters[0] if sql_query.parameters else []
-                src_param_count = src_query.count("?")
-                src_params = list(params_list[:src_param_count])
-                post_params = list(params_list[src_param_count:])
+                src_params = list(params_list)
+                post_params = []
+                # No post_where_conds — all WHERE conditions are passed through the query.
+                # (post_where_conds stays empty; target filtering handled by BFS result
+                # intersection + target_labels + _filter_nodes_by_post_where below.)
                 try:
                     cursor = self._store.conn.cursor()
                     cursor.execute(src_query, src_params)
@@ -1018,43 +1016,20 @@ class QueryMixin:
                 if from_start == -1:
                     from_start = sql_str.lower().find('\nfrom ')
                 src_portion = sql_str[from_start:m.start()].strip()
-                src_query = f"SELECT DISTINCT {source_alias}.node_id {src_portion}"
-                # Collect all SQL aliases defined AFTER the Cartesian JOIN boundary
-                # (including target_alias itself and any dependent joins like l4, p5).
-                # These must be excluded from the WHERE clause for the source query.
-                post_boundary_sql = sql_str[m.start():]
-                # Extract aliases: patterns like "JOIN ... alias ON" or "FROM ... alias"
-                post_aliases = set(_re.findall(
-                    r'\bJOIN\s+\S+\s+(\w+)\s+ON\b',
-                    post_boundary_sql,
-                    _re.IGNORECASE,
-                ))
-                post_aliases.add(target_alias)
-                # WHERE clause for source: keep only conditions that reference no
-                # post-boundary aliases.  This fixes the case where the isolation
-                # label JOIN for the target (e.g. l4 which JOINs on n3.node_id) leaks
-                # its IS NOT NULL condition into the source query.
-                where_m = _re.search(r'\nWHERE\s+(.*?)(?:\n(?:ORDER|HAVING|GROUP)|$)', sql_str, _re.DOTALL)
-                if where_m:
-                    where_raw = where_m.group(1).strip()
-                    # Split on top-level AND only (not AND inside subqueries/parens)
-                    src_conds = []
-                    for c in _split_top_level_and(where_raw):
-                        c = c.strip()
-                        if not c:
-                            continue
-                        if any(_re.search(r'\b' + _re.escape(pa) + r'\b', c) for pa in post_aliases):
-                            post_where_conds.append(c)
-                        else:
-                            src_conds.append(c)
-                    if src_conds:
-                        src_query += "\nWHERE " + " AND ".join(src_conds)
-                # Use just the source-related params (those before target_alias params)
+                # Use full SQL (all JOINs + WHERE) to extract distinct source node IDs.
+                # DISTINCT collapses the Cartesian product with target rows.
+                # All original params apply unchanged.
+                from_start_full = sql_str.find('\nFROM ')
+                if from_start_full == -1:
+                    from_start_full = sql_str.lower().find('\nfrom ')
+                full_from_where = sql_str[from_start_full:].strip()
+                order_m2 = _re.search(r'\n(?:ORDER|HAVING|GROUP)\b', full_from_where, _re.IGNORECASE)
+                if order_m2:
+                    full_from_where = full_from_where[:order_m2.start()].strip()
+                src_query = f"SELECT DISTINCT {source_alias}.node_id {full_from_where}"
                 params_list = sql_query.parameters[0] if sql_query.parameters else []
-                # Count '?' in src_query to determine how many params to use
-                src_param_count = src_query.count("?")
-                src_params = list(params_list[:src_param_count])
-                post_params = list(params_list[src_param_count:])
+                src_params = list(params_list)
+                post_params = []
                 try:
                     cursor = self._store.conn.cursor()
                     cursor.execute(src_query, src_params)

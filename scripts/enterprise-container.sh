@@ -81,6 +81,20 @@ print('✓ schema initialized')
     # dispatch table for new methods on existing classes.
     "$0" deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
     "$0" compile-all 2>&1 | grep -iE 'ERROR|failed|Detected' || true
+    # Remove USER-namespace SQL projection clones created by DDL init.
+    # IRIS auto-generates User.* classes when DDL runs in USER namespace; they conflict
+    # with the canonical Graph.KG.Edge (rdf_edges) class and cause compile failures.
+    # Do NOT delete Graph.KG.* projection classes — they own the tables.
+    docker exec "$CONTAINER" /usr/irissys/bin/irispython -c "
+import iris
+stale = ['User.nodes','User.rdflabels','User.rdfprops','User.rdfedges']
+for cls in stale:
+    try: iris.cls('%SYSTEM.OBJ').Delete(cls,'ef')
+    except Exception: pass
+# Recompile Graph.KG.Edge after removing USER duplicates
+iris.cls('%SYSTEM.OBJ').Compile('Graph.KG.Edge','ck')
+" 2>/dev/null || true
+    "$0" compile-all 2>&1 | grep -iE 'ERROR|failed|Detected' || true
     echo "Loading libarno_callout.so via TCP..."
     "$0" tcp-load-arno 2>&1 | grep -iE 'ERROR|loaded|failed'
     "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true

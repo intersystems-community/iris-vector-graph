@@ -51,7 +51,8 @@ class TestPurgeRawBefore:
         engine, store = _make_engine()
         store.purge_raw_before.return_value = 2
         result = engine.purge_raw_before(250)
-        store.purge_raw_before.assert_called_once_with(250)
+        args, kwargs = store.purge_raw_before.call_args
+        assert args[0] == 250
         assert result == 2
 
     def test_purge_raw_before_zero_deletes(self):
@@ -74,16 +75,19 @@ class TestPurgeRawBefore:
         store._call_classmethod = MagicMock(return_value="5")
         result = store.purge_raw_before(250)
         store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "250"
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "250", "0"
         )
-        assert result == 5
+        assert result.deleted == 5
 
-    def test_store_purge_raw_before_returns_int(self):
+    def test_store_purge_raw_before_returns_purge_result(self):
         from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+        from iris_vector_graph._engine.temporal import PurgeResult
 
         store = IRISGraphStore.__new__(IRISGraphStore)
         store._call_classmethod = MagicMock(return_value="0")
-        assert store.purge_raw_before(100) == 0
+        result = store.purge_raw_before(100)
+        assert isinstance(result, PurgeResult)
+        assert result.deleted == 0
 
 
 # ─── Gap 2: suppressReverseIndex ─────────────────────────────────────────────

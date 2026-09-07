@@ -210,20 +210,22 @@ class TestUpdateSpoUniqueConstraint:
         assert GraphSchema.update_spo_unique_constraint(cur) is True
 
     def test_already_exists_returns_true(self):
+        # Two DROP attempts (u_spo, uspo) then ADD CONSTRAINT — raise on the ADD
         execute_count = [0]
         def side_effect(sql, *a):
             execute_count[0] += 1
-            if execute_count[0] == 2:  # second execute is ADD CONSTRAINT
+            if execute_count[0] == 3:  # third execute is ADD CONSTRAINT
                 raise Exception("constraint already exists")
         cur = MagicMock()
         cur.execute.side_effect = side_effect
         assert GraphSchema.update_spo_unique_constraint(cur) is True
 
     def test_other_error_returns_false(self):
+        # Two DROP attempts (u_spo, uspo) then ADD CONSTRAINT — raise on the ADD
         execute_count = [0]
         def side_effect(sql, *a):
             execute_count[0] += 1
-            if execute_count[0] == 2:
+            if execute_count[0] == 3:
                 raise Exception("some other error")
         cur = MagicMock()
         cur.execute.side_effect = side_effect

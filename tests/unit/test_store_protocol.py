@@ -161,6 +161,18 @@ class MockGraphStore:
     def execute_k_core(self, top_k, progress_callback=None):
         return self._record("execute_k_core", top_k=top_k)
 
+    def purge_bucket_range(self, bucket_start, bucket_end):
+        return self._record("purge_bucket_range", bucket_start=bucket_start, bucket_end=bucket_end)
+
+    def purge_raw_before(self, ts_end):
+        return self._record("purge_raw_before", ts_end=ts_end)
+
+    def intern_label_set(self, attrs_json):
+        return self._record("intern_label_set", attrs_json=attrs_json)
+
+    def resolve_label_set(self, hash_hex):
+        return self._record("resolve_label_set", hash_hex=hash_hex)
+
     def close(self):
         pass
 

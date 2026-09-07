@@ -448,17 +448,18 @@ class TestSetEdgeWeight:
 class TestDropGraph:
 
     def test_returns_deleted_count(self):
+        # drop_graph returns nodes_deleted + edges_deleted (two rowcount reads)
         eng, conn, cursor = _make_eng()
         cursor.rowcount = 5
         result = eng.drop_graph("g1")
-        assert result == 5
+        assert result == 10  # 5 edges + 5 nodes
 
     def test_commit_failure_doesnt_raise(self):
         eng, conn, cursor = _make_eng()
         cursor.rowcount = 3
         conn.commit.side_effect = RuntimeError("commit failed")
         result = eng.drop_graph("g1")
-        assert result == 3
+        assert result == 0  # commit failure → rollback → return 0
 
 
 # ---------------------------------------------------------------------------

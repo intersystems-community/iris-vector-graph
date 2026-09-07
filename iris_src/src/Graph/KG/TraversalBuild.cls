@@ -41,7 +41,10 @@ ClassMethod BuildKG() As %Status
 			&sql(FETCH c3 INTO :s, :p, :o, :qual, :edgeGraph)
 			Quit:SQLCODE'=0
 			If (s = "") || (p = "") || (o = "") Continue
-			// graph_id is '' (empty) for the default graph (spec 214 FR-003 sentinel)
+			// graph_id is '' (empty) for the default graph (spec 214 FR-003 sentinel).
+			// IRIS SQL %GetData returns $C(0) for empty-string VARCHAR NOT NULL, so strip
+			// control characters before comparing to distinguish default vs named graph.
+			Set edgeGraph = $ZStrip(edgeGraph, "*C")
 			Set g = $Select(edgeGraph="":0, 1:edgeGraph)
 			Set weight = 1.0
 			If qual '= "" {
