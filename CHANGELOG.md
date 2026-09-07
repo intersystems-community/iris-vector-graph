@@ -2,6 +2,66 @@
 
 # Changelog
 
+### v2.18.0 (2026-09-07)
+
+**Bug fixes across Cypher VLP, adjacency indexing, SQL bridge, and spec-hygiene gates**
+
+27 previously-failing tests now pass. Key fixes: `BuildKG` never populated `^KG` for
+default-graph edges (IRIS SQL `%GetData` returns `$C(0)` for empty-string `VARCHAR NOT NULL`,
+not `""`); VLP source-ID extraction heuristic picked the property-key string instead of the
+node ID; SQL bridge had column-name typos unreachable without a live container. Five
+spec-hygiene gates added to prevent these categories of regression.
+
+#### Fixes
+
+- **`TraversalBuild.BuildKG`**: `$ZStrip(edgeGraph, "*C")` strips the `$C(0)` sentinel
+  before comparing to `""`, so default-graph edges are now correctly written to
+  `^KG("out", 0, s, p, o)`. Without this, `sync()`/`BuildKG` ran without error but
+  left `^KG` empty, silently breaking all multi-hop BFS and variable-length-path queries.
+- **`LedgerApply.OpCreateRel`**: missing `)` in `WriteAdjacency(...)` call (introduced by
+  spec-214 graph-param addition) — caused compile error at container startup that was
+  swallowed by `|| true`. Fixed to `WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals), tGKey)`.
+- **VLP source-ID extraction** (`_engine/query.py`): replaced broken "first SQL param
+  that isn't a schema name" heuristic with full-SQL `DISTINCT source_alias.node_id` query
+  using all original params. The old heuristic picked `'id'` (a property key string) as the
+  source node ID when `rdf_props` JOINs appeared before the Cartesian JOIN boundary.
+  Also added fast-path for `WHERE source_alias.node_id = ?` patterns to avoid a DB round-trip.
+- **`_engine/fhir.py` column name typos**: `sqlid_column` → `sql_table` + `id_column`,
+  `viavia_source` → `via_source` in three SQL statements. Caused `SQLCODE -29` on all
+  `map_sql_table` and `list_table_mappings` calls.
+- **IVF Cypher translation**: `kg_IVF(?, ?, k, nprobe)` parameters now inlined as SQL
+  literals — IRIS does not support `?` parameters inside `JSON_TABLE(stored_proc(...))`.
+- **String subscript** (`'hello'[1..4]`): routes to `SUBSTRING` instead of JSON array
+  logic when base is a string literal.
+- **VLP relationship property filter** (`[r*1..2 {weight: 10}]`): applied in
+  `_execute_var_length_labeled` via incoming-edge qualifier lookup; was silently ignored.
+- **Label isolation JOIN for mapped SQL table nodes**: `translate_node_pattern` now skips
+  `rdf_labels` JOIN for nodes registered in `mapped_node_aliases` — external SQL tables
+  have no `node_id` column, causing `SQLCODE -29`.
+- **`test_attrs_roundtrip`**: `attrs.error` → `attrs.get("error")` (dict, not object).
+- **`bm25_build` test**: `"node_id, text"` → `["node_id", "text"]` (list, not string).
+- **`test_store_protocol` test sync**: `TestPurgeRawBefore`, `TestDropGraph`,
+  `TestUpdateSpoUniqueConstraint` updated to match current implementation semantics
+  (`PurgeResult` return type, multi-step FK-safe delete, 3-execute DROP+ADD sequence).
+
+#### Spec-Hygiene Gates (Principle VIII — constitution v1.3.0)
+
+Four gates added to prevent the root-cause categories from recurring:
+
+- **Gate 1** (`tests/conftest.py`): missing IRIS container → `pytest.fail` instead of
+  `pytest.skip`. Silent fake-green is no longer possible.
+- **Gate 2** (`scripts/enterprise-container.sh`): `compile-all` exits non-zero on any
+  ObjectScript compile error; `|| true` removed from `up` sequence.
+- **Gate 3** (`scripts/enterprise-container.sh`): adjacency smoke test on every container
+  startup — `create_edge` + `sync()` + BFS, asserts result non-empty.
+- **Gate 4** (`tests/unit/test_store_protocol.py`, `tests/unit/test_spec_hygiene_gates.py`):
+  `test_mock_has_all_protocol_methods` uses `inspect` to diff `GraphStore` members against
+  `MockGraphStore` at unit-test time (no container). `test_fhir_sql_columns_match_schema`
+  parses `INSERT`/`SELECT` DML in `fhir.py` and cross-references column names against
+  `CREATE TABLE` in `schema.py`.
+
+---
+
 ### v2.17.0 (2026-09-07)
 
 **Named graphs for nodes — spec 214**
