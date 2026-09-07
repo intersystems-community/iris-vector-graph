@@ -59,17 +59,25 @@ def iris_test_container():
     except Exception:
         pass
 
-    # 2. If not found, fail rather than skip — a missing container is a developer
-    #    error, not an expected environment variant.  pytest.skip produces silent
-    #    fake-green; pytest.fail surfaces it as a hard failure.
-    #    CI may set IVG_AUTO_START_CONTAINER=1 to spin up the container instead.
+    # 2. If not found: fail on developer machines (missing container = error);
+    #    skip in CI when SKIP_IRIS_TESTS=true (container not provisioned in that job).
+    #    pytest.skip produces silent fake-green on dev machines — pytest.fail surfaces
+    #    the problem.  CI sets SKIP_IRIS_TESTS=true explicitly to opt into skipping.
     if container is None:
         auto_start = os.environ.get("IVG_AUTO_START_CONTAINER", "0") not in ("0", "false", "no")
-        if not auto_start:
+        if auto_start:
+            pass  # fall through to start the container
+        elif os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true":
+            pytest.skip(
+                f"IRIS container '{_GQS_CONTAINER}' not running — "
+                f"skipped because SKIP_IRIS_TESTS=true"
+            )
+        else:
             pytest.fail(
                 f"IRIS container '{_GQS_CONTAINER}' is not running. "
                 f"Start it with: scripts/enterprise-container.sh up\n"
-                f"(Set IVG_AUTO_START_CONTAINER=1 to start automatically.)"
+                f"(Set IVG_AUTO_START_CONTAINER=1 to start automatically, "
+                f"or SKIP_IRIS_TESTS=true to skip in CI.)"
             )
         _sp.run(["docker", "rm", "-f", _GQS_CONTAINER], capture_output=True)
         logger.info("Starting fresh Community IRIS container: %s", _GQS_CONTAINER)

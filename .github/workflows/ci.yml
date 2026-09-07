@@ -27,9 +27,13 @@ jobs:
         run: pip install -e ".[dev,full]"
 
       - name: Run unit tests
+        env:
+          SKIP_IRIS_TESTS: "true"
         run: pytest tests/unit/ -q --no-header --tb=short
 
       - name: Coverage report
+        env:
+          SKIP_IRIS_TESTS: "true"
         run: |
           pip install coverage
           coverage run -m pytest tests/unit/ -q --no-header
