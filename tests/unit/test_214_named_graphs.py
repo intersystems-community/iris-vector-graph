@@ -43,8 +43,12 @@ class TestSchemaMigration:
         eng, cursor = self._make_engine((1,))
         with patch.object(eng, "_iris_obj", MagicMock()):
             eng.create_node("n1")
-        sqls = [c.args[0] for c in cursor.execute.call_args_list if c.args]
-        inserts = [s for s in sqls if "INSERT INTO Graph_KG.nodes" in s]
+        inserts = [
+            c.args[0]
+            for c in cursor.execute.call_args_list
+            if c.args and "INSERT INTO Graph_KG.nodes" in str(c.args[0])
+        ]
+        # check: [s for s in sqls if "INSERT INTO Graph_KG.nodes" in s]
         assert inserts, "No INSERT INTO nodes found"
         # After spec-214, the INSERT should include graph_id
         # Before implementation this will fail — which is expected (T005 must fail first)
@@ -56,7 +60,6 @@ class TestSchemaMigration:
         eng, cursor = self._make_engine((1,))
         with patch.object(eng, "_iris_obj", MagicMock()):
             eng.create_node("n1", graph="umls")
-        sqls = [c.args[0] for c in cursor.execute.call_args_list if c.args]
         params = [c.args[1] for c in cursor.execute.call_args_list if len(c.args) > 1]
         # graph_id='umls' must appear in the parameters
         flat_params = [p for row in params if isinstance(row, (list, tuple)) for p in row]
@@ -295,7 +298,8 @@ class TestImportNdjsonGraph:
         eng.create_node = _cn
         eng.create_edge = MagicMock(return_value=True)
         eng.bulk_create_edges_temporal = MagicMock()
-        result = eng.import_graph_ndjson(str(ndjson), graph="snap")
+        eng.import_graph_ndjson(str(ndjson), graph="snap")
+        created_with_graph_2 = created_with_graph
         graphs = {g for _, g in created_with_graph}
         assert "snap" in graphs, f"graph='snap' not passed to create_node; got {created_with_graph}"
 
