@@ -59,14 +59,17 @@ def iris_test_container():
     except Exception:
         pass
 
-    # 2. If not found, skip rather than start a new container —
-    #    unless IVG_AUTO_START_CONTAINER=1 (default when running in CI).
+    # 2. If not found, fail rather than skip — a missing container is a developer
+    #    error, not an expected environment variant.  pytest.skip produces silent
+    #    fake-green; pytest.fail surfaces it as a hard failure.
+    #    CI may set IVG_AUTO_START_CONTAINER=1 to spin up the container instead.
     if container is None:
         auto_start = os.environ.get("IVG_AUTO_START_CONTAINER", "0") not in ("0", "false", "no")
         if not auto_start:
-            pytest.skip(
-                f"IRIS container '{_GQS_CONTAINER}' not running. "
-                f"Start with: scripts/enterprise-container.sh up"
+            pytest.fail(
+                f"IRIS container '{_GQS_CONTAINER}' is not running. "
+                f"Start it with: scripts/enterprise-container.sh up\n"
+                f"(Set IVG_AUTO_START_CONTAINER=1 to start automatically.)"
             )
         _sp.run(["docker", "rm", "-f", _GQS_CONTAINER], capture_output=True)
         logger.info("Starting fresh Community IRIS container: %s", _GQS_CONTAINER)

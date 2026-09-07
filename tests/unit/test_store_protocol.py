@@ -1,3 +1,4 @@
+import inspect
 import os
 from unittest.mock import MagicMock, patch
 
@@ -5,6 +6,14 @@ import pytest
 
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.store_protocol import GraphStore
+
+
+def _protocol_methods():
+    """Return all non-dunder callable names declared on GraphStore."""
+    return {
+        name for name, member in inspect.getmembers(GraphStore)
+        if not name.startswith("_") and callable(member)
+    }
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
@@ -181,6 +190,27 @@ class TestGraphStoreProtocol:
 
     def test_mock_satisfies_protocol(self):
         assert isinstance(MockGraphStore(), GraphStore)
+
+    def test_mock_has_all_protocol_methods(self):
+        """Fail immediately when GraphStore gains a new method that MockGraphStore lacks.
+
+        This is Gate 4 of the spec-hygiene suite: protocol drift detection.
+        Historically, GraphStore grew methods (purge_raw_before, intern_label_set, etc.)
+        that MockGraphStore never implemented, silently making isinstance() return False
+        and masking routing bugs.  This test catches the gap at the unit level without
+        needing a live container.
+        """
+        required = _protocol_methods()
+        mock_methods = {
+            name for name in dir(MockGraphStore)
+            if not name.startswith("_") and callable(getattr(MockGraphStore, name))
+        }
+        missing = required - mock_methods
+        assert not missing, (
+            f"MockGraphStore is missing {len(missing)} method(s) from GraphStore protocol: "
+            f"{sorted(missing)}\n"
+            f"Add stub implementations to MockGraphStore so the protocol check passes."
+        )
 
     def test_mock_records_calls(self):
         store = MockGraphStore()

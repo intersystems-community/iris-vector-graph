@@ -1,23 +1,23 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.1.1 → 1.2.0 (MINOR — new principle VII added)
-Bump rationale: Added Principle VII (Cypher Conformance Gates) after the
-  direction-symmetry cross-join bug was found independently in two Cypher
-  implementations (cbm HEAD 571196db and IVG ≤v2.5.1).
-
-  The openCypher TCK (~1,615 scenarios across 220 .feature files) has no
-  Python-native runner — the official harness is Scala/JVM only.  Running TCK
-  requires building a behave step-definition harness: that work is tracked as a
-  future spec, not a current requirement.  Principle VII therefore specifies the
-  conformance obligation (what to test), names the TCK as the authoritative
-  reference, and sets a direction-symmetry gate as the minimum immediate bar.
+Version change: 1.2.0 → 1.3.0 (MINOR — new principle VIII added)
+Bump rationale: Added Principle VIII (Spec-Hygiene Gates) after the Sept 2026
+  incident where 27 tests were silently fake-green for an extended period:
+  - tests/conftest.py defaulted to ivg-iris (dead Community container), causing
+    all integration tests to skip with no visible failure
+  - ObjectScript compile errors were swallowed by || true in enterprise-container.sh
+  - ^KG adjacency was never smoke-tested after container startup
+  - GraphStore protocol grew 4 methods without MockGraphStore being updated
+  - fhir.py had column-name typos (sqlid_column, viavia_source) undetected for
+    multiple spec cycles because the tests were silently skipped
 
 Modified principles:
-  - VII: new principle added — Cypher Conformance Gates
+  - VIII: new principle added — Spec-Hygiene Gates
 
 No other principles changed.  Templates do not require updates.
 -->
+
 
 # iris-vector-graph Constitution
 
@@ -144,6 +144,69 @@ direction-symmetry gate above is the minimum bar.
 
 **Unit tests alone are insufficient** for translator changes that affect JOIN shape.
 
+### VIII. Spec-Hygiene Gates
+
+Four automated gates MUST pass on every container startup and test run.  None may be
+bypassed with `|| true`, `pytest.skip`, or similar suppressors except where the specific
+exemption is documented below.
+
+#### Gate 1 — Container required, not optional
+
+When the configured IRIS test container is not running, integration tests MUST call
+`pytest.fail()` — not `pytest.skip()`.  A missing container is a developer error, not an
+expected environment variant.  `pytest.skip` produces silent fake-green; `pytest.fail`
+surfaces the problem as a hard failure that blocks the test run.
+
+**Exemption**: The `arno_iris_connection` fixture may remain `pytest.skip` because
+Arno/Enterprise-only tests are genuinely optional on machines without the enterprise image.
+All other IRIS connection fixtures use `pytest.fail`.
+
+**Rationale**: The Sept 2026 incident traced to `conftest.py` defaulting to `ivg-iris`
+(Community, MaxServerConn=1, effectively dead).  Every integration test silently skipped
+for multiple spec cycles.  Coverage reported 9%.  The fake-green masked 27 real failures.
+
+#### Gate 2 — ObjectScript compile errors fail container startup
+
+`enterprise-container.sh compile-all` MUST exit non-zero when IRIS reports any compile
+error.  The `|| true` suppressor is removed from the `up` sequence.  A container that
+boots with compile errors is not fit for testing and MUST NOT report `✓ ready`.
+
+**Rationale**: `LedgerApply.cls` had a syntax error (missing `)`) introduced in spec-214.
+The container logged the error but `|| true` swallowed the exit code.  Tests ran against
+a silently broken ObjectScript class for the duration of the spec cycle.
+
+#### Gate 3 — Adjacency smoke test on every container startup
+
+After `initialize_schema()` completes, `enterprise-container.sh up` MUST run a
+minimal probe: create two nodes, create one edge, call `sync()`, run a 1-hop BFS,
+assert the result is non-empty, then delete the test data.  If the probe fails, the
+container MUST exit non-zero and print `✗ Adjacency smoke test failed`.
+
+**Rationale**: The `$C(0)` sentinel bug in `TraversalBuild.BuildKG` meant `^KG` was
+never populated.  BFS always returned 0 rows.  No existing test asserted the invariant
+at container startup; the bug lived through the entire spec-214 development cycle.
+
+#### Gate 4 — Protocol drift detection
+
+The `GraphStore` Protocol MUST have a companion test (`test_mock_has_all_protocol_methods`
+in `tests/unit/test_store_protocol.py`) that uses `inspect` to enumerate all non-dunder
+members of `GraphStore` and asserts they are all present on `MockGraphStore`.  This test
+MUST run at the unit level — it requires no container.
+
+Additionally, `tests/unit/test_spec_hygiene_gates.py::test_fhir_sql_columns_match_schema`
+MUST validate that every column name referenced in `fhir.py` INSERT/SELECT statements
+exists in the corresponding `CREATE TABLE` in `schema.py`.
+
+**Rationale**: `GraphStore` grew 4 methods without `MockGraphStore` being updated,
+silently making `isinstance(MockGraphStore(), GraphStore)` return `False`.  `fhir.py`
+had typos (`sqlid_column`, `viavia_source`) that were never caught because the tests
+that exercise them were silently skipped (Gate 1 failure).
+
+**Authoritative files**:
+- `tests/unit/test_store_protocol.py::TestGraphStoreProtocol::test_mock_has_all_protocol_methods`
+- `tests/unit/test_spec_hygiene_gates.py::test_fhir_sql_columns_match_schema`
+- `scripts/enterprise-container.sh` (Gates 2 and 3)
+
 ## Additional Constraints
 
 - Use the existing RDF schema (`nodes`, `rdf_labels`, `rdf_props`, `rdf_edges`,
@@ -169,4 +232,4 @@ amendments MUST be documented and explicitly approved before implementation begi
 Version increments follow semantic versioning: MAJOR for backward-incompatible governance
 changes, MINOR for new or materially expanded principles, PATCH for clarifications.
 
-**Version**: 1.2.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-08-01
+**Version**: 1.3.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-09-07

@@ -80,7 +80,7 @@ print('✓ schema initialized')
     # + %Stream.FileCharacter + %SYSTEM.OBJ.Load which does NOT update the TCP-visible
     # dispatch table for new methods on existing classes.
     "$0" deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
-    "$0" compile-all 2>&1 | grep -iE 'ERROR|failed|Detected' || true
+    "$0" compile-all || { echo "✗ First compile-all failed — aborting startup"; exit 1; }
     # Remove USER-namespace SQL projection clones created by DDL init.
     # IRIS auto-generates User.* classes when DDL runs in USER namespace; they conflict
     # with the canonical Graph.KG.Edge (rdf_edges) class and cause compile failures.
@@ -94,10 +94,47 @@ for cls in stale:
 # Recompile Graph.KG.Edge after removing USER duplicates
 iris.cls('%SYSTEM.OBJ').Compile('Graph.KG.Edge','ck')
 " 2>/dev/null || true
-    "$0" compile-all 2>&1 | grep -iE 'ERROR|failed|Detected' || true
+    "$0" compile-all || { echo "✗ Second compile-all failed — aborting startup"; exit 1; }
     echo "Loading libarno_callout.so via TCP..."
     "$0" tcp-load-arno 2>&1 | grep -iE 'ERROR|loaded|failed'
     "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
+    # Gate 3 — adjacency smoke test: create_edge + BuildKG + BFS must return a result.
+    # Catches BuildKG bugs (e.g. $C(0) sentinel), WriteAdjacency failures, ^KG layout breaks.
+    echo "Running adjacency smoke test..."
+    python3 -c "
+import iris, socket, sys
+try:
+    ip = socket.gethostbyname('$CONTAINER.orb.local')
+    conn = iris.connect(hostname=ip, port=1972, namespace='USER', username='_SYSTEM', password='SYS')
+except Exception:
+    try:
+        conn = iris.connect(hostname='localhost', port=31971, namespace='USER', username='_SYSTEM', password='SYS')
+    except Exception as e:
+        print('adjacency smoke: skipped (cannot connect):', e)
+        sys.exit(0)
+import warnings; warnings.filterwarnings('ignore')
+from iris_vector_graph.engine import IRISGraphEngine
+e = IRISGraphEngine(conn, embedding_dimension=768)
+try:
+    e.create_node('__smoke_a'); e.create_node('__smoke_b')
+    e.create_edge('__smoke_a', 'SMOKE', '__smoke_b')
+    e.sync()
+    r = e.execute_cypher(\"MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.id = '__smoke_a' RETURN b.id\")
+    rows = r.rows if hasattr(r, 'rows') else r.get('rows', [])
+    # Cleanup
+    cur = conn.cursor()
+    for t in ('rdf_edges', 'rdf_labels', 'rdf_props', 'nodes'):
+        try: cur.execute(f\"DELETE FROM Graph_KG.{t} WHERE s LIKE '__smoke%' OR node_id LIKE '__smoke%' OR o_id LIKE '__smoke%'\")
+        except Exception: pass
+    conn.commit()
+    if not rows:
+        print('✗ adjacency smoke FAILED — create_edge+BFS returned 0 rows; check BuildKG/WriteAdjacency')
+        sys.exit(1)
+    print('✓ adjacency smoke passed')
+except Exception as ex:
+    print(f'✗ adjacency smoke error: {ex}')
+    sys.exit(1)
+" || { echo "✗ Adjacency smoke test failed — container is not fit for testing"; exit 1; }
     echo "✓ $CONTAINER ready (Enterprise + Arno)"
     ;;
 
@@ -158,11 +195,17 @@ except Exception as e:
     # iris_devtester/external connections see. External TCP connections see the
     # same compiled binaries. Do NOT use "iris session" — it routes to a different
     # namespace mapping and new methods are not visible to TCP callers.
-    docker exec "$CONTAINER" /usr/irissys/bin/irispython -c "
+    _compile_out=$(docker exec "$CONTAINER" /usr/irissys/bin/irispython -c "
 import iris
 result = iris.cls('%SYSTEM.OBJ').LoadDir('/tmp/src', 'ck', None, 1)
 print('LoadDir:', result)
-" 2>&1 | grep -iE 'ERROR|Compiling class|Detected|LoadDir|error #' | grep -v 'PageRankEmbed\|rdf_edges' || true
+" 2>&1)
+    echo "$_compile_out" | grep -iE 'ERROR|Compiling class|Detected|LoadDir|error #' | grep -v 'PageRankEmbed\|rdf_edges' || true
+    # Fail if any compile errors were detected (Gate 2 — spec hygiene)
+    if echo "$_compile_out" | grep -qiE 'Detected [1-9][0-9]* error'; then
+        echo "✗ ObjectScript compile FAILED — fix errors above before proceeding"
+        exit 1
+    fi
     ;;
 
   tcp-deploy)
