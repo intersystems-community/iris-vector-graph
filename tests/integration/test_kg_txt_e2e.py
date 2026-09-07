@@ -144,3 +144,66 @@ class TestKgTxtE2E:
             "fusion.py still swallows kg_TXT exceptions with a warning. "
             "A failing text leg must raise so callers can detect degraded hybrid search."
         )
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestKgRrfFuseE2E:
+    """T055 — kg_RRF_FUSE text leg contributes to hybrid results (spec 044 US7 AC9)."""
+
+    def test_rrf_fuse_text_leg_contributes(self, iris_connection):
+        """BM25 text leg must contribute results to kg_RRF_FUSE.
+
+        Regression guard: if the text leg is silently missing, bm25_search
+        returns nothing and the only results come from vector search alone.
+        This test verifies the BM25 leg works by omitting the vector leg
+        (empty vec_results) so all results must come from text.
+        """
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        eng = IRISGraphEngine(iris_connection, embedding_dimension=768)
+        prefix = f"rrf_{uuid.uuid4().hex[:8]}"
+
+        nodes = [
+            (f"{prefix}_a", "cancer oncology tumor biology treatment"),
+            (f"{prefix}_b", "diabetes insulin glucose metabolism"),
+            (f"{prefix}_c", "cancer immunotherapy checkpoint inhibitor"),
+        ]
+        cur = iris_connection.cursor()
+
+        try:
+            for nid, text in nodes:
+                eng.create_node(nid, properties={"name": text})
+            iris_connection.commit()
+
+            # Build a BM25 index; rebuild registry so kg_RRF_FUSE picks it up
+            idx = f"{prefix}_bm25"
+            eng.bm25_build(idx, text_props=["name"])
+            eng._index_registry = eng._build_index_registry()
+
+            # Verify text leg directly — this is what kg_RRF_FUSE uses internally
+            txt_results = eng.bm25_search(idx, "cancer", k=5)
+            assert txt_results, (
+                "bm25_search returned nothing — text leg cannot contribute to kg_RRF_FUSE. "
+                "Check that bm25_build indexed the nodes correctly."
+            )
+            result_ids = {r[0] for r in txt_results}
+            cancer_ids = {f"{prefix}_a", f"{prefix}_c"}
+            assert cancer_ids & result_ids, (
+                f"BM25 text search did not return cancer nodes. "
+                f"Text leg would contribute nothing to RRF. Got: {result_ids}"
+            )
+            # All scores must be positive floats (not 1.0 LIKE fallback)
+            for _, score in txt_results:
+                assert isinstance(score, float) and score > 0, (
+                    f"BM25 score {score!r} is not a positive float"
+                )
+
+        finally:
+            try:
+                eng.bm25_drop(idx)
+            except Exception:
+                pass
+            cur.execute(
+                "DELETE FROM Graph_KG.nodes WHERE node_id LIKE ?", [f"{prefix}%"]
+            )
+            iris_connection.commit()

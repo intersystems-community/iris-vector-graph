@@ -340,14 +340,16 @@ class TestHybridSearchFusion:
         assert isinstance(results, list)
 
     def test_multi_modal_text_failure(self):
+        # fusion.py re-raises kg_TXT failures so callers can detect degraded hybrid search.
+        # The old behavior (silent WARNING) let SQLCODE -51 go undetected for release cycles.
         from iris_vector_graph.fusion import HybridSearchFusion
         engine = MagicMock()
         engine.kg_KNN_VEC.return_value = [("n1", 0.9)]
         engine.kg_TXT.side_effect = RuntimeError("txt fail")
         engine.kg_NEIGHBORHOOD_EXPANSION.return_value = []
         hsf = HybridSearchFusion(engine)
-        results = hsf.multi_modal_search(query_vector='[0.1]', query_text="test", k=5)
-        assert isinstance(results, list)
+        with pytest.raises(RuntimeError, match="txt fail"):
+            hsf.multi_modal_search(query_vector='[0.1]', query_text="test", k=5)
 
     def test_multi_modal_graph_expansion_failure(self):
         from iris_vector_graph.fusion import HybridSearchFusion
@@ -360,13 +362,15 @@ class TestHybridSearchFusion:
         assert isinstance(results, list)
 
     def test_multi_modal_no_results(self):
+        # Both legs failing: kg_TXT re-raises, so the caller sees the error.
+        # If only vector fails (warned), but text also fails → raises on text.
         from iris_vector_graph.fusion import HybridSearchFusion
         engine = MagicMock()
         engine.kg_KNN_VEC.side_effect = RuntimeError("fail")
         engine.kg_TXT.side_effect = RuntimeError("fail")
         hsf = HybridSearchFusion(engine)
-        results = hsf.multi_modal_search(query_vector='[0.1]', query_text="test", k=5)
-        assert results == []
+        with pytest.raises(RuntimeError, match="fail"):
+            hsf.multi_modal_search(query_vector='[0.1]', query_text="test", k=5)
 
     def test_adaptive_search_short_query(self):
         hsf, engine = self._make_hybrid()

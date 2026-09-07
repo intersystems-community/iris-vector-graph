@@ -308,6 +308,47 @@ class TestSQLTableBridgeE2E:
         with pytest.raises(ValueError, match="not found"):
             self.engine.map_sql_table("NonExistent.Table999", "SomeID", "GhostLabel")
 
+    def test_via_table_traversal(self):
+        """T030 — M:M relationship via join table (spec 040 US2 AC2)."""
+        PAT = self.PAT
+        MED = f"BridgeMed{uuid.uuid4().hex[:4]}"
+        PATMED = f"BridgeTest.PatMed{uuid.uuid4().hex[:4]}"
+        pat_tbl = self._create_patient_table()
+        med_tbl = f"BridgeTest.{MED}"
+        patmed_tbl = PATMED
+        for t in [med_tbl, patmed_tbl]:
+            try:
+                self.cur.execute(f"DROP TABLE {t}")
+            except Exception:
+                pass
+        self.cur.execute(
+            f"CREATE TABLE {med_tbl} (MedID VARCHAR(20) PRIMARY KEY, Name VARCHAR(100))"
+        )
+        self.cur.execute(f"INSERT INTO {med_tbl} VALUES ('M001', 'Aspirin')")
+        self.cur.execute(
+            f"CREATE TABLE {patmed_tbl} "
+            f"(PatientID VARCHAR(20), MedID VARCHAR(20))"
+        )
+        self.cur.execute(f"INSERT INTO {patmed_tbl} VALUES ('P001', 'M001')")
+        self.conn.commit()
+
+        self.engine.map_sql_table(pat_tbl, "PatientID", PAT)
+        self.engine.map_sql_table(med_tbl, "MedID", MED)
+        self.engine.map_sql_relationship(
+            PAT, "PRESCRIBED", MED,
+            via_table=patmed_tbl, via_source="PatientID", via_target="MedID",
+        )
+
+        result = self.engine.execute_cypher(
+            f"MATCH (p:{PAT})-[:PRESCRIBED]->(m:{MED}) "
+            f"WHERE p.MRN = $mrn RETURN m.Name",
+            {"mrn": "MRN-001"},
+        )
+        assert result["rows"], "via_table traversal returned no rows"
+        assert result["rows"][0][0] == "Aspirin", (
+            f"Expected 'Aspirin', got {result['rows'][0][0]!r}"
+        )
+
     def test_list_and_remove_mapping(self):
         tbl = self._create_patient_table()
         self.engine.map_sql_table(tbl, "PatientID", self.PAT)

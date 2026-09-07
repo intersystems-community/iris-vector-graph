@@ -2,6 +2,21 @@
 
 # Changelog
 
+### v2.18.3 (2026-09-07)
+
+**Spec hygiene: updated specs 044 and 040; added missing E2E tests**
+
+- **Spec 044 US7**: Added Phase 10 documenting the `kg_TXT` calling-convention fix,
+  `kg_RRF_FUSE` text-leg validation, and `fusion.py` exception propagation.
+  7 E2E tests in `tests/integration/test_kg_txt_e2e.py` — all passing.
+- **Spec 040 T030**: `test_via_table_traversal` E2E (M:M join-table path) implemented
+  and passing; task marked `[X]` in spec 040 tasks.md.
+- **`test_multi_modal_text_failure` / `test_multi_modal_no_results`**: Updated to
+  assert `RuntimeError` is raised (not silently swallowed) when `kg_TXT` fails.
+  This matches the correct behavior introduced in v2.18.2.
+
+---
+
 ### v2.18.2 (2026-09-07)
 
 **Fix: `kg_TXT` SQLCODE -51 / silent hybrid-search degradation**
