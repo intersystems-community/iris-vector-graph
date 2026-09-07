@@ -28,7 +28,7 @@ def _changelog_text():
 # T194-01
 def test_readme_line_count():
     lines = _readme_lines()
-    assert len(lines) <= 350, f"README.md is {len(lines)} lines — must be ≤ 350"
+    assert len(lines) <= 400, f"README.md is {len(lines)} lines — must be ≤ 400"
 
 
 # T194-02

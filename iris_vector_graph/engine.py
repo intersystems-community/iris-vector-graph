@@ -212,15 +212,15 @@ class IRISGraphEngine(
             self._store._ledger_guard = self._ledger_guard
         except Exception:  # pragma: no cover - foreign store objects
             pass
-        # Probe once whether the nodes table has the graph_id column (spec 214).
-        # Clusters upgraded from pre-214 schemas may not yet have run the migration;
-        # create_node uses this flag to emit a compatible INSERT in either case.
-        self._nodes_has_graph_id: bool = self._probe_nodes_graph_id()
+        # Assume graph_id column exists by default (post-214 schema).
+        # Set to False by initialize_schema() if the probe finds the column absent,
+        # allowing create_node to emit a compatible INSERT on pre-214 schemas.
+        # Defaulting True avoids an eager SQL round-trip on every engine construction.
+        self._nodes_has_graph_id: bool = True
         logger.debug(
-            "IRISGraphEngine initialized (dim=%s dtype=%s nodes_graph_id=%s)",
+            "IRISGraphEngine initialized (dim=%s dtype=%s)",
             embedding_dimension or "auto",
             self.vector_dtype,
-            self._nodes_has_graph_id,
         )
 
     @property

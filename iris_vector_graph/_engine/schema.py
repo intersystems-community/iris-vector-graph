@@ -175,6 +175,9 @@ class SchemaMixin:
 
         # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
         GraphSchema.ensure_indexes(cursor)
+        # Update the engine flag after migration — ensure_indexes runs
+        # add_graph_id_to_nodes which adds the column if absent.
+        self._nodes_has_graph_id = self._probe_nodes_graph_id()
 
         # 4. Check for dimension mismatch on existing tables; fix untyped vector column
         try:
