@@ -2,6 +2,28 @@
 
 # Changelog
 
+### v2.18.2 (2026-09-07)
+
+**Fix: `kg_TXT` SQLCODE -51 / silent hybrid-search degradation**
+
+- **`kg_TXT` SQLCODE -51**: `CALL iris_vector_graph.kg_TXT(...)` failed because IRIS
+  registers the stored procedure as a scalar FUNCTION. Rewrote to inline SQL using
+  `%FIND`/`%FIND.Rank` when the iFind index exists, with a `LIKE`-based fallback on
+  instances without iFind installed.
+- **`docs.text` iFind index**: Added `idx_docs_text_ifind` to the base DDL and to
+  `ensure_indexes` so `kg_TXT` gets BM25-ranked results on fresh installs.
+- **`kg_TXT` DDL arity**: Schema DDL had 2 params (`q, k`); Python caller passed 3
+  (`query_text, k, min_confidence`). DDL updated to 3 params; `kg_RRF_FUSE` call site
+  updated to `kg_TXT(:qtext, :k2, 0)`.
+- **Silent hybrid degradation fixed**: `fusion.py:156` swallowed `kg_TXT` exceptions as
+  a WARNING, making hybrid search silently degrade to vector-only with no caller-visible
+  error. Changed to `logger.error` + re-raise.
+- **E2E regression tests**: `tests/integration/test_kg_txt_e2e.py` — 6 tests covering
+  result shape, score types, k limit, no-match, CALL-verb detection, and fusion
+  exception propagation.
+
+---
+
 ### v2.18.1 (2026-09-07)
 
 **Fix: spec-214 migration safety and backward compatibility for pre-214 clusters**

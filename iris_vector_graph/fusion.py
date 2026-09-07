@@ -153,7 +153,12 @@ class HybridSearchFusion:
                 search_modes.append("text")
                 logger.info(f"Text search returned {len(text_results)} results")
             except Exception as e:
-                logger.warning(f"Text search failed: {e}")
+                # Re-raise so callers know hybrid fusion lost the text leg.
+                # A silent WARNING here made kg_TXT's SQLCODE -51 bug undetectable
+                # for multiple release cycles — callers saw "hybrid" results that
+                # were actually pure vector-only with no indication of the failure.
+                logger.error("kg_TXT failed — text leg absent from hybrid fusion: %s", e)
+                raise
 
         # Graph expansion (if we have initial results)
         if result_lists:

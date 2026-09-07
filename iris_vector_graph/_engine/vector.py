@@ -400,30 +400,72 @@ class VectorMixin:
     def kg_TXT(
         self, query_text: str, k: int = 50, min_confidence: int = 0
     ) -> List[Tuple[str, float]]:
-        """
-        Enhanced text search using server-side SQL procedure
+        """Full-text search over the docs table.
+
+        Prefers IRIS iFind (%FIND / %FIND.Rank) when the idx_docs_text_ifind index
+        exists, giving BM25-style ranking.  Falls back to LIKE-based search on
+        instances where iFind is not installed.
+
+        Note: the kg_TXT stored procedure is NOT used — IRIS registers it as a scalar
+        FUNCTION (SQLCODE -51 on CALL, SQLCODE -30 on SELECT … FROM).  Inline SQL is
+        the only reliable calling convention from DBAPI.
 
         Args:
-            query_text: Text query string
-            k: Number of results to return
-            min_confidence: Minimum confidence score (0-1000 scale)
+            query_text: Full-text query string.
+            k: Maximum number of results.
+            min_confidence: Minimum iFind rank score (0-1000, iFind path only).
 
         Returns:
-            List of (entity_id, relevance_score) tuples
+            List of (entity_id, score) tuples ordered by descending relevance.
         """
+        docs_table = self._t("docs")
         cursor = self.conn.cursor()
         try:
-            # Call server-side procedure for unified logic
-            # Signature: (queryText, k, minConfidence)
+            # iFind path — available when idx_docs_text_ifind exists
+            try:
+                if min_confidence > 0:
+                    cursor.execute(
+                        f"SELECT TOP ? d.id, %FIND.Rank(d.text, ?) AS bm25 "
+                        f"FROM {docs_table} d "
+                        f"WHERE %FIND(d.text, ?) > 0 AND %FIND.Rank(d.text, ?) >= ? "
+                        f"ORDER BY bm25 DESC",
+                        [k, query_text, query_text, query_text, min_confidence],
+                    )
+                else:
+                    cursor.execute(
+                        f"SELECT TOP ? d.id, %FIND.Rank(d.text, ?) AS bm25 "
+                        f"FROM {docs_table} d "
+                        f"WHERE %FIND(d.text, ?) > 0 "
+                        f"ORDER BY bm25 DESC",
+                        [k, query_text, query_text],
+                    )
+                results = cursor.fetchall()
+                return [(row[0], float(row[1])) for row in results]
+            except Exception as ifind_err:
+                if "-359" not in str(ifind_err) and "FIND" not in str(ifind_err).upper():
+                    raise
+                # iFind not available on this IRIS build — fall back to LIKE
+                logger.debug(
+                    "kg_TXT: iFind unavailable (%s), using LIKE fallback", ifind_err
+                )
+
+            # LIKE fallback — no BM25 ranking, score = 1.0 for all matches
+            terms = query_text.split()
+            if not terms:
+                return []
+            conditions = " AND ".join(["d.text LIKE ?" for _ in terms])
+            like_params = [f"%{t}%" for t in terms]
             cursor.execute(
-                "CALL iris_vector_graph.kg_TXT(?, ?, ?)",
-                [query_text, k, min_confidence],
+                f"SELECT TOP {k} d.id, 1.0 AS score "
+                f"FROM {docs_table} d "
+                f"WHERE {conditions}",
+                like_params,
             )
             results = cursor.fetchall()
-            return [(entity_id, float(score)) for entity_id, score in results]
+            return [(row[0], float(row[1])) for row in results]
 
         except Exception as e:
-            logger.error(f"kg_TXT failed: {e}")
+            logger.error("kg_TXT failed: %s", e)
             raise
         finally:
             cursor.close()

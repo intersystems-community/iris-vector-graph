@@ -111,6 +111,8 @@ CREATE TABLE Graph_KG.docs(
   text  VARCHAR(4000) %EXACT
 );
 
+CREATE INDEX idx_docs_text_ifind ON Graph_KG.docs(text) INDEXTYPE = %iFind.Index.Basic;
+
 CREATE TABLE IF NOT EXISTS Graph_KG.fhir_bridges (
     fhir_code        VARCHAR(64) %EXACT NOT NULL,
     kg_node_id       VARCHAR(256) %EXACT NOT NULL,
@@ -253,6 +255,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 "CREATE INDEX idx_props_val_ifind ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic",
             ),
             (
+                "idx_docs_text_ifind",
+                "CREATE INDEX idx_docs_text_ifind ON Graph_KG.docs(text) INDEXTYPE = %iFind.Index.Basic",
+            ),
+            (
                 "idx_edges_confidence",
                 "CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER))",
             ),
@@ -260,7 +266,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
 
-        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_edges_confidence"}
+        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_docs_text_ifind", "idx_edges_confidence"}
 
         status = {}
         for name, sql in indexes:
@@ -807,13 +813,14 @@ END
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_TXT(
   IN q VARCHAR(4000),
-  IN k INT
+  IN k INT,
+  IN minConfidence INT
 )
 LANGUAGE SQL
 BEGIN
-  SELECT TOP :k d.id, %FIND.Rank(d.text, :q) AS bm25
+  SELECT d.id, %FIND.Rank(d.text, :q) AS bm25
   FROM {table_schema}.docs d
-  WHERE %FIND(d.text, :q) > 0
+  WHERE %FIND(d.text, :q) > 0 AND %FIND.Rank(d.text, :q) >= :minConfidence
   ORDER BY bm25 DESC;
 END
 """,
@@ -834,7 +841,7 @@ BEGIN
   ),
   K AS (
     SELECT ROW_NUMBER() OVER (ORDER BY bm25 DESC) AS r, id, bm25
-    FROM {table_schema}.kg_TXT(:qtext, :k2)
+    FROM {table_schema}.kg_TXT(:qtext, :k2, 0)
   ),
   F AS (
     SELECT COALESCE(V.id, K.id) AS id,
