@@ -372,16 +372,17 @@ ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %Strin
 }
 ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef pathId As %Integer, results As %DynamicArray, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
+	Set pGraph = 0
     Set o = ""
     For {
-        Set o = $Order(^KG("out", 0, s, p, o))
+        Set o = $Order(^KG("out", pGraph, s, p, o))
         If o = "" Quit
         
         // Filter by label if requested
         If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
         
         // T014: O(1) Hop Rejection
-        If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) Continue
+        If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", pGraph, o, nextP))) Continue
         
         Set pathId = pathId + 1
         Set obj = ##class(%DynamicObject).%New()
@@ -390,7 +391,7 @@ ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, m
         Set obj.s = s
         Set obj.p = p
         Set obj.o = o
-        Set obj.w = $Get(^KG("out", 0, s, p, o), 1.0)
+        Set obj.w = $Get(^KG("out", pGraph, s, p, o), 1.0)
         Do results.%Push(obj)
         
         If '$Data(seen(o)) Set nextFrontier(o) = ""
@@ -398,30 +399,32 @@ ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, m
 }
 ClassMethod TraverseAllPredicates(s As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef pathId As %Integer, results As %DynamicArray, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
+	Set pGraph = 0
     Set p = ""
     For {
-        Set p = $Order(^KG("out", 0, s, p))
+        Set p = $Order(^KG("out", pGraph, s, p))
         If p = "" Quit
         Do ..TraverseWithPredicate(s, p, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
     }
 }
 ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
+	Set pGraph = 0
     Set o = ""
     For {
-        Set o = $Order(^KG("out", 0, s, p, o))
+        Set o = $Order(^KG("out", pGraph, s, p, o))
         If o = "" Quit
         If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
         
         // Always record this hop's result — leaf nodes at hop N are valid results
         // even when hop N < maxHops.
         Set count = count + 1
-        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", 0, s, p, o), 1.0), hop)
+        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", pGraph, s, p, o), 1.0), hop)
         
         // Only add to nextFrontier if the node can continue on the next hop.
         // The nextP lookahead prunes the frontier, not the result set.
         If '$Data(seen(o)) {
-            If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", o, nextP))) {
+            If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", pGraph, o, nextP))) {
                 // Node has no next-hop edges — don't add to frontier, but result was recorded.
             } Else {
                 Set nextFrontier(o) = ""
@@ -431,29 +434,32 @@ ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Intege
 }
 ClassMethod TraverseAllPredicatesFast(s As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
+	Set pGraph = 0
     Set p = ""
     For {
-        Set p = $Order(^KG("out", 0, s, p))
+        Set p = $Order(^KG("out", pGraph, s, p))
         If p = "" Quit
         Do ..TraverseWithPredicateFast(s, p, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
     }
 }
 ClassMethod TraverseWithPredicateFastInbound(s As %String, p As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
+	Set pGraph = 0
     Set o = ""
     For {
-        Set o = $Order(^KG("in", 0, s, p, o))
+        Set o = $Order(^KG("in", pGraph, s, p, o))
         If o = "" Quit
         Set count = count + 1
-        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", 0, o, p, s), 1.0), hop)
+        Set ^||BFS.Results(count) = $ListBuild(s, p, o, $Get(^KG("out", pGraph, o, p, s), 1.0), hop)
         If '$Data(seen(o)) Set nextFrontier(o) = ""
     }
 }
 ClassMethod TraverseAllPredicatesFastInbound(s As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
+	Set pGraph = 0
     Set p = ""
     For {
-        Set p = $Order(^KG("in", 0, s, p))
+        Set p = $Order(^KG("in", pGraph, s, p))
         If p = "" Quit
         Do ..TraverseWithPredicateFastInbound(s, p, hop, .count, .nextFrontier, .seen)
     }

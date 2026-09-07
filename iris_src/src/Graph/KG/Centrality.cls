@@ -8,10 +8,10 @@
 ///   - EigenvectorJson         — power iteration over raw adjacency A (NOT PageRank with α=1)
 ///
 /// Storage (read-only):
-///   ^KG("out", 0, s, p, o)   outbound edges (shard-0)
+///   ^KG("out", pGraph, s, p, o)   outbound edges (shard-0)
 ///   ^KG("in",  0, o, p, s)   inbound edges (shard-0)
-///   ^KG("deg", node)         total out-degree
-///   ^KG("degp", node, pred)  per-predicate out-degree
+///   ^KG("deg", pGraph, node)         total out-degree
+///   ^KG("degp", pGraph, node, pred)  per-predicate out-degree
 ///
 /// Process-private scratch (killed on exit):
 ///   ^||CENT(-score, node)    descending sort buffer (shared across algos)
@@ -37,6 +37,7 @@ Class Graph.KG.Centrality Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @returns JSON array: [{"id":"node","score":0.42,"degree":17}, ...] sorted desc by score
 ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %String = "", topK As %Integer = 10000) As %String
 {
+	Set pGraph = 0
     // Count nodes for normalization
     Set nodeCount = 0
     // Enumerate the full node set: outbound sources (^KG("deg")) UNION
@@ -45,13 +46,13 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
     Kill ^||CENTNODES
     Set node = ""
     For {
-        Set node = $Order(^KG("deg", node))
+        Set node = $Order(^KG("deg", pGraph, node))
         Quit:node=""
         Set ^||CENTNODES(node) = ""
     }
     Set node = ""
     For {
-        Set node = $Order(^KG("in", 0, node))
+        Set node = $Order(^KG("in", pGraph, node))
         Quit:node=""
         Set ^||CENTNODES(node) = ""
     }
@@ -77,30 +78,30 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
         If predicate = "" {
             // All predicates
             If direction = "out" {
-                Set deg = +$Get(^KG("deg", node))
+                Set deg = +$Get(^KG("deg", pGraph, node))
             } ElseIf direction = "in" {
-                // Walk ^KG("in", 0, node, p, s) and count
+                // Walk ^KG("in", pGraph, node, p, s) and count
                 Set p = ""
                 For {
-                    Set p = $Order(^KG("in", 0, node, p))
+                    Set p = $Order(^KG("in", pGraph, node, p))
                     Quit:p=""
                     Set s = ""
                     For {
-                        Set s = $Order(^KG("in", 0, node, p, s))
+                        Set s = $Order(^KG("in", pGraph, node, p, s))
                         Quit:s=""
                         Set deg = deg + 1
                     }
                 }
             } Else {
                 // both = out + in
-                Set deg = +$Get(^KG("deg", node))
+                Set deg = +$Get(^KG("deg", pGraph, node))
                 Set p = ""
                 For {
-                    Set p = $Order(^KG("in", 0, node, p))
+                    Set p = $Order(^KG("in", pGraph, node, p))
                     Quit:p=""
                     Set s = ""
                     For {
-                        Set s = $Order(^KG("in", 0, node, p, s))
+                        Set s = $Order(^KG("in", pGraph, node, p, s))
                         Quit:s=""
                         Set deg = deg + 1
                     }
@@ -109,20 +110,20 @@ ClassMethod DegreeCentralityJson(direction As %String = "out", predicate As %Str
         } Else {
             // Specific predicate
             If direction = "out" {
-                Set deg = +$Get(^KG("degp", node, predicate))
+                Set deg = +$Get(^KG("degp", pGraph, node, predicate))
             } ElseIf direction = "in" {
-                // Walk ^KG("in", 0, node, predicate, *)
+                // Walk ^KG("in", pGraph, node, predicate, *)
                 Set s = ""
                 For {
-                    Set s = $Order(^KG("in", 0, node, predicate, s))
+                    Set s = $Order(^KG("in", pGraph, node, predicate, s))
                     Quit:s=""
                     Set deg = deg + 1
                 }
             } Else {
-                Set deg = +$Get(^KG("degp", node, predicate))
+                Set deg = +$Get(^KG("degp", pGraph, node, predicate))
                 Set s = ""
                 For {
-                    Set s = $Order(^KG("in", 0, node, predicate, s))
+                    Set s = $Order(^KG("in", pGraph, node, predicate, s))
                     Quit:s=""
                     Set deg = deg + 1
                 }

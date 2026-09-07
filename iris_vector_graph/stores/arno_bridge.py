@@ -345,8 +345,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
 
     try:
         cur = conn.cursor()
-        cur.execute(f"SELECT {sql_fn[0]}(?, {sql_fn[1]})",
-                    [lib_path, *args])
+        cur.execute(f"SELECT {sql_fn[0]}(?, {sql_fn[1]})", [lib_path, *args])
         row = cur.fetchone()
     except Exception as e:
         raise ArnoError(f"$ZF(-5) call to {fn_name!r} failed: {e}") from e
@@ -371,8 +370,7 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
         cur2 = conn.cursor()
         while offset < total_len:
             length = min(chunk_size, total_len - offset)
-            cur2.execute("SELECT ivg_arno_zf_get_result_chunk(?, ?, ?)",
-                         [lib_path, offset, length])
+            cur2.execute("SELECT ivg_arno_zf_get_result_chunk(?, ?, ?)", [lib_path, offset, length])
             chunk_row = cur2.fetchone()
             if not chunk_row or chunk_row[0] is None:
                 raise ArnoError(f"{fn_name!r} chunk fetch returned NULL at offset {offset}")
@@ -431,6 +429,7 @@ def remap_kernel_ids(result_json: str, idx_to_node: list) -> list:
     original string node IDs.
     """
     import json as _json
+
     parsed = _json.loads(result_json) if result_json else []
     out: list = []
     for r in parsed:
@@ -453,7 +452,7 @@ def clear_probe_cache() -> None:
 
 
 def build_kg_adjacency_json(conn) -> str:
-    """Walk `^KG("out", 0, src, predicate, dst)` via Native API and serialize as
+    """Walk `^KG("out", "", 0, src, predicate, dst)` via Native API and serialize as
     `{"nodes": [...], "edges": [{"s": "...", "d": "..."}, ...]}` JSON.
 
     This bypasses the rzf `ns.keys` truncation bug observed when iterating
@@ -470,6 +469,7 @@ def build_kg_adjacency_json(conn) -> str:
     """
     import iris as _iris
     import json as _json
+
     iris_inst = _iris.createIRIS(conn)
 
     nodes_seen: dict = {}
@@ -508,7 +508,7 @@ def build_kg_adjacency_json(conn) -> str:
 
 def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
     """Build NKG-format adjacency string with embedded NODEMAP header by walking
-    `^KG("out", 0, src, predicate, dst)` via Native API, then upload it in
+    `^KG("out", "", 0, src, predicate, dst)` via Native API, then upload it in
     30KB chunks via `kg_adj_append` to the Rust-side buffer.
 
     Format (matches `Graph.KG.NKGAccel.ExportAdjacencyKG` + `parse_nkg_adjacency_with_nodemap`):
@@ -546,6 +546,7 @@ def build_kg_adjacency_chunked(conn) -> "tuple[list[str], int]":
             pass
 
     import iris as _iris
+
     iris_inst = _iris.createIRIS(conn)
 
     node_to_idx: dict = {}
@@ -614,7 +615,8 @@ LANGUAGE OBJECTSCRIPT
     set fnid = $ZF(-4,3,dllid,"kg_adj_append")
     quit:fnid=0 "ERROR: kg_adj_append not found"
     quit $ZF(-5,dllid,fnid,chunk)
-}""".strip())
+}""".strip()
+    )
     conn.commit()
 
     lib_path = _probe_cache[_conn_key(conn)]["lib_path"]
@@ -635,7 +637,7 @@ def _build_kg_adjacency_serverside(conn) -> "tuple[list[str], int]":
     + chunked kg_adj_append calls in a single Python→IRIS round-trip.
 
     Returns (idx_to_node, edge_count). The nodemap is built inside ObjectScript
-    via $Order on `^KG("out",0,...)` / `^KG("in",0,...)`, then the entire
+    via $Order on `^KG("out","",0,...)` / `^KG("in","",0,...)`, then the entire
     NODEMAP+adjacency string is built in IRIS memory and pushed to libarno's
     Mutex<String> buffer in 30KB chunks via direct $ZF(-5,kg_adj_append,...)
     calls. The nodemap is also persisted to `^||arnonodemap` in process-private
@@ -662,7 +664,7 @@ LANGUAGE OBJECTSCRIPT
     kill ^||arnonodemap, ^||arnonodelookup, ^||arnonodeschunks
     set n = 0, node = ""
     for {
-        set node = $Order(^KG("out",0,node))
+        set node = $Order(^KG("out","",0,node))
         quit:node=""
         set ^||arnonodemap(n) = node
         set ^||arnonodelookup(node) = n
@@ -670,7 +672,7 @@ LANGUAGE OBJECTSCRIPT
     }
     set node = ""
     for {
-        set node = $Order(^KG("in",0,node))
+        set node = $Order(^KG("in","",0,node))
         quit:node=""
         if '$Data(^||arnonodelookup(node)) {
             set ^||arnonodemap(n) = node
@@ -698,18 +700,18 @@ LANGUAGE OBJECTSCRIPT
     set buf = ""
     set src = ""
     for {
-        set src = $Order(^KG("out",0,src))
+        set src = $Order(^KG("out","",0,src))
         quit:src=""
         set sIdx = $Get(^||arnonodelookup(src))
         if sIdx="" continue
         set nbrs = ""
         set pred = ""
         for {
-            set pred = $Order(^KG("out",0,src,pred))
+            set pred = $Order(^KG("out","",0,src,pred))
             quit:pred=""
             set dst = ""
             for {
-                set dst = $Order(^KG("out",0,src,pred,dst))
+                set dst = $Order(^KG("out","",0,src,pred,dst))
                 quit:dst=""
                 set dIdx = $Get(^||arnonodelookup(dst))
                 if dIdx="" continue

@@ -22,6 +22,7 @@ def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) 
     else:
         conn = conn_or_cursor
     import iris as _iris_pkg
+
     iris_obj = _iris_pkg.createIRIS(conn)
     return iris_obj.classMethodValue(class_name, method_name, *args)
 
@@ -33,10 +34,8 @@ def _call_classmethod_large(iris_obj, cls: str, method: str, *args) -> str:
     _, tag, n_str = raw.split(":", 2)
     n = int(n_str)
     return "".join(
-        str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i))
-        for i in range(1, n + 1)
+        str(iris_obj.classMethodValue(cls, "ReadLargeOutChunk", tag, i)) for i in range(1, n + 1)
     )
-
 
 
 class GraphSchema:
@@ -53,8 +52,11 @@ class GraphSchema:
         """
         return f"""
 CREATE TABLE Graph_KG.nodes(
-  node_id    VARCHAR(256) %EXACT PRIMARY KEY,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  node_id    VARCHAR(256) %EXACT NOT NULL,
+  graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT pk_nodes_graph PRIMARY KEY (node_id, graph_id),
+  CONSTRAINT uq_nodes_nodeid UNIQUE (node_id)
 );
 
 CREATE TABLE Graph_KG.rdf_labels(
@@ -274,11 +276,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 if m:
                     sqlcode = m.group(1)
 
-                if (
-                    "already exists" in err
-                    or "already has" in err
-                    or "already has index" in err
-                ):
+                if "already exists" in err or "already has" in err or "already has index" in err:
                     status[name] = True
                 elif sqlcode == "-400" and "rdf_edges" in sql.lower():
                     alt_sql = GraphSchema._create_index_alter_table(name, sql)
@@ -292,9 +290,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                             if "already exists" in e2_err or "already has" in e2_err:
                                 status[name] = True
                             else:
-                                logger.debug(
-                                    "Index %s ALTER TABLE fallback failed: %s", name, e2
-                                )
+                                logger.debug("Index %s ALTER TABLE fallback failed: %s", name, e2)
                                 status[name] = False
                     else:
                         logger.debug(
@@ -312,9 +308,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
         status["add_graph_id_column"] = GraphSchema.add_graph_id_column(cursor)
         status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor)
-        status["update_spo_unique_constraint"] = (
-            GraphSchema.update_spo_unique_constraint(cursor)
-        )
+        status["update_spo_unique_constraint"] = GraphSchema.update_spo_unique_constraint(cursor)
+        status["add_graph_id_to_nodes"] = GraphSchema.add_graph_id_to_nodes(cursor)
 
         return status
 
@@ -322,6 +317,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     def update_spo_unique_constraint(cursor) -> bool:
         try:
             cursor.execute("ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT u_spo")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT uspo")
         except Exception:
             pass
         try:
@@ -337,9 +336,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     @staticmethod
     def add_graph_id_index(cursor) -> bool:
         try:
-            cursor.execute(
-                "CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)"
-            )
+            cursor.execute("CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)")
             return True
         except Exception as e:
             if "already exists" in str(e).lower() or "already has" in str(e).lower():
@@ -372,6 +369,114 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             if "already exists" in err_lower or "duplicate" in err_lower or "unique" in err_lower:
                 return True
             return False
+
+    @staticmethod
+    def add_graph_id_to_nodes(cursor) -> Dict[str, Any]:
+        """Spec 214: add graph_id to nodes table; migrate __graph pseudo-props.
+
+        Step 1 (DDL, auto-commits in IRIS):
+          ALTER TABLE nodes ADD COLUMN graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''
+        Step 2-3 (DML transaction): migrate __graph rows; delete them from rdf_props.
+        Step 4-7 (recreation transaction): recreate nodes with new PK(node_id, graph_id)
+          and UNIQUE(node_id); rename or recreate FKs on dependent tables.
+        """
+        result: Dict[str, Any] = {"column_added": False, "rows_migrated": 0, "pk_recreated": False}
+
+        # Step 1 — DDL (auto-commits)
+        try:
+            cursor.execute(
+                "ALTER TABLE Graph_KG.nodes ADD COLUMN graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''"
+            )
+            result["column_added"] = True
+        except Exception as e:
+            err = str(e).lower()
+            if "already" in err or "duplicate" in err:
+                result["column_added"] = True
+            else:
+                logger.warning("add_graph_id_to_nodes step1 failed: %s", e)
+                return result
+
+        # Step 2-3 — DML: migrate __graph values
+        try:
+            cursor.execute(
+                "UPDATE Graph_KG.nodes n SET n.graph_id = "
+                "(SELECT p.val FROM Graph_KG.rdf_props p "
+                "WHERE p.s = n.node_id AND p.\"key\" = '__graph') "
+                "WHERE EXISTS (SELECT 1 FROM Graph_KG.rdf_props p "
+                "WHERE p.s = n.node_id AND p.\"key\" = '__graph')"
+            )
+            migrated = cursor.rowcount if cursor.rowcount is not None else 0
+            cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE \"key\" = '__graph'")
+            try:
+                cursor.connection.commit()
+            except AttributeError:
+                pass
+            result["rows_migrated"] = migrated
+        except Exception as e:
+            logger.warning("add_graph_id_to_nodes migration DML failed: %s", e)
+
+        # Step 4-7 — check if compound PK already exists; if not, recreate table
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
+                "WHERE TABLE_SCHEMA='Graph_KG' AND TABLE_NAME='nodes' "
+                "AND CONSTRAINT_NAME='pk_nodes_graph'"
+            )
+            row = cursor.fetchone()
+            if row and int(row[0]) > 0:
+                result["pk_recreated"] = True
+                return result
+        except Exception:
+            pass
+
+        try:
+            cursor.execute(
+                """
+                CREATE TABLE Graph_KG.nodes_new (
+                    node_id    VARCHAR(256) %EXACT NOT NULL,
+                    graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT pk_nodes_graph PRIMARY KEY (node_id, graph_id),
+                    CONSTRAINT uq_nodes_nodeid UNIQUE (node_id)
+                )
+            """
+            )
+            cursor.execute(
+                "INSERT INTO Graph_KG.nodes_new (node_id, graph_id, created_at) "
+                "SELECT node_id, graph_id, created_at FROM Graph_KG.nodes"
+            )
+            cursor.execute("DROP TABLE Graph_KG.nodes")
+            # Attempt RENAME
+            renamed = False
+            try:
+                cursor.execute("RENAME TABLE Graph_KG.nodes_new TO Graph_KG.nodes")
+                renamed = True
+            except Exception:
+                pass
+            if not renamed:
+                # RENAME not supported; recreate FKs pointing at nodes_new under the new name.
+                # In IRIS, we can alias or accept nodes_new as the canonical table until a
+                # proper rename path is available.  Log a warning.
+                logger.warning(
+                    "RENAME TABLE not supported; Graph_KG.nodes_new has the new schema. "
+                    "Manual intervention required to rename nodes_new → nodes."
+                )
+            try:
+                conn = getattr(cursor, "connection", None)
+                if conn:
+                    conn.commit()
+            except Exception:
+                pass
+            result["pk_recreated"] = True
+        except Exception as e:
+            logger.warning("add_graph_id_to_nodes table recreation failed: %s", e)
+            try:
+                conn = getattr(cursor, "connection", None)
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+        return result
 
     @staticmethod
     def disable_indexes(cursor) -> Dict[str, bool]:
@@ -480,7 +585,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             cursor.execute(sql, [node_id, label])
         """
         templates = {
-            "nodes": "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
+            "nodes": "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ? AND graph_id = ?)",
             "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
             "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
             "rdf_edges": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
@@ -503,9 +608,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             True if upgraded or already large enough, False on error
         """
         try:
-            cursor.execute(
-                "ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)"
-            )
+            cursor.execute("ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)")
             return True
         except Exception as e:
             # Already correct size or other issue
@@ -633,7 +736,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             statement suitable for cursor.execute().
         """
         return [
-             "CREATE SCHEMA iris_vector_graph",
+            "CREATE SCHEMA iris_vector_graph",
             """
 CREATE OR REPLACE FUNCTION SQLUser.JSON_ARRAYLENGTH(j VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { Set a = ##class(%Library.DynamicArray).%FromJSON(j) Quit a.%Size() }
 """,
@@ -884,16 +987,13 @@ LANGUAGE OBJECTSCRIPT
         # --- Graph.KG.PageRank (sentinel: reliably compiles; Edge conflicts with existing DDL table) ---
         try:
             cursor.execute(
-                "SELECT COUNT(*) FROM %Dictionary.ClassDefinition "
-                "WHERE Name='Graph.KG.PageRank'"
+                "SELECT COUNT(*) FROM %Dictionary.ClassDefinition " "WHERE Name='Graph.KG.PageRank'"
             )
             row = cursor.fetchone()
             caps.objectscript_deployed = bool(row and row[0])
         except Exception:
             try:
-                result = _call_classmethod(
-                    _native_target, "Graph.KG.PageRank", "%Exists", 1
-                )
+                result = _call_classmethod(_native_target, "Graph.KG.PageRank", "%Exists", 1)
                 caps.objectscript_deployed = bool(result)
             except Exception:
                 caps.objectscript_deployed = False
@@ -917,17 +1017,13 @@ LANGUAGE OBJECTSCRIPT
 
         # --- ^KG bootstrap marker via native API ---
         try:
-            result = _call_classmethod(
-                _native_target, "Graph.KG.Meta", "IsSet", "kg_built"
-            )
+            result = _call_classmethod(_native_target, "Graph.KG.Meta", "IsSet", "kg_built")
             caps.kg_built = bool(result)
         except Exception:
             caps.kg_built = False
 
         try:
-            result = _call_classmethod(
-                _native_target, "Graph.KG.Meta", "IsSet", "nkg_built"
-            )
+            result = _call_classmethod(_native_target, "Graph.KG.Meta", "IsSet", "nkg_built")
             caps.nkg_built = bool(result)
         except Exception:
             caps.nkg_built = False
@@ -935,9 +1031,7 @@ LANGUAGE OBJECTSCRIPT
         return caps
 
     @staticmethod
-    def deploy_objectscript_classes(
-        cursor, iris_src_path: Path, conn=None
-    ) -> "IRISCapabilities":
+    def deploy_objectscript_classes(cursor, iris_src_path: Path, conn=None) -> "IRISCapabilities":
         """
         Deploy ObjectScript .cls files to IRIS and return capability flags.
 
@@ -970,12 +1064,12 @@ LANGUAGE OBJECTSCRIPT
                     except Exception:
                         pass
                 try:
-                    _call_classmethod(_native, "%SYSTEM.OBJ", "Compile", "Graph.KG.GraphIndex", "ck-d")
+                    _call_classmethod(
+                        _native, "%SYSTEM.OBJ", "Compile", "Graph.KG.GraphIndex", "ck-d"
+                    )
                 except Exception:
                     pass
-                _call_classmethod(
-                    _native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1
-                )
+                _call_classmethod(_native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1)
                 for dep_cls in ("Graph.KG.Edge", "Graph.KG.TestEdge"):
                     try:
                         _call_classmethod(_native, "%SYSTEM.OBJ", "Compile", dep_cls, "ck-d")

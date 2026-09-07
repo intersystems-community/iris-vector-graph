@@ -8,7 +8,11 @@
 
 ```sql
 CREATE TABLE Graph_KG.nodes (
-    node_id VARCHAR(256) PRIMARY KEY,
+    node_id    VARCHAR(256) %EXACT NOT NULL,
+    graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',  -- spec 214: empty string = default graph
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT pk_nodes_graph PRIMARY KEY (node_id, graph_id),
+    CONSTRAINT uq_nodes_nodeid UNIQUE (node_id)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 ```

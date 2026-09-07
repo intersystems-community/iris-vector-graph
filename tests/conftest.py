@@ -548,3 +548,33 @@ def ledger_reset(iris_connection, iris_master_cleanup):
     _wipe()
     yield
     _wipe()
+
+
+@pytest.fixture(scope="function")
+def node_graph_reset(iris_connection, iris_master_cleanup):
+    """Spec 214: remove all named-graph rows before and after each test.
+
+    Deletes all rows with graph_id != '' (non-default-graph) from the four
+    structural tables in FK-safe order, then delegates to iris_master_cleanup
+    for default-graph cleanup.
+    """
+    def _wipe_named_graphs():
+        cursor = iris_connection.cursor()
+        try:
+            with contextlib.suppress(Exception):
+                cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE graph_id <> ''")
+            with contextlib.suppress(Exception):
+                cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s IN (SELECT node_id FROM Graph_KG.nodes WHERE graph_id <> '')")
+            with contextlib.suppress(Exception):
+                cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s IN (SELECT node_id FROM Graph_KG.nodes WHERE graph_id <> '')")
+            with contextlib.suppress(Exception):
+                cursor.execute("DELETE FROM Graph_KG.nodes WHERE graph_id <> ''")
+            with contextlib.suppress(Exception):
+                iris_connection.commit()
+        finally:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+    _wipe_named_graphs()
+    yield
+    _wipe_named_graphs()

@@ -5,18 +5,21 @@ Classes for managing SQL generation from Cypher AST.
 Supports multi-stage queries via Common Table Expressions (CTEs).
 """
 
-from dataclasses import dataclass, field
-from typing import List, Any, Dict, Optional, Union
-import logging
 import json
+import logging
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
+
 from pydantic import BaseModel, Field
-from . import ast
-from .parser import CypherParseError
+
 from iris_vector_graph.security import (
-    validate_table_name,
     VALID_GRAPH_TABLES,
     sanitize_identifier,
+    validate_table_name,
 )
+
+from . import ast
+from .parser import CypherParseError
 
 logger = logging.getLogger(__name__)
 
@@ -29,30 +32,44 @@ _schema_prefix: str = ""
 # referenced UNQUALIFIED in SELECT/ORDER BY. IRIS does not register a
 # JSON_TABLE-backed CTE name as a referenceable label, so `DegCent.score`
 # raises SQLCODE -23; bare `score` resolves correctly.
-_PROC_CTE_ALIASES = frozenset({
-    "VecSearch", "BM25", "PPR", "IVF_SEARCH", "Retrieve", "Neighbors", "WS",
-    "DegCent", "Betweenness", "Closeness", "Eigenvector",
-    "Leiden", "TriangleCount", "SCC", "KCore",
-})
+_PROC_CTE_ALIASES = frozenset(
+    {
+        "VecSearch",
+        "BM25",
+        "PPR",
+        "IVF_SEARCH",
+        "Retrieve",
+        "Neighbors",
+        "WS",
+        "DegCent",
+        "Betweenness",
+        "Closeness",
+        "Eigenvector",
+        "Leiden",
+        "TriangleCount",
+        "SCC",
+        "KCore",
+    }
+)
 
 # Allowed map-parameter keys for centrality procedures (Spec 162 FR-029).
 # The procedure-call validator rejects unknown keys to prevent silent typos
 # and reserves keys (e.g. `weighted`) for future Phase 2 extensions.
 CENTRALITY_ALLOWED_KEYS: Dict[str, set] = {
     "ivg.degreeCentrality": {"direction", "predicate", "topK"},
-    "ivg.betweenness":      {"sampleSize", "direction", "maxHops", "topK", "memBudgetMB"},
-    "ivg.closeness":        {"formula", "direction", "maxHops", "topK"},
-    "ivg.eigenvector":      {"maxIter", "tol", "topK"},
+    "ivg.betweenness": {"sampleSize", "direction", "maxHops", "topK", "memBudgetMB"},
+    "ivg.closeness": {"formula", "direction", "maxHops", "topK"},
+    "ivg.eigenvector": {"maxIter", "tol", "topK"},
 }
 
 # Allowed map-parameter keys for community-detection procedures (Spec 163 FR-015).
 # Same forward-compat semantics as CENTRALITY_ALLOWED_KEYS — `weighted` is reserved
 # for Phase 2 weighted Leiden / weighted Triangle / etc.
 COMMUNITY_ALLOWED_KEYS: Dict[str, set] = {
-    "ivg.leiden":         {"maxLevels", "gamma", "tol", "topK", "memBudgetMB", "randomSeed"},
-    "ivg.triangleCount":  {"topK"},
-    "ivg.scc":            {"topK"},
-    "ivg.kcore":          {"topK"},
+    "ivg.leiden": {"maxLevels", "gamma", "tol", "topK", "memBudgetMB", "randomSeed"},
+    "ivg.triangleCount": {"topK"},
+    "ivg.scc": {"topK"},
+    "ivg.kcore": {"topK"},
 }
 
 
@@ -67,8 +84,7 @@ def _validate_centrality_proc_map(proc_name: str, map_keys) -> None:
     unknown = set(map_keys) - allowed
     if unknown:
         raise ValueError(
-            f"Unknown parameters for {proc_name}: {sorted(unknown)}. "
-            f"Allowed: {sorted(allowed)}"
+            f"Unknown parameters for {proc_name}: {sorted(unknown)}. " f"Allowed: {sorted(allowed)}"
         )
 
 
@@ -83,8 +99,7 @@ def _validate_community_proc_map(proc_name: str, map_keys) -> None:
     unknown = set(map_keys) - allowed
     if unknown:
         raise ValueError(
-            f"Unknown parameters for {proc_name}: {sorted(unknown)}. "
-            f"Allowed: {sorted(allowed)}"
+            f"Unknown parameters for {proc_name}: {sorted(unknown)}. " f"Allowed: {sorted(allowed)}"
         )
 
 
@@ -140,7 +155,9 @@ def _jsonpath_key(prop: str) -> str:
 def labels_subquery(node_expr: str, exclude_labels=None) -> str:
     extra = ""
     if exclude_labels:
-        placeholders = ", ".join(f"'{lbl.replace(chr(39), chr(39)+chr(39))}'" for lbl in exclude_labels)
+        placeholders = ", ".join(
+            f"'{lbl.replace(chr(39), chr(39)+chr(39))}'" for lbl in exclude_labels
+        )
         extra = f" AND label NOT IN ({placeholders})"
     return f"COALESCE((SELECT JSON_ARRAYAGG(label) FROM {_table('rdf_labels')} WHERE s = {node_expr}{extra}), CAST('[]' AS VARCHAR(256)))"
 
@@ -205,13 +222,9 @@ class TranslationContext:
             self.variable_aliases = parent.variable_aliases.copy()
 
         # Variables that are scalar (not graph nodes) — skip node expansion in RETURN
-        self.scalar_variables: set = (
-            set() if parent is None else parent.scalar_variables.copy()
-        )
+        self.scalar_variables: set = set() if parent is None else parent.scalar_variables.copy()
 
-        self.graph_context: Optional[str] = (
-            None if parent is None else parent.graph_context
-        )
+        self.graph_context: Optional[str] = None if parent is None else parent.graph_context
 
         # Named path registry: path variable → AST NamedPath + SQL aliases
         self.named_paths: Dict[str, ast.NamedPath] = (
@@ -236,12 +249,8 @@ class TranslationContext:
             {} if parent is None else parent.node_obj_aliases.copy()
         )
         # Maps node alias → SQL expression for its node_id (for anon source nodes with no nodes JOIN)
-        self.node_id_expr: Dict[str, str] = (
-            {} if parent is None else parent.node_id_expr.copy()
-        )
-        self.var_length_paths: List[dict] = (
-            [] if parent is None else parent.var_length_paths
-        )
+        self.node_id_expr: Dict[str, str] = {} if parent is None else parent.node_id_expr.copy()
+        self.var_length_paths: List[dict] = [] if parent is None else parent.var_length_paths
 
         self.select_items: List[str] = []
         self.from_clauses: List[str] = []
@@ -258,14 +267,10 @@ class TranslationContext:
 
         self.dml_statements: List[tuple[str, List[Any]]] = []
 
-        self.all_stage_params: List[Any] = (
-            [] if parent is None else parent.all_stage_params
-        )
+        self.all_stage_params: List[Any] = [] if parent is None else parent.all_stage_params
         self._alias_counter: int = 0 if parent is None else parent._alias_counter
         self.stages: List[str] = [] if parent is None else parent.stages
-        self.input_params: Dict[str, Any] = (
-            {} if parent is None else parent.input_params
-        )
+        self.input_params: Dict[str, Any] = {} if parent is None else parent.input_params
         self.temporal_rel_ctes: Dict[str, str] = (
             {} if parent is None else parent.temporal_rel_ctes.copy()
         )
@@ -274,18 +279,14 @@ class TranslationContext:
         )
         # Variables bound to relationship patterns in MATCH clauses.
         # Used by translate_to_sql() to tag Bolt column types as "relationship".
-        self.rel_variables: set = (
-            set() if parent is None else parent.rel_variables.copy()
-        )
+        self.rel_variables: set = set() if parent is None else parent.rel_variables.copy()
         self.system_procedure_call: Optional[Any] = None
         self.pending_where = None
         self.mapped_node_aliases: Dict[str, dict] = (
             {} if parent is None else parent.mapped_node_aliases.copy()
         )
         # Maps SQL-safe column alias → Cypher expression text for post-execution column renaming.
-        self.column_name_map: Dict[str, str] = (
-            {} if parent is None else parent.column_name_map
-        )
+        self.column_name_map: Dict[str, str] = {} if parent is None else parent.column_name_map
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
         # List of (label_value, param_placeholder) tuples — one per optional label constraint.
@@ -313,15 +314,11 @@ class TranslationContext:
         # Variable type tracking for semantic validation.
         # Maps variable name → "node" | "relationship" | "scalar"
         # Used to enforce type consistency and detect VariableTypeConflict/VariableAlreadyBound errors.
-        self.variable_types: Dict[str, str] = (
-            {} if parent is None else parent.variable_types.copy()
-        )
+        self.variable_types: Dict[str, str] = {} if parent is None else parent.variable_types.copy()
         # Temporal type tracking: maps variable name → temporal type
         # Types: "date", "localtime", "time", "datetime", "localdatetime", "duration"
         # Used to emit correct SQL extraction for property access (e.g., d.year, dur.months)
-        self.temporal_types: Dict[str, str] = (
-            {} if parent is None else parent.temporal_types.copy()
-        )
+        self.temporal_types: Dict[str, str] = {} if parent is None else parent.temporal_types.copy()
         # Variables known to hold non-integer values that cannot be used as list indices.
         # Set during WITH clause translation when a literal bool/float/str/list/map is bound.
         # Used by _expr_subscript to emit IVGLISTGET which raises TypeError for these.
@@ -330,9 +327,7 @@ class TranslationContext:
         )
         # Variables known to hold non-map values (scalars, lists).
         # Property access on these should raise TypeError at compile time.
-        self.non_map_vars: set = (
-            set() if parent is None else parent.non_map_vars.copy()
-        )
+        self.non_map_vars: set = set() if parent is None else parent.non_map_vars.copy()
         # UNWIND aliases that hold collected node JSON blobs ({_id, _labels, _props}).
         # Property access must join rdf_props using the _id extracted from the blob.
         self.collected_node_variables: set = (
@@ -452,6 +447,7 @@ class TranslationContext:
             jt_items = [si for si in self.select_items if "JSON_TABLE" in si]
             if len(jt_items) >= 2:
                 import re as _re
+
                 _alias_re = _re.compile(r'^(.*?)\s+AS\s+"([^"]+)"\s*$', _re.DOTALL)
                 subqueries = []
                 outer_cols = []
@@ -553,13 +549,16 @@ class TranslationContext:
             cte_prefix = ""
         return cte_prefix, sql, params
 
-    def build_label_only_dml_subquery(self, node_alias: str, select_override: str) -> tuple[str, str, List[Any]]:
+    def build_label_only_dml_subquery(
+        self, node_alias: str, select_override: str
+    ) -> tuple[str, str, List[Any]]:
         """Build a label-only DML subquery, stripping rdf_props JOINs/conditions for node_alias.
 
         Used after SET n = {map} deletes all properties — subsequent INSERT/SELECT must not
         JOIN rdf_props for the matched node since those rows no longer exist.
         """
         import re as _re_lo
+
         # Save state
         saved_joins = list(self.join_clauses)
         saved_join_params = list(self.join_params)
@@ -580,7 +579,7 @@ class TranslationContext:
                 # drop this JOIN and its params
             else:
                 new_joins.append(jc)
-                new_join_params.extend(saved_join_params[jp_offset:jp_offset + pc])
+                new_join_params.extend(saved_join_params[jp_offset : jp_offset + pc])
             jp_offset += pc
 
         self.join_clauses = new_joins
@@ -592,10 +591,15 @@ class TranslationContext:
         wp_offset = 0
         for cond in saved_where:
             pc = cond.count("?")
-            cond_params = saved_where_params[wp_offset:wp_offset + pc]
+            cond_params = saved_where_params[wp_offset : wp_offset + pc]
             wp_offset += pc
             drop = any(f"{pa}." in cond for pa in prop_join_aliases)
-            if not drop and "EXISTS" in cond and "rdf_props" in cond and f"{node_alias}.node_id" in cond:
+            if (
+                not drop
+                and "EXISTS" in cond
+                and "rdf_props" in cond
+                and f"{node_alias}.node_id" in cond
+            ):
                 drop = True
             if not drop:
                 new_where.append(cond)
@@ -614,9 +618,7 @@ class TranslationContext:
         return result
 
 
-def translate_procedure_call(
-    proc: ast.CypherProcedureCall, context: TranslationContext
-) -> None:
+def translate_procedure_call(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     """Translate a CALL procedure into a CTE prepended to context.stages.
 
     Supported:
@@ -674,12 +676,12 @@ def _tck_val_to_python(val_str):
     if val_str is None:
         return None
     s = str(val_str).strip()
-    if s.lower() == 'null':
+    if s.lower() == "null":
         return None
     if s.startswith("'") and s.endswith("'"):
         return s[1:-1]
     try:
-        if '.' in s:
+        if "." in s:
             return float(s)
         return int(s)
     except (ValueError, TypeError):
@@ -688,15 +690,15 @@ def _tck_val_to_python(val_str):
 
 def _tck_type_coerce(val, arg_type_str: str):
     """Coerce val for type comparison — e.g. FLOAT accepts INTEGER by converting to float."""
-    t = arg_type_str.upper().rstrip('?').strip()
+    t = arg_type_str.upper().rstrip("?").strip()
     if val is None:
         return None
-    if t in ('FLOAT', 'NUMBER'):
+    if t in ("FLOAT", "NUMBER"):
         try:
             return float(val)
         except (TypeError, ValueError):
             return val
-    if t == 'INTEGER':
+    if t == "INTEGER":
         try:
             if isinstance(val, float) and val.is_integer():
                 return int(val)
@@ -726,7 +728,7 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
     test data rows. Argument values are used to filter rows.
     """
     proc_name = proc.procedure_name
-    procedures = getattr(context, '_tck_procedures', {}) or {}
+    procedures = getattr(context, "_tck_procedures", {}) or {}
 
     if proc_name not in procedures:
         raise ValueError(
@@ -735,9 +737,9 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
         )
 
     proc_def = procedures[proc_name]
-    args_spec = proc_def.get('args', [])
-    outputs_spec = proc_def.get('outputs', [])
-    rows = proc_def.get('rows', [])
+    args_spec = proc_def.get("args", [])
+    outputs_spec = proc_def.get("outputs", [])
+    rows = proc_def.get("rows", [])
 
     # --- Validate argument count ---
     # Implicit call: no parens, args come from parameters
@@ -751,15 +753,14 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
             )
         # Validate all expected parameters are present
         for arg_spec in args_spec:
-            arg_name = arg_spec['name']
+            arg_name = arg_spec["name"]
             if arg_name not in context.input_params:
                 # ParameterMissing maps to KeyError in the TCK harness
                 raise KeyError(
-                    f"Procedure {proc_name}: missing parameter '{arg_name}' "
-                    f"(MissingParameter)"
+                    f"Procedure {proc_name}: missing parameter '{arg_name}' " f"(MissingParameter)"
                 )
         # Build argument list from parameters
-        call_args = [context.input_params.get(s['name']) for s in args_spec]
+        call_args = [context.input_params.get(s["name"]) for s in args_spec]
     else:
         arg_count_provided = len(proc.arguments) if proc.arguments else 0
         arg_count_expected = len(args_spec)
@@ -774,8 +775,16 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
         for i, arg in enumerate(proc.arguments or []):
             # Check for aggregation functions in arguments (InvalidAggregation)
             if isinstance(arg, ast.FunctionCall) and arg.function_name.lower() in (
-                'count', 'sum', 'avg', 'min', 'max', 'collect', 'stdev', 'stdevp',
-                'percentiledisc', 'percentilecont',
+                "count",
+                "sum",
+                "avg",
+                "min",
+                "max",
+                "collect",
+                "stdev",
+                "stdevp",
+                "percentiledisc",
+                "percentilecont",
             ):
                 raise SyntaxError(
                     f"Procedure {proc_name}: aggregation functions are not allowed "
@@ -787,9 +796,7 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
                 if arg.name in context.input_params:
                     call_args.append(context.input_params[arg.name])
                 else:
-                    raise ValueError(
-                        f"Procedure {proc_name}: parameter '${arg.name}' not found"
-                    )
+                    raise ValueError(f"Procedure {proc_name}: parameter '${arg.name}' not found")
             else:
                 call_args.append(None)
 
@@ -797,21 +804,21 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
         for i, (arg_val, arg_spec) in enumerate(zip(call_args, args_spec)):
             if arg_val is None:
                 continue  # null is always acceptable
-            arg_type = arg_spec.get('type', '').upper().rstrip('?').strip()
+            arg_type = arg_spec.get("type", "").upper().rstrip("?").strip()
             # Boolean check must come before int/float checks since bool is a subclass of int
             is_bool = isinstance(arg_val, bool)
-            if arg_type in ('STRING',) and not isinstance(arg_val, str):
+            if arg_type in ("STRING",) and not isinstance(arg_val, str):
                 raise SyntaxError(
                     f"Procedure {proc_name}: argument {i+1} expected STRING, "
                     f"got {type(arg_val).__name__} (InvalidArgumentType)"
                 )
-            if arg_type == 'INTEGER':
+            if arg_type == "INTEGER":
                 if is_bool:
                     raise SyntaxError(
                         f"Procedure {proc_name}: argument {i+1} expected INTEGER, "
                         f"got boolean (InvalidArgumentType)"
                     )
-            if arg_type == 'INTEGER' and not isinstance(arg_val, (int,)):
+            if arg_type == "INTEGER" and not isinstance(arg_val, (int,)):
                 if isinstance(arg_val, float) and arg_val.is_integer():
                     call_args[i] = int(arg_val)
                 elif is_bool:
@@ -819,7 +826,7 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
                         f"Procedure {proc_name}: argument {i+1} expected INTEGER, "
                         f"got boolean (InvalidArgumentType)"
                     )
-            if arg_type in ('FLOAT', 'NUMBER'):
+            if arg_type in ("FLOAT", "NUMBER"):
                 if isinstance(arg_val, bool):
                     raise SyntaxError(
                         f"Procedure {proc_name}: argument {i+1} expected {arg_type}, "
@@ -855,7 +862,7 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
         pass
 
     # --- No outputs → no CTE needed ---
-    output_names = [out['name'] for out in outputs_spec]
+    output_names = [out["name"] for out in outputs_spec]
     if not output_names:
         return
 
@@ -865,8 +872,8 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
         if not args_spec or not call_args:
             return True  # No args → return all rows
         for i, (arg_spec_item, call_val) in enumerate(zip(args_spec, call_args)):
-            col_name = arg_spec_item['name']
-            arg_type = arg_spec_item.get('type', '').upper().rstrip('?').strip()
+            col_name = arg_spec_item["name"]
+            arg_type = arg_spec_item.get("type", "").upper().rstrip("?").strip()
             row_raw = row_data.get(col_name)
             row_val = _tck_val_to_python(row_raw)
             if call_val is None and row_val is None:
@@ -918,7 +925,7 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
             context.bind_variable_type(alias, "scalar", force=True)
             # If the alias differs from the column name, we need a rename mapping
             if orig != alias:
-                if not hasattr(context, '_tck_yield_renames'):
+                if not hasattr(context, "_tck_yield_renames"):
                     context._tck_yield_renames = {}
                 context._tck_yield_renames[alias] = (cte_name, orig)
     # else: No YIELD clause — do NOT expose outputs in scope.
@@ -936,9 +943,7 @@ def _resolve_arg(arg, context: TranslationContext, name: str, expected_type=None
     if isinstance(arg, ast.Literal):
         val = arg.value
         if isinstance(val, list):
-            return [
-                item.value if isinstance(item, ast.Literal) else item for item in val
-            ]
+            return [item.value if isinstance(item, ast.Literal) else item for item in val]
         return val
     elif isinstance(arg, ast.Variable):
         if arg.name in context.input_params:
@@ -1007,9 +1012,7 @@ def _vs_build_similarity(query_input, vector_fn, label, options, emb_table):
     )
 
 
-def _translate_vector_search(
-    proc: ast.CypherProcedureCall, context: TranslationContext
-) -> None:
+def _translate_vector_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     args = proc.arguments
     if len(args) < 4:
         raise ValueError(
@@ -1019,17 +1022,13 @@ def _translate_vector_search(
 
     label_arg = args[0]
     if not isinstance(label_arg, ast.Literal) or not isinstance(label_arg.value, str):
-        raise ValueError(
-            "ivg.vector.search: first argument (label) must be a string literal"
-        )
+        raise ValueError("ivg.vector.search: first argument (label) must be a string literal")
     label = label_arg.value
     validate_table_name("rdf_labels")
 
     prop_arg = args[1]
     if not isinstance(prop_arg, ast.Literal) or not isinstance(prop_arg.value, str):
-        raise ValueError(
-            "ivg.vector.search: second argument (property) must be a string literal"
-        )
+        raise ValueError("ivg.vector.search: second argument (property) must be a string literal")
 
     query_input = _vs_resolve_query_input(args[2], context)
     limit_int = _vs_resolve_limit(args[3], context)
@@ -1072,9 +1071,7 @@ def _translate_vector_search(
         context.scalar_variables.add("score")
 
 
-def _translate_neighbors(
-    proc: ast.CypherProcedureCall, context: TranslationContext
-) -> None:
+def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     """CALL ivg.neighbors($sources, 'MENTIONS', 'out') YIELD neighbor
 
     Args: source (str or list[str]), predicate (str, optional), direction ('out'/'in'/'both', default 'out')
@@ -1092,12 +1089,8 @@ def _translate_neighbors(
             f"ivg.neighbors: source must be a string or list, got {type(sources).__name__}"
         )
 
-    predicate = (
-        _resolve_arg(args[1], context, "ivg.neighbors") if len(args) > 1 else None
-    )
-    direction = (
-        _resolve_arg(args[2], context, "ivg.neighbors") if len(args) > 2 else "out"
-    )
+    predicate = _resolve_arg(args[1], context, "ivg.neighbors") if len(args) > 1 else None
+    direction = _resolve_arg(args[2], context, "ivg.neighbors") if len(args) > 2 else "out"
     if direction not in ("out", "in", "both"):
         raise ValueError(
             f"ivg.neighbors: direction must be 'out', 'in', or 'both', got {direction!r}"
@@ -1108,9 +1101,7 @@ def _translate_neighbors(
     parts = []
 
     if direction in ("out", "both"):
-        sql = (
-            f"SELECT DISTINCT e.o_id AS neighbor FROM {edges_tbl} e WHERE e.s IN ({ph})"
-        )
+        sql = f"SELECT DISTINCT e.o_id AS neighbor FROM {edges_tbl} e WHERE e.s IN ({ph})"
         p = list(sources)
         if predicate:
             sql += " AND e.p = ?"
@@ -1118,9 +1109,7 @@ def _translate_neighbors(
         parts.append((sql, p))
 
     if direction in ("in", "both"):
-        sql = (
-            f"SELECT DISTINCT e.s AS neighbor FROM {edges_tbl} e WHERE e.o_id IN ({ph})"
-        )
+        sql = f"SELECT DISTINCT e.s AS neighbor FROM {edges_tbl} e WHERE e.o_id IN ({ph})"
         p = list(sources)
         if predicate:
             sql += " AND e.p = ?"
@@ -1156,9 +1145,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     if isinstance(seeds, str):
         seeds = [seeds]
     if not isinstance(seeds, list):
-        raise ValueError(
-            f"ivg.ppr: seeds must be a string or list, got {type(seeds).__name__}"
-        )
+        raise ValueError(f"ivg.ppr: seeds must be a string or list, got {type(seeds).__name__}")
 
     alpha = float(_resolve_arg(args[1], context, "ivg.ppr")) if len(args) > 1 else 0.85
     max_iter = int(_resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
@@ -1185,27 +1172,21 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
         context.scalar_variables.add("score")
 
 
-def _translate_bm25_search(
-    proc: ast.CypherProcedureCall, context: TranslationContext
-) -> None:
+def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     args = proc.arguments
     if len(args) < 3:
         raise ValueError("ivg.bm25.search requires 3 arguments: name, query, k")
 
     idx_name = _resolve_arg(args[0], context, "ivg.bm25.search")
     if not isinstance(idx_name, str):
-        raise ValueError(
-            "ivg.bm25.search: first argument (name) must be a string literal"
-        )
+        raise ValueError("ivg.bm25.search: first argument (name) must be a string literal")
 
     query = _resolve_arg(args[1], context, "ivg.bm25.search")
     k_val = _resolve_arg(args[2], context, "ivg.bm25.search")
     try:
         k_int = int(k_val)
     except (TypeError, ValueError):
-        raise ValueError(
-            f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}"
-        )
+        raise ValueError(f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}")
 
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "kg_BM25"
     # Bind idx_name and query as parameters (? placeholders) rather than
@@ -1229,9 +1210,7 @@ def _translate_bm25_search(
         context.scalar_variables.add("score")
 
 
-def _translate_retrieve(
-    proc: ast.CypherProcedureCall, context: TranslationContext
-) -> None:
+def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     args = proc.arguments
     if not args:
         raise ValueError(
@@ -1250,7 +1229,9 @@ def _translate_retrieve(
 
     vec_limit = limit * 2
     bm25_limit = limit * 2
-    emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+    emb_table = (
+        f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+    )
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "Graph_KG.kg_BM25"
 
     # Bind all string user inputs as ? parameters; integer args stay inline (safe).
@@ -1269,7 +1250,7 @@ def _translate_retrieve(
         f") j"
     )
 
-    context.all_stage_params.append(str(query))   # for EMBEDDING(?, ...)
+    context.all_stage_params.append(str(query))  # for EMBEDDING(?, ...)
     context.all_stage_params.append(str(embedding_config))
 
     if vec_label == "*":
@@ -1308,26 +1289,18 @@ def _translate_retrieve(
         context.scalar_variables.add("score")
 
 
-def _translate_ivf_search(
-    proc: ast.CypherProcedureCall, context: TranslationContext
-) -> None:
+def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     args = proc.arguments
     if len(args) < 4:
-        raise ValueError(
-            "ivg.ivf.search requires 4 arguments: name, query_vec, k, nprobe"
-        )
+        raise ValueError("ivg.ivf.search requires 4 arguments: name, query_vec, k, nprobe")
 
     idx_name = _resolve_arg(args[0], context, "ivg.ivf.search")
     if not isinstance(idx_name, str):
-        raise ValueError(
-            "ivg.ivf.search: first argument (name) must be a string literal"
-        )
+        raise ValueError("ivg.ivf.search: first argument (name) must be a string literal")
 
     query_vec = _resolve_arg(args[1], context, "ivg.ivf.search")
     if not isinstance(query_vec, list):
-        raise ValueError(
-            "ivg.ivf.search: second argument (query_vec) must be a list of floats"
-        )
+        raise ValueError("ivg.ivf.search: second argument (query_vec) must be a list of floats")
     floats = [float(v) for v in query_vec]
     import json as _json
 
@@ -1337,9 +1310,7 @@ def _translate_ivf_search(
     try:
         k_int = int(k_val)
     except (TypeError, ValueError):
-        raise ValueError(
-            f"ivg.ivf.search: third argument (k) must be an integer, got {k_val!r}"
-        )
+        raise ValueError(f"ivg.ivf.search: third argument (k) must be an integer, got {k_val!r}")
 
     nprobe_val = _resolve_arg(args[3], context, "ivg.ivf.search")
     try:
@@ -1379,9 +1350,7 @@ def _translate_weighted_shortest_path(
 ) -> None:
     args = proc.arguments
     if len(args) < 2:
-        raise ValueError(
-            "ivg.shortestPath.weighted requires at least 2 arguments: from, to"
-        )
+        raise ValueError("ivg.shortestPath.weighted requires at least 2 arguments: from, to")
 
     from_id = _resolve_arg(args[0], context, "ivg.shortestPath.weighted")
     to_id = _resolve_arg(args[1], context, "ivg.shortestPath.weighted")
@@ -1396,30 +1365,26 @@ def _translate_weighted_shortest_path(
         else 9999.0
     )
     max_hops = (
-        int(_resolve_arg(args[4], context, "ivg.shortestPath.weighted"))
-        if len(args) > 4
-        else 10
+        int(_resolve_arg(args[4], context, "ivg.shortestPath.weighted")) if len(args) > 4 else 10
     )
     direction = (
-        str(_resolve_arg(args[5], context, "ivg.shortestPath.weighted"))
-        if len(args) > 5
-        else "out"
+        str(_resolve_arg(args[5], context, "ivg.shortestPath.weighted")) if len(args) > 5 else "out"
     )
 
     if not isinstance(from_id, str) or not isinstance(to_id, str):
-        raise ValueError(
-            "ivg.shortestPath.weighted: from and to must be string literals or $param"
-        )
+        raise ValueError("ivg.shortestPath.weighted: from and to must be string literals or $param")
 
     context.var_length_paths.append(
         {
             "weighted": True,
-            "src_id_param": from_id
-            if not isinstance(from_id, str) or from_id.startswith("$")
-            else f"'{from_id}'",
-            "dst_id_param": to_id
-            if not isinstance(to_id, str) or to_id.startswith("$")
-            else f"'{to_id}'",
+            "src_id_param": (
+                from_id
+                if not isinstance(from_id, str) or from_id.startswith("$")
+                else f"'{from_id}'"
+            ),
+            "dst_id_param": (
+                to_id if not isinstance(to_id, str) or to_id.startswith("$") else f"'{to_id}'"
+            ),
             "weight_prop": weight_prop,
             "max_cost": max_cost,
             "max_hops": max_hops,
@@ -1561,9 +1526,7 @@ def _build_temporal_cte(edges: list, cte_name: str, metadata) -> str:
         o = str(e.get("o", e.get("target", ""))).replace("'", "''")
         ts = int(e.get("ts", e.get("timestamp", 0)))
         w = float(e.get("w", e.get("weight", 1.0)))
-        rows.append(
-            f"SELECT '{s}' AS s, '{p}' AS p, '{o}' AS o, {ts} AS ts, {w} AS weight"
-        )
+        rows.append(f"SELECT '{s}' AS s, '{p}' AS p, '{o}' AS o, {ts} AS ts, {w} AS weight")
     return " UNION ALL ".join(rows)
 
 
@@ -1582,40 +1545,66 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     if join_count <= JOIN_THRESHOLD:
         return sql
     import re as _re
+
     # Capture an optional `TOP n` in the prefix (the FETCH-FIRST-+-JOIN workaround emits
     # SELECT [DISTINCT] TOP n) so it stays attached to the SELECT keyword and is not
     # swept into the column list.
-    select_m = _re.match(r'(SELECT\s+(?:DISTINCT\s+)?(?:TOP\s+\d+\s+)?)(.*?)(\nFROM\s)', sql, _re.DOTALL)
+    select_m = _re.match(
+        r"(SELECT\s+(?:DISTINCT\s+)?(?:TOP\s+\d+\s+)?)(.*?)(\nFROM\s)", sql, _re.DOTALL
+    )
     if not select_m:
         return sql
     # select_prefix carries any DISTINCT and TOP n; both propagate to the outer wrapper
     # (line below), so the CTE wrap preserves the row cap from the TOP workaround.
     select_prefix = select_m.group(1)
     select_cols = select_m.group(2).strip()
-    has_agg = bool(_re.search(r'\b(AVG|SUM|COUNT|MIN|MAX|STDEV|JSON_ARRAYAGG)\s*\(', select_cols))
-    has_group = 'GROUP BY' in sql
+    has_agg = bool(_re.search(r"\b(AVG|SUM|COUNT|MIN|MAX|STDEV|JSON_ARRAYAGG)\s*\(", select_cols))
+    has_group = "GROUP BY" in sql
     if has_agg and not has_group:
         return sql
-    inner_from_onwards = sql[select_m.start(3):]
+    inner_from_onwards = sql[select_m.start(3) :]
     inner_sql = f"SELECT {select_cols}{inner_from_onwards}"
-    _SQL_TYPES = frozenset({
-        'INTEGER','INT','DOUBLE','FLOAT','REAL','VARCHAR','CHAR','BIGINT','SMALLINT',
-        'DECIMAL','NUMERIC','BOOLEAN','DATE','TIME','TIMESTAMP','VARBINARY','BINARY',
-    })
-    alias_re = _re.compile(r'\)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?:,|\Z)', _re.IGNORECASE | _re.DOTALL)
-    top_as_re = _re.compile(r'(?:^|,)\s*(?:[^,]+?)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?=,|$)', _re.IGNORECASE)
+    _SQL_TYPES = frozenset(
+        {
+            "INTEGER",
+            "INT",
+            "DOUBLE",
+            "FLOAT",
+            "REAL",
+            "VARCHAR",
+            "CHAR",
+            "BIGINT",
+            "SMALLINT",
+            "DECIMAL",
+            "NUMERIC",
+            "BOOLEAN",
+            "DATE",
+            "TIME",
+            "TIMESTAMP",
+            "VARBINARY",
+            "BINARY",
+        }
+    )
+    alias_re = _re.compile(
+        r'\)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?:,|\Z)', _re.IGNORECASE | _re.DOTALL
+    )
+    top_as_re = _re.compile(
+        r'(?:^|,)\s*(?:[^,]+?)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?=,|$)', _re.IGNORECASE
+    )
     seen = {}
-    for m in _re.finditer(r'(?:^|(?<=,))\s*([^,]+?)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?=,|$)', select_cols, _re.DOTALL):
+    for m in _re.finditer(
+        r'(?:^|(?<=,))\s*([^,]+?)\s+AS\s+("?[a-z_][a-z0-9_"]*"?)\s*(?=,|$)', select_cols, _re.DOTALL
+    ):
         alias = m.group(2).strip('"')
         if alias.upper() not in _SQL_TYPES:
             seen[alias] = alias
-    outer_cols = ', '.join(seen.keys())
+    outer_cols = ", ".join(seen.keys())
     if not outer_cols:
         return sql
     outer_sql = f"WITH _MR AS (\n{inner_sql}\n)\n{select_prefix}{outer_cols}\nFROM _MR"
-    order_m = _re.search(r'\nORDER BY .+', sql, _re.DOTALL)
-    limit_m = _re.search(r'\nFETCH FIRST (\d+) ROWS ONLY', sql)
-    offset_m = _re.search(r'\nOFFSET \d+', sql)
+    order_m = _re.search(r"\nORDER BY .+", sql, _re.DOTALL)
+    limit_m = _re.search(r"\nFETCH FIRST (\d+) ROWS ONLY", sql)
+    offset_m = _re.search(r"\nOFFSET \d+", sql)
     suffix = ""
     if order_m:
         start = order_m.start()
@@ -1645,7 +1634,9 @@ def _demote_agg_stages_to_subqueries(sql: str, ctes: list) -> tuple:
     return sql, remaining_ctes
 
 
-def _to_sql_init_part_from(context: TranslationContext, cypher_query: ast.CypherQuery, i: int) -> None:
+def _to_sql_init_part_from(
+    context: TranslationContext, cypher_query: ast.CypherQuery, i: int
+) -> None:
     if i > 0:
         context.from_clauses.append(f"Stage{i}")
     elif getattr(context, "_ivf_derived", None):
@@ -1697,7 +1688,7 @@ def _inject_row_number(sql: str, rn_over: str) -> str:
     if idx < 0:
         return sql
     insert_at = idx + len("SELECT ")
-    if sql[insert_at:insert_at + 9].upper().startswith("DISTINCT "):
+    if sql[insert_at : insert_at + 9].upper().startswith("DISTINCT "):
         insert_at += len("DISTINCT ")
     return sql[:insert_at] + f"ROW_NUMBER() OVER({rn_over}) AS __rn, " + sql[insert_at:]
 
@@ -1719,7 +1710,10 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     # resolvable as a variable — emit it as a bare column name for the subquery wrapper to resolve.
     order_by_items = []
     with_aliases = {
-        (item.alias or (item.expression.name if isinstance(item.expression, ast.Variable) else None))
+        (
+            item.alias
+            or (item.expression.name if isinstance(item.expression, ast.Variable) else None)
+        )
         for item in part.with_clause.items
     } - {None}
     # Map (variable, property_name) -> alias for PropertyReference WITH projections.
@@ -1737,6 +1731,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     # so we can fix the params order after build_stage_sql.
     sort_expr_params: list = []  # select_params only — params in SQL SELECT before FROM
     import re as _re_ob
+
     if part.with_clause.order_by_clause:
         for item in part.with_clause.order_by_clause.items:
             direction = "ASC" if item.ascending else "DESC"
@@ -1771,8 +1766,12 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # Safe even for SQL-reserved-word aliases (e.g. "count") since _raw_sql is
                     # the concrete column (e.g. p2.val), not the quoted alias.
                     _sort_alias = f"__sort{len(sort_projections)}"
-                    sort_projections.append((_sort_alias,
-                        f"CASE WHEN ISNUMERIC({_raw_sql}) = 1 THEN CAST({_raw_sql} AS DOUBLE) END"))
+                    sort_projections.append(
+                        (
+                            _sort_alias,
+                            f"CASE WHEN ISNUMERIC({_raw_sql}) = 1 THEN CAST({_raw_sql} AS DOUBLE) END",
+                        )
+                    )
                     _sort_alias2 = f"__sort{len(sort_projections)}"
                     sort_projections.append((_sort_alias2, _raw_sql))
                     order_by_items.append(f"{_sort_alias} {direction}")
@@ -1786,8 +1785,12 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 col = _safe_alias(_alias_name)
                 _raw_sql = _with_alias_sql.get(_alias_name, col)
                 _sort_alias = f"__sort{len(sort_projections)}"
-                sort_projections.append((_sort_alias,
-                    f"CASE WHEN ISNUMERIC({_raw_sql}) = 1 THEN CAST({_raw_sql} AS DOUBLE) END"))
+                sort_projections.append(
+                    (
+                        _sort_alias,
+                        f"CASE WHEN ISNUMERIC({_raw_sql}) = 1 THEN CAST({_raw_sql} AS DOUBLE) END",
+                    )
+                )
                 _sort_alias2 = f"__sort{len(sort_projections)}"
                 sort_projections.append((_sort_alias2, _raw_sql))
                 order_by_items.append(f"{_sort_alias} {direction}")
@@ -1798,9 +1801,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # expressions like `a + 2` emit `a + 2` not `u0.a + 2` (u0 is out of
                     # scope in the outer SELECT * FROM (...) __ob ORDER BY ...).
                     prev_ob_map = getattr(context, "_orderby_alias_sql", None)
-                    context._orderby_alias_sql = {
-                        name: _safe_alias(name) for name in with_aliases
-                    }
+                    context._orderby_alias_sql = {name: _safe_alias(name) for name in with_aliases}
                     if prev_ob_map:
                         context._orderby_alias_sql.update(prev_ob_map)
                     # Snapshot join_params AND select_params length before translating.
@@ -1821,7 +1822,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     context._orderby_alias_sql = prev_ob_map
                     # If the expression references JOIN aliases (p\d+.val) or a correlated
                     # rdf_props subquery, it cannot be used in OVER() — project it as a sort column.
-                    if _re_ob.search(r'\b(?:%EXACT\()?p\d+\.val\)?', expr) or 'rdf_props' in expr:
+                    if _re_ob.search(r"\b(?:%EXACT\()?p\d+\.val\)?", expr) or "rdf_props" in expr:
                         sort_alias = f"__sort{len(sort_projections)}"
                         sort_projections.append((sort_alias, expr))
                         order_by_items.append(f"{sort_alias} {direction}")
@@ -1839,7 +1840,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
         for sort_alias, sort_expr in sort_projections:
             # Inject into SELECT: "SELECT ..., (sort_expr) AS sort_alias\nFROM ..."
             # Match the first \nFROM or " FROM " at the top level
-            _from_pat = _re_ob.search(r'\nFROM ', sql)
+            _from_pat = _re_ob.search(r"\nFROM ", sql)
             if _from_pat:
                 insert_at = _from_pat.start()
                 sql = sql[:insert_at] + f", ({sort_expr}) AS {sort_alias}" + sql[insert_at:]
@@ -1881,6 +1882,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                         break
                 result.append(item)
             return result
+
         _ob_exprs = _ob_with_exprs(order_by_items, sort_projections)
         rn_over = f"ORDER BY {', '.join(_ob_exprs)}" if _ob_exprs else ""
         if limit is not None and skip is not None:
@@ -1937,8 +1939,11 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
             # SELECT * FROM (...) __ob ORDER BY lets IRIS reject them, which the TCK interprets as
             # a SyntaxError (the TCK SyntaxError-check catches any SQL error on execution).
             _has_agg_in_ob = any(
-                'COUNT(' in ob.upper() or 'SUM(' in ob.upper()
-                or 'MIN(' in ob.upper() or 'MAX(' in ob.upper() or 'AVG(' in ob.upper()
+                "COUNT(" in ob.upper()
+                or "SUM(" in ob.upper()
+                or "MIN(" in ob.upper()
+                or "MAX(" in ob.upper()
+                or "AVG(" in ob.upper()
                 for ob in order_by_items
             )
             if _has_agg_in_ob:
@@ -1948,7 +1953,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
 
     # If this stage captures an OPTIONAL MATCH anchor null-row, embed the UNION ALL
     # directly into the Stage CTE so the null row survives subsequent MATCH stages.
-    _stage_null_row_groups = getattr(context, 'optional_null_row_label_groups', [])
+    _stage_null_row_groups = getattr(context, "optional_null_row_label_groups", [])
     _stage_null_row_labels = context.optional_null_row_labels
     if _stage_null_row_labels or _stage_null_row_groups:
         _n_cols = len(context.select_items)
@@ -1962,7 +1967,9 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 _ne_params.extend(_ne_p)
         else:
             for _lbl in _stage_null_row_labels:
-                _ne_parts.append(f"NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE label = ?)")
+                _ne_parts.append(
+                    f"NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE label = ?)"
+                )
                 _ne_params.append(_lbl)
         _where_clause = " AND ".join(_ne_parts)
         sql = sql + f"\nUNION ALL\nSELECT {_null_sel} WHERE {_where_clause}"
@@ -1982,9 +1989,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
         new_aliases = {}
         for item in part.with_clause.items:
             alias = item.alias or (
-                item.expression.name
-                if isinstance(item.expression, ast.Variable)
-                else None
+                item.expression.name if isinstance(item.expression, ast.Variable) else None
             )
             if alias:
                 new_aliases[alias] = new_stage
@@ -2010,24 +2015,32 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
             if isinstance(item.expression, ast.AggregationFunction) and alias:
                 context.scalar_variables.add(alias)
                 # Track collect(node_var) → alias as a collected node list
-                if (item.expression.function_name.lower() == "collect"
-                        and item.expression.argument
-                        and isinstance(item.expression.argument, ast.Variable)):
+                if (
+                    item.expression.function_name.lower() == "collect"
+                    and item.expression.argument
+                    and isinstance(item.expression.argument, ast.Variable)
+                ):
                     collected_var = item.expression.argument.name
-                    if (collected_var not in context.scalar_variables
-                            and collected_var not in getattr(context, "edge_stage_variables", set())):
+                    if (
+                        collected_var not in context.scalar_variables
+                        and collected_var not in getattr(context, "edge_stage_variables", set())
+                    ):
                         context.collected_node_lists[alias] = collected_var
             elif alias and not isinstance(item.expression, ast.Variable):
                 context.scalar_variables.add(alias)
-            elif (alias and isinstance(item.expression, ast.Variable)
-                  and item.expression.name in context.scalar_variables):
+            elif (
+                alias
+                and isinstance(item.expression, ast.Variable)
+                and item.expression.name in context.scalar_variables
+            ):
                 # Scalar passthrough: WITH scalar_var AS alias — alias is also scalar
                 context.scalar_variables.add(alias)
                 # Propagate collected_node_lists for scalar passthroughs
                 if item.expression.name in context.collected_node_lists:
-                    context.collected_node_lists[alias] = context.collected_node_lists[item.expression.name]
+                    context.collected_node_lists[alias] = context.collected_node_lists[
+                        item.expression.name
+                    ]
     context.variable_aliases = new_aliases
-
 
 
 def _tts_union_branches(cypher_query, params):
@@ -2042,9 +2055,7 @@ def _tts_union_branches(cypher_query, params):
         has_all = any(all_flags[1:])
         has_distinct = not all(all_flags[1:])
         if has_all and has_distinct:
-            raise SyntaxError(
-                "Cannot mix UNION and UNION ALL in the same query"
-            )
+            raise SyntaxError("Cannot mix UNION and UNION ALL in the same query")
 
     # All branches must return the same columns (same names, same order).
     def _branch_columns(branch):
@@ -2088,10 +2099,12 @@ def _tts_union_branches(cypher_query, params):
         sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
         all_params.extend(r.parameters)
     sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
+
     def _ensure_from(s: str) -> str:
         if "\nFROM " not in s and "\nfrom " not in s:
             return s.rstrip() + "\nFROM (SELECT 1) __dual"
         return s
+
     combined = sep.join(f"({_ensure_from(s)})" for s in sqls)
     flat_params = []
     for p_list in all_params:
@@ -2118,9 +2131,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                         context.from_clauses.append(td_name)
             else:
                 cte_name = (
-                    context.stages[0].split(" AS ")[0].strip()
-                    if context.stages
-                    else "VecSearch"
+                    context.stages[0].split(" AS ")[0].strip() if context.stages else "VecSearch"
                 )
                 context.from_clauses.append(cte_name)
 
@@ -2135,9 +2146,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                 break
         # Check for UNWIND+UPDATE pattern: when a literal-list UNWIND feeds updating clauses,
         # expand Python-side (like FOREACH) so each list element gets its own DML set.
-        unwind_clause = next(
-            (c for c in part.clauses if isinstance(c, ast.UnwindClause)), None
-        )
+        unwind_clause = next((c for c in part.clauses if isinstance(c, ast.UnwindClause)), None)
         has_updating = any(isinstance(c, ast.UpdatingClause) for c in part.clauses)
         unwind_literals = None
         if (
@@ -2168,9 +2177,21 @@ def _tts_process_parts(cypher_query, context, metadata):
             # so each element gets its own DML set (one INSERT per row).
             _range_args = unwind_clause.expression.arguments
             try:
-                _start = int(_range_args[0].value) if len(_range_args) >= 1 and isinstance(_range_args[0], ast.Literal) else None
-                _end = int(_range_args[1].value) if len(_range_args) >= 2 and isinstance(_range_args[1], ast.Literal) else None
-                _step = int(_range_args[2].value) if len(_range_args) >= 3 and isinstance(_range_args[2], ast.Literal) else 1
+                _start = (
+                    int(_range_args[0].value)
+                    if len(_range_args) >= 1 and isinstance(_range_args[0], ast.Literal)
+                    else None
+                )
+                _end = (
+                    int(_range_args[1].value)
+                    if len(_range_args) >= 2 and isinstance(_range_args[1], ast.Literal)
+                    else None
+                )
+                _step = (
+                    int(_range_args[2].value)
+                    if len(_range_args) >= 3 and isinstance(_range_args[2], ast.Literal)
+                    else 1
+                )
                 if _start is not None and _end is not None and _step != 0:
                     _vals = list(range(_start, _end + (1 if _step > 0 else -1), _step))
                     unwind_literals = [ast.Literal(v) for v in _vals]
@@ -2239,7 +2260,9 @@ def _tts_process_parts(cypher_query, context, metadata):
                     translate_subquery_call(clause, context, metadata)
                     context.optional_match_new_aliases = set()
                 elif isinstance(clause, ast.ForeachClause):
-                    is_transactional = _to_sql_handle_foreach(clause, context, metadata) or is_transactional
+                    is_transactional = (
+                        _to_sql_handle_foreach(clause, context, metadata) or is_transactional
+                    )
                     context.optional_match_new_aliases = set()
                 elif isinstance(clause, ast.UpdatingClause):
                     is_transactional = True
@@ -2250,7 +2273,7 @@ def _tts_process_parts(cypher_query, context, metadata):
         if part.procedure_call is not None:
             translate_procedure_call(part.procedure_call, context)
             # For TCK procedures: add the CTE to FROM clause so the final SELECT can reference it
-            tck_cte = getattr(context, '_tck_proc_cte', None)
+            tck_cte = getattr(context, "_tck_proc_cte", None)
             if tck_cte and tck_cte not in context.from_clauses:
                 context.from_clauses.append(tck_cte)
         if part.with_clause:
@@ -2328,21 +2351,22 @@ def _tts_finalize_context(cypher_query, context):
     # If the last QueryPart had a WITH clause, we must select from that CTE stage.
     # Otherwise, we continue with the context of the last QueryPart (e.g. current MATCH joins).
     last_part_had_with = (
-        cypher_query.query_parts[-1].with_clause is not None
+        cypher_query.query_parts[-1].with_clause is not None if cypher_query.query_parts else False
+    )
+    # A WITH clause in any query part (not just the last) may have produced stages.
+    any_part_had_with = (
+        any(qp.with_clause is not None for qp in cypher_query.query_parts)
         if cypher_query.query_parts
         else False
     )
-    # A WITH clause in any query part (not just the last) may have produced stages.
-    any_part_had_with = any(
-        qp.with_clause is not None for qp in cypher_query.query_parts
-    ) if cypher_query.query_parts else False
     if context.stages and last_part_had_with:
         # The last query part ended with a WITH clause, which just created Stage{N}.
         # RETURN must select directly from that stage with no additional JOINs.
         # Preserve UNWIND CROSS JOIN JSON_TABLE clauses before reset — they were
         # added by translate_unwind_clause and must survive the stage reset.
         unwind_joins = [
-            j for j in context.join_clauses
+            j
+            for j in context.join_clauses
             if "JSON_TABLE" in j and j.strip().startswith("CROSS JOIN")
         ]
         context.select_items, context.select_params = [], []
@@ -2368,12 +2392,8 @@ def _tts_finalize_context(cypher_query, context):
 
     # Handle standalone CALL (no RETURN): synthesize RETURN for yielded / all output items
     _proc = cypher_query.procedure_call
-    if (
-        _proc is not None
-        and not cypher_query.return_clause
-        and context.stages
-    ):
-        cte_name = getattr(context, '_tck_proc_cte', None)
+    if _proc is not None and not cypher_query.return_clause and context.stages:
+        cte_name = getattr(context, "_tck_proc_cte", None)
         if not cte_name:
             cte_name = context.from_clauses[0] if context.from_clauses else None
         if not cte_name:
@@ -2382,21 +2402,19 @@ def _tts_finalize_context(cypher_query, context):
         # Determine what YIELD * means
         if _proc.yield_star:
             # Check if this is in-query (has preceding MATCH/WITH) — that's an error
-            has_preceding = bool(cypher_query.query_parts and any(
-                part.clauses for part in cypher_query.query_parts
-            ))
+            has_preceding = bool(
+                cypher_query.query_parts and any(part.clauses for part in cypher_query.query_parts)
+            )
             if has_preceding:
-                raise SyntaxError(
-                    "YIELD * is not allowed in an in-query CALL (UnexpectedSyntax)"
-                )
+                raise SyntaxError("YIELD * is not allowed in an in-query CALL (UnexpectedSyntax)")
             # Standalone YIELD * → expand all output columns
-            output_names = getattr(context, '_tck_proc_outputs', [])
+            output_names = getattr(context, "_tck_proc_outputs", [])
             for out_name in output_names:
                 context.select_items.append(f"{cte_name}.{out_name} AS {out_name}")
             context.select_params = []
         elif _proc.yield_items:
             # Explicit YIELD list (possibly with renames)
-            renames = getattr(context, '_tck_yield_renames', {})
+            renames = getattr(context, "_tck_yield_renames", {})
             for item in _proc.yield_items:
                 if isinstance(item, tuple):
                     orig, alias = item
@@ -2407,29 +2425,23 @@ def _tts_finalize_context(cypher_query, context):
             context.select_params = []
         else:
             # Standalone CALL with no YIELD clause — expose all outputs
-            output_names = getattr(context, '_tck_proc_outputs', [])
+            output_names = getattr(context, "_tck_proc_outputs", [])
             if output_names:
                 for out_name in output_names:
                     context.select_items.append(f"{cte_name}.{out_name} AS {out_name}")
                 context.select_params = []
 
     # YIELD * is not allowed in an in-query CALL (where a RETURN clause follows)
-    if (
-        _proc is not None
-        and _proc.yield_star
-        and cypher_query.return_clause
-    ):
-        raise SyntaxError(
-            "YIELD * is not allowed in an in-query CALL (UnexpectedSyntax)"
-        )
+    if _proc is not None and _proc.yield_star and cypher_query.return_clause:
+        raise SyntaxError("YIELD * is not allowed in an in-query CALL (UnexpectedSyntax)")
 
     if cypher_query.return_clause:
         # For transactional queries (with SET/REMOVE/DELETE), we need to clear WHERE
         # conditions on properties that have been modified, since their values have changed.
-        set_properties = getattr(context, '_set_properties', set())
-        removed_properties = getattr(context, '_removed_properties', set())
+        set_properties = getattr(context, "_set_properties", set())
+        removed_properties = getattr(context, "_removed_properties", set())
         modified_properties = set_properties | removed_properties
-        full_replace_aliases = getattr(context, '_full_replace_aliases', set())
+        full_replace_aliases = getattr(context, "_full_replace_aliases", set())
         if modified_properties and context.where_conditions:
             # Filter out WHERE conditions that reference modified properties.
             # Examples of conditions to remove:
@@ -2453,11 +2465,11 @@ def _tts_finalize_context(cypher_query, context):
                 is_modified_property_condition = False
 
                 # Check for .val = pattern (property value comparisons)
-                if '.val = ' in cond:
+                if ".val = " in cond:
                     is_modified_property_condition = True
                     # Verify this isn't part of a sub-SELECT (like "NOT IN (SELECT 1 ... .val = ?)")
                     # by checking it's at the top level
-                    if 'SELECT' in cond and cond.index('.val = ') < cond.rindex('SELECT'):
+                    if "SELECT" in cond and cond.index(".val = ") < cond.rindex("SELECT"):
                         # This might be in a subquery, be more careful
                         # For now, assume it's a property value condition
                         is_modified_property_condition = True
@@ -2473,6 +2485,7 @@ def _tts_finalize_context(cypher_query, context):
         # node aliases — all props were deleted so INNER JOINs to rdf_props return 0 rows.
         if full_replace_aliases and context.join_clauses:
             import re as _re_tts
+
             prop_join_aliases_to_strip = set()
             kept_joins = []
             orig_join_params_offset = 0
@@ -2489,7 +2502,9 @@ def _tts_finalize_context(cypher_query, context):
                         break
                 if not drop:
                     kept_joins.append(jc)
-                    kept_join_params.extend(context.join_params[orig_join_params_offset:orig_join_params_offset + pc])
+                    kept_join_params.extend(
+                        context.join_params[orig_join_params_offset : orig_join_params_offset + pc]
+                    )
                 orig_join_params_offset += pc
             context.join_clauses = kept_joins
             context.join_params = kept_join_params
@@ -2500,12 +2515,16 @@ def _tts_finalize_context(cypher_query, context):
                 wp_off = 0
                 for cond in context.where_conditions:
                     pc = cond.count("?")
-                    cp = context.where_params[wp_off:wp_off + pc]
+                    cp = context.where_params[wp_off : wp_off + pc]
                     wp_off += pc
                     drop = any(f"{pa}." in cond for pa in prop_join_aliases_to_strip)
                     if not drop:
                         for nalias in full_replace_aliases:
-                            if "EXISTS" in cond and "rdf_props" in cond and f"{nalias}.node_id" in cond:
+                            if (
+                                "EXISTS" in cond
+                                and "rdf_props" in cond
+                                and f"{nalias}.node_id" in cond
+                            ):
                                 drop = True
                                 break
                     if not drop:
@@ -2591,13 +2610,18 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     # OPTIONAL MATCH null-row fallback for RETURN clause in transactional queries.
     optional_union_sql = ""
     optional_extra_params: List[Any] = []
-    if sql is not None and context.optional_null_row_labels and context.optional_null_row_items and not context.return_is_pure_aggregation:
+    if (
+        sql is not None
+        and context.optional_null_row_labels
+        and context.optional_null_row_items
+        and not context.return_is_pure_aggregation
+    ):
         null_items = list(context.optional_null_row_items)
         while len(null_items) < len(context.select_items):
             null_items.append("NULL")
-        null_select = ", ".join(null_items[:len(context.select_items)])
+        null_select = ", ".join(null_items[: len(context.select_items)])
         not_exists_parts = []
-        label_groups = getattr(context, 'optional_null_row_label_groups', None) or []
+        label_groups = getattr(context, "optional_null_row_label_groups", None) or []
         if label_groups:
             for group in label_groups:
                 ne_sql, ne_params = _build_null_row_not_exists(group)
@@ -2658,9 +2682,7 @@ def _tts_collect_path_funcs(cypher_query, vl):
     named_path_vars = {
         np.variable
         for np in (
-            cypher_query.query_parts[0].clauses[0].named_paths
-            if cypher_query.query_parts
-            else []
+            cypher_query.query_parts[0].clauses[0].named_paths if cypher_query.query_parts else []
         )
     }
     path_named_var = None  # the Cypher variable name for the path (e.g. "p")
@@ -2669,9 +2691,7 @@ def _tts_collect_path_funcs(cypher_query, vl):
         if isinstance(expr, ast.Variable) and expr.name in named_path_vars:
             path_funcs.append("path")
             path_named_var = expr.name
-        elif isinstance(
-            expr, ast.FunctionCall
-        ) and expr.function_name.lower() in (
+        elif isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in (
             "length",
             "nodes",
             "relationships",
@@ -2723,13 +2743,16 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         if stage_name in [s.split(" AS ")[0].strip() for s in context.stages]:
             sql = sql.replace("SELECT \nFROM", f"SELECT *\nFROM", 1)
             sql = sql.replace("SELECT DISTINCT \nFROM", f"SELECT DISTINCT *\nFROM", 1)
-    if hasattr(context, '_percentile_queries') and context._percentile_queries:
+    if hasattr(context, "_percentile_queries") and context._percentile_queries:
         import re as _re
-        from_match = _re.search(r'\nFROM\s+(.*?)(?=\nWHERE|\nORDER|\nFETCH|\nGROUP|\nHAVING|$)', sql, _re.DOTALL)
+
+        from_match = _re.search(
+            r"\nFROM\s+(.*?)(?=\nWHERE|\nORDER|\nFETCH|\nGROUP|\nHAVING|$)", sql, _re.DOTALL
+        )
         if from_match and len(context._percentile_queries) == 1:
             from_clause = from_match.group(0).strip()
             val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
-            col_alias = _re.search(r'AS\s+(\w+)\s*$', sql.split('\n')[0])
+            col_alias = _re.search(r"AS\s+(\w+)\s*$", sql.split("\n")[0])
             out_alias = col_alias.group(1) if col_alias else "result"
             proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
             sql = (
@@ -2749,12 +2772,13 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     _has_limit = cypher_query.limit is not None
     if fetch_first_unsafe and order_by_items and (_has_skip or _has_limit):
         import re as _re_sort
-        _join_alias_re = _re_sort.compile(r'\b(?:%EXACT\()?p\d+\.val\)?')
+
+        _join_alias_re = _re_sort.compile(r"\b(?:%EXACT\()?p\d+\.val\)?")
         new_ob_items = []
         sort_injections = []
         for i, ob_item in enumerate(order_by_items):
             # Extract expression part (before the trailing ASC/DESC)
-            _m = _re_sort.match(r'^(.*?)\s+(ASC|DESC)$', ob_item, _re_sort.IGNORECASE)
+            _m = _re_sort.match(r"^(.*?)\s+(ASC|DESC)$", ob_item, _re_sort.IGNORECASE)
             if _m and _join_alias_re.search(_m.group(1)):
                 sort_col = f"__sort{i}"
                 sort_injections.append((_m.group(1), sort_col))
@@ -2768,15 +2792,17 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
             # projection: project both a DOUBLE column (for numeric sort) and the raw string.
             # The ORDER BY in OVER() references both: numeric first, string second.
             # This matches Cypher semantics: numbers sort before strings, NULL sorts last.
-            _bare_prop_re = _re_sort.compile(r'^(?:%EXACT\()?p\d+\.val\)?$')
-            _from_pat = _re_sort.search(r'\nFROM ', sql)
+            _bare_prop_re = _re_sort.compile(r"^(?:%EXACT\()?p\d+\.val\)?$")
+            _from_pat = _re_sort.search(r"\nFROM ", sql)
             adjusted_ob_items = list(order_by_items)
             for sort_expr, sort_col in sort_injections:
                 if _bare_prop_re.match(sort_expr):
                     # Project both numeric and string variants
                     num_col = f"{sort_col}_n"
                     str_col = f"{sort_col}_s"
-                    num_expr = f"CASE WHEN ISNUMERIC({sort_expr}) = 1 THEN CAST({sort_expr} AS DOUBLE) END"
+                    num_expr = (
+                        f"CASE WHEN ISNUMERIC({sort_expr}) = 1 THEN CAST({sort_expr} AS DOUBLE) END"
+                    )
                     # Find direction from order_by_items
                     direction = "ASC"
                     for ob in adjusted_ob_items:
@@ -2784,17 +2810,29 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
                             direction = ob.split()[-1].upper()
                             break
                     if _from_pat:
-                        sql = sql[:_from_pat.start()] + f", {num_expr} AS {num_col}, {sort_expr} AS {str_col}" + sql[_from_pat.start():]
-                        _from_pat = _re_sort.search(r'\nFROM ', sql)
+                        sql = (
+                            sql[: _from_pat.start()]
+                            + f", {num_expr} AS {num_col}, {sort_expr} AS {str_col}"
+                            + sql[_from_pat.start() :]
+                        )
+                        _from_pat = _re_sort.search(r"\nFROM ", sql)
                     # Replace __sortN with __sortN_n ASC, __sortN_s ASC in order_by_items
                     adjusted_ob_items = [
-                        f"{num_col} {direction}, {str_col} {direction}" if ob == f"{sort_col} {direction}" else ob
+                        (
+                            f"{num_col} {direction}, {str_col} {direction}"
+                            if ob == f"{sort_col} {direction}"
+                            else ob
+                        )
                         for ob in adjusted_ob_items
                     ]
                 else:
                     if _from_pat:
-                        sql = sql[:_from_pat.start()] + f", {sort_expr} AS {sort_col}" + sql[_from_pat.start():]
-                        _from_pat = _re_sort.search(r'\nFROM ', sql)
+                        sql = (
+                            sql[: _from_pat.start()]
+                            + f", {sort_expr} AS {sort_col}"
+                            + sql[_from_pat.start() :]
+                        )
+                        _from_pat = _re_sort.search(r"\nFROM ", sql)
             order_by_items = adjusted_ob_items
     sql = apply_pagination(sql, cypher_query, context, order_by_items)
     vl = context.var_length_paths or None
@@ -2806,17 +2844,21 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     # one null row instead of 0 rows.
     optional_union_sql = ""
     optional_extra_params: List[Any] = []
-    if context.optional_null_row_labels and context.optional_null_row_items and not context.return_is_pure_aggregation:
+    if (
+        context.optional_null_row_labels
+        and context.optional_null_row_items
+        and not context.return_is_pure_aggregation
+    ):
         null_items = context.optional_null_row_items
         # Build the null-row SELECT: pad with NULLs if fewer items than select columns
         while len(null_items) < len(context.select_items):
             null_items.append("NULL")
-        null_select = ", ".join(null_items[:len(context.select_items)])
+        null_select = ", ".join(null_items[: len(context.select_items)])
         # NOT EXISTS check: for each anchor node's label group, no node may have ALL labels.
         # Using grouped check prevents TCK-injected labels (always present) from blocking
         # the null row when the semantic label (e.g. 'NotThere') doesn't exist.
         not_exists_parts = []
-        label_groups = getattr(context, 'optional_null_row_label_groups', None) or []
+        label_groups = getattr(context, "optional_null_row_label_groups", None) or []
         if label_groups:
             for group in label_groups:
                 ne_sql, ne_params = _build_null_row_not_exists(group)
@@ -2856,7 +2898,9 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         sql += optional_union_sql
 
     return SQLQuery(
-        sql=sql, parameters=[p + optional_extra_params], query_metadata=metadata,
+        sql=sql,
+        parameters=[p + optional_extra_params],
+        query_metadata=metadata,
         var_length_paths=vl,
         bolt_column_types=_build_bolt_column_types(cypher_query, context),
         column_name_map=dict(context.column_name_map),
@@ -2864,7 +2908,9 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
 
 
 def translate_to_sql(
-    cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]] = None, engine=None,
+    cypher_query: ast.CypherQuery,
+    params: Optional[Dict[str, Any]] = None,
+    engine=None,
     procedures: Optional[Dict[str, Any]] = None,
 ) -> SQLQuery:
     result = _tts_union_branches(cypher_query, params)
@@ -3020,6 +3066,7 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
         # re-calling translate_expression which would allocate fresh aliases (p2, p3…)
         # that are not in the FROM clause.
         import re as _alias_re
+
         for sel_item in context.select_items:
             # Format: "<expr> AS <alias>" or "<expr> AS \"<alias>\""
             _m = _alias_re.match(r'^(.*)\s+AS\s+"?([^"]+)"?\s*$', sel_item, _alias_re.IGNORECASE)
@@ -3046,7 +3093,8 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                     context.join_clauses = saved_join_clauses
                     context._alias_counter = saved_alias_counter
     import re as _re
-    _proc_prefix_re = _re.compile(r'^(?:Stage\d+|' + '|'.join(_PROC_CTE_ALIASES) + r')\.')
+
+    _proc_prefix_re = _re.compile(r"^(?:Stage\d+|" + "|".join(_PROC_CTE_ALIASES) + r")\.")
     # Inject alias_to_sql into context so compound ORDER BY expressions like `n + 2`
     # (where `n` is a RETURN alias) resolve correctly via _expr_variable.
     # This is scoped to ORDER BY translation only and cleaned up afterwards.
@@ -3065,11 +3113,12 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
     edge_stage_vars = getattr(context, "edge_stage_variables", set())
     for item in query.order_by_clause.items:
         try:
-            if (isinstance(item.expression, ast.Variable)
-                    and item.expression.name in alias_to_sql):
-                expr = _proc_prefix_re.sub('', alias_to_sql[item.expression.name])
-            elif (isinstance(item.expression, ast.PropertyReference)
-                    and item.expression.variable not in context.variable_aliases):
+            if isinstance(item.expression, ast.Variable) and item.expression.name in alias_to_sql:
+                expr = _proc_prefix_re.sub("", alias_to_sql[item.expression.name])
+            elif (
+                isinstance(item.expression, ast.PropertyReference)
+                and item.expression.variable not in context.variable_aliases
+            ):
                 # ORDER BY alias.property where alias is a RETURN alias not in variable_aliases.
                 var = item.expression.variable
                 prop = item.expression.property_name
@@ -3085,30 +3134,32 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                         expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
                     else:
                         expr = translate_expression(item.expression, context, segment="select")
-                        expr = _proc_prefix_re.sub('', expr)
+                        expr = _proc_prefix_re.sub("", expr)
                 elif var in alias_to_sql:
                     # Fallback: try to use alias_to_sql entry — only works if it's a simple col ref
                     import re as _re2
+
                     alias_sql = alias_to_sql[var]
-                    stage_col_m = _re2.match(r'^(?:Stage\d+\.)?\w+$', alias_sql.strip())
+                    stage_col_m = _re2.match(r"^(?:Stage\d+\.)?\w+$", alias_sql.strip())
                     if stage_col_m:
                         col_ref = alias_sql.strip()
                         expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
                     else:
                         expr = translate_expression(item.expression, context, segment="select")
-                        expr = _proc_prefix_re.sub('', expr)
+                        expr = _proc_prefix_re.sub("", expr)
                 else:
                     expr = translate_expression(item.expression, context, segment="select")
-                    expr = _proc_prefix_re.sub('', expr)
+                    expr = _proc_prefix_re.sub("", expr)
             else:
                 expr = translate_expression(item.expression, context, segment="select")
-                expr = _proc_prefix_re.sub('', expr)
+                expr = _proc_prefix_re.sub("", expr)
         except (ValueError, SyntaxError):
-            if (isinstance(item.expression, ast.Variable)
-                    and item.expression.name in alias_to_sql):
-                expr = _proc_prefix_re.sub('', alias_to_sql[item.expression.name])
-            elif (isinstance(item.expression, ast.PropertyReference)
-                    and item.expression.variable in alias_to_sql):
+            if isinstance(item.expression, ast.Variable) and item.expression.name in alias_to_sql:
+                expr = _proc_prefix_re.sub("", alias_to_sql[item.expression.name])
+            elif (
+                isinstance(item.expression, ast.PropertyReference)
+                and item.expression.variable in alias_to_sql
+            ):
                 prop = item.expression.property_name
                 var = item.expression.variable
                 orig_var = getattr(context, "_return_alias_map", {}).get(var, var)
@@ -3149,46 +3200,48 @@ def _eval_pagination_expr(value) -> Optional[float]:
         return None  # contains variable reference — cannot eval statically
     if isinstance(value, ast.FunctionCall):
         fname = value.function_name.lower()
-        import math as _math, random as _random
+        import math as _math
+        import random as _random
+
         # Arithmetic operators are encoded as __arith_<op> by the parser
-        if fname.startswith('__arith_') and len(value.arguments) == 2:
+        if fname.startswith("__arith_") and len(value.arguments) == 2:
             lv = _eval_pagination_expr(value.arguments[0])
             rv = _eval_pagination_expr(value.arguments[1])
             if lv is None or rv is None:
                 return None
-            op = fname[len('__arith_'):]
-            if op == '*':
+            op = fname[len("__arith_") :]
+            if op == "*":
                 return lv * rv
-            if op == '+':
+            if op == "+":
                 return lv + rv
-            if op == '-':
+            if op == "-":
                 return lv - rv
-            if op == '/':
+            if op == "/":
                 return lv / rv if rv != 0 else None
-            if op == '%':
+            if op == "%":
                 return lv % rv if rv != 0 else None
-            if op == '^':
-                return lv ** rv
+            if op == "^":
+                return lv**rv
             return None
         args = [_eval_pagination_expr(a) for a in value.arguments]
         # rand() needs no arguments evaluated
-        if fname == 'rand':
+        if fname == "rand":
             return _random.random()
         if any(a is None for a in args):
             return None  # variable arg — cannot eval statically
         _fn_map = {
-            'tointeger': lambda a: float(int(a[0])),
-            'tofloat': lambda a: float(a[0]),
-            'ceil': lambda a: float(_math.ceil(a[0])),
-            'floor': lambda a: float(_math.floor(a[0])),
-            'round': lambda a: float(round(a[0])),
-            'abs': lambda a: float(abs(a[0])),
-            'sqrt': lambda a: float(_math.sqrt(a[0])),
-            'log': lambda a: float(_math.log(a[0])),
-            'exp': lambda a: float(_math.exp(a[0])),
-            'sin': lambda a: float(_math.sin(a[0])),
-            'cos': lambda a: float(_math.cos(a[0])),
-            'tan': lambda a: float(_math.tan(a[0])),
+            "tointeger": lambda a: float(int(a[0])),
+            "tofloat": lambda a: float(a[0]),
+            "ceil": lambda a: float(_math.ceil(a[0])),
+            "floor": lambda a: float(_math.floor(a[0])),
+            "round": lambda a: float(round(a[0])),
+            "abs": lambda a: float(abs(a[0])),
+            "sqrt": lambda a: float(_math.sqrt(a[0])),
+            "log": lambda a: float(_math.log(a[0])),
+            "exp": lambda a: float(_math.exp(a[0])),
+            "sin": lambda a: float(_math.sin(a[0])),
+            "cos": lambda a: float(_math.cos(a[0])),
+            "tan": lambda a: float(_math.tan(a[0])),
         }
         if fname in _fn_map:
             try:
@@ -3198,7 +3251,9 @@ def _eval_pagination_expr(value) -> Optional[float]:
         return None
 
 
-def _resolve_pagination_value(value, context: TranslationContext, clause: str = "SKIP/LIMIT") -> Optional[int]:
+def _resolve_pagination_value(
+    value, context: TranslationContext, clause: str = "SKIP/LIMIT"
+) -> Optional[int]:
     """Resolve a SKIP/LIMIT value that may be an integer literal or a parameter variable."""
     if value is None:
         return None
@@ -3231,14 +3286,10 @@ def _resolve_pagination_value(value, context: TranslationContext, clause: str = 
         return result
     # Expression contains variable references (NonConstantExpression)
     if not isinstance(value, (int, float)):
-        raise SyntaxError(
-            f"NonConstantExpression: {clause} value must be a constant expression"
-        )
+        raise SyntaxError(f"NonConstantExpression: {clause} value must be a constant expression")
     f_val = float(value)
     if f_val != int(f_val):
-        raise SyntaxError(
-            f"InvalidArgumentType: {clause} requires an integer, got float: {value}"
-        )
+        raise SyntaxError(f"InvalidArgumentType: {clause} requires an integer, got float: {value}")
     return int(f_val)
 
 
@@ -3383,21 +3434,18 @@ def translate_unwind_clause(unwind, context):
         node_var = unwind.expression.arguments[0].name
         node_alias = context.variable_aliases.get(node_var)
         edge_stage_vars = getattr(context, "edge_stage_variables", set())
-        is_edge = (
-            node_alias is not None
-            and (
-                (node_alias.startswith("e") and not node_alias.startswith("Stage"))
-                or (node_alias.startswith("Stage") and node_var in edge_stage_vars)
-            )
+        is_edge = node_alias is not None and (
+            (node_alias.startswith("e") and not node_alias.startswith("Stage"))
+            or (node_alias.startswith("Stage") and node_var in edge_stage_vars)
         )
         if node_alias and not is_edge:
             # Node variable: directly join rdf_props to enumerate keys.
             # Use a subquery alias so the alias.unwind_alias column name is accessible.
-            rp_tbl = _table('rdf_props')
+            rp_tbl = _table("rdf_props")
             rp_inner = context.next_alias(prefix="rp")
             # The join produces one row per (node, key); alias.key column exposed as unwind.alias
             join_sql = (
-                f"(SELECT {rp_inner}.s, {rp_inner}.\"key\" AS {unwind.alias} "
+                f'(SELECT {rp_inner}.s, {rp_inner}."key" AS {unwind.alias} '
                 f"FROM {rp_tbl} {rp_inner}) {alias} ON {alias}.s = {node_alias}.node_id"
             )
             context.join_clauses.append(f"JOIN {join_sql}")
@@ -3434,7 +3482,9 @@ def _extract_literal_value(v):
         return v
 
 
-_TEMPORAL_CREATE_FNS = frozenset({"date", "time", "localtime", "localdatetime", "datetime", "duration"})
+_TEMPORAL_CREATE_FNS = frozenset(
+    {"date", "time", "localtime", "localdatetime", "datetime", "duration"}
+)
 
 
 def _create_resolve_prop_value(v, context):
@@ -3446,10 +3496,17 @@ def _create_resolve_prop_value(v, context):
             if isinstance(val, list):
                 resolved = []
                 for item in val:
-                    if isinstance(item, ast.FunctionCall) and item.function_name.lower() in _TEMPORAL_CREATE_FNS:
+                    if (
+                        isinstance(item, ast.FunctionCall)
+                        and item.function_name.lower() in _TEMPORAL_CREATE_FNS
+                    ):
                         try:
                             sql_val = translate_expression(item, context, segment="select")
-                            if isinstance(sql_val, str) and sql_val.startswith("'") and sql_val.endswith("'"):
+                            if (
+                                isinstance(sql_val, str)
+                                and sql_val.startswith("'")
+                                and sql_val.endswith("'")
+                            ):
                                 resolved.append(sql_val[1:-1])
                             else:
                                 resolved.append(item)
@@ -3466,7 +3523,10 @@ def _create_resolve_prop_value(v, context):
         if isinstance(val, (list, dict)):
             return json.dumps(val)
         return val
-    if isinstance(v, ast.Variable) and getattr(context, "foreach_literals", {}).get(v.name) is not None:
+    if (
+        isinstance(v, ast.Variable)
+        and getattr(context, "foreach_literals", {}).get(v.name) is not None
+    ):
         raw = context.foreach_literals[v.name]
         val = _extract_literal_value(raw)
         # JSON-encode lists and dicts for storage in rdf_props
@@ -3488,7 +3548,7 @@ def _create_resolve_prop_value(v, context):
     if isinstance(v, ast.PropertyReference):
         # Property reference to a previously-created node in the same CREATE clause.
         # e.g. CREATE (a {id: 0}), ({num: a.id}) — resolve a.id from already-set props.
-        node_props = getattr(context, '_create_node_props', {})
+        node_props = getattr(context, "_create_node_props", {})
         node_prop_map = node_props.get(v.variable, {})
         if v.property_name in node_prop_map:
             return node_prop_map[v.property_name]
@@ -3497,17 +3557,24 @@ def _create_resolve_prop_value(v, context):
 
 def _create_node_literal(node, node_id_expr, context):
     node_id = node_id_expr.value if isinstance(node_id_expr, ast.Literal) else node_id_expr
-    context.add_dml(
-        f"INSERT INTO {_table('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
-        [node_id, node_id],
-    )
+    if getattr(context, "graph_context", None):
+        _gc = context.graph_context.replace("'", "''")
+        context.add_dml(
+            f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND graph_id = ?)",
+            [node_id, context.graph_context, node_id, context.graph_context],
+        )
+    else:
+        context.add_dml(
+            f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND graph_id = '')",
+            [node_id, node_id],
+        )
     for label in node.labels:
         context.add_dml(
             f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
             [node_id, label, node_id, label],
         )
     if node.variable and node.properties:
-        if not hasattr(context, '_create_node_props'):
+        if not hasattr(context, "_create_node_props"):
             context._create_node_props = {}
         if node.variable not in context._create_node_props:
             context._create_node_props[node.variable] = {}
@@ -3518,7 +3585,7 @@ def _create_node_literal(node, node_id_expr, context):
             continue
         # Track resolved property values for cross-node references in the same CREATE.
         if node.variable and not isinstance(val, (ast.Variable, ast.PropertyReference)):
-            if not hasattr(context, '_create_node_props'):
+            if not hasattr(context, "_create_node_props"):
                 context._create_node_props = {}
             context._create_node_props.setdefault(node.variable, {})[k] = val
         if isinstance(val, ast.Variable):
@@ -3557,6 +3624,7 @@ def _create_node_from_alias(node, node_id_expr, var_alias, context):
                     resolved_props[pk] = pv
             # Build a synthetic node with resolved properties for literal creation
             import copy as _copy
+
             synthetic_node = _copy.copy(node)
             synthetic_node.properties = {
                 pk: ast.Literal(pv) if not isinstance(pv, ast.Literal) else pv
@@ -3569,10 +3637,16 @@ def _create_node_from_alias(node, node_id_expr, var_alias, context):
     else:
         select_override = f"SELECT {var_alias}.{node_id_expr.name} AS node_id"
     cte, sql, p = context.build_dml_subquery(select_override=select_override)
-    context.add_dml(
-        f"{cte}INSERT INTO {_table('nodes')} (node_id) SELECT t.node_id FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id)",
-        p,
-    )
+    if getattr(context, "graph_context", None):
+        context.add_dml(
+            f"{cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id AND graph_id = ?)",
+            [context.graph_context] + p + [context.graph_context],
+        )
+    else:
+        context.add_dml(
+            f"{cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT t.node_id, '' FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id AND graph_id = '')",
+            p,
+        )
     for label in node.labels:
         context.add_dml(
             f"{cte}INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
@@ -3598,11 +3672,12 @@ def _create_clause_node_entry(node, context):
             _id_is_user_property = True
     if node_id_expr is None:
         import uuid as _uuid
+
         generated_id = str(_uuid.uuid4())
         node_id_expr = ast.Literal(generated_id)
         key = f"__create_id_{node.variable}" if node.variable else f"__create_id_anon_{id(node)}"
         context.input_params[key] = generated_id
-        if not hasattr(context, '_anon_node_keys'):
+        if not hasattr(context, "_anon_node_keys"):
             context._anon_node_keys = {}
         context._anon_node_keys[id(node)] = generated_id
 
@@ -3622,14 +3697,16 @@ def _create_clause_node_entry(node, context):
         context.register_variable(node.variable)
         if _id_is_user_property:
             # Track that this variable uses 'id' as a regular rdf_props entry, not node_id
-            if not hasattr(context, '_id_as_property_vars'):
+            if not hasattr(context, "_id_as_property_vars"):
                 context._id_as_property_vars = set()
             context._id_as_property_vars.add(node.variable)
         if not context.from_clauses and isinstance(node_id_expr, ast.Literal):
             node_id_val = node_id_expr.value
             alias = context.variable_aliases[node.variable]
             context.from_clauses.append(f"{_table('nodes')} {alias}")
-            context.where_conditions.append(f"{alias}.node_id = {context.add_where_param(node_id_val)}")
+            context.where_conditions.append(
+                f"{alias}.node_id = {context.add_where_param(node_id_val)}"
+            )
 
 
 def _create_clause_resolve_node_id(id_expr, node, context):
@@ -3640,7 +3717,7 @@ def _create_clause_resolve_node_id(id_expr, node, context):
                 return stored
             if node.variable in context.input_params:
                 return context.input_params[node.variable]
-        anon_id = getattr(context, '_anon_node_keys', {}).get(id(node))
+        anon_id = getattr(context, "_anon_node_keys", {}).get(id(node))
         if anon_id:
             return anon_id
         return None
@@ -3663,9 +3740,17 @@ def _create_clause_relationship_entry(rel, i, pat, context):
 
     s_id_expr = source_node.properties.get("id") or source_node.properties.get("node_id")
     t_id_expr = target_node.properties.get("id") or target_node.properties.get("node_id")
-    if s_id_expr is not None and isinstance(s_id_expr, ast.Literal) and not isinstance(s_id_expr.value, str):
+    if (
+        s_id_expr is not None
+        and isinstance(s_id_expr, ast.Literal)
+        and not isinstance(s_id_expr.value, str)
+    ):
         s_id_expr = None
-    if t_id_expr is not None and isinstance(t_id_expr, ast.Literal) and not isinstance(t_id_expr.value, str):
+    if (
+        t_id_expr is not None
+        and isinstance(t_id_expr, ast.Literal)
+        and not isinstance(t_id_expr.value, str)
+    ):
         t_id_expr = None
 
     s_id = _create_clause_resolve_node_id(s_id_expr, source_node, context)
@@ -3673,46 +3758,62 @@ def _create_clause_relationship_entry(rel, i, pat, context):
     if s_id and t_id:
         for rt in rel.types:
             rel_props_raw = {
-                k: (v.value if isinstance(v, ast.Literal) else
-                    context.foreach_literals.get(v.name)
-                    if isinstance(v, ast.Variable) and hasattr(context, "foreach_literals")
-                    else None)
+                k: (
+                    v.value
+                    if isinstance(v, ast.Literal)
+                    else (
+                        context.foreach_literals.get(v.name)
+                        if isinstance(v, ast.Variable) and hasattr(context, "foreach_literals")
+                        else None
+                    )
+                )
                 for k, v in rel.properties.items()
             }
             # Exclude null values (null props are not stored per openCypher semantics)
             rel_props = {k: v for k, v in rel_props_raw.items() if v is not None}
             if rel_props:
                 import json as _json
+
                 # Store all values as strings — JSON_VALUE returns VARCHAR; ints stored
                 # as JSON numbers are returned as NULL by IRIS SQLUser.JSON_VALUE.
                 qualifiers_json = _json.dumps({k: str(v) for k, v in rel_props.items()})
-                context.add_dml(
-                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                    [s_id, rt, t_id, qualifiers_json],
-                )
+                if getattr(context, "graph_context", None):
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                        [s_id, rt, t_id, qualifiers_json, context.graph_context],
+                    )
+                else:
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                        [s_id, rt, t_id, qualifiers_json],
+                    )
             else:
-                context.add_dml(
-                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
-                    [s_id, rt, t_id],
-                )
+                if getattr(context, "graph_context", None):
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)",
+                        [s_id, rt, t_id, context.graph_context],
+                    )
+                else:
+                    context.add_dml(
+                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
+                        [s_id, rt, t_id],
+                    )
     else:
         s_alias = (
-            context.variable_aliases.get(source_node.variable)
-            if source_node.variable
-            else None
+            context.variable_aliases.get(source_node.variable) if source_node.variable else None
         )
         t_alias = (
-            context.variable_aliases.get(target_node.variable)
-            if target_node.variable
-            else None
+            context.variable_aliases.get(target_node.variable) if target_node.variable else None
         )
         s_expr, s_p = (
             ("?", [s_id])
             if s_id
             else (
-                f"{s_alias}.{source_node.variable}"
-                if s_alias and s_alias.startswith("Stage")
-                else f"{s_alias}.node_id",
+                (
+                    f"{s_alias}.{source_node.variable}"
+                    if s_alias and s_alias.startswith("Stage")
+                    else f"{s_alias}.node_id"
+                ),
                 [],
             )
         )
@@ -3720,9 +3821,11 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             ("?", [t_id])
             if t_id
             else (
-                f"{t_alias}.{target_node.variable}"
-                if t_alias and t_alias.startswith("Stage")
-                else f"{t_alias}.node_id",
+                (
+                    f"{t_alias}.{target_node.variable}"
+                    if t_alias and t_alias.startswith("Stage")
+                    else f"{t_alias}.node_id"
+                ),
                 [],
             )
         )
@@ -3730,10 +3833,21 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             cte, sql, p = context.build_dml_subquery(
                 select_override=f"SELECT {s_expr}, ?, {t_expr}"
             )
-            context.add_dml(
-                f"{cte}INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
-                s_p + [rt] + t_p + p,
-            )
+            if getattr(context, "graph_context", None):
+                # IRIS binds outer ? before inner subquery ? — pass graph_id first
+                cte2, sql2, p2 = context.build_dml_subquery(
+                    select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3"
+                )
+                context.add_dml(
+                    f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
+                    f"SELECT _ge.c1, _ge.c2, _ge.c3, ? FROM ({sql2}) AS _ge",
+                    [context.graph_context] + s_p + [rt] + t_p + p2,
+                )
+            else:
+                context.add_dml(
+                    f"{cte}INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
+                    s_p + [rt] + t_p + p,
+                )
 
 
 def translate_create_clause(create, context, metadata):
@@ -3750,17 +3864,23 @@ def translate_create_clause(create, context, metadata):
                     )
         for rel in pat.relationships:
             if rel.variable and rel.variable in context.variable_aliases:
-                raise SyntaxError(
-                    f"VariableAlreadyBound: variable '{rel.variable}' already bound"
-                )
+                raise SyntaxError(f"VariableAlreadyBound: variable '{rel.variable}' already bound")
             if not rel.types:
-                raise SyntaxError("NoSingleRelationshipType: CREATE relationship must have exactly one type")
+                raise SyntaxError(
+                    "NoSingleRelationshipType: CREATE relationship must have exactly one type"
+                )
             if len(rel.types) > 1:
-                raise SyntaxError("NoSingleRelationshipType: CREATE relationship must have exactly one type")
+                raise SyntaxError(
+                    "NoSingleRelationshipType: CREATE relationship must have exactly one type"
+                )
             if rel.direction == ast.Direction.BOTH:
-                raise SyntaxError("RequiresDirectedRelationship: CREATE relationship must be directed")
+                raise SyntaxError(
+                    "RequiresDirectedRelationship: CREATE relationship must be directed"
+                )
             if rel.variable_length is not None:
-                raise SyntaxError("CreatingVarLength: variable-length relationships cannot be used in CREATE")
+                raise SyntaxError(
+                    "CreatingVarLength: variable-length relationships cannot be used in CREATE"
+                )
         for node in pat.nodes:
             _create_clause_node_entry(node, context)
         for i, rel in enumerate(pat.relationships):
@@ -3818,9 +3938,8 @@ def translate_delete_clause(delete, context, metadata):
 
         # Detect whether the variable is a relationship (edge), taking into account
         # variables promoted to a CTE stage via WITH.
-        is_edge_var = (
-            alias.startswith("e")
-            or var.name in getattr(context, "edge_stage_variables", set())
+        is_edge_var = alias.startswith("e") or var.name in getattr(
+            context, "edge_stage_variables", set()
         )
         # When alias is a CTE stage (e.g. "Stage1"), the node_id column is named
         # after the variable (e.g. "n"), not "node_id".
@@ -3837,12 +3956,8 @@ def translate_delete_clause(delete, context, metadata):
             cte_s, subquery_s, subparams_s = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.{s_col}"
             )
-            _, subquery_p, _ = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.{p_col}"
-            )
-            _, subquery_o, _ = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.{o_col}"
-            )
+            _, subquery_p, _ = context.build_dml_subquery(select_override=f"SELECT {alias}.{p_col}")
+            _, subquery_o, _ = context.build_dml_subquery(select_override=f"SELECT {alias}.{o_col}")
             # All three calls return the same CTE and params (same Stage1 binding).
             # The CTE appears once in the SQL; params are bound once.
             context.add_dml(
@@ -4012,12 +4127,11 @@ def _validate_merge_pattern_no_null_properties(merge_node):
     if not merge_node:
         return
 
-    props = merge_node.properties if hasattr(merge_node, 'properties') else {}
+    props = merge_node.properties if hasattr(merge_node, "properties") else {}
     for key, value in props.items():
         if isinstance(value, ast.Literal) and value.value is None:
             raise ValueError(
-                "Cannot merge on null property value: "
-                f"property '{key}' has value null"
+                "Cannot merge on null property value: " f"property '{key}' has value null"
             )
 
 
@@ -4047,12 +4161,15 @@ def translate_merge_clause(merge, context, metadata):
     _create_pattern = merge.pattern
     if any(r.direction == ast.Direction.BOTH for r in merge.pattern.relationships):
         import copy as _copy
+
         _create_rels = []
         for r in merge.pattern.relationships:
             if r.direction == ast.Direction.BOTH:
                 _r2 = _copy.copy(r)
                 _r2 = ast.RelationshipPattern(
-                    variable=r.variable, types=r.types, properties=r.properties,
+                    variable=r.variable,
+                    types=r.types,
+                    properties=r.properties,
                     variable_length=r.variable_length,
                     direction=ast.Direction.OUTGOING,
                 )
@@ -4073,11 +4190,8 @@ def translate_merge_clause(merge, context, metadata):
     if merge_node is not None and not merge.pattern.relationships:
         var_name = merge_node.variable
         node_alias = context.variable_aliases.get(var_name) if var_name else None
-        generated_uuid = (
-            context.input_params.get(f"__create_id_{var_name}")
-            if var_name else None
-        )
-        if generated_uuid is None and hasattr(context, '_anon_node_keys'):
+        generated_uuid = context.input_params.get(f"__create_id_{var_name}") if var_name else None
+        if generated_uuid is None and hasattr(context, "_anon_node_keys"):
             generated_uuid = context._anon_node_keys.get(id(merge_node))
 
         # Check whether translate_create_clause added UUID-based from/where entries.
@@ -4089,9 +4203,7 @@ def translate_merge_clause(merge, context, metadata):
             and f"{_table('nodes')} {node_alias}" in added_froms[0]
         )
         _has_uuid_where = (
-            len(added_wheres) == 1
-            and node_alias
-            and f"{node_alias}.node_id = ?" in added_wheres[0]
+            len(added_wheres) == 1 and node_alias and f"{node_alias}.node_id = ?" in added_wheres[0]
         )
 
         exist_sql, exist_params = _merge_pattern_existence_sql(merge_node, context)
@@ -4106,21 +4218,35 @@ def translate_merge_clause(merge, context, metadata):
                 if "INSERT INTO " + _table("nodes") in sql and new_uuid in str(params):
                     # Replace "WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ?)"
                     # with a pattern-based check so existing matching nodes block the INSERT.
-                    new_dmls.append((
-                        f"INSERT INTO {_table('nodes')} (node_id) SELECT ? "
-                        f"WHERE NOT EXISTS ({exist_sql})",
-                        [new_uuid] + exist_params,
-                    ))
+                    if getattr(context, "graph_context", None):
+                        _gc = context.graph_context
+                        new_dmls.append(
+                            (
+                                f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, ? "
+                                f"WHERE NOT EXISTS ({exist_sql})",
+                                [new_uuid, _gc] + exist_params,
+                            )
+                        )
+                    else:
+                        new_dmls.append(
+                            (
+                                f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' "
+                                f"WHERE NOT EXISTS ({exist_sql})",
+                                [new_uuid] + exist_params,
+                            )
+                        )
                 elif "INSERT INTO " + _table("rdf_labels") in sql and new_uuid in str(params):
                     # The rdf_labels insert must also be guarded by pattern existence.
                     # Extract the label from the original params (second param).
                     label_val = params[1] if len(params) > 1 else None
                     if label_val is not None:
-                        new_dmls.append((
-                            f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? "
-                            f"WHERE NOT EXISTS ({exist_sql})",
-                            [new_uuid, label_val] + exist_params,
-                        ))
+                        new_dmls.append(
+                            (
+                                f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? "
+                                f"WHERE NOT EXISTS ({exist_sql})",
+                                [new_uuid, label_val] + exist_params,
+                            )
+                        )
                     else:
                         new_dmls.append((sql, params))
                 else:
@@ -4157,9 +4283,9 @@ def translate_merge_clause(merge, context, metadata):
                 p_alias = context.next_alias("p")
                 context.join_clauses.append(
                     f'JOIN {_table("rdf_props")} {p_alias} ON '
-                    f'{p_alias}.s = {node_alias}.node_id AND '
+                    f"{p_alias}.s = {node_alias}.node_id AND "
                     f'{p_alias}."key" = {context.add_join_param(k)} AND '
-                    f'{p_alias}.val = {context.add_join_param(str(val))}'
+                    f"{p_alias}.val = {context.add_join_param(str(val))}"
                 )
 
     # --- Rewrite DML + SELECT for relationship MERGE patterns ---
@@ -4192,10 +4318,18 @@ def translate_merge_clause(merge, context, metadata):
             # For CREATE-bound nodes: get UUID params directly and rewrite VALUES INSERT
             src_uuid = (
                 context.input_params.get(f"__create_id_{src_var}") if src_var else None
-            ) or (context._anon_node_keys.get(id(source_node)) if hasattr(context, '_anon_node_keys') else None)
+            ) or (
+                context._anon_node_keys.get(id(source_node))
+                if hasattr(context, "_anon_node_keys")
+                else None
+            )
             tgt_uuid = (
                 context.input_params.get(f"__create_id_{tgt_var}") if tgt_var else None
-            ) or (context._anon_node_keys.get(id(target_node)) if hasattr(context, '_anon_node_keys') else None)
+            ) or (
+                context._anon_node_keys.get(id(target_node))
+                if hasattr(context, "_anon_node_keys")
+                else None
+            )
 
             # Build NOT EXISTS conditions for both styles:
             # alias-ref style (for SELECT-based INSERT) and UUID style (for VALUES INSERT)
@@ -4243,8 +4377,12 @@ def translate_merge_clause(merge, context, metadata):
                         f"(s = ? AND p = ? AND o_id = ?) OR (s = ? AND p = ? AND o_id = ?)"
                     )
                     not_exists_uuid_params = [
-                        src_uuid, rel_type, tgt_uuid,
-                        tgt_uuid, rel_type, src_uuid,
+                        src_uuid,
+                        rel_type,
+                        tgt_uuid,
+                        tgt_uuid,
+                        rel_type,
+                        src_uuid,
                     ]
             else:
                 not_exists_uuid_sql = not_exists_alias_sql
@@ -4339,7 +4477,7 @@ def translate_merge_clause(merge, context, metadata):
                             old_param_count = old_join.count(" = ? ") + old_join.count(" = ?")
                             if old_param_count > 0:
                                 del context.join_params[
-                                    _pre_join_params_len:_pre_join_params_len + old_param_count
+                                    _pre_join_params_len : _pre_join_params_len + old_param_count
                                 ]
                     elif src_alias and tgt_alias:
                         _sn_ref_u = (
@@ -4398,8 +4536,12 @@ def translate_merge_clause(merge, context, metadata):
                 source_node, target_node = right_node, left_node
             else:
                 source_node, target_node = left_node, right_node
-            src_a = context.variable_aliases.get(source_node.variable) if source_node.variable else None
-            tgt_a = context.variable_aliases.get(target_node.variable) if target_node.variable else None
+            src_a = (
+                context.variable_aliases.get(source_node.variable) if source_node.variable else None
+            )
+            tgt_a = (
+                context.variable_aliases.get(target_node.variable) if target_node.variable else None
+            )
             if src_a and tgt_a:
                 _edge_contexts.append((src_a, tgt_a, rel.types[0]))
 
@@ -4412,10 +4554,9 @@ def translate_merge_clause(merge, context, metadata):
                 ):
                     var_name = item.expression.variable
                     sql_alias = context.variable_aliases.get(var_name, "")
-                    actual_id = (
-                        context.input_params.get(f"__create_id_{var_name}")
-                        or context.input_params.get(var_name)
-                    )
+                    actual_id = context.input_params.get(
+                        f"__create_id_{var_name}"
+                    ) or context.input_params.get(var_name)
                     if not sql_alias and not actual_id:
                         raise SyntaxError(f"Undefined variable: {var_name}")
                     k, v = item.expression.property_name, item.value
@@ -4436,17 +4577,17 @@ def translate_merge_clause(merge, context, metadata):
                         if json_val is None:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                f'SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) '
-                                f'WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) '
-                                f'AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})',
+                                f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                                f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
+                                f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                 [k] + all_params + [rel_type] + all_params,
                             )
                         else:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                f'SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST(\'{{}}\' AS VARCHAR(256))), ?, ?) '
-                                f'WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) '
-                                f'AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})',
+                                f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
+                                f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
+                                f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                 [k, json_val] + all_params + [rel_type] + all_params,
                             )
                         continue
@@ -4473,12 +4614,14 @@ def translate_merge_clause(merge, context, metadata):
                             if from_parts:
                                 from_sql = ", ".join(from_parts)
                                 join_sql = (" " + " ".join(join_parts)) if join_parts else ""
-                                where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+                                where_sql = (
+                                    (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+                                )
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                                    f'SELECT {sql_alias}.node_id, ?, ? '
-                                    f'FROM {from_sql}{join_sql}'
-                                    f'{where_sql}'
+                                    f"SELECT {sql_alias}.node_id, ?, ? "
+                                    f"FROM {from_sql}{join_sql}"
+                                    f"{where_sql}"
                                     f'{" AND " if where_parts else " WHERE "}'
                                     f'NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
                                     f'WHERE s = {sql_alias}.node_id AND "key" = ?)',
@@ -4487,7 +4630,7 @@ def translate_merge_clause(merge, context, metadata):
                             else:
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                                    f'SELECT {sql_alias}.node_id, ?, ? '
+                                    f"SELECT {sql_alias}.node_id, ?, ? "
                                     f'FROM {_table("nodes")} {sql_alias} '
                                     f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
                                     f'WHERE s = {sql_alias}.node_id AND "key" = ?)',
@@ -4503,7 +4646,9 @@ def translate_merge_clause(merge, context, metadata):
                             _on_props = _on_mn.properties if _on_mn else {}
                             if _on_labels or _on_props:
                                 # _on_es = "SELECT 1 FROM nodes _ml0 JOIN ..."
-                                _on_ns = _on_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1)
+                                _on_ns = _on_es.replace(
+                                    "SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1
+                                )
                                 _on_fj = _on_es.replace("SELECT 1 ", "", 1)
                                 # UPDATE existing property row
                                 context.add_dml(
@@ -4515,7 +4660,7 @@ def translate_merge_clause(merge, context, metadata):
                                 # Param order: k, val (for SELECT ?, ?), _on_ep (JOIN conditions), k (NOT EXISTS)
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                                    f'SELECT _ml0.node_id, ?, ? {_on_fj} '
+                                    f"SELECT _ml0.node_id, ?, ? {_on_fj} "
                                     f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
                                     f'WHERE s = _ml0.node_id AND "key" = ?)',
                                     [k, val] + _on_ep + [k],
@@ -4536,11 +4681,13 @@ def translate_merge_clause(merge, context, metadata):
                             if from_parts:
                                 from_sql = ", ".join(from_parts)
                                 join_sql = (" " + " ".join(join_parts)) if join_parts else ""
-                                where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+                                where_sql = (
+                                    (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+                                )
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_props")} SET val = ? '
-                                    f'WHERE s IN ('
-                                    f'SELECT {sql_alias}.node_id FROM {from_sql}{join_sql}{where_sql}'
+                                    f"WHERE s IN ("
+                                    f"SELECT {sql_alias}.node_id FROM {from_sql}{join_sql}{where_sql}"
                                     f') AND "key" = ?',
                                     [val] + join_params_parts + where_params_parts + [k],
                                 )
@@ -4553,7 +4700,11 @@ def translate_merge_clause(merge, context, metadata):
                 elif isinstance(item.expression, ast.Variable):
                     var_name = item.expression.name
                     # Relationship map assignment: SET r = {map} or SET r += {map}
-                    if var_name in context.rel_variables and isinstance(item.value, ast.MapLiteral) and _edge_contexts:
+                    if (
+                        var_name in context.rel_variables
+                        and isinstance(item.value, ast.MapLiteral)
+                        and _edge_contexts
+                    ):
                         src_a, tgt_a, rel_type = _edge_contexts[0]
                         from_parts = context.from_clauses[:_pre_from_len]
                         join_parts = context.join_clauses[:_pre_join_len]
@@ -4566,36 +4717,47 @@ def translate_merge_clause(merge, context, metadata):
                         all_params = join_params_parts + where_params_parts
                         # Build the qualifiers JSON for each key in the map
                         for mk, mv in item.value.entries.items():
-                            json_val = (mv.value if isinstance(mv, ast.Literal) else
-                                        context.input_params.get(mv.name) if isinstance(mv, ast.Variable) else str(mv))
+                            json_val = (
+                                mv.value
+                                if isinstance(mv, ast.Literal)
+                                else (
+                                    context.input_params.get(mv.name)
+                                    if isinstance(mv, ast.Variable)
+                                    else str(mv)
+                                )
+                            )
                             if json_val is None:
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                    f'SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) '
-                                    f'WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) '
-                                    f'AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})',
+                                    f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                                    f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
+                                    f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                     [mk] + all_params + [rel_type] + all_params,
                                 )
                             else:
                                 context.add_dml(
                                     f'UPDATE {_table("rdf_edges")} SET qualifiers = '
-                                    f'SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST(\'{{}}\' AS VARCHAR(256))), ?, ?) '
-                                    f'WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) '
-                                    f'AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})',
+                                    f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}' AS VARCHAR(256))), ?, ?) "
+                                    f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
+                                    f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                     [mk, str(json_val)] + all_params + [rel_type] + all_params,
                                 )
                         continue
                     # Label assignment: MERGE (...) ON CREATE SET a:SomeLabel or SET a:Foo:Bar
                     # Validate: variable must be defined.
-                    if (var_name not in context.variable_aliases
-                            and context.input_params.get(f"__create_id_{var_name}") is None):
+                    if (
+                        var_name not in context.variable_aliases
+                        and context.input_params.get(f"__create_id_{var_name}") is None
+                    ):
                         raise SyntaxError(f"Undefined variable: {var_name}")
                     actual_id = context.input_params.get(f"__create_id_{var_name}")
                     raw_val = item.value
                     if isinstance(raw_val, list):
                         label_list_merge = [str(lv) for lv in raw_val]
                     else:
-                        label_list_merge = [str(raw_val.value if isinstance(raw_val, ast.Literal) else raw_val)]
+                        label_list_merge = [
+                            str(raw_val.value if isinstance(raw_val, ast.Literal) else raw_val)
+                        ]
                     for label in label_list_merge:
                         if is_create:
                             # ON CREATE: add label only when node was just created.
@@ -4612,12 +4774,14 @@ def translate_merge_clause(merge, context, metadata):
                             _lbl_props = _lbl_mn.properties if _lbl_mn else {}
                             if _lbl_labels or _lbl_props:
                                 # Find matched node via MERGE pattern, add label if not present.
-                                _lbl_ns = _lbl_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1)
+                                _lbl_ns = _lbl_es.replace(
+                                    "SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1
+                                )
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_labels")} (s, label) '
-                                    f'SELECT q.node_id, ? FROM ({_lbl_ns}) q '
+                                    f"SELECT q.node_id, ? FROM ({_lbl_ns}) q "
                                     f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_labels")} '
-                                    f'WHERE s = q.node_id AND label = ?)',
+                                    f"WHERE s = q.node_id AND label = ?)",
                                     [label] + _lbl_ep + [label],
                                 )
                             else:
@@ -4626,7 +4790,7 @@ def translate_merge_clause(merge, context, metadata):
                                     f'INSERT INTO {_table("rdf_labels")} (s, label) '
                                     f'SELECT node_id, ? FROM {_table("nodes")} '
                                     f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_labels")} '
-                                    f'WHERE s = node_id AND label = ?)',
+                                    f"WHERE s = node_id AND label = ?)",
                                     [label, label],
                                 )
 
@@ -4659,9 +4823,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             if isinstance(v, (list, dict)):
                 v = json.dumps(v)
             return ("?", [v], False)
-        raise SyntaxError(
-            f"UndefinedVariable: Variable `{expr.name}` not defined"
-        )
+        raise SyntaxError(f"UndefinedVariable: Variable `{expr.name}` not defined")
 
     # For complex expressions, translate inline with property refs as correlated subqueries.
     def _translate_expr_for_update(e, node_var: str) -> tuple:
@@ -4674,6 +4836,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                 return f"CAST('{safe}' AS VARCHAR(256))", []
             if isinstance(e.value, list):
                 import json as _json
+
                 js = _json.dumps(_extract_literal_value(e))
                 safe = js.replace("'", "''")
                 return f"CAST('{safe}' AS VARCHAR({max(len(js)+1, 64)}))", []
@@ -4688,9 +4851,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                     safe = v.replace("'", "''")
                     return f"CAST('{safe}' AS VARCHAR(256))", []
                 return str(v), []
-            raise SyntaxError(
-                f"UndefinedVariable: Variable `{e.name}` not defined"
-            )
+            raise SyntaxError(f"UndefinedVariable: Variable `{e.name}` not defined")
 
         if isinstance(e, ast.PropertyReference):
             # n.prop reference — translate to correlated subquery
@@ -4708,22 +4869,26 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             return sql, []
 
         if isinstance(e, ast.FunctionCall) and e.function_name.startswith("__arith_"):
-            op = e.function_name[len("__arith_"):]
+            op = e.function_name[len("__arith_") :]
             op_map = {"+": "+", "-": "-", "*": "*", "/": "/", "%": "%"}
             sql_op = op_map.get(op, op)
             # For + where either operand is a string literal, use string concatenation (||)
             # and avoid casting PropertyReference to NUMERIC.
             if op == "+":
+
                 def _is_str_arg(a):
                     return isinstance(a, ast.Literal) and isinstance(a.value, str)
+
                 def _is_list_arg(a):
                     if isinstance(a, ast.Literal):
                         v = _extract_literal_value(a)
                         return isinstance(v, list)
                     return False
+
                 left_is_str = _is_str_arg(e.arguments[0])
                 right_is_str = _is_str_arg(e.arguments[1])
                 if left_is_str or right_is_str:
+
                     def _str_aware_translate(a):
                         if isinstance(a, ast.PropertyReference):
                             prop = a.property_name
@@ -4736,15 +4901,20 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                                 f"AND _upd.\"key\" = '{safe_prop}')"
                             ), []
                         return _translate_expr_for_update(a, node_var)
+
                     left_sql, left_params = _str_aware_translate(e.arguments[0])
                     right_sql, right_params = _str_aware_translate(e.arguments[1])
-                    return f"(CAST({left_sql} AS VARCHAR(4096)) || CAST({right_sql} AS VARCHAR(4096)))", left_params + right_params
+                    return (
+                        f"(CAST({left_sql} AS VARCHAR(4096)) || CAST({right_sql} AS VARCHAR(4096)))",
+                        left_params + right_params,
+                    )
                 left_is_list = _is_list_arg(e.arguments[0])
                 right_is_list = _is_list_arg(e.arguments[1])
                 if left_is_list or right_is_list:
                     # JSON array concatenation: use string-manipulation approach
                     # left_arr + right_arr → remove trailing ] from left, remove leading [ from right
                     import json as _json
+
                     def _list_sql(a, is_left_side):
                         if _is_list_arg(a):
                             js = _json.dumps(_extract_literal_value(a))
@@ -4762,6 +4932,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                                 f"AND _upd.\"key\" = '{safe_prop}')"
                             ), []
                         return _translate_expr_for_update(a, node_var)
+
                     left_sql, left_params = _list_sql(e.arguments[0], True)
                     right_sql, right_params = _list_sql(e.arguments[1], False)
                     # Concat: strip trailing ] from left, strip leading [ from right, join with ,
@@ -4799,7 +4970,7 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
 
 def translate_set_clause(set_cl, context, metadata):
     # Track which properties are being SET so we can exclude them from the final SELECT WHERE clause
-    if not hasattr(context, '_set_properties'):
+    if not hasattr(context, "_set_properties"):
         context._set_properties = set()
 
     for item in set_cl.items:
@@ -4825,7 +4996,11 @@ def translate_set_clause(set_cl, context, metadata):
             elif isinstance(val_expr, ast.MapLiteral):
                 for k, v in val_expr.entries.items():
                     context._set_properties.add(k)
-                    val = v.value if isinstance(v, ast.Literal) else context.input_params.get(v.name) if isinstance(v, ast.Variable) else v
+                    val = (
+                        v.value
+                        if isinstance(v, ast.Literal)
+                        else context.input_params.get(v.name) if isinstance(v, ast.Variable) else v
+                    )
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
                         [val] + subparams + [k],
@@ -4843,7 +5018,7 @@ def translate_set_clause(set_cl, context, metadata):
                 item.value,
             )
             # Detect edge alias: relationship variables use aliases starting with 'e' but not 'ES_'
-            is_edge = alias and alias.startswith('e') and not alias.startswith('ES_')
+            is_edge = alias and alias.startswith("e") and not alias.startswith("ES_")
             if is_edge:
                 # Relationship property SET: UPDATE rdf_edges qualifiers JSON blob
                 # Null value means remove the property (Cypher semantics)
@@ -4856,8 +5031,8 @@ def translate_set_clause(set_cl, context, metadata):
                     # null literal → remove the key from qualifiers
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f'SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) '
-                        f'WHERE edge_id IN ({subquery})',
+                        f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                        f"WHERE edge_id IN ({subquery})",
                         [k] + subparams,
                     )
                 elif is_expr:
@@ -4865,22 +5040,21 @@ def translate_set_clause(set_cl, context, metadata):
                     # For edges, current value is JSON_VALUE(qualifiers, '$.key').
                     safe_k = k.replace("'", "''")
                     edge_val_ref = f"CAST(CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END AS DOUBLE)"
-                    adapted_sql = val_sql.replace(
-                        "CAST(val AS NUMERIC)", edge_val_ref
-                    ).replace(
-                        "CAST(val AS VARCHAR(4096))", f"CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END"
+                    adapted_sql = val_sql.replace("CAST(val AS NUMERIC)", edge_val_ref).replace(
+                        "CAST(val AS VARCHAR(4096))",
+                        f"CASE WHEN {_table('rdf_edges')}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({_table('rdf_edges')}.qualifiers, '$.{safe_k}') END",
                     )
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f'SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST(\'{{}}\'  AS VARCHAR(256))), ?, CAST(({adapted_sql}) AS VARCHAR(256))) '
-                        f'WHERE edge_id IN ({subquery})',
+                        f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}'  AS VARCHAR(256))), ?, CAST(({adapted_sql}) AS VARCHAR(256))) "
+                        f"WHERE edge_id IN ({subquery})",
                         [k] + val_params + subparams,
                     )
                 else:
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                        f'SQLUser.CypherFn_IVGJSONSET(qualifiers, ?, ?) '
-                        f'WHERE edge_id IN ({subquery})',
+                        f"SQLUser.CypherFn_IVGJSONSET(qualifiers, ?, ?) "
+                        f"WHERE edge_id IN ({subquery})",
                         [k, str(val_for_json)] + subparams,
                     )
             else:
@@ -4908,26 +5082,35 @@ def translate_set_clause(set_cl, context, metadata):
                     # where bare `val` references are replaced by correlated subqueries from rdf_props.
                     safe_k = k.replace("'", "''")
                     _iv_subq = f"(SELECT _iv.val FROM {_table('rdf_props')} _iv WHERE _iv.s = {_table('nodes')}.node_id AND _iv.\"key\" = '{safe_k}')"
-                    insert_val_sql = val_sql.replace(
-                        "CAST(val AS NUMERIC)",
-                        f"CAST({_iv_subq} AS NUMERIC)",
-                    ).replace(
-                        "CAST(val AS VARCHAR(4096))",
-                        f"CAST({_iv_subq} AS VARCHAR(4096))",
-                    ).replace(
-                        # bare `val` used directly (e.g. arithmetic on val without CAST)
-                        " val ", f" {_iv_subq} ",
-                    ).replace(
-                        "(val ", f"({_iv_subq} ",
-                    ).replace(
-                        " val)", f" {_iv_subq})",
+                    insert_val_sql = (
+                        val_sql.replace(
+                            "CAST(val AS NUMERIC)",
+                            f"CAST({_iv_subq} AS NUMERIC)",
+                        )
+                        .replace(
+                            "CAST(val AS VARCHAR(4096))",
+                            f"CAST({_iv_subq} AS VARCHAR(4096))",
+                        )
+                        .replace(
+                            # bare `val` used directly (e.g. arithmetic on val without CAST)
+                            " val ",
+                            f" {_iv_subq} ",
+                        )
+                        .replace(
+                            "(val ",
+                            f"({_iv_subq} ",
+                        )
+                        .replace(
+                            " val)",
+                            f" {_iv_subq})",
+                        )
                     )
                     context.add_dml(
                         f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
                         f'SELECT node_id, ?, {insert_val_sql} FROM {_table("nodes")} '
-                        f'WHERE node_id IN ({subquery}) AND NOT EXISTS ('
+                        f"WHERE node_id IN ({subquery}) AND NOT EXISTS ("
                         f'SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?'
-                        f')',
+                        f")",
                         [k] + val_params + subparams + [k],
                     )
                 else:
@@ -4941,7 +5124,11 @@ def translate_set_clause(set_cl, context, metadata):
                         f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
                         [k, val] + subparams + [k],
                     )
-        elif isinstance(item.expression, ast.Variable) and isinstance(item.value, ast.MapLiteral) and not getattr(item, "merge", False):
+        elif (
+            isinstance(item.expression, ast.Variable)
+            and isinstance(item.value, ast.MapLiteral)
+            and not getattr(item, "merge", False)
+        ):
             # SET n = {map} — full property replace: delete all existing props and insert new ones
             alias = context.variable_aliases.get(item.expression.name)
             # DELETE uses the full property-filtered subquery (fires before props are gone)
@@ -4958,12 +5145,16 @@ def translate_set_clause(set_cl, context, metadata):
                 select_override=f"SELECT {alias}.node_id",
             )
             # Track this alias so the final SELECT also drops property JOINs for it
-            if not hasattr(context, '_full_replace_aliases'):
+            if not hasattr(context, "_full_replace_aliases"):
                 context._full_replace_aliases = set()
             context._full_replace_aliases.add(alias)
             # Insert new properties (skip null values per openCypher semantics)
             for k, v in item.value.entries.items():
-                val = v.value if isinstance(v, ast.Literal) else context.input_params.get(v.name) if isinstance(v, ast.Variable) else None
+                val = (
+                    v.value
+                    if isinstance(v, ast.Literal)
+                    else context.input_params.get(v.name) if isinstance(v, ast.Variable) else None
+                )
                 if val is None:
                     continue
                 context._set_properties.add(k)
@@ -4991,9 +5182,9 @@ def translate_set_clause(set_cl, context, metadata):
 
 def translate_remove_clause(remove, context, metadata):
     # Track which properties are being REMOVED so we can exclude them from the final SELECT WHERE clause
-    if not hasattr(context, '_removed_properties'):
+    if not hasattr(context, "_removed_properties"):
         context._removed_properties = set()
-    if not hasattr(context, '_removed_labels'):
+    if not hasattr(context, "_removed_labels"):
         context._removed_labels = set()
 
     for item in remove.items:
@@ -5018,7 +5209,7 @@ def translate_remove_clause(remove, context, metadata):
                 prop_name,
             )
             # Detect edge alias: relationship variables use aliases starting with 'e' but not 'ES_'
-            is_edge = alias and alias.startswith('e') and not alias.startswith('ES_')
+            is_edge = alias and alias.startswith("e") and not alias.startswith("ES_")
             if is_edge:
                 # Relationship property REMOVE: update qualifiers JSON to remove the key
                 cte, subquery, subparams = context.build_dml_subquery(
@@ -5026,8 +5217,8 @@ def translate_remove_clause(remove, context, metadata):
                 )
                 context.add_dml(
                     f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
-                    f'SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) '
-                    f'WHERE edge_id IN ({subquery})',
+                    f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
+                    f"WHERE edge_id IN ({subquery})",
                     [k] + subparams,
                 )
             else:
@@ -5101,19 +5292,14 @@ def translate_match_clause(match_clause, context, metadata):
         # symmetry fix).  Without this guard, translate_node_pattern emits a CROSS
         # JOIN that produces wrong results for (t)-[:R]->(f_bound).
         first_is_unbound = (
-            first_node.variable is not None
-            and first_node.variable not in context.variable_aliases
+            first_node.variable is not None and first_node.variable not in context.variable_aliases
         )
         last_node_bound = (
             pattern.nodes
             and pattern.nodes[-1].variable
             and pattern.nodes[-1].variable in context.variable_aliases
         )
-        skip_first_node_join = (
-            first_is_unbound
-            and last_node_bound
-            and bool(pattern.relationships)
-        )
+        skip_first_node_join = first_is_unbound and last_node_bound and bool(pattern.relationships)
         has_rels = bool(pattern.relationships)
         if not skip_first_node_join:
             if first_node.variable:
@@ -5158,9 +5344,7 @@ def translate_match_clause(match_clause, context, metadata):
             )
             last_node = tgt_node
             is_back_ref = (
-                src_node.variable
-                and tgt_node.variable
-                and src_node.variable == tgt_node.variable
+                src_node.variable and tgt_node.variable and src_node.variable == tgt_node.variable
             )
             if is_back_ref:
                 # Self-loop: both ends are the same node — add edge self-loop constraint.
@@ -5186,13 +5370,9 @@ def translate_match_clause(match_clause, context, metadata):
                                 f"({edge_alias}.s IS NULL OR {edge_alias}.s = {edge_alias}.o_id)"
                             )
                         else:
-                            context.where_conditions.append(
-                                f"{edge_alias}.s = {edge_alias}.o_id"
-                            )
+                            context.where_conditions.append(f"{edge_alias}.s = {edge_alias}.o_id")
             elif last_node.variable:
-                translate_node_pattern(
-                    last_node, context, metadata, optional=match_clause.optional
-                )
+                translate_node_pattern(last_node, context, metadata, optional=match_clause.optional)
             elif not (last_node.labels or last_node.properties):
                 pass  # truly anonymous target — edge join covers it
             # else: anonymous labeled/propertied target — _trp_directed_edge already
@@ -5228,9 +5408,7 @@ def translate_match_clause(match_clause, context, metadata):
                     # to NULL rather than FALSE, which would incorrectly filter null rows.
                     # Guard with IS NULL checks so null hops always pass the constraint.
                     is_opt = match_clause.optional
-                    excl = (
-                        f"NOT ({new_s} = {prev_s} AND {new_p} = {prev_p} AND {new_o} = {prev_o})"
-                    )
+                    excl = f"NOT ({new_s} = {prev_s} AND {new_p} = {prev_p} AND {new_o} = {prev_o})"
                     if is_opt:
                         excl = f"({excl} OR {new_s} IS NULL OR {prev_s} IS NULL)"
                     context.where_conditions.append(excl)
@@ -5243,9 +5421,11 @@ def translate_match_clause(match_clause, context, metadata):
         # Track path variable type for semantic validation
         context.bind_variable_type(np.variable, "path")
         node_aliases = [
-            context.variable_aliases.get(n.variable)
-            if n.variable
-            else context.node_obj_aliases.get(id(n), f"n{i}")
+            (
+                context.variable_aliases.get(n.variable)
+                if n.variable
+                else context.node_obj_aliases.get(id(n), f"n{i}")
+            )
             for i, n in enumerate(np.pattern.nodes)
         ]
         # For relationships: first try the variable alias, then look up by object id
@@ -5272,11 +5452,7 @@ def _subquery_correlated_scalar(subquery, inner, child_ctx, context):
         if child_ctx.join_clauses:
             inner_sql_parts.extend(child_ctx.join_clauses)
     elif child_ctx.join_clauses:
-        first_join = (
-            child_ctx.join_clauses[0]
-            .replace("JOIN ", "", 1)
-            .replace("CROSS JOIN ", "", 1)
-        )
+        first_join = child_ctx.join_clauses[0].replace("JOIN ", "", 1).replace("CROSS JOIN ", "", 1)
         on_idx = first_join.find(" ON ")
         if on_idx > 0:
             from_part = first_join[:on_idx]
@@ -5335,11 +5511,11 @@ def _subquery_correlated_lateral(subquery, inner, context, metadata):
         first_jc = child_ctx_lateral.join_clauses[0]
         for prefix in ("CROSS JOIN ", "LEFT OUTER JOIN ", "JOIN "):
             if first_jc.startswith(prefix):
-                rest = first_jc[len(prefix):]
+                rest = first_jc[len(prefix) :]
                 on_idx = rest.find(" ON ")
                 if on_idx > 0:
                     table_part = rest[:on_idx]
-                    cond_part = rest[on_idx + 4:]
+                    cond_part = rest[on_idx + 4 :]
                     child_ctx_lateral.from_clauses.append(table_part)
                     if cond_part.strip() and cond_part.strip() != "1=1":
                         child_ctx_lateral.where_conditions.insert(0, cond_part)
@@ -5449,9 +5625,7 @@ def _subquery_uncorrelated(subquery, inner, context, metadata):
                 context.scalar_variables.add(alias)
 
 
-def translate_subquery_call(
-    subquery: ast.SubqueryCall, context: TranslationContext, metadata
-):
+def translate_subquery_call(subquery: ast.SubqueryCall, context: TranslationContext, metadata):
     inner = subquery.inner_query
     is_correlated = len(subquery.import_variables) > 0
     if is_correlated:
@@ -5506,9 +5680,10 @@ def translate_node_pattern(node, context, metadata, optional=False):
                 # ONE null row (instead of filtering every expanded-edge row to 0 rows).
                 if optional and not alias.startswith("Stage"):
                     import re as _re_lbl
+
                     _node_join_pat = _re_lbl.compile(
-                        rf'LEFT OUTER JOIN\s+\S+\s+{_re_lbl.escape(alias)}\s+ON\s+'
-                        rf'{_re_lbl.escape(alias)}\.node_id\s*=\s*(\S+)'
+                        rf"LEFT OUTER JOIN\s+\S+\s+{_re_lbl.escape(alias)}\s+ON\s+"
+                        rf"{_re_lbl.escape(alias)}\.node_id\s*=\s*(\S+)"
                     )
                     _rhs_col = None
                     _edge_join_idx = None
@@ -5524,7 +5699,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                         label_param = context.add_join_param(label)
                         context.join_clauses[_edge_join_idx] += (
                             f" AND EXISTS(SELECT 1 FROM {_table('rdf_labels')}"
-                            f" WHERE s = {_rhs_col} AND \"label\" = {label_param})"
+                            f' WHERE s = {_rhs_col} AND "label" = {label_param})'
                         )
                         continue  # no separate label JOIN or WHERE needed
                 l_alias = context.next_alias("l")
@@ -5561,11 +5736,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                     else:
                         context.where_conditions.append(f"{p_alias}.val = {val_sql}")
         return
-    alias = (
-        context.register_variable(node.variable)
-        if node.variable
-        else context.next_alias("n")
-    )
+    alias = context.register_variable(node.variable) if node.variable else context.next_alias("n")
     # Track node type for semantic validation
     if node.variable:
         context.bind_variable_type(node.variable, "node")
@@ -5584,9 +5755,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                     context.join_clauses.append(f"{jt} {sql_table} {alias} ON 1=1")
                 for k, v in node.properties.items():
                     val_sql = translate_expression(v, context, segment="where")
-                    context.where_conditions.append(
-                        f"{alias}.{sanitize_identifier(k)} = {val_sql}"
-                    )
+                    context.where_conditions.append(f"{alias}.{sanitize_identifier(k)} = {val_sql}")
                 return
 
     nodes_tbl = _table("nodes")
@@ -5608,7 +5777,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
         if is_anchor_optional and node.labels:
             # Track all labels for this anchor as a group (combined NOT EXISTS check).
             context.optional_null_row_label_groups.append(list(node.labels))
-        if getattr(node, 'labels_or', False) and len(node.labels) > 1:
+        if getattr(node, "labels_or", False) and len(node.labels) > 1:
             l_alias = context.next_alias("l")
             labels_inlined = ", ".join(f"'{lab}'" for lab in node.labels)
             context.join_clauses.append(
@@ -5649,9 +5818,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
             context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
             if not optional:
-                context.where_conditions.append(
-                    TranslationContext._structural_guard_sql(alias, k)
-                )
+                context.where_conditions.append(TranslationContext._structural_guard_sql(alias, k))
             p_alias = context.next_alias("p")
             context.join_clauses.append(
                 f"{jt} {_table('rdf_props')} {p_alias} "
@@ -5663,7 +5830,6 @@ def translate_node_pattern(node, context, metadata, optional=False):
                 )
             else:
                 context.where_conditions.append(f"{p_alias}.val = {val_sql}")
-
 
 
 def _trp_variable_length(rel, source_node, target_node, context, metadata, optional=False):
@@ -5690,7 +5856,11 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
         src_id_param = _resolve_id_param(source_node)
         dst_id_param = _resolve_id_param(target_node)
 
-        direction_str = "both" if rel.direction == ast.Direction.BOTH else ("in" if rel.direction == ast.Direction.INCOMING else "out")
+        direction_str = (
+            "both"
+            if rel.direction == ast.Direction.BOTH
+            else ("in" if rel.direction == ast.Direction.INCOMING else "out")
+        )
 
         # If the relationship has a named variable (e.g. [r*1..3]), register it so
         # that RETURN r does not raise "Undefined variable".  We use the sentinel alias
@@ -5717,10 +5887,14 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
                 "src_id_param": src_id_param,
                 "dst_id_param": dst_id_param,
                 "return_path_funcs": [],
-                "properties": {
-                    k: (v.value if isinstance(v, ast.Literal) else v)
-                    for k, v in rel.properties.items()
-                } if rel.properties else {},
+                "properties": (
+                    {
+                        k: (v.value if isinstance(v, ast.Literal) else v)
+                        for k, v in rel.properties.items()
+                    }
+                    if rel.properties
+                    else {}
+                ),
                 "source_labels": list(source_node.labels) if source_node.labels else [],
                 "target_labels": list(target_node.labels) if target_node.labels else [],
                 "optional": optional,
@@ -5801,10 +5975,7 @@ def _trp_temporal_rewrite_from_joins(context, source_alias, cte_name):
 
     new_joins = []
     for jc in context.join_clauses:
-        if (
-            f"{source_alias}.node_id" in jc
-            or f"{_table('nodes')} {source_alias}" in jc
-        ):
+        if f"{source_alias}.node_id" in jc or f"{_table('nodes')} {source_alias}" in jc:
             continue
         new_joins.append(jc)
     context.join_clauses = new_joins
@@ -5813,9 +5984,7 @@ def _trp_temporal_rewrite_from_joins(context, source_alias, cte_name):
 def _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edge_alias, direction):
     if rel.variable is None or context.pending_where is None:
         return False
-    tb = _extract_temporal_bounds(
-        context.pending_where, rel.variable, context.input_params
-    )
+    tb = _extract_temporal_bounds(context.pending_where, rel.variable, context.input_params)
     if tb is None:
         return False
     engine = getattr(context, "_engine", None)
@@ -5847,9 +6016,7 @@ def _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edg
     cte_sql = _build_temporal_cte(edges, cte_name, getattr(context, "_metadata", None))
     if not hasattr(context, "cte_clauses"):
         context.cte_clauses = []
-    context.cte_clauses.append(
-        f"{cte_name} AS ({cte_sql})"
-    )
+    context.cte_clauses.append(f"{cte_name} AS ({cte_sql})")
     context.temporal_rel_ctes[rel.variable] = cte_name
     context.temporal_derived[cte_name] = cte_sql
     context.temporal_rel_ctes[rel.variable] = cte_name
@@ -5873,21 +6040,15 @@ def _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edg
     return True
 
 
-def _trp_mapped_relation(rel, source_node, target_node, context, source_alias, target_alias, optional):
+def _trp_mapped_relation(
+    rel, source_node, target_node, context, source_alias, target_alias, optional
+):
     """Handle SQL-table-bridge mapped relations. Returns True if handled."""
     if not (rel.types and len(rel.types) == 1):
         return False
     engine = getattr(context, "_engine", None)
-    src_label = (
-        next((lbl for lbl in source_node.labels), None)
-        if source_node.labels
-        else None
-    )
-    tgt_label = (
-        next((lbl for lbl in target_node.labels), None)
-        if target_node.labels
-        else None
-    )
+    src_label = next((lbl for lbl in source_node.labels), None) if source_node.labels else None
+    tgt_label = next((lbl for lbl in target_node.labels), None) if target_node.labels else None
     if engine and src_label and tgt_label:
         rel_map = engine.get_rel_mapping(src_label, rel.types[0], tgt_label)
         if rel_map:
@@ -5919,8 +6080,17 @@ def _trp_mapped_relation(rel, source_node, target_node, context, source_alias, t
 
 
 def _trp_undirected_edge(
-    rel, source_node, target_node, context,
-    source_alias, target_alias, edge_alias, s_ref, t_ref, jt, is_new_target,
+    rel,
+    source_node,
+    target_node,
+    context,
+    source_alias,
+    target_alias,
+    edge_alias,
+    s_ref,
+    t_ref,
+    jt,
+    is_new_target,
     is_anon_source=False,
 ):
     """Handle undirected (BOTH direction) patterns via CTE-based UNION ALL.
@@ -5982,7 +6152,7 @@ def _trp_undirected_edge(
         else:
             context.join_clauses.append(f"{jt} {cte_name} {edge_alias} ON 1=1")
         # Apply source node labels via _src column (anonymous source has no node table)
-        for label in (source_node.labels or []):
+        for label in source_node.labels or []:
             l_alias = context.next_alias("l")
             context.join_clauses.append(
                 f"{jt} {_table('rdf_labels')} {l_alias} "
@@ -5995,9 +6165,7 @@ def _trp_undirected_edge(
 
     context._undirected_aliases.add(edge_alias)
     if is_new_target and not target_alias.startswith("Stage"):
-        context.join_clauses.append(
-            f"{jt} {_table('nodes')} {target_alias} ON {target_on}"
-        )
+        context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
     else:
         context.where_conditions.append(target_on)
     context.variable_aliases[rel.variable or edge_alias] = edge_alias
@@ -6108,12 +6276,14 @@ def _trp_directed_edge_join(
             context.join_clauses.append(f"{jt} {derived} ON {edge_cond}")
             context._edgescan_aliases.add(edge_alias)
         else:
-            context.join_clauses.append(
-                f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
-            )
+            context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
     else:
         if is_anon_source:
-            actual_cond = edge_cond.lstrip("1=1").lstrip(" AND ").strip() if edge_cond.startswith("1=1") else edge_cond
+            actual_cond = (
+                edge_cond.lstrip("1=1").lstrip(" AND ").strip()
+                if edge_cond.startswith("1=1")
+                else edge_cond
+            )
             if not context.from_clauses:
                 context.from_clauses.append(f"{_table('rdf_edges')} {edge_alias}")
                 if actual_cond:
@@ -6132,9 +6302,7 @@ def _trp_directed_edge_join(
                     f"{jt} {_table('rdf_edges')} {edge_alias} ON {full_cond}"
                 )
         else:
-            context.join_clauses.append(
-                f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}"
-            )
+            context.join_clauses.append(f"{jt} {_table('rdf_edges')} {edge_alias} ON {edge_cond}")
 
 
 def _trp_apply_anon_source_constraints(source_node, edge_alias, src_col, context, jt):
@@ -6144,7 +6312,7 @@ def _trp_apply_anon_source_constraints(source_node, edge_alias, src_col, context
     provides the source id via edge_alias.<src_col> ('s' for OUTGOING, 'o_id' for INCOMING).
     """
     src_ref = f"{edge_alias}.{src_col}"
-    for label in (source_node.labels or []):
+    for label in source_node.labels or []:
         l_alias = context.next_alias("l")
         context.join_clauses.append(
             f"{jt} {_table('rdf_labels')} {l_alias} "
@@ -6199,9 +6367,20 @@ def _trp_move_target_cond_to_edge_join(context, edge_alias, target_on, source_al
 
 
 def _trp_directed_edge(
-    rel, source_node, target_node, context,
-    source_alias, target_alias, edge_alias, s_ref, t_ref,
-    edge_cond, target_on, jt, is_anon_source, is_new_target,
+    rel,
+    source_node,
+    target_node,
+    context,
+    source_alias,
+    target_alias,
+    edge_alias,
+    s_ref,
+    t_ref,
+    edge_cond,
+    target_on,
+    jt,
+    is_anon_source,
+    is_new_target,
 ):
     optional = jt == "LEFT OUTER JOIN"
     if rel.types:
@@ -6215,9 +6394,7 @@ def _trp_directed_edge(
     )
 
     if is_new_target and not target_alias.startswith("Stage"):
-        context.join_clauses.append(
-            f"{jt} {_table('nodes')} {target_alias} ON {target_on}"
-        )
+        context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
     elif optional:
         # For OPTIONAL MATCH with an already-bound target, choose null guard:
         # - If source was introduced WITHIN this optional match (not pre-bound):
@@ -6260,9 +6437,7 @@ def _trp_directed_edge(
                 # Source was introduced within this OPTIONAL — move target equality
                 # into the edge JOIN ON (no WHERE), and null-gate source via this edge.
                 # This avoids filtering the base row when the full path fails.
-                _trp_move_target_cond_to_edge_join(
-                    context, edge_alias, target_on, source_alias
-                )
+                _trp_move_target_cond_to_edge_join(context, edge_alias, target_on, source_alias)
         else:
             context.where_conditions.append(target_on)
     else:
@@ -6306,6 +6481,7 @@ def translate_relationship_pattern(
         context.rel_variables.add(rel.variable)
         # Track relationship type for semantic validation
         context.bind_variable_type(rel.variable, "relationship")
+
     def _node_id_ref(variable, alias):
         """Return full SQL expression for the node_id of a node variable.
 
@@ -6319,6 +6495,7 @@ def translate_relationship_pattern(
             safe_var = _safe_alias(variable)
             return f"SQLUser.JSON_VALUE({alias}.{safe_var}, '$._id')"
         return f"{alias}.node_id"
+
     direction = "in" if rel.direction == ast.Direction.INCOMING else "out"
     s_ref = _node_id_ref(source_node.variable, source_alias)
     t_ref = _node_id_ref(target_node.variable, target_alias)
@@ -6378,7 +6555,12 @@ def translate_relationship_pattern(
         # When optional and source was pre-registered by translate_node_pattern (is_unbound_src
         # is False but source was not stage-bound), it got a CROSS JOIN.  Upgrade it to a LEFT
         # OUTER JOIN anchored on the edge column so OPTIONAL semantics are preserved.
-        if optional and not is_unbound_src and not is_anon_source and not source_alias.startswith("Stage"):
+        if (
+            optional
+            and not is_unbound_src
+            and not is_anon_source
+            and not source_alias.startswith("Stage")
+        ):
             nodes_tbl = _table("nodes")
             cross_clause = f"CROSS JOIN {nodes_tbl} {source_alias}"
             new_join_clauses = []
@@ -6392,7 +6574,8 @@ def translate_relationship_pattern(
             context.join_clauses = new_join_clauses
             # Remove the spurious WHERE condition that would nullify the LEFT OUTER JOIN
             context.where_conditions = [
-                w for w in context.where_conditions
+                w
+                for w in context.where_conditions
                 if not (f"{source_alias}.node_id = {stage}.{src_edge_col}" in w)
             ]
             # Label JOINs for the source were added (without WHERE) by translate_node_pattern.
@@ -6400,9 +6583,11 @@ def translate_relationship_pattern(
             # if the edge's source node doesn't carry the required label the pattern doesn't
             # match and the whole OPTIONAL should yield NULL.  Enforce with WHERE IS NOT NULL.
             for jc in context.join_clauses:
-                if (jc.startswith("LEFT OUTER JOIN") and
-                        _table("rdf_labels") in jc and
-                        f"{source_alias}.node_id" in jc):
+                if (
+                    jc.startswith("LEFT OUTER JOIN")
+                    and _table("rdf_labels") in jc
+                    and f"{source_alias}.node_id" in jc
+                ):
                     # Extract the label alias (first token after rdf_labels keyword)
                     parts = jc.split()
                     rdf_idx = next((i for i, p in enumerate(parts) if "rdf_labels" in p), None)
@@ -6416,14 +6601,11 @@ def translate_relationship_pattern(
         if is_new_target and target_node.variable:
             target_alias_fresh = context.next_alias("n")
             context.variable_aliases[target_node.variable] = target_alias_fresh
-            on_cond = (
-                f"{target_alias_fresh}.node_id = {stage}.{tgt_edge_col}"
-                + (f" AND {dir_cond}" if dir_cond != "1=1" else "")
+            on_cond = f"{target_alias_fresh}.node_id = {stage}.{tgt_edge_col}" + (
+                f" AND {dir_cond}" if dir_cond != "1=1" else ""
             )
-            context.join_clauses.append(
-                f"{jt} {_table('nodes')} {target_alias_fresh} ON {on_cond}"
-            )
-            for label in (target_node.labels or []):
+            context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias_fresh} ON {on_cond}")
+            for label in target_node.labels or []:
                 l_alias = context.next_alias("l")
                 context.join_clauses.append(
                     f"{jt} {_table('rdf_labels')} {l_alias} "
@@ -6443,14 +6625,13 @@ def translate_relationship_pattern(
         if is_unbound_src and source_node.variable:
             source_alias_fresh = context.next_alias("n")
             context.variable_aliases[source_node.variable] = source_alias_fresh
-            on_cond = (
-                f"{source_alias_fresh}.node_id = {stage}.{src_edge_col}"
-                + (f" AND {dir_cond}" if dir_cond != "1=1" and not (is_new_target and target_node.variable) else "")
+            on_cond = f"{source_alias_fresh}.node_id = {stage}.{src_edge_col}" + (
+                f" AND {dir_cond}"
+                if dir_cond != "1=1" and not (is_new_target and target_node.variable)
+                else ""
             )
-            context.join_clauses.append(
-                f"{jt} {_table('nodes')} {source_alias_fresh} ON {on_cond}"
-            )
-            for label in (source_node.labels or []):
+            context.join_clauses.append(f"{jt} {_table('nodes')} {source_alias_fresh} ON {on_cond}")
+            for label in source_node.labels or []:
                 l_alias = context.next_alias("l")
                 context.join_clauses.append(
                     f"{jt} {_table('rdf_labels')} {l_alias} "
@@ -6459,14 +6640,29 @@ def translate_relationship_pattern(
                 if not optional:
                     context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
         return
-    if _trp_temporal_edge(rel, source_node, target_node, context, source_alias, edge_alias, direction):
+    if _trp_temporal_edge(
+        rel, source_node, target_node, context, source_alias, edge_alias, direction
+    ):
         return
-    if _trp_mapped_relation(rel, source_node, target_node, context, source_alias, target_alias, optional):
+    if _trp_mapped_relation(
+        rel, source_node, target_node, context, source_alias, target_alias, optional
+    ):
         return
     if rel.direction == ast.Direction.BOTH:
-        _trp_undirected_edge(rel, source_node, target_node, context,
-                              source_alias, target_alias, edge_alias, s_ref, t_ref, jt, is_new_target,
-                              is_anon_source=is_anon_source)
+        _trp_undirected_edge(
+            rel,
+            source_node,
+            target_node,
+            context,
+            source_alias,
+            target_alias,
+            edge_alias,
+            s_ref,
+            t_ref,
+            jt,
+            is_new_target,
+            is_anon_source=is_anon_source,
+        )
         return
 
     # Direction-symmetry fix: when source is unbound but target is already bound,
@@ -6490,7 +6686,7 @@ def translate_relationship_pattern(
         context.join_clauses.append(f"{jt} {_table('nodes')} {source_alias} ON {src_on}")
         # Apply source node labels — skip_first_node_join bypassed translate_node_pattern,
         # so labels must be joined here to avoid missing filter constraints.
-        for label in (source_node.labels or []):
+        for label in source_node.labels or []:
             l_alias = context.next_alias("l")
             context.join_clauses.append(
                 f"{jt} {_table('rdf_labels')} {l_alias} "
@@ -6520,24 +6716,42 @@ def translate_relationship_pattern(
         else:
             edge_cond = f"{edge_alias}.o_id = {s_ref}"
             target_on = f"{t_ref} = {edge_alias}.s"
-    _trp_directed_edge(rel, source_node, target_node, context,
-                       source_alias, target_alias, edge_alias, s_ref, t_ref,
-                       edge_cond, target_on, jt, is_anon_source, is_new_target)
+    _trp_directed_edge(
+        rel,
+        source_node,
+        target_node,
+        context,
+        source_alias,
+        target_alias,
+        edge_alias,
+        s_ref,
+        t_ref,
+        edge_cond,
+        target_on,
+        jt,
+        is_anon_source,
+        is_new_target,
+    )
 
 
 def _check_where_unbound_vars(expr, context):
     """Raise SyntaxError if expr uses unbound node/relationship variables at WHERE level."""
     if isinstance(expr, ast.LabelPredicate):
         var = expr.variable
-        if (var and var not in context.variable_aliases
-                and var not in context.input_params
-                and var not in getattr(context, "scalar_variables", set())):
+        if (
+            var
+            and var not in context.variable_aliases
+            and var not in context.input_params
+            and var not in getattr(context, "scalar_variables", set())
+        ):
             raise SyntaxError(f"UndefinedVariable: Variable `{var}` not defined")
     elif isinstance(expr, ast.Variable):
         var = expr.name
-        if (var not in context.variable_aliases
-                and var not in context.input_params
-                and var not in getattr(context, "scalar_variables", set())):
+        if (
+            var not in context.variable_aliases
+            and var not in context.input_params
+            and var not in getattr(context, "scalar_variables", set())
+        ):
             raise SyntaxError(f"UndefinedVariable: Variable `{var}` not defined")
 
 
@@ -6551,15 +6765,15 @@ def _collect_cypher_vars(expr) -> set:
     elif isinstance(expr, ast.PropertyReference):
         vars_found.add(expr.variable)
     elif isinstance(expr, ast.BooleanExpression):
-        for operand in (expr.operands or []):
+        for operand in expr.operands or []:
             vars_found.update(_collect_cypher_vars(operand))
     elif isinstance(expr, ast.FunctionCall):
-        for arg in (expr.arguments or []):
+        for arg in expr.arguments or []:
             vars_found.update(_collect_cypher_vars(arg))
-    elif hasattr(expr, 'left') and hasattr(expr, 'right'):
+    elif hasattr(expr, "left") and hasattr(expr, "right"):
         vars_found.update(_collect_cypher_vars(expr.left))
         vars_found.update(_collect_cypher_vars(expr.right))
-    elif hasattr(expr, 'expression'):
+    elif hasattr(expr, "expression"):
         vars_found.update(_collect_cypher_vars(expr.expression))
     return vars_found
 
@@ -6578,10 +6792,7 @@ def translate_where_clause(where, context):
     opt_new = getattr(context, "optional_match_new_aliases", set())
     if opt_new:
         cypher_vars = _collect_cypher_vars(where.expression)
-        opt_cypher_vars = {
-            v for v in cypher_vars
-            if context.variable_aliases.get(v) in opt_new
-        }
+        opt_cypher_vars = {v for v in cypher_vars if context.variable_aliases.get(v) in opt_new}
         non_opt_cypher_vars = cypher_vars - opt_cypher_vars
         # Push into JOIN when all referenced variables are from the optional set.
         # To correctly null out the edge alias when the condition fails, we push
@@ -6591,9 +6802,10 @@ def translate_where_clause(where, context):
             opt_join_start = getattr(context, "opt_join_start_idx", None)
             if opt_join_start is not None and opt_join_start < len(context.join_clauses):
                 import re as _re
+
                 # Build substitution map: nX.node_id -> edge/CTE column it equals in JOIN ON
                 _node_dst_pat = _re.compile(
-                    r'LEFT OUTER JOIN\s+\S+\s+(\w+)\s+ON\s+\1\.node_id\s*=\s*(\w+\.\w+)\b'
+                    r"LEFT OUTER JOIN\s+\S+\s+(\w+)\s+ON\s+\1\.node_id\s*=\s*(\w+\.\w+)\b"
                 )
                 subst = {}
                 for jc in context.join_clauses[opt_join_start:]:
@@ -6607,12 +6819,19 @@ def translate_where_clause(where, context):
                 # IRIS crashes when correlated property-value subqueries appear in
                 # LEFT OUTER JOIN ON clauses (e.g. "(SELECT val FROM rdf_props ...)").
                 # EXISTS subqueries are fine. Skip the JOIN push only for val-fetch patterns.
-                _has_prop_subq = "(SELECT val FROM" in cond_pushed or "(SELECT %EXACT" in cond_pushed
+                _has_prop_subq = (
+                    "(SELECT val FROM" in cond_pushed or "(SELECT %EXACT" in cond_pushed
+                )
                 if _has_prop_subq:
-                    opt_aliases = {context.variable_aliases[v] for v in opt_cypher_vars
-                                   if v in context.variable_aliases}
+                    opt_aliases = {
+                        context.variable_aliases[v]
+                        for v in opt_cypher_vars
+                        if v in context.variable_aliases
+                    }
                     if opt_aliases:
-                        null_checks = " OR ".join(f"{a}.node_id IS NULL" for a in sorted(opt_aliases))
+                        null_checks = " OR ".join(
+                            f"{a}.node_id IS NULL" for a in sorted(opt_aliases)
+                        )
                         context.where_conditions.append(f"({null_checks} OR {cond})")
                         return
                 # Move where_params added for this condition to join_params at the
@@ -6626,12 +6845,13 @@ def translate_where_clause(where, context):
                     del context.where_params[-n_new_where_params:]
                     # Find insertion offset: ?s in join clauses 0..opt_join_start (inclusive)
                     insert_offset = sum(
-                        jc.count("?")
-                        for jc in context.join_clauses[:opt_join_start + 1]
+                        jc.count("?") for jc in context.join_clauses[: opt_join_start + 1]
                     )
                     for i, p in enumerate(new_params):
                         context.join_params.insert(insert_offset + i, p)
-                context.join_clauses[opt_join_start] = context.join_clauses[opt_join_start] + f" AND {cond_pushed}"
+                context.join_clauses[opt_join_start] = (
+                    context.join_clauses[opt_join_start] + f" AND {cond_pushed}"
+                )
                 return
         elif opt_cypher_vars and non_opt_cypher_vars:
             # Mixed: some mandatory, some optional vars. Push the condition to the FIRST
@@ -6642,15 +6862,16 @@ def translate_where_clause(where, context):
             opt_join_start = getattr(context, "opt_join_start_idx", None)
             if opt_join_start is not None and opt_join_start < len(context.join_clauses):
                 import re as _re
+
                 # Match "LEFT OUTER JOIN <table> <alias> ON <alias>.node_id = <rhs>"
                 # where <rhs> can be any column reference (standard or CTE).
                 _node_dst_pat = _re.compile(
-                    r'LEFT OUTER JOIN\s+\S+\s+(\w+)\s+ON\s+\1\.node_id\s*=\s*(\w+\.\w+)\b'
+                    r"LEFT OUTER JOIN\s+\S+\s+(\w+)\s+ON\s+\1\.node_id\s*=\s*(\w+\.\w+)\b"
                 )
                 # Extract all join aliases from joins AFTER opt_join_start (except node aliases
                 # which we'll substitute out). These are forward references we can't push.
                 _join_alias_pat = _re.compile(
-                    r'(?:LEFT OUTER JOIN|LEFT JOIN|JOIN)\s+\S+\s+(\w+)\s+ON'
+                    r"(?:LEFT OUTER JOIN|LEFT JOIN|JOIN)\s+\S+\s+(\w+)\s+ON"
                 )
                 _forward_aliases = set()
                 for jc in context.join_clauses[opt_join_start:]:
@@ -6675,16 +6896,20 @@ def translate_where_clause(where, context):
                         new_params = context.where_params[-n_new_where_params:]
                         del context.where_params[-n_new_where_params:]
                         insert_offset = sum(
-                            jc.count("?")
-                            for jc in context.join_clauses[:opt_join_start + 1]
+                            jc.count("?") for jc in context.join_clauses[: opt_join_start + 1]
                         )
                         for i, p in enumerate(new_params):
                             context.join_params.insert(insert_offset + i, p)
-                    context.join_clauses[opt_join_start] = context.join_clauses[opt_join_start] + f" AND {cond_pushed}"
+                    context.join_clauses[opt_join_start] = (
+                        context.join_clauses[opt_join_start] + f" AND {cond_pushed}"
+                    )
                     return
             # Fallback: wrap with IS NULL guard in outer WHERE
-            opt_aliases = {context.variable_aliases[v] for v in opt_cypher_vars
-                          if v in context.variable_aliases}
+            opt_aliases = {
+                context.variable_aliases[v]
+                for v in opt_cypher_vars
+                if v in context.variable_aliases
+            }
             if opt_aliases:
                 null_checks = " OR ".join(f"{a}.node_id IS NULL" for a in sorted(opt_aliases))
                 context.where_conditions.append(f"({null_checks} OR {cond})")
@@ -6736,7 +6961,7 @@ def _absorb_child_joins(child_ctx, context, sub_froms, sub_wheres):
             tbl_part = parts[0]
             for kw in ("LEFT OUTER JOIN ", "LEFT JOIN ", "JOIN "):
                 if tbl_part.upper().startswith(kw):
-                    tbl_part = tbl_part[len(kw):]
+                    tbl_part = tbl_part[len(kw) :]
                     break
             sub_froms.append(tbl_part)
             sub_wheres.append(parts[1].strip())
@@ -6801,7 +7026,7 @@ def _register_unbound_node(node, child_ctx, sub_froms, sub_wheres):
     node_alias = child_ctx.next_alias("n")
     child_ctx.variable_aliases[node.variable] = node_alias
     sub_froms.append(f"{_table('nodes')} {node_alias}")
-    for lbl in (node.labels or []):
+    for lbl in node.labels or []:
         lbl_alias = child_ctx.next_alias("l")
         sub_froms.append(f"{_table('rdf_labels')} {lbl_alias}")
         sub_wheres.append(
@@ -6818,14 +7043,10 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
     if getattr(expr, "is_pattern_predicate", False):
         for node in pat.nodes:
             if node and node.variable and node.variable not in context.variable_aliases:
-                raise SyntaxError(
-                    f"UndefinedVariable: Variable `{node.variable}` not defined"
-                )
+                raise SyntaxError(f"UndefinedVariable: Variable `{node.variable}` not defined")
         for rel in pat.relationships:
             if rel and rel.variable and rel.variable not in context.variable_aliases:
-                raise SyntaxError(
-                    f"UndefinedVariable: Variable `{rel.variable}` not defined"
-                )
+                raise SyntaxError(f"UndefinedVariable: Variable `{rel.variable}` not defined")
 
     # Full existential subquery with aggregation: EXISTS { MATCH ... WITH ..., count(*) AS alias WHERE alias = N }
     # Translates to: (SELECT COUNT(*) FROM ... WHERE ...) = N
@@ -6871,7 +7092,9 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
                         right_node = pat.nodes[i + 1] if i + 1 < len(pat.nodes) else None
                         edge_alias = child_ctx.next_alias("ex")
                         sub_froms.append(f"{_table('rdf_edges')} {edge_alias}")
-                        conds = _exists_edge_conds(rel, left_node, right_node, edge_alias, child_ctx)
+                        conds = _exists_edge_conds(
+                            rel, left_node, right_node, edge_alias, child_ctx
+                        )
                         sub_wheres.extend(conds)
                     if expr.where_condition:
                         wc_sql = translate_boolean_expression(expr.where_condition, child_ctx)
@@ -6993,6 +7216,7 @@ def _get_non_boolean_operand(expr):
                 return operand
     return None
 
+
 def _format_invalid_type(operand):
     """Format error message for invalid operand type."""
     if isinstance(operand, ast.Literal):
@@ -7006,7 +7230,6 @@ def _format_invalid_type(operand):
             return f"list: {operand.value!r}"
     # Fallback
     return str(operand)
-
 
 
 def _coerce_varchar_boolean_if_needed(operand, translated_sql, context) -> str:
@@ -7057,9 +7280,10 @@ def _boolean_expr_logical(op, expr, context):
         # For AND, we need cond to hold (it's already nullable → mark has_null).
         # "CASE WHEN (cond) THEN (1=1) ELSE NULL END" means: true if cond, else NULL.
         import re as _re_and
+
         unwrapped = []
         for p in parts:
-            m_not = _re_and.match(r'^CASE WHEN NOT \((.+)\) THEN \(1=0\) ELSE NULL END$', p)
+            m_not = _re_and.match(r"^CASE WHEN NOT \((.+)\) THEN \(1=0\) ELSE NULL END$", p)
             if m_not:
                 has_null = True
                 unwrapped.append(m_not.group(1))
@@ -7122,9 +7346,10 @@ def _boolean_expr_logical(op, expr, context):
                 return "(1=1)"
             # Unwrap nested nullable CASE WHEN parts from inner 3VL AND/OR:
             import re as _re_or
+
             unwrapped_or = []
             for p in parts_or:
-                m_or = _re_or.match(r'^CASE WHEN \((.+)\) THEN \(1=1\) ELSE NULL END$', p)
+                m_or = _re_or.match(r"^CASE WHEN \((.+)\) THEN \(1=1\) ELSE NULL END$", p)
                 if m_or:
                     has_null_or = True
                     unwrapped_or.append(m_or.group(1))
@@ -7170,8 +7395,8 @@ def _boolean_expr_logical(op, expr, context):
         # Constant folding: if both operands are sentinel booleans (1=1)/(1=0), evaluate at Python level
         # to avoid generating exponentially large nested SQL for chains like true XOR true XOR true ...
         if sa in ("(1=1)", "(1=0)") and sb in ("(1=1)", "(1=0)"):
-            a_val = (sa == "(1=1)")
-            b_val = (sb == "(1=1)")
+            a_val = sa == "(1=1)"
+            b_val = sb == "(1=1)"
             result = a_val != b_val  # XOR: true if exactly one is true
             return "(1=1)" if result else "(1=0)"
         # Both are non-NULL expressions: simple XOR
@@ -7189,18 +7414,24 @@ def _boolean_expr_logical(op, expr, context):
         if isinstance(operand, ast.Literal) and operand.value is None:
             return "NULL"
         # Fold NOT NOT: double negation cancels (IRIS SQL rejects NOT NOT syntax)
-        if (isinstance(operand, ast.BooleanExpression)
-                and operand.operator == ast.BooleanOperator.NOT
-                and len(operand.operands) == 1):
+        if (
+            isinstance(operand, ast.BooleanExpression)
+            and operand.operator == ast.BooleanOperator.NOT
+            and len(operand.operands) == 1
+        ):
             return translate_boolean_expression(operand.operands[0], context)
         # NOT (x IS NULL) → x IS NOT NULL (IRIS parses NOT x IS NULL as (NOT x) IS NULL)
-        if (isinstance(operand, ast.BooleanExpression)
-                and operand.operator == ast.BooleanOperator.IS_NULL):
+        if (
+            isinstance(operand, ast.BooleanExpression)
+            and operand.operator == ast.BooleanOperator.IS_NULL
+        ):
             left = translate_expression(operand.operands[0], context, segment="where")
             return f"{left} IS NOT NULL"
         # NOT (x IS NOT NULL) → x IS NULL
-        if (isinstance(operand, ast.BooleanExpression)
-                and operand.operator == ast.BooleanOperator.IS_NOT_NULL):
+        if (
+            isinstance(operand, ast.BooleanExpression)
+            and operand.operator == ast.BooleanOperator.IS_NOT_NULL
+        ):
             left = translate_expression(operand.operands[0], context, segment="where")
             return f"{left} IS NULL"
         operand_sql = translate_boolean_expression(operand, context)
@@ -7270,9 +7501,7 @@ def _list_literal_in_3vl(lhs_list, rhs_items):
 def _boolean_expr_in(left, right_expr, context, left_expr=None):
     # Validate RHS is a list type; non-list literals (bool, int, str) are type errors
     if isinstance(right_expr, ast.Literal) and not isinstance(right_expr.value, list):
-        raise SyntaxError(
-            "InvalidArgumentType: IN requires a list on the right-hand side"
-        )
+        raise SyntaxError("InvalidArgumentType: IN requires a list on the right-hand side")
     if isinstance(right_expr, ast.SubscriptExpression):
         inner_sql = translate_expression(right_expr.expression, context, segment="where")
         idx = right_expr.index
@@ -7282,7 +7511,9 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             sub_arr_sql = f"SQLUser.JSON_VALUE({inner_sql}, '$[{i}]')"
             return f"{left} IN (SELECT __iv FROM JSON_TABLE({sub_arr_sql}, '$[*]' COLUMNS(__iv VARCHAR(1000) PATH '$')) {ij_alias})"
         idx_sql = translate_expression(idx, context, segment="where")
-        sub_arr_sql = f"SQLUser.JSON_VALUE({inner_sql}, '$[' || CAST(({idx_sql}) AS VARCHAR) || ']')"
+        sub_arr_sql = (
+            f"SQLUser.JSON_VALUE({inner_sql}, '$[' || CAST(({idx_sql}) AS VARCHAR) || ']')"
+        )
         ij_alias = context.next_alias("ij")
         return f"{left} IN (SELECT __iv FROM JSON_TABLE({sub_arr_sql}, '$[*]' COLUMNS(__iv VARCHAR(1000) PATH '$')) {ij_alias})"
     if isinstance(right_expr, ast.SliceExpression):
@@ -7320,7 +7551,11 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             # All null: x IN [null] = null (handled by caller null check for left=null, else null)
             return "NULL"
         # Type-strict IN: Cypher string != int, filter mismatched literal items
-        if left_expr is not None and isinstance(left_expr, ast.Literal) and left_expr.value is not None:
+        if (
+            left_expr is not None
+            and isinstance(left_expr, ast.Literal)
+            and left_expr.value is not None
+        ):
             lv = left_expr.value
             lv_str = isinstance(lv, str)
             lv_num = isinstance(lv, (int, float)) and not isinstance(lv, bool)
@@ -7328,14 +7563,15 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             for item in non_null_items:
                 if isinstance(item, ast.Literal) and item.value is not None:
                     iv = item.value
-                    if (lv_str and isinstance(iv, (int, float)) and not isinstance(iv, bool)):
+                    if lv_str and isinstance(iv, (int, float)) and not isinstance(iv, bool):
                         continue
-                    if (lv_num and isinstance(iv, str)):
+                    if lv_num and isinstance(iv, str):
                         continue
                 filtered.append(item)
             if not filtered:
                 return "(1=0)"
             non_null_items = filtered
+
         def _serialize_in_item(item):
             if isinstance(item, ast.Literal):
                 v = item.value
@@ -7344,6 +7580,7 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
                     return context.add_where_param(json.dumps(_literal_to_python(item)))
                 return context.add_where_param(v)
             return context.add_where_param(item)
+
         placeholders = ", ".join(_serialize_in_item(item) for item in non_null_items)
         in_expr = f"{left} IN ({placeholders})"
         if null_items:
@@ -7364,9 +7601,12 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             return in_expr
     # For function calls / dynamic expressions returning JSON arrays (e.g. keys(), labels(), range()):
     # Expand via JSON_TABLE so: left IN keys(map) works correctly.
-    _json_array_fns = frozenset({"keys", "labels", "range", "collect", "nodes", "relationships", "tail", "reverse"})
+    _json_array_fns = frozenset(
+        {"keys", "labels", "range", "collect", "nodes", "relationships", "tail", "reverse"}
+    )
     _is_json_array_expr = (
-        isinstance(right_expr, ast.FunctionCall) and right_expr.function_name.lower() in _json_array_fns
+        isinstance(right_expr, ast.FunctionCall)
+        and right_expr.function_name.lower() in _json_array_fns
     ) or isinstance(right_expr, ast.ListComprehension)
     if _is_json_array_expr:
         right_sql = translate_expression(right_expr, context, segment="where")
@@ -7393,6 +7633,7 @@ def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str
       2. current-edge vs current-edge: e1.s = e2.s AND e1.p = e2.p AND e1.o_id = e2.o_id
       3. current-edge vs stage-edge: same as case 1, reversed
     """
+
     def _get_edge_info(expr_var):
         """Return (kind, alias, var_name) for a Variable that is an edge variable.
         kind: 'stage' or 'current' or None
@@ -7405,10 +7646,10 @@ def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str
             return None
         edge_stage_vars = getattr(context, "edge_stage_variables", set())
         if alias.startswith("Stage") and var_name in edge_stage_vars:
-            return ('stage', alias, var_name)
+            return ("stage", alias, var_name)
         if alias.startswith("e") and not alias.startswith("Stage"):
             is_undirected = alias in getattr(context, "_undirected_aliases", set())
-            return ('current', alias, var_name, is_undirected)
+            return ("current", alias, var_name, is_undirected)
         return None
 
     left_info = _get_edge_info(left_expr)
@@ -7432,12 +7673,12 @@ def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str
             return (f"{alias}._src", f"{alias}._p", f"{alias}._dst")
         return (f"{alias}.s", f"{alias}.p", f"{alias}.o_id")
 
-    if left_info[0] == 'stage':
+    if left_info[0] == "stage":
         ls, lp, lo = _stage_cols(left_info[2])
     else:
         ls, lp, lo = _current_cols(left_info[1], left_info[3] if len(left_info) > 3 else False)
 
-    if right_info[0] == 'stage':
+    if right_info[0] == "stage":
         rs, rp, ro = _stage_cols(right_info[2])
     else:
         rs, rp, ro = _current_cols(right_info[1], right_info[3] if len(right_info) > 3 else False)
@@ -7452,7 +7693,6 @@ def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str
     else:
         # NOT EQUALS: at least one component differs
         return "(" + " OR ".join(parts) + ")"
-
 
 
 def _collect_is_null_props(expr, context) -> set:
@@ -7542,7 +7782,7 @@ def translate_boolean_expression(expr, context) -> str:
         if isinstance(expr, ast.Variable) and expr.name in context.variable_aliases:
             alias = context.variable_aliases[expr.name]
             # Node aliases start with 'n', relationship aliases with 'e' (but not Stage CTEs)
-            if alias and alias[0] in ('n', 'e') and not alias.startswith('ES_'):
+            if alias and alias[0] in ("n", "e") and not alias.startswith("ES_"):
                 raise SyntaxError(
                     f"InvalidArgumentType: {expr.name} is a graph entity and cannot be used as a boolean predicate"
                 )
@@ -7574,9 +7814,7 @@ def translate_boolean_expression(expr, context) -> str:
             # (result is 1 only when inner is SQL NULL — neither truthy nor falsy).
             # IRIS requires a non-NULL condition in CASE WHEN, so guard against inner="NULL".
             null_check = (
-                f"CASE WHEN {inner} THEN 0 "
-                f"WHEN NOT ({inner}) THEN 0 "
-                f"ELSE 1 END = 1"
+                f"CASE WHEN {inner} THEN 0 " f"WHEN NOT ({inner}) THEN 0 " f"ELSE 1 END = 1"
             )
             if op == ast.BooleanOperator.IS_NULL:
                 return null_check
@@ -7588,7 +7826,9 @@ def translate_boolean_expression(expr, context) -> str:
     # Cypher three-valued logic: any comparison involving NULL yields NULL (unknown).
     # This includes null = null, null <> null, null < x, x IN [null], null IN [...], etc.
     _left_is_null = isinstance(left_expr, ast.Literal) and left_expr.value is None
-    _right_is_null = right_expr is not None and isinstance(right_expr, ast.Literal) and right_expr.value is None
+    _right_is_null = (
+        right_expr is not None and isinstance(right_expr, ast.Literal) and right_expr.value is None
+    )
     # Also check parameter variables whose resolved value is null
     if not _left_is_null and isinstance(left_expr, ast.Variable):
         _left_val = context.input_params.get(left_expr.name)
@@ -7597,7 +7837,8 @@ def translate_boolean_expression(expr, context) -> str:
         _right_val = context.input_params.get(right_expr.name)
         _right_is_null = _right_val is None and right_expr.name in context.input_params
     if (_left_is_null or _right_is_null) and op not in (
-        ast.BooleanOperator.IS_NULL, ast.BooleanOperator.IS_NOT_NULL
+        ast.BooleanOperator.IS_NULL,
+        ast.BooleanOperator.IS_NOT_NULL,
     ):
         # Special case: null IN [] = false (empty list, no unknowns possible)
         if op == ast.BooleanOperator.IN and _left_is_null:
@@ -7631,9 +7872,18 @@ def translate_boolean_expression(expr, context) -> str:
                 bool_val = result if op == ast.BooleanOperator.EQUALS else not result
                 return "(1=1)" if bool_val else "(1=0)"
         # Scalar literal type-mismatch: Cypher is strongly typed, string != number
-        if right_expr is not None and isinstance(left_expr, ast.Literal) and isinstance(right_expr, ast.Literal):
+        if (
+            right_expr is not None
+            and isinstance(left_expr, ast.Literal)
+            and isinstance(right_expr, ast.Literal)
+        ):
             lv, rv = left_expr.value, right_expr.value
-            if lv is not None and rv is not None and not isinstance(lv, bool) and not isinstance(rv, bool):
+            if (
+                lv is not None
+                and rv is not None
+                and not isinstance(lv, bool)
+                and not isinstance(rv, bool)
+            ):
                 # string vs numeric: always false in Cypher (no implicit coercion)
                 lv_str = isinstance(lv, str)
                 rv_str = isinstance(rv, str)
@@ -7672,7 +7922,12 @@ def translate_boolean_expression(expr, context) -> str:
         # Cross-type literal ordering: string vs numeric → null (Cypher has no ordering between types)
         if isinstance(left_expr, ast.Literal) and isinstance(right_expr, ast.Literal):
             lv, rv = left_expr.value, right_expr.value
-            if lv is not None and rv is not None and not isinstance(lv, bool) and not isinstance(rv, bool):
+            if (
+                lv is not None
+                and rv is not None
+                and not isinstance(lv, bool)
+                and not isinstance(rv, bool)
+            ):
                 lv_str = isinstance(lv, str)
                 rv_str = isinstance(rv, str)
                 lv_num = isinstance(lv, (int, float))
@@ -7682,7 +7937,12 @@ def translate_boolean_expression(expr, context) -> str:
 
     # String predicate type guard: STARTS WITH, ENDS WITH, CONTAINS require string operands.
     # If either operand is a known non-string literal (number, bool, list, map), return NULL.
-    if op in (ast.BooleanOperator.STARTS_WITH, ast.BooleanOperator.ENDS_WITH, ast.BooleanOperator.CONTAINS):
+    if op in (
+        ast.BooleanOperator.STARTS_WITH,
+        ast.BooleanOperator.ENDS_WITH,
+        ast.BooleanOperator.CONTAINS,
+    ):
+
         def _is_non_string_literal(e):
             if isinstance(e, ast.Literal) and e.value is not None:
                 return not isinstance(e.value, str)
@@ -7691,11 +7951,18 @@ def translate_boolean_expression(expr, context) -> str:
             if isinstance(e, ast.Literal) and isinstance(e.value, list):
                 return True
             return False
-        if _is_non_string_literal(left_expr) or (right_expr is not None and _is_non_string_literal(right_expr)):
+
+        if _is_non_string_literal(left_expr) or (
+            right_expr is not None and _is_non_string_literal(right_expr)
+        ):
             return "NULL"
 
     left_inlined = _inline_literal(left_expr)
-    left = left_inlined if left_inlined is not None else translate_expression(left_expr, context, segment="where")
+    left = (
+        left_inlined
+        if left_inlined is not None
+        else translate_expression(left_expr, context, segment="where")
+    )
     # Wrap CASE WHEN expressions in parens — IRIS SQLCODE -25 if bare CASE ends before =
     if left.startswith("CASE WHEN ") and " END" in left:
         left = f"({left})"
@@ -7704,7 +7971,11 @@ def translate_boolean_expression(expr, context) -> str:
         if in_sql is not None:
             return in_sql
     right_inlined = _inline_literal(right_expr)
-    right = right_inlined if right_inlined is not None else translate_expression(right_expr, context, segment="where")
+    right = (
+        right_inlined
+        if right_inlined is not None
+        else translate_expression(right_expr, context, segment="where")
+    )
     if right.startswith("CASE WHEN ") and " END" in right:
         right = f"({right})"
     if op in (
@@ -7722,19 +7993,44 @@ def translate_boolean_expression(expr, context) -> str:
             right = f"CAST({right} AS DOUBLE)"
         # Numeric literal type promotion: IRIS treats 1 <> 1.0 due to INTEGER vs DOUBLE.
         # When comparing int with float literal, cast both to DOUBLE.
-        _left_is_int = isinstance(left_expr, ast.Literal) and isinstance(left_expr.value, int) and not isinstance(left_expr.value, bool)
-        _right_is_int = right_expr is not None and isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, int) and not isinstance(right_expr.value, bool)
+        _left_is_int = (
+            isinstance(left_expr, ast.Literal)
+            and isinstance(left_expr.value, int)
+            and not isinstance(left_expr.value, bool)
+        )
+        _right_is_int = (
+            right_expr is not None
+            and isinstance(right_expr, ast.Literal)
+            and isinstance(right_expr.value, int)
+            and not isinstance(right_expr.value, bool)
+        )
         _left_is_float = isinstance(left_expr, ast.Literal) and isinstance(left_expr.value, float)
-        _right_is_float = right_expr is not None and isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, float)
+        _right_is_float = (
+            right_expr is not None
+            and isinstance(right_expr, ast.Literal)
+            and isinstance(right_expr.value, float)
+        )
         if (_left_is_int and _right_is_float) or (_left_is_float and _right_is_int):
             left = f"CAST({left} AS DOUBLE)"
             right = f"CAST({right} AS DOUBLE)"
     # Numeric equality: IRIS returns 0 for 1 = 1.0 (INTEGER vs DOUBLE). Cast both to DOUBLE.
     if op == ast.BooleanOperator.EQUALS and right_expr is not None:
-        _left_is_int_eq = isinstance(left_expr, ast.Literal) and isinstance(left_expr.value, int) and not isinstance(left_expr.value, bool)
-        _right_is_int_eq = isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, int) and not isinstance(right_expr.value, bool)
-        _left_is_float_eq = isinstance(left_expr, ast.Literal) and isinstance(left_expr.value, float)
-        _right_is_float_eq = isinstance(right_expr, ast.Literal) and isinstance(right_expr.value, float)
+        _left_is_int_eq = (
+            isinstance(left_expr, ast.Literal)
+            and isinstance(left_expr.value, int)
+            and not isinstance(left_expr.value, bool)
+        )
+        _right_is_int_eq = (
+            isinstance(right_expr, ast.Literal)
+            and isinstance(right_expr.value, int)
+            and not isinstance(right_expr.value, bool)
+        )
+        _left_is_float_eq = isinstance(left_expr, ast.Literal) and isinstance(
+            left_expr.value, float
+        )
+        _right_is_float_eq = isinstance(right_expr, ast.Literal) and isinstance(
+            right_expr.value, float
+        )
         if (_left_is_int_eq and _right_is_float_eq) or (_left_is_float_eq and _right_is_int_eq):
             left = f"CAST({left} AS DOUBLE)"
             right = f"CAST({right} AS DOUBLE)"
@@ -7845,11 +8141,7 @@ def _expr_pattern_comprehension(expr, context, segment):
             pred_type = f" AND {e_alias}.p IN ({safe_types})"
 
     src_bind = ""
-    if (
-        src_node
-        and src_node.variable
-        and src_node.variable in context.variable_aliases
-    ):
+    if src_node and src_node.variable and src_node.variable in context.variable_aliases:
         src_id = f"{context.variable_aliases[src_node.variable]}.node_id"
         src_bind = f" AND {e_alias}.s = {src_id}"
 
@@ -7859,8 +8151,7 @@ def _expr_pattern_comprehension(expr, context, segment):
     if tgt_node and tgt_node.labels:
         lbl_alias = context.next_alias("pcl")
         tgt_label_join = (
-            f" JOIN {_table('rdf_labels')} {lbl_alias}"
-            f" ON {lbl_alias}.s = {t_alias}.node_id"
+            f" JOIN {_table('rdf_labels')} {lbl_alias}" f" ON {lbl_alias}.s = {t_alias}.node_id"
         )
         if len(tgt_node.labels) == 1:
             safe_lbl = tgt_node.labels[0].replace("'", "''")
@@ -7871,11 +8162,7 @@ def _expr_pattern_comprehension(expr, context, segment):
 
     # Target node variable binding (bound target node in MATCH)
     tgt_bind = ""
-    if (
-        tgt_node
-        and tgt_node.variable
-        and tgt_node.variable in context.variable_aliases
-    ):
+    if tgt_node and tgt_node.variable and tgt_node.variable in context.variable_aliases:
         tgt_id = f"{context.variable_aliases[tgt_node.variable]}.node_id"
         tgt_bind = f" AND {t_alias}.node_id = {tgt_id}"
 
@@ -7952,12 +8239,12 @@ def _expr_prop(expr, context, segment):
         # startNode(r).prop → look up prop from the node referenced by edge s or o_id
         # Note: prop has already had 'id' rewritten to 'node_id' above; undo that for
         # property lookup since 'id' is a user-defined property, not the internal node_id.
-        orig_prop = str(expr.arguments[1].value) if isinstance(expr.arguments[1], ast.Literal) else prop
+        orig_prop = (
+            str(expr.arguments[1].value) if isinstance(expr.arguments[1], ast.Literal) else prop
+        )
         node_id_expr = translate_expression(inner_expr, context, segment=segment)
         _safe_prop = orig_prop.replace("'", "''")
-        return (
-            f"(SELECT val FROM {_table('rdf_props')} WHERE s = {node_id_expr} AND \"key\" = '{_safe_prop}')"
-        )
+        return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {node_id_expr} AND \"key\" = '{_safe_prop}')"
     inner = translate_expression(inner_expr, context, segment=segment)
     return f"{inner}.{prop}"
 
@@ -8000,7 +8287,11 @@ def _expr_arith(expr, context, segment):
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
         rhs_arg = expr.arguments[1]
-        if isinstance(rhs_arg, ast.Literal) and isinstance(rhs_arg.value, (int, float)) and rhs_arg.value != 0:
+        if (
+            isinstance(rhs_arg, ast.Literal)
+            and isinstance(rhs_arg.value, (int, float))
+            and rhs_arg.value != 0
+        ):
             return f"MOD({left}, {right})"
         return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE MOD({left}, {right}) END"
     if op == "^":
@@ -8009,16 +8300,36 @@ def _expr_arith(expr, context, segment):
         # Cypher ^ always returns float (4^3 = 64.0 per spec)
         return f"CAST(POWER({left}, {right}) AS DOUBLE)"
     if op == "+":
+
         def _is_str(arg):
-            return (isinstance(arg, ast.Literal) and isinstance(arg.value, str)) or \
-                isinstance(arg, ast.FunctionCall) and arg.function_name.startswith("__arith_+")
+            return (
+                (isinstance(arg, ast.Literal) and isinstance(arg.value, str))
+                or isinstance(arg, ast.FunctionCall)
+                and arg.function_name.startswith("__arith_+")
+            )
+
         def _is_list(arg):
             if isinstance(arg, ast.Literal) and isinstance(arg.value, list):
                 return True
-            if not isinstance(arg, ast.MapLiteral) and isinstance(arg, ast.FunctionCall) and arg.function_name in (
-                "collect", "nodes", "relationships", "labels", "keys", "range",
-                "reverse", "tail", "head", "__list_comprehension", "__arith_+",
-                "filter", "extract",
+            if (
+                not isinstance(arg, ast.MapLiteral)
+                and isinstance(arg, ast.FunctionCall)
+                and arg.function_name
+                in (
+                    "collect",
+                    "nodes",
+                    "relationships",
+                    "labels",
+                    "keys",
+                    "range",
+                    "reverse",
+                    "tail",
+                    "head",
+                    "__list_comprehension",
+                    "__arith_+",
+                    "filter",
+                    "extract",
+                )
             ):
                 return True
             # __arith_+ that returns a list (recursively check)
@@ -8032,7 +8343,9 @@ def _expr_arith(expr, context, segment):
                 if alias.startswith("Stage"):
                     return True
             # Also check if it's a variable known to be a list from scalar_variables tracking
-            if isinstance(arg, ast.Variable) and arg.name in getattr(context, "scalar_variables", set()):
+            if isinstance(arg, ast.Variable) and arg.name in getattr(
+                context, "scalar_variables", set()
+            ):
                 # scalar_variables includes collect() output; check if it's from a list source
                 if arg.name in getattr(context, "collected_node_lists", {}):
                     return True
@@ -8044,6 +8357,7 @@ def _expr_arith(expr, context, segment):
                 if branches and all(_is_list(b) for b in branches):
                     return True
             return False
+
         left_str = _is_str(expr.arguments[0])
         right_str = _is_str(expr.arguments[1])
         if left_str or right_str:
@@ -8052,8 +8366,9 @@ def _expr_arith(expr, context, segment):
         right_list = _is_list(expr.arguments[1])
         if left_list or right_list:
             # Constant folding: both fully literal → compute in Python
-            if (_is_fully_literal(expr.arguments[0]) and _is_fully_literal(expr.arguments[1])):
+            if _is_fully_literal(expr.arguments[0]) and _is_fully_literal(expr.arguments[1]):
                 import json as _json
+
                 lv = _literal_to_python(expr.arguments[0])
                 rv = _literal_to_python(expr.arguments[1])
                 # Wrap scalar in list if one side is a scalar (list + scalar or scalar + list)
@@ -8064,6 +8379,7 @@ def _expr_arith(expr, context, segment):
                 combined = lv + rv
                 js = _json.dumps(combined)
                 return f"CAST('{js.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({max(len(js)+1, 256)}))"
+
             # Runtime: JSON array concat via subquery building.
             # If one side is a scalar (not a list), wrap it as a single-element JSON array.
             def _ensure_array_sql(arg_expr, arg_sql):
@@ -8077,6 +8393,7 @@ def _expr_arith(expr, context, segment):
                     return arg_sql
                 # Scalar: wrap in JSON array string
                 return f"('[' || CAST({arg_sql} AS VARCHAR(4096)) || ']')"
+
             left_arr = _ensure_array_sql(expr.arguments[0], left)
             right_arr = _ensure_array_sql(expr.arguments[1], right)
             # Generate row numbers up to 100 to handle practical list sizes (each element is extracted)
@@ -8094,6 +8411,7 @@ def _expr_arith(expr, context, segment):
         # But: skip this if either side is provably numeric (arithmetic subexpr, numeric literal,
         # or numeric-returning function) — in that case just fall through to numeric cast.
         larg, rarg = expr.arguments[0], expr.arguments[1]
+
         def _is_definitely_numeric(arg):
             if isinstance(arg, ast.Literal):
                 return isinstance(arg.value, (int, float)) and not isinstance(arg.value, bool)
@@ -8101,16 +8419,33 @@ def _expr_arith(expr, context, segment):
                 fn = arg.function_name
                 if fn in ("__arith_*", "__arith_-", "__arith_/", "__arith_%", "__arith_^"):
                     return True  # arithmetic on numbers returns number
-                if fn in ("id", "size", "length", "toInteger", "toFloat", "abs", "sign", "round", "floor", "ceil"):
+                if fn in (
+                    "id",
+                    "size",
+                    "length",
+                    "toInteger",
+                    "toFloat",
+                    "abs",
+                    "sign",
+                    "round",
+                    "floor",
+                    "ceil",
+                ):
                     return True
             return False
+
         def _is_definitely_string(arg):
             return isinstance(arg, ast.Literal) and isinstance(arg.value, str)
+
         # Only apply runtime polymorphism when neither side is a known string/numeric type,
         # both operands are ambiguous property refs (could be list or scalar).
-        if (isinstance(larg, ast.PropertyReference) or isinstance(rarg, ast.PropertyReference)) and not (
-            _is_definitely_numeric(larg) or _is_definitely_numeric(rarg) or
-            _is_definitely_string(larg) or _is_definitely_string(rarg)
+        if (
+            isinstance(larg, ast.PropertyReference) or isinstance(rarg, ast.PropertyReference)
+        ) and not (
+            _is_definitely_numeric(larg)
+            or _is_definitely_numeric(rarg)
+            or _is_definitely_string(larg)
+            or _is_definitely_string(rarg)
         ):
             # Evaluate left/right once in an __arrc subquery to avoid ? appearing multiple times.
             # String-trim array concat: trim ] from left, [ from right, join with comma.
@@ -8119,6 +8454,7 @@ def _expr_arith(expr, context, segment):
                 if isinstance(arg_expr, ast.PropertyReference) or _is_list(arg_expr):
                     return alias
                 return f"('[' || {alias} || ']')"
+
             la_str = _rt_ensure_array_str(larg, "__la")
             ra_str = _rt_ensure_array_str(rarg, "__ra")
             return (
@@ -8143,7 +8479,11 @@ def _expr_arith(expr, context, segment):
         if op == "/":
             both_int = _is_integer_expr(expr.arguments[0]) and _is_integer_expr(expr.arguments[1])
             rhs_arg = expr.arguments[1]
-            if isinstance(rhs_arg, ast.Literal) and isinstance(rhs_arg.value, (int, float)) and rhs_arg.value != 0:
+            if (
+                isinstance(rhs_arg, ast.Literal)
+                and isinstance(rhs_arg.value, (int, float))
+                and rhs_arg.value != 0
+            ):
                 # Cypher: integer/integer = floor division (3/2=1, -7/2=-4).
                 # IRIS promotes to DOUBLE (3/2=1.5), so wrap in FLOOR for integer operands.
                 if both_int:
@@ -8155,12 +8495,13 @@ def _expr_arith(expr, context, segment):
     return f"({left} {op} {right})"
 
 
-
 def _lp_predicate_uses_arithmetic_on_var(predicate, var_name):
     """Return True if any arithmetic function (__arith_%) is applied directly to var_name."""
     if isinstance(predicate, ast.FunctionCall):
-        if (predicate.function_name.startswith("__arith_")
-                and predicate.function_name != "__arith_+"):
+        if (
+            predicate.function_name.startswith("__arith_")
+            and predicate.function_name != "__arith_+"
+        ):
             for arg in predicate.arguments:
                 if isinstance(arg, ast.Variable) and arg.name == var_name:
                     return True
@@ -8194,15 +8535,22 @@ def _lp_needs_null_sentinel(source):
     CAST('[[1,2,3]]' AS VARCHAR) expands to rows (1), (2), (3) instead of ('[1,2,3]').
     Workaround: append null to the serialised JSON array.
     """
-    if not (isinstance(source, ast.Literal) and isinstance(source.value, list)
-            and len(source.value) == 1):
+    if not (
+        isinstance(source, ast.Literal)
+        and isinstance(source.value, list)
+        and len(source.value) == 1
+    ):
         return False
     inner = source.value[0]
     if not (isinstance(inner, ast.Literal) and isinstance(inner.value, list)):
         return False
     # Only numeric inner arrays trigger the IRIS bug.
     for item in inner.value:
-        if isinstance(item, ast.Literal) and isinstance(item.value, (int, float)) and not isinstance(item.value, bool):
+        if (
+            isinstance(item, ast.Literal)
+            and isinstance(item.value, (int, float))
+            and not isinstance(item.value, bool)
+        ):
             return True
     return False
 
@@ -8211,8 +8559,9 @@ def _expr_list_predicate(expr, context, segment):
     # --- Static type check: raise SyntaxError for invalid argument types ---
     # Cypher semantics: arithmetic operators (%, *, -, /) on string/boolean list elements
     # are invalid at compile time (InvalidArgumentType).
-    if (_lp_source_all_non_numeric(expr.source)
-            and _lp_predicate_uses_arithmetic_on_var(expr.predicate, expr.variable)):
+    if _lp_source_all_non_numeric(expr.source) and _lp_predicate_uses_arithmetic_on_var(
+        expr.predicate, expr.variable
+    ):
         raise SyntaxError(
             f"Type mismatch: {expr.quantifier}() predicate uses arithmetic on "
             f"non-numeric list elements (InvalidArgumentType)"
@@ -8227,6 +8576,7 @@ def _expr_list_predicate(expr, context, segment):
     if null_sentinel:
         # Reserialise with appended null sentinel
         from iris_vector_graph.cypher.translator import _literal_to_python as _ltp
+
         inner_py = _ltp(expr.source)
         inner_py.append(None)
         _sentinel_json = json.dumps(inner_py)
@@ -8262,16 +8612,16 @@ def _expr_list_predicate(expr, context, segment):
                 _lst[_i] = str(_lst[_i])
     # Also replace inline CAST('...' AS DOUBLE) with string literal for VARCHAR column comparison.
     import re as _re_qp
+
     def _cast_double_to_str(m):
         return f"'{m.group(1)}'"
+
     pred_sql = _re_qp.sub(r"CAST\('([^']+)' AS DOUBLE\)", _cast_double_to_str, pred_sql)
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
     pred_with_alias = pred_sql
     for col in ("node_id", "p", "val", "label"):
-        pred_with_alias = pred_with_alias.replace(
-            f"{alias}.{col}", f"{alias}.{var}"
-        )
+        pred_with_alias = pred_with_alias.replace(f"{alias}.{col}", f"{alias}.{var}")
     # IRIS WHERE clause needs a comparison predicate, not a bare boolean expression.
     # Coerce bare 1/0 and bare column references to proper predicates.
     where_pred = pred_with_alias
@@ -8287,7 +8637,9 @@ def _expr_list_predicate(expr, context, segment):
         # Aggregation-style nested quantifier: (SELECT CASE WHEN ... END FROM ...) returns
         # 0/1/NULL scalar. IRIS requires a comparison operator in CASE WHEN conditions.
         where_pred = f"{where_pred} = 1"
-    elif where_pred and not any(op in where_pred for op in ("=", "<", ">", " IN ", " IS ", " LIKE ", " NOT ")):
+    elif where_pred and not any(
+        op in where_pred for op in ("=", "<", ">", " IN ", " IS ", " LIKE ", " NOT ")
+    ):
         # Bare column reference (e.g. lp0.x) — treat as truth test
         where_pred = f"{where_pred} = 1"
 
@@ -8296,7 +8648,9 @@ def _expr_list_predicate(expr, context, segment):
     counts_alias = context.next_alias("qc")
     sat_pred = where_pred.replace(f"{alias}.", f"{counts_alias}.")
     not_pred = where_pred.replace(f"{alias}.", f"{counts_alias}.")
-    _jt_null_filter = f" WHERE {counts_alias}.{_safe_alias(expr.variable)} IS NOT NULL" if null_sentinel else ""
+    _jt_null_filter = (
+        f" WHERE {counts_alias}.{_safe_alias(expr.variable)} IS NOT NULL" if null_sentinel else ""
+    )
     jt_from = f"FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({_safe_alias(expr.variable)} {col_type} PATH '$')) {counts_alias}{_jt_null_filter}"
     sat_expr = f"SUM(CASE WHEN {sat_pred} THEN 1 ELSE 0 END)"
     dfail_expr = f"SUM(CASE WHEN NOT ({not_pred}) THEN 1 ELSE 0 END)"
@@ -8441,12 +8795,13 @@ def _expr_list_comprehension(expr, context, segment):
     if (
         not expr.predicate
         and isinstance(expr.projection, ast.FunctionCall)
-        and expr.projection.function_name.lower() in ("tofloat", "tointeger", "tostring", "toboolean")
+        and expr.projection.function_name.lower()
+        in ("tofloat", "tointeger", "tostring", "toboolean")
     ):
         if isinstance(expr.source, ast.Literal) and isinstance(expr.source.value, list):
             _lc_source_elems = expr.source.value
         elif isinstance(expr.source, ast.Variable):
-            _llv = getattr(context, 'literal_list_vars', {})
+            _llv = getattr(context, "literal_list_vars", {})
             _var_alias = context.variable_aliases.get(expr.source.name, expr.source.name)
             if _var_alias in _llv:
                 _lc_source_elems = _llv[_var_alias]
@@ -8455,18 +8810,27 @@ def _expr_list_comprehension(expr, context, segment):
 
     if _lc_source_elems is not None:
         import json as _json
+
         fn_lc = expr.projection.function_name.lower()
         results = []
         for elem in _lc_source_elems:
             v = elem.value if isinstance(elem, ast.Literal) else None
             if fn_lc == "tofloat":
                 try:
-                    results.append(float(str(v)) if isinstance(v, (int, float, str)) and not isinstance(v, bool) else None)
+                    results.append(
+                        float(str(v))
+                        if isinstance(v, (int, float, str)) and not isinstance(v, bool)
+                        else None
+                    )
                 except (ValueError, TypeError):
                     results.append(None)
             elif fn_lc == "tointeger":
                 try:
-                    results.append(int(float(str(v))) if isinstance(v, (int, float, str)) and not isinstance(v, bool) else None)
+                    results.append(
+                        int(float(str(v)))
+                        if isinstance(v, (int, float, str)) and not isinstance(v, bool)
+                        else None
+                    )
                 except (ValueError, TypeError):
                     results.append(None)
             elif fn_lc == "tostring":
@@ -8480,7 +8844,9 @@ def _expr_list_comprehension(expr, context, segment):
                 if isinstance(v, bool):
                     results.append(v)
                 elif isinstance(v, str):
-                    results.append(True if v.lower() == "true" else (False if v.lower() == "false" else None))
+                    results.append(
+                        True if v.lower() == "true" else (False if v.lower() == "false" else None)
+                    )
                 else:
                     results.append(None)
         js = _json.dumps(results)
@@ -8497,8 +8863,9 @@ def _expr_list_comprehension(expr, context, segment):
     # Mark as scalar variable so property access uses JSON_VALUE
     context.scalar_variables.add(expr.variable)
     # If source is a collected node list, mark loop var as collected_node_variable
-    if (isinstance(expr.source, ast.Variable)
-            and expr.source.name in getattr(context, "collected_node_lists", {})):
+    if isinstance(expr.source, ast.Variable) and expr.source.name in getattr(
+        context, "collected_node_lists", {}
+    ):
         context.collected_node_variables.add(expr.variable)
     where_clause = ""
     if expr.predicate:
@@ -8575,9 +8942,7 @@ def _expr_case(expr, context, segment):
         if res is None:
             res = translate_expression(wc.result, context, segment)
         parts.append(f"WHEN {cond} THEN {res}")
-    else_res = (
-        _inline_literal(expr.else_result) if expr.else_result is not None else None
-    )
+    else_res = _inline_literal(expr.else_result) if expr.else_result is not None else None
     if else_res is None and expr.else_result is not None:
         else_res = translate_expression(expr.else_result, context, segment)
     if else_res is not None:
@@ -8879,7 +9244,9 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             # For PT-22H → seconds = -79200
             # For P-27DT-21H-40M-32.142S → seconds = -(21*3600 + 40*60 + 32) = -78032
             # Approach: compute H*3600 + M*60 + S components numerically
-            time_part_sql = f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            time_part_sql = (
+                f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            )
             h_in_t = f"CHARINDEX('H', {time_part_sql})"
             m_in_t = f"CHARINDEX('M', {time_part_sql})"
             s_in_t = f"CHARINDEX('S', {time_part_sql})"
@@ -8893,7 +9260,9 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             # Seconds from time part (after M or H or start, before S - use full float including fractional)
             s_start = f"CASE WHEN {m_in_t} > 0 THEN {m_in_t} + 1 WHEN {h_in_t} > 0 THEN {h_in_t} + 1 ELSE 1 END"
             # s_end must reach S to capture full float like "-59.9" (not just "-59" by stopping at dot)
-            s_end_full = f"CASE WHEN {s_in_t} > 0 THEN {s_in_t} ELSE LENGTH({time_part_sql}) + 1 END"
+            s_end_full = (
+                f"CASE WHEN {s_in_t} > 0 THEN {s_in_t} ELSE LENGTH({time_part_sql}) + 1 END"
+            )
             # Use FLOOR for seconds to handle negative fractional: FLOOR(-59.9) = -60
             s_val = f"CASE WHEN {s_in_t} > 0 THEN CAST(FLOOR(CAST(SUBSTRING({time_part_sql}, {s_start}, {s_end_full} - {s_start}) AS FLOAT)) AS INTEGER) ELSE 0 END"
 
@@ -8907,7 +9276,9 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             # Cypher spec: nanoseconds is the positive offset from the floor second.
             # For negative fractional seconds: floor(-59.9) = -60, offset = 0.1s = 100000000 ns
             # i.e., nanos = 1_000_000_000 - frac_ns when seconds component is negative
-            time_part_sql = f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            time_part_sql = (
+                f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            )
             h_in_t = f"CHARINDEX('H', {time_part_sql})"
             m_in_t = f"CHARINDEX('M', {time_part_sql})"
             s_in_t = f"CHARINDEX('S', {time_part_sql})"
@@ -8925,7 +9296,9 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             )
 
         elif prop_name == "milliseconds":
-            time_part_sql = f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            time_part_sql = (
+                f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            )
             s_in_t = f"CHARINDEX('S', {time_part_sql})"
             dot_in_t = f"CHARINDEX('.', {time_part_sql})"
             return (
@@ -8935,7 +9308,9 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             )
 
         elif prop_name == "microseconds":
-            time_part_sql = f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            time_part_sql = (
+                f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            )
             s_in_t = f"CHARINDEX('S', {time_part_sql})"
             dot_in_t = f"CHARINDEX('.', {time_part_sql})"
             return (
@@ -8945,7 +9320,9 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             )
 
         elif prop_name == "nanoseconds":
-            time_part_sql = f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            time_part_sql = (
+                f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1, 9999) ELSE '' END"
+            )
             s_in_t = f"CHARINDEX('S', {time_part_sql})"
             dot_in_t = f"CHARINDEX('.', {time_part_sql})"
             return (
@@ -8987,7 +9364,7 @@ def _expr_property_reference(expr, context, segment):
         edge_stage_vars = getattr(context, "edge_stage_variables", set())
         if expr.variable in context.scalar_variables or expr.variable in edge_stage_vars:
             # Compile-time TypeError: scalar/list variables cannot have properties accessed on them
-            if expr.variable in getattr(context, 'non_map_vars', set()):
+            if expr.variable in getattr(context, "non_map_vars", set()):
                 raise TypeError(
                     f"TypeError: Type mismatch: expected Map or Node, but was {expr.variable!r} (non-map scalar)"
                 )
@@ -9050,7 +9427,9 @@ def _expr_property_reference(expr, context, segment):
             # alias substitution (alias.node_id -> edge._dst) without creating a
             # dangling JOIN that precedes the node JOIN that defines the alias.
             context.where_params.append(expr.property_name)
-            return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {alias}.node_id AND \"key\" = ?)"
+            return (
+                f"(SELECT val FROM {_table('rdf_props')} WHERE s = {alias}.node_id AND \"key\" = ?)"
+            )
         # Skip the structural guard when this property is also IS NULL / IS NOT NULL
         # checked in the current boolean context (e.g. `a.x IS NULL OR a.x > 'y'`).
         # In that case the LEFT JOIN NULL already handles the missing-property case.
@@ -9064,7 +9443,6 @@ def _expr_property_reference(expr, context, segment):
         f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(expr.property_name)}'
     )
     return f"{p_alias}.val"
-
 
 
 def _expr_map_projection(expr, context, segment):
@@ -9088,6 +9466,7 @@ def _expr_map_literal(expr, context, segment):
         return "'{}'"
     if _is_fully_literal(expr):
         import json as _json
+
         py_val = _literal_to_python(expr)
         json_str = _json.dumps(py_val)
         str_len = max(len(json_str) + 1, 256)
@@ -9132,9 +9511,7 @@ def _expr_subscript(expr, context, segment):
             if base.name in context.rel_variables:
                 rel_alias = base_alias
                 idx_sql = translate_expression(idx, context, segment=segment)
-                return (
-                    f"SQLUser.JSON_VALUE({rel_alias}.qualifiers, '$.' || CAST(({idx_sql}) AS VARCHAR))"
-                )
+                return f"SQLUser.JSON_VALUE({rel_alias}.qualifiers, '$.' || CAST(({idx_sql}) AS VARCHAR))"
             # Node variable — subscript is a property key expression via rdf_props JOIN
             node_alias = base_alias
             node_ref = f"{node_alias}.node_id" if node_alias else "NULL"
@@ -9153,7 +9530,11 @@ def _expr_subscript(expr, context, segment):
         # For literal integer indices, inline the value directly to avoid ? parameter
         # placeholders in the JSON path expression (IRIS can't use ? in '$[?]').
         # However, if the index is non-integer (a string key for maps), use property notation.
-        if isinstance(idx, ast.Literal) and isinstance(idx.value, int) and not isinstance(idx.value, bool):
+        if (
+            isinstance(idx, ast.Literal)
+            and isinstance(idx.value, int)
+            and not isinstance(idx.value, bool)
+        ):
             # Integer index → use JSON_ARRAYGET (handles array JSON correctly without UDF lock issues)
             return f"SQLUser.JSON_ARRAYGET({base_sql}, {idx.value})"
         if isinstance(idx, ast.Literal) and isinstance(idx.value, str):
@@ -9217,7 +9598,11 @@ def _expr_subscript(expr, context, segment):
         idx_sql = translate_expression(idx, context, segment=segment)
         return f"SQLUser.JSON_VALUE({base_sql}, '$.' || CAST(({idx_sql}) AS VARCHAR))"
     base_sql = translate_expression(base, context, segment=segment)
-    if isinstance(idx, ast.Literal) and isinstance(idx.value, int) and not isinstance(idx.value, bool):
+    if (
+        isinstance(idx, ast.Literal)
+        and isinstance(idx.value, int)
+        and not isinstance(idx.value, bool)
+    ):
         i = idx.value
         return (
             f"(SELECT elem FROM JSON_TABLE({base_sql}, "
@@ -9240,7 +9625,9 @@ def _expr_slice(expr, context, segment):
     # Determine if start/end are statically known literals (including null literal)
     start_is_literal = isinstance(expr.start, ast.Literal)
     end_is_literal = isinstance(expr.end, ast.Literal)
-    start_val = expr.start.value if start_is_literal else None  # None = not a literal OR null literal
+    start_val = (
+        expr.start.value if start_is_literal else None
+    )  # None = not a literal OR null literal
     end_val = expr.end.value if end_is_literal else None
 
     # Null propagation: if either bound is an explicit null literal, return NULL
@@ -9327,7 +9714,7 @@ def _expr_property_access(expr, context, segment):
     # Compile-time TypeError: property access on a known non-map type
     if isinstance(expr.expression, ast.Variable):
         vname = expr.expression.name
-        if vname in getattr(context, 'non_map_vars', set()):
+        if vname in getattr(context, "non_map_vars", set()):
             raise TypeError(
                 f"TypeError: Type mismatch: expected Map or Node but was a non-map value"
             )
@@ -9374,7 +9761,7 @@ def _expr_variable(expr, context, segment):
         raise SyntaxError(f"Undefined variable: {expr.name}")
     # TCK procedure CTEs: alias is the output column (possibly renamed via AS)
     if alias.startswith("TCK_Proc_"):
-        renames = getattr(context, '_tck_yield_renames', {})
+        renames = getattr(context, "_tck_yield_renames", {})
         if expr.name in renames:
             _cte, orig_col = renames[expr.name]
             return f"{alias}.{orig_col}"
@@ -9415,8 +9802,10 @@ def _literal_to_python(node):
         v = node.value
         if isinstance(v, list):
             return [_literal_to_python(item) for item in v]
-        if v is True: return True
-        if v is False: return False
+        if v is True:
+            return True
+        if v is False:
+            return False
         return v
     if isinstance(node, ast.MapLiteral):
         return {k: _literal_to_python(val) for k, val in node.entries.items()}
@@ -9425,6 +9814,7 @@ def _literal_to_python(node):
 
 def _expr_literal(expr, context, segment):
     import json as _json
+
     v = expr.value
     if v is True:
         return "1"
@@ -9446,19 +9836,25 @@ def _expr_literal(expr, context, segment):
         for item in v:
             if isinstance(item, ast.Literal):
                 iv = item.value
-                if iv is True: sql_items.append("1")
-                elif iv is False: sql_items.append("0")
-                elif iv is None: sql_items.append("NULL")
-                elif isinstance(iv, str): sql_items.append(f"'{iv.replace(chr(39), chr(39)+chr(39))}'")
+                if iv is True:
+                    sql_items.append("1")
+                elif iv is False:
+                    sql_items.append("0")
+                elif iv is None:
+                    sql_items.append("NULL")
+                elif isinstance(iv, str):
+                    sql_items.append(f"'{iv.replace(chr(39), chr(39)+chr(39))}'")
                 elif isinstance(iv, list):
                     # Nested list literal — recursively translate via the list branch
                     sql_items.append(translate_expression(item, context, segment=segment))
-                else: sql_items.append(str(iv))
+                else:
+                    sql_items.append(str(iv))
             else:
                 sql_items.append(translate_expression(item, context, segment=segment))
         return f"JSON_ARRAY({', '.join(sql_items)})"
     if isinstance(v, float):
         import math as _math
+
         if _math.isinf(v) or _math.isnan(v):
             if segment == "select":
                 return context.add_select_param(v)
@@ -9481,14 +9877,20 @@ def _expr_literal(expr, context, segment):
     if segment == "join":
         return context.add_join_param(v)
     if segment == "inline":
-        if isinstance(v, str): return f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+        if isinstance(v, str):
+            return f"'{v.replace(chr(39), chr(39)+chr(39))}'"
         return str(v)
     return context.add_where_param(v)
 
 
-_NON_DETERMINISTIC_FUNCTIONS = frozenset({
-    "rand", "random", "timestamp", "randomuuid",
-})
+_NON_DETERMINISTIC_FUNCTIONS = frozenset(
+    {
+        "rand",
+        "random",
+        "timestamp",
+        "randomuuid",
+    }
+)
 
 
 def _expr_aggregation(expr, context, segment):
@@ -9506,29 +9908,28 @@ def _expr_aggregation(expr, context, segment):
             )
     if expr.argument and isinstance(expr.argument, ast.Literal):
         v = expr.argument.value
-        if v is True: arg = "1"
-        elif v is False: arg = "0"
-        elif v is None: arg = "NULL"
-        elif v == "*": arg = "*"  # count(*) — star is not a string literal
-        elif isinstance(v, str): arg = f"'{v.replace(chr(39), chr(39)+chr(39))}'"
-        elif isinstance(v, list): arg = _expr_literal(expr.argument, context, segment)
-        else: arg = str(v)
+        if v is True:
+            arg = "1"
+        elif v is False:
+            arg = "0"
+        elif v is None:
+            arg = "NULL"
+        elif v == "*":
+            arg = "*"  # count(*) — star is not a string literal
+        elif isinstance(v, str):
+            arg = f"'{v.replace(chr(39), chr(39)+chr(39))}'"
+        elif isinstance(v, list):
+            arg = _expr_literal(expr.argument, context, segment)
+        else:
+            arg = str(v)
     else:
         arg = (
-            translate_expression(expr.argument, context, segment=segment)
-            if expr.argument
-            else "*"
+            translate_expression(expr.argument, context, segment=segment) if expr.argument else "*"
         )
-    fn = (
-        "JSON_ARRAYAGG"
-        if expr.function_name.upper() == "COLLECT"
-        else expr.function_name.upper()
-    )
+    fn = "JSON_ARRAYAGG" if expr.function_name.upper() == "COLLECT" else expr.function_name.upper()
     # collect(nodeVar) — emit structured JSON objects instead of bare node_id strings,
     # so the result set carries enough data for node-pattern comparison.
-    if (fn == "JSON_ARRAYAGG"
-            and expr.argument
-            and isinstance(expr.argument, ast.Variable)):
+    if fn == "JSON_ARRAYAGG" and expr.argument and isinstance(expr.argument, ast.Variable):
         var_name = expr.argument.name
         alias = context.variable_aliases.get(var_name)
         edge_stage_vars = getattr(context, "edge_stage_variables", set())
@@ -9539,7 +9940,7 @@ def _expr_aggregation(expr, context, segment):
             # Determine node_id expression for this variable
             if alias in context.mapped_node_aliases:
                 mapping = context.mapped_node_aliases[alias]
-                id_col = sanitize_identifier(mapping['id_column'])
+                id_col = sanitize_identifier(mapping["id_column"])
                 node_id_expr = f"{alias}.{id_col}"
             elif alias.startswith("Stage"):
                 # Stage CTE: column name is the safe alias of the variable
@@ -9570,7 +9971,11 @@ def _scalar_coalesce(fn, args, args_exprs):
             for i, (arg, arg_expr) in enumerate(zip(args, args_exprs)):
                 if i == 0:
                     coerced.append(f"CAST({arg} AS VARCHAR(4096))")
-                elif isinstance(arg_expr, ast.Literal) and not isinstance(arg_expr.value, str) and arg_expr.value is not None:
+                elif (
+                    isinstance(arg_expr, ast.Literal)
+                    and not isinstance(arg_expr.value, str)
+                    and arg_expr.value is not None
+                ):
                     coerced.append(f"CAST({arg} AS VARCHAR(4096))")
                 else:
                     coerced.append(arg)
@@ -9585,7 +9990,11 @@ def _scalar_string(fn, args, args_exprs, context=None):
     if fn == "tofloat":
         return f"CASE WHEN ISNUMERIC({args[0]}) = 1 THEN CAST({args[0]} AS DOUBLE) ELSE NULL END"
     if fn == "tostring":
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, bool):
+        if (
+            args_exprs
+            and isinstance(args_exprs[0], ast.Literal)
+            and isinstance(args_exprs[0].value, bool)
+        ):
             return f"'{'true' if args_exprs[0].value else 'false'}'"
         return f"CAST({args[0]} AS VARCHAR(4096))"
     if fn == "substring":
@@ -9644,6 +10053,7 @@ def _has_map_key(map_literal, key):
 def _date_from_iso_week(year, week, dow=1):
     """Compute date for ISO week date (year, week, day-of-week where Mon=1)."""
     import datetime as _dt
+
     # ISO week 1 is the week containing the first Thursday of the year.
     # Jan 4 is always in ISO week 1.
     jan4 = _dt.date(year, 1, 4)
@@ -9655,12 +10065,14 @@ def _date_from_iso_week(year, week, dow=1):
 def _date_from_ordinal_day(year, ordinal):
     """Convert year + ordinal day (1-based) to date."""
     import datetime as _dt
+
     return _dt.date(year, 1, 1) + _dt.timedelta(days=ordinal - 1)
 
 
 def _date_from_quarter(year, quarter, day_of_quarter=1):
     """Convert year + quarter + day-of-quarter to date."""
     import datetime as _dt
+
     first_month = (quarter - 1) * 3 + 1
     start = _dt.date(year, first_month, 1)
     return start + _dt.timedelta(days=day_of_quarter - 1)
@@ -9669,26 +10081,27 @@ def _date_from_quarter(year, quarter, day_of_quarter=1):
 def _normalize_tz_str(tz):
     """Normalize a timezone suffix: compact +0100 → +01:00, -00:00 → Z, etc."""
     import re as _re
+
     if not tz:
         return ""
     if tz in ("Z", "z"):
         return "Z"
     # +HHMM or -HHMM (no colon, 4 digits) → +HH:MM
-    m = _re.match(r'^([+-])(\d{2})(\d{2})$', tz)
+    m = _re.match(r"^([+-])(\d{2})(\d{2})$", tz)
     if m:
         sign, hh, mm = m.group(1), m.group(2), m.group(3)
         if (sign == "-" or sign == "+") and hh == "00" and mm == "00":
             return "Z"
         return f"{sign}{hh}:{mm}"
     # +HH:MM or -HH:MM (with colon)
-    m = _re.match(r'^([+-])(\d{2}):(\d{2})$', tz)
+    m = _re.match(r"^([+-])(\d{2}):(\d{2})$", tz)
     if m:
         sign, hh, mm = m.group(1), m.group(2), m.group(3)
         if hh == "00" and mm == "00":
             return "Z"
         return f"{sign}{hh}:{mm}"
     # +HH or -HH (hours only, 2 digits) → +HH:00
-    m = _re.match(r'^([+-])(\d{2})$', tz)
+    m = _re.match(r"^([+-])(\d{2})$", tz)
     if m:
         sign, hh = m.group(1), m.group(2)
         return f"{sign}{hh}:00"
@@ -9699,8 +10112,9 @@ def _normalize_tz_str(tz):
 def _iana_tz_offset(iana_name, ref_year=2015, ref_month=7, ref_day=21):
     """Return '+HH:MM' or '+HH:MM:SS' offset for IANA timezone at reference date."""
     try:
-        from zoneinfo import ZoneInfo as _ZI
         import datetime as _dt2
+        from zoneinfo import ZoneInfo as _ZI
+
         _zi = _ZI(iana_name)
         _aware = _dt2.datetime(ref_year, ref_month, ref_day, tzinfo=_zi)
         _off = _aware.utcoffset()
@@ -9723,11 +10137,12 @@ def _parse_time_string(s, ref_year=2015, ref_month=7, ref_day=21):
     Returns normalized string or None.
     """
     import re as _re
+
     s = s.strip()
     # Split off IANA bracket zone [Name]
     iana_suffix = ""
     iana_name = ""
-    m_iana = _re.match(r'^(.*?)(\[([^\]]+)\])$', s)
+    m_iana = _re.match(r"^(.*?)(\[([^\]]+)\])$", s)
     if m_iana:
         s = m_iana.group(1)
         iana_name = m_iana.group(3)
@@ -9735,7 +10150,7 @@ def _parse_time_string(s, ref_year=2015, ref_month=7, ref_day=21):
 
     # Split off timezone
     tz = ""
-    m = _re.match(r'^(.*?)([Zz]|[+-]\d{2}(?::?\d{2}(?::?\d{2})?)?)$', s)
+    m = _re.match(r"^(.*?)([Zz]|[+-]\d{2}(?::?\d{2}(?::?\d{2})?)?)$", s)
     if m:
         time_part = m.group(1)
         tz_raw = m.group(2)
@@ -9749,7 +10164,7 @@ def _parse_time_string(s, ref_year=2015, ref_month=7, ref_day=21):
             tz = _iana_tz_offset(iana_name, ref_year, ref_month, ref_day)
 
     # Extended: HH:MM[:SS[.frac]]
-    m = _re.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', time_part)
+    m = _re.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_part)
     if m:
         h, mi, s_str, frac = m.group(1), m.group(2), m.group(3), m.group(4)
         if s_str:
@@ -9759,7 +10174,7 @@ def _parse_time_string(s, ref_year=2015, ref_month=7, ref_day=21):
         return f"{h}:{mi}{tz}{iana_suffix}"
 
     # Compact: HHMMSS.frac or HHMMSS or HHMM or HH
-    m = _re.match(r'^(\d{2})(?:(\d{2})(?:(\d{2})(?:\.(\d+))?)?)?$', time_part)
+    m = _re.match(r"^(\d{2})(?:(\d{2})(?:(\d{2})(?:\.(\d+))?)?)?$", time_part)
     if m:
         h = m.group(1)
         mi = m.group(2) or "00"
@@ -9787,7 +10202,7 @@ def _parse_datetime_string(s):
         return None
     sep_idx = s.upper().index("T")
     date_str = s[:sep_idx]
-    rest = s[sep_idx + 1:]
+    rest = s[sep_idx + 1 :]
 
     parsed_date = _parse_date_string(date_str)
     if not parsed_date:
@@ -9810,27 +10225,27 @@ def _parse_duration_string(s):
 
     s = s.strip()
     # Calendar notation: P2012-02-02T14:37:21.545 → Pyyyy-mm-ddThh:mm:ss.frac
-    m = _re.match(r'^P(-?\d+)-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$', s)
+    m = _re.match(r"^P(-?\d+)-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$", s)
     if m:
         yr, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         h, mi, sec = int(m.group(4)), int(m.group(5)), int(m.group(6))
         frac_str = m.group(7) or ""
-        rem_ns = int(frac_str.ljust(9, '0')[:9]) if frac_str else 0
+        rem_ns = int(frac_str.ljust(9, "0")[:9]) if frac_str else 0
         return _format_duration(yr, mo, d, h, mi, sec, rem_ns)
 
     # Standard: PnYnMnWnDTnHnMnS with possible fractions on last component
     m = _re.match(
-        r'^P'
-        r'(?:(-?[\d.]+)Y)?'
-        r'(?:(-?[\d.]+)M)?'
-        r'(?:(-?[\d.]+)W)?'
-        r'(?:(-?[\d.]+)D)?'
-        r'(?:T'
-        r'(?:(-?[\d.]+)H)?'
-        r'(?:(-?[\d.]+)M)?'
-        r'(?:(-?[\d.]+)S)?'
-        r')?$',
-        s
+        r"^P"
+        r"(?:(-?[\d.]+)Y)?"
+        r"(?:(-?[\d.]+)M)?"
+        r"(?:(-?[\d.]+)W)?"
+        r"(?:(-?[\d.]+)D)?"
+        r"(?:T"
+        r"(?:(-?[\d.]+)H)?"
+        r"(?:(-?[\d.]+)M)?"
+        r"(?:(-?[\d.]+)S)?"
+        r")?$",
+        s,
     )
     if not m or not any(m.groups()):
         return None
@@ -9901,7 +10316,7 @@ def _format_duration(yr_int, mo_int, d_int, h_int, m_int, s_int, rem_ns):
         time_part += f"{m_int}M"
     if rem_ns != 0:
         abs_rem = abs(rem_ns)
-        ns_str = f"{abs_rem:09d}".rstrip('0')
+        ns_str = f"{abs_rem:09d}".rstrip("0")
         if s_int == 0 and rem_ns < 0:
             # e.g. s_int=0, rem_ns=-1_000_000 → "-0.001S"
             time_part += f"-0.{ns_str}S"
@@ -9922,8 +10337,9 @@ def _format_duration(yr_int, mo_int, d_int, h_int, m_int, s_int, rem_ns):
 def _normalize_tz_offset(tz):
     """Normalize timezone offset string: strip trailing :00 seconds component."""
     import re as _re
+
     # +HH:MM:00 → +HH:MM, but keep +HH:MM:SS if SS != 00
-    m = _re.match(r'^([+-]\d{2}:\d{2}):00$', tz)
+    m = _re.match(r"^([+-]\d{2}:\d{2}):00$", tz)
     if m:
         return m.group(1)
     return tz
@@ -9942,17 +10358,18 @@ def _format_tz_for_iso(tz_str, ref_year=None, ref_month=None, ref_day=None):
     specific date (for IANA zones).  Otherwise uses a representative summer date.
     """
     import re as _re_ftz
-    if tz_str in ('Z', 'z', 'UTC', 'GMT', '+00:00', '-00:00', '+0000', '-0000'):
-        return 'Z' if tz_str in ('Z', 'z', 'UTC', 'GMT') else tz_str
+
+    if tz_str in ("Z", "z", "UTC", "GMT", "+00:00", "-00:00", "+0000", "-0000"):
+        return "Z" if tz_str in ("Z", "z", "UTC", "GMT") else tz_str
     # Numeric offset pattern: +HH:MM or -HH:MM or +HHMM or -HHMM
-    m_num = _re_ftz.match(r'^([+-])(\d{2}):?(\d{2})(?::(\d{2}))?$', tz_str)
+    m_num = _re_ftz.match(r"^([+-])(\d{2}):?(\d{2})(?::(\d{2}))?$", tz_str)
     if m_num:
         offset_str = f"{m_num.group(1)}{m_num.group(2)}:{m_num.group(3)}"
-        if m_num.group(4) and m_num.group(4) != '00':
+        if m_num.group(4) and m_num.group(4) != "00":
             offset_str += f":{m_num.group(4)}"
         return offset_str
     # IANA timezone name
-    if '/' in tz_str or tz_str in ('UTC', 'GMT'):
+    if "/" in tz_str or tz_str in ("UTC", "GMT"):
         y = ref_year or 2015
         mo = ref_month or 7
         d = ref_day or 21
@@ -9978,56 +10395,57 @@ def _subsecond_frac(ns, us, ms):
     if total_ns == 0:
         return None
     raw = f"{total_ns:09d}"
-    return raw.rstrip('0')
+    return raw.rstrip("0")
 
 
 def _parse_date_string(s):
     """Parse ISO 8601 date string to (year, month, day). Returns None on failure."""
     import datetime as _dt
     import re as _re
+
     s = s.strip()
     # YYYY-MM-DD or YYYYMMDD
-    m = _re.match(r'^(\d{4})-(\d{2})-(\d{2})$', s)
+    m = _re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
-    m = _re.match(r'^(\d{4})(\d{2})(\d{2})$', s)
+    m = _re.match(r"^(\d{4})(\d{2})(\d{2})$", s)
     if m:
         return int(m.group(1)), int(m.group(2)), int(m.group(3))
     # YYYY-MM or YYYYMM → first day of month
-    m = _re.match(r'^(\d{4})-(\d{2})$', s)
+    m = _re.match(r"^(\d{4})-(\d{2})$", s)
     if m:
         return int(m.group(1)), int(m.group(2)), 1
-    m = _re.match(r'^(\d{4})(\d{2})$', s)
+    m = _re.match(r"^(\d{4})(\d{2})$", s)
     if m:
         return int(m.group(1)), int(m.group(2)), 1
     # YYYY → Jan 1
-    m = _re.match(r'^(\d{4})$', s)
+    m = _re.match(r"^(\d{4})$", s)
     if m:
         return int(m.group(1)), 1, 1
     # YYYY-Www-D or YYYYWwwD
-    m = _re.match(r'^(\d{4})-W(\d{2})-(\d)$', s)
+    m = _re.match(r"^(\d{4})-W(\d{2})-(\d)$", s)
     if m:
         d = _date_from_iso_week(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         return d.year, d.month, d.day
-    m = _re.match(r'^(\d{4})W(\d{2})(\d)$', s)
+    m = _re.match(r"^(\d{4})W(\d{2})(\d)$", s)
     if m:
         d = _date_from_iso_week(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         return d.year, d.month, d.day
     # YYYY-Www or YYYYWww → Monday of that week
-    m = _re.match(r'^(\d{4})-W(\d{2})$', s)
+    m = _re.match(r"^(\d{4})-W(\d{2})$", s)
     if m:
         d = _date_from_iso_week(int(m.group(1)), int(m.group(2)), 1)
         return d.year, d.month, d.day
-    m = _re.match(r'^(\d{4})W(\d{2})$', s)
+    m = _re.match(r"^(\d{4})W(\d{2})$", s)
     if m:
         d = _date_from_iso_week(int(m.group(1)), int(m.group(2)), 1)
         return d.year, d.month, d.day
     # YYYY-DDD or YYYYDDD (ordinal)
-    m = _re.match(r'^(\d{4})-(\d{3})$', s)
+    m = _re.match(r"^(\d{4})-(\d{3})$", s)
     if m:
         d = _date_from_ordinal_day(int(m.group(1)), int(m.group(2)))
         return d.year, d.month, d.day
-    m = _re.match(r'^(\d{4})(\d{3})$', s)
+    m = _re.match(r"^(\d{4})(\d{3})$", s)
     if m:
         d = _date_from_ordinal_day(int(m.group(1)), int(m.group(2)))
         return d.year, d.month, d.day
@@ -10060,11 +10478,19 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
                 if base_key is None:
                     base_key = key
                     base_expr_node = expr_node
-                elif time_base_key is None and key in _TIME_ONLY_KEYS and base_key in _DATE_ONLY_KEYS + _DATETIME_KEYS:
+                elif (
+                    time_base_key is None
+                    and key in _TIME_ONLY_KEYS
+                    and base_key in _DATE_ONLY_KEYS + _DATETIME_KEYS
+                ):
                     # Secondary time base alongside a date/datetime base
                     time_base_key = key
                     time_base_expr_node = expr_node
-                elif time_base_key is None and key in _DATE_ONLY_KEYS + _DATETIME_KEYS and base_key in _TIME_ONLY_KEYS:
+                elif (
+                    time_base_key is None
+                    and key in _DATE_ONLY_KEYS + _DATETIME_KEYS
+                    and base_key in _TIME_ONLY_KEYS
+                ):
                     # Secondary date base alongside a time base — swap order
                     time_base_key = base_key
                     time_base_expr_node = base_expr_node
@@ -10078,7 +10504,8 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
     base_sql = translate_expression(base_expr_node, context, segment="select")
     time_base_sql = (
         translate_expression(time_base_expr_node, context, segment="select")
-        if time_base_expr_node is not None else None
+        if time_base_expr_node is not None
+        else None
     )
 
     # Collect literal integer overrides (year, month, day, hour, minute, second, etc.)
@@ -10129,7 +10556,9 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
             jan4_iris_dow = f"DATEPART('weekday', {jan4_str})"
             first_mon = f"DATEADD('day', -MOD({jan4_iris_dow} - 2 + 7, 7), {jan4_str})"
             # Target date = first_mon + (week-1)*7 + (base_iso_dow - 1) days
-            target_date = f"DATEADD('day', ({week_val} - 1) * 7 + ({base_iso_dow} - 1), {first_mon})"
+            target_date = (
+                f"DATEADD('day', ({week_val} - 1) * 7 + ({base_iso_dow} - 1), {first_mon})"
+            )
             return (
                 f"(LPAD(CAST(DATEPART('year', {target_date}) AS VARCHAR(6)), 4, '0') || '-' || "
                 f"LPAD(CAST(DATEPART('month', {target_date}) AS VARCHAR(4)), 2, '0') || '-' || "
@@ -10185,7 +10614,9 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
         # take the part after 'T'; otherwise use the base as-is (time/localtime).
         # This avoids having to know the actual runtime type of the base variable.
         t_pos = f"CHARINDEX('T', {base_sql})"
-        time_base = f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1) ELSE {base_sql} END"
+        time_base = (
+            f"CASE WHEN {t_pos} > 0 THEN SUBSTRING({base_sql}, {t_pos} + 1) ELSE {base_sql} END"
+        )
         # Now positions are all relative to time-only string: HH:MM:SS...
         h_pos, mi_pos, s_pos = 1, 4, 7
 
@@ -10193,10 +10624,12 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
         mi_sql = _int_field("minute", f"CAST(SUBSTRING({time_base}, {mi_pos}, 2) AS INTEGER)")
         # Seconds may not be present (e.g. '12:00+01:00' — position 6 is '+' not ':')
         # Use CASE to return 0 when seconds are absent
-        _s_colon_check = f"SUBSTRING({time_base}, {s_pos - 1}, 1)"  # char before s_pos should be ':'
+        _s_colon_check = (
+            f"SUBSTRING({time_base}, {s_pos - 1}, 1)"  # char before s_pos should be ':'
+        )
         s_sql = _int_field(
             "second",
-            f"CASE WHEN {_s_colon_check} = ':' THEN CAST(SUBSTRING({time_base}, {s_pos}, 2) AS INTEGER) ELSE 0 END"
+            f"CASE WHEN {_s_colon_check} = ':' THEN CAST(SUBSTRING({time_base}, {s_pos}, 2) AS INTEGER) ELSE 0 END",
         )
 
         # fractional second: position of '.' after seconds (s_pos + 2, since SS occupies s_pos..s_pos+1)
@@ -10212,7 +10645,9 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
         # Build time string with optional fractional seconds from base
         # Fractional part is replaced only when nanosecond/microsecond/millisecond is explicitly overridden.
         # Overriding 'second' does NOT strip the fractional part — only replaces the seconds integer.
-        _has_frac_override = any(k in overrides for k in ("nanosecond", "microsecond", "millisecond"))
+        _has_frac_override = any(
+            k in overrides for k in ("nanosecond", "microsecond", "millisecond")
+        )
         if not _has_frac_override:
             if base_key in ("time", "datetime"):
                 # Strip tz suffix from fractional part using CHARINDEX (IRIS has no REGEXP_REPLACE).
@@ -10319,10 +10754,13 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
                 s_str2 = _padded(str(overrides["second"]), 2)
             else:
                 s_str2 = _padded(
-                    f"CASE WHEN {_tsrc_colon} = ':' THEN CAST(SUBSTRING({_tsrc}, 7, 2) AS INTEGER) ELSE 0 END", 2
+                    f"CASE WHEN {_tsrc_colon} = ':' THEN CAST(SUBSTRING({_tsrc}, 7, 2) AS INTEGER) ELSE 0 END",
+                    2,
                 )
             # Fractional seconds from time_base
-            _has_frac_ov2 = any(k in overrides for k in ("nanosecond", "microsecond", "millisecond"))
+            _has_frac_ov2 = any(
+                k in overrides for k in ("nanosecond", "microsecond", "millisecond")
+            )
             _frac_start2 = 9  # position of '.' in time-only string
             if not _has_frac_ov2:
                 if time_base_key == "time":
@@ -10365,7 +10803,9 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
                 s_str2 = _padded(str(overrides["second"]), 2)
             else:
                 s_str2 = _padded(f"CAST(SUBSTRING({base_sql}, 18, 2) AS INTEGER)", 2)
-            _has_frac_ov2 = any(k in overrides for k in ("nanosecond", "microsecond", "millisecond"))
+            _has_frac_ov2 = any(
+                k in overrides for k in ("nanosecond", "microsecond", "millisecond")
+            )
             _frac_pos2 = 20  # position of '.' in datetime string
             if not _has_frac_ov2:
                 if base_key == "datetime":
@@ -10433,8 +10873,10 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
                     f"WHEN {_pp} >= 20 AND ({_mp} = 0 OR {_pp} <= {_mp}) THEN {_pp} "
                     f"WHEN {_mp} >= 20 THEN {_mp} ELSE 0 END"
                 )
-                result += f" || CASE WHEN ({_tzp}) > 0 THEN SUBSTRING({_tz_src}, ({_tzp})) ELSE 'Z' END"
-            elif (base_key == "time" or time_base_key == "time"):
+                result += (
+                    f" || CASE WHEN ({_tzp}) > 0 THEN SUBSTRING({_tz_src}, ({_tzp})) ELSE 'Z' END"
+                )
+            elif base_key == "time" or time_base_key == "time":
                 # Extract tz from the time variable (e.g., '12:31:14+01:00')
                 _t_src = time_base_sql if time_base_sql is not None else base_sql
                 _zp = f"CHARINDEX('Z', {_t_src})"
@@ -10445,7 +10887,9 @@ def _build_date_sql_from_dynamic_base(map_expr, context, target_fn="date"):
                     f"WHEN {_pp} > 0 AND ({_mp} = 0 OR {_pp} <= {_mp}) THEN {_pp} "
                     f"WHEN {_mp} > 0 THEN {_mp} ELSE 0 END"
                 )
-                result += f" || CASE WHEN ({_tzp}) > 0 THEN SUBSTRING({_t_src}, ({_tzp})) ELSE 'Z' END"
+                result += (
+                    f" || CASE WHEN ({_tzp}) > 0 THEN SUBSTRING({_t_src}, ({_tzp})) ELSE 'Z' END"
+                )
             else:
                 result += " || 'Z'"
             return f"({result})"
@@ -10474,11 +10918,13 @@ def _build_date_from_map(m, with_time=False, with_tz=False):
     if _has_map_key(m, "date"):
         base_expr = m.entries["date"]
         # date('YYYY-MM-DD') nested call
-        if (isinstance(base_expr, ast.FunctionCall) and
-                base_expr.function_name.lower() == "date" and
-                base_expr.arguments and
-                isinstance(base_expr.arguments[0], ast.Literal) and
-                isinstance(base_expr.arguments[0].value, str)):
+        if (
+            isinstance(base_expr, ast.FunctionCall)
+            and base_expr.function_name.lower() == "date"
+            and base_expr.arguments
+            and isinstance(base_expr.arguments[0], ast.Literal)
+            and isinstance(base_expr.arguments[0].value, str)
+        ):
             parsed = _parse_date_string(base_expr.arguments[0].value)
             if parsed:
                 base_year, base_month, base_day = parsed
@@ -10574,6 +11020,7 @@ def _build_date_from_map(m, with_time=False, with_tz=False):
                 if "/" in tz_name or tz_name in ("UTC", "GMT"):
                     try:
                         from zoneinfo import ZoneInfo as _ZoneInfo
+
                         _zi = _ZoneInfo(tz_name)
                         _aware = _dt.datetime(y_out, mo_out, d_out, tzinfo=_zi)
                         _off = _aware.utcoffset()
@@ -10633,7 +11080,7 @@ def _build_temporal_from_variable_map(fn, m, context):
             alias = context.variable_aliases.get(expr.name)
             temporal_type = context.temporal_types.get(expr.name)
             # Prefer compile-time literal value if available (enables TZ arithmetic)
-            tlv = getattr(context, 'temporal_literal_values', {})
+            tlv = getattr(context, "temporal_literal_values", {})
             if expr.name in tlv:
                 return f"'{tlv[expr.name]}'", temporal_type
             if alias and alias.startswith("Stage"):
@@ -10647,9 +11094,13 @@ def _build_temporal_from_variable_map(fn, m, context):
             fn_inner = expr.function_name.lower()
             if fn_inner in ("date", "localtime", "time", "localdatetime", "datetime"):
                 # Inline the temporal constructor
-                inner_args = [translate_expression(a, context, segment="inline") for a in expr.arguments]
+                inner_args = [
+                    translate_expression(a, context, segment="inline") for a in expr.arguments
+                ]
                 inner_args_exprs = expr.arguments
-                inner_result = _scalar_numeric_and_datetime(fn_inner, inner_args, inner_args_exprs, context)
+                inner_result = _scalar_numeric_and_datetime(
+                    fn_inner, inner_args, inner_args_exprs, context
+                )
                 if inner_result is not None:
                     return inner_result, fn_inner
         return None, None
@@ -10726,9 +11177,11 @@ def _build_temporal_from_variable_map(fn, m, context):
                     dow_offset_sql = f"MOD({{fn DAYOFWEEK({base_date_cast_sql})}} - 2 + 7, 7)"
                     result_date_sql = f"DATEADD('day', {dow_offset_sql}, {result_date_sql})"
                 # Format as YYYY-MM-DD
-                return (f"(CAST(YEAR({result_date_sql}) AS VARCHAR(4)) || '-' || "
-                        f"RIGHT('0' || CAST(MONTH({result_date_sql}) AS VARCHAR(2)), 2) || '-' || "
-                        f"RIGHT('0' || CAST(DAY({result_date_sql}) AS VARCHAR(2)), 2))")
+                return (
+                    f"(CAST(YEAR({result_date_sql}) AS VARCHAR(4)) || '-' || "
+                    f"RIGHT('0' || CAST(MONTH({result_date_sql}) AS VARCHAR(2)), 2) || '-' || "
+                    f"RIGHT('0' || CAST(DAY({result_date_sql}) AS VARCHAR(2)), 2))"
+                )
 
             # OrdinalDay: date({date: other, ordinalDay: N})
             if has_ordinal:
@@ -10740,9 +11193,11 @@ def _build_temporal_from_variable_map(fn, m, context):
                     y_sql = f"SUBSTRING({date_sql}, 1, 4)"
                 jan1_sql = f"CAST(({y_sql} || '-01-01') AS DATE)"
                 result_date_sql = f"DATEADD('day', {ordinal_val - 1}, {jan1_sql})"
-                return (f"(CAST(YEAR({result_date_sql}) AS VARCHAR(4)) || '-' || "
-                        f"RIGHT('0' || CAST(MONTH({result_date_sql}) AS VARCHAR(2)), 2) || '-' || "
-                        f"RIGHT('0' || CAST(DAY({result_date_sql}) AS VARCHAR(2)), 2))")
+                return (
+                    f"(CAST(YEAR({result_date_sql}) AS VARCHAR(4)) || '-' || "
+                    f"RIGHT('0' || CAST(MONTH({result_date_sql}) AS VARCHAR(2)), 2) || '-' || "
+                    f"RIGHT('0' || CAST(DAY({result_date_sql}) AS VARCHAR(2)), 2))"
+                )
 
             # Quarter: date({date: other, quarter: Q, dayOfQuarter?: D})
             if has_quarter:
@@ -10770,10 +11225,14 @@ def _build_temporal_from_variable_map(fn, m, context):
                     # Start of the resulting month: DATEADD('month', month_offset, q_start)
                     result_month_start_sql = f"DATEADD('month', {month_offset_sql}, {q_start_sql})"
                     # Then add day - 1 to reach the right day
-                    result_date_sql = f"DATEADD('day', {base_day_sql} - 1, {result_month_start_sql})"
-                return (f"(CAST(YEAR({result_date_sql}) AS VARCHAR(4)) || '-' || "
-                        f"RIGHT('0' || CAST(MONTH({result_date_sql}) AS VARCHAR(2)), 2) || '-' || "
-                        f"RIGHT('0' || CAST(DAY({result_date_sql}) AS VARCHAR(2)), 2))")
+                    result_date_sql = (
+                        f"DATEADD('day', {base_day_sql} - 1, {result_month_start_sql})"
+                    )
+                return (
+                    f"(CAST(YEAR({result_date_sql}) AS VARCHAR(4)) || '-' || "
+                    f"RIGHT('0' || CAST(MONTH({result_date_sql}) AS VARCHAR(2)), 2) || '-' || "
+                    f"RIGHT('0' || CAST(DAY({result_date_sql}) AS VARCHAR(2)), 2))"
+                )
         return None
 
     # For fn in ("localtime", "time"): need time component from base
@@ -10788,57 +11247,77 @@ def _build_temporal_from_variable_map(fn, m, context):
             elif btype == "time":
                 if fn == "localtime":
                     # localtime from time: strip TZ from time value
-                    if isinstance(base_sql, str) and base_sql.startswith("'") and base_sql.endswith("'"):
+                    if (
+                        isinstance(base_sql, str)
+                        and base_sql.startswith("'")
+                        and base_sql.endswith("'")
+                    ):
                         import re as _re_lt
+
                         _ts = base_sql[1:-1]
-                        _ts = _re_lt.sub(r'\[.*\]$', '', _ts)
-                        _ts = _re_lt.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', _ts)
-                        if _ts.endswith('Z'):
+                        _ts = _re_lt.sub(r"\[.*\]$", "", _ts)
+                        _ts = _re_lt.sub(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", _ts)
+                        if _ts.endswith("Z"):
                             _ts = _ts[:-1]
                         time_sql = f"'{_ts}'"
                     else:
                         # Runtime SQL: strip TZ via CASE
                         # TZ offset starts at pos 6 for HH:MM, pos 9 for HH:MM:SS
                         # Use pos 6 to catch both formats
-                        time_sql = (f"CASE "
-                                    f"WHEN CHARINDEX('+', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('+', {base_sql}, 6) - 1) "
-                                    f"WHEN CHARINDEX('-', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('-', {base_sql}, 6) - 1) "
-                                    f"WHEN CHARINDEX('Z', {base_sql}) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('Z', {base_sql}) - 1) "
-                                    f"ELSE {base_sql} END")
+                        time_sql = (
+                            f"CASE "
+                            f"WHEN CHARINDEX('+', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('+', {base_sql}, 6) - 1) "
+                            f"WHEN CHARINDEX('-', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('-', {base_sql}, 6) - 1) "
+                            f"WHEN CHARINDEX('Z', {base_sql}) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('Z', {base_sql}) - 1) "
+                            f"ELSE {base_sql} END"
+                        )
                 else:
                     time_sql = base_sql  # fn == "time": keep TZ
             elif btype in ("localdatetime", "datetime"):
                 # Extract time part starting at position 12 (after 'YYYY-MM-DDT')
                 # Strip IANA timezone name [Region/City] if present
-                if isinstance(base_sql, str) and base_sql.startswith("'") and base_sql.endswith("'"):
+                if (
+                    isinstance(base_sql, str)
+                    and base_sql.startswith("'")
+                    and base_sql.endswith("'")
+                ):
                     # Compile-time literal: extract time part in Python
                     import re as _re_tdtm
+
                     _base_dt_inner = base_sql[1:-1]
-                    _t_pos_dt = _base_dt_inner.find('T')
-                    _time_str_raw = _base_dt_inner[_t_pos_dt + 1:] if _t_pos_dt >= 0 else _base_dt_inner
+                    _t_pos_dt = _base_dt_inner.find("T")
+                    _time_str_raw = (
+                        _base_dt_inner[_t_pos_dt + 1 :] if _t_pos_dt >= 0 else _base_dt_inner
+                    )
                     if fn == "localtime":
                         # Strip all TZ info
-                        _time_str_raw = _re_tdtm.sub(r'\[[^\]]+\]', '', _time_str_raw)
-                        _time_str_raw = _re_tdtm.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', _time_str_raw)
-                        if _time_str_raw.endswith('Z'):
+                        _time_str_raw = _re_tdtm.sub(r"\[[^\]]+\]", "", _time_str_raw)
+                        _time_str_raw = _re_tdtm.sub(
+                            r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", _time_str_raw
+                        )
+                        if _time_str_raw.endswith("Z"):
                             _time_str_raw = _time_str_raw[:-1]
                     else:
                         # fn == "time": keep numeric TZ, strip IANA zone
-                        _time_str_raw = _re_tdtm.sub(r'\[[^\]]+\]', '', _time_str_raw)
+                        _time_str_raw = _re_tdtm.sub(r"\[[^\]]+\]", "", _time_str_raw)
                     time_sql = f"'{_time_str_raw}'"
                 else:
                     _time_raw = f"SUBSTRING({base_sql}, 12, 99)"
                     if fn == "localtime":
                         # Strip all timezone info. TZ starts at pos 6 min (HH:MM format)
-                        time_sql = (f"CASE WHEN CHARINDEX('[', {_time_raw}) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('[', {_time_raw}) - 1) "
-                                    f"WHEN CHARINDEX('+', {_time_raw}, 6) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('+', {_time_raw}, 6) - 1) "
-                                    f"WHEN CHARINDEX('-', {_time_raw}, 6) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('-', {_time_raw}, 6) - 1) "
-                                    f"WHEN CHARINDEX('Z', {_time_raw}) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('Z', {_time_raw}) - 1) "
-                                    f"ELSE {_time_raw} END")
+                        time_sql = (
+                            f"CASE WHEN CHARINDEX('[', {_time_raw}) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('[', {_time_raw}) - 1) "
+                            f"WHEN CHARINDEX('+', {_time_raw}, 6) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('+', {_time_raw}, 6) - 1) "
+                            f"WHEN CHARINDEX('-', {_time_raw}, 6) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('-', {_time_raw}, 6) - 1) "
+                            f"WHEN CHARINDEX('Z', {_time_raw}) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('Z', {_time_raw}) - 1) "
+                            f"ELSE {_time_raw} END"
+                        )
                     else:
                         # fn == "time": keep offset, strip IANA name only
-                        time_sql = (f"CASE WHEN CHARINDEX('[', {_time_raw}) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('[', {_time_raw}) - 1) "
-                                    f"ELSE {_time_raw} END")
+                        time_sql = (
+                            f"CASE WHEN CHARINDEX('[', {_time_raw}) > 0 THEN SUBSTRING({_time_raw}, 1, CHARINDEX('[', {_time_raw}) - 1) "
+                            f"ELSE {_time_raw} END"
+                        )
             else:
                 time_sql = base_sql
 
@@ -10872,34 +11351,46 @@ def _build_temporal_from_variable_map(fn, m, context):
                         # Then compute new hour/minute and build result
 
                         # If time_sql is a compile-time literal, do it in Python
-                        stripped = time_sql.strip("'") if (time_sql.startswith("'") and time_sql.endswith("'")) else None
+                        stripped = (
+                            time_sql.strip("'")
+                            if (time_sql.startswith("'") and time_sql.endswith("'"))
+                            else None
+                        )
                         if stripped is not None:
                             import re as _re3
+
                             # strip IANA
-                            stripped = _re3.sub(r'\[.*\]$', '', stripped)
-                            m_tz_old = _re3.search(r'([+-])(\d{2}):(\d{2})$', stripped)
+                            stripped = _re3.sub(r"\[.*\]$", "", stripped)
+                            m_tz_old = _re3.search(r"([+-])(\d{2}):(\d{2})$", stripped)
                             if m_tz_old:
-                                old_sign = 1 if m_tz_old.group(1) == '+' else -1
-                                old_offset_mins = old_sign * (int(m_tz_old.group(2)) * 60 + int(m_tz_old.group(3)))
-                                pure_time = stripped[:m_tz_old.start()]
-                            elif stripped.endswith('Z'):
+                                old_sign = 1 if m_tz_old.group(1) == "+" else -1
+                                old_offset_mins = old_sign * (
+                                    int(m_tz_old.group(2)) * 60 + int(m_tz_old.group(3))
+                                )
+                                pure_time = stripped[: m_tz_old.start()]
+                            elif stripped.endswith("Z"):
                                 old_offset_mins = 0
                                 pure_time = stripped[:-1]
                             else:
                                 old_offset_mins = 0
                                 pure_time = stripped
                             # Parse new_tz_str offset
-                            m_new = _re3.match(r'^([+-])(\d{2}):(\d{2})$', new_tz_str)
+                            m_new = _re3.match(r"^([+-])(\d{2}):(\d{2})$", new_tz_str)
                             if m_new:
-                                new_sign = 1 if m_new.group(1) == '+' else -1
-                                new_offset_mins = new_sign * (int(m_new.group(2)) * 60 + int(m_new.group(3)))
+                                new_sign = 1 if m_new.group(1) == "+" else -1
+                                new_offset_mins = new_sign * (
+                                    int(m_new.group(2)) * 60 + int(m_new.group(3))
+                                )
                             else:
                                 new_offset_mins = 0
                             delta_mins = new_offset_mins - old_offset_mins
                             # Parse pure_time
-                            tm = _re3.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', pure_time)
+                            tm = _re3.match(
+                                r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", pure_time
+                            )
                             if tm:
-                                h_v = int(tm.group(1)); mi_v = int(tm.group(2))
+                                h_v = int(tm.group(1))
+                                mi_v = int(tm.group(2))
                                 s_v = int(tm.group(3) or 0)
                                 frac_v = tm.group(4) or ""
                                 total_mins = h_v * 60 + mi_v + delta_mins
@@ -10907,7 +11398,9 @@ def _build_temporal_from_variable_map(fn, m, context):
                                 new_h = total_mins // 60
                                 new_mi = total_mins % 60
                                 if frac_v:
-                                    return f"'{new_h:02d}:{new_mi:02d}:{s_v:02d}.{frac_v}{new_tz_str}'"
+                                    return (
+                                        f"'{new_h:02d}:{new_mi:02d}:{s_v:02d}.{frac_v}{new_tz_str}'"
+                                    )
                                 elif s_v:
                                     return f"'{new_h:02d}:{new_mi:02d}:{s_v:02d}{new_tz_str}'"
                                 else:
@@ -10950,62 +11443,89 @@ def _build_temporal_from_variable_map(fn, m, context):
                     if btype in ("time", "datetime"):
                         # Try to get old TZ from the original base_sql (before CASE transforms)
                         _orig_sql = base_sql
-                        if isinstance(_orig_sql, str) and _orig_sql.startswith("'") and _orig_sql.endswith("'"):
+                        if (
+                            isinstance(_orig_sql, str)
+                            and _orig_sql.startswith("'")
+                            and _orig_sql.endswith("'")
+                        ):
                             import re as _re_shift2
+
                             _orig_inner = _orig_sql[1:-1]
-                            _orig_inner = _re_shift2.sub(r'\[[^\]]+\]', '', _orig_inner)
+                            _orig_inner = _re_shift2.sub(r"\[[^\]]+\]", "", _orig_inner)
                             # For datetime: extract time portion
-                            _t_pos2 = _orig_inner.find('T')
+                            _t_pos2 = _orig_inner.find("T")
                             if _t_pos2 >= 0:
-                                _orig_inner = _orig_inner[_t_pos2 + 1:]
-                            _m_old_tz = _re_shift2.search(r'([+-])(\d{2}):(\d{2})$', _orig_inner)
+                                _orig_inner = _orig_inner[_t_pos2 + 1 :]
+                            _m_old_tz = _re_shift2.search(r"([+-])(\d{2}):(\d{2})$", _orig_inner)
                             if _m_old_tz:
-                                _old_mins2 = (1 if _m_old_tz.group(1) == '+' else -1) * (int(_m_old_tz.group(2)) * 60 + int(_m_old_tz.group(3)))
-                                _m_new_tz = _re_shift2.match(r'^([+-])(\d{2}):(\d{2})', new_tz_str)
+                                _old_mins2 = (1 if _m_old_tz.group(1) == "+" else -1) * (
+                                    int(_m_old_tz.group(2)) * 60 + int(_m_old_tz.group(3))
+                                )
+                                _m_new_tz = _re_shift2.match(r"^([+-])(\d{2}):(\d{2})", new_tz_str)
                                 if _m_new_tz:
-                                    _new_mins2 = (1 if _m_new_tz.group(1) == '+' else -1) * (int(_m_new_tz.group(2)) * 60 + int(_m_new_tz.group(3)))
+                                    _new_mins2 = (1 if _m_new_tz.group(1) == "+" else -1) * (
+                                        int(_m_new_tz.group(2)) * 60 + int(_m_new_tz.group(3))
+                                    )
                                     _delta2 = _new_mins2 - _old_mins2
                                     if _delta2 != 0:
                                         # Need to shift h_sql and mi_sql — only possible if base_sql is a literal
-                                        _pure_t2 = _orig_inner[:_m_old_tz.start()]
-                                        _tm3 = _re_shift2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', _pure_t2)
+                                        _pure_t2 = _orig_inner[: _m_old_tz.start()]
+                                        _tm3 = _re_shift2.match(
+                                            r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", _pure_t2
+                                        )
                                         if _tm3:
-                                            h3 = int(_tm3.group(1)); mi3 = int(_tm3.group(2))
-                                            s3 = int(_tm3.group(3) or 0); frac3 = _tm3.group(4) or ""
+                                            h3 = int(_tm3.group(1))
+                                            mi3 = int(_tm3.group(2))
+                                            s3 = int(_tm3.group(3) or 0)
+                                            frac3 = _tm3.group(4) or ""
                                             # Apply second override AFTER extracting base values
                                             if has_second:
                                                 s3 = _extract_int_from_map_entry(m, "second", s3)
                                             total3 = (h3 * 60 + mi3 + _delta2) % (24 * 60)
-                                            h3n = total3 // 60; mi3n = total3 % 60
+                                            h3n = total3 // 60
+                                            mi3n = total3 % 60
                                             if frac3:
                                                 return f"'{h3n:02d}:{mi3n:02d}:{s3:02d}.{frac3}{new_tz_str}'"
                                             elif s3:
-                                                return f"'{h3n:02d}:{mi3n:02d}:{s3:02d}{new_tz_str}'"
+                                                return (
+                                                    f"'{h3n:02d}:{mi3n:02d}:{s3:02d}{new_tz_str}'"
+                                                )
                                             else:
                                                 return f"'{h3n:02d}:{mi3n:02d}{new_tz_str}'"
                     result_sql = f"({h_sql} || ':' || {mi_sql} || ':' || {s_sql} || {frac_sql} || '{new_tz_str}')"
                 else:
                     # No TZ override — use source TZ or default to Z for local types
                     if btype in ("localtime", "localdatetime"):
-                        result_sql = f"({h_sql} || ':' || {mi_sql} || ':' || {s_sql} || {frac_sql} || 'Z')"
+                        result_sql = (
+                            f"({h_sql} || ':' || {mi_sql} || ':' || {s_sql} || {frac_sql} || 'Z')"
+                        )
                     elif btype in ("time", "datetime"):
                         # Extract TZ from source literal if available
-                        if isinstance(base_sql, str) and base_sql.startswith("'") and base_sql.endswith("'"):
+                        if (
+                            isinstance(base_sql, str)
+                            and base_sql.startswith("'")
+                            and base_sql.endswith("'")
+                        ):
                             import re as _re_src_tz
+
                             _src = base_sql[1:-1]
-                            _iana_src = _re_src_tz.search(r'\[([^\]]+)\]', _src)
+                            _iana_src = _re_src_tz.search(r"\[([^\]]+)\]", _src)
                             _iana_src_str = _iana_src.group(0) if _iana_src else ""
-                            _src_no_iana = _src[:_iana_src.start()] if _iana_src else _src
+                            _src_no_iana = _src[: _iana_src.start()] if _iana_src else _src
                             # For datetime: get time portion
-                            _t_p = _src_no_iana.find('T')
+                            _t_p = _src_no_iana.find("T")
                             if _t_p >= 0:
-                                _src_no_iana = _src_no_iana[_t_p + 1:]
-                            _m_src_tz = _re_src_tz.search(r'([+-]\d{2}:?\d{2}(?::\d{2})?)$', _src_no_iana)
+                                _src_no_iana = _src_no_iana[_t_p + 1 :]
+                            _m_src_tz = _re_src_tz.search(
+                                r"([+-]\d{2}:?\d{2}(?::\d{2})?)$", _src_no_iana
+                            )
                             if _m_src_tz:
                                 # time() strips IANA zone; only datetime/localdatetime keep it
-                                _src_tz = _m_src_tz.group(1) + (_iana_src_str if fn != "time" else "")
+                                _src_tz = _m_src_tz.group(1) + (
+                                    _iana_src_str if fn != "time" else ""
+                                )
                                 result_sql = f"({h_sql} || ':' || {mi_sql} || ':' || {s_sql} || {frac_sql} || '{_src_tz}')"
-                            elif _src_no_iana.endswith('Z'):
+                            elif _src_no_iana.endswith("Z"):
                                 result_sql = f"({h_sql} || ':' || {mi_sql} || ':' || {s_sql} || {frac_sql} || 'Z')"
                             else:
                                 result_sql = f"({h_sql} || ':' || {mi_sql} || ':' || {s_sql} || {frac_sql} || {tz_suffix_sql})"
@@ -11036,14 +11556,19 @@ def _build_temporal_from_variable_map(fn, m, context):
                 # Helper: strip TZ suffix from a compile-time literal string
                 def _strip_tz_str(s):
                     import re as _rtz
-                    s = _rtz.sub(r'\[[^\]]+\]', '', s)  # remove IANA zone
-                    s = _rtz.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', s)
-                    if s.endswith('Z'):
+
+                    s = _rtz.sub(r"\[[^\]]+\]", "", s)  # remove IANA zone
+                    s = _rtz.sub(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", s)
+                    if s.endswith("Z"):
                         s = s[:-1]
                     return s
 
                 # If base_sql is a compile-time literal, handle fully at compile time
-                if isinstance(base_sql, str) and base_sql.startswith("'") and base_sql.endswith("'"):
+                if (
+                    isinstance(base_sql, str)
+                    and base_sql.startswith("'")
+                    and base_sql.endswith("'")
+                ):
                     inner = base_sql[1:-1]
                     tz_suffix = ""
                     if fn == "localdatetime":
@@ -11051,51 +11576,68 @@ def _build_temporal_from_variable_map(fn, m, context):
                     else:  # fn == "datetime"
                         # Preserve or override TZ — extract IANA zone and numeric offset separately
                         import re as _re_dt0
+
                         # Step 1: extract IANA zone (e.g. [Europe/Stockholm])
-                        _iana_m0 = _re_dt0.search(r'\[([^\]]+)\]', inner)
-                        _iana_zone = _iana_m0.group(0) if _iana_m0 else ""  # e.g. '[Europe/Stockholm]'
-                        _inner_no_iana = inner[:_iana_m0.start()] if _iana_m0 else inner
+                        _iana_m0 = _re_dt0.search(r"\[([^\]]+)\]", inner)
+                        _iana_zone = (
+                            _iana_m0.group(0) if _iana_m0 else ""
+                        )  # e.g. '[Europe/Stockholm]'
+                        _inner_no_iana = inner[: _iana_m0.start()] if _iana_m0 else inner
                         # Step 2: extract numeric TZ offset from end
-                        tz_m0 = _re_dt0.search(r'([+-]\d{2}:?\d{2}(?::\d{2})?)$', _inner_no_iana)
+                        tz_m0 = _re_dt0.search(r"([+-]\d{2}:?\d{2}(?::\d{2})?)$", _inner_no_iana)
                         if tz_m0:
                             _numeric_tz = tz_m0.group(1)
                             tz_suffix = _numeric_tz + _iana_zone  # e.g. '+01:00[Europe/Stockholm]'
-                            inner = _inner_no_iana[:tz_m0.start()]
-                        elif _inner_no_iana.endswith('Z'):
-                            tz_suffix = 'Z'
+                            inner = _inner_no_iana[: tz_m0.start()]
+                        elif _inner_no_iana.endswith("Z"):
+                            tz_suffix = "Z"
                             inner = _inner_no_iana[:-1]
                         else:
                             # localdatetime source — default TZ is Z for datetime
-                            tz_suffix = 'Z' if btype in ("localdatetime",) else ""
+                            tz_suffix = "Z" if btype in ("localdatetime",) else ""
                             inner = _inner_no_iana
                         # Step 3: apply TZ override if present (override replaces tz_suffix)
-                        tz_override_expr = m.entries.get("timezone") if hasattr(m, "entries") else None
+                        tz_override_expr = (
+                            m.entries.get("timezone") if hasattr(m, "entries") else None
+                        )
                         if tz_override_expr and isinstance(tz_override_expr, ast.Literal):
                             new_tz = _format_tz_for_iso(tz_override_expr.value)
                             # If source had TZ and new differs, shift the wall-clock time
                             if tz_m0 and new_tz != tz_suffix:
-                                _m_old_off = _re_dt0.match(r'^([+-])(\d{2}):(\d{2})', _numeric_tz)
-                                _m_new_off = _re_dt0.match(r'^([+-])(\d{2}):(\d{2})', new_tz)
+                                _m_old_off = _re_dt0.match(r"^([+-])(\d{2}):(\d{2})", _numeric_tz)
+                                _m_new_off = _re_dt0.match(r"^([+-])(\d{2}):(\d{2})", new_tz)
                                 if _m_old_off and _m_new_off:
-                                    _old_mins = (1 if _m_old_off.group(1) == '+' else -1) * (int(_m_old_off.group(2)) * 60 + int(_m_old_off.group(3)))
-                                    _new_mins = (1 if _m_new_off.group(1) == '+' else -1) * (int(_m_new_off.group(2)) * 60 + int(_m_new_off.group(3)))
+                                    _old_mins = (1 if _m_old_off.group(1) == "+" else -1) * (
+                                        int(_m_old_off.group(2)) * 60 + int(_m_old_off.group(3))
+                                    )
+                                    _new_mins = (1 if _m_new_off.group(1) == "+" else -1) * (
+                                        int(_m_new_off.group(2)) * 60 + int(_m_new_off.group(3))
+                                    )
                                     _delta = _new_mins - _old_mins
                                     if _delta != 0:
                                         # Extract time part from inner (after 'T')
-                                        _t_idx = inner.find('T')
+                                        _t_idx = inner.find("T")
                                         if _t_idx >= 0:
                                             _date_part = inner[:_t_idx]
-                                            _t_str = inner[_t_idx + 1:]
-                                            _tm_m = _re_dt0.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', _t_str)
+                                            _t_str = inner[_t_idx + 1 :]
+                                            _tm_m = _re_dt0.match(
+                                                r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$",
+                                                _t_str,
+                                            )
                                             if _tm_m:
-                                                _th = int(_tm_m.group(1)); _tmi = int(_tm_m.group(2))
-                                                _ts = int(_tm_m.group(3) or 0); _tfrac = _tm_m.group(4) or ""
+                                                _th = int(_tm_m.group(1))
+                                                _tmi = int(_tm_m.group(2))
+                                                _ts = int(_tm_m.group(3) or 0)
+                                                _tfrac = _tm_m.group(4) or ""
                                                 _total = (_th * 60 + _tmi + _delta) % (24 * 60)
-                                                _th_new = _total // 60; _tmi_new = _total % 60
+                                                _th_new = _total // 60
+                                                _tmi_new = _total % 60
                                                 if _tfrac:
                                                     _t_shifted = f"{_th_new:02d}:{_tmi_new:02d}:{_ts:02d}.{_tfrac}"
                                                 elif _ts:
-                                                    _t_shifted = f"{_th_new:02d}:{_tmi_new:02d}:{_ts:02d}"
+                                                    _t_shifted = (
+                                                        f"{_th_new:02d}:{_tmi_new:02d}:{_ts:02d}"
+                                                    )
                                                 else:
                                                     _t_shifted = f"{_th_new:02d}:{_tmi_new:02d}"
                                                 inner = f"{_date_part}T{_t_shifted}"
@@ -11105,19 +11647,28 @@ def _build_temporal_from_variable_map(fn, m, context):
                         # Parse inner into date+time parts and apply overrides
                         # inner is 'YYYY-MM-DDTHH:MM[:SS[.frac]]'
                         import re as _re_ov
+
                         _dt_m = _re_ov.match(
-                            r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})([.\d]*))?$',
-                            inner)
+                            r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})([.\d]*))?$", inner
+                        )
                         if _dt_m:
-                            yr0 = int(_dt_m.group(1)); mo0 = int(_dt_m.group(2))
-                            dy0 = int(_dt_m.group(3)); hr0 = int(_dt_m.group(4))
-                            mi0 = int(_dt_m.group(5)); sc0 = int(_dt_m.group(6) or 0)
+                            yr0 = int(_dt_m.group(1))
+                            mo0 = int(_dt_m.group(2))
+                            dy0 = int(_dt_m.group(3))
+                            hr0 = int(_dt_m.group(4))
+                            mi0 = int(_dt_m.group(5))
+                            sc0 = int(_dt_m.group(6) or 0)
                             frac0 = _dt_m.group(7) or ""
-                            if has_yr: yr0 = _extract_int_from_map_entry(m, "year", yr0)
-                            if has_mo: mo0 = _extract_int_from_map_entry(m, "month", mo0)
-                            if has_dy: dy0 = _extract_int_from_map_entry(m, "day", dy0)
-                            if has_hr: hr0 = _extract_int_from_map_entry(m, "hour", hr0)
-                            if has_mi: mi0 = _extract_int_from_map_entry(m, "minute", mi0)
+                            if has_yr:
+                                yr0 = _extract_int_from_map_entry(m, "year", yr0)
+                            if has_mo:
+                                mo0 = _extract_int_from_map_entry(m, "month", mo0)
+                            if has_dy:
+                                dy0 = _extract_int_from_map_entry(m, "day", dy0)
+                            if has_hr:
+                                hr0 = _extract_int_from_map_entry(m, "hour", hr0)
+                            if has_mi:
+                                mi0 = _extract_int_from_map_entry(m, "minute", mi0)
                             if has_sec:
                                 sc0 = _extract_int_from_map_entry(m, "second", sc0)
                                 # second override resets sub-second fraction? No: keep frac unless nanosecond/ms key given
@@ -11130,22 +11681,50 @@ def _build_temporal_from_variable_map(fn, m, context):
                 else:
                     # Runtime SQL expression path
                     # Strip TZ suffix from base_sql (TZ starts after 'YYYY-MM-DDTHH:MM:SS')
-                    no_tz_sql = (f"CASE "
-                                 f"WHEN CHARINDEX('+', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('+', {base_sql}, 17) - 1) "
-                                 f"WHEN CHARINDEX('-', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('-', {base_sql}, 17) - 1) "
-                                 f"WHEN CHARINDEX('Z', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('Z', {base_sql}, 17) - 1) "
-                                 f"ELSE {base_sql} END")
+                    no_tz_sql = (
+                        f"CASE "
+                        f"WHEN CHARINDEX('+', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('+', {base_sql}, 17) - 1) "
+                        f"WHEN CHARINDEX('-', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('-', {base_sql}, 17) - 1) "
+                        f"WHEN CHARINDEX('Z', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, 1, CHARINDEX('Z', {base_sql}, 17) - 1) "
+                        f"ELSE {base_sql} END"
+                    )
                     if has_overrides:
                         # Apply date/time component overrides to no_tz_sql
-                        y_sql = f"'{_extract_int_from_map_entry(m,'year',0):04d}'" if has_yr else f"SUBSTRING({no_tz_sql}, 1, 4)"
-                        mo_sql = f"'{_extract_int_from_map_entry(m,'month',0):02d}'" if has_mo else f"SUBSTRING({no_tz_sql}, 6, 2)"
-                        d_sql = f"'{_extract_int_from_map_entry(m,'day',0):02d}'" if has_dy else f"SUBSTRING({no_tz_sql}, 9, 2)"
-                        hr_sql = f"'{_extract_int_from_map_entry(m,'hour',0):02d}'" if has_hr else f"SUBSTRING({no_tz_sql}, 12, 2)"
-                        mi_sql = f"'{_extract_int_from_map_entry(m,'minute',0):02d}'" if has_mi else f"SUBSTRING({no_tz_sql}, 15, 2)"
-                        sc_sql = f"'{_extract_int_from_map_entry(m,'second',0):02d}'" if has_sec else f"SUBSTRING({no_tz_sql}, 18, 2)"
+                        y_sql = (
+                            f"'{_extract_int_from_map_entry(m,'year',0):04d}'"
+                            if has_yr
+                            else f"SUBSTRING({no_tz_sql}, 1, 4)"
+                        )
+                        mo_sql = (
+                            f"'{_extract_int_from_map_entry(m,'month',0):02d}'"
+                            if has_mo
+                            else f"SUBSTRING({no_tz_sql}, 6, 2)"
+                        )
+                        d_sql = (
+                            f"'{_extract_int_from_map_entry(m,'day',0):02d}'"
+                            if has_dy
+                            else f"SUBSTRING({no_tz_sql}, 9, 2)"
+                        )
+                        hr_sql = (
+                            f"'{_extract_int_from_map_entry(m,'hour',0):02d}'"
+                            if has_hr
+                            else f"SUBSTRING({no_tz_sql}, 12, 2)"
+                        )
+                        mi_sql = (
+                            f"'{_extract_int_from_map_entry(m,'minute',0):02d}'"
+                            if has_mi
+                            else f"SUBSTRING({no_tz_sql}, 15, 2)"
+                        )
+                        sc_sql = (
+                            f"'{_extract_int_from_map_entry(m,'second',0):02d}'"
+                            if has_sec
+                            else f"SUBSTRING({no_tz_sql}, 18, 2)"
+                        )
                         # Preserve fractional seconds from original
-                        frac_sql = (f"CASE WHEN LENGTH({no_tz_sql}) > 19 AND SUBSTRING({no_tz_sql}, 20, 1) = '.' "
-                                    f"THEN SUBSTRING({no_tz_sql}, 19, 99) ELSE '' END")
+                        frac_sql = (
+                            f"CASE WHEN LENGTH({no_tz_sql}) > 19 AND SUBSTRING({no_tz_sql}, 20, 1) = '.' "
+                            f"THEN SUBSTRING({no_tz_sql}, 19, 99) ELSE '' END"
+                        )
                         rebuilt = f"({y_sql} || '-' || {mo_sql} || '-' || {d_sql} || 'T' || {hr_sql} || ':' || {mi_sql} || ':' || {sc_sql} || {frac_sql})"
                     else:
                         rebuilt = no_tz_sql
@@ -11153,16 +11732,24 @@ def _build_temporal_from_variable_map(fn, m, context):
                     if fn == "localdatetime":
                         return rebuilt
                     else:
-                        tz_override_expr = m.entries.get("timezone") if hasattr(m, "entries") else None
-                        if tz_override_expr and isinstance(tz_override_expr, ast.Literal) and isinstance(tz_override_expr.value, str):
+                        tz_override_expr = (
+                            m.entries.get("timezone") if hasattr(m, "entries") else None
+                        )
+                        if (
+                            tz_override_expr
+                            and isinstance(tz_override_expr, ast.Literal)
+                            and isinstance(tz_override_expr.value, str)
+                        ):
                             new_tz_iso = _format_tz_for_iso(tz_override_expr.value)
                             return f"({rebuilt} || '{new_tz_iso}')"
                         else:
                             # Keep original timezone
-                            tz_suffix_sql = (f"CASE "
-                                             f"WHEN CHARINDEX('+', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('+', {base_sql}, 17)) "
-                                             f"WHEN CHARINDEX('-', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('-', {base_sql}, 17)) "
-                                             f"WHEN CHARINDEX('Z', {base_sql}, 17) > 0 THEN 'Z' ELSE 'Z' END")
+                            tz_suffix_sql = (
+                                f"CASE "
+                                f"WHEN CHARINDEX('+', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('+', {base_sql}, 17)) "
+                                f"WHEN CHARINDEX('-', {base_sql}, 17) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('-', {base_sql}, 17)) "
+                                f"WHEN CHARINDEX('Z', {base_sql}, 17) > 0 THEN 'Z' ELSE 'Z' END"
+                            )
                             return f"({rebuilt} || {tz_suffix_sql})"
 
         # Case 1: {date: var, hour: h, minute: m, second: s} — date from var, time from literals
@@ -11206,11 +11793,17 @@ def _build_temporal_from_variable_map(fn, m, context):
                 if time_base_sql is None:
                     return None
                 if ttype in ("localdatetime", "datetime"):
-                    if isinstance(time_base_sql, str) and time_base_sql.startswith("'") and time_base_sql.endswith("'"):
+                    if (
+                        isinstance(time_base_sql, str)
+                        and time_base_sql.startswith("'")
+                        and time_base_sql.endswith("'")
+                    ):
                         # Compile-time literal: extract time part in Python
                         _tbs_inner = time_base_sql[1:-1]
-                        _t_pos = _tbs_inner.find('T')
-                        time_base_sql = f"'{_tbs_inner[_t_pos + 1:]}'" if _t_pos >= 0 else time_base_sql
+                        _t_pos = _tbs_inner.find("T")
+                        time_base_sql = (
+                            f"'{_tbs_inner[_t_pos + 1:]}'" if _t_pos >= 0 else time_base_sql
+                        )
                     else:
                         time_base_sql = f"SUBSTRING({time_base_sql}, 12, 99)"
                 # Apply second override if present
@@ -11222,18 +11815,22 @@ def _build_temporal_from_variable_map(fn, m, context):
                     # Fractional: extract from pos 9 (after 'HH:MM:SS'), strip tz suffix
                     # For localdatetime: strip +/- or Z tz; for datetime/time: keep tz
                     if fn == "localdatetime":
-                        frac_sql = (f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
-                                    f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
-                                    f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END")
+                        frac_sql = (
+                            f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
+                            f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
+                            f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END"
+                        )
                     else:
                         # fn == "datetime": strip TZ from frac (TZ suffix will be handled below)
-                        frac_sql = (f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
-                                    f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
-                                    f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END")
+                        frac_sql = (
+                            f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
+                            f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
+                            f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END"
+                        )
                     time_sql = f"({h_sql} || ':' || {mi_sql} || ':' || '{s_val:02d}' || {frac_sql})"
                 else:
                     # Strip timezone from time base for localdatetime
@@ -11264,78 +11861,124 @@ def _build_temporal_from_variable_map(fn, m, context):
                     if isinstance(tz_expr, ast.Literal) and isinstance(tz_expr.value, str):
                         tz_str = _format_tz_for_iso(tz_expr.value)
                         # If source time had TZ and override differs, shift the time
-                        if base_time_expr is not None and ttype_outer in ("time", "datetime") and isinstance(time_base_sql_outer, str) and time_base_sql_outer.startswith("'") and time_base_sql_outer.endswith("'"):
+                        if (
+                            base_time_expr is not None
+                            and ttype_outer in ("time", "datetime")
+                            and isinstance(time_base_sql_outer, str)
+                            and time_base_sql_outer.startswith("'")
+                            and time_base_sql_outer.endswith("'")
+                        ):
                             import re as _re_shift
+
                             _ts2 = time_base_sql_outer[1:-1]
                             # Extract IANA zone from source before stripping
-                            _ts2_iana_m = _re_shift.search(r'\[([^\]]+)\]', _ts2)
+                            _ts2_iana_m = _re_shift.search(r"\[([^\]]+)\]", _ts2)
                             _ts2_iana_name = _ts2_iana_m.group(1) if _ts2_iana_m else ""
-                            _ts2 = _re_shift.sub(r'\[[^\]]+\]', '', _ts2)  # strip IANA zone
+                            _ts2 = _re_shift.sub(r"\[[^\]]+\]", "", _ts2)  # strip IANA zone
                             # If _ts2 is a full datetime (contains 'T'), extract time portion
-                            _t_sep = _ts2.find('T')
+                            _t_sep = _ts2.find("T")
                             if _t_sep >= 0:
-                                _ts2 = _ts2[_t_sep + 1:]  # just the time part 'HH:MM+01:00'
-                            _m_old = _re_shift.search(r'([+-])(\d{2}):(\d{2})$', _ts2)
+                                _ts2 = _ts2[_t_sep + 1 :]  # just the time part 'HH:MM+01:00'
+                            _m_old = _re_shift.search(r"([+-])(\d{2}):(\d{2})$", _ts2)
                             if _m_old:
-                                old_sign = 1 if _m_old.group(1) == '+' else -1
-                                old_off_mins = old_sign * (int(_m_old.group(2)) * 60 + int(_m_old.group(3)))
-                                _pure_t = _ts2[:_m_old.start()]
+                                old_sign = 1 if _m_old.group(1) == "+" else -1
+                                old_off_mins = old_sign * (
+                                    int(_m_old.group(2)) * 60 + int(_m_old.group(3))
+                                )
+                                _pure_t = _ts2[: _m_old.start()]
                                 # If IANA zone present, recompute offset for target date (DST-aware)
                                 if _ts2_iana_name:
                                     # Determine target date from base_date_expr + overrides
                                     _tgt_bs, _tgt_bt = _get_base_sql(base_date_expr)
-                                    if isinstance(_tgt_bs, str) and _tgt_bs.startswith("'") and _tgt_bs.endswith("'"):
+                                    if (
+                                        isinstance(_tgt_bs, str)
+                                        and _tgt_bs.startswith("'")
+                                        and _tgt_bs.endswith("'")
+                                    ):
                                         _tgt_i = _tgt_bs[1:-1][:10]
                                         _tgt_y = int(_tgt_i[:4]) if _tgt_i[:4].isdigit() else 1984
-                                        _tgt_mo = int(_tgt_i[5:7]) if len(_tgt_i) > 6 and _tgt_i[5:7].isdigit() else 10
-                                        _tgt_d = int(_tgt_i[8:10]) if len(_tgt_i) > 9 and _tgt_i[8:10].isdigit() else 11
+                                        _tgt_mo = (
+                                            int(_tgt_i[5:7])
+                                            if len(_tgt_i) > 6 and _tgt_i[5:7].isdigit()
+                                            else 10
+                                        )
+                                        _tgt_d = (
+                                            int(_tgt_i[8:10])
+                                            if len(_tgt_i) > 9 and _tgt_i[8:10].isdigit()
+                                            else 11
+                                        )
                                     else:
                                         _tgt_y, _tgt_mo, _tgt_d = 1984, 10, 11
-                                    if has_day: _tgt_d = _extract_int_from_map_entry(m, "day", _tgt_d)
-                                    if has_month: _tgt_mo = _extract_int_from_map_entry(m, "month", _tgt_mo)
-                                    if has_year: _tgt_y = _extract_int_from_map_entry(m, "year", _tgt_y)
-                                    _dst_off_s1 = _iana_tz_offset(_ts2_iana_name, _tgt_y, _tgt_mo, _tgt_d)
+                                    if has_day:
+                                        _tgt_d = _extract_int_from_map_entry(m, "day", _tgt_d)
+                                    if has_month:
+                                        _tgt_mo = _extract_int_from_map_entry(m, "month", _tgt_mo)
+                                    if has_year:
+                                        _tgt_y = _extract_int_from_map_entry(m, "year", _tgt_y)
+                                    _dst_off_s1 = _iana_tz_offset(
+                                        _ts2_iana_name, _tgt_y, _tgt_mo, _tgt_d
+                                    )
                                     if _dst_off_s1:
-                                        _m_dst = _re_shift.match(r'^([+-])(\d{2}):(\d{2})', _dst_off_s1)
+                                        _m_dst = _re_shift.match(
+                                            r"^([+-])(\d{2}):(\d{2})", _dst_off_s1
+                                        )
                                         if _m_dst:
-                                            old_off_mins = (1 if _m_dst.group(1) == '+' else -1) * (int(_m_dst.group(2)) * 60 + int(_m_dst.group(3)))
-                            elif _ts2.endswith('Z'):
-                                old_off_mins = 0; _pure_t = _ts2[:-1]
+                                            old_off_mins = (1 if _m_dst.group(1) == "+" else -1) * (
+                                                int(_m_dst.group(2)) * 60 + int(_m_dst.group(3))
+                                            )
+                            elif _ts2.endswith("Z"):
+                                old_off_mins = 0
+                                _pure_t = _ts2[:-1]
                             else:
-                                old_off_mins = 0; _pure_t = _ts2
+                                old_off_mins = 0
+                                _pure_t = _ts2
                             # Also extract time portion from time_base_sql (which may have been overridden by second)
                             _time_for_shift = time_base_sql
-                            if isinstance(_time_for_shift, str) and _time_for_shift.startswith("'") and _time_for_shift.endswith("'"):
+                            if (
+                                isinstance(_time_for_shift, str)
+                                and _time_for_shift.startswith("'")
+                                and _time_for_shift.endswith("'")
+                            ):
                                 _tfs = _time_for_shift[1:-1]
-                                _tfs = _re_shift.sub(r'\[.*\]$', '', _tfs)
-                                _tfs_tz_m = _re_shift.search(r'([+-])(\d{2}):(\d{2})$', _tfs)
+                                _tfs = _re_shift.sub(r"\[.*\]$", "", _tfs)
+                                _tfs_tz_m = _re_shift.search(r"([+-])(\d{2}):(\d{2})$", _tfs)
                                 if _tfs_tz_m:
-                                    _pure_t = _tfs[:_tfs_tz_m.start()]
-                                elif _tfs.endswith('Z'):
+                                    _pure_t = _tfs[: _tfs_tz_m.start()]
+                                elif _tfs.endswith("Z"):
                                     _pure_t = _tfs[:-1]
                                 else:
                                     _pure_t = _tfs
-                            _m_new2 = _re_shift.match(r'^([+-])(\d{2}):(\d{2})', tz_str)
+                            _m_new2 = _re_shift.match(r"^([+-])(\d{2}):(\d{2})", tz_str)
                             if _m_new2:
-                                new_sign2 = 1 if _m_new2.group(1) == '+' else -1
-                                new_off_mins = new_sign2 * (int(_m_new2.group(2)) * 60 + int(_m_new2.group(3)))
+                                new_sign2 = 1 if _m_new2.group(1) == "+" else -1
+                                new_off_mins = new_sign2 * (
+                                    int(_m_new2.group(2)) * 60 + int(_m_new2.group(3))
+                                )
                             else:
                                 new_off_mins = old_off_mins
                             delta_mins = new_off_mins - old_off_mins
                             if delta_mins != 0:
-                                _tm2 = _re_shift.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', _pure_t)
+                                _tm2 = _re_shift.match(
+                                    r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", _pure_t
+                                )
                                 if _tm2:
-                                    h2 = int(_tm2.group(1)); mi2 = int(_tm2.group(2))
-                                    s2v = int(_tm2.group(3) or 0); frac2 = _tm2.group(4) or ""
+                                    h2 = int(_tm2.group(1))
+                                    mi2 = int(_tm2.group(2))
+                                    s2v = int(_tm2.group(3) or 0)
+                                    frac2 = _tm2.group(4) or ""
                                     # Apply second override if present
                                     if has_second:
                                         s2v = _extract_int_from_map_entry(m, "second", s2v)
                                     total2 = h2 * 60 + mi2 + delta_mins
                                     total2 = total2 % (24 * 60)
-                                    h2n = total2 // 60; mi2n = total2 % 60
-                                    if frac2: shifted = f"'{h2n:02d}:{mi2n:02d}:{s2v:02d}.{frac2}'"
-                                    elif s2v: shifted = f"'{h2n:02d}:{mi2n:02d}:{s2v:02d}'"
-                                    else: shifted = f"'{h2n:02d}:{mi2n:02d}'"
+                                    h2n = total2 // 60
+                                    mi2n = total2 % 60
+                                    if frac2:
+                                        shifted = f"'{h2n:02d}:{mi2n:02d}:{s2v:02d}.{frac2}'"
+                                    elif s2v:
+                                        shifted = f"'{h2n:02d}:{mi2n:02d}:{s2v:02d}'"
+                                    else:
+                                        shifted = f"'{h2n:02d}:{mi2n:02d}'"
                                     return f"({new_date_sql} || 'T' || {shifted} || '{tz_str}')"
                     else:
                         tz_str = "Z"
@@ -11344,41 +11987,71 @@ def _build_temporal_from_variable_map(fn, m, context):
                     if base_time_expr is not None:
                         if ttype_outer in ("localtime", "localdatetime"):
                             tz_str = "Z"
-                        elif isinstance(time_base_sql_outer, str) and time_base_sql_outer.startswith("'") and time_base_sql_outer.endswith("'"):
+                        elif (
+                            isinstance(time_base_sql_outer, str)
+                            and time_base_sql_outer.startswith("'")
+                            and time_base_sql_outer.endswith("'")
+                        ):
                             # Extract TZ from compile-time literal
                             import re as _re_tz2
+
                             _ts3 = time_base_sql_outer[1:-1]
                             # Strip IANA bracket but keep numeric TZ
-                            _iana3 = _re_tz2.search(r'\[([^\]]+)\]', _ts3)
+                            _iana3 = _re_tz2.search(r"\[([^\]]+)\]", _ts3)
                             _iana_name3 = _iana3.group(1) if _iana3 else ""
                             _iana_bracket3 = _iana3.group(0) if _iana3 else ""
-                            _ts3_no_iana = _ts3[:_iana3.start()] if _iana3 else _ts3
+                            _ts3_no_iana = _ts3[: _iana3.start()] if _iana3 else _ts3
                             # For datetime: extract time portion
-                            _ts3_t = _ts3_no_iana.find('T')
+                            _ts3_t = _ts3_no_iana.find("T")
                             if _ts3_t >= 0:
-                                _ts3_no_iana = _ts3_no_iana[_ts3_t + 1:]
-                            _m_tz3 = _re_tz2.search(r'([+-]\d{2}:?\d{2}(?::\d{2})?)$', _ts3_no_iana)
+                                _ts3_no_iana = _ts3_no_iana[_ts3_t + 1 :]
+                            _m_tz3 = _re_tz2.search(r"([+-]\d{2}:?\d{2}(?::\d{2})?)$", _ts3_no_iana)
                             if _m_tz3:
                                 _num_tz3 = _m_tz3.group(1)
                                 if _iana_name3:
                                     # Recompute DST-aware offset for the target date
                                     # Target date from base_date_expr + overrides
-                                    _target_base_sql3, _target_btype3 = _get_base_sql(base_date_expr)
-                                    if isinstance(_target_base_sql3, str) and _target_base_sql3.startswith("'") and _target_base_sql3.endswith("'"):
-                                        _tgt_inner3 = _target_base_sql3[1:-1][:10]  # YYYY-MM-DD portion
-                                        _tgt_y3 = int(_tgt_inner3[:4]) if _tgt_inner3[:4].isdigit() else 1984
-                                        _tgt_mo3 = int(_tgt_inner3[5:7]) if _tgt_inner3[5:7].isdigit() else 10
-                                        _tgt_d3 = int(_tgt_inner3[8:10]) if _tgt_inner3[8:10].isdigit() else 11
+                                    _target_base_sql3, _target_btype3 = _get_base_sql(
+                                        base_date_expr
+                                    )
+                                    if (
+                                        isinstance(_target_base_sql3, str)
+                                        and _target_base_sql3.startswith("'")
+                                        and _target_base_sql3.endswith("'")
+                                    ):
+                                        _tgt_inner3 = _target_base_sql3[1:-1][
+                                            :10
+                                        ]  # YYYY-MM-DD portion
+                                        _tgt_y3 = (
+                                            int(_tgt_inner3[:4])
+                                            if _tgt_inner3[:4].isdigit()
+                                            else 1984
+                                        )
+                                        _tgt_mo3 = (
+                                            int(_tgt_inner3[5:7])
+                                            if _tgt_inner3[5:7].isdigit()
+                                            else 10
+                                        )
+                                        _tgt_d3 = (
+                                            int(_tgt_inner3[8:10])
+                                            if _tgt_inner3[8:10].isdigit()
+                                            else 11
+                                        )
                                     else:
                                         _tgt_y3, _tgt_mo3, _tgt_d3 = 1984, 10, 11
-                                    if has_day: _tgt_d3 = _extract_int_from_map_entry(m, "day", _tgt_d3)
-                                    if has_month: _tgt_mo3 = _extract_int_from_map_entry(m, "month", _tgt_mo3)
-                                    if has_year: _tgt_y3 = _extract_int_from_map_entry(m, "year", _tgt_y3)
-                                    _dst_off3 = _iana_tz_offset(_iana_name3, _tgt_y3, _tgt_mo3, _tgt_d3)
+                                    if has_day:
+                                        _tgt_d3 = _extract_int_from_map_entry(m, "day", _tgt_d3)
+                                    if has_month:
+                                        _tgt_mo3 = _extract_int_from_map_entry(m, "month", _tgt_mo3)
+                                    if has_year:
+                                        _tgt_y3 = _extract_int_from_map_entry(m, "year", _tgt_y3)
+                                    _dst_off3 = _iana_tz_offset(
+                                        _iana_name3, _tgt_y3, _tgt_mo3, _tgt_d3
+                                    )
                                     tz_str = (_dst_off3 if _dst_off3 else _num_tz3) + _iana_bracket3
                                 else:
                                     tz_str = _num_tz3
-                            elif _ts3_no_iana.endswith('Z'):
+                            elif _ts3_no_iana.endswith("Z"):
                                 tz_str = "Z"
                             else:
                                 tz_str = "Z"
@@ -11391,31 +12064,43 @@ def _build_temporal_from_variable_map(fn, m, context):
                     # Strip TZ from time_sql before appending tz_str
                     # (time_sql may be a runtime expr or literal with TZ embedded)
                     _pure_time_sql = time_sql
-                    if isinstance(time_sql, str) and time_sql.startswith("'") and time_sql.endswith("'"):
+                    if (
+                        isinstance(time_sql, str)
+                        and time_sql.startswith("'")
+                        and time_sql.endswith("'")
+                    ):
                         import re as _re_ptz
+
                         _pt_inner = time_sql[1:-1]
-                        _pt_inner = _re_ptz.sub(r'\[.*\]$', '', _pt_inner)
-                        _pt_inner = _re_ptz.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', _pt_inner)
-                        if _pt_inner.endswith('Z'): _pt_inner = _pt_inner[:-1]
+                        _pt_inner = _re_ptz.sub(r"\[.*\]$", "", _pt_inner)
+                        _pt_inner = _re_ptz.sub(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", _pt_inner)
+                        if _pt_inner.endswith("Z"):
+                            _pt_inner = _pt_inner[:-1]
                         _pure_time_sql = f"'{_pt_inner}'"
                     elif time_base_sql_outer is not None:
                         # time_sql may equal time_base_sql_outer or be a CASE expression
                         # If it's time_base_sql_outer (runtime column), strip TZ via CASE
                         if time_sql == time_base_sql_outer:
-                            _pure_time_sql = (f"CASE WHEN CHARINDEX('+', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('+', {time_sql}, 6) - 1) "
-                                              f"WHEN CHARINDEX('-', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('-', {time_sql}, 6) - 1) "
-                                              f"WHEN CHARINDEX('Z', {time_sql}) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('Z', {time_sql}) - 1) "
-                                              f"ELSE {time_sql} END")
+                            _pure_time_sql = (
+                                f"CASE WHEN CHARINDEX('+', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('+', {time_sql}, 6) - 1) "
+                                f"WHEN CHARINDEX('-', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('-', {time_sql}, 6) - 1) "
+                                f"WHEN CHARINDEX('Z', {time_sql}) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('Z', {time_sql}) - 1) "
+                                f"ELSE {time_sql} END"
+                            )
                     return f"({new_date_sql} || 'T' || {_pure_time_sql} || '{tz_str}')"
                 else:
                     # Runtime TZ extraction from time_base_sql_outer
-                    pure_t_sql = (f"CASE WHEN CHARINDEX('+', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('+', {time_sql}, 6) - 1) "
-                                  f"WHEN CHARINDEX('-', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('-', {time_sql}, 6) - 1) "
-                                  f"WHEN CHARINDEX('Z', {time_sql}) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('Z', {time_sql}) - 1) "
-                                  f"ELSE {time_sql} END")
-                    tz_suffix_sql = (f"CASE WHEN CHARINDEX('+', {time_base_sql_outer}, 6) > 0 THEN SUBSTRING({time_base_sql_outer}, CHARINDEX('+', {time_base_sql_outer}, 6)) "
-                                     f"WHEN CHARINDEX('-', {time_base_sql_outer}, 6) > 0 THEN SUBSTRING({time_base_sql_outer}, CHARINDEX('-', {time_base_sql_outer}, 6)) "
-                                     f"WHEN CHARINDEX('Z', {time_base_sql_outer}) > 0 THEN 'Z' ELSE 'Z' END")
+                    pure_t_sql = (
+                        f"CASE WHEN CHARINDEX('+', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('+', {time_sql}, 6) - 1) "
+                        f"WHEN CHARINDEX('-', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('-', {time_sql}, 6) - 1) "
+                        f"WHEN CHARINDEX('Z', {time_sql}) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('Z', {time_sql}) - 1) "
+                        f"ELSE {time_sql} END"
+                    )
+                    tz_suffix_sql = (
+                        f"CASE WHEN CHARINDEX('+', {time_base_sql_outer}, 6) > 0 THEN SUBSTRING({time_base_sql_outer}, CHARINDEX('+', {time_base_sql_outer}, 6)) "
+                        f"WHEN CHARINDEX('-', {time_base_sql_outer}, 6) > 0 THEN SUBSTRING({time_base_sql_outer}, CHARINDEX('-', {time_base_sql_outer}, 6)) "
+                        f"WHEN CHARINDEX('Z', {time_base_sql_outer}) > 0 THEN 'Z' ELSE 'Z' END"
+                    )
                     return f"({new_date_sql} || 'T' || {pure_t_sql} || {tz_suffix_sql})"
             return f"({new_date_sql} || 'T' || {time_sql})"
 
@@ -11431,10 +12116,14 @@ def _build_temporal_from_variable_map(fn, m, context):
 
             # Time from variable
             if btype in ("localdatetime", "datetime"):
-                if isinstance(base_sql, str) and base_sql.startswith("'") and base_sql.endswith("'"):
+                if (
+                    isinstance(base_sql, str)
+                    and base_sql.startswith("'")
+                    and base_sql.endswith("'")
+                ):
                     # Compile-time literal: extract time part in Python for precise TZ handling
                     _base_inner = base_sql[1:-1]
-                    _t_start = _base_inner.find('T')
+                    _t_start = _base_inner.find("T")
                     time_base_sql = f"'{_base_inner[_t_start + 1:]}'" if _t_start >= 0 else base_sql
                 else:
                     time_base_sql = f"SUBSTRING({base_sql}, 12, 99)"
@@ -11443,30 +12132,39 @@ def _build_temporal_from_variable_map(fn, m, context):
 
             has_second = _has_map_key(m, "second")
             # For compile-time literals, extract time components in Python for precise handling
-            _c2_base_literal = (isinstance(time_base_sql, str) and time_base_sql.startswith("'") and time_base_sql.endswith("'"))
+            _c2_base_literal = (
+                isinstance(time_base_sql, str)
+                and time_base_sql.startswith("'")
+                and time_base_sql.endswith("'")
+            )
             if _c2_base_literal:
                 import re as _re_c2lit
+
                 _c2_t_inner = time_base_sql[1:-1]
                 # Extract IANA zone and numeric TZ from time_base_sql
-                _c2_lit_iana = _re_c2lit.search(r'\[([^\]]+)\]', _c2_t_inner)
+                _c2_lit_iana = _re_c2lit.search(r"\[([^\]]+)\]", _c2_t_inner)
                 _c2_lit_iana_name = _c2_lit_iana.group(1) if _c2_lit_iana else ""
                 _c2_lit_iana_str = _c2_lit_iana.group(0) if _c2_lit_iana else ""
-                _c2_t_no_iana = _c2_t_inner[:_c2_lit_iana.start()] if _c2_lit_iana else _c2_t_inner
-                _c2_lit_tz_m = _re_c2lit.search(r'([+-]\d{2}:?\d{2}(?::\d{2})?)$', _c2_t_no_iana)
+                _c2_t_no_iana = _c2_t_inner[: _c2_lit_iana.start()] if _c2_lit_iana else _c2_t_inner
+                _c2_lit_tz_m = _re_c2lit.search(r"([+-]\d{2}:?\d{2}(?::\d{2})?)$", _c2_t_no_iana)
                 if _c2_lit_tz_m:
                     _c2_lit_num_tz = _c2_lit_tz_m.group(1)
-                    _c2_lit_pure_t = _c2_t_no_iana[:_c2_lit_tz_m.start()]
-                elif _c2_t_no_iana.endswith('Z'):
-                    _c2_lit_num_tz = 'Z'
+                    _c2_lit_pure_t = _c2_t_no_iana[: _c2_lit_tz_m.start()]
+                elif _c2_t_no_iana.endswith("Z"):
+                    _c2_lit_num_tz = "Z"
                     _c2_lit_pure_t = _c2_t_no_iana[:-1]
                 else:
-                    _c2_lit_num_tz = ''
+                    _c2_lit_num_tz = ""
                     _c2_lit_pure_t = _c2_t_no_iana
                 # Parse pure time components
-                _c2_tm_m = _re_c2lit.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', _c2_lit_pure_t)
+                _c2_tm_m = _re_c2lit.match(
+                    r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", _c2_lit_pure_t
+                )
                 if _c2_tm_m:
-                    _c2_lit_h = int(_c2_tm_m.group(1)); _c2_lit_mi = int(_c2_tm_m.group(2))
-                    _c2_lit_s = int(_c2_tm_m.group(3) or 0); _c2_lit_frac = _c2_tm_m.group(4) or ""
+                    _c2_lit_h = int(_c2_tm_m.group(1))
+                    _c2_lit_mi = int(_c2_tm_m.group(2))
+                    _c2_lit_s = int(_c2_tm_m.group(3) or 0)
+                    _c2_lit_frac = _c2_tm_m.group(4) or ""
                 else:
                     _c2_base_literal = False  # fallback
 
@@ -11477,25 +12175,31 @@ def _build_temporal_from_variable_map(fn, m, context):
                     _c2_s_eff = s_val  # second override
                     if _c2_lit_frac:
                         # Strip TZ from frac in Python (frac is already pure fractional from _c2_lit_frac)
-                        time_sql = f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}:{_c2_s_eff:02d}.{_c2_lit_frac}'"
+                        time_sql = (
+                            f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}:{_c2_s_eff:02d}.{_c2_lit_frac}'"
+                        )
                     else:
                         time_sql = f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}:{_c2_s_eff:02d}'"
                 else:
                     h_sql = f"SUBSTRING({time_base_sql}, 1, 2)"
                     mi_sql = f"SUBSTRING({time_base_sql}, 4, 2)"
                     if fn == "localdatetime":
-                        frac_sql = (f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
-                                    f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
-                                    f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END")
+                        frac_sql = (
+                            f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
+                            f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
+                            f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END"
+                        )
                     else:
                         # Strip TZ from frac for datetime
-                        frac_sql = (f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
-                                    f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
-                                    f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
-                                    f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END")
+                        frac_sql = (
+                            f"CASE WHEN LENGTH({time_base_sql}) > 8 AND SUBSTRING({time_base_sql}, 9, 1) = '.' "
+                            f"THEN CASE WHEN CHARINDEX('+', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('+', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('-', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('-', {time_base_sql}, 10) - 9) "
+                            f"WHEN CHARINDEX('Z', {time_base_sql}, 10) > 0 THEN SUBSTRING({time_base_sql}, 9, CHARINDEX('Z', {time_base_sql}, 10) - 9) "
+                            f"ELSE SUBSTRING({time_base_sql}, 9, 99) END ELSE '' END"
+                        )
                     time_sql = f"({h_sql} || ':' || {mi_sql} || ':' || '{s_val:02d}' || {frac_sql})"
             else:
                 if fn == "localdatetime":
@@ -11508,23 +12212,37 @@ def _build_temporal_from_variable_map(fn, m, context):
                 # Build timezone suffix; if a new timezone override is given and the source
                 # time has a different timezone, shift the wall-clock time.
                 tz_override_expr = m.entries.get("timezone") if hasattr(m, "entries") else None
-                if tz_override_expr and isinstance(tz_override_expr, ast.Literal) and isinstance(tz_override_expr.value, str):
+                if (
+                    tz_override_expr
+                    and isinstance(tz_override_expr, ast.Literal)
+                    and isinstance(tz_override_expr.value, str)
+                ):
                     new_tz_iso = _format_tz_for_iso(tz_override_expr.value, year, month, day)
                     # If source has a known compile-time tz and new tz differs, convert
-                    if _c2_base_literal and btype in ("time", "datetime") and _c2_lit_num_tz not in ('', 'Z'):
+                    if (
+                        _c2_base_literal
+                        and btype in ("time", "datetime")
+                        and _c2_lit_num_tz not in ("", "Z")
+                    ):
                         import re as _re4
-                        _m_old_off = _re4.match(r'^([+-])(\d{2}):(\d{2})', _c2_lit_num_tz)
-                        _m_new_off = _re4.match(r'^([+-])(\d{2}):(\d{2})', new_tz_iso)
+
+                        _m_old_off = _re4.match(r"^([+-])(\d{2}):(\d{2})", _c2_lit_num_tz)
+                        _m_new_off = _re4.match(r"^([+-])(\d{2}):(\d{2})", new_tz_iso)
                         if _m_old_off and _m_new_off:
-                            old_off_mins = (1 if _m_old_off.group(1) == '+' else -1) * (int(_m_old_off.group(2)) * 60 + int(_m_old_off.group(3)))
-                            new_off_mins = (1 if _m_new_off.group(1) == '+' else -1) * (int(_m_new_off.group(2)) * 60 + int(_m_new_off.group(3)))
+                            old_off_mins = (1 if _m_old_off.group(1) == "+" else -1) * (
+                                int(_m_old_off.group(2)) * 60 + int(_m_old_off.group(3))
+                            )
+                            new_off_mins = (1 if _m_new_off.group(1) == "+" else -1) * (
+                                int(_m_new_off.group(2)) * 60 + int(_m_new_off.group(3))
+                            )
                             delta_mins = new_off_mins - old_off_mins
                             if delta_mins != 0:
                                 # s_val already applied in time_sql for has_second case; use _c2_lit_s as base
                                 _c2_s_for_shift = s_val if has_second else _c2_lit_s
                                 total2 = _c2_lit_h * 60 + _c2_lit_mi + delta_mins
                                 total2 = total2 % (24 * 60)
-                                h2n = total2 // 60; mi2n = total2 % 60
+                                h2n = total2 // 60
+                                mi2n = total2 % 60
                                 if _c2_lit_frac:
                                     shifted_t = f"'{h2n:02d}:{mi2n:02d}:{_c2_s_for_shift:02d}.{_c2_lit_frac}'"
                                 elif _c2_s_for_shift:
@@ -11534,35 +12252,58 @@ def _build_temporal_from_variable_map(fn, m, context):
                                 return f"('{year:04d}-{month:02d}-{day:02d}T' || {shifted_t} || '{new_tz_iso}')"
                     elif not _c2_base_literal:
                         # Runtime: check if time_sql is a literal (no-has_second case)
-                        stripped_t = time_sql.strip("'") if (isinstance(time_sql, str) and time_sql.startswith("'") and time_sql.endswith("'")) else None
+                        stripped_t = (
+                            time_sql.strip("'")
+                            if (
+                                isinstance(time_sql, str)
+                                and time_sql.startswith("'")
+                                and time_sql.endswith("'")
+                            )
+                            else None
+                        )
                         if stripped_t is not None and btype in ("time", "datetime"):
                             import re as _re4b
-                            s2t = _re4b.sub(r'\[.*\]$', '', stripped_t)
-                            m_old_tz = _re4b.search(r'([+-])(\d{2}):(\d{2})$', s2t)
+
+                            s2t = _re4b.sub(r"\[.*\]$", "", stripped_t)
+                            m_old_tz = _re4b.search(r"([+-])(\d{2}):(\d{2})$", s2t)
                             if m_old_tz:
-                                old_sign = 1 if m_old_tz.group(1) == '+' else -1
-                                old_off_mins = old_sign * (int(m_old_tz.group(2)) * 60 + int(m_old_tz.group(3)))
-                                pure_t = s2t[:m_old_tz.start()]
-                            elif s2t.endswith('Z'):
-                                old_off_mins = 0; pure_t = s2t[:-1]
+                                old_sign = 1 if m_old_tz.group(1) == "+" else -1
+                                old_off_mins = old_sign * (
+                                    int(m_old_tz.group(2)) * 60 + int(m_old_tz.group(3))
+                                )
+                                pure_t = s2t[: m_old_tz.start()]
+                            elif s2t.endswith("Z"):
+                                old_off_mins = 0
+                                pure_t = s2t[:-1]
                             else:
-                                old_off_mins = 0; pure_t = s2t
+                                old_off_mins = 0
+                                pure_t = s2t
                             _tz_raw = tz_override_expr.value
-                            _m_new = _re4b.match(r'^([+-])(\d{2}):(\d{2})', _format_tz_for_iso(_tz_raw, year, month, day))
+                            _m_new = _re4b.match(
+                                r"^([+-])(\d{2}):(\d{2})",
+                                _format_tz_for_iso(_tz_raw, year, month, day),
+                            )
                             if _m_new:
-                                new_sign = 1 if _m_new.group(1) == '+' else -1
-                                new_off_mins = new_sign * (int(_m_new.group(2)) * 60 + int(_m_new.group(3)))
+                                new_sign = 1 if _m_new.group(1) == "+" else -1
+                                new_off_mins = new_sign * (
+                                    int(_m_new.group(2)) * 60 + int(_m_new.group(3))
+                                )
                             else:
                                 new_off_mins = old_off_mins
                             delta_mins = new_off_mins - old_off_mins
                             if delta_mins != 0:
-                                tm2 = _re4b.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', pure_t)
+                                tm2 = _re4b.match(
+                                    r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", pure_t
+                                )
                                 if tm2:
-                                    h2 = int(tm2.group(1)); mi2 = int(tm2.group(2))
-                                    s2v = int(tm2.group(3) or 0); frac2 = tm2.group(4) or ""
+                                    h2 = int(tm2.group(1))
+                                    mi2 = int(tm2.group(2))
+                                    s2v = int(tm2.group(3) or 0)
+                                    frac2 = tm2.group(4) or ""
                                     total2 = h2 * 60 + mi2 + delta_mins
                                     total2 = total2 % (24 * 60)
-                                    h2n = total2 // 60; mi2n = total2 % 60
+                                    h2n = total2 // 60
+                                    mi2n = total2 % 60
                                     if frac2:
                                         shifted_t = f"'{h2n:02d}:{mi2n:02d}:{s2v:02d}.{frac2}'"
                                     elif s2v:
@@ -11588,21 +12329,27 @@ def _build_temporal_from_variable_map(fn, m, context):
                         if _c2_lit_frac:
                             _c2_pure_time_str = f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}:{_c2_s_eff2:02d}.{_c2_lit_frac}'"
                         elif _c2_s_eff2:
-                            _c2_pure_time_str = f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}:{_c2_s_eff2:02d}'"
+                            _c2_pure_time_str = (
+                                f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}:{_c2_s_eff2:02d}'"
+                            )
                         else:
                             _c2_pure_time_str = f"'{_c2_lit_h:02d}:{_c2_lit_mi:02d}'"
                         if not _c2_tz_str_final:
-                            _c2_tz_str_final = 'Z'
+                            _c2_tz_str_final = "Z"
                         return f"('{year:04d}-{month:02d}-{day:02d}T' || {_c2_pure_time_str} || '{_c2_tz_str_final}')"
                     elif btype in ("time", "datetime"):
-                        tz_suffix_sql = (f"CASE WHEN CHARINDEX('+', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('+', {base_sql}, 6)) "
-                                         f"WHEN CHARINDEX('-', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('-', {base_sql}, 6)) "
-                                         f"WHEN CHARINDEX('Z', {base_sql}) > 0 THEN 'Z' ELSE 'Z' END")
+                        tz_suffix_sql = (
+                            f"CASE WHEN CHARINDEX('+', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('+', {base_sql}, 6)) "
+                            f"WHEN CHARINDEX('-', {base_sql}, 6) > 0 THEN SUBSTRING({base_sql}, CHARINDEX('-', {base_sql}, 6)) "
+                            f"WHEN CHARINDEX('Z', {base_sql}) > 0 THEN 'Z' ELSE 'Z' END"
+                        )
                         # Strip tz from time_sql for the time part
-                        pure_time_sql = (f"CASE WHEN CHARINDEX('+', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('+', {time_sql}, 6) - 1) "
-                                         f"WHEN CHARINDEX('-', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('-', {time_sql}, 6) - 1) "
-                                         f"WHEN CHARINDEX('Z', {time_sql}) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('Z', {time_sql}) - 1) "
-                                         f"ELSE {time_sql} END")
+                        pure_time_sql = (
+                            f"CASE WHEN CHARINDEX('+', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('+', {time_sql}, 6) - 1) "
+                            f"WHEN CHARINDEX('-', {time_sql}, 6) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('-', {time_sql}, 6) - 1) "
+                            f"WHEN CHARINDEX('Z', {time_sql}) > 0 THEN SUBSTRING({time_sql}, 1, CHARINDEX('Z', {time_sql}) - 1) "
+                            f"ELSE {time_sql} END"
+                        )
                         return f"('{year:04d}-{month:02d}-{day:02d}T' || {pure_time_sql} || {tz_suffix_sql})"
                     elif btype in ("localtime", "localdatetime"):
                         return f"('{year:04d}-{month:02d}-{day:02d}T' || {time_sql} || 'Z')"
@@ -11641,13 +12388,15 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             if result is not None:
                 return result
             # Dynamic base: date({date: expr, ...overrides}) — generate SQL SUBSTRING ops
-            result = _build_date_sql_from_dynamic_base(
-                args_exprs[0], context, target_fn="date"
-            )
+            result = _build_date_sql_from_dynamic_base(args_exprs[0], context, target_fn="date")
             if result is not None:
                 return result
         # String arg: parse ISO 8601 formats
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, str):
+        if (
+            args_exprs
+            and isinstance(args_exprs[0], ast.Literal)
+            and isinstance(args_exprs[0].value, str)
+        ):
             parsed = _parse_date_string(args_exprs[0].value)
             if parsed:
                 return f"'{parsed[0]:04d}-{parsed[1]:02d}-{parsed[2]:02d}'"
@@ -11667,7 +12416,11 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             )
             if result is not None:
                 return result
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, str):
+        if (
+            args_exprs
+            and isinstance(args_exprs[0], ast.Literal)
+            and isinstance(args_exprs[0].value, str)
+        ):
             parsed = _parse_datetime_string(args_exprs[0].value)
             if parsed:
                 return f"'{parsed}'"
@@ -11679,21 +12432,24 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             inner_val = args[0][1:-1]  # strip quotes
             # Strip IANA bracket annotation first
             import re as _re_loc
-            inner_val = _re_loc.sub(r'\[[^\]]+\]$', '', inner_val)
+
+            inner_val = _re_loc.sub(r"\[[^\]]+\]$", "", inner_val)
             # Strip +HH:MM or Z timezone suffix
-            inner_val = _re_loc.sub(r'([+-]\d{2}:?\d{2}(?::\d{2})?)$', '', inner_val)
-            if inner_val.endswith('Z'):
+            inner_val = _re_loc.sub(r"([+-]\d{2}:?\d{2}(?::\d{2})?)$", "", inner_val)
+            if inner_val.endswith("Z"):
                 inner_val = inner_val[:-1]
             # Compact time: remove trailing :00 from HH:MM:00 if seconds=0 and no ms
             return f"'{inner_val}'"
         # args[0] is a runtime SQL column reference — strip TZ from datetime column
         # TZ offset starts at position 20 ('YYYY-MM-DDTHH:MM:SS' = 19 chars + 'T')
         _ld_col = args[0]
-        return (f"CASE "
-                f"WHEN CHARINDEX('+', {_ld_col}, 17) > 0 THEN SUBSTRING({_ld_col}, 1, CHARINDEX('+', {_ld_col}, 17) - 1) "
-                f"WHEN CHARINDEX('-', {_ld_col}, 17) > 0 THEN SUBSTRING({_ld_col}, 1, CHARINDEX('-', {_ld_col}, 17) - 1) "
-                f"WHEN CHARINDEX('Z', {_ld_col}, 17) > 0 THEN SUBSTRING({_ld_col}, 1, CHARINDEX('Z', {_ld_col}, 17) - 1) "
-                f"ELSE {_ld_col} END")
+        return (
+            f"CASE "
+            f"WHEN CHARINDEX('+', {_ld_col}, 17) > 0 THEN SUBSTRING({_ld_col}, 1, CHARINDEX('+', {_ld_col}, 17) - 1) "
+            f"WHEN CHARINDEX('-', {_ld_col}, 17) > 0 THEN SUBSTRING({_ld_col}, 1, CHARINDEX('-', {_ld_col}, 17) - 1) "
+            f"WHEN CHARINDEX('Z', {_ld_col}, 17) > 0 THEN SUBSTRING({_ld_col}, 1, CHARINDEX('Z', {_ld_col}, 17) - 1) "
+            f"ELSE {_ld_col} END"
+        )
     if fn in ("datetime",):
         if not args:
             return "NULL"
@@ -11701,12 +12457,14 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             result = _build_date_from_map(args_exprs[0], with_time=True, with_tz=True)
             if result is not None:
                 return result
-            result = _build_date_sql_from_dynamic_base(
-                args_exprs[0], context, target_fn="datetime"
-            )
+            result = _build_date_sql_from_dynamic_base(args_exprs[0], context, target_fn="datetime")
             if result is not None:
                 return result
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, str):
+        if (
+            args_exprs
+            and isinstance(args_exprs[0], ast.Literal)
+            and isinstance(args_exprs[0].value, str)
+        ):
             parsed = _parse_datetime_string(args_exprs[0].value)
             if parsed:
                 return f"'{parsed}'"
@@ -11715,7 +12473,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             temporal_type = context.temporal_types.get(args_exprs[0].name)
             if temporal_type == "localdatetime":
                 # localdatetime has no TZ — add Z
-                tlv = getattr(context, 'temporal_literal_values', {})
+                tlv = getattr(context, "temporal_literal_values", {})
                 if args_exprs[0].name in tlv:
                     return f"'{tlv[args_exprs[0].name]}Z'"
                 return f"({args[0]} || 'Z')"
@@ -11728,9 +12486,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             return "NULL"
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
             # Check if map has a dynamic temporal base (time: var, localtime: var, etc.)
-            _dyn_result = _build_date_sql_from_dynamic_base(
-                args_exprs[0], context, target_fn=fn
-            )
+            _dyn_result = _build_date_sql_from_dynamic_base(args_exprs[0], context, target_fn=fn)
             if _dyn_result is not None:
                 return _dyn_result
             m = args_exprs[0]
@@ -11756,7 +12512,11 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
                 tz_str = tz_val if tz_val else "Z"
                 return f"'{time_part}{tz_str}'"
             return f"'{time_part}'"
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, str):
+        if (
+            args_exprs
+            and isinstance(args_exprs[0], ast.Literal)
+            and isinstance(args_exprs[0].value, str)
+        ):
             parsed = _parse_time_string(args_exprs[0].value)
             if parsed:
                 if fn == "time" and not any(c in parsed for c in "Z+-"):
@@ -11767,7 +12527,9 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             base = args[0]
             # Extract time portion: if contains 'T', take substring after 'T'; else use as-is
             t_idx = f"CHARINDEX('T', {base})"
-            time_part_sql = f"CASE WHEN {t_idx} > 0 THEN SUBSTRING({base}, {t_idx} + 1) ELSE {base} END"
+            time_part_sql = (
+                f"CASE WHEN {t_idx} > 0 THEN SUBSTRING({base}, {t_idx} + 1) ELSE {base} END"
+            )
             if fn == "localtime":
                 tp = time_part_sql
                 _z = f"CHARINDEX('Z', {tp})"
@@ -11779,7 +12541,9 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
                     f"WHEN {_m} > 0 THEN {_m} "
                     f"ELSE 0 END"
                 )
-                time_expr = f"CASE WHEN ({_tz}) > 0 THEN SUBSTRING({tp}, 1, ({_tz}) - 1) ELSE {tp} END"
+                time_expr = (
+                    f"CASE WHEN ({_tz}) > 0 THEN SUBSTRING({tp}, 1, ({_tz}) - 1) ELSE {tp} END"
+                )
             else:
                 time_expr = time_part_sql
             return time_expr
@@ -11852,7 +12616,11 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
 
             result_str = _format_duration(int(years), mo_int, d_int, h_int, m_int, s_int, rem_ns)
             return f"'{result_str}'"
-        if args_exprs and isinstance(args_exprs[0], ast.Literal) and isinstance(args_exprs[0].value, str):
+        if (
+            args_exprs
+            and isinstance(args_exprs[0], ast.Literal)
+            and isinstance(args_exprs[0].value, str)
+        ):
             parsed = _parse_duration_string(args_exprs[0].value)
             if parsed:
                 return f"'{parsed}'"
@@ -11864,6 +12632,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
 # Temporal namespace function evaluators (duration.between, datetime.fromepoch,
 # date.truncate, etc.) — all evaluated at translation time using literal args.
 # ---------------------------------------------------------------------------
+
 
 def _temporal_to_datetime_obj(temporal_str, fn_name):
     """Convert a temporal ISO string to a Python datetime object (naive UTC).
@@ -11893,16 +12662,16 @@ def _temporal_to_datetime_obj(temporal_str, fn_name):
         # Extract time part (strip timezone)
         s = temporal_str
         # Remove IANA timezone like '[America/New_York]'
-        s = _re.sub(r'\[.*\]$', '', s)
+        s = _re.sub(r"\[.*\]$", "", s)
         # Remove timezone offset like +01:00, +0100, Z
-        s = _re.sub(r'[Zz]$', '', s)
-        s = _re.sub(r'[+-]\d{2}:?\d{2}(?::?\d{2})?$', '', s)
-        m = _re.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+        s = _re.sub(r"[Zz]$", "", s)
+        s = _re.sub(r"[+-]\d{2}:?\d{2}(?::?\d{2})?$", "", s)
+        m = _re.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
         if m:
             h, mi = int(m.group(1)), int(m.group(2))
             sec = int(m.group(3) or 0)
             frac = m.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             us = ns // 1000
             return _dt.datetime(2000, 1, 1, h, mi, sec, us)
         return None
@@ -11911,12 +12680,12 @@ def _temporal_to_datetime_obj(temporal_str, fn_name):
     if fn_name in ("localdatetime", "datetime"):
         s = temporal_str
         # Remove IANA timezone
-        s = _re.sub(r'\[.*\]$', '', s)
+        s = _re.sub(r"\[.*\]$", "", s)
         if "T" not in s.upper():
             return None
         sep = s.upper().index("T")
         date_str = s[:sep]
-        time_str = s[sep+1:]
+        time_str = s[sep + 1 :]
         parsed_date = _parse_date_string(date_str)
         if not parsed_date:
             return None
@@ -11928,19 +12697,19 @@ def _temporal_to_datetime_obj(temporal_str, fn_name):
             time_str = time_str[:-1]
         else:
             # Remove +HH:MM, -HH:MM, +HHMM, or -HHMM
-            tz_m = _re.search(r'([+-])(\d{2}):?(\d{2})(?::\d{2})?$', time_str)
+            tz_m = _re.search(r"([+-])(\d{2}):?(\d{2})(?::\d{2})?$", time_str)
             if tz_m:
-                sign = 1 if tz_m.group(1) == '+' else -1
+                sign = 1 if tz_m.group(1) == "+" else -1
                 tz_offset_secs = sign * (int(tz_m.group(2)) * 3600 + int(tz_m.group(3)) * 60)
-                time_str = time_str[:tz_m.start()]
+                time_str = time_str[: tz_m.start()]
         # Parse time portion
-        m = _re.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', time_str)
+        m = _re.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_str)
         if not m:
             return None
         h, mi = int(m.group(1)), int(m.group(2))
         sec = int(m.group(3) or 0)
         frac = m.group(4) or ""
-        ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+        ns = int(frac.ljust(9, "0")[:9]) if frac else 0
         us = ns // 1000
         try:
             dt = _dt.datetime(y, mo, d, h, mi, sec, us)
@@ -11956,6 +12725,7 @@ def _temporal_to_datetime_obj(temporal_str, fn_name):
 def _datetime_to_epoch_ns(dt):
     """Convert a datetime to nanoseconds since Unix epoch."""
     import datetime as _dt
+
     epoch = _dt.datetime(1970, 1, 1, 0, 0, 0)
     delta = dt - epoch
     total_secs = delta.total_seconds()
@@ -11977,11 +12747,12 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
     def _has_tz(fn_name, temporal_str):
         """Return True if this temporal type carries an explicit timezone offset."""
         import re as _re2
+
         if fn_name == "datetime":
-            s = _re2.sub(r'\[.*\]$', '', temporal_str)
-            return bool(_re2.search(r'[Zz]$|[+-]\d{2}:?\d{2}', s))
+            s = _re2.sub(r"\[.*\]$", "", temporal_str)
+            return bool(_re2.search(r"[Zz]$|[+-]\d{2}:?\d{2}", s))
         if fn_name == "time":
-            return bool(_re2.search(r'[Zz]$|[+-]\d{2}:?\d{2}', temporal_str))
+            return bool(_re2.search(r"[Zz]$|[+-]\d{2}:?\d{2}", temporal_str))
         return False  # date, localtime, localdatetime have no tz
 
     def _parse_utc_normalized(temporal_str, fn_name):
@@ -11993,6 +12764,7 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
         For others: use wall-clock.
         """
         import re as _re2
+
         if fn_name in ("datetime", "localdatetime"):
             return _temporal_to_datetime_obj(temporal_str, fn_name)
         if fn_name == "date":
@@ -12004,18 +12776,18 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
             if s.endswith("Z") or s.endswith("z"):
                 s = s[:-1]
             else:
-                tz_m = _re2.search(r'([+-])(\d{2}):?(\d{2})(?::\d{2})?$', s)
+                tz_m = _re2.search(r"([+-])(\d{2}):?(\d{2})(?::\d{2})?$", s)
                 if tz_m:
-                    sign = 1 if tz_m.group(1) == '+' else -1
+                    sign = 1 if tz_m.group(1) == "+" else -1
                     tz_offset_secs = sign * (int(tz_m.group(2)) * 3600 + int(tz_m.group(3)) * 60)
-                    s = s[:tz_m.start()]
-            m2 = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+                    s = s[: tz_m.start()]
+            m2 = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
             if not m2:
                 return None
             h, mi = int(m2.group(1)), int(m2.group(2))
             sec = int(m2.group(3) or 0)
             frac = m2.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             us = ns // 1000
             try:
                 dt = _dt.datetime(2000, 1, 1, h, mi, sec, us)
@@ -12028,30 +12800,31 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
     def _parse_wall_clock_dt(temporal_str, fn_name):
         """Parse a temporal to a datetime treating wall-clock time (no UTC adjustment)."""
         import re as _re2
+
         if fn_name == "date":
             return _temporal_to_datetime_obj(temporal_str, fn_name)
         if fn_name in ("localtime", "time"):
             # Strip offset, use local time value as-is
             s = temporal_str
-            s = _re2.sub(r'[Zz]$', '', s)
-            s = _re2.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', s)
-            m2 = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+            s = _re2.sub(r"[Zz]$", "", s)
+            s = _re2.sub(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", s)
+            m2 = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
             if not m2:
                 return None
             h, mi = int(m2.group(1)), int(m2.group(2))
             sec = int(m2.group(3) or 0)
             frac = m2.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             us = ns // 1000
             return _dt.datetime(2000, 1, 1, h, mi, sec, us)
         # datetime / localdatetime: extract wall-clock (strip tz without applying)
         s = temporal_str
-        s = _re2.sub(r'\[.*\]$', '', s)
+        s = _re2.sub(r"\[.*\]$", "", s)
         if "T" not in s.upper():
             return None
         sep = s.upper().index("T")
         date_str = s[:sep]
-        time_str = s[sep+1:]
+        time_str = s[sep + 1 :]
         parsed_date = _parse_date_string(date_str)
         if not parsed_date:
             return None
@@ -12059,16 +12832,16 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
         if time_str.endswith("Z") or time_str.endswith("z"):
             time_str = time_str[:-1]
         else:
-            tz_m = _re2.search(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', time_str)
+            tz_m = _re2.search(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", time_str)
             if tz_m:
-                time_str = time_str[:tz_m.start()]
-        m2 = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', time_str)
+                time_str = time_str[: tz_m.start()]
+        m2 = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_str)
         if not m2:
             return None
         h, mi = int(m2.group(1)), int(m2.group(2))
         sec = int(m2.group(3) or 0)
         frac = m2.group(4) or ""
-        ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+        ns = int(frac.ljust(9, "0")[:9]) if frac else 0
         us = ns // 1000
         try:
             return _dt.datetime(y, mo, d, h, mi, sec, us)
@@ -12117,7 +12890,7 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
         where -PT1.001S is -1 seconds -1 ms, not -2 seconds +999 ms.
         """
         total_us = delta.days * 86400 * 1_000_000 + delta.seconds * 1_000_000 + delta.microseconds
-        whole_s = int(total_us / 1_000_000)   # truncate toward zero
+        whole_s = int(total_us / 1_000_000)  # truncate toward zero
         rem_us = total_us - whole_s * 1_000_000
         return whole_s, rem_us * 1000
 
@@ -12144,10 +12917,16 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
         # Mixed time/date — compute only time difference (strip date component)
         if is_lhs_timeonly:
             time_lhs = lhs_dt
-            time_rhs = _dt.datetime(2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond)
+            time_rhs = _dt.datetime(
+                2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond
+            )
         else:
-            time_lhs = _dt.datetime(2000, 1, 1, lhs_dt.hour, lhs_dt.minute, lhs_dt.second, lhs_dt.microsecond)
-            time_rhs = _dt.datetime(2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond)
+            time_lhs = _dt.datetime(
+                2000, 1, 1, lhs_dt.hour, lhs_dt.minute, lhs_dt.second, lhs_dt.microsecond
+            )
+            time_rhs = _dt.datetime(
+                2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond
+            )
         delta = time_rhs - time_lhs
         total_s, rem_ns = _secs_ns_from_delta(delta)
         _, h, m, s = _secs_to_hms(total_s)
@@ -12156,6 +12935,7 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
     def _compute_forward(start_dt, end_dt, start_is_dateonly, end_is_dateonly):
         """Compute duration from start → end where end >= start."""
         import calendar as _cal2
+
         sy, smo, sd = start_dt.year, start_dt.month, start_dt.day
         ey, emo, ed = end_dt.year, end_dt.month, end_dt.day
 
@@ -12173,8 +12953,15 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
         max_day = _cal2.monthrange(anchor_y, anchor_mo)[1]
         anchor_d = min(sd, max_day)
         try:
-            anchor = _dt.datetime(anchor_y, anchor_mo, anchor_d,
-                                  start_dt.hour, start_dt.minute, start_dt.second, start_dt.microsecond)
+            anchor = _dt.datetime(
+                anchor_y,
+                anchor_mo,
+                anchor_d,
+                start_dt.hour,
+                start_dt.minute,
+                start_dt.second,
+                start_dt.microsecond,
+            )
         except ValueError:
             anchor = start_dt
 
@@ -12191,8 +12978,15 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
             max_day2 = _cal2.monthrange(anchor_y2, anchor_mo2)[1]
             anchor_d2 = min(sd, max_day2)
             try:
-                anchor2 = _dt.datetime(anchor_y2, anchor_mo2, anchor_d2,
-                                       start_dt.hour, start_dt.minute, start_dt.second, start_dt.microsecond)
+                anchor2 = _dt.datetime(
+                    anchor_y2,
+                    anchor_mo2,
+                    anchor_d2,
+                    start_dt.hour,
+                    start_dt.minute,
+                    start_dt.second,
+                    start_dt.microsecond,
+                )
                 remaining2 = end_dt - anchor2
                 total_remain_s2, rem_ns3 = _secs_ns_from_delta(remaining2)
                 if total_remain_s2 >= 0:
@@ -12219,7 +13013,14 @@ def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
             rhs_dt, lhs_dt, is_rhs_dateonly, is_lhs_dateonly
         )
         # Negate components (rem_ns stays positive per Cypher spec)
-        years, months, days, h_int, m_int, s_int = -years, -months, -days, (-h_int if h_int else 0), (-m_int if m_int else 0), (-s_int if s_int else 0)
+        years, months, days, h_int, m_int, s_int = (
+            -years,
+            -months,
+            -days,
+            (-h_int if h_int else 0),
+            (-m_int if m_int else 0),
+            (-s_int if s_int else 0),
+        )
     else:
         years, months, days, h_int, m_int, s_int, rem_ns = _compute_forward(
             lhs_dt, rhs_dt, is_lhs_dateonly, is_rhs_dateonly
@@ -12246,7 +13047,8 @@ def _compute_duration_inmonths(lhs_str, lhs_fn, rhs_str, rhs_fn):
         return "PT0S"
     # Parse the ISO duration string and extract years/months
     import re as _re
-    m = _re.match(r'^P(-?\d+Y)?(-?\d+M)?', full)
+
+    m = _re.match(r"^P(-?\d+Y)?(-?\d+M)?", full)
     if not m:
         return "PT0S"
     yr_part = m.group(1)  # e.g. '-1Y' or '30Y' or None
@@ -12282,23 +13084,23 @@ def _compute_duration_indays(lhs_str, lhs_fn, rhs_str, rhs_fn):
         if fn == "datetime":
             return _temporal_to_datetime_obj(ts, fn)
         if fn == "time":
-            s = _re2.sub(r'\[.*\]$', '', ts)
+            s = _re2.sub(r"\[.*\]$", "", ts)
             tz_offset_secs = 0
             if s.endswith("Z") or s.endswith("z"):
                 s = s[:-1]
             else:
-                tz_m = _re2.search(r'([+-])(\d{2}):?(\d{2})(?::\d{2})?$', s)
+                tz_m = _re2.search(r"([+-])(\d{2}):?(\d{2})(?::\d{2})?$", s)
                 if tz_m:
-                    sign = 1 if tz_m.group(1) == '+' else -1
+                    sign = 1 if tz_m.group(1) == "+" else -1
                     tz_offset_secs = sign * (int(tz_m.group(2)) * 3600 + int(tz_m.group(3)) * 60)
-                    s = s[:tz_m.start()]
-            m = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+                    s = s[: tz_m.start()]
+            m = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
             if not m:
                 return None
             h, mi = int(m.group(1)), int(m.group(2))
             sec = int(m.group(3) or 0)
             frac = m.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             try:
                 dt = _dt.datetime(2000, 1, 1, h, mi, sec, ns // 1000)
                 return dt - _dt.timedelta(seconds=tz_offset_secs)
@@ -12311,21 +13113,21 @@ def _compute_duration_indays(lhs_str, lhs_fn, rhs_str, rhs_fn):
         if fn == "date":
             return _temporal_to_datetime_obj(ts, fn)
         if fn in ("localtime", "time"):
-            s = _re2.sub(r'[Zz]$', '', ts)
-            s = _re2.sub(r'[+-]\d{2}:?\d{2}(?::?\d{2})?$', '', s)
-            m = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+            s = _re2.sub(r"[Zz]$", "", ts)
+            s = _re2.sub(r"[+-]\d{2}:?\d{2}(?::?\d{2})?$", "", s)
+            m = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
             if not m:
                 return None
             h, mi = int(m.group(1)), int(m.group(2))
             sec = int(m.group(3) or 0)
             frac = m.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             return _dt.datetime(2000, 1, 1, h, mi, sec, ns // 1000)
-        s = _re2.sub(r'\[.*\]$', '', ts)
+        s = _re2.sub(r"\[.*\]$", "", ts)
         if "T" not in s.upper():
             return None
         sep = s.upper().index("T")
-        date_str, time_str = s[:sep], s[sep+1:]
+        date_str, time_str = s[:sep], s[sep + 1 :]
         parsed = _parse_date_string(date_str)
         if not parsed:
             return None
@@ -12333,16 +13135,16 @@ def _compute_duration_indays(lhs_str, lhs_fn, rhs_str, rhs_fn):
         if time_str.endswith("Z") or time_str.endswith("z"):
             time_str = time_str[:-1]
         else:
-            tz_m = _re2.search(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', time_str)
+            tz_m = _re2.search(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", time_str)
             if tz_m:
-                time_str = time_str[:tz_m.start()]
-        m2 = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', time_str)
+                time_str = time_str[: tz_m.start()]
+        m2 = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_str)
         if not m2:
             return None
         h, mi = int(m2.group(1)), int(m2.group(2))
         sec = int(m2.group(3) or 0)
         frac = m2.group(4) or ""
-        ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+        ns = int(frac.ljust(9, "0")[:9]) if frac else 0
         try:
             return _dt.datetime(y, mo, d, h, mi, sec, ns // 1000)
         except ValueError:
@@ -12376,6 +13178,7 @@ def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
     Normalizes total seconds into H/M/S components.
     """
     import datetime as _dt
+
     # Use the same tz-aware logic as duration.between
     _TZ_AWARE = ("time", "datetime")
     lhs_is_tz_aware = lhs_fn in _TZ_AWARE
@@ -12389,23 +13192,23 @@ def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
         if fn == "datetime":
             return _temporal_to_datetime_obj(ts, fn)
         if fn == "time":
-            s = _re2.sub(r'\[.*\]$', '', ts)
+            s = _re2.sub(r"\[.*\]$", "", ts)
             tz_offset_secs = 0
             if s.endswith("Z") or s.endswith("z"):
                 s = s[:-1]
             else:
-                tz_m = _re2.search(r'([+-])(\d{2}):?(\d{2})(?::\d{2})?$', s)
+                tz_m = _re2.search(r"([+-])(\d{2}):?(\d{2})(?::\d{2})?$", s)
                 if tz_m:
-                    sign = 1 if tz_m.group(1) == '+' else -1
+                    sign = 1 if tz_m.group(1) == "+" else -1
                     tz_offset_secs = sign * (int(tz_m.group(2)) * 3600 + int(tz_m.group(3)) * 60)
-                    s = s[:tz_m.start()]
-            m = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+                    s = s[: tz_m.start()]
+            m = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
             if not m:
                 return None
             h, mi = int(m.group(1)), int(m.group(2))
             sec = int(m.group(3) or 0)
             frac = m.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             try:
                 dt = _dt.datetime(2000, 1, 1, h, mi, sec, ns // 1000)
                 return dt - _dt.timedelta(seconds=tz_offset_secs)
@@ -12422,22 +13225,22 @@ def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
             if fn in ("date", "localtime"):
                 return _temporal_to_datetime_obj(ts, fn)
             if fn == "time":
-                s = _re2.sub(r'[Zz]$', '', ts)
-                s = _re2.sub(r'[+-]\d{2}:?\d{2}(?::?\d{2})?$', '', s)
-                m = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s)
+                s = _re2.sub(r"[Zz]$", "", ts)
+                s = _re2.sub(r"[+-]\d{2}:?\d{2}(?::?\d{2})?$", "", s)
+                m = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s)
                 if not m:
                     return None
                 h, mi = int(m.group(1)), int(m.group(2))
                 sec = int(m.group(3) or 0)
                 frac = m.group(4) or ""
-                ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+                ns = int(frac.ljust(9, "0")[:9]) if frac else 0
                 return _dt.datetime(2000, 1, 1, h, mi, sec, ns // 1000)
             # datetime/localdatetime: strip tz without applying
-            s = _re2.sub(r'\[.*\]$', '', ts)
+            s = _re2.sub(r"\[.*\]$", "", ts)
             if "T" not in s.upper():
                 return None
             sep = s.upper().index("T")
-            date_str, time_str = s[:sep], s[sep+1:]
+            date_str, time_str = s[:sep], s[sep + 1 :]
             parsed = _parse_date_string(date_str)
             if not parsed:
                 return None
@@ -12445,20 +13248,21 @@ def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
             if time_str.endswith("Z") or time_str.endswith("z"):
                 time_str = time_str[:-1]
             else:
-                tz_m = _re2.search(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', time_str)
+                tz_m = _re2.search(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", time_str)
                 if tz_m:
-                    time_str = time_str[:tz_m.start()]
-            m2 = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', time_str)
+                    time_str = time_str[: tz_m.start()]
+            m2 = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_str)
             if not m2:
                 return None
             h, mi = int(m2.group(1)), int(m2.group(2))
             sec = int(m2.group(3) or 0)
             frac = m2.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             try:
                 return _dt.datetime(y, mo, d, h, mi, sec, ns // 1000)
             except ValueError:
                 return None
+
         lhs_dt = _wall(lhs_str, lhs_fn)
         rhs_dt = _wall(rhs_str, rhs_fn)
 
@@ -12470,11 +13274,27 @@ def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
 
     if is_timeonly_l or is_timeonly_r:
         if is_timeonly_l:
-            time_lhs = lhs_dt if not both_tz_aware else _dt.datetime(2000, 1, 1, lhs_dt.hour, lhs_dt.minute, lhs_dt.second, lhs_dt.microsecond)
-            time_rhs = _dt.datetime(2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond)
+            time_lhs = (
+                lhs_dt
+                if not both_tz_aware
+                else _dt.datetime(
+                    2000, 1, 1, lhs_dt.hour, lhs_dt.minute, lhs_dt.second, lhs_dt.microsecond
+                )
+            )
+            time_rhs = _dt.datetime(
+                2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond
+            )
         else:
-            time_lhs = _dt.datetime(2000, 1, 1, lhs_dt.hour, lhs_dt.minute, lhs_dt.second, lhs_dt.microsecond)
-            time_rhs = rhs_dt if not both_tz_aware else _dt.datetime(2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond)
+            time_lhs = _dt.datetime(
+                2000, 1, 1, lhs_dt.hour, lhs_dt.minute, lhs_dt.second, lhs_dt.microsecond
+            )
+            time_rhs = (
+                rhs_dt
+                if not both_tz_aware
+                else _dt.datetime(
+                    2000, 1, 1, rhs_dt.hour, rhs_dt.minute, rhs_dt.second, rhs_dt.microsecond
+                )
+            )
         delta = time_rhs - time_lhs
     else:
         delta = rhs_dt - lhs_dt
@@ -12525,6 +13345,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
         if len(args_exprs) < 2:
             return "NULL"
         lhs_expr, rhs_expr = args_exprs[0], args_exprs[1]
+
         # Get temporal type and literal value from each arg
         def _get_temporal_lit(expr):
             if isinstance(expr, ast.FunctionCall):
@@ -12533,6 +13354,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
             return None, None
+
         lhs_str, lhs_fn = _get_temporal_lit(lhs_expr)
         rhs_str, rhs_fn = _get_temporal_lit(rhs_expr)
         if lhs_str is not None and rhs_str is not None:
@@ -12545,6 +13367,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
     if fn == "duration.inmonths":
         if len(args_exprs) < 2:
             return "NULL"
+
         def _get_temporal_lit(expr):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
@@ -12552,6 +13375,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
             return None, None
+
         lhs_str, lhs_fn = _get_temporal_lit(args_exprs[0])
         rhs_str, rhs_fn = _get_temporal_lit(args_exprs[1])
         if lhs_str is not None and rhs_str is not None:
@@ -12564,6 +13388,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
     if fn == "duration.indays":
         if len(args_exprs) < 2:
             return "NULL"
+
         def _get_temporal_lit(expr):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
@@ -12571,6 +13396,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
             return None, None
+
         lhs_str, lhs_fn = _get_temporal_lit(args_exprs[0])
         rhs_str, rhs_fn = _get_temporal_lit(args_exprs[1])
         if lhs_str is not None and rhs_str is not None:
@@ -12583,6 +13409,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
     if fn == "duration.inseconds":
         if len(args_exprs) < 2:
             return "NULL"
+
         def _get_temporal_lit(expr):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
@@ -12590,6 +13417,7 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
             return None, None
+
         lhs_str, lhs_fn = _get_temporal_lit(args_exprs[0])
         rhs_str, rhs_fn = _get_temporal_lit(args_exprs[1])
         if lhs_str is not None and rhs_str is not None:
@@ -12608,12 +13436,16 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
         nanos = 0
         if isinstance(secs_expr, ast.Literal) and isinstance(secs_expr.value, (int, float)):
             secs = int(secs_expr.value)
-        if nanos_expr and isinstance(nanos_expr, ast.Literal) and isinstance(nanos_expr.value, (int, float)):
+        if (
+            nanos_expr
+            and isinstance(nanos_expr, ast.Literal)
+            and isinstance(nanos_expr.value, (int, float))
+        ):
             nanos = int(nanos_expr.value)
         if secs is not None:
             epoch = _dt.datetime(1970, 1, 1, 0, 0, 0)
             dt = epoch + _dt.timedelta(seconds=secs)
-            frac_str = f"{nanos:09d}".rstrip('0') if nanos else None
+            frac_str = f"{nanos:09d}".rstrip("0") if nanos else None
             if frac_str:
                 result = f"{dt.year:04d}-{dt.month:02d}-{dt.day:02d}T{dt.hour:02d}:{dt.minute:02d}:{dt.second:02d}.{frac_str}Z"
             else:
@@ -12642,8 +13474,13 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
         return "NULL"
 
     # ---- date.truncate / datetime.truncate / localdatetime.truncate ----
-    if fn in ("date.truncate", "datetime.truncate", "localdatetime.truncate",
-              "localtime.truncate", "time.truncate"):
+    if fn in (
+        "date.truncate",
+        "datetime.truncate",
+        "localdatetime.truncate",
+        "localtime.truncate",
+        "time.truncate",
+    ):
         return _eval_truncate(fn, args_exprs)
 
     return None
@@ -12654,9 +13491,9 @@ def _eval_truncate(fn, args_exprs):
 
     Signature: truncate(unit, temporal, map?)
     """
+    import calendar as _cal
     import datetime as _dt
     import re as _re
-    import calendar as _cal
 
     if not args_exprs:
         return "NULL"
@@ -12706,9 +13543,11 @@ def _eval_truncate(fn, args_exprs):
                 temporal_str = _time_only
             else:
                 # Handle date({year:...,month:...,day:...}) etc.
-                sql = _build_date_from_map(map_arg,
-                                           with_time=(temporal_fn in ("datetime", "localdatetime")),
-                                           with_tz=(temporal_fn == "datetime"))
+                sql = _build_date_from_map(
+                    map_arg,
+                    with_time=(temporal_fn in ("datetime", "localdatetime")),
+                    with_tz=(temporal_fn == "datetime"),
+                )
                 if sql and sql.startswith("'") and sql.endswith("'"):
                     temporal_str = sql[1:-1]
 
@@ -12721,6 +13560,7 @@ def _eval_truncate(fn, args_exprs):
         """Parse temporal string to Python datetime using local wall-clock time (no TZ conversion)."""
         import datetime as _dt2
         import re as _re2
+
         if fn == "date":
             parsed = _parse_date_string(s)
             if parsed:
@@ -12728,38 +13568,38 @@ def _eval_truncate(fn, args_exprs):
                 return _dt2.datetime(y, mo, d, 0, 0, 0)
             return None
         if fn in ("localtime", "time"):
-            s2 = _re2.sub(r'\[.*\]$', '', s)
-            s2 = _re2.sub(r'[Z]$', '', s2)
-            s2 = _re2.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', s2)
-            m = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', s2)
+            s2 = _re2.sub(r"\[.*\]$", "", s)
+            s2 = _re2.sub(r"[Z]$", "", s2)
+            s2 = _re2.sub(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", s2)
+            m = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", s2)
             if m:
                 h2, mi2 = int(m.group(1)), int(m.group(2))
                 sec = int(m.group(3) or 0)
                 frac = m.group(4) or ""
-                ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+                ns = int(frac.ljust(9, "0")[:9]) if frac else 0
                 return _dt2.datetime(2000, 1, 1, h2, mi2, sec, ns // 1000)
             return None
         if fn in ("localdatetime", "datetime"):
-            s2 = _re2.sub(r'\[.*\]$', '', s)
+            s2 = _re2.sub(r"\[.*\]$", "", s)
             if "T" not in s2.upper():
                 return None
             sep = s2.upper().index("T")
             date_s = s2[:sep]
-            time_s = s2[sep+1:]
+            time_s = s2[sep + 1 :]
             parsed_date = _parse_date_string(date_s)
             if not parsed_date:
                 return None
             y2, mo2, d2 = parsed_date
             # Strip timezone without adjusting
-            time_s = _re2.sub(r'[Z]$', '', time_s)
-            time_s = _re2.sub(r'[+-]\d{2}:?\d{2}(?::\d{2})?$', '', time_s)
-            m = _re2.match(r'^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$', time_s)
+            time_s = _re2.sub(r"[Z]$", "", time_s)
+            time_s = _re2.sub(r"[+-]\d{2}:?\d{2}(?::\d{2})?$", "", time_s)
+            m = _re2.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_s)
             if not m:
                 return None
             h2, mi2 = int(m.group(1)), int(m.group(2))
             sec = int(m.group(3) or 0)
             frac = m.group(4) or ""
-            ns = int(frac.ljust(9, '0')[:9]) if frac else 0
+            ns = int(frac.ljust(9, "0")[:9]) if frac else 0
             try:
                 return _dt2.datetime(y2, mo2, d2, h2, mi2, sec, ns // 1000)
             except ValueError:
@@ -12774,7 +13614,7 @@ def _eval_truncate(fn, args_exprs):
     input_tz = ""
     _input_iana_tz = None  # IANA timezone name from input (needs re-resolve post-truncation)
     if temporal_fn in ("datetime", "time"):
-        _tz_m = _re.search(r'([+-]\d{2}:\d{2}(?::\d{2})?)(\[[\w/]+\])?$', temporal_str or "")
+        _tz_m = _re.search(r"([+-]\d{2}:\d{2}(?::\d{2})?)(\[[\w/]+\])?$", temporal_str or "")
         if _tz_m:
             input_tz = _tz_m.group(1)
             if _tz_m.group(2):
@@ -12785,7 +13625,7 @@ def _eval_truncate(fn, args_exprs):
                     _iana_raw = _tz_m.group(2)[1:-1]  # strip '[' ']'
                     if "/" in _iana_raw or _iana_raw in ("UTC", "GMT"):
                         _input_iana_tz = _iana_raw
-        elif temporal_str and temporal_str.endswith('Z'):
+        elif temporal_str and temporal_str.endswith("Z"):
             input_tz = "Z"
 
     # Optional map for overrides (3rd arg)
@@ -12835,6 +13675,7 @@ def _eval_truncate(fn, args_exprs):
     elif unit == "weekyear":
         # ISO week year: find first Monday of the ISO week year
         import datetime as _dt2
+
         iso_year = dt.isocalendar()[0]
         jan4_iy = _dt2.date(iso_year, 1, 4)
         monday_iy = jan4_iy - _dt2.timedelta(days=jan4_iy.weekday())
@@ -12848,6 +13689,7 @@ def _eval_truncate(fn, args_exprs):
     elif unit == "week":
         # Truncate to Monday of ISO week; dayOfWeek override selects a different weekday
         import datetime as _dt2
+
         dt_date = _dt2.date(y, mo, d)
         monday = dt_date - _dt2.timedelta(days=dt_date.weekday())
         dow_override = overrides.get("dayOfWeek")
@@ -12912,7 +13754,7 @@ def _eval_truncate(fn, args_exprs):
 
     # Build fractional seconds (nanosecond precision)
     total_ns = us * 1000 + ns_extra
-    frac_str = f"{total_ns:09d}".rstrip('0') if total_ns else None
+    frac_str = f"{total_ns:09d}".rstrip("0") if total_ns else None
 
     def _fmt_time_part(h, mi, s, frac_str):
         """Format time as HH:MM[:SS[.frac]], omitting trailing zero components."""
@@ -12971,13 +13813,20 @@ def _scalar_statistical(fn, args, args_exprs, context):
             if pct_name in context.input_params:
                 pct_val = float(context.input_params[pct_name])
                 # Remove the stray where_param that _translate_arg added for this variable
-                if context.where_params and context.where_params[-1] == context.input_params[pct_name]:
+                if (
+                    context.where_params
+                    and context.where_params[-1] == context.input_params[pct_name]
+                ):
                     context.where_params.pop()
                 pct_expr = str(pct_val)
             else:
                 pct_val = pct_expr
         else:
-            pct_val = float(pct_expr) if isinstance(pct_expr, str) and pct_expr.replace('.','',1).isdigit() else pct_expr
+            pct_val = (
+                float(pct_expr)
+                if isinstance(pct_expr, str) and pct_expr.replace(".", "", 1).isdigit()
+                else pct_expr
+            )
         if var_name or val_expr:
             context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
         return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
@@ -13075,14 +13924,25 @@ def _expr_fn_path_funcs(fn, expr, context):
 
 
 def _expr_fn_vector_ops(fn, args_exprs, args, context):
-    if fn not in ("vector_distance", "vector_similarity", "ivg.vector_distance", "ivg.vector_similarity"):
+    if fn not in (
+        "vector_distance",
+        "vector_similarity",
+        "ivg.vector_distance",
+        "ivg.vector_similarity",
+    ):
         return None
     if len(args_exprs) < 2:
         raise ValueError(f"{fn}() requires 2 arguments: (node_variable, query_vector)")
     node_arg = args_exprs[0]
     vec_arg = args_exprs[1]
-    alias = context.variable_aliases.get(node_arg.name, node_arg.name) if isinstance(node_arg, ast.Variable) else args[0]
-    emb_table = f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+    alias = (
+        context.variable_aliases.get(node_arg.name, node_arg.name)
+        if isinstance(node_arg, ast.Variable)
+        else args[0]
+    )
+    emb_table = (
+        f"{_schema_prefix}.kg_NodeEmbeddings" if _schema_prefix else "Graph_KG.kg_NodeEmbeddings"
+    )
     if isinstance(vec_arg, ast.Variable) and vec_arg.name in context.input_params:
         vec_val = context.input_params[vec_arg.name]
         if isinstance(vec_val, list):
@@ -13110,7 +13970,12 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
             if context_alias:
                 if context_alias.startswith("Stage"):
                     return f"{context_alias}.{var_name}"
-                p_col = "_p" if getattr(context, "_undirected_aliases", set()) and context_alias in context._undirected_aliases else "p"
+                p_col = (
+                    "_p"
+                    if getattr(context, "_undirected_aliases", set())
+                    and context_alias in context._undirected_aliases
+                    else "p"
+                )
                 return f"{context_alias}.{p_col}"
         return args[0] if args else "NULL"
     if fn == "startnode":
@@ -13163,15 +14028,11 @@ def _expr_fn_range(args_exprs):
     # Also catch non-Literal AST nodes that are clearly wrong types (MapLiteral, etc.).
     for _i, _arg in enumerate(args_exprs[:3]):
         if isinstance(_arg, ast.MapLiteral):
-            raise ValueError(
-                f"range() argument {_i} must be an integer, got 'Map'"
-            )
+            raise ValueError(f"range() argument {_i} must be an integer, got 'Map'")
         if isinstance(_arg, ast.Literal):
             _v = _arg.value
             if isinstance(_v, list):
-                raise ValueError(
-                    f"range() argument {_i} must be an integer, got 'List'"
-                )
+                raise ValueError(f"range() argument {_i} must be an integer, got 'List'")
             if not isinstance(_v, int) or isinstance(_v, bool):
                 raise ValueError(
                     f"range() argument {_i} must be an integer, got {type(_v).__name__!r}"
@@ -13226,6 +14087,7 @@ def _expr_fn_list_ops(fn, args, args_exprs):
         if not args:
             return "0"
         arg_expr = args_exprs[0] if args_exprs else None
+
         def _arg_is_list_type(e):
             """Heuristic: returns True if expression e produces a JSON array."""
             if isinstance(e, ast.Literal) and isinstance(e.value, list):
@@ -13237,14 +14099,27 @@ def _expr_fn_list_ops(fn, args, args_exprs):
             if isinstance(e, ast.FunctionCall):
                 # List concatenation or list-producing functions
                 if e.function_name in (
-                    "__arith_+", "collect", "nodes", "relationships",
-                    "labels", "keys", "range",
+                    "__arith_+",
+                    "collect",
+                    "nodes",
+                    "relationships",
+                    "labels",
+                    "keys",
+                    "range",
                 ):
                     return True
                 # range(), nodes(), etc. are list-producing
-                if e.function_name.lower() in ("range", "nodes", "relationships", "labels", "keys", "collect"):
+                if e.function_name.lower() in (
+                    "range",
+                    "nodes",
+                    "relationships",
+                    "labels",
+                    "keys",
+                    "collect",
+                ):
                     return True
             return False
+
         is_list = _arg_is_list_type(arg_expr)
         if is_list:
             return f"SQLUser.JSON_ARRAYLENGTH({args[0]})"
@@ -13306,7 +14181,9 @@ def _expr_function_call(expr, context, segment):
         _sp0 = len(context.select_params)
         _wp0 = len(context.where_params)
         _jp0 = len(context.join_params)
-        if isinstance(expr.arguments[0], ast.Literal) and not isinstance(expr.arguments[0].value, list):
+        if isinstance(expr.arguments[0], ast.Literal) and not isinstance(
+            expr.arguments[0].value, list
+        ):
             inlined = _inline_literal(expr.arguments[0])
             if inlined is not None:
                 arg_sql = inlined
@@ -13332,7 +14209,9 @@ def _expr_function_call(expr, context, segment):
             del context.select_params[_sp0:]
             context.where_params.extend(_sp_added * 2)
         cast_type = "INTEGER" if fn == "tointeger" else "DOUBLE"
-        return f"CASE WHEN ISNUMERIC({arg_sql}) = 1 THEN CAST({arg_sql} AS {cast_type}) ELSE NULL END"
+        return (
+            f"CASE WHEN ISNUMERIC({arg_sql}) = 1 THEN CAST({arg_sql} AS {cast_type}) ELSE NULL END"
+        )
 
     # size(pattern-predicate) raises SyntaxError — ExistsExpression arg is a pattern, not a list
     if fn == "size" and expr.arguments and isinstance(expr.arguments[0], ast.ExistsExpression):
@@ -13352,6 +14231,7 @@ def _expr_function_call(expr, context, segment):
             pval = context.input_params[arg0.name]
             if isinstance(pval, dict):
                 import json as _json
+
                 keys = list(pval.keys())
                 if not keys:
                     return "CAST('[]' AS VARCHAR(256))"
@@ -13389,7 +14269,7 @@ def _expr_function_call(expr, context, segment):
         return result
 
     if fn == "labels":
-        removed = getattr(context, '_removed_labels', None)
+        removed = getattr(context, "_removed_labels", None)
         return labels_subquery(args[0] if args else "NULL", exclude_labels=removed or None)
     if fn == "properties":
         if expr.arguments:
@@ -13511,7 +14391,11 @@ def _expr_boolean(expr, context, segment):
     if cond.startswith("CASE WHEN ") and cond.endswith(" END"):
         # Replace (1=0) and (1=1) sentinels with integers in the CASE WHEN body
         cond = cond.replace("THEN (1=0)", "THEN 0").replace("THEN (1=1)", "THEN 1")
-        if " THEN 1 ELSE NULL END" in cond or " THEN 0 ELSE NULL END" in cond or " THEN 1 ELSE 0 END" in cond:
+        if (
+            " THEN 1 ELSE NULL END" in cond
+            or " THEN 0 ELSE NULL END" in cond
+            or " THEN 1 ELSE 0 END" in cond
+        ):
             return cond
     # IRIS rejects parentheses around IS NULL/IS NOT NULL predicates in CASE WHEN.
     # e.g. CASE WHEN (NULL IS NULL) fails; CASE WHEN NULL IS NULL works.
@@ -13585,7 +14469,10 @@ def translate_expression(expr, context, segment="select") -> str:
     if isinstance(expr, ast.LabelPredicate):
         alias = context.variable_aliases.get(expr.variable)
         # Detect relationship variables (alias starts with 'e' for rdf_edges)
-        is_rel = alias and (alias.startswith("e") or expr.variable in getattr(context, "edge_stage_variables", set()))
+        is_rel = alias and (
+            alias.startswith("e")
+            or expr.variable in getattr(context, "edge_stage_variables", set())
+        )
         if is_rel:
             # For relationships, r:TYPE means edge type matches — check rdf_edges.p
             if segment in ("select", "inline", None):
@@ -13611,22 +14498,122 @@ def translate_expression(expr, context, segment="select") -> str:
     return "NULL"
 
 
-
-_IRIS_RESERVED = frozenset({
-    "count","sum","avg","min","max","key","value","type","name","label",
-    "order","group","index","select","from","where","join","having",
-    "union","insert","update","delete","create","drop","alter","set",
-    "table","schema","column","row","data","id","user","date","time",
-    "result","results","null","true","false","top","exists","not","and","or",
-    "input","first","second","only","rows","fetch","with","offset","limit",
-    "values","int","integer","varchar","char","double","float","decimal",
-    "boolean","bit","case","when","then","else","end","in","is","as",
-    "like","between","distinct","all","any","some","by","asc","desc",
-    "inner","outer","left","right","full","cross","natural","on","using",
-    "intersect","except","minus","having","into","for","primary","foreign",
-    "references","unique","default","check","constraint","index","trigger",
-    "view","procedure","function","begin","commit","rollback","transaction",
-})
+_IRIS_RESERVED = frozenset(
+    {
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "key",
+        "value",
+        "type",
+        "name",
+        "label",
+        "order",
+        "group",
+        "index",
+        "select",
+        "from",
+        "where",
+        "join",
+        "having",
+        "union",
+        "insert",
+        "update",
+        "delete",
+        "create",
+        "drop",
+        "alter",
+        "set",
+        "table",
+        "schema",
+        "column",
+        "row",
+        "data",
+        "id",
+        "user",
+        "date",
+        "time",
+        "result",
+        "results",
+        "null",
+        "true",
+        "false",
+        "top",
+        "exists",
+        "not",
+        "and",
+        "or",
+        "input",
+        "first",
+        "second",
+        "only",
+        "rows",
+        "fetch",
+        "with",
+        "offset",
+        "limit",
+        "values",
+        "int",
+        "integer",
+        "varchar",
+        "char",
+        "double",
+        "float",
+        "decimal",
+        "boolean",
+        "bit",
+        "case",
+        "when",
+        "then",
+        "else",
+        "end",
+        "in",
+        "is",
+        "as",
+        "like",
+        "between",
+        "distinct",
+        "all",
+        "any",
+        "some",
+        "by",
+        "asc",
+        "desc",
+        "inner",
+        "outer",
+        "left",
+        "right",
+        "full",
+        "cross",
+        "natural",
+        "on",
+        "using",
+        "intersect",
+        "except",
+        "minus",
+        "having",
+        "into",
+        "for",
+        "primary",
+        "foreign",
+        "references",
+        "unique",
+        "default",
+        "check",
+        "constraint",
+        "index",
+        "trigger",
+        "view",
+        "procedure",
+        "function",
+        "begin",
+        "commit",
+        "rollback",
+        "transaction",
+    }
+)
 
 
 # IRIS tokenizer splits identifiers that start with certain reserved keyword tokens.
@@ -13657,7 +14644,9 @@ def _expr_to_cypher_text(expr) -> str:
         base = _expr_to_cypher_text(expr.expression)
         # Wrap in parens when the base is a non-simple expression (subscript, function, etc.)
         # so the column name matches the original Cypher text: (list[1]).prop not list[1].prop
-        needs_parens = base and not isinstance(expr.expression, (ast.Variable, ast.PropertyReference))
+        needs_parens = base and not isinstance(
+            expr.expression, (ast.Variable, ast.PropertyReference)
+        )
         base_str = f"({base})" if needs_parens else base
         return f"{base_str}.{expr.property_name}" if base_str else f".{expr.property_name}"
     if isinstance(expr, ast.Variable):
@@ -13693,12 +14682,9 @@ def _expr_to_cypher_text(expr) -> str:
         return f" {op_str} ".join(parts)
     if isinstance(expr, ast.AggregationFunction):
         # count(*) may be parsed as argument=Literal("*") or argument=None
-        is_count_star = (
-            expr.function_name == "count"
-            and (
-                expr.argument is None
-                or (isinstance(expr.argument, ast.Literal) and expr.argument.value == "*")
-            )
+        is_count_star = expr.function_name == "count" and (
+            expr.argument is None
+            or (isinstance(expr.argument, ast.Literal) and expr.argument.value == "*")
         )
         if is_count_star:
             return "count(*)"
@@ -13709,9 +14695,12 @@ def _expr_to_cypher_text(expr) -> str:
         fn = expr.function_name
         # Arithmetic operator wrappers: __arith_+ → infix notation "a + b"
         _ARITH_OPS = {
-            "__arith_+": "+", "__arith_-": "-",
-            "__arith_*": "*", "__arith_/": "/",
-            "__arith_%": "%", "__arith_^": "^",
+            "__arith_+": "+",
+            "__arith_-": "-",
+            "__arith_*": "*",
+            "__arith_/": "/",
+            "__arith_%": "%",
+            "__arith_^": "^",
         }
         if fn in _ARITH_OPS and len(expr.arguments) == 2:
             op = _ARITH_OPS[fn]
@@ -13721,11 +14710,17 @@ def _expr_to_cypher_text(expr) -> str:
             # The parser encodes explicit parens by placing a lower-precedence op as a
             # direct argument. Wrap right operand if it is itself a binary arithmetic expr.
             _PREC = {"^": 4, "*": 3, "/": 3, "%": 3, "+": 2, "-": 2}
+
             def _needs_paren(arg, parent_op):
-                if not (isinstance(arg, ast.FunctionCall) and arg.function_name in _ARITH_OPS and len(arg.arguments) == 2):
+                if not (
+                    isinstance(arg, ast.FunctionCall)
+                    and arg.function_name in _ARITH_OPS
+                    and len(arg.arguments) == 2
+                ):
                     return False
                 child_op = _ARITH_OPS[arg.function_name]
                 return _PREC.get(child_op, 0) < _PREC.get(parent_op, 0)
+
             if _needs_paren(expr.arguments[1], op):
                 right = f"({right})"
             if _needs_paren(expr.arguments[0], op):
@@ -13736,9 +14731,7 @@ def _expr_to_cypher_text(expr) -> str:
         args = ", ".join(_expr_to_cypher_text(a) for a in expr.arguments)
         return f"{fn}({args})"
     if isinstance(expr, ast.MapLiteral):
-        entries = ", ".join(
-            f"{k}: {_expr_to_cypher_text(v)}" for k, v in expr.entries.items()
-        )
+        entries = ", ".join(f"{k}: {_expr_to_cypher_text(v)}" for k, v in expr.entries.items())
         return "{" + entries + "}"
     if isinstance(expr, ast.SubscriptExpression):
         base_text = _expr_to_cypher_text(expr.expression)
@@ -13764,7 +14757,11 @@ def _contains_aggregation(expr) -> bool:
     if isinstance(expr, ast.MapLiteral):
         return any(_contains_aggregation(v) for v in expr.entries.values())
     if isinstance(expr, ast.Literal) and isinstance(expr.value, list):
-        return any(_contains_aggregation(v) for v in expr.value if hasattr(v, '__class__') and not isinstance(v, (int, str, float, bool, type(None))))
+        return any(
+            _contains_aggregation(v)
+            for v in expr.value
+            if hasattr(v, "__class__") and not isinstance(v, (int, str, float, bool, type(None)))
+        )
     return False
 
 
@@ -13882,7 +14879,7 @@ def translate_return_clause(ret, context):
                 p_col = f"__edge_{var_name}_p"
                 q_col = f"{alias_name}.{var_name}"  # Stage column holding qualifiers JSON
                 edge_json = (
-                    f"'{{\"type\":\"' || {alias_name}.{p_col} || '\",\"props\":' || "
+                    f'\'{{"type":"\' || {alias_name}.{p_col} || \'","props":\' || '
                     f"COALESCE({q_col}, '{{}}') || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {var_name}")
@@ -13891,7 +14888,7 @@ def translate_return_clause(ret, context):
 
             # TCK procedure CTE variables are scalar, not graph nodes
             if alias_name and alias_name.startswith("TCK_Proc_"):
-                renames_star = getattr(context, '_tck_yield_renames', {})
+                renames_star = getattr(context, "_tck_yield_renames", {})
                 if var_name in renames_star:
                     _cte_s, orig_col_s = renames_star[var_name]
                     sql_col_s = f"{alias_name}.{orig_col_s}"
@@ -13917,12 +14914,8 @@ def translate_return_clause(ret, context):
                     else:
                         node_expr = f"{alias_name}.node_id"
                 context.select_items.append(f"{node_expr} AS {prefix}_id")
-                context.select_items.append(
-                    f"{labels_subquery(node_expr)} AS {prefix}_labels"
-                )
-                context.select_items.append(
-                    f"{properties_subquery(node_expr)} AS {prefix}_props"
-                )
+                context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
+                context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
         # Also expand named path variables from context.named_paths
         for path_var in sorted(context.named_paths.keys()):
@@ -13931,9 +14924,7 @@ def translate_return_clause(ret, context):
             node_aliases = context.path_node_aliases[path_var]
             edge_aliases = context.path_edge_aliases.get(path_var, [])
             node_id_expr_map = getattr(context, "node_id_expr", {})
-            nodes_arr = ", ".join(
-                node_id_expr_map.get(a, f"{a}.node_id") for a in node_aliases
-            )
+            nodes_arr = ", ".join(node_id_expr_map.get(a, f"{a}.node_id") for a in node_aliases)
             undirected_aliases = getattr(context, "_undirected_aliases", set())
             rels_parts = []
             for a in edge_aliases:
@@ -14009,9 +15000,7 @@ def translate_return_clause(ret, context):
                 node_aliases = context.path_node_aliases[var_name]
                 edge_aliases = context.path_edge_aliases[var_name]
                 node_id_expr = getattr(context, "node_id_expr", {})
-                nodes_arr = ", ".join(
-                    node_id_expr.get(a, f"{a}.node_id") for a in node_aliases
-                )
+                nodes_arr = ", ".join(node_id_expr.get(a, f"{a}.node_id") for a in node_aliases)
                 # Use _p for bidirectional (undirected) edges, p for directed edges
                 undirected_aliases = getattr(context, "_undirected_aliases", set())
                 rels_parts = []
@@ -14046,7 +15035,7 @@ def translate_return_clause(ret, context):
                 p_col = f"__edge_{var_name}_p"
                 q_col = f"{alias_name}.{var_name}"  # Stage1.r = qualifiers JSON
                 edge_json = (
-                    f"'{{\"type\":\"' || {alias_name}.{p_col} || '\",\"props\":' || "
+                    f'\'{{"type":"\' || {alias_name}.{p_col} || \'","props":\' || '
                     f"COALESCE({q_col}, '{{}}') || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {_safe_alias(prefix)}")
@@ -14064,7 +15053,7 @@ def translate_return_clause(ret, context):
                 continue
             # TCK procedure CTE: variables are scalar columns, not graph nodes
             if alias_name and alias_name.startswith("TCK_Proc_"):
-                renames = getattr(context, '_tck_yield_renames', {})
+                renames = getattr(context, "_tck_yield_renames", {})
                 if var_name in renames:
                     _cte, orig_col = renames[var_name]
                     sql_col = f"{alias_name}.{orig_col}"
@@ -14081,7 +15070,7 @@ def translate_return_clause(ret, context):
                 p_col = f"{alias_name}.{'_p' if is_undirected else 'p'}"
                 q_col = f"{alias_name}.qualifiers"
                 edge_json = (
-                    f"'{{\"type\":\"' || {p_col} || '\",\"props\":' || "
+                    f'\'{{"type":"\' || {p_col} || \'","props":\' || '
                     f"COALESCE({q_col}, '{{}}') || '}}'"
                 )
                 context.select_items.append(f"{edge_json} AS {_safe_alias(prefix)}")
@@ -14107,12 +15096,8 @@ def translate_return_clause(ret, context):
                     else:
                         node_expr = f"{alias_name}.node_id"
                 context.select_items.append(f"{node_expr} AS {prefix}_id")
-                context.select_items.append(
-                    f"{labels_subquery(node_expr)} AS {prefix}_labels"
-                )
-                context.select_items.append(
-                    f"{properties_subquery(node_expr)} AS {prefix}_props"
-                )
+                context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
+                context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")
                 # Null-row for OPTIONAL MATCH: node is null → 3 NULLs
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
                 # When aggregates are present, node variables must be in GROUP BY
@@ -14123,7 +15108,8 @@ def translate_return_clause(ret, context):
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact
-        sql = _re_exact.sub(r'\bp(\d+)\.val\b', r'%EXACT(p\1.val)', sql)
+
+        sql = _re_exact.sub(r"\bp(\d+)\.val\b", r"%EXACT(p\1.val)", sql)
         alias = item.alias
         user_provided_alias = alias is not None  # True when user wrote AS <alias>
         cypher_col = None  # Cypher-text column name for post-execution remapping
@@ -14134,14 +15120,13 @@ def translate_return_clause(ret, context):
                 # NOTE: column_name_map registration done below after alias deduplication
             elif isinstance(item.expression, ast.Variable):
                 alias = item.expression.name
-            elif isinstance(
-                item.expression, (ast.AggregationFunction, ast.FunctionCall)
-            ):
+            elif isinstance(item.expression, (ast.AggregationFunction, ast.FunctionCall)):
                 # For function calls (e.g., labels(a), count(*)), use cypher_text as the actual column name
                 cypher_text = _expr_to_cypher_text(item.expression)
                 if cypher_text:
                     import re as _re_fn
-                    alias = _re_fn.sub(r'[^A-Za-z0-9_]', '_', cypher_text)
+
+                    alias = _re_fn.sub(r"[^A-Za-z0-9_]", "_", cypher_text)
                     if alias and alias[0].isdigit():
                         alias = f"_{alias}"
                     if not alias:
@@ -14153,14 +15138,15 @@ def translate_return_clause(ret, context):
                 cypher_text = _expr_to_cypher_text(item.expression)
                 if cypher_text:
                     import re as _re_alias
+
                     # Build a SQL-safe alias (replace non-identifier chars with underscores)
-                    alias = _re_alias.sub(r'[^A-Za-z0-9_]', '_', cypher_text)
+                    alias = _re_alias.sub(r"[^A-Za-z0-9_]", "_", cypher_text)
                     if alias and alias[0].isdigit():
                         alias = f"_{alias}"
                     # NOTE: do NOT register column_name_map here — done below after dedup
         if alias:
             # Deduplicate auto-generated aliases (e.g. x > d and x < d both → x___d)
-            safe = _safe_alias(alias).replace('.', '_')
+            safe = _safe_alias(alias).replace(".", "_")
             if safe in _used_ret_aliases:
                 _dedup_n = 2
                 while f"{safe}_{_dedup_n}" in _used_ret_aliases:
@@ -14203,9 +15189,13 @@ def translate_with_clause(with_clause, context):
             if alias.startswith("e"):
                 is_undirected = alias in getattr(context, "_undirected_aliases", set())
                 if is_undirected:
-                    context.select_items.append(f"{alias}._src AS {var}_src, {alias}._p AS {var}_p, {alias}._dst AS {var}_dst")
+                    context.select_items.append(
+                        f"{alias}._src AS {var}_src, {alias}._p AS {var}_p, {alias}._dst AS {var}_dst"
+                    )
                 else:
-                    context.select_items.append(f"{alias}.s AS {var}_s, {alias}.p AS {var}_p, {alias}.o_id AS {var}_o_id")
+                    context.select_items.append(
+                        f"{alias}.s AS {var}_s, {alias}.p AS {var}_p, {alias}.o_id AS {var}_o_id"
+                    )
             else:
                 context.select_items.append(f"{alias}.node_id AS {var}")
         if with_clause.where_clause:
@@ -14260,19 +15250,24 @@ def translate_with_clause(with_clause, context):
                 alias = f"{item.expression.variable}_{item.expression.property_name}"
             elif isinstance(item.expression, ast.Variable):
                 alias = item.expression.name
-            elif isinstance(item.expression, (ast.AggregationFunction, ast.FunctionCall,
-                                               ast.BooleanExpression, ast.Literal,
-                                               ast.MapLiteral)):
+            elif isinstance(
+                item.expression,
+                (
+                    ast.AggregationFunction,
+                    ast.FunctionCall,
+                    ast.BooleanExpression,
+                    ast.Literal,
+                    ast.MapLiteral,
+                ),
+            ):
                 # Non-variable, non-property expressions require an explicit alias in WITH
-                raise SyntaxError(
-                    "NoExpressionAlias: Expression in WITH must be aliased"
-                )
+                raise SyntaxError("NoExpressionAlias: Expression in WITH must be aliased")
         if alias is None:
             alias = context.next_alias("v")
 
         # Track temporal literal values for compile-time TZ conversion in later stages
         if isinstance(sql, str) and sql.startswith("'") and sql.endswith("'"):
-            if not hasattr(context, 'temporal_literal_values'):
+            if not hasattr(context, "temporal_literal_values"):
                 context.temporal_literal_values = {}
             context.temporal_literal_values[alias] = sql[1:-1]  # strip quotes
 
@@ -14306,7 +15301,12 @@ def translate_with_clause(with_clause, context):
         # serve as a valid Cypher list index — flag it so _expr_subscript emits IVGLISTGET.
         if isinstance(item.expression, ast.Literal):
             _v = item.expression.value
-            if isinstance(_v, bool) or isinstance(_v, float) or isinstance(_v, str) or isinstance(_v, list):
+            if (
+                isinstance(_v, bool)
+                or isinstance(_v, float)
+                or isinstance(_v, str)
+                or isinstance(_v, list)
+            ):
                 context.non_integer_index_vars.add(alias)
         elif isinstance(item.expression, ast.MapLiteral):
             context.non_integer_index_vars.add(alias)
@@ -14316,7 +15316,12 @@ def translate_with_clause(with_clause, context):
             _param_name = item.expression.name
             if _param_name in context.input_params:
                 _pval = context.input_params[_param_name]
-                if isinstance(_pval, bool) or isinstance(_pval, float) or isinstance(_pval, str) or isinstance(_pval, (list, dict)):
+                if (
+                    isinstance(_pval, bool)
+                    or isinstance(_pval, float)
+                    or isinstance(_pval, str)
+                    or isinstance(_pval, (list, dict))
+                ):
                     context.non_integer_index_vars.add(alias)
 
         # Track literal list variables for list-comprehension constant folding.
@@ -14325,11 +15330,11 @@ def translate_with_clause(with_clause, context):
         # can be constant-folded, preserving null slots that JSON_ARRAYAGG would silently drop.
         if isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list):
             _lit_elems = item.expression.value
-            if hasattr(context, 'literal_list_vars'):
+            if hasattr(context, "literal_list_vars"):
                 context.literal_list_vars[alias] = _lit_elems
         elif isinstance(item.expression, ast.Variable):
             _pname = item.expression.name
-            if hasattr(context, 'literal_list_vars') and _pname in context.literal_list_vars:
+            if hasattr(context, "literal_list_vars") and _pname in context.literal_list_vars:
                 context.literal_list_vars[alias] = context.literal_list_vars[_pname]
 
         # Track non-map variables for property access TypeError enforcement.
@@ -14351,9 +15356,11 @@ def translate_with_clause(with_clause, context):
         # Stage-promoted edge variables forwarded through another WITH: propagate identity columns
         # so downstream MATCH/RETURN can still reference __edge_<alias>_s/p/o.
         edge_stage_vars = getattr(context, "edge_stage_variables", set())
-        if (isinstance(item.expression, ast.Variable)
-                and item.expression.name in edge_stage_vars
-                and context.variable_aliases.get(item.expression.name, "").startswith("Stage")):
+        if (
+            isinstance(item.expression, ast.Variable)
+            and item.expression.name in edge_stage_vars
+            and context.variable_aliases.get(item.expression.name, "").startswith("Stage")
+        ):
             prev_stage = context.variable_aliases[item.expression.name]
             prev_var = item.expression.name
             # Propagate identity columns using new alias name
@@ -14369,9 +15376,11 @@ def translate_with_clause(with_clause, context):
                 context.edge_stage_variables.add(alias)
 
         # Edge variables: expose qualifiers JSON so downstream r.prop works via JSON_VALUE(r, '$.prop')
-        if (isinstance(item.expression, ast.Variable)
-                and context.variable_aliases.get(item.expression.name, "").startswith("e")
-                and not context.variable_aliases.get(item.expression.name, "").startswith("Stage")):
+        if (
+            isinstance(item.expression, ast.Variable)
+            and context.variable_aliases.get(item.expression.name, "").startswith("e")
+            and not context.variable_aliases.get(item.expression.name, "").startswith("Stage")
+        ):
             e_alias = context.variable_aliases[item.expression.name]
             sql = f"{e_alias}.qualifiers"
             if not hasattr(context, "edge_stage_variables"):
@@ -14382,7 +15391,9 @@ def translate_with_clause(with_clause, context):
             if alias != item.expression.name:
                 context.edge_stage_variables.add(alias)
                 # Rebind the alias in variable_aliases so the second MATCH resolves it to Stage
-                context.variable_aliases[alias] = context.variable_aliases.get(item.expression.name, "Stage1")
+                context.variable_aliases[alias] = context.variable_aliases.get(
+                    item.expression.name, "Stage1"
+                )
             # Preserve edge identity columns so DELETE can find the original edge row
             # even after the relationship variable is promoted to a CTE stage.
             # Use the final alias name so stage-bound MATCH uses matching column names.
@@ -14400,21 +15411,31 @@ def translate_with_clause(with_clause, context):
         if has_agg and not _contains_aggregation(item.expression):
             # For edge variables in GROUP BY, also include s/p/o identity columns so that
             # edges with the same qualifiers (e.g. both {}) are not collapsed into one group.
-            if (isinstance(item.expression, ast.Variable)
-                    and context.variable_aliases.get(item.expression.name, "").startswith("e")
-                    and not context.variable_aliases.get(item.expression.name, "").startswith("Stage")):
+            if (
+                isinstance(item.expression, ast.Variable)
+                and context.variable_aliases.get(item.expression.name, "").startswith("e")
+                and not context.variable_aliases.get(item.expression.name, "").startswith("Stage")
+            ):
                 e_alias_gb = context.variable_aliases[item.expression.name]
                 is_undirected_gb = e_alias_gb in getattr(context, "_undirected_aliases", set())
                 if is_undirected_gb:
-                    context.group_by_items.extend([
-                        f"{e_alias_gb}._src", f"{e_alias_gb}._p",
-                        f"{e_alias_gb}._dst", f"{e_alias_gb}.qualifiers"
-                    ])
+                    context.group_by_items.extend(
+                        [
+                            f"{e_alias_gb}._src",
+                            f"{e_alias_gb}._p",
+                            f"{e_alias_gb}._dst",
+                            f"{e_alias_gb}.qualifiers",
+                        ]
+                    )
                 else:
-                    context.group_by_items.extend([
-                        f"{e_alias_gb}.s", f"{e_alias_gb}.p",
-                        f"{e_alias_gb}.o_id", f"{e_alias_gb}.qualifiers"
-                    ])
+                    context.group_by_items.extend(
+                        [
+                            f"{e_alias_gb}.s",
+                            f"{e_alias_gb}.p",
+                            f"{e_alias_gb}.o_id",
+                            f"{e_alias_gb}.qualifiers",
+                        ]
+                    )
             else:
                 context.group_by_items.append(sql)
         if isinstance(item.expression, ast.AggregationFunction):
@@ -14482,7 +15503,10 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
         op = expr.operator
         if op in (ast.BooleanOperator.AND, ast.BooleanOperator.OR):
             op_str = " AND " if op == ast.BooleanOperator.AND else " OR "
-            parts = [_translate_where_with_alias_expansion(o, alias_to_expr, context) for o in expr.operands]
+            parts = [
+                _translate_where_with_alias_expansion(o, alias_to_expr, context)
+                for o in expr.operands
+            ]
             return "(" + op_str.join(parts) + ")"
         elif op == ast.BooleanOperator.NOT:
             inner = _translate_where_with_alias_expansion(expr.operands[0], alias_to_expr, context)
@@ -14491,7 +15515,9 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
             # Handle unary IS NULL / IS NOT NULL operators
             operand_expr = expr.operands[0]
             if isinstance(operand_expr, ast.Variable) and operand_expr.name in alias_to_expr:
-                operand_sql = translate_expression(alias_to_expr[operand_expr.name], context, segment="where")
+                operand_sql = translate_expression(
+                    alias_to_expr[operand_expr.name], context, segment="where"
+                )
             else:
                 operand_sql = translate_expression(operand_expr, context, segment="where")
             if op == ast.BooleanOperator.IS_NULL:
@@ -14512,7 +15538,9 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
             # Translate right side with alias expansion
             if right_expr:
                 if isinstance(right_expr, ast.Variable) and right_expr.name in alias_to_expr:
-                    right = translate_expression(alias_to_expr[right_expr.name], context, segment="where")
+                    right = translate_expression(
+                        alias_to_expr[right_expr.name], context, segment="where"
+                    )
                 else:
                     right = translate_expression(right_expr, context, segment="where")
             else:
@@ -14550,20 +15578,34 @@ def _translate_having_expr(expr, agg_aliases: set, agg_alias_sql: dict, context)
     if isinstance(expr, ast.BooleanExpression):
         op = expr.operator
         if op == ast.BooleanOperator.AND:
-            return "(" + " AND ".join(
-                _translate_having_expr(o, agg_aliases, agg_alias_sql, context) for o in expr.operands
-            ) + ")"
+            return (
+                "("
+                + " AND ".join(
+                    _translate_having_expr(o, agg_aliases, agg_alias_sql, context)
+                    for o in expr.operands
+                )
+                + ")"
+            )
         if op == ast.BooleanOperator.OR:
-            return "(" + " OR ".join(
-                _translate_having_expr(o, agg_aliases, agg_alias_sql, context) for o in expr.operands
-            ) + ")"
+            return (
+                "("
+                + " OR ".join(
+                    _translate_having_expr(o, agg_aliases, agg_alias_sql, context)
+                    for o in expr.operands
+                )
+                + ")"
+            )
         if op == ast.BooleanOperator.NOT:
             return f"NOT ({_translate_having_expr(expr.operands[0], agg_aliases, agg_alias_sql, context)})"
         left = _translate_having_expr(expr.operands[0], agg_aliases, agg_alias_sql, context)
         right_expr = expr.operands[1] if len(expr.operands) > 1 else None
         # Use segment="inline" to inline literals (don't parameterize them) in HAVING clauses.
         # This avoids adding extra parameters for literal constants in aggregate comparisons.
-        right = translate_expression(right_expr, context, segment="inline") if right_expr is not None else ""
+        right = (
+            translate_expression(right_expr, context, segment="inline")
+            if right_expr is not None
+            else ""
+        )
         op_map = {
             ast.BooleanOperator.EQUALS: "=",
             ast.BooleanOperator.NOT_EQUALS: "<>",

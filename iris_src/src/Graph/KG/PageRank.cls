@@ -15,6 +15,7 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
 ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String
 {
+	Set pGraph = 0
 	If seedJson = "" Return "[]"
 	
 	Try {
@@ -43,7 +44,7 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
 			
-			Set deg = +$Get(^KG("deg", node))
+			Set deg = +$Get(^KG("deg", pGraph, node))
 			If deg = 0 {
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - alpha))
 				Continue
@@ -51,12 +52,12 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				Set share = (alpha * rank) / deg
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
 				}
@@ -132,10 +133,11 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 
 ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
+	Set pGraph = 0
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", node))
+		Set node = $Order(^KG("deg", pGraph, node))
 		Quit:node=""
 		Set nodeCount = nodeCount + 1
 		Set ranks(node) = 1
@@ -157,19 +159,19 @@ ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 
 		For {
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			Set deg = +$Get(^KG("deg", node))
+			Set deg = +$Get(^KG("deg", pGraph, node))
 			If deg = 0 {
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - damping))
 				Continue
 			}
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				Set share = (damping * rank) / deg
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
 				}

@@ -5,6 +5,7 @@ Class Graph.KG.Subgraph Extends %RegisteredObject
 
 ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypesJson As %String = "", maxNodes As %Integer = 10000) As %String
 {
+	Set pGraph = 0
 	If seedJson = "" Return "{""nodes"":[],""edges"":[],""properties"":{},""labels"":{}}"
 	
 	Try {
@@ -34,7 +35,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 	For i = 0:1:(seedArr.%Size()-1) {
 		Set s = seedArr.%Get(i)
 		// Accept seed if it has outgoing OR incoming edges in ^KG
-		If $Data(^KG("deg", s)) || ($Order(^KG("in", 0, s, "")) '= "") {
+		If $Data(^KG("deg", pGraph, s)) || ($Order(^KG("in", pGraph, s, "")) '= "") {
 			Set frontier(s) = ""
 			If '$Data(seen(s)) {
 				Set seen(s) = ""
@@ -51,10 +52,10 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 			Set node = $Order(frontier(node))
 			Quit:node=""
 			
-			// Walk outgoing edges: ^KG("out", 0, node, predicate, object)
+			// Walk outgoing edges: ^KG("out", pGraph, node, predicate, object)
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				
 				// Edge type filter
@@ -62,7 +63,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 				
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					
 					// Record edge
@@ -162,6 +163,7 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 /// alpha = teleport probability (NOT damping); damping = 1 - alpha.
 ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %Double = 0.00001, topK As %Integer = 50, maxHops As %Integer = 5, edgeTypesJson As %String = "") As %String
 {
+	Set pGraph = 0
 	If seedJson = "" Return "{""nodes"":[],""edges"":[],""ppr_scores"":[],""seed_ids"":[],""nodes_before_pruning"":0,""nodes_after_pruning"":0}"
 	
 	Try {
@@ -187,19 +189,19 @@ ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %
 		For {
 			Set node = $Order(ranks(node), 1, rank)
 			Quit:node=""
-			Set deg = +$Get(^KG("deg", node))
+			Set deg = +$Get(^KG("deg", pGraph, node))
 			If deg = 0 {
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - damping))
 				Continue
 			}
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				Set share = (damping * rank) / deg
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
 				}
@@ -302,12 +304,12 @@ ClassMethod PPRGuidedJson(seedJson As %String, alpha As %Double = 0.15, eps As %
 			Quit:node=""
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				If hasFilter && '$Data(allowedPred(p)) Continue
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set edgeKey = node_$Char(1)_p_$Char(1)_o
 					If '$Data(edgeSeen(edgeKey)) {

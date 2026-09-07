@@ -3,29 +3,30 @@ Class Graph.KG.TraversalKHop Extends %RegisteredObject
 
 ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 {
+	Set pGraph = 0
     If pred '= "" {
-        Set cnt = $Get(^KG("degp", srcId, pred), -1)
+        Set cnt = $Get(^KG("degp", pGraph, srcId, pred), -1)
         If cnt >= 0 Return +cnt
     } Else {
-        Set cnt = $Get(^KG("deg", srcId), -1)
+        Set cnt = $Get(^KG("deg", pGraph, srcId), -1)
         If cnt >= 0 Return +cnt
     }
     Set cnt = 0
     If pred '= "" {
         Set o = ""
         For {
-            Set o = $Order(^KG("out", 0, srcId, pred, o))
+            Set o = $Order(^KG("out", pGraph, srcId, pred, o))
             Quit:o=""
             Set cnt = cnt + 1
         }
     } Else {
         Set p = ""
         For {
-            Set p = $Order(^KG("out", 0, srcId, p))
+            Set p = $Order(^KG("out", pGraph, srcId, p))
             Quit:p=""
             Set o = ""
             For {
-                Set o = $Order(^KG("out", 0, srcId, p, o))
+                Set o = $Order(^KG("out", pGraph, srcId, p, o))
                 Quit:o=""
                 Set cnt = cnt + 1
             }
@@ -35,12 +36,13 @@ ClassMethod KHopCount(srcId As %String, pred As %String = "") As %Integer
 }
 ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPreds As %List = "") As %String
 {
+	Set pGraph = 0
     Set result = ""
     Set hasGuard = (requiredPreds '= "") && ($ListLength(requiredPreds) > 0)
     If pred '= "" {
         Set o = ""
         For {
-            Set o = $Order(^KG("out", 0, srcId, pred, o))
+            Set o = $Order(^KG("out", pGraph, srcId, pred, o))
             Quit:o=""
             If hasGuard {
                 Set dstIdx = $Get(^NKG("$NI", o))
@@ -51,11 +53,11 @@ ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPred
     } Else {
         Set p = ""
         For {
-            Set p = $Order(^KG("out", 0, srcId, p))
+            Set p = $Order(^KG("out", pGraph, srcId, p))
             Quit:p=""
             Set o = ""
             For {
-                Set o = $Order(^KG("out", 0, srcId, p, o))
+                Set o = $Order(^KG("out", pGraph, srcId, p, o))
                 Quit:o=""
                 If hasGuard {
                     Set dstIdx = $Get(^NKG("$NI", o))
@@ -69,13 +71,14 @@ ClassMethod KHopNeighborIds(srcId As %String, pred As %String = "", requiredPred
 }
 ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
 {
+	Set pGraph = 0
     Kill ^||kh2s, ^||kh2all
     Set ^||kh2all(srcId) = ""
 
     If pred '= "" {
         Set o1 = ""
         For {
-            Set o1 = $Order(^KG("out", 0, srcId, pred, o1))
+            Set o1 = $Order(^KG("out", pGraph, srcId, pred, o1))
             Quit:o1=""
             If '$Data(^||kh2all(o1)) {
                 Set ^||kh2all(o1) = ""
@@ -85,11 +88,11 @@ ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
     } Else {
         Set p1 = ""
         For {
-            Set p1 = $Order(^KG("out", 0, srcId, p1))
+            Set p1 = $Order(^KG("out", pGraph, srcId, p1))
             Quit:p1=""
             Set o1 = ""
             For {
-                Set o1 = $Order(^KG("out", 0, srcId, p1, o1))
+                Set o1 = $Order(^KG("out", pGraph, srcId, p1, o1))
                 Quit:o1=""
                 If '$Data(^||kh2all(o1)) {
                     Set ^||kh2all(o1) = ""
@@ -107,7 +110,7 @@ ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
         If pred '= "" {
             Set o2 = ""
             For {
-                Set o2 = $Order(^KG("out", 0, mid, pred, o2))
+                Set o2 = $Order(^KG("out", pGraph, mid, pred, o2))
                 Quit:o2=""
                 If '$Data(^||kh2all(o2)) {
                     Set ^||kh2all(o2) = ""
@@ -117,11 +120,11 @@ ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
         } Else {
             Set p2 = ""
             For {
-                Set p2 = $Order(^KG("out", 0, mid, p2))
+                Set p2 = $Order(^KG("out", pGraph, mid, p2))
                 Quit:p2=""
                 Set o2 = ""
                 For {
-                    Set o2 = $Order(^KG("out", 0, mid, p2, o2))
+                    Set o2 = $Order(^KG("out", pGraph, mid, p2, o2))
                     Quit:o2=""
                     If '$Data(^||kh2all(o2)) {
                         Set ^||kh2all(o2) = ""
@@ -136,13 +139,14 @@ ClassMethod KHop2Count(srcId As %String, pred As %String = "") As %Integer
 }
 ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults As %Integer = 0) As %String
 {
+	Set pGraph = 0
     Kill ^||kh2s, ^||kh2all
     Set ^||kh2all(srcId) = ""
 
     If pred '= "" {
         Set o1 = ""
         For {
-            Set o1 = $Order(^KG("out", 0, srcId, pred, o1))
+            Set o1 = $Order(^KG("out", pGraph, srcId, pred, o1))
             Quit:o1=""
             If '$Data(^||kh2all(o1)) {
                 Set ^||kh2all(o1) = ""
@@ -152,11 +156,11 @@ ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults 
     } Else {
         Set p1 = ""
         For {
-            Set p1 = $Order(^KG("out", 0, srcId, p1))
+            Set p1 = $Order(^KG("out", pGraph, srcId, p1))
             Quit:p1=""
             Set o1 = ""
             For {
-                Set o1 = $Order(^KG("out", 0, srcId, p1, o1))
+                Set o1 = $Order(^KG("out", pGraph, srcId, p1, o1))
                 Quit:o1=""
                 If '$Data(^||kh2all(o1)) {
                     Set ^||kh2all(o1) = ""
@@ -175,7 +179,7 @@ ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults 
         If pred '= "" {
             Set o2 = ""
             For {
-                Set o2 = $Order(^KG("out", 0, mid, pred, o2))
+                Set o2 = $Order(^KG("out", pGraph, mid, pred, o2))
                 Quit:o2=""
                 If '$Data(^||kh2all(o2)) {
                     Set ^||kh2all(o2) = ""
@@ -190,11 +194,11 @@ ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults 
         } Else {
             Set p2 = ""
             For {
-                Set p2 = $Order(^KG("out", 0, mid, p2))
+                Set p2 = $Order(^KG("out", pGraph, mid, p2))
                 Quit:p2=""
                 Set o2 = ""
                 For {
-                    Set o2 = $Order(^KG("out", 0, mid, p2, o2))
+                    Set o2 = $Order(^KG("out", pGraph, mid, p2, o2))
                     Quit:o2=""
                     If '$Data(^||kh2all(o2)) {
                         Set ^||kh2all(o2) = ""

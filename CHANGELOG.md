@@ -2,6 +2,56 @@
 
 # Changelog
 
+### v2.17.0 (2026-09-07)
+
+**Named graphs for nodes — spec 214**
+
+Adds a real `graph_id` dimension to `Graph_KG.nodes` (was emulated via `__graph` pseudo-property),
+graph-aware adjacency globals (`^KG("out", gKey, s, p, o)`), graph-scoped `delete_edge`,
+Cypher `CREATE`/`MERGE` that target named graphs, and `import_graph_ndjson(graph=)`.
+
+#### New
+
+- **`nodes.graph_id`**: new column `VARCHAR(256) %EXACT NOT NULL DEFAULT ''`; PK becomes
+  `(node_id, graph_id)`; `UNIQUE(node_id)` retained for FK compatibility.
+  Default graph = `''` (empty string sentinel); named graphs = `'umls'`, `'go'`, etc.
+- **`^KG` layout**: `^KG("out", gKey, s, p, o)` where `gKey=0` (integer) for the default
+  graph and the graph name for named graphs. `BuildKG` reads `graph_id` from `rdf_edges`.
+- **`WriteAdjacency`/`DeleteAdjacency`**: new `graph=0` parameter on
+  `Graph.KG.EdgeScan`; all 7 traversal/algorithm ObjectScript classes updated.
+- **`delete_edge(s, p, o, graph=None, all_graphs=False)`**: scopes deletion to the named
+  graph. **Breaking change**: default now deletes only the default-graph row. Callers that
+  relied on cross-graph deletion must pass `all_graphs=True`.
+- **Cypher `USE GRAPH` context**: `CREATE (n)` and `MERGE` now store `graph_id` from the
+  graph context; `CREATE (a)-[r]->(b)` stores `graph_id` on the edge.
+- **`import_graph_ndjson(path, graph=None)`**: new `graph` param scopes all imported nodes
+  and edges to the named graph.
+- **`drop_graph`**: extended to also delete nodes (and cascade labels, props, embeddings)
+  scoped to the named graph, in FK-safe order.
+- **Migration**: `initialize_schema()` runs `add_graph_id_to_nodes()` which adds the column,
+  migrates `__graph` pseudo-prop rows, and recreates the nodes table with the new PK.
+  Idempotent; schema-change approved 2026-09-06.
+
+#### Fixes
+
+- `update_spo_unique_constraint` now also drops the `uspo` constraint variant (IRIS
+  internal name) so named-graph edges are not blocked by the old single-column UNIQUE.
+- `create_edge` default-graph INSERT now sets `graph_id=''` explicitly so `delete_edge`
+  (which filters by `graph_id`) correctly removes default-graph rows.
+- `TraversalBFS/Paths/KHop/PageRank/Centrality/Algorithms/Subgraph`: `pGraph` variable
+  initialized to `0` in each method body, fixing `<UNDEFINED> pGraph` errors that appeared
+  after the adjacency-layout change.
+
+#### Tests
+
+- Unit: `tests/unit/test_214_named_graphs.py` (16 tests, no container required).
+- Live: `tests/integration/test_214_schema_migration.py`, `test_214_drop_graph.py`,
+  `test_214_adjacency_graph.py`, `test_214_delete_edge_scoped.py`,
+  `test_214_cypher_create_graph.py`, `test_214_import_ndjson_graph.py`,
+  `test_214_node_graph_dim.py`; new `node_graph_reset` fixture in `tests/conftest.py`.
+
+---
+
 ### v2.16.0 (2026-09-05)
 
 **Immutable graph revision ledger and atomic changesets — spec 213**

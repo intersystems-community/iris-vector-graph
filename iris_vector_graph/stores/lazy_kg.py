@@ -64,6 +64,7 @@ class LazyKG:
                 aren't needed.
         """
         import iris as _iris
+
         self._iris = _iris.createIRIS(conn)
         self._include_sinks = include_sinks
         self._out_cache: dict = {}

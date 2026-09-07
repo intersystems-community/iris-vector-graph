@@ -5,10 +5,11 @@ Class Graph.KG.Algorithms Extends %RegisteredObject
 
 ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 {
+	Set pGraph = 0
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", node))
+		Set node = $Order(^KG("deg", pGraph, node))
 		Quit:node=""
 		Set labels(node) = node
 		Set nodeCount = nodeCount + 1
@@ -16,7 +17,7 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 	// Also include nodes that only appear as targets (no outgoing edges = no "deg" entry)
 	Set node = ""
 	For {
-		Set node = $Order(^KG("in", 0, node))
+		Set node = $Order(^KG("in", pGraph, node))
 		Quit:node=""
 		If '$Data(labels(node)) {
 			Set labels(node) = node
@@ -38,11 +39,11 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 			// Check outgoing neighbors
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set nbrLabel = $Get(labels(o), o)
 					If minLabel ]] nbrLabel Set minLabel = nbrLabel
@@ -52,11 +53,11 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 			// Check incoming neighbors
 			Set p = ""
 			For {
-				Set p = $Order(^KG("in", 0, node, p))
+				Set p = $Order(^KG("in", pGraph, node, p))
 				Quit:p=""
 				Set s = ""
 				For {
-					Set s = $Order(^KG("in", 0, node, p, s))
+					Set s = $Order(^KG("in", pGraph, node, p, s))
 					Quit:s=""
 					Set nbrLabel = $Get(labels(s), s)
 					If minLabel ]] nbrLabel Set minLabel = nbrLabel
@@ -84,17 +85,18 @@ ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 
 ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 {
+	Set pGraph = 0
 	Set nodeCount = 0
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", node))
+		Set node = $Order(^KG("deg", pGraph, node))
 		Quit:node=""
 		Set labels(node) = node
 		Set nodeCount = nodeCount + 1
 	}
 	Set node = ""
 	For {
-		Set node = $Order(^KG("in", 0, node))
+		Set node = $Order(^KG("in", pGraph, node))
 		Quit:node=""
 		If '$Data(labels(node)) {
 			Set labels(node) = node
@@ -116,11 +118,11 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 			// Count outgoing neighbor labels
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, node, p))
+				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
 				Set o = ""
 				For {
-					Set o = $Order(^KG("out", 0, node, p, o))
+					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set nbrLabel = $Get(labels(o), o)
 					Set counts(nbrLabel) = $Get(counts(nbrLabel), 0) + 1
@@ -130,11 +132,11 @@ ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 			// Count incoming neighbor labels
 			Set p = ""
 			For {
-				Set p = $Order(^KG("in", 0, node, p))
+				Set p = $Order(^KG("in", pGraph, node, p))
 				Quit:p=""
 				Set s = ""
 				For {
-					Set s = $Order(^KG("in", 0, node, p, s))
+					Set s = $Order(^KG("in", pGraph, node, p, s))
 					Quit:s=""
 					Set nbrLabel = $Get(labels(s), s)
 					Set counts(nbrLabel) = $Get(counts(nbrLabel), 0) + 1

@@ -3,6 +3,7 @@ Class Graph.KG.TraversalPaths Extends %RegisteredObject [ SqlSchemaName = Graph_
 
 ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", findAll As %Integer = 0) As %String
 {
+	Set pGraph = 0
 	Kill ^||SP.parents, ^||SP.frontier, ^||SP.seen
 
 	If srcId = "" || (dstId = "") {
@@ -43,7 +44,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 			If direction = "both" || (direction = "out") {
 				Set p = ""
 				For {
-					Set p = $Order(^KG("out", 0, s, p))
+					Set p = $Order(^KG("out", pGraph, s, p))
 					Quit:p=""
 					If $IsObject(preds) {
 						Set allowed = 0
@@ -52,7 +53,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 					}
 					Set o = ""
 					For {
-						Set o = $Order(^KG("out", 0, s, p, o))
+						Set o = $Order(^KG("out", pGraph, s, p, o))
 						Quit:o=""
 						Set ^||SP.parents(o, s, p) = ""
 						If o = dstId {
@@ -68,7 +69,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 			If direction = "both" {
 				Set p = ""
 				For {
-					Set p = $Order(^KG("in", 0, s, p))
+					Set p = $Order(^KG("in", pGraph, s, p))
 					Quit:p=""
 					If $IsObject(preds) {
 						Set allowed = 0
@@ -77,7 +78,7 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 					}
 					Set o = ""
 					For {
-						Set o = $Order(^KG("in", 0, s, p, o))
+						Set o = $Order(^KG("in", pGraph, s, p, o))
 						Quit:o=""
 						Set ^||SP.parents(o, s, p) = ""
 						If o = dstId {
@@ -172,6 +173,7 @@ ClassMethod BacktrackPath(srcId As %String, dstId As %String, depth As %Integer)
 }
 ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out") As %String
 {
+	Set pGraph = 0
 	Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
 
 	Set srcId = $Get(srcId, "")
@@ -220,14 +222,14 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 		If direction = "out" || (direction = "both") {
 			Set p = ""
 			For {
-				Set p = $Order(^KG("out", 0, curNode, p))
+				Set p = $Order(^KG("out", pGraph, curNode, p))
 				Quit:p=""
 				Set neighbor = ""
 				For {
-					Set neighbor = $Order(^KG("out", 0, curNode, p, neighbor))
+					Set neighbor = $Order(^KG("out", pGraph, curNode, p, neighbor))
 					Quit:neighbor=""
 					If $Data(^||Dij.seen(neighbor)) Continue
-					Set rawW = $Get(^KG("out", 0, curNode, p, neighbor), 1)
+					Set rawW = $Get(^KG("out", pGraph, curNode, p, neighbor), 1)
 					Set edgeW = +rawW
 					If edgeW <= 0 Set edgeW = 1.0
 					Set newCost = minCost + edgeW
@@ -246,14 +248,14 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 		If direction = "both" {
 			Set p = ""
 			For {
-				Set p = $Order(^KG("in", 0, curNode, p))
+				Set p = $Order(^KG("in", pGraph, curNode, p))
 				Quit:p=""
 				Set neighbor = ""
 				For {
-					Set neighbor = $Order(^KG("in", 0, curNode, p, neighbor))
+					Set neighbor = $Order(^KG("in", pGraph, curNode, p, neighbor))
 					Quit:neighbor=""
 					If $Data(^||Dij.seen(neighbor)) Continue
-					Set rawW = $Get(^KG("in", 0, curNode, p, neighbor), 1)
+					Set rawW = $Get(^KG("in", pGraph, curNode, p, neighbor), 1)
 					Set edgeW = +rawW
 					If edgeW <= 0 Set edgeW = 1.0
 					Set newCost = minCost + edgeW

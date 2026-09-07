@@ -2,8 +2,12 @@ import logging
 from typing import Dict, Any, List
 
 from iris_vector_graph.status import (
-    EngineStatus, TableCounts, AdjacencyStatus,
-    ObjectScriptStatus, ArnoStatus, IndexInventory,
+    EngineStatus,
+    TableCounts,
+    AdjacencyStatus,
+    ObjectScriptStatus,
+    ArnoStatus,
+    IndexInventory,
 )
 from iris_vector_graph.result import IVGResult
 
@@ -12,14 +16,15 @@ logger = logging.getLogger(__name__)
 
 class AdminMixin:
     """Administrative/system operations mixin for IRISGraphEngine.
-    
+
     Provides schema introspection, query management, index visibility,
     and diagnostic warning aggregation.
     """
 
     def _handle_show_command(self, cmd: str) -> Dict[str, Any]:
         if "DATABASES" in cmd:
-            return IVGResult(columns=[
+            return IVGResult(
+                columns=[
                     "name",
                     "type",
                     "aliases",
@@ -50,23 +55,25 @@ class AdminMixin:
                         True,
                         [],
                     ]
-                ]
+                ],
             )
         if "PROCEDURES" in cmd:
             procs = self._try_system_procedure(
                 type("P", (), {"procedure_name": "dbms.procedures"})()
             )
             if procs:
-                return IVGResult(columns=["name", "description", "signature"],
-                    rows=[[r[0], r[2], r[1]] for r in procs.rows])
+                return IVGResult(
+                    columns=["name", "description", "signature"],
+                    rows=[[r[0], r[2], r[1]] for r in procs.rows],
+                )
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "FUNCTIONS" in cmd:
-            fns = self._try_system_procedure(
-                type("P", (), {"procedure_name": "dbms.functions"})()
-            )
+            fns = self._try_system_procedure(type("P", (), {"procedure_name": "dbms.functions"})())
             if fns:
-                return IVGResult(columns=["name", "description", "signature"],
-                    rows=[[r[0], r[2], r[1]] for r in fns.rows])
+                return IVGResult(
+                    columns=["name", "description", "signature"],
+                    rows=[[r[0], r[2], r[1]] for r in fns.rows],
+                )
             return IVGResult(columns=["name", "description", "signature"], rows=[])
         if "INDEXES" in cmd:
             return self._show_indexes()
@@ -94,10 +101,16 @@ class AdminMixin:
             hnsw_count = int(r[0]) if r else 0
         except Exception:
             pass
-        rows.append([
-            "hnsw_node_embeddings", "VECTOR(HNSW)", "NODE", ["*"], ["emb"],
-            "ONLINE" if hnsw_count > 0 else "BUILDING",
-        ])
+        rows.append(
+            [
+                "hnsw_node_embeddings",
+                "VECTOR(HNSW)",
+                "NODE",
+                ["*"],
+                ["emb"],
+                "ONLINE" if hnsw_count > 0 else "BUILDING",
+            ]
+        )
 
         for (name,) in _try(f"SELECT DISTINCT name FROM {self._t('kg_IVFMeta')}"):
             rows.append([name, "VECTOR(IVF)", "NODE", ["*"], ["emb"], "ONLINE"])
@@ -113,10 +126,16 @@ class AdminMixin:
             nkg_ok = bool(int(native.classMethodValue("Graph.KG.Traversal", "NKGPopulated")))
         except Exception:
             nkg_ok = False
-        rows.append([
-            "nkg_adjacency", "ADJACENCY(^NKG)", "RELATIONSHIP", ["*"], ["*"],
-            "ONLINE" if nkg_ok else "NOT_BUILT",
-        ])
+        rows.append(
+            [
+                "nkg_adjacency",
+                "ADJACENCY(^NKG)",
+                "RELATIONSHIP",
+                ["*"],
+                ["*"],
+                "ONLINE" if nkg_ok else "NOT_BUILT",
+            ]
+        )
 
         kg_ok = False
         try:
@@ -124,10 +143,16 @@ class AdminMixin:
             kg_ok = int(native.classMethodValue("Graph.KG.Traversal", "KGEdgeCount", 1)) > 0
         except Exception:
             pass
-        rows.append([
-            "kg_adjacency", "ADJACENCY(^KG)", "RELATIONSHIP", ["*"], ["*"],
-            "ONLINE" if kg_ok else "NOT_BUILT",
-        ])
+        rows.append(
+            [
+                "kg_adjacency",
+                "ADJACENCY(^KG)",
+                "RELATIONSHIP",
+                ["*"],
+                ["*"],
+                "ONLINE" if kg_ok else "NOT_BUILT",
+            ]
+        )
 
         rows.append(["pk_nodes", "UNIQUE", "NODE", ["*"], ["node_id"], "ONLINE"])
         rows.append(["pk_rdf_edges", "UNIQUE", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "ONLINE"])
@@ -138,25 +163,40 @@ class AdminMixin:
         cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "ownedIndex"]
         rows = [
             ["node_id_unique", "UNIQUENESS", "NODE", ["*"], ["node_id"], "pk_nodes"],
-            ["edge_spo_unique", "UNIQUENESS", "RELATIONSHIP", ["*"], ["s", "p", "o_id"], "pk_rdf_edges"],
+            [
+                "edge_spo_unique",
+                "UNIQUENESS",
+                "RELATIONSHIP",
+                ["*"],
+                ["s", "p", "o_id"],
+                "pk_rdf_edges",
+            ],
         ]
         try:
             cursor = self.conn.cursor()
             # Check table existence via %Dictionary before querying it — the IRIS
             # Python driver segfaults on SELECT against a non-existent table.
             cursor.execute(
-                "SELECT COUNT(*) FROM %Dictionary.CompiledClass "
-                "WHERE Name='Graph.KG.FHIRBridge'"
+                "SELECT COUNT(*) FROM %Dictionary.CompiledClass " "WHERE Name='Graph.KG.FHIRBridge'"
             )
             if int((cursor.fetchone() or [0])[0]) > 0:
-                rows.append(["fhir_bridge_unique", "UNIQUENESS", "NODE",
-                              ["*"], ["external_id", "bridge_type", "node_id"], "pk_fhir_bridges"])
+                rows.append(
+                    [
+                        "fhir_bridge_unique",
+                        "UNIQUENESS",
+                        "NODE",
+                        ["*"],
+                        ["external_id", "bridge_type", "node_id"],
+                        "pk_fhir_bridges",
+                    ]
+                )
         except Exception:
             pass
         return IVGResult(columns=cols, rows=rows)
 
     def status(self, internals: bool = False) -> "EngineStatus":
         import time as _time
+
         t0 = _time.perf_counter()
         errors: list = []
         cursor = self.conn.cursor()
@@ -200,14 +240,14 @@ class AdminMixin:
         if kg_populated and tables.edges > 0:
             try:
                 native = self._iris_obj()
-                kg_pred = str(native.get(["KG", "out", 0, ""])) or ""
+                kg_pred = str(native.get(["KG", "out", "", 0, ""])) or ""
                 if not kg_pred:
                     s_val = ""
-                    kg_pred_node = native.orderAll(["KG", "out", 0, s_val])
+                    kg_pred_node = native.orderAll(["KG", "out", "", 0, s_val])
                     if kg_pred_node:
-                        kg_pred = str(native.orderAll(
-                            ["KG", "out", 0, str(kg_pred_node), ""]
-                        ) or "")
+                        kg_pred = str(
+                            native.orderAll(["KG", "out", "", 0, str(kg_pred_node), ""]) or ""
+                        )
             except Exception:
                 kg_pred = ""
 
@@ -239,8 +279,12 @@ class AdminMixin:
         os_classes = []
         os_deployed = self.capabilities.objectscript_deployed
         _known_classes = [
-            "Graph.KG.Traversal", "Graph.KG.PageRank", "Graph.KG.IVFIndex",
-            "Graph.KG.BM25Index", "Graph.KG.ArnoAccel", "Graph.KG.Snapshot",
+            "Graph.KG.Traversal",
+            "Graph.KG.PageRank",
+            "Graph.KG.IVFIndex",
+            "Graph.KG.BM25Index",
+            "Graph.KG.ArnoAccel",
+            "Graph.KG.Snapshot",
             "Graph.KG.Dijkstra",
         ]
         if os_deployed:
@@ -305,8 +349,11 @@ class AdminMixin:
             probe_ms=probe_ms,
             errors=errors,
             pending_sync=self._nkg_dirty,
-            internals={"^KG_populated": adjacency.kg_populated,
-                       "^NKG_populated": adjacency.nkg_populated} if internals else None,
+            internals=(
+                {"^KG_populated": adjacency.kg_populated, "^NKG_populated": adjacency.nkg_populated}
+                if internals
+                else None
+            ),
         )
 
     def verify_sync(self, heal: bool = False) -> "SyncReport":
@@ -427,8 +474,12 @@ class AdminMixin:
                 f"WHERE Command IS NOT NULL FETCH FIRST {safe_limit} ROWS ONLY",
             )
             return [
-                {"id": str(r[0]), "state": str(r[1]), "client": str(r[2]),
-                 "command": str(r[3])[:200]}
+                {
+                    "id": str(r[0]),
+                    "state": str(r[1]),
+                    "client": str(r[2]),
+                    "command": str(r[3])[:200],
+                }
                 for r in cursor.fetchall()
             ]
         except Exception as e:
@@ -447,6 +498,7 @@ class AdminMixin:
     def get_centrality_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
         try:
             import iris as _iris
+
             iris_inst = self._iris_obj()
         except Exception as e:
             logger.debug("get_centrality_warnings: createIRIS failed: %s", e)
@@ -459,11 +511,13 @@ class AdminMixin:
                 src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, "")
                 while src is not None and src != "":
                     reason = iris_inst.get("^IVG.warnings", "centrality", ts, src)
-                    warnings_list.append({
-                        "timestamp": str(ts),
-                        "source": str(src),
-                        "reason": str(reason) if reason is not None else "",
-                    })
+                    warnings_list.append(
+                        {
+                            "timestamp": str(ts),
+                            "source": str(src),
+                            "reason": str(reason) if reason is not None else "",
+                        }
+                    )
                     if len(warnings_list) >= max_entries:
                         return warnings_list
                     src = iris_inst.nextSubscript(False, "^IVG.warnings", "centrality", ts, src)
@@ -475,6 +529,7 @@ class AdminMixin:
     def get_community_warnings(self, max_entries: int = 50) -> List[Dict[str, Any]]:
         try:
             import iris as _iris
+
             iris_inst = self._iris_obj()
         except Exception:
             return []
@@ -485,11 +540,13 @@ class AdminMixin:
                 src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, "")
                 while src is not None and src != "":
                     reason = iris_inst.get("^IVG.warnings", "communities", ts, src)
-                    warnings_list.append({
-                        "timestamp": str(ts),
-                        "source": str(src),
-                        "reason": str(reason) if reason is not None else "",
-                    })
+                    warnings_list.append(
+                        {
+                            "timestamp": str(ts),
+                            "source": str(src),
+                            "reason": str(reason) if reason is not None else "",
+                        }
+                    )
                     if len(warnings_list) >= max_entries:
                         return warnings_list
                     src = iris_inst.nextSubscript(False, "^IVG.warnings", "communities", ts, src)
@@ -497,5 +554,3 @@ class AdminMixin:
         except Exception as e:
             logger.debug("get_community_warnings: ^IVG.warnings traversal failed: %s", e)
         return warnings_list
-
-

@@ -1,10 +1,10 @@
 import json
 import logging
-from typing import Dict, Any, NamedTuple, Optional, List
+from typing import Any, Dict, List, NamedTuple, Optional
 
-from iris_vector_graph.schema import GraphSchema
-from iris_vector_graph._validate import NodeIdInput, EdgeInput
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
+from iris_vector_graph._validate import EdgeInput, NodeIdInput
+from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
 
@@ -40,37 +40,46 @@ class _BulkLoadSession:
         n = self._engine._with_reconnect(
             self._engine.bulk_create_nodes, nodes, max_retries=self._max_retries
         )
-        self.stats["nodes"] += (n if isinstance(n, int) else len(nodes))
+        self.stats["nodes"] += n if isinstance(n, int) else len(nodes)
         return n
 
     def add_edges(self, edges, predicate="KNOWS"):
         n = self._engine._with_reconnect(
-            self._engine.bulk_ingest_edges, edges, predicate,
-            auto_sync=False, max_retries=self._max_retries,
+            self._engine.bulk_ingest_edges,
+            edges,
+            predicate,
+            auto_sync=False,
+            max_retries=self._max_retries,
         )
-        self.stats["edges"] += (n if isinstance(n, int) else len(edges))
+        self.stats["edges"] += n if isinstance(n, int) else len(edges)
         return n
 
 
 class NodesEdgesMixin:
     """Node and edge CRUD mixin for IRISGraphEngine.
-    
+
     Provides node/edge creation, retrieval, deletion, and bulk operations."""
 
-    def bulk_load_session(self, max_retries: int = 3, rebuild_indexes: bool = True,
-                          incremental: bool = True):
+    def bulk_load_session(
+        self, max_retries: int = 3, rebuild_indexes: bool = True, incremental: bool = True
+    ):
         _ledger_check(self, "bulk_load_session")
         from contextlib import contextmanager
 
         @contextmanager
         def _session():
             import time as _time
+
             from iris_vector_graph.schema import GraphSchema
 
             stats: Dict[str, Any] = {
-                "nodes": 0, "edges": 0, "retries": 0,
-                "load_seconds": 0.0, "index_rebuild_seconds": 0.0,
-                "sync_seconds": 0.0, "incremental": incremental,
+                "nodes": 0,
+                "edges": 0,
+                "retries": 0,
+                "load_seconds": 0.0,
+                "index_rebuild_seconds": 0.0,
+                "sync_seconds": 0.0,
+                "incremental": incremental,
             }
             if rebuild_indexes:
                 try:
@@ -83,7 +92,10 @@ class NodesEdgesMixin:
                 try:
                     self._iris_obj().classMethodValue("Graph.KG.Traversal", "InitNKGSkeleton")
                 except Exception as e:
-                    logger.warning("bulk_load_session: InitNKGSkeleton failed, falling back to full rebuild: %s", str(e)[:120])
+                    logger.warning(
+                        "bulk_load_session: InitNKGSkeleton failed, falling back to full rebuild: %s",
+                        str(e)[:120],
+                    )
                     incremental_ok = False
                 else:
                     incremental_ok = True
@@ -104,7 +116,9 @@ class NodesEdgesMixin:
                         GraphSchema.rebuild_indexes(self.conn.cursor())
                         self.conn.commit()
                     except Exception as e:
-                        logger.warning("bulk_load_session: rebuild_indexes failed: %s", str(e)[:120])
+                        logger.warning(
+                            "bulk_load_session: rebuild_indexes failed: %s", str(e)[:120]
+                        )
                     stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
                 ts = _time.perf_counter()
                 if incremental_ok and not self._bulk_load_drifted():
@@ -115,7 +129,9 @@ class NodesEdgesMixin:
                         pass
                 else:
                     if incremental_ok:
-                        logger.warning("bulk_load_session: ^NKG drift detected — running full sync()")
+                        logger.warning(
+                            "bulk_load_session: ^NKG drift detected — running full sync()"
+                        )
                     try:
                         self.sync()
                     except Exception as e:
@@ -123,7 +139,6 @@ class NodesEdgesMixin:
                 stats["sync_seconds"] = round(_time.perf_counter() - ts, 2)
 
         return _session()
-
 
     def _bulk_load_drifted(self) -> bool:
         try:
@@ -138,21 +153,19 @@ class NodesEdgesMixin:
         except Exception:
             return True
 
-
     def backfill_2hop_exact(self) -> int:
         try:
-            return int(self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats"))
+            return int(
+                self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopExactStats")
+            )
         except Exception as e:
             logger.warning("backfill_2hop_exact failed: %s", str(e)[:120])
             return 0
 
-
     def _assert_node_exists(self, node_id: str) -> None:
         cursor = self.conn.cursor()
         try:
-            cursor.execute(
-                f"SELECT COUNT(*) FROM {self._t('nodes')} WHERE node_id = ?", [node_id]
-            )
+            cursor.execute(f"SELECT COUNT(*) FROM {self._t('nodes')} WHERE node_id = ?", [node_id])
             result = cursor.fetchone()
             if not result or result[0] == 0:
                 raise ValueError(f"Node does not exist: {node_id}")
@@ -161,9 +174,8 @@ class NodesEdgesMixin:
         except Exception:
             pass
         finally:
-            if hasattr(cursor, 'close'):
+            if hasattr(cursor, "close"):
                 cursor.close()
-
 
     def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -180,14 +192,16 @@ class NodesEdgesMixin:
         nodes = self.get_nodes([node_id])
         return nodes[0] if nodes else None
 
-
-    def _filter_edges_by_properties(
-        self, bfs_results: list, prop_filter: dict
-    ) -> list:
+    def _filter_edges_by_properties(self, bfs_results: list, prop_filter: dict) -> list:
         if not prop_filter:
             return bfs_results
         import json as _json
-        edges = [(r["s"], r["p"], r["o"]) for r in bfs_results if r.get("s") and r.get("p") and r.get("o")]
+
+        edges = [
+            (r["s"], r["p"], r["o"])
+            for r in bfs_results
+            if r.get("s") and r.get("p") and r.get("o")
+        ]
         if not edges:
             return bfs_results
 
@@ -199,8 +213,7 @@ class NodesEdgesMixin:
                 # Fall back to matching by (s, o) only when p is the sentinel.
                 if p == "R":
                     cursor.execute(
-                        f"SELECT qualifiers FROM {self._t('rdf_edges')} "
-                        "WHERE s=? AND o_id=?",
+                        f"SELECT qualifiers FROM {self._t('rdf_edges')} " "WHERE s=? AND o_id=?",
                         [s, o],
                     )
                 else:
@@ -224,15 +237,9 @@ class NodesEdgesMixin:
         passing = set(results)
 
         if not passing:
-            logger.debug(
-                "_filter_edges_by_properties: no edges match filter %s", prop_filter
-            )
+            logger.debug("_filter_edges_by_properties: no edges match filter %s", prop_filter)
 
-        return [
-            r for r in bfs_results
-            if (r.get("s"), r.get("p"), r.get("o")) in passing
-        ]
-
+        return [r for r in bfs_results if (r.get("s"), r.get("p"), r.get("o")) in passing]
 
     def get_nodes(self, node_ids: List[str]) -> List[Dict[str, Any]]:
         """
@@ -279,9 +286,7 @@ class NodesEdgesMixin:
                         if val is not None:
                             parsed_val = val
                             try:
-                                if (
-                                    str(val).startswith("{") and str(val).endswith("}")
-                                ) or (
+                                if (str(val).startswith("{") and str(val).endswith("}")) or (
                                     str(val).startswith("[") and str(val).endswith("]")
                                 ):
                                     parsed_val = json.loads(val)
@@ -292,9 +297,7 @@ class NodesEdgesMixin:
                             node_map[s][store_key] = val
 
             empty_nids = [
-                nid
-                for nid, data in node_map.items()
-                if not data["labels"] and len(data) <= 2
+                nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2
             ]
             if empty_nids:
                 existing_empty: set = set()
@@ -324,7 +327,6 @@ class NodesEdgesMixin:
                     results.append(node)
             return results
 
-
     def _get_node_cypher_fallback(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Original Cypher-based get_node implementation as safety fallback."""
         # Use parameters to prevent Cypher injection
@@ -349,25 +351,15 @@ class NodesEdgesMixin:
         labels_raw = row_map.get(labels_key)
         props_raw = row_map.get(props_key)
 
-        labels = (
-            json.loads(labels_raw)
-            if isinstance(labels_raw, str)
-            else (labels_raw or [])
-        )
-        props_items = (
-            json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or [])
-        )
+        labels = json.loads(labels_raw) if isinstance(labels_raw, str) else (labels_raw or [])
+        props_items = json.loads(props_raw) if isinstance(props_raw, str) else (props_raw or [])
 
         if props_items and isinstance(props_items[0], str):
             props_items = [json.loads(item) for item in props_items]
 
-        props = {
-            item["key"]: item["value"] for item in props_items if isinstance(item, dict)
-        }
+        props = {item["key"]: item["value"] for item in props_items if isinstance(item, dict)}
 
         return {"id": row_map[id_key], "labels": labels, "properties": props}
-
-
 
     def count_nodes(self, label: Optional[str] = None) -> int:
         """
@@ -383,9 +375,7 @@ class NodesEdgesMixin:
         try:
             if label:
                 # Use constant table names
-                cursor.execute(
-                    "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label]
-                )
+                cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE label = ?", [label])
             else:
                 cursor.execute("SELECT COUNT(*) FROM Graph_KG.nodes")
 
@@ -394,7 +384,6 @@ class NodesEdgesMixin:
         except Exception as e:
             logger.error(f"Count nodes failed: {e}")
             return 0
-
 
     def get_node_ids_by_label(self, label: str) -> List[str]:
         """
@@ -414,7 +403,6 @@ class NodesEdgesMixin:
         cursor = self.conn.cursor()
         cursor.execute(f"SELECT s FROM {self._t('rdf_labels')} WHERE label = ?", [label])
         return [row[0] for row in cursor.fetchall() if row and row[0]]
-
 
     def get_nodes_by_label(self, label: str) -> List[Dict[str, Any]]:
         """
@@ -548,10 +536,7 @@ class NodesEdgesMixin:
         `limit` non-positive means no cap.
         """
         top = f"TOP {int(limit)} " if limit and int(limit) > 0 else ""
-        sql = (
-            f'SELECT {top}s, val FROM {self._t("rdf_props")} '
-            f'WHERE "key" = ? AND val LIKE ?'
-        )
+        sql = f'SELECT {top}s, val FROM {self._t("rdf_props")} ' f'WHERE "key" = ? AND val LIKE ?'
         cursor = self.conn.cursor()
         try:
             cursor.execute(sql, [key, like])
@@ -618,15 +603,16 @@ class NodesEdgesMixin:
             row = cursor.fetchone()
             return int(row[0]) if row and row[0] else 0
         except Exception as e:
-            logger.error(
-                "count_subjects_with_property(%s=%s) failed: %s", key, val, e
-            )
+            logger.error("count_subjects_with_property(%s=%s) failed: %s", key, val, e)
             return 0
         finally:
             cursor.close()
 
     def create_node(
-        self, node_id: str, labels: List[str] = None, properties: Dict[str, Any] = None,
+        self,
+        node_id: str,
+        labels: List[str] = None,
+        properties: Dict[str, Any] = None,
         graph: Optional[str] = None,
     ) -> bool:
         """Create a node in the knowledge graph.
@@ -650,8 +636,10 @@ class NodesEdgesMixin:
         try:
             cursor.execute("START TRANSACTION")
 
+            graph_id = graph if graph is not None else ""
             cursor.execute(
-                f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id]
+                f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
+                [node_id, graph_id],
             )
 
             if labels:
@@ -664,8 +652,7 @@ class NodesEdgesMixin:
             props = dict(properties) if properties else {}
             if "id" not in props:
                 props["id"] = node_id
-            if graph:
-                props["__graph"] = graph
+            # spec 214 FR-019: __graph pseudo-property no longer written; graph_id is a real column
 
             prop_data = []
             for k, v in props.items():
@@ -682,16 +669,11 @@ class NodesEdgesMixin:
         except Exception as e:
             cursor.execute("ROLLBACK")
             err_lower = str(e).lower()
-            if (
-                "unique" in err_lower
-                or "-119" in str(e)
-                or "validation failed" in err_lower
-            ):
+            if "unique" in err_lower or "-119" in str(e) or "validation failed" in err_lower:
                 logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
             else:
                 logger.error(f"create_node failed: {e}")
             return False
-
 
     def create_edge(
         self,
@@ -731,7 +713,7 @@ class NodesEdgesMixin:
                 )
             else:
                 cursor.execute(
-                    f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                    f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, '')",
                     [source_id, predicate, target_id, qual_json],
                 )
             self.conn.commit()
@@ -739,9 +721,7 @@ class NodesEdgesMixin:
             self.conn.rollback()
             err_lower = str(e).lower()
             if "unique" in err_lower or "-119" in str(e):
-                logger.debug(
-                    f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}"
-                )
+                logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
             else:
                 logger.error(f"create_edge failed: {e}")
             return False
@@ -753,15 +733,13 @@ class NodesEdgesMixin:
                 predicate,
                 target_id,
                 str(float(weight)),
+                graph if graph else 0,
             )
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
         return True
 
-
-    def set_edge_weight(
-        self, source: str, predicate: str, target: str, weight: float
-    ) -> bool:
+    def set_edge_weight(self, source: str, predicate: str, target: str, weight: float) -> bool:
         """Set or update the weight of an existing edge.
 
         Used by weighted shortest-path / cost traversals.
@@ -791,15 +769,36 @@ class NodesEdgesMixin:
             logger.warning(f"set_edge_weight failed: {e}")
             return False
 
+    def delete_edge(
+        self,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        graph: str = None,
+        all_graphs: bool = False,
+    ) -> bool:
+        """Delete a structural edge.
 
-    def delete_edge(self, source_id: str, predicate: str, target_id: str) -> bool:
+        Spec 214 FR-006: graph= scopes deletion to one graph (default: '' for default graph).
+        Spec 214 FR-007: all_graphs=True restores pre-214 cross-graph deletion.
+        Breaking change: default (no graph, all_graphs=False) deletes only the
+        default-graph row (graph_id=''), not all rows matching (s, p, o_id).
+        Callers that relied on cross-graph deletion must pass all_graphs=True.
+        """
         _ledger_check(self, "delete_edge")
         cursor = self.conn.cursor()
         try:
-            cursor.execute(
-                f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
-                [source_id, predicate, target_id],
-            )
+            if all_graphs:
+                cursor.execute(
+                    f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
+                    [source_id, predicate, target_id],
+                )
+            else:
+                graph_id = graph if graph is not None else ""
+                cursor.execute(
+                    f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?",
+                    [source_id, predicate, target_id, graph_id],
+                )
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
@@ -807,12 +806,16 @@ class NodesEdgesMixin:
             return False
         try:
             self._iris_obj().classMethodVoid(
-                "Graph.KG.EdgeScan", "DeleteAdjacency", source_id, predicate, target_id
+                "Graph.KG.EdgeScan",
+                "DeleteAdjacency",
+                source_id,
+                predicate,
+                target_id,
+                graph_id if graph_id else 0,
             )
         except Exception as e:
             logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
         return True
-
 
     def list_graphs(self) -> List[str]:
         cursor = self.conn.cursor()
@@ -821,23 +824,62 @@ class NodesEdgesMixin:
         )
         return [row[0] for row in cursor.fetchall()]
 
-
     def drop_graph(self, graph_id: str) -> int:
+        """Drop all nodes, edges, labels and props scoped to graph_id (spec 214 FR-008).
+
+        Deletes in FK-safe order: labels → props → embeddings → edges → nodes.
+        Returns combined row count of nodes + edges deleted.
+        """
         _ledger_check(self, "drop_graph")
         cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE graph_id = ?", [graph_id])
-        deleted = cursor.rowcount if cursor.rowcount is not None else 0
+        deleted = 0
         try:
+            cursor.execute("START TRANSACTION")
+            # Labels belonging to named-graph nodes
+            cursor.execute(
+                f"DELETE FROM {self._t('rdf_labels')} "
+                f"WHERE s IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
+                [graph_id],
+            )
+            # Props belonging to named-graph nodes
+            cursor.execute(
+                f'DELETE FROM {self._t("rdf_props")} '
+                f"WHERE s IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
+                [graph_id],
+            )
+            # Embeddings
+            cursor.execute(
+                f"DELETE FROM {self._t('kg_NodeEmbeddings')} "
+                f"WHERE id IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
+                [graph_id],
+            )
+            try:
+                cursor.execute(
+                    f"DELETE FROM {self._t('kg_NodeEmbeddings_optimized')} "
+                    f"WHERE id IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
+                    [graph_id],
+                )
+            except Exception:
+                pass
+            # Edges
+            cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE graph_id = ?", [graph_id])
+            edges_deleted = cursor.rowcount if cursor.rowcount is not None else 0
+            # Nodes
+            cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE graph_id = ?", [graph_id])
+            nodes_deleted = cursor.rowcount if cursor.rowcount is not None else 0
+            deleted = nodes_deleted + edges_deleted
             self.conn.commit()
-        except Exception:
-            pass
-        # BYPASS: this deletes SQL rows without touching ^KG/^NKG. Flag the
-        # adjacency index as stale so var-length Cypher guards and verify_sync()
-        # surface the drift; caller should sync() to repair.
+        except Exception as e:
+            logger.error("drop_graph failed: %s", e)
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            return 0
+        # BYPASS: SQL rows deleted without touching ^KG/^NKG; flag stale.
         if deleted:
             self._nkg_dirty = True
         return deleted
-
 
     def bulk_create_nodes(
         self,
@@ -874,7 +916,9 @@ class NodesEdgesMixin:
         if self.capabilities.objectscript_deployed:
             try:
                 import json as _json
+
                 from iris_vector_graph.schema import _call_classmethod_large
+
                 iris_obj = self._iris_obj()
                 normalized = [
                     {
@@ -882,15 +926,20 @@ class NodesEdgesMixin:
                         "labels": n.get("labels", []),
                         "props": n.get("properties", {}),
                     }
-                    for n in nodes if n.get("id")
+                    for n in nodes
+                    if n.get("id")
                 ]
                 created = []
                 for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
-                    chunk = normalized[i:i + _BULK_CHUNK_SIZE]
-                    count = int(_call_classmethod_large(
-                        iris_obj, "Graph.KG.EdgeScan", "BulkIngestNodesSQL",
-                        _json.dumps(chunk),
-                    ))
+                    chunk = normalized[i : i + _BULK_CHUNK_SIZE]
+                    count = int(
+                        _call_classmethod_large(
+                            iris_obj,
+                            "Graph.KG.EdgeScan",
+                            "BulkIngestNodesSQL",
+                            _json.dumps(chunk),
+                        )
+                    )
                     created.extend(c["id"] for c in chunk[:count])
                 return created
             except Exception as e:
@@ -965,7 +1014,6 @@ class NodesEdgesMixin:
                 GraphSchema.rebuild_indexes(cursor)
                 self.conn.commit()
 
-
     def bulk_create_edges(
         self,
         edges: List[Dict[str, Any]],
@@ -977,6 +1025,7 @@ class NodesEdgesMixin:
         _ledger_check(self, "bulk_create_edges")
         if auto_rebuild_kg is not None:
             import warnings
+
             warnings.warn(
                 "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
                 DeprecationWarning,
@@ -984,7 +1033,11 @@ class NodesEdgesMixin:
             )
             auto_sync = auto_rebuild_kg
 
-        if len(edges) > 250_000 and disable_indexes and not getattr(self, "_large_load_hinted", False):
+        if (
+            len(edges) > 250_000
+            and disable_indexes
+            and not getattr(self, "_large_load_hinted", False)
+        ):
             self._large_load_hinted = True
             logger.info(
                 "bulk_create_edges called with %d edges and per-call index rebuild "
@@ -1046,7 +1099,6 @@ class NodesEdgesMixin:
                 else:
                     self.sync()
 
-
     def bulk_ingest_edges(
         self,
         edges: List[Dict[str, Any]],
@@ -1057,6 +1109,7 @@ class NodesEdgesMixin:
         if not edges:
             return 0
         import json as _json
+
         normalized = []
         for e in edges:
             if isinstance(e, (list, tuple)):
@@ -1072,14 +1125,20 @@ class NodesEdgesMixin:
         if self.capabilities.objectscript_deployed:
             try:
                 from iris_vector_graph.schema import _call_classmethod_large
+
                 iris_obj = self._iris_obj()
                 n = 0
                 for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
-                    chunk = normalized[i:i + _BULK_CHUNK_SIZE]
-                    n += int(_call_classmethod_large(
-                        iris_obj, "Graph.KG.EdgeScan", "BulkIngestEdgesSQL",
-                        _json.dumps(chunk), predicate,
-                    ))
+                    chunk = normalized[i : i + _BULK_CHUNK_SIZE]
+                    n += int(
+                        _call_classmethod_large(
+                            iris_obj,
+                            "Graph.KG.EdgeScan",
+                            "BulkIngestEdgesSQL",
+                            _json.dumps(chunk),
+                            predicate,
+                        )
+                    )
                 self._nkg_dirty = True
                 if auto_sync:
                     self.sync()
@@ -1101,7 +1160,9 @@ class NodesEdgesMixin:
                 if err_lower(ex):
                     continue  # duplicate edge — skip silently
             try:
-                self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0")
+                self._iris_obj().classMethodVoid(
+                    "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0"
+                )
             except Exception:
                 pass
             n += 1
@@ -1111,16 +1172,11 @@ class NodesEdgesMixin:
             self.sync()
         return n
 
-
-
-
     def delete_node(self, node_id: str) -> bool:
         _ledger_check(self, "delete_node")
         cursor = self.conn.cursor()
         try:
-            cursor.execute(
-                f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
-            )
+            cursor.execute(f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
             cursor.execute(
                 f"SELECT edge_id FROM {self._t('rdf_edges')} WHERE s = ? OR o_id = ?",
                 [node_id, node_id],
@@ -1136,24 +1192,16 @@ class NodesEdgesMixin:
                         f"DELETE FROM {self._t('rdf_reifications')} WHERE reifier_id = ?",
                         [reif_id],
                     )
-                    cursor.execute(
-                        f"DELETE FROM {self._t('rdf_props')} WHERE s = ?", [reif_id]
-                    )
-                    cursor.execute(
-                        f"DELETE FROM {self._t('rdf_labels')} WHERE s = ?", [reif_id]
-                    )
-                    cursor.execute(
-                        f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [reif_id]
-                    )
+                    cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s = ?", [reif_id])
+                    cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s = ?", [reif_id])
+                    cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [reif_id])
             cursor.execute(
                 f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? OR o_id = ?",
                 [node_id, node_id],
             )
             cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s = ?", [node_id])
             cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s = ?", [node_id])
-            cursor.execute(
-                f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [node_id]
-            )
+            cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [node_id])
             self.conn.commit()
             # BYPASS: edge rows removed from SQL but ^KG/^NKG still hold them.
             # Flag stale so var-length guards / verify_sync() catch the drift.
@@ -1164,7 +1212,6 @@ class NodesEdgesMixin:
             return False
         finally:
             cursor.close()
-
 
     def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = None) -> "DeleteResult":
         _ledger_check(self, "bulk_delete_nodes")
@@ -1191,17 +1238,11 @@ class NodesEdgesMixin:
                 cursor.execute(
                     f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE id IN ({phs})", batch
                 )
-                cursor.execute(
-                    f"DELETE FROM {self._t('rdf_edges')} WHERE s IN ({phs})", batch
-                )
-                cursor.execute(
-                    f"DELETE FROM {self._t('rdf_edges')} WHERE o_id IN ({phs})", batch
-                )
+                cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE s IN ({phs})", batch)
+                cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE o_id IN ({phs})", batch)
                 cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s IN ({phs})", batch)
                 cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s IN ({phs})", batch)
-                cursor.execute(
-                    f"DELETE FROM {self._t('nodes')} WHERE node_id IN ({phs})", batch
-                )
+                cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE node_id IN ({phs})", batch)
                 self.conn.commit()
                 deleted += len(batch)
             except Exception as e:
@@ -1226,38 +1267,35 @@ class NodesEdgesMixin:
             return {}
         return {k: v for k, v in node.items() if k not in ("id", "labels")}
 
-
     def get_node_name(self, node_id: str) -> Optional[str]:
         props = self.get_node_properties(node_id)
         return props.get("name") or props.get("label") or props.get("title")
-
 
     def get_nodes_by_ids(self, node_ids: List[str]) -> List[Dict[str, Any]]:
         if not node_ids:
             return []
         return self.get_nodes(node_ids)
 
-
     def node_count(self) -> int:
         result = self.execute_cypher("MATCH (n) RETURN count(n) AS c")
         rows = result.rows
         return int(rows[0][0]) if rows else 0
-
 
     def edge_count(self) -> int:
         result = self.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
         rows = result.rows
         return int(rows[0][0]) if rows else 0
 
-
-    def store_node(self, node_id: str, properties: Optional[Dict[str, Any]] = None,
-                   labels: Optional[List[str]] = None) -> bool:
+    def store_node(
+        self,
+        node_id: str,
+        properties: Optional[Dict[str, Any]] = None,
+        labels: Optional[List[str]] = None,
+    ) -> bool:
         _ledger_check(self, "store_node")
         cursor = self.conn.cursor()
         try:
-            cursor.execute(
-                f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id]
-            )
+            cursor.execute(f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id])
             self.conn.commit()
         except Exception as e:
             err_lower = str(e).lower()
@@ -1272,11 +1310,11 @@ class NodesEdgesMixin:
                 try:
                     cursor2.execute(
                         f"DELETE FROM {self._t('rdf_props')} WHERE s = ? AND \"key\" = ?",
-                        [node_id, k]
+                        [node_id, k],
                     )
                     cursor2.execute(
                         f"INSERT INTO {self._t('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)",
-                        [node_id, k, val_str]
+                        [node_id, k, val_str],
                     )
                     self.conn.commit()
                 except Exception:
@@ -1289,20 +1327,28 @@ class NodesEdgesMixin:
                 try:
                     cursor3.execute(
                         f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
-                        [node_id, lbl]
+                        [node_id, lbl],
                     )
                     self.conn.commit()
                 except Exception as e:
                     err_lower = str(e).lower()
-                    if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
+                    if (
+                        "-119" not in str(e)
+                        and "duplicate" not in err_lower
+                        and "unique" not in err_lower
+                    ):
                         raise
                 finally:
                     cursor3.close()
         return True
 
-
-    def store_edge(self, source_id: str, predicate: str, target_id: str,
-                   qualifiers: Optional[Dict[str, Any]] = None) -> bool:
+    def store_edge(
+        self,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        qualifiers: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         _ledger_check(self, "store_edge")
         self.store_node(source_id)
         self.store_node(target_id)
@@ -1322,7 +1368,6 @@ class NodesEdgesMixin:
             cursor.close()
         return True
 
-
     def nodes_exist(self, node_ids: List[str]) -> set:
         if not node_ids:
             return set()
@@ -1330,7 +1375,7 @@ class NodesEdgesMixin:
         cursor = self.conn.cursor()
         try:
             for i in range(0, len(node_ids), 200):
-                batch = node_ids[i:i + 200]
+                batch = node_ids[i : i + 200]
                 phs = ",".join(["?"] * len(batch))
                 try:
                     cursor.execute(

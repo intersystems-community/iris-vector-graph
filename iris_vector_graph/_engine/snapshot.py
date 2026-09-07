@@ -1,15 +1,15 @@
 import json
 import logging
-from typing import Optional, Dict, Any, List
-from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
+from typing import Any, Dict, List, Optional
 
+from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
 
 
 class SnapshotMixin:
     """Graph snapshot/serialization mixin for IRISGraphEngine.
-    
+
     Provides graph I/O operations: import from networkx/RDF/OBO ontologies,
     export/import snapshots as portable ZIP archives, and NDJSON graph serialization.
     """
@@ -26,6 +26,7 @@ class SnapshotMixin:
         _ledger_check(self, "load_networkx")
         if auto_rebuild_kg is not None:
             import warnings
+
             warnings.warn(
                 "auto_rebuild_kg= is deprecated. Use auto_sync= instead.",
                 DeprecationWarning,
@@ -68,12 +69,8 @@ class SnapshotMixin:
         if progress_callback:
             progress_callback(added_nodes + skipped_nodes, 0)
         for src, dst, data in G.edges(data=True):
-            predicate = data.get(
-                "predicate", data.get("label", data.get("key", "is_a"))
-            )
-            qualifiers = {
-                k: v for k, v in data.items() if k not in ("predicate", "label", "key")
-            }
+            predicate = data.get("predicate", data.get("label", data.get("key", "is_a")))
+            qualifiers = {k: v for k, v in data.items() if k not in ("predicate", "label", "key")}
             if self.create_edge(
                 source_id=str(src),
                 predicate=str(predicate),
@@ -103,7 +100,6 @@ class SnapshotMixin:
             self.sync()
         return stats
 
-
     def import_rdf(
         self,
         path: str,
@@ -117,11 +113,13 @@ class SnapshotMixin:
         try:
             import rdflib
             from rdflib import (
-                Graph,
-                ConjunctiveGraph,
-                URIRef,
-                Literal as RDFLiteral,
                 BNode,
+                ConjunctiveGraph,
+                Graph,
+            )
+            from rdflib import Literal as RDFLiteral
+            from rdflib import (
+                URIRef,
             )
         except ImportError:
             raise ImportError("import_rdf requires rdflib: pip install rdflib")
@@ -265,16 +263,15 @@ class SnapshotMixin:
 
         return result
 
-
     def save_snapshot(
         self,
         path: str,
         layers: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        import zipfile as _zipfile
         import json as _json
         import time as _time
         import uuid as _uuid
+        import zipfile as _zipfile
 
         if layers is None:
             layers = ["sql", "globals"]
@@ -284,9 +281,7 @@ class SnapshotMixin:
         import sys as _sys
 
         try:
-            iris_ver = str(
-                _call_classmethod(self.conn, "%SYSTEM.Version", "GetVersion")
-            )
+            iris_ver = str(_call_classmethod(self.conn, "%SYSTEM.Version", "GetVersion"))
         except Exception:
             iris_ver = "unknown"
         metadata: Dict[str, Any] = {
@@ -323,14 +318,8 @@ class SnapshotMixin:
                     all_desc = cursor.description
                     rows = cursor.fetchall()
                     _ROWID_NAMES = {"edge_id", "reification_id", "label_id", "prop_id"}
-                    skip = {
-                        i
-                        for i, d in enumerate(all_desc)
-                        if d[0].lower() in _ROWID_NAMES
-                    }
-                    cols = [
-                        d[0].lower() for i, d in enumerate(all_desc) if i not in skip
-                    ]
+                    skip = {i for i, d in enumerate(all_desc) if d[0].lower() in _ROWID_NAMES}
+                    cols = [d[0].lower() for i, d in enumerate(all_desc) if i not in skip]
                     lines = []
                     for row in rows:
                         lines.append(
@@ -339,20 +328,20 @@ class SnapshotMixin:
                                     k: (
                                         None
                                         if v is None
-                                        else v.isoformat()
-                                        if hasattr(v, "isoformat")
-                                        else float(v)
-                                        if hasattr(v, "__float__")
-                                        and not isinstance(v, (int, str, bool))
-                                        else v
+                                        else (
+                                            v.isoformat()
+                                            if hasattr(v, "isoformat")
+                                            else (
+                                                float(v)
+                                                if hasattr(v, "__float__")
+                                                and not isinstance(v, (int, str, bool))
+                                                else v
+                                            )
+                                        )
                                     )
                                     for k, v in zip(
                                         cols,
-                                        [
-                                            val
-                                            for i, val in enumerate(row)
-                                            if i not in skip
-                                        ],
+                                        [val for i, val in enumerate(row) if i not in skip],
                                     )
                                 }
                             )
@@ -371,9 +360,7 @@ class SnapshotMixin:
                 for row in rows:
                     nid, emb_val, meta_val = row[0], row[1], row[2]
                     emb_str = str(emb_val) if emb_val is not None else None
-                    lines.append(
-                        _json.dumps({"id": nid, "emb": emb_str, "metadata": meta_val})
-                    )
+                    lines.append(_json.dumps({"id": nid, "emb": emb_str, "metadata": meta_val}))
                 sql_data[VECTOR_TABLE] = "\n".join(lines)
                 metadata["tables"][VECTOR_TABLE] = len(rows)
                 metadata["has_vector_sql"] = True
@@ -399,7 +386,7 @@ class SnapshotMixin:
 
         if "globals" in layers:
             GLOBALS_EXPORT = [
-                ("KG", [["out", 0], ["in", 0]]),
+                ("KG", [["out"], ["in"]]),
                 ("BM25Idx", [[]]),
                 ("IVF", [[]]),
                 ("PLAID", [[]]),
@@ -420,9 +407,7 @@ class SnapshotMixin:
                     for prefix_subs in subscript_prefixes:
                         try:
                             lines.extend(
-                                self._export_global_to_ndjson(
-                                    iris_obj, f"^{gname}", prefix_subs
-                                )
+                                self._export_global_to_ndjson(iris_obj, f"^{gname}", prefix_subs)
                             )
                         except Exception as eg:
                             logger.debug(
@@ -440,9 +425,7 @@ class SnapshotMixin:
                             "size": len(content),
                         }
             except Exception as e:
-                logger.warning(
-                    "Snapshot: global export failed (globals layer skipped): %s", e
-                )
+                logger.warning("Snapshot: global export failed (globals layer skipped): %s", e)
         with _zipfile.ZipFile(path, "w", _zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("metadata.json", _json.dumps(metadata, indent=2))
             for table, content in sql_data.items():
@@ -459,10 +442,9 @@ class SnapshotMixin:
         }
 
     @staticmethod
-
     def snapshot_info(path: str) -> Dict[str, Any]:
-        import zipfile as _zipfile
         import json as _json
+        import zipfile as _zipfile
 
         with _zipfile.ZipFile(path, "r") as zf:
             with zf.open("metadata.json") as f:
@@ -476,16 +458,15 @@ class SnapshotMixin:
             "globals": metadata.get("globals", {}),
         }
 
-
     def restore_snapshot(
         self,
         path: str,
         merge: bool = False,
     ) -> Dict[str, Any]:
         _ledger_check(self, "restore_snapshot")
-        import zipfile as _zipfile
         import json as _json
         import uuid as _uuid
+        import zipfile as _zipfile
 
         run_id = _uuid.uuid4().hex[:8]
 
@@ -493,9 +474,7 @@ class SnapshotMixin:
             names = zf.namelist()
             metadata = _json.loads(zf.read("metadata.json"))
 
-            sql_files = {
-                n: zf.read(n).decode("utf-8") for n in names if n.startswith("sql/")
-            }
+            sql_files = {n: zf.read(n).decode("utf-8") for n in names if n.startswith("sql/")}
             global_files = {n: zf.read(n) for n in names if n.startswith("globals/")}
 
         restored_tables: Dict[str, int] = {}
@@ -522,9 +501,7 @@ class SnapshotMixin:
             ]
             globals_in_snapshot = metadata.get("globals", {})
             for gname, ginfo in globals_in_snapshot.items():
-                subscripts = (
-                    ginfo.get("subscripts", []) if isinstance(ginfo, dict) else []
-                )
+                subscripts = ginfo.get("subscripts", []) if isinstance(ginfo, dict) else []
                 try:
                     iris_obj = self._iris_obj()
                     if subscripts:
@@ -556,8 +533,7 @@ class SnapshotMixin:
                     f"INSERT INTO {table} ({col_list}) SELECT {placeholders} "
                     f"WHERE NOT EXISTS (SELECT 1 FROM {table} WHERE "
                     + " AND ".join(
-                        f"{c} = ?" if row[c] is not None else f"{c} IS NULL"
-                        for c in cols[:1]
+                        f"{c} = ?" if row[c] is not None else f"{c} IS NULL" for c in cols[:1]
                     )
                     + ")",
                     vals + [vals[0]],
@@ -570,9 +546,7 @@ class SnapshotMixin:
             fname = f"sql/{fname_short}"
             if fname not in sql_files:
                 continue
-            table_name = fname_short.replace("Graph_KG_", "Graph_KG.").replace(
-                ".ndjson", ""
-            )
+            table_name = fname_short.replace("Graph_KG_", "Graph_KG.").replace(".ndjson", "")
             count = 0
             for line in sql_files[fname].splitlines():
                 line = line.strip()
@@ -695,9 +669,7 @@ class SnapshotMixin:
                         .replace(".gof", "")
                     )
                     ndjson = content.decode("utf-8", errors="replace")
-                    count = self._import_global_from_ndjson(
-                        iris_obj, f"^{gname}", ndjson
-                    )
+                    count = self._import_global_from_ndjson(iris_obj, f"^{gname}", ndjson)
                     if count > 0:
                         restored_globals.append(gname)
             except Exception as e:
@@ -709,11 +681,7 @@ class SnapshotMixin:
         if restored_globals:
             restored_layers.append("globals")
 
-        if (
-            not restored_tables
-            and not restored_globals
-            and "globals" in restored_layers
-        ):
+        if not restored_tables and not restored_globals and "globals" in restored_layers:
             logger.warning(
                 "Globals-only restore: SQL tables are empty — rdf_edges queries will return no results"
             )
@@ -725,10 +693,7 @@ class SnapshotMixin:
             "snapshot_ts": metadata.get("created_ts", 0),
         }
 
-
-    def _export_global_to_ndjson(
-        self, iris_obj, global_name: str, prefix_subs: list
-    ) -> list:
+    def _export_global_to_ndjson(self, iris_obj, global_name: str, prefix_subs: list) -> list:
         import json as _json
 
         lines = []
@@ -755,10 +720,7 @@ class SnapshotMixin:
         _recurse(seed)
         return lines
 
-
-    def _import_global_from_ndjson(
-        self, iris_obj, global_name: str, ndjson: str
-    ) -> int:
+    def _import_global_from_ndjson(self, iris_obj, global_name: str, ndjson: str) -> int:
         import json as _json
 
         count = 0
@@ -775,7 +737,6 @@ class SnapshotMixin:
             except Exception as e:
                 logger.debug("global import line failed: %s", e)
         return count
-
 
     def load_obo(
         self,
@@ -802,13 +763,14 @@ class SnapshotMixin:
 
             mapping = {n: f"{prefix}:{n}" for n in G.nodes()}
             G = nx.relabel_nodes(G, mapping)
-        return self.load_networkx(
-            G, label_attr="namespace", progress_callback=progress_callback
-        )
-
+        return self.load_networkx(G, label_attr="namespace", progress_callback=progress_callback)
 
     def import_graph_ndjson(
-        self, path: str, upsert_nodes: bool = True, batch_size: int = 10000
+        self,
+        path: str,
+        upsert_nodes: bool = True,
+        batch_size: int = 10000,
+        graph: str = None,
     ) -> dict:
         _ledger_check(self, "import_graph_ndjson")
         nodes = 0
@@ -832,21 +794,30 @@ class SnapshotMixin:
                 etype = event.get("type", "")
                 if not kind and etype == "node":
                     kind = "node"
-                    event = {"kind": "node", "id": event.get("id", ""),
-                             "labels": event.get("labels", []),
-                             "properties": event.get("props", event.get("properties", {}))}
+                    event = {
+                        "kind": "node",
+                        "id": event.get("id", ""),
+                        "labels": event.get("labels", []),
+                        "properties": event.get("props", event.get("properties", {})),
+                    }
                 elif not kind and etype == "rel":
                     kind = "edge"
-                    event = {"kind": "edge", "source": event.get("s", ""), "predicate": event.get("p", ""),
-                             "target": event.get("o", ""), "graph": event.get("graph"),
-                             "qualifiers": event.get("quals") or None}
+                    event = {
+                        "kind": "edge",
+                        "source": event.get("s", ""),
+                        "predicate": event.get("p", ""),
+                        "target": event.get("o", ""),
+                        "graph": event.get("graph"),
+                        "qualifiers": event.get("quals") or None,
+                    }
 
                 if kind == "node":
                     node_id = event.get("id", "")
                     labels = event.get("labels", [])
                     props = event.get("properties", {})
                     if node_id:
-                        self.create_node(node_id, labels=labels, properties=props)
+                        # spec 214 FR-015: pass graph to scope import into a named graph
+                        self.create_node(node_id, labels=labels, properties=props, graph=graph)
                         nodes += 1
 
                 elif kind == "edge":
@@ -854,10 +825,14 @@ class SnapshotMixin:
                     pred = event.get("predicate", "")
                     tgt = event.get("target", "")
                     if src and pred and tgt:
-                        graph = event.get("graph")
+                        event_graph = event.get("graph")
                         quals = event.get("qualifiers")
-                        if graph is not None or quals:
-                            self.create_edge(src, pred, tgt, qualifiers=quals or None, graph=graph)
+                        # spec 214 FR-015: if graph= param supplied, it overrides per-line graph
+                        effective_graph = graph if graph is not None else event_graph
+                        if effective_graph is not None or quals:
+                            self.create_edge(
+                                src, pred, tgt, qualifiers=quals or None, graph=effective_graph
+                            )
                         else:
                             self.create_edge(src, pred, tgt)
                         edges += 1
@@ -893,7 +868,6 @@ class SnapshotMixin:
 
         return {"nodes": nodes, "edges": edges, "temporal_edges": temporal_edges}
 
-
     def export_graph_ndjson(self, path: str) -> dict:
         nodes_written = 0
         edges_written = 0
@@ -909,9 +883,7 @@ class SnapshotMixin:
                         "id": node_id,
                         "labels": node_data.get("labels", []),
                         "properties": {
-                            k: v
-                            for k, v in node_data.items()
-                            if k not in ("id", "labels")
+                            k: v for k, v in node_data.items() if k not in ("id", "labels")
                         },
                     }
                     f.write(json.dumps(event) + "\n")
@@ -919,5 +891,3 @@ class SnapshotMixin:
 
         cursor.close()
         return {"nodes": nodes_written, "edges": edges_written}
-
-

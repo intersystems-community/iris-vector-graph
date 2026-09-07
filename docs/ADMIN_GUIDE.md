@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD036 -->
+
 # IVG Admin Guide
 
 **Audience**: Ops engineers and DBAs deploying, configuring, and monitoring iris-vector-graph.
@@ -277,7 +279,7 @@ Cause: Native accelerator not loaded.
 Fix: Deploy `libarno_callout.so` and call `NKGAccel.Load(...)` before running algorithms.  
 Verify: `engine.status().adjacency.bfs_path == "arno"`.
 
-**3. Embedding insert fails with dimension mismatch**
+**3. Embedding insert fails with dimension mismatch** (troubleshooting)
 
 Cause: `kg_NodeEmbeddings` HNSW index was created with a different vector dimension than what you're inserting.  
 Fix: Drop and recreate the table. `engine.initialize_schema()` alone won't change the dimension — you must explicitly drop `Graph_KG.kg_NodeEmbeddings` first.

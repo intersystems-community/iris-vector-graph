@@ -452,7 +452,7 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
         Set ^KG("out", 0, tS, tP, tO) = ..WeightOf(tQuals)
         Set ^KG("in", 0, tO, tP, tS) = ..WeightOf(tQuals)
     } Else {
-        Do ##class(Graph.KG.EdgeScan).WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals))
+        Do ##class(Graph.KG.EdgeScan).WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals), ""
     }
     Do ..Rec(.pRecords, "create_rel", "rel", tStmt, "", ..EncNull(), ..Enc(..TupleJson(tS, tP, tO, tG)), tG)
     Kill tKeys
@@ -587,7 +587,7 @@ ClassMethod DeleteRelInternal(pSchema As %String, pSeq As %Integer, pStmt As %St
     Set tRow = $Get(^IVG.Ledger("stmt", pStmt), "")
     If tRow '= "" Set ^IVG.Ledger("stmt", pStmt) = $ListBuild($ListGet(tRow, 1), $ListGet(tRow, 2), $ListGet(tRow, 3), $ListGet(tRow, 4), $ListGet(tRow, 5), pSeq)
     // Adjacency: the functional index (when compiled) already removed the entries.
-    If $Data(^KG("out", 0, pS, pP, pO)) Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO)
+    If $Data(^KG("out", 0, pS, pP, pO)) Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO, 0)
     Do ..Rec(.pRecords, "delete_rel", "rel", pStmt, "", ..Enc(tPriorObj.%ToJSON()), ..EncNull(), pG, pFlags)
     Set pCtx("deletedStmt", pStmt) = 1
     Return ""
