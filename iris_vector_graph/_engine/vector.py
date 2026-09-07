@@ -734,10 +734,11 @@ class VectorMixin:
                 if idx_type == "hnsw":
                     vec_results = self.kg_KNN_VEC(query_vector, k=k1)
                     break
-            for idx_name in self._index_registry:
-                if self._index_registry[idx_name] == "bm25":
-                    txt_results = self.bm25_search(idx_name, query_text, k=k2)
-                    break
+            if query_text:  # skip BM25 leg when no text query provided
+                for idx_name in self._index_registry:
+                    if self._index_registry[idx_name] == "bm25":
+                        txt_results = self.bm25_search(idx_name, query_text, k=k2)
+                        break
         except Exception as e:
             logger.error(f"kg_RRF_FUSE index search failed: {e}")
 

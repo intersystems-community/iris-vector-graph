@@ -22,6 +22,16 @@
 
 ---
 
+### v2.18.4 (2026-09-07)
+
+**Fix: `kg_RRF_FUSE` skips BM25 leg when `query_text` is empty**
+
+`kg_RRF_FUSE(..., query_text="")` now skips the BM25 search leg instead of calling
+`bm25_search("", ...)` and raising a pydantic validation error. The HNSW-only registry
+path (no text query) was silently returning `[]` because the exception was swallowed.
+
+---
+
 ### v2.18.3 (2026-09-07)
 
 **Spec hygiene: updated specs 044 and 040; added missing E2E tests**
