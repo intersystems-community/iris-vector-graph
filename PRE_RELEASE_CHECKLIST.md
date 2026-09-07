@@ -130,18 +130,42 @@ ruff check .
 
 ---
 
-## 9. PyPI Publish (explicit permission required)
+## 8b. Documentation Parity — **GATE** (blocks §9)
+
+Every spec delivered since the last release MUST have corresponding user-facing documentation
+before publishing. A PyPI release without docs leaves consumers on their own.
+
+- [ ] `README.md` version string matches `pyproject.toml`
+- [ ] Every new public API introduced since the last tag has a usage example in `README.md`
+      or `docs/USER_GUIDE.md`
+- [ ] `docs/demos/` has at least one runnable demo for any new major feature
+- [ ] `grep -r "v[0-9]\+\.[0-9]\+" README.md` — no hardcoded version older than current
+
+```bash
+# Quick check — should print current version only
+grep -E "v[0-9]+\.[0-9]+\.[0-9]+" README.md | grep -v "$(grep '^version' pyproject.toml | grep -o '[0-9.]*')"
+```
+
+---
+
+## 9. PyPI Publish + GitHub Release (explicit permission required)
 
 **Do not run without explicit "publish it" / "push to PyPI" instruction.**
 
 ```bash
 python -m build
 twine upload dist/*
+git push && git push --tags
+gh release create v<version> \
+  --title "v<version>" \
+  --notes "$(awk '/^### v<version>/,/^---$/{print}' CHANGELOG.md | head -n -1)"
 ```
 
 - [ ] Explicit publish instruction received from Tom
 - [ ] `dist/` contains only the intended release artifacts
 - [ ] Test install from PyPI in a clean venv: `pip install iris-vector-graph==<version>`
+- [ ] `git push && git push --tags` pushed to origin
+- [ ] GitHub release created with CHANGELOG section as notes
 
 ---
 
