@@ -2,6 +2,26 @@
 
 # Changelog
 
+### v2.18.4 (2026-09-07)
+
+**Spec hygiene: tasks.md sync, integration test fixes, embedding dimension**
+
+- **Spec 039** (temporal Cypher): all 52 tasks marked `[X]`; spec status updated to
+  Complete — 21 unit + 9 E2E tests pass at v2.18.4.
+- **Spec 040** (SQL table bridge): 52 tasks marked `[X]`; T034 (mixed mapped+native
+  multi-hop) and T036-T044 (attach_embeddings E2E) remain `[ ]` — T034 requires
+  translator work, T036-T044 require an embedding model.
+- **Spec 041** (embed-nodes): `tasks.md` created; unit and integration tests documented;
+  vector recall E2E deferred pending real embedding model.
+- **Integration conftest**: `engine` fixture now uses `embedding_dimension=768` matching
+  the container default — fixes `test_store_embedding_and_knn` IRIS vector dimension
+  mismatch (SQLCODE field-validation failure).
+- **Temporal index integration tests**: `PurgeResult.deleted` attribute used consistently
+  throughout `test_temporal_index_gaps_e2e.py` — fixes two assertions that compared
+  `PurgeResult` object directly to `int`.
+
+---
+
 ### v2.18.3 (2026-09-07)
 
 **Spec hygiene: updated specs 044 and 040; added missing E2E tests**

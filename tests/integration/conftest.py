@@ -33,7 +33,7 @@ def _cleanup_prefix(engine, prefix: str) -> None:
 @pytest.fixture
 def engine(iris_connection):
     """Create and initialize an IRISGraphEngine for testing."""
-    engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
+    engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
     engine.initialize_schema(auto_deploy_objectscript=True)
     yield engine
     # Restore dimension to 128 (session default) so subsequent fixtures aren't confused.
