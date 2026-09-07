@@ -25,7 +25,7 @@ class FhirMixin:
         try:
             cur = self.conn.cursor()
             cur.execute(
-                "SELECT label, sqlid_column, prop_columns FROM Graph_KG.table_mappings"
+                "SELECT label, sql_table, id_column, prop_columns FROM Graph_KG.table_mappings"
             )
             for row in cur.fetchall():
                 self._table_mapping_cache[row[0]] = {
@@ -51,7 +51,7 @@ class FhirMixin:
             cur = self.conn.cursor()
             cur.execute(
                 "SELECT source_label, predicate, target_label, target_fk, "
-                "viavia_source, via_target FROM Graph_KG.relationship_mappings"
+                "via_table, via_source, via_target FROM Graph_KG.relationship_mappings"
             )
             for row in cur.fetchall():
                 key = (row[0], row[1], row[2])
@@ -116,7 +116,7 @@ class FhirMixin:
         )
         if cur.rowcount == 0:
             cur.execute(
-                "INSERT INTO Graph_KG.table_mappings (label, sqlid_column, prop_columns) VALUES (?,?,?,?)",
+                "INSERT INTO Graph_KG.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
                 [label, table, id_column, prop_json],
             )
         self.conn.commit()
@@ -165,7 +165,7 @@ class FhirMixin:
         if cur.rowcount == 0:
             cur.execute(
                 "INSERT INTO Graph_KG.relationship_mappings "
-                "(source_label, predicate, target_label, target_fk, viavia_source, via_target) "
+                "(source_label, predicate, target_label, target_fk, via_table, via_source, via_target) "
                 "VALUES (?,?,?,?,?,?,?)",
                 [
                     source_label,
@@ -190,7 +190,7 @@ class FhirMixin:
     def list_table_mappings(self) -> dict:
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT label, sqlid_column, prop_columns, registered_at FROM Graph_KG.table_mappings"
+            "SELECT label, sql_table, id_column, prop_columns, registered_at FROM Graph_KG.table_mappings"
         )
         nodes = [
             {
@@ -203,7 +203,7 @@ class FhirMixin:
             for r in cur.fetchall()
         ]
         cur.execute(
-            "SELECT source_label, predicate, target_label, target_fk, viavia_source, via_target "
+            "SELECT source_label, predicate, target_label, target_fk, via_table, via_source, via_target "
             "FROM Graph_KG.relationship_mappings"
         )
         rels = [

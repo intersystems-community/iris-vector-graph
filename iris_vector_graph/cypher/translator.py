@@ -1321,13 +1321,15 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
         )
 
     ivf_fn = f"{_schema_prefix}.kg_IVF" if _schema_prefix else "kg_IVF"
-    # Bind idx_name and query_json as ? parameters; k_int/nprobe_int are safe int literals.
-    context.all_stage_params.extend([str(idx_name), _json.dumps(floats)])
+    # IRIS does not support ? parameters inside JSON_TABLE(stored_proc(...)) —
+    # embed idx_name and query_json as safe SQL literals directly.
+    safe_idx = idx_name.replace("'", "''")
+    query_json_str = _json.dumps(floats).replace("'", "''")
 
     cte_sql = (
         f"SELECT j.node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {ivf_fn}(?, ?, {k_int}, {nprobe_int}),\n"
+        f"  {ivf_fn}('{safe_idx}', '{query_json_str}', {k_int}, {nprobe_int}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -5665,56 +5667,63 @@ def translate_node_pattern(node, context, metadata, optional=False):
         # applied as filter JOINs against the already-registered alias.
         if node.labels or node.properties:
             alias = context.variable_aliases[node.variable]
-            # For CTE stage aliases (Stage1, Stage2…), the node_id column is stored
-            # under the variable name (e.g. Stage1.a1), not Stage1.node_id.
-            if alias.startswith("Stage"):
-                node_id_col = f"{alias}.{node.variable}"
-            else:
-                node_id_col = f"{alias}.node_id"
-            jt = "LEFT OUTER JOIN" if optional else "JOIN"
-            for label in node.labels:
-                # For optional non-anchor targets: push the label check into the
-                # PRECEDING EDGE JOIN's ON clause via EXISTS, rather than a separate
-                # label JOIN + WHERE condition.  This ensures that when ALL edges from
-                # the anchor fail the label test, the LEFT OUTER JOIN produces exactly
-                # ONE null row (instead of filtering every expanded-edge row to 0 rows).
-                if optional and not alias.startswith("Stage"):
-                    import re as _re_lbl
-
-                    _node_join_pat = _re_lbl.compile(
-                        rf"LEFT OUTER JOIN\s+\S+\s+{_re_lbl.escape(alias)}\s+ON\s+"
-                        rf"{_re_lbl.escape(alias)}\.node_id\s*=\s*(\S+)"
-                    )
-                    _rhs_col = None
-                    _edge_join_idx = None
-                    for _jidx in range(len(context.join_clauses) - 1, -1, -1):
-                        _m = _node_join_pat.search(context.join_clauses[_jidx])
-                        if _m:
-                            _rhs_col = _m.group(1).rstrip(")")
-                            # The edge JOIN is the clause immediately before the node JOIN
-                            if _jidx > 0:
-                                _edge_join_idx = _jidx - 1
-                            break
-                    if _rhs_col is not None and _edge_join_idx is not None:
-                        label_param = context.add_join_param(label)
-                        context.join_clauses[_edge_join_idx] += (
-                            f" AND EXISTS(SELECT 1 FROM {_table('rdf_labels')}"
-                            f' WHERE s = {_rhs_col} AND "label" = {label_param})'
-                        )
-                        continue  # no separate label JOIN or WHERE needed
-                l_alias = context.next_alias("l")
-                context.join_clauses.append(
-                    f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {node_id_col} AND {l_alias}.label = {context.add_join_param(label)}"
-                )
-                if not optional:
-                    context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
+            # For mapped SQL table nodes, skip label isolation JOINs — the node_id
+            # column doesn't exist in external SQL tables, and the label is enforced
+            # by the SQL mapping itself.
+            effective_labels = (
+                [] if alias in context.mapped_node_aliases else list(node.labels)
+            )
+            if effective_labels or node.properties:
+                # For CTE stage aliases (Stage1, Stage2…), the node_id column is stored
+                # under the variable name (e.g. Stage1.a1), not Stage1.node_id.
+                if alias.startswith("Stage"):
+                    node_id_col = f"{alias}.{node.variable}"
                 else:
-                    # Optional non-anchor target with label constraint: if the node was
-                    # reached (node_id IS NOT NULL) the label must match; otherwise the
-                    # edge is treated as non-matching (null result).
-                    context.where_conditions.append(
-                        f"({node_id_col} IS NULL OR {l_alias}.s IS NOT NULL)"
+                    node_id_col = f"{alias}.node_id"
+                jt = "LEFT OUTER JOIN" if optional else "JOIN"
+                for label in effective_labels:
+                    # For optional non-anchor targets: push the label check into the
+                    # PRECEDING EDGE JOIN's ON clause via EXISTS, rather than a separate
+                    # label JOIN + WHERE condition.  This ensures that when ALL edges from
+                    # the anchor fail the label test, the LEFT OUTER JOIN produces exactly
+                    # ONE null row (instead of filtering every expanded-edge row to 0 rows).
+                    if optional and not alias.startswith("Stage"):
+                        import re as _re_lbl
+
+                        _node_join_pat = _re_lbl.compile(
+                            rf"LEFT OUTER JOIN\s+\S+\s+{_re_lbl.escape(alias)}\s+ON\s+"
+                            rf"{_re_lbl.escape(alias)}\.node_id\s*=\s*(\S+)"
+                        )
+                        _rhs_col = None
+                        _edge_join_idx = None
+                        for _jidx in range(len(context.join_clauses) - 1, -1, -1):
+                            _m = _node_join_pat.search(context.join_clauses[_jidx])
+                            if _m:
+                                _rhs_col = _m.group(1).rstrip(")")
+                                # The edge JOIN is the clause immediately before the node JOIN
+                                if _jidx > 0:
+                                    _edge_join_idx = _jidx - 1
+                                break
+                        if _rhs_col is not None and _edge_join_idx is not None:
+                            label_param = context.add_join_param(label)
+                            context.join_clauses[_edge_join_idx] += (
+                                f" AND EXISTS(SELECT 1 FROM {_table('rdf_labels')}"
+                                f' WHERE s = {_rhs_col} AND "label" = {label_param})'
+                            )
+                            continue  # no separate label JOIN or WHERE needed
+                    l_alias = context.next_alias("l")
+                    context.join_clauses.append(
+                        f"{jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {node_id_col} AND {l_alias}.label = {context.add_join_param(label)}"
                     )
+                    if not optional:
+                        context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
+                    else:
+                        # Optional non-anchor target with label constraint: if the node was
+                        # reached (node_id IS NOT NULL) the label must match; otherwise the
+                        # edge is treated as non-matching (null result).
+                        context.where_conditions.append(
+                            f"({node_id_col} IS NULL OR {l_alias}.s IS NOT NULL)"
+                        )
             for k, v in node.properties.items():
                 val_sql = translate_expression(v, context, segment="where")
                 if k in ("node_id", "id"):
@@ -5777,7 +5786,11 @@ def translate_node_pattern(node, context, metadata, optional=False):
         if is_anchor_optional and node.labels:
             # Track all labels for this anchor as a group (combined NOT EXISTS check).
             context.optional_null_row_label_groups.append(list(node.labels))
-        if getattr(node, "labels_or", False) and len(node.labels) > 1:
+        # Skip rdf_labels isolation JOIN for mapped SQL table nodes — they don't
+        # have a node_id column and their label is enforced by the mapping itself.
+        if alias in context.mapped_node_aliases:
+            pass  # label already enforced by SQL table mapping; no rdf_labels JOIN needed
+        elif getattr(node, "labels_or", False) and len(node.labels) > 1:
             l_alias = context.next_alias("l")
             labels_inlined = ", ".join(f"'{lab}'" for lab in node.labels)
             context.join_clauses.append(
@@ -9615,10 +9628,28 @@ def _expr_subscript(expr, context, segment):
 def _expr_slice(expr, context, segment):
     # Cypher slice semantics:
     #   - implicit start (None) → 0
-    #   - implicit end (None) → array length
+    #   - implicit end (None) → array/string length
     #   - null start or end (Literal(None)) → return NULL
     #   - negative index n → length + n  (e.g. -1 on [1,2,3] → index 2)
+    #
+    # String detection: if the base is a string literal, use SUBSTRING semantics.
+    base_is_string_literal = (
+        isinstance(expr.expression, ast.Literal)
+        and isinstance(expr.expression.value, str)
+    )
     base_sql = translate_expression(expr.expression, context, segment=segment)
+
+    if base_is_string_literal:
+        # String slice: 'hello'[1..4] → SUBSTRING('hello', 2, 3) (1-based, length)
+        start_val = int(expr.start.value) if isinstance(expr.start, ast.Literal) and expr.start.value is not None else 0
+        end_val = int(expr.end.value) if isinstance(expr.end, ast.Literal) and expr.end.value is not None else None
+        # SUBSTRING is 1-indexed; Cypher slice is 0-indexed
+        sql_start = start_val + 1
+        if end_val is not None:
+            sql_len = max(0, end_val - start_val)
+            return f"SUBSTRING({base_sql}, {sql_start}, {sql_len})"
+        return f"SUBSTRING({base_sql}, {sql_start})"
+
     jt_alias = context.next_alias("slc")
     arr_len_sql = f"SQLUser.JSON_ARRAYLENGTH({base_sql})"
 

@@ -1092,6 +1092,37 @@ class QueryMixin:
             if hop >= min_hops
         ]
 
+        # Step 2b: Filter by relationship properties if specified (e.g. [r*1..2 {weight: 10}])
+        # For single-hop (max_hops==1), check direct edges from source_ids.
+        # For multi-hop, check that the target has at least one incoming edge matching
+        # the filter (simplified heuristic — full path verification would require path BFS).
+        rel_props_filter = vl0.get("properties") or {}
+        if rel_props_filter and target_ids:
+            import json as _json_rpf
+            passing_targets = set()
+            cursor_rpf = self._store.conn.cursor()
+            t_table = self._t("rdf_edges") if hasattr(self, "_t") else "Graph_KG.rdf_edges"
+            for tgt_id in target_ids:
+                try:
+                    # For each target, check whether any incoming edge matches the filter.
+                    # This handles both direct (1-hop) and indirect (multi-hop) cases.
+                    cursor_rpf.execute(
+                        f"SELECT qualifiers FROM {t_table} WHERE o_id=?",
+                        [tgt_id],
+                    )
+                    for row in cursor_rpf.fetchall():
+                        qual_json = row[0] if row else None
+                        try:
+                            qualifiers = _json_rpf.loads(qual_json) if qual_json else {}
+                        except Exception:
+                            qualifiers = {}
+                        if all(str(qualifiers.get(k)) == str(v) for k, v in rel_props_filter.items()):
+                            passing_targets.add(tgt_id)
+                            break
+                except Exception as exc:
+                    logger.debug("rel_props_filter query failed: %s", exc)
+            target_ids = [t for t in target_ids if t in passing_targets]
+
         # Step 3: Filter target nodes by target_labels (AND semantics per label)
         if target_labels and target_ids:
             for lbl in target_labels:

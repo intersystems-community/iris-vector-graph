@@ -551,7 +551,6 @@ class TestRRFFuseCommunityE2E:
     def test_hnsw_bm25_rrf_returns_fused_results(self):
         """kg_RRF_FUSE with hnsw + bm25: both legs must contribute to fusion."""
         import json
-        from iris_vector_graph._engine.vector import _table
 
         # Build a BM25 index over node text
         idx_bm25 = f"rrf_bm25_{self._run}"
@@ -578,7 +577,7 @@ class TestRRFFuseCommunityE2E:
 
         # Check if BM25 ObjectScript class is available
         try:
-            self.engine.bm25_build(idx_bm25, "node_id, text")
+            self.engine.bm25_build(idx_bm25, ["node_id", "text"])
         except Exception as e:
             if "CLASS DOES NOT EXIST" in str(e).upper() or "not exist" in str(e).lower():
                 pytest.skip("Graph.KG.BM25Index not available on this container")
