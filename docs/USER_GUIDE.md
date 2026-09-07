@@ -102,6 +102,40 @@ engine.bulk_create_edges_temporal(temporal_edges)
 engine.delete_edge("service:auth", "CALLS", "service:payment")
 ```
 
+### Named Graphs
+
+Scope nodes and edges to a named graph for multi-tenant data, staging
+snapshots, or materializing a ledger reconstruction into an isolated subgraph.
+The default graph uses `graph=""` (empty-string sentinel); named graphs use any
+non-empty string.
+
+```python
+# Nodes
+engine.create_node("C0027051", labels=["Concept"], graph="umls")
+
+# Structural edges
+engine.create_edge("C0027051", "ISA", "C0085580", graph="umls")
+
+# Cypher CREATE/MERGE respects USE GRAPH context
+engine.execute_cypher("USE GRAPH umls CREATE (n:Concept {id: 'C0001234'})")
+
+# Import an NDJSON snapshot into a named graph
+engine.import_graph_ndjson("export.ndjson", graph="staging")
+
+# Delete an edge scoped to a named graph
+engine.delete_edge("C0027051", "ISA", "C0085580", graph="umls")
+
+# Delete an edge regardless of which graph it belongs to
+engine.delete_edge("C0027051", "ISA", "C0085580", all_graphs=True)
+
+# Drop all nodes and edges in a named graph (FK-safe order)
+engine.drop_graph("staging")
+```
+
+The `^KG` adjacency index partitions by graph key so BFS and variable-length
+paths stay within their graph. Existing callers that never pass `graph=` are
+unaffected — their data lands in the default graph.
+
 ---
 
 ## 3. Cypher Queries
@@ -439,14 +473,152 @@ SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
 
 ---
 
+## 10. Revision Ledger
+
+The ledger provides opt-in, immutable transaction-time history. Each `commit`
+applies atomically or not at all — no partial writes, no silent overwrites.
+
+### Enable and commit
+
+```python
+from iris_vector_graph.ledger import Changeset
+
+# Enable once; idempotent — captures existing graph as genesis revision
+genesis = engine.ledger.enable()
+print(genesis.revision_id)  # "a3f9..." — stable across restarts
+
+# Build a changeset
+head = engine.ledger.head()
+cs = Changeset(
+    actor="ingest:etl-42",
+    actor_type="ingest",
+    message="equipment sync — batch 2026-09-07",
+    expected_head=head.revision_id,      # optimistic concurrency lock
+    idempotency_key="etl-42-2026-09-07", # safe to retry on network error
+)
+cs.create_node("pump-7", labels=["Equipment"], properties={"status": "ok"})
+cs.create_node("tank-2")
+rel = cs.create_relationship("pump-7", "FEEDS", "tank-2", qualifiers={"weight": "1.0"})
+cs.set_qualifier(rel, "capacity", "100")
+cs.set_property("pump-7", "rated_kw", "15")
+
+result = engine.ledger.commit(cs)
+print(result.revision.seq)  # monotonically increasing sequence number
+```
+
+If another writer commits between `head()` and `commit()`, a `StaleHeadError`
+is raised and nothing is written. Retry by re-reading `head()`.
+
+### History and diffs
+
+```python
+# Page through revisions (newest first)
+for rev in engine.ledger.history(limit=20):
+    print(rev.seq, rev.actor, rev.message, rev.committed_ms)
+
+# Full mutation records for one revision
+rev = engine.ledger.get_revision(result.revision.revision_id)
+for record in rev.records:
+    print(record.op, record.entity_kind, record.entity_id)
+
+# Diff between two revisions (what changed?)
+changes = engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
+for change in changes:
+    print(change.op, change.entity_id, change.prior, change.new)
+```
+
+### Historical reconstruction
+
+```python
+# Read-only graph as of a past revision — returns an IVGResult of NDJSON
+snapshot = engine.ledger.reconstruct(genesis.revision_id)
+
+# Export reconstruction to an NDJSON file (import into a named graph later)
+engine.ledger.export_reconstruction(result.revision.revision_id, "at-rev.ndjson")
+
+# Verify current tables match the replay from genesis
+report = engine.ledger.verify()
+print(report.consistent)          # True if tables == replay
+print(report.unrecorded_writes)   # writes that bypassed the ledger
+
+# Adopt unrecorded writes into the ledger history
+engine.ledger.verify(adopt=True)
+```
+
+### Concurrent writers — branch conflict
+
+```python
+import threading
+from iris_vector_graph.ledger import Changeset, StaleHeadError
+
+def writer(name: str, conn):
+    eng = IRISGraphEngine(conn)
+    head = eng.ledger.head()
+    cs = Changeset(actor=name, actor_type="test",
+                   expected_head=head.revision_id)
+    cs.create_node(f"node-{name}")
+    try:
+        r = eng.ledger.commit(cs)
+        print(f"{name} won at seq={r.revision.seq}")
+    except StaleHeadError:
+        # Another writer committed first — re-read head and retry
+        head = eng.ledger.head()
+        cs2 = Changeset(actor=name, actor_type="test",
+                        expected_head=head.revision_id)
+        cs2.create_node(f"node-{name}")
+        r = eng.ledger.commit(cs2)
+        print(f"{name} retried at seq={r.revision.seq}")
+
+threads = [threading.Thread(target=writer, args=(f"writer-{i}", conn)) for i in range(3)]
+for t in threads: t.start()
+for t in threads: t.join()
+```
+
+### Strict mode
+
+Strict mode rejects structural writes that bypass the ledger (`create_node`,
+`create_edge`, etc.) with `LedgerStrictModeError`. Reads, temporal writes, and
+index maintenance are unaffected.
+
+```python
+engine.ledger.set_strict(True)   # or enable(strict=True) at first enable
+try:
+    engine.create_node("bypass")   # raises LedgerStrictModeError
+except Exception as e:
+    print(e)                        # must use ledger.commit(Changeset(...))
+```
+
+### Metrics
+
+```python
+stats = engine.ledger.stats()
+print(stats.head_seq, stats.commits_ok, stats.rejections)
+
+engine.status().ledger   # included in the engine status report
+```
+
+For Prometheus integration see
+[docs/ledger-prometheus-hook.md](ledger-prometheus-hook.md).
+
+---
+
 ## Quick Reference
 
 | Task                     | Code                                                             |
 | ------------------------ | ---------------------------------------------------------------- |
 | Initialize               | `engine.initialize_schema()`                                     |
 | Add node                 | `engine.create_node("id", labels=[...], properties={...})`       |
+| Add node (named graph)   | `engine.create_node("id", graph="umls")`                         |
 | Add edge                 | `engine.create_edge("src", "pred", "tgt", qualifiers={...})`     |
+| Add edge (named graph)   | `engine.create_edge("src", "pred", "tgt", graph="umls")`         |
+| Drop named graph         | `engine.drop_graph("staging")`                                   |
 | Query                    | `engine.execute_cypher("MATCH (n) RETURN n.name LIMIT 10")`      |
+| Enable ledger            | `engine.ledger.enable()`                                         |
+| Commit changeset         | `engine.ledger.commit(cs)`                                       |
+| Ledger history           | `engine.ledger.history(limit=20)`                                |
+| Diff two revisions       | `engine.ledger.diff(rev_a, rev_b)`                               |
+| Reconstruct at revision  | `engine.ledger.reconstruct(rev_id)`                              |
+| Verify consistency       | `engine.ledger.verify()`                                         |
 | Degree                   | `engine.degree_centrality(direction="out", top_k=20)`            |
 | Betweenness              | `engine.betweenness_centrality(sample_size=200, top_k=20)`       |
 | Betweenness neighborhood | `engine.betweenness_centrality_neighborhood(seed="...", hops=2)` |

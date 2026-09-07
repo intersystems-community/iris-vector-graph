@@ -109,7 +109,7 @@ and [docs/performance/GRAPH_ALGORITHMS.md](docs/performance/GRAPH_ALGORITHMS.md)
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    iris-vector-graph  v2.1.0                        │
+│                    iris-vector-graph  v2.18.0                       │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │   ┌───────────────┐   ┌───────────────┐   ┌───────────────────┐    │
@@ -186,6 +186,41 @@ Every write to ivg is stored as W3C-aligned SPO triples (`rdf_edges`, `rdf_props
 with OWL 2 RL inference, named graph support, and RDF-star style edge qualifiers.
 See [docs/SEMANTIC_LAYER.md](docs/SEMANTIC_LAYER.md) for the full guide: format
 reference, SHACL shape writing, PROV-O vocabulary mapping, and integration patterns.
+
+---
+
+## Named Graphs
+
+Scope nodes and edges to a named graph — useful for multi-tenant data, staging
+vs. production snapshots, or materializing a ledger reconstruction into an
+isolated subgraph.
+
+```python
+# Create a node in the "umls" named graph
+engine.create_node("C0027051", labels=["Concept"], graph="umls")
+
+# Create an edge in the same named graph
+engine.create_edge("C0027051", "ISA", "C0085580", graph="umls")
+
+# Cypher: USE GRAPH targets the context for CREATE and MERGE
+engine.execute_cypher("USE GRAPH umls CREATE (n:Concept {id: 'C0001234'})")
+
+# Import an NDJSON file into a named graph
+engine.import_graph_ndjson("export.ndjson", graph="staging")
+
+# Drop everything scoped to a named graph (nodes, edges, labels, props)
+engine.drop_graph("staging")
+
+# delete_edge defaults to the default graph; pass all_graphs=True to sweep all
+engine.delete_edge("C0027051", "ISA", "C0085580", graph="umls")
+engine.delete_edge("C0027051", "ISA", "C0085580", all_graphs=True)
+```
+
+Nodes in the default graph use `graph=""` (empty-string sentinel); the BFS
+adjacency index (`^KG`) partitions by graph key so traversals stay within
+their graph. Existing code that never passes `graph=` is unaffected.
+
+See [docs/USER_GUIDE.md](docs/USER_GUIDE.md#named-graphs) for the full guide.
 
 ---
 
@@ -281,15 +316,15 @@ warning is emitted.
 
 ## Documentation
 
-| Document                                                 | Contents                                                    |
-| -------------------------------------------------------- | ----------------------------------------------------------- |
-| [User Guide](docs/USER_GUIDE.md)                         | Cypher examples, temporal edges, vector search, bulk loader |
-| [Admin Guide](docs/ADMIN_GUIDE.md)                       | Container setup, schema management, index rebuilding        |
-| [Admin API](docs/ADMIN_API.md)                           | Python API reference for engine administration              |
-| [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput    |
-| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details        |
-| [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance             |
-| [Changelog](CHANGELOG.md)                                | Full version history                                        |
+| Document                                                 | Contents                                                             |
+| -------------------------------------------------------- | -------------------------------------------------------------------- |
+| [User Guide](docs/USER_GUIDE.md)                         | Cypher examples, named graphs, ledger, temporal edges, vector search |
+| [Admin Guide](docs/ADMIN_GUIDE.md)                       | Container setup, schema management, index rebuilding                 |
+| [Admin API](docs/ADMIN_API.md)                           | Python API reference for engine administration                       |
+| [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput             |
+| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details                 |
+| [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance                      |
+| [Changelog](CHANGELOG.md)                                | Full version history                                                 |
 
 ---
 
