@@ -212,10 +212,15 @@ class IRISGraphEngine(
             self._store._ledger_guard = self._ledger_guard
         except Exception:  # pragma: no cover - foreign store objects
             pass
+        # Probe once whether the nodes table has the graph_id column (spec 214).
+        # Clusters upgraded from pre-214 schemas may not yet have run the migration;
+        # create_node uses this flag to emit a compatible INSERT in either case.
+        self._nodes_has_graph_id: bool = self._probe_nodes_graph_id()
         logger.debug(
-            "IRISGraphEngine initialized (dim=%s dtype=%s)",
+            "IRISGraphEngine initialized (dim=%s dtype=%s nodes_graph_id=%s)",
             embedding_dimension or "auto",
             self.vector_dtype,
+            self._nodes_has_graph_id,
         )
 
     @property
@@ -228,6 +233,24 @@ class IRISGraphEngine(
     def _t(self, name: str) -> str:
         """Per-instance table qualifier — use this instead of the free _table() in all mixin code."""
         return _table(name, prefix=self._schema_prefix)
+
+    def _probe_nodes_graph_id(self) -> bool:
+        """Return True if Graph_KG.nodes already has a graph_id column.
+
+        Called once at engine init.  Allows create_node to emit a compatible
+        INSERT on pre-214 schemas (no graph_id column) without failing.
+        """
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'nodes' "
+                "AND COLUMN_NAME = 'graph_id'"
+            )
+            row = cur.fetchone()
+            return bool(row and int(row[0]) > 0)
+        except Exception:
+            return False
 
     @classmethod
     def from_connect(

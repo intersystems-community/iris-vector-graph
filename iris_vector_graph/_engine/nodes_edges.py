@@ -637,10 +637,19 @@ class NodesEdgesMixin:
             cursor.execute("START TRANSACTION")
 
             graph_id = graph if graph is not None else ""
-            cursor.execute(
-                f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
-                [node_id, graph_id],
-            )
+            # Use a schema-compatible INSERT: include graph_id only when the column
+            # exists (post-214 schema).  Pre-214 clusters that haven't run the migration
+            # yet still work; they just can't use named graphs until migrated.
+            if getattr(self, "_nodes_has_graph_id", True):
+                cursor.execute(
+                    f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
+                    [node_id, graph_id],
+                )
+            else:
+                cursor.execute(
+                    f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)",
+                    [node_id],
+                )
 
             if labels:
                 label_data = [[node_id, label] for label in labels]
@@ -954,7 +963,11 @@ class NodesEdgesMixin:
                 GraphSchema.disable_indexes(cursor)
 
             # 2. SQL templates (using %NOINDEX for speed)
-            node_sql = GraphSchema.get_bulk_insert_sql("nodes")
+            # Use graph-aware template only when the schema has the graph_id column.
+            _graph_col = getattr(self, "_nodes_has_graph_id", True)
+            node_sql = GraphSchema.get_bulk_insert_sql(
+                "nodes_with_graph" if _graph_col else "nodes"
+            )
             label_sql = GraphSchema.get_bulk_insert_sql("rdf_labels")
             prop_sql = GraphSchema.get_bulk_insert_sql("rdf_props")
 
@@ -969,8 +982,12 @@ class NodesEdgesMixin:
                     continue
 
                 created_ids.append(node_id)
-                # params: [node_id, node_id] for WHERE NOT EXISTS
-                valid_nodes.append([node_id, node_id])
+                # params depend on template: nodes_with_graph needs [node_id, graph_id, node_id];
+                # plain nodes needs [node_id, node_id]
+                if _graph_col:
+                    valid_nodes.append([node_id, "", node_id])
+                else:
+                    valid_nodes.append([node_id, node_id])
 
                 for label in node.get("labels", []):
                     # params: [s, label, s, label]

@@ -2,6 +2,28 @@
 
 # Changelog
 
+### v2.18.1 (2026-09-07)
+
+**Fix: spec-214 migration safety and backward compatibility for pre-214 clusters**
+
+Three bugs introduced by spec-214 that break any cluster that has not yet run
+`initialize_schema()` after upgrading:
+
+- **`add_graph_id_to_nodes` was destructive by default**: Steps 4–7 (DROP TABLE +
+  RENAME) ran automatically on every `initialize_schema()` call when the compound PK
+  didn't exist, destroying data if `RENAME TABLE` failed (IRIS syntax is
+  `ALTER TABLE old RENAME new`, not `RENAME TABLE x TO y`). The table-recreation path
+  is now gated behind `recreate_pk=True` and is never called from the normal migration
+  path. The default is additive-only: add column, migrate data.
+- **`create_node` always referenced `graph_id`**: `INSERT INTO nodes (node_id, graph_id)`
+  failed on any pre-214 schema. The engine now probes for the column at init time
+  (`_probe_nodes_graph_id`) and emits a compatible INSERT on older schemas.
+- **`bulk_create_nodes` had wrong param count**: The bulk node template had 4 params but
+  the caller passed 2. Fixed to 3 params for the post-214 path (`nodes_with_graph`
+  template) and 2 params for the pre-214 fallback.
+
+---
+
 ### v2.18.0 (2026-09-07)
 
 **Bug fixes across Cypher VLP, adjacency indexing, SQL bridge, and spec-hygiene gates**

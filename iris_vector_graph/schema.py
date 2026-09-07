@@ -371,18 +371,28 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             return False
 
     @staticmethod
-    def add_graph_id_to_nodes(cursor) -> Dict[str, Any]:
-        """Spec 214: add graph_id to nodes table; migrate __graph pseudo-props.
+    def add_graph_id_to_nodes(cursor, recreate_pk: bool = False) -> Dict[str, Any]:
+        """Spec 214: add graph_id column to nodes; migrate __graph pseudo-props.
+
+        This migration is safe to run on a live cluster.  It is additive-only by
+        default: it adds the column and migrates data without touching the primary key.
+        The compound PK recreation (step 4+) is gated behind ``recreate_pk=True``
+        and is intentionally NOT called from ``ensure_indexes`` because the IRIS
+        ``RENAME TABLE`` syntax is ``ALTER TABLE old RENAME new`` (without schema
+        qualification on the new name), and the intermediate ``DROP TABLE nodes``
+        step is destructive and non-recoverable on connection loss.
 
         Step 1 (DDL, auto-commits in IRIS):
           ALTER TABLE nodes ADD COLUMN graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''
         Step 2-3 (DML transaction): migrate __graph rows; delete them from rdf_props.
-        Step 4-7 (recreation transaction): recreate nodes with new PK(node_id, graph_id)
-          and UNIQUE(node_id); rename or recreate FKs on dependent tables.
+        Step 4+ (optional, recreate_pk=True only): recreate nodes with compound PK
+          (node_id, graph_id) and UNIQUE(node_id).  Requires explicit opt-in because
+          it drops the existing nodes table — only safe on a fresh schema or after a
+          verified full backup.  IRIS rename syntax: ALTER TABLE nodes_new RENAME nodes
         """
         result: Dict[str, Any] = {"column_added": False, "rows_migrated": 0, "pk_recreated": False}
 
-        # Step 1 — DDL (auto-commits)
+        # Step 1 — DDL (auto-commits in IRIS)
         try:
             cursor.execute(
                 "ALTER TABLE Graph_KG.nodes ADD COLUMN graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''"
@@ -396,7 +406,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 logger.warning("add_graph_id_to_nodes step1 failed: %s", e)
                 return result
 
-        # Step 2-3 — DML: migrate __graph values
+        # Step 2-3 — DML: migrate existing __graph pseudo-prop values
         try:
             cursor.execute(
                 "UPDATE Graph_KG.nodes n SET n.graph_id = "
@@ -415,7 +425,15 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         except Exception as e:
             logger.warning("add_graph_id_to_nodes migration DML failed: %s", e)
 
-        # Step 4-7 — check if compound PK already exists; if not, recreate table
+        if not recreate_pk:
+            # Default path: additive migration only. The UNIQUE(node_id) constraint on
+            # the existing table is sufficient for all current callers. The compound PK
+            # is only required for strict multi-tenant isolation and must be opted into
+            # explicitly via recreate_pk=True after a full backup.
+            return result
+
+        # Step 4+ — optional compound-PK recreation (recreate_pk=True only).
+        # Check if it already exists first — safe to skip if so.
         try:
             cursor.execute(
                 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
@@ -446,20 +464,20 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 "SELECT node_id, graph_id, created_at FROM Graph_KG.nodes"
             )
             cursor.execute("DROP TABLE Graph_KG.nodes")
-            # Attempt RENAME
-            renamed = False
+            # IRIS rename syntax: ALTER TABLE old_name RENAME new_name
+            # The new name must NOT be schema-qualified.
             try:
-                cursor.execute("RENAME TABLE Graph_KG.nodes_new TO Graph_KG.nodes")
-                renamed = True
-            except Exception:
-                pass
-            if not renamed:
-                # RENAME not supported; recreate FKs pointing at nodes_new under the new name.
-                # In IRIS, we can alias or accept nodes_new as the canonical table until a
-                # proper rename path is available.  Log a warning.
-                logger.warning(
-                    "RENAME TABLE not supported; Graph_KG.nodes_new has the new schema. "
-                    "Manual intervention required to rename nodes_new → nodes."
+                cursor.execute("ALTER TABLE Graph_KG.nodes_new RENAME nodes")
+                result["pk_recreated"] = True
+            except Exception as rename_err:
+                # Rename failed after DROP — data is in nodes_new, nodes is gone.
+                # Log loudly; caller must run ALTER TABLE Graph_KG.nodes_new RENAME nodes
+                # manually to recover.
+                logger.error(
+                    "add_graph_id_to_nodes: DROP succeeded but RENAME failed (%s). "
+                    "Data is in Graph_KG.nodes_new. Run: "
+                    "ALTER TABLE Graph_KG.nodes_new RENAME nodes",
+                    rename_err,
                 )
             try:
                 conn = getattr(cursor, "connection", None)
@@ -467,7 +485,6 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                     conn.commit()
             except Exception:
                 pass
-            result["pk_recreated"] = True
         except Exception as e:
             logger.warning("add_graph_id_to_nodes table recreation failed: %s", e)
             try:
@@ -585,7 +602,8 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             cursor.execute(sql, [node_id, label])
         """
         templates = {
-            "nodes": "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ? AND graph_id = ?)",
+            "nodes": "INSERT INTO Graph_KG.nodes (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
+            "nodes_with_graph": "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
             "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
             "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
             "rdf_edges": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
