@@ -24,14 +24,22 @@ ClassMethod jsonNum(pValue As %String) As %String [ Internal ]
 /// Handles backslash, double-quote, and ASCII control characters.
 ClassMethod jsonEsc(pValue As %String) As %String [ Internal ]
 {
-	Set result = pValue
-	Set result = $Replace(result, "\", "\\")
+	// RFC 8259 §7: U+0000–U+001F must be escaped. Named escapes for the 5
+	// common ones; \uXXXX for the rest (NUL, SOH … ETB, EM … US).
+	Set result = $Replace(pValue, "\", "\\")
 	Set result = $Replace(result, """", "\""")
 	Set result = $Replace(result, $Char(8),  "\b")
 	Set result = $Replace(result, $Char(9),  "\t")
 	Set result = $Replace(result, $Char(10), "\n")
 	Set result = $Replace(result, $Char(12), "\f")
 	Set result = $Replace(result, $Char(13), "\r")
+	// Remaining control chars U+0000–U+001F (NUL and 0x01–0x07, 0x0B, 0x0E–0x1F)
+	For i = 0:1:7,11,14:1:31 {
+		If result [ $Char(i) {
+			Set hex = $Select(i<16: "000"_$ZHex(i), 1: "00"_$ZHex(i))
+			Set result = $Replace(result, $Char(i), "\u"_hex)
+		}
+	}
 	Return result
 }
 

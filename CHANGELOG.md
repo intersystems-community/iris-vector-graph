@@ -2,6 +2,33 @@
 
 # Changelog
 
+### v2.18.7 (2026-09-08)
+
+**Fix: jsonEsc incomplete — NUL and other control chars not escaped (field failure)**
+
+**Root cause:** `jsonEsc()` in `TemporalIndex.cls` and `TraversalBFS.cls` handled
+`\`, `"`, and 5 named control chars (BS/TAB/LF/FF/CR) but omitted the other 26
+characters in U+0000–U+001F. Kubernetes embeds a NUL byte (`\x00`, U+0000) as a
+C string terminator in process/pod names. Any metric series whose label included
+such a name stored the NUL in `^KG("tout")` verbatim, then `QueryWindow` emitted
+it into the JSON string — causing `json.loads` to raise `ValueError: Invalid
+control character` and dropping the entire window for that tenant.
+
+**Fix:** Both `jsonEsc` implementations now loop over `i = 0:1:7, 11, 14:1:31`
+(the 26 remaining control chars) and emit `\uXXXX`. The 5 named escapes are kept
+as-is for readability.
+
+**Downstream note for opsreview:** `MetricIngest.SeriesTarget` should also strip
+control characters before storing the series node ID — defense-in-depth so IVG
+never receives malformed data regardless of what Kubernetes delivers. The IVG fix
+ensures the JSON layer is safe even if bad bytes reach storage.
+
+**Regression tests:** 2 new tests in `tests/integration/test_temporal_json_safety.py`
+(`TestControlCharEscaping`): NUL byte round-trip + full 13-char control set.
+All 19 JSON safety tests pass.
+
+---
+
 ### v2.18.6 (2026-09-08)
 
 **Fix: ObjectScript JSON numeric normalization — TemporalIndex and TraversalBFS**
@@ -1756,6 +1783,33 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.18.7 (2026-09-08)
+
+**Fix: jsonEsc incomplete — NUL and other control chars not escaped (field failure)**
+
+**Root cause:** `jsonEsc()` in `TemporalIndex.cls` and `TraversalBFS.cls` handled
+`\`, `"`, and 5 named control chars (BS/TAB/LF/FF/CR) but omitted the other 26
+characters in U+0000–U+001F. Kubernetes embeds a NUL byte (`\x00`, U+0000) as a
+C string terminator in process/pod names. Any metric series whose label included
+such a name stored the NUL in `^KG("tout")` verbatim, then `QueryWindow` emitted
+it into the JSON string — causing `json.loads` to raise `ValueError: Invalid
+control character` and dropping the entire window for that tenant.
+
+**Fix:** Both `jsonEsc` implementations now loop over `i = 0:1:7, 11, 14:1:31`
+(the 26 remaining control chars) and emit `\uXXXX`. The 5 named escapes are kept
+as-is for readability.
+
+**Downstream note for opsreview:** `MetricIngest.SeriesTarget` should also strip
+control characters before storing the series node ID — defense-in-depth so IVG
+never receives malformed data regardless of what Kubernetes delivers. The IVG fix
+ensures the JSON layer is safe even if bad bytes reach storage.
+
+**Regression tests:** 2 new tests in `tests/integration/test_temporal_json_safety.py`
+(`TestControlCharEscaping`): NUL byte round-trip + full 13-char control set.
+All 19 JSON safety tests pass.
+
+---
 
 ### v2.18.6 (2026-09-08)
 

@@ -262,3 +262,52 @@ class TestBFSJsonSafety:
             assert any(abs(w - 0.453) < 1e-6 for w in weights), (
                 f"Expected w≈0.453 in BFS results, got weights: {weights}"
             )
+
+
+@pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
+class TestControlCharEscaping:
+    """jsonEsc must cover all U+0000-U+001F, not just the 5 named escapes.
+
+    Root cause of the 2.18.6 field failure:
+      Kubernetes process names embed a NUL byte (chr(0)) as a C string terminator.
+      jsonEsc handled backslash/quote/LF/CR/TAB/BS/FF but not NUL or the other
+      26 control chars. json.loads raises ValueError on any unescaped U+0000-U+001F.
+
+    Rule: these tests MUST call json.loads() — not iterate the result object.
+    Python json.loads is strict; IRIS %FromJSON is lenient and will NOT catch this.
+    """
+
+    NUL_SRC = f"{_PREFIX}_nul_pod\x00suffix"
+
+    def test_nul_byte_in_source_parses_strictly(self, tstore):
+        """NUL in node id must emit \\u0000, not a raw NUL byte."""
+        tstore._iris_obj().classMethodVoid(
+            "Graph.KG.TemporalIndex", "InsertEdge",
+            self.NUL_SRC, "CALLS", f"{_PREFIX}_svc", "10000", "1",
+        )
+        raw = str(tstore._call_classmethod(
+            "Graph.KG.TemporalIndex", "QueryWindow",
+            self.NUL_SRC, "CALLS", "0", "99999999",
+        ))
+        result = json.loads(raw)   # raises if NUL is unescaped
+        assert len(result) == 1
+        assert result[0]["s"] == self.NUL_SRC  # chr(0) decoded back by json.loads
+
+    def test_other_control_chars_parse_strictly(self, tstore):
+        """U+0001-U+0007 SOH-BEL, U+000B VT, U+000E-U+001F SO-US all must escape."""
+        other_controls = "".join(
+            chr(i) for i in [1, 2, 3, 4, 5, 6, 7, 11, 14, 15, 27, 28, 31]
+        )
+        src = f"{_PREFIX}_ctrl_{uuid.uuid4().hex[:4]}"
+        tstore._iris_obj().classMethodVoid(
+            "Graph.KG.TemporalIndex", "InsertEdge",
+            src + other_controls, "CALLS", f"{_PREFIX}_svc2", "11000", "1",
+        )
+        raw = str(tstore._call_classmethod(
+            "Graph.KG.TemporalIndex", "QueryWindow",
+            src + other_controls, "CALLS", "0", "99999999",
+        ))
+        result = json.loads(raw)
+        assert len(result) == 1
+        # Verify the source round-trips correctly
+        assert result[0]["s"] == src + other_controls

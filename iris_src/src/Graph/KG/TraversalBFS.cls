@@ -14,11 +14,21 @@ ClassMethod jsonNum(pValue As %String) As %String [ Internal ]
 /// Escape a string for embedding inside a JSON double-quoted value.
 ClassMethod jsonEsc(pValue As %String) As %String [ Internal ]
 {
+	// RFC 8259 §7: U+0000–U+001F must be escaped. Named escapes for common ones;
+	// \uXXXX for the rest (NUL $Char(0), SOH–BEL, VT, SO–US).
 	Set result = $Replace(pValue, "\", "\\")
 	Set result = $Replace(result, """", "\""")
-	Set result = $Replace(result, $Char(10), "\n")
-	Set result = $Replace(result, $Char(13), "\r")
+	Set result = $Replace(result, $Char(8),  "\b")
 	Set result = $Replace(result, $Char(9),  "\t")
+	Set result = $Replace(result, $Char(10), "\n")
+	Set result = $Replace(result, $Char(12), "\f")
+	Set result = $Replace(result, $Char(13), "\r")
+	For i = 0:1:7,11,14:1:31 {
+		If result [ $Char(i) {
+			Set hex = $Select(i<16: "000"_$ZHex(i), 1: "00"_$ZHex(i))
+			Set result = $Replace(result, $Char(i), "\u"_hex)
+		}
+	}
 	Return result
 }
 
