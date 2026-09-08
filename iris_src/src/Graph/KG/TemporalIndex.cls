@@ -9,9 +9,38 @@ Parameter TSUNIT As %String = "";
 /// Bucket width in milliseconds when TSUNIT="ms". Derived: BUCKET * 1000.
 Parameter BUCKETMS As %Integer = 300000;
 
+/// Render a numeric value as valid JSON.
+/// ObjectScript renders 0.5 as ".5" and -0.5 as "-.5" — both are not JSON.
+/// Empty string is stored as null.
+ClassMethod jsonNum(pValue As %String) As %String [ Internal ]
+{
+	If pValue = "" { Return "null" }
+	If $Extract(pValue, 1, 2) = "-." { Return "-0" _ $Extract(pValue, 2, *) }
+	If $Extract(pValue, 1) = "." { Return "0" _ pValue }
+	Return pValue
+}
+
+/// Escape a string for embedding inside a JSON double-quoted value.
+/// Handles backslash, double-quote, and ASCII control characters.
+ClassMethod jsonEsc(pValue As %String) As %String [ Internal ]
+{
+	Set result = pValue
+	Set result = $Replace(result, "\", "\\")
+	Set result = $Replace(result, """", "\""")
+	Set result = $Replace(result, $Char(8),  "\b")
+	Set result = $Replace(result, $Char(9),  "\t")
+	Set result = $Replace(result, $Char(10), "\n")
+	Set result = $Replace(result, $Char(12), "\f")
+	Set result = $Replace(result, $Char(13), "\r")
+	Return result
+}
+
 ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0, suppressReverseIndex As %Boolean = 0, mode As %String = "") As %Status
 {
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
+	// Coerce empty weight to 1 — same guard as the batch path (:70).
+	// Prevents {"w":} in QueryWindow JSON (defect #3).
+	If weight = "" Set weight = 1
 	// Resolve effective mode: explicit mode overrides legacy upsert boolean.
 	// mode="" falls back to upsert semantics for backward compat.
 	If mode = "" { Set mode = $Select(upsert: "skip", 1: "insert") }
@@ -200,7 +229,7 @@ ClassMethod QueryWindow(source As %String, predicate As %String, tsStart As %Int
 					If o = "" Quit
 					If 'first Set result = result _ ","
 					Set first = 0
-					Set result = result _ "{""s"":""" _ s _ """,""p"":""" _ p _ """,""o"":""" _ o _ """,""ts"":" _ ts _ ",""w"":" _ w _ "}"
+					Set result = result _ "{""s"":""" _ ..jsonEsc(s) _ """,""p"":""" _ ..jsonEsc(p) _ """,""o"":""" _ ..jsonEsc(o) _ """,""ts"":" _ ts _ ",""w"":" _ ..jsonNum(w) _ "}"
 				}
 			}
 		}
@@ -235,7 +264,7 @@ ClassMethod QueryWindowSources(predicate As %String, tsStart As %Integer, tsEnd 
 		Quit:(src = "")
 		If 'first { Set result = result _ "," }
 		Set first = 0
-		Set result = result _ """" _ src _ """"
+		Set result = result _ """" _ ..jsonEsc(src) _ """"
 	}
 	Return result _ "]"
 }
@@ -283,7 +312,7 @@ ClassMethod FindBursts(predicate As %String, windowSec As %Integer, threshold As
 		If total >= threshold {
 			Set:'first result = result _ ","
 			Set first = 0
-			Set result = result _ "{""id"":""" _ node _ """,""velocity"":" _ total _ "}"
+			Set result = result _ "{""id"":""" _ ..jsonEsc(node) _ """,""velocity"":" _ ..jsonNum(total) _ "}"
 		}
 	}
 	Return result _ "]"
@@ -506,7 +535,7 @@ ClassMethod QueryWindowInbound(target As %String, predicate As %String, tsStart 
 					If s = "" Quit
 					If 'first Set result = result _ ","
 					Set first = 0
-					Set result = result _ "{""s"":""" _ s _ """,""p"":""" _ p _ """,""o"":""" _ o _ """,""ts"":" _ ts _ ",""w"":" _ w _ "}"
+					Set result = result _ "{""s"":""" _ ..jsonEsc(s) _ """,""p"":""" _ ..jsonEsc(p) _ """,""o"":""" _ ..jsonEsc(o) _ """,""ts"":" _ ts _ ",""w"":" _ ..jsonNum(w) _ "}"
 				}
 			}
 		}
@@ -592,7 +621,7 @@ ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As 
 			Set avg = $Select(cnt=0:"null", 1:$FN(sm/cnt,"",6))
 			If 'first Set result = result _ ","
 			Set first = 0
-			Set result = result _ "{""source"":""" _ src _ """,""predicate"":""" _ p _ """,""count"":" _ cnt _ ",""sum"":" _ sm _ ",""avg"":" _ avg _ ",""min"":" _ mn _ ",""max"":" _ mx _ "}"
+			Set result = result _ "{""source"":""" _ ..jsonEsc(src) _ """,""predicate"":""" _ ..jsonEsc(p) _ """,""count"":" _ ..jsonNum(cnt) _ ",""sum"":" _ ..jsonNum(sm) _ ",""avg"":" _ ..jsonNum(avg) _ ",""min"":" _ ..jsonNum(mn) _ ",""max"":" _ ..jsonNum(mx) _ "}"
 		}
 	}
 	Return result _ "]"
@@ -629,7 +658,7 @@ ClassMethod GetBucketGroupTargets(source As %String, predicate As %String, tsSta
 		Quit:(tgt = "")
 		If 'first { Set result = result _ "," }
 		Set first = 0
-		Set result = result _ """" _ tgt _ """"
+		Set result = result _ """" _ ..jsonEsc(tgt) _ """"
 	}
 	Return result _ "]"
 }

@@ -2,6 +2,44 @@
 
 # Changelog
 
+### v2.18.6 (2026-09-08)
+
+**Fix: ObjectScript JSON numeric normalization — TemporalIndex and TraversalBFS**
+
+**Root cause:** ObjectScript renders `0.5` as `.5` (no leading zero). Python
+`json.loads` and `JSON.parse` reject this as invalid JSON. IRIS's own `%FromJSON`
+is lenient and accepts it, so all ObjectScript-side tests pass — only external
+consumers break. Any fractional edge weight (rate, ratio, CPU fraction) triggers it.
+
+**Affected methods (all fixed):**
+
+- `Graph.KG.TemporalIndex`: `QueryWindow`, `QueryWindowInbound` (weight),
+  `QueryWindowSources`, `QueryWindowTargets` (string fields), `FindBursts` (velocity),
+  `QueryAggregate` (all numeric fields), `InsertEdge` (empty weight guard)
+- `Graph.KG.TraversalBFS`: `BFSFastJson`, `BFSFastJsonDirect`, `BFSFastJsonSorted`,
+  `BFSFastJsonChunked` (weight and string fields)
+
+**Fix:** Added `jsonNum(pValue)` and `jsonEsc(pValue)` helpers to both classes.
+`jsonNum` adds leading `0` when needed (`".5"→"0.5"`, `"-.5"→"-0.5"`, empty→`"null"`).
+`jsonEsc` handles `"`, `\`, and 5 ASCII control chars.
+
+**Why it went unnoticed:** Every temporal and BFS test in the suite went through Python
+engine methods that call `json.loads` inside a try/except — parse failures silently
+returned empty results, indistinguishable from "no edges in window."
+No test inserted a fractional weight and called `json.loads` on the raw
+ObjectScript output directly. This is the test anti-pattern that hid the bug.
+
+**New tests:** `tests/integration/test_temporal_json_safety.py` — 17 tests.
+All assert `json.loads(str(raw_ObjectScript_output))` with Python's strict parser.
+Weights 0.0, 0.1, 0.5, 0.818, 1.0, 1.5 all round-trip correctly.
+
+**Downstream fix note:** OpsReview's `MetricIngest.SeriesTarget` has an
+`UNSAFECHARS` workaround for `"` in node IDs, and `InteropRCA` wraps `QueryWindow`
+results in try/catch to swallow malformed windows. Both workarounds can be removed
+once this version is deployed.
+
+---
+
 ### v2.18.5 (2026-09-07)
 
 **Fix: temporal integration test PurgeResult assertions**
@@ -1718,6 +1756,44 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.18.6 (2026-09-08)
+
+**Fix: ObjectScript JSON numeric normalization — TemporalIndex and TraversalBFS**
+
+**Root cause:** ObjectScript renders `0.5` as `.5` (no leading zero). Python
+`json.loads` and `JSON.parse` reject this as invalid JSON. IRIS's own `%FromJSON`
+is lenient and accepts it, so all ObjectScript-side tests pass — only external
+consumers break. Any fractional edge weight (rate, ratio, CPU fraction) triggers it.
+
+**Affected methods (all fixed):**
+
+- `Graph.KG.TemporalIndex`: `QueryWindow`, `QueryWindowInbound` (weight),
+  `QueryWindowSources`, `QueryWindowTargets` (string fields), `FindBursts` (velocity),
+  `QueryAggregate` (all numeric fields), `InsertEdge` (empty weight guard)
+- `Graph.KG.TraversalBFS`: `BFSFastJson`, `BFSFastJsonDirect`, `BFSFastJsonSorted`,
+  `BFSFastJsonChunked` (weight and string fields)
+
+**Fix:** Added `jsonNum(pValue)` and `jsonEsc(pValue)` helpers to both classes.
+`jsonNum` adds leading `0` when needed (`".5"→"0.5"`, `"-.5"→"-0.5"`, empty→`"null"`).
+`jsonEsc` handles `"`, `\`, and 5 ASCII control chars.
+
+**Why it went unnoticed:** Every temporal and BFS test in the suite went through Python
+engine methods that call `json.loads` inside a try/except — parse failures silently
+returned empty results, indistinguishable from "no edges in window."
+No test inserted a fractional weight and called `json.loads` on the raw
+ObjectScript output directly. This is the test anti-pattern that hid the bug.
+
+**New tests:** `tests/integration/test_temporal_json_safety.py` — 17 tests.
+All assert `json.loads(str(raw_ObjectScript_output))` with Python's strict parser.
+Weights 0.0, 0.1, 0.5, 0.818, 1.0, 1.5 all round-trip correctly.
+
+**Downstream fix note:** OpsReview's `MetricIngest.SeriesTarget` has an
+`UNSAFECHARS` workaround for `"` in node IDs, and `InteropRCA` wraps `QueryWindow`
+results in try/catch to swallow malformed windows. Both workarounds can be removed
+once this version is deployed.
+
+---
 
 ### v2.18.5 (2026-09-07)
 

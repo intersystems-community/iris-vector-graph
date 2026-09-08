@@ -1,6 +1,27 @@
 Class Graph.KG.TraversalBFS Extends %RegisteredObject
 {
 
+/// Render a numeric value as valid JSON (leading-zero normalization).
+/// ObjectScript renders 0.5 as ".5" — not valid JSON for external parsers.
+ClassMethod jsonNum(pValue As %String) As %String [ Internal ]
+{
+	If pValue = "" { Return "null" }
+	If $Extract(pValue, 1, 2) = "-." { Return "-0" _ $Extract(pValue, 2, *) }
+	If $Extract(pValue, 1) = "." { Return "0" _ pValue }
+	Return pValue
+}
+
+/// Escape a string for embedding inside a JSON double-quoted value.
+ClassMethod jsonEsc(pValue As %String) As %String [ Internal ]
+{
+	Set result = $Replace(pValue, "\", "\\")
+	Set result = $Replace(result, """", "\""")
+	Set result = $Replace(result, $Char(10), "\n")
+	Set result = $Replace(result, $Char(13), "\r")
+	Set result = $Replace(result, $Char(9),  "\t")
+	Return result
+}
+
 ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "") As %DynamicArray
 {
     Set results = ##class(%DynamicArray).%New()
@@ -187,7 +208,7 @@ ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHo
         If $Find(p, """") Set p = $Replace(p, """", "\""")
         If $Find(o, """") Set o = $Replace(o, """", "\""")
         Set result = result
-            _ "{""s"":""" _ s _ """,""p"":""" _ p _ """,""o"":""" _ o _ """,""w"":" _ +$ListGet(lb, 4) _ ",""step"":" _ +$ListGet(lb, 5) _ "}"
+            _ "{""s"":""" _ ..jsonEsc(s) _ """,""p"":""" _ ..jsonEsc(p) _ """,""o"":""" _ ..jsonEsc(o) _ """,""w"":" _ ..jsonNum($ListGet(lb, 4)) _ ",""step"":" _ +$ListGet(lb, 5) _ "}"
     }
     Return result _ "]"
 }
@@ -216,7 +237,7 @@ ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxH
     For i = 1:1:count {
         Set lb = $Get(^||BFS.Results(i))
         If lb = "" Continue
-        Set obj = "{""s"":"""_$Replace($ListGet(lb,1),"""","\""")_""",""p"":"""_$Replace($ListGet(lb,2),"""","\""")_""",""o"":"""_$Replace($ListGet(lb,3),"""","\""")_""",""w"":"_(+$ListGet(lb,4))_",""step"":"_(+$ListGet(lb,5))_"}"
+        Set obj = "{""s"":"""_..jsonEsc($ListGet(lb,1))_""",""p"":"""_..jsonEsc($ListGet(lb,2))_""",""o"":"""_..jsonEsc($ListGet(lb,3))_""",""w"":"_..jsonNum($ListGet(lb,4))_",""step"":"_(+$ListGet(lb,5))_"}"
         If 'first Set obj = "," _ obj
         Set first = 0
         Set chunk = chunk _ obj
@@ -311,7 +332,7 @@ ClassMethod ReadBFSResults(tag As %String) As %String
             Set s = $ListGet(lb, 1)
             Set p = $ListGet(lb, 2)
             Set w = +$ListGet(lb, 3)
-            Set result = result _ "{""s"":"""_$Replace(s,"""","\""")_""",""p"":"""_$Replace(p,"""","\""")_""",""o"":"""_$Replace(o,"""","\""")_""",""w"":"_w_",""step"":"_step_"}"
+            Set result = result _ "{""s"":"""_..jsonEsc(s)_""",""p"":"""_..jsonEsc(p)_""",""o"":"""_..jsonEsc(o)_""",""w"":"_..jsonNum(w)_",""step"":"_step_"}"
         }
     }
     Kill ^ArnoKG("bfs_r", tag)
@@ -348,7 +369,7 @@ ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %Strin
         Set s = $ListGet(lb, 1)
         Set p = $ListGet(lb, 2)
         Set w = +$ListGet(lb, 3)
-        Set entry = "{""s"":"""_$Replace(s,"""","\""")_""",""p"":"""_$Replace(p,"""","\""")_""",""o"":"""_$Replace(o,"""","\""")_""",""w"":"_w_",""step"":"_step_"}"
+        Set entry = "{""s"":"""_..jsonEsc(s)_""",""p"":"""_..jsonEsc(p)_""",""o"":"""_..jsonEsc(o)_""",""w"":"_..jsonNum(w)_",""step"":"_step_"}"
         If result '= "" Set result = result _ ","
         Set result = result _ entry
         Set count = count + 1
