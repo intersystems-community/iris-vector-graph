@@ -231,6 +231,45 @@ result = engine.execute_cypher(
 )
 ```
 
+### Testing with historical fixture data
+
+`get_edge_velocity()` and `find_burst_nodes()` compute windows relative to
+`time.time()` (wall clock) by default. When test fixtures use a historical epoch
+(e.g. 2026-07-01), pass `now_ts` to anchor the window to the fixture time:
+
+```python
+FIXTURE_NOW = 1_751_328_000  # 2026-07-01T00:00:00Z
+
+engine.create_edge_temporal("svc-auth", "CALLS", "svc-db",
+                             timestamp=FIXTURE_NOW - 60, weight=1.0)
+
+# Without now_ts → returns 0 (wall clock is months after fixture)
+# With now_ts → returns 1
+velocity = engine.get_edge_velocity("svc-auth", window_seconds=300,
+                                    now_ts=FIXTURE_NOW)
+assert velocity == 1
+
+bursts = engine.find_burst_nodes("CALLS", window_seconds=300,
+                                  threshold=1, now_ts=FIXTURE_NOW)
+assert any(b["id"] == "svc-auth" for b in bursts)
+```
+
+`get_edges_in_window()`, `get_temporal_aggregate()`, and related methods take
+explicit start/end timestamps, so they are unaffected by this issue.
+
+### Edge attributes
+
+`create_edge_temporal(attrs={"latency_ms": "237"})` writes attrs to
+`^KG("edgeprop")`. These are **not** included in `get_edges_in_window()` results
+(which return only `{s, p, o, ts, w}`). To retrieve attrs per edge:
+
+```python
+edges = engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end)
+for edge in edges:
+    attrs = engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
+    print(attrs)  # {"latency_ms": "237", ...}
+```
+
 ### AQL (ArangoDB Query Language)
 
 ```python

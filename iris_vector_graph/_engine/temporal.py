@@ -229,7 +229,23 @@ class TemporalMixin:
         """Return the canonical JSON for a known label set hash, or '' if unknown."""
         return self._store.resolve_label_set(hash_hex)
 
-    def get_edge_velocity(self, node_id: str, window_seconds: int = 300, window: int = None, now_ts: int = 0) -> int:
+    def get_edge_velocity(
+        self,
+        node_id: str,
+        window_seconds: int = 300,
+        window: int = None,
+        now_ts: int = 0,
+    ) -> int:
+        """Count edges arriving at ``node_id`` within the last ``window_seconds``.
+
+        Args:
+            node_id: Source node ID.
+            window_seconds: Width of the time window in seconds.
+            now_ts: Unix timestamp to use as "now". Default 0 = wall clock.
+                **Pass an explicit value when testing with historical fixture data**
+                (e.g., ``now_ts = fixture_epoch + window_seconds``) to ensure the
+                window covers the fixture timestamps.
+        """
         w = window if window is not None else window_seconds
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "GetVelocity", node_id, w, now_ts
@@ -237,10 +253,25 @@ class TemporalMixin:
         return int(result)
 
     def find_burst_nodes(
-        self, predicate: str = "", window_seconds: int = 300, threshold: int = 50
+        self,
+        predicate: str = "",
+        window_seconds: int = 300,
+        threshold: int = 50,
+        now_ts: int = 0,
     ) -> list:
+        """Find nodes whose inbound edge count in the last window exceeds threshold.
+
+        Args:
+            predicate: Filter to edges with this predicate. Empty = all predicates.
+            window_seconds: Width of the detection window in seconds.
+            threshold: Minimum edge count to qualify as a burst.
+            now_ts: Unix timestamp to use as "now". Default 0 = wall clock.
+                **Pass an explicit value when testing with historical fixture data**
+                so the detection window covers the fixture timestamps.
+        """
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold
+            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold,
+            now_ts,
         )
         return json.loads(str(result))
 
