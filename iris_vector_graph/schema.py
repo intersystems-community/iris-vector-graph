@@ -259,6 +259,10 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 "CREATE INDEX idx_docs_text_ifind ON Graph_KG.docs(text) INDEXTYPE = %iFind.Index.Basic",
             ),
             (
+                "idx_ledger_correlation",
+                "CREATE INDEX idx_ledger_correlation ON Graph_KG.ledger_revisions (correlation_id)",
+            ),
+            (
                 "idx_edges_confidence",
                 "CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER))",
             ),
@@ -266,7 +270,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             ("drop_idx_props_key_val", "DROP INDEX idx_props_key_val"),
         ]
 
-        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_docs_text_ifind", "idx_edges_confidence"}
+        _OPTIONAL_INDEXES = {"idx_props_val_ifind", "idx_docs_text_ifind", "idx_edges_confidence", "idx_ledger_correlation"}
 
         status = {}
         for name, sql in indexes:

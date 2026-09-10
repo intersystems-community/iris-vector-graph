@@ -269,6 +269,8 @@ def fetch_history(
     since_ms: Optional[int] = None,
     until_ms: Optional[int] = None,
     descending: bool = False,
+    correlation_id: Optional[str] = None,
+    source: Optional[str] = None,
 ):
     from .client import HistoryPage
 
@@ -293,6 +295,12 @@ def fetch_history(
     if until_ms is not None:
         where.append("committed_ms <= ?")
         params.append(int(until_ms))
+    if correlation_id is not None:
+        where.append("correlation_id = ?")
+        params.append(correlation_id)
+    if source is not None:
+        where.append("source = ?")
+        params.append(source)
     sql = f"SELECT TOP {int(limit)} {_REV_COLS} FROM {schema}.ledger_revisions"
     if where:
         sql += " WHERE " + " AND ".join(where)

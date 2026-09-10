@@ -580,6 +580,18 @@ The `expected_head` check runs only when the fingerprint is new (not a replay).
 for rev in engine.ledger.history(limit=20):
     print(rev.seq, rev.actor, rev.message, rev.committed_ms)
 
+# Multi-tenant: filter to one tenant's revisions using correlation_id
+# Set correlation_id on every Changeset at commit time:
+#   cs = Changeset(actor="ingest", actor_type="ingest",
+#                  correlation_id="acme-health|iris-acme-health")
+page = engine.ledger.history(
+    correlation_id="acme-health|iris-acme-health",
+    limit=50,
+    descending=True,
+)
+for rev in page.revisions:
+    print(rev.seq, rev.correlation_id, rev.committed_ms)
+
 # Full mutation records for one revision
 rev = engine.ledger.get_revision(result.revision.revision_id)
 for record in rev.records:

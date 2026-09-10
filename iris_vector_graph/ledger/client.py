@@ -380,7 +380,26 @@ class GraphLedger:
         since_ms: Optional[int] = None,
         until_ms: Optional[int] = None,
         descending: bool = False,
+        correlation_id: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> HistoryPage:
+        """Return a page of ledger revisions, newest or oldest first.
+
+        All filter parameters are pushed to SQL (not applied in Python).
+
+        Args:
+            after_seq: Pagination cursor — return revisions after this seq.
+            limit: Maximum revisions to return.
+            actor: Filter to revisions by a specific actor string.
+            actor_type: Filter to revisions by actor type (e.g. "ingest").
+            since_ms: Only revisions committed at or after this epoch-ms.
+            until_ms: Only revisions committed at or before this epoch-ms.
+            descending: Return newest-first when True.
+            correlation_id: Filter to revisions with this exact correlation_id.
+                Useful for per-tenant history in multi-tenant graphs where
+                correlation_id is set to e.g. "acme-health|iris-acme-health".
+            source: Filter to revisions tagged with this source string.
+        """
         from .replay import fetch_history
 
         return fetch_history(
@@ -393,6 +412,8 @@ class GraphLedger:
             since_ms=since_ms,
             until_ms=until_ms,
             descending=descending,
+            correlation_id=correlation_id,
+            source=source,
         )
 
     def get_revision(self, revision_id: str) -> Revision:
