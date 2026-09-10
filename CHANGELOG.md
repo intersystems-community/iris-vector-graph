@@ -2,6 +2,52 @@
 
 # Changelog
 
+### v2.18.8 (2026-09-10)
+
+**Ledger API: specs 215-218 — four friction-report items**
+
+Full SpecKit pipeline (specify → clarify → plan → tasks → analyze → implement)
+completed for all four specs. E2E integration tests on `ivg-iris-enterprise` gate
+each phase. 14 new unit tests + 10 new integration tests.
+
+#### Spec 215 — DiffEntry.rel_info + fingerprint docstring (doc + minor API)
+
+- `DiffEntry.rel_info` property: returns `{"s","p","o","graph"}` dict for
+  relationship diff entries (entity_id is an opaque stmt_id; actual tuple is in
+  `after`/`before` JSON). Returns `None` for non-relationship entries.
+- `Changeset.fingerprint()` now has a docstring stating exactly which fields are
+  hashed (`actor`, `actor_type`, `ops`) and which are excluded (`expected_head`,
+  `idempotency_key`, etc.).
+- `CommitResult` class docstring notes `replayed=True` can occur with a different
+  `expected_head` — fingerprint does not include it.
+- USER_GUIDE §10: new Idempotency subsection; `rel_info` usage example in diff section.
+
+#### Spec 216 — ledger.history() source filter (enhancement)
+
+- `history(correlation_id=..., source=...)` — new filter params pushed to SQL.
+- `idx_ledger_correlation` added to `ensure_indexes()` as an optional index.
+- Multi-tenant example added to USER_GUIDE §10 History subsection.
+
+#### Spec 217 — create_relationship missing-node (bug fix + enhancement)
+
+- `NodeNotFoundError(LedgerError)` — new exception with `.missing_node` attribute;
+  raised by `commit()` when a node is missing (parses `"node_not_found: 'X'"` from
+  ObjectScript response).
+- `Changeset(auto_stub_missing_nodes=True)` — `create_relationship(s, p, o)` auto-
+  prepends `upsert_node(s)` and `upsert_node(o)` if not already in the changeset.
+- `NodeNotFoundError` exported from `iris_vector_graph.ledger`.
+
+#### Spec 218 — post_commit_properties (enhancement)
+
+- `Changeset.post_commit_properties: dict[str, dict[str, str]]` — applied after
+  successful commit via direct SQL (Approach A — no new revision created).
+- `REVISION_ID_SENTINEL = "$REVISION_ID"` — placeholder substituted with the actual
+  `revision_id` after commit, enabling audit trails without a second commit.
+- `CommitResult.post_commit_applied: bool` and `CommitResult.post_commit_error: Optional[str]`.
+- USER_GUIDE §10: Post-commit properties section with audit trail example.
+
+---
+
 ### v2.18.7 (2026-09-08)
 
 **Fix: jsonEsc incomplete — NUL and other control chars not escaped (field failure)**
@@ -1783,6 +1829,52 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.18.8 (2026-09-10)
+
+**Ledger API: specs 215-218 — four friction-report items**
+
+Full SpecKit pipeline (specify → clarify → plan → tasks → analyze → implement)
+completed for all four specs. E2E integration tests on `ivg-iris-enterprise` gate
+each phase. 14 new unit tests + 10 new integration tests.
+
+#### Spec 215 — DiffEntry.rel_info + fingerprint docstring (doc + minor API)
+
+- `DiffEntry.rel_info` property: returns `{"s","p","o","graph"}` dict for
+  relationship diff entries (entity_id is an opaque stmt_id; actual tuple is in
+  `after`/`before` JSON). Returns `None` for non-relationship entries.
+- `Changeset.fingerprint()` now has a docstring stating exactly which fields are
+  hashed (`actor`, `actor_type`, `ops`) and which are excluded (`expected_head`,
+  `idempotency_key`, etc.).
+- `CommitResult` class docstring notes `replayed=True` can occur with a different
+  `expected_head` — fingerprint does not include it.
+- USER_GUIDE §10: new Idempotency subsection; `rel_info` usage example in diff section.
+
+#### Spec 216 — ledger.history() source filter (enhancement)
+
+- `history(correlation_id=..., source=...)` — new filter params pushed to SQL.
+- `idx_ledger_correlation` added to `ensure_indexes()` as an optional index.
+- Multi-tenant example added to USER_GUIDE §10 History subsection.
+
+#### Spec 217 — create_relationship missing-node (bug fix + enhancement)
+
+- `NodeNotFoundError(LedgerError)` — new exception with `.missing_node` attribute;
+  raised by `commit()` when a node is missing (parses `"node_not_found: 'X'"` from
+  ObjectScript response).
+- `Changeset(auto_stub_missing_nodes=True)` — `create_relationship(s, p, o)` auto-
+  prepends `upsert_node(s)` and `upsert_node(o)` if not already in the changeset.
+- `NodeNotFoundError` exported from `iris_vector_graph.ledger`.
+
+#### Spec 218 — post_commit_properties (enhancement)
+
+- `Changeset.post_commit_properties: dict[str, dict[str, str]]` — applied after
+  successful commit via direct SQL (Approach A — no new revision created).
+- `REVISION_ID_SENTINEL = "$REVISION_ID"` — placeholder substituted with the actual
+  `revision_id` after commit, enabling audit trails without a second commit.
+- `CommitResult.post_commit_applied: bool` and `CommitResult.post_commit_error: Optional[str]`.
+- USER_GUIDE §10: Post-commit properties section with audit trail example.
+
+---
 
 ### v2.18.7 (2026-09-08)
 
