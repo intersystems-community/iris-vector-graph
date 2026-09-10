@@ -2,6 +2,21 @@
 
 # Changelog
 
+### v2.18.9 (2026-09-10)
+
+**Fix: TestEdgeEmbeddingsE2E isolation — run-scoped assertions, full wipe in setup**
+
+`TestEdgeEmbeddingsE2E` assertions `embedded == N` were comparing the total count
+of ALL embeddings in the session-scoped container against the expected count for
+the current test run. Other tests in the session (ledger E2E, etc.) left rows in
+`rdf_edges` and `kg_EdgeEmbeddings`. Fix: setup now wipes `nodes`, `rdf_labels`,
+`rdf_props`, `rdf_edges`, and `kg_EdgeEmbeddings`; assertions check run-prefixed
+counts via direct SQL rather than the global `result["embedded"]` counter.
+
+Result: 0 failures (was 4 pre-existing), 7876 passed.
+
+---
+
 ### v2.18.8 (2026-09-10)
 
 **Ledger API: specs 215-218 — four friction-report items**
@@ -1829,6 +1844,21 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.18.9 (2026-09-10)
+
+**Fix: TestEdgeEmbeddingsE2E isolation — run-scoped assertions, full wipe in setup**
+
+`TestEdgeEmbeddingsE2E` assertions `embedded == N` were comparing the total count
+of ALL embeddings in the session-scoped container against the expected count for
+the current test run. Other tests in the session (ledger E2E, etc.) left rows in
+`rdf_edges` and `kg_EdgeEmbeddings`. Fix: setup now wipes `nodes`, `rdf_labels`,
+`rdf_props`, `rdf_edges`, and `kg_EdgeEmbeddings`; assertions check run-prefixed
+counts via direct SQL rather than the global `result["embedded"]` counter.
+
+Result: 0 failures (was 4 pre-existing), 7876 passed.
+
+---
 
 ### v2.18.8 (2026-09-10)
 
