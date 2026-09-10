@@ -324,6 +324,29 @@ class DiffEntry:
     def inverse(self) -> "DiffEntry":
         return DiffEntry(self.entity_kind, self.entity_id, self.attr, self.after, self.before)
 
+    @property
+    def rel_info(self) -> Optional[Dict[str, Any]]:
+        """For relationship diff entries, return the parsed (s, p, o, graph) tuple.
+
+        ``entity_id`` for ``entity_kind == "rel"`` entries is an opaque numeric
+        statement-identity string (``^IVG.Ledger("stmt", N)``).  The human-readable
+        subject, predicate, object and named graph are encoded in ``after`` for
+        create_rel records and in ``before`` for delete_rel records as a JSON string
+        of the form ``{"s": "...", "p": "...", "o": "...", "graph": "..."}``.
+
+        Returns ``None`` for non-relationship entries or when both ``after`` and
+        ``before`` are ``None``.
+        """
+        if self.entity_kind != "rel":
+            return None
+        src = self.after if self.after is not None else self.before
+        if src is None:
+            return None
+        try:
+            return json.loads(src)
+        except Exception:
+            return None
+
     def to_wire(self) -> Dict[str, Any]:
         return {
             "entity_kind": self.entity_kind,

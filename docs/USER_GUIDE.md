@@ -548,6 +548,31 @@ print(result.revision.seq)  # monotonically increasing sequence number
 If another writer commits between `head()` and `commit()`, a `StaleHeadError`
 is raised and nothing is written. Retry by re-reading `head()`.
 
+### Idempotency
+
+Every changeset carries an idempotency fingerprint computed over `{actor, actor_type,
+ops}`. If you commit the same changeset twice (same actor and ops), the second commit
+returns `CommitResult(replayed=True)` instead of creating a new revision.
+
+```python
+cs = Changeset(actor="ingest:acme", actor_type="ingest", idempotency_key="batch-001")
+cs.create_node("node-A")
+r1 = engine.ledger.commit(cs)
+
+# Retry (e.g. after a network timeout) — returns replayed=True, same revision_id
+r2 = engine.ledger.commit(cs)
+assert r2.replayed
+assert r2.revision.revision_id == r1.revision.revision_id
+```
+
+**Which fields are hashed**: `actor`, `actor_type`, `ops`. **Excluded**:
+`expected_head`, `idempotency_key`, `message`, `correlation_id`.
+
+**Important**: `expected_head` is NOT part of the fingerprint. A retry with a
+different `expected_head` (because the head advanced) produces the **same**
+fingerprint and returns `replayed=True` — it does not raise `StaleHeadError`.
+The `expected_head` check runs only when the fingerprint is new (not a replay).
+
 ### History and diffs
 
 ```python
@@ -563,7 +588,13 @@ for record in rev.records:
 # Diff between two revisions (what changed?)
 changes = engine.ledger.diff(genesis.revision_id, result.revision.revision_id)
 for change in changes:
-    print(change.op, change.entity_id, change.prior, change.new)
+    if change.entity_kind == "rel":
+        # Relationship entries: entity_id is an opaque numeric stmt_id.
+        # Use rel_info to get the human-readable (s, p, o, graph) tuple.
+        info = change.rel_info  # {"s": "A", "p": "CALLS", "o": "B", "graph": ""}
+        print(f"  {info['s']} -[{info['p']}]-> {info['o']} ({change.attr or 'existence'})")
+    else:
+        print(change.attr, change.entity_id, change.before, change.after)
 ```
 
 ### Historical reconstruction

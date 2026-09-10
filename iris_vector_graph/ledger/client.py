@@ -76,6 +76,20 @@ class RevisionInfo:
 
 @dataclass
 class CommitResult:
+    """Result of a successful :meth:`GraphLedger.commit` call.
+
+    Attributes:
+        revision: The assigned or replayed :class:`RevisionInfo`.
+        replayed: ``True`` when this commit was a replay of an earlier identical
+            changeset (same ``actor``, ``actor_type``, and ``ops`` fingerprint).
+            **Note**: ``replayed=True`` can occur even when ``expected_head`` differs
+            from the original commit — the fingerprint does *not* include
+            ``expected_head``.  See :meth:`Changeset.fingerprint` for the exact
+            scope of the idempotency hash.
+        stmt_ids: Mapping of op index → assigned statement identity for new
+            relationship operations.
+    """
+
     revision: RevisionInfo
     replayed: bool = False
     stmt_ids: Dict[int, str] = field(default_factory=dict)

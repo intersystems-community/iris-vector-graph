@@ -299,6 +299,20 @@ class Changeset:
         return canonical_dumps(self.to_wire())
 
     def fingerprint(self) -> str:
+        """SHA-256 hex digest used for idempotency matching.
+
+        **Included fields**: ``actor``, ``actor_type``, ``ops``.
+
+        **Excluded fields**: ``expected_head``, ``idempotency_key``, ``message``,
+        ``correlation_id``, ``committed_at``, and all other session-operational fields.
+
+        Consequence: two ``Changeset`` objects with the same ``actor``, ``actor_type``,
+        and ``ops`` but different ``expected_head`` values produce **the same
+        fingerprint**. If the first commit is replayed with a different
+        ``expected_head``, the server returns ``replayed=True`` rather than
+        ``StaleHeadError`` — ``expected_head`` is checked separately, after the
+        idempotency check.
+        """
         scope = {
             "actor": self.actor,
             "actor_type": self.actor_type,
