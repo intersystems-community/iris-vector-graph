@@ -40,6 +40,60 @@ def _fix_iris_json(raw3: str) -> str:
     return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
 
+# ── BFS strategy protocol (spec-arch-4, internal seam) ─────────────────────
+# Three adapters exist for BFS: Arno/NKG (Rust), ObjectScript, and SQL fallback.
+# A formal internal seam makes each independently testable and adding a fourth
+# path safe. The protocol is NOT exported — callers see only execute_bfs.
+try:
+    from typing import Protocol, runtime_checkable as _runtime_checkable
+
+    @_runtime_checkable
+    class _BfsStrategy(Protocol):
+        def run(
+            self,
+            source_id: str,
+            predicates: list,
+            max_hops: int,
+            direction: str,
+            max_results: int,
+        ) -> "IVGResult": ...
+
+except Exception:
+    # Fallback for Python < 3.8 (should not occur in practice)
+    class _BfsStrategy:  # type: ignore[no-redef]
+        pass
+
+
+class _ArnoBfsAdapter:
+    """Arno/NKG Rust-accelerated BFS adapter."""
+    __slots__ = ("_s",)
+
+    def __init__(self, store): self._s = store
+
+    def run(self, source_id, predicates, max_hops, direction, max_results):
+        return self._s._run_arno_bfs(source_id, predicates, max_hops, direction, max_results)
+
+
+class _ObjectScriptBfsAdapter:
+    """ObjectScript BFSFastJsonSorted adapter with SQL fallback."""
+    __slots__ = ("_s",)
+
+    def __init__(self, store): self._s = store
+
+    def run(self, source_id, predicates, max_hops, direction, max_results):
+        return self._s._run_objectscript_bfs(source_id, predicates, max_hops, direction, max_results)
+
+
+class _SqlBfsFallbackAdapter:
+    """Pure-SQL BFS adapter (fallback when ObjectScript unavailable)."""
+    __slots__ = ("_s",)
+
+    def __init__(self, store): self._s = store
+
+    def run(self, source_id, predicates, max_hops, direction, max_results):
+        return self._s._sql_bfs_fallback(source_id, predicates, max_hops, direction, max_results)
+
+
 class IRISGraphStore:
     def __init__(self, conn, namespace: str = "USER"):
         self.conn = conn
@@ -549,49 +603,69 @@ class IRISGraphStore:
 
     # ── Traversal ─────────────────────────────────────────────────────────────
 
+    def _select_bfs_strategy(self) -> "_BfsStrategy":
+        """Choose the BFS adapter based on available capabilities (internal seam)."""
+        if self._detect_arno() and self._arno_capabilities.get("bfs"):
+            return _ArnoBfsAdapter(self)
+        return _ObjectScriptBfsAdapter(self)
+
     def execute_bfs(
         self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
     ) -> IVGResult:
+        """Execute BFS via the selected strategy adapter."""
+        strategy = self._select_bfs_strategy()
+        return strategy.run(source_id, predicates, max_hops, direction, max_results)
+
+    def _run_arno_bfs(
+        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
+    ) -> IVGResult:
+        """Arno/NKG Rust-accelerated BFS path. Falls back to ObjectScript on error."""
         import json as _json
-
         predicates_json = _json.dumps(predicates) if predicates else ""
+        try:
+            raw = self._arno_call(
+                "Graph.KG.NKGAccel",
+                "BFSJson",
+                source_id,
+                predicates_json,
+                str(max_hops),
+                str(max_results),
+            )
+            raw_val = raw if isinstance(raw, str) else str(raw)
+            if raw_val.startswith("SORTED:"):
+                tag = raw_val.split(":", 2)[1]
+                iris_obj = self._iris_obj()
+                pages = []
+                i = 1
+                while True:
+                    chunk = str(
+                        iris_obj.classMethodValue("Graph.KG.NKGAccel", "ReadBFSPage", tag, i)
+                    )
+                    if not chunk or chunk == "":
+                        break
+                    pages.append(chunk)
+                    i += 1
+                raw_val = "".join(pages)
+            results = _json.loads(raw_val) if raw_val else []
+            if not isinstance(results, list):
+                results = []
+            rows = [
+                [r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")]
+                for r in results
+            ]
+            return IVGResult(columns=["id", "hops", "pred"], rows=rows)
+        except Exception as e:
+            logger.warning("Arno BFS failed, falling back to ObjectScript: %s", e)
+            return _ObjectScriptBfsAdapter(self).run(
+                source_id, predicates, max_hops, direction, max_results
+            )
 
-        if self._detect_arno() and self._arno_capabilities.get("bfs"):
-            try:
-                raw = self._arno_call(
-                    "Graph.KG.NKGAccel",
-                    "BFSJson",
-                    source_id,
-                    predicates_json,
-                    str(max_hops),
-                    str(max_results),
-                )
-                raw_val = raw if isinstance(raw, str) else str(raw)
-                if raw_val.startswith("SORTED:"):
-                    tag = raw_val.split(":", 2)[1]
-                    iris_obj = self._iris_obj()
-                    pages = []
-                    i = 1
-                    while True:
-                        chunk = str(
-                            iris_obj.classMethodValue("Graph.KG.NKGAccel", "ReadBFSPage", tag, i)
-                        )
-                        if not chunk or chunk == "":
-                            break
-                        pages.append(chunk)
-                        i += 1
-                    raw_val = "".join(pages)
-                results = _json.loads(raw_val) if raw_val else []
-                if not isinstance(results, list):
-                    results = []
-                rows = [
-                    [r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")]
-                    for r in results
-                ]
-                return IVGResult(columns=["id", "hops", "pred"], rows=rows)
-            except Exception as e:
-                logger.warning("Arno BFS failed, falling back to ObjectScript: %s", e)
-
+    def _run_objectscript_bfs(
+        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
+    ) -> IVGResult:
+        """ObjectScript BFSFastJsonSorted path with SQL fallback."""
+        import json as _json
+        predicates_json = _json.dumps(predicates) if predicates else ""
         try:
             bfs_json = str(
                 self._call_classmethod(
@@ -613,12 +687,10 @@ class IRISGraphStore:
         if val.startswith("SORTED:"):
             tag = val.split(":", 2)[1]
             if tag == "0":
-                # ^KG not built or source has no edges — fall back to SQL BFS
                 return self._sql_bfs_fallback(
                     source_id, predicates, max_hops, direction, max_results
                 )
             from iris_vector_graph.engine import _bfs_stream_pages
-
             results = list(_bfs_stream_pages(self.conn, tag))
             rows = [
                 [

@@ -129,6 +129,74 @@ def _bfs_stream_pages(conn, tag, page_size=500):
         cursor_o = page.get("next_o", "")
 
 
+# ── Sub-engine namespaces (spec-arch-2) ────────────────────────────────────
+# Each sub-engine is a thin delegator that groups related methods by domain.
+# All 192 top-level methods remain unchanged — sub-engines are additive only.
+# Callers who only need graph mutations learn `engine.graph.*`; temporal callers
+# learn `engine.temporal.*`. Fixture setup and IDE autocomplete improve because
+# the relevant method surface is 10-30 methods, not 192.
+
+class _GraphSubEngine:
+    """Structural graph mutations and queries."""
+    __slots__ = ("_e",)
+    def __init__(self, e): self._e = e
+    def create_node(self, *a, **kw): return self._e.create_node(*a, **kw)
+    def create_edge(self, *a, **kw): return self._e.create_edge(*a, **kw)
+    def upsert_node(self, *a, **kw): return self._e.upsert_node(*a, **kw)
+    def delete_node(self, *a, **kw): return self._e.delete_node(*a, **kw)
+    def delete_edge(self, *a, **kw): return self._e.delete_edge(*a, **kw)
+    def bulk_create_nodes(self, *a, **kw): return self._e.bulk_create_nodes(*a, **kw)
+    def bulk_create_edges(self, *a, **kw): return self._e.bulk_create_edges(*a, **kw)
+    def get_node_count(self, *a, **kw): return self._e.get_node_count(*a, **kw)
+    def get_edge_count(self, *a, **kw): return self._e.get_edge_count(*a, **kw)
+    def get_labels(self, *a, **kw): return self._e.get_labels(*a, **kw)
+    def get_relationship_types(self, *a, **kw): return self._e.get_relationship_types(*a, **kw)
+
+
+class _CypherSubEngine:
+    """Cypher query execution and adjacency index management."""
+    __slots__ = ("_e",)
+    def __init__(self, e): self._e = e
+    def execute_cypher(self, *a, **kw): return self._e.execute_cypher(*a, **kw)
+    def execute_bfs(self, *a, **kw): return self._e.execute_bfs(*a, **kw)
+    def execute_knn_vec(self, *a, **kw): return self._e.execute_knn_vec(*a, **kw)
+    def sync(self, *a, **kw): return self._e.sync(*a, **kw)
+    def rebuild_nkg(self, *a, **kw): return self._e.rebuild_nkg(*a, **kw)
+    def rebuild_kg(self, *a, **kw): return self._e.rebuild_kg(*a, **kw)
+
+
+class _TemporalSubEngine:
+    """Temporal edge graph — event-time writes and window queries."""
+    __slots__ = ("_e",)
+    def __init__(self, e): self._e = e
+    def create_edge_temporal(self, *a, **kw): return self._e.create_edge_temporal(*a, **kw)
+    def bulk_create_edges_temporal(self, *a, **kw): return self._e.bulk_create_edges_temporal(*a, **kw)
+    def get_edges_in_window(self, *a, **kw): return self._e.get_edges_in_window(*a, **kw)
+    def get_edge_velocity(self, *a, **kw): return self._e.get_edge_velocity(*a, **kw)
+    def find_burst_nodes(self, *a, **kw): return self._e.find_burst_nodes(*a, **kw)
+    def get_edge_attrs(self, *a, **kw): return self._e.get_edge_attrs(*a, **kw)
+    def get_temporal_aggregate(self, *a, **kw): return self._e.get_temporal_aggregate(*a, **kw)
+    def get_bucket_groups(self, *a, **kw): return self._e.get_bucket_groups(*a, **kw)
+    def get_bucket_group_targets(self, *a, **kw): return self._e.get_bucket_group_targets(*a, **kw)
+    def purge_raw_before(self, *a, **kw): return self._e.purge_raw_before(*a, **kw)
+
+
+class _AlgorithmsSubEngine:
+    """Graph algorithms — centrality, community detection, ranking."""
+    __slots__ = ("_e",)
+    def __init__(self, e): self._e = e
+    def degree_centrality(self, *a, **kw): return self._e.degree_centrality(*a, **kw)
+    def betweenness_centrality(self, *a, **kw): return self._e.betweenness_centrality(*a, **kw)
+    def closeness_centrality(self, *a, **kw): return self._e.closeness_centrality(*a, **kw)
+    def eigenvector_centrality(self, *a, **kw): return self._e.eigenvector_centrality(*a, **kw)
+    def leiden_communities(self, *a, **kw): return self._e.leiden_communities(*a, **kw)
+    def pagerank(self, *a, **kw): return self._e.pagerank(*a, **kw)
+    def execute_wcc(self, *a, **kw): return self._e.execute_wcc(*a, **kw)
+    def execute_scc(self, *a, **kw): return self._e.execute_scc(*a, **kw)
+    def execute_k_core(self, *a, **kw): return self._e.execute_k_core(*a, **kw)
+    def execute_triangle_count(self, *a, **kw): return self._e.execute_triangle_count(*a, **kw)
+
+
 class IRISGraphEngine(
     LedgerMixin,
     RdfExportMixin,
@@ -217,6 +285,11 @@ class IRISGraphEngine(
         # allowing create_node to emit a compatible INSERT on pre-214 schemas.
         # Defaulting True avoids an eager SQL round-trip on every engine construction.
         self._nodes_has_graph_id: bool = True
+        # Sub-engine namespaces (additive — top-level methods unchanged)
+        self.graph = _GraphSubEngine(self)
+        self.cypher = _CypherSubEngine(self)
+        self.temporal = _TemporalSubEngine(self)
+        self.algorithms = _AlgorithmsSubEngine(self)
         logger.debug(
             "IRISGraphEngine initialized (dim=%s dtype=%s)",
             embedding_dimension or "auto",

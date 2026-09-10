@@ -102,6 +102,26 @@ class CommitResult:
 
 
 @dataclass
+class _CommitWireResult:
+    """Raw result from the transport layer — no exceptions, no side effects.
+
+    ``_send_changeset`` populates this and returns it to ``commit()``, which
+    then maps it to exceptions (on failure) or ``CommitResult`` (on success).
+    Keeping transport (chunking, ObjectScript call, JSON parsing) separate from
+    semantics (NKG dirty, post_commit SQL, metrics) makes each independently
+    testable with a simple mock.
+    """
+
+    ok: bool
+    revision_id: Optional[str]
+    replayed: bool
+    stmt_ids: dict
+    error_code: Optional[str]
+    reason: Optional[str]
+    raw_resp: dict
+
+
+@dataclass
 class HistoryPage:
     revisions: List[RevisionInfo]
     next_after_seq: Optional[int]
@@ -223,8 +243,12 @@ class GraphLedger:
 
     # -- commit ----------------------------------------------------------------
 
-    def commit(self, changeset: Changeset, *, kind: str = "changeset") -> CommitResult:
-        changeset.validate()
+    def _send_changeset(self, changeset: Changeset, *, kind: str = "changeset") -> "_CommitWireResult":
+        """Transport layer: chunk, call ObjectScript, parse JSON → _CommitWireResult.
+
+        Never raises. All errors are encoded in the result's ``ok=False`` path.
+        Has no side effects on the engine or store — purely I/O.
+        """
         payload = changeset.canonical_json()
         meta = {
             "fingerprint": changeset.fingerprint(),
@@ -234,21 +258,26 @@ class GraphLedger:
             "schema": self._schema(),
             "staged": False,
         }
-        t0 = time.perf_counter()
-        if len(payload) <= CHUNK_CHARS:
-            raw = self._call("Commit", payload, json.dumps(meta))
-        else:
-            token = uuid.uuid4().hex
-            iris_obj = self._iris()
-            idx = 0
-            for start in range(0, len(payload), CHUNK_CHARS):
-                idx += 1
-                iris_obj.classMethodValue(
-                    LEDGER_CLASS, "StageChunk", token, idx, payload[start : start + CHUNK_CHARS]
-                )
-            meta["staged"] = True
-            raw = self._call("Commit", token, json.dumps(meta))
-        duration_ms = (time.perf_counter() - t0) * 1000.0
+        try:
+            if len(payload) <= CHUNK_CHARS:
+                raw = self._call("Commit", payload, json.dumps(meta))
+            else:
+                token = uuid.uuid4().hex
+                iris_obj = self._iris()
+                idx = 0
+                for start in range(0, len(payload), CHUNK_CHARS):
+                    idx += 1
+                    iris_obj.classMethodValue(
+                        LEDGER_CLASS, "StageChunk", token, idx, payload[start : start + CHUNK_CHARS]
+                    )
+                meta["staged"] = True
+                raw = self._call("Commit", token, json.dumps(meta))
+        except Exception as exc:
+            return _CommitWireResult(
+                ok=False, revision_id=None, replayed=False, stmt_ids={},
+                error_code="inconsistent", reason=str(exc),
+                raw_resp={"ok": False, "error": "inconsistent", "reason": str(exc)},
+            )
         try:
             resp = (
                 json.loads(raw)
@@ -261,8 +290,25 @@ class GraphLedger:
                 "error": "inconsistent",
                 "reason": f"non-JSON response: {raw[:200]!r}",
             }
+        revision = resp.get("revision") or {}
+        return _CommitWireResult(
+            ok=bool(resp.get("ok", False)),
+            revision_id=revision.get("revision_id") if revision else None,
+            replayed=bool(resp.get("replayed", False)),
+            stmt_ids=resp.get("stmt_ids") or {},
+            error_code=resp.get("error") if not resp.get("ok", False) else None,
+            reason=resp.get("reason"),
+            raw_resp=resp,
+        )
 
-        if not resp.get("ok", False):
+    def commit(self, changeset: Changeset, *, kind: str = "changeset") -> CommitResult:
+        changeset.validate()
+        t0 = time.perf_counter()
+        wire = self._send_changeset(changeset, kind=kind)
+        duration_ms = (time.perf_counter() - t0) * 1000.0
+
+        if not wire.ok:
+            resp = wire.raw_resp
             self._emit(
                 resp.get("error", "error"), None, changeset, duration_ms, reason=resp.get("reason")
             )
@@ -274,9 +320,10 @@ class GraphLedger:
                 raise NodeNotFoundError(missing_node=missing)
             raise from_commit_error(resp)
 
+        resp = wire.raw_resp
         info = RevisionInfo.from_wire(resp["revision"])
-        replayed = bool(resp.get("replayed", False))
-        stmt_ids = {int(k): str(v) for k, v in (resp.get("stmt_ids") or {}).items()}
+        replayed = wire.replayed
+        stmt_ids = {int(k): str(v) for k, v in (wire.stmt_ids or {}).items()}
         self._emit("replayed" if replayed else "success", info, changeset, duration_ms)
 
         if not replayed and any(
