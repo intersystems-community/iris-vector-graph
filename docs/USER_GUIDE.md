@@ -112,7 +112,21 @@ engine.create_edge_temporal(
     predicate="CALLS",
     target="service:payment",
     timestamp=int(time.time()),
-    weight=42.7  # latency_ms, metric value, etc
+    weight=42.7,  # latency_ms, metric value, etc
+    attrs={"status": "ok", "region": "us-east-1"},
+)
+
+# upsert=True: if edge (source, predicate, target, timestamp) exists,
+# weight and attrs are REPLACED (last-write-wins).
+# Note: bucket aggregates (^KG("tagg")) are NOT adjusted — use
+# get_edges_in_window() for exact per-edge statistics.
+engine.create_edge_temporal(
+    source="service:auth",
+    predicate="CALLS",
+    target="service:payment",
+    timestamp=existing_ts,
+    weight=55.2,  # new value replaces old
+    upsert=True,
 )
 ```
 

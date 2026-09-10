@@ -51,7 +51,7 @@ ClassMethod InsertEdge(source As %String, predicate As %String, target As %Strin
 	If weight = "" Set weight = 1
 	// Resolve effective mode: explicit mode overrides legacy upsert boolean.
 	// mode="" falls back to upsert semantics for backward compat.
-	If mode = "" { Set mode = $Select(upsert: "skip", 1: "insert") }
+	If mode = "" { Set mode = $Select(upsert: "update", 1: "insert") }
 	If mode = "skip" && $Data(^KG("tout", timestamp, source, predicate, target)) { Return 1 }
 	If mode = "update" {
 		// Kill stale edgeprop subtree before rewriting attrs.

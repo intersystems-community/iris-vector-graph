@@ -44,6 +44,21 @@ class TemporalMixin:
     ) -> bool:
         """Create a timestamped edge in the temporal index.
 
+        Args:
+            upsert: When ``True``, if an edge with the same ``(source, predicate,
+                target, timestamp)`` key already exists, its weight and attrs are
+                **replaced** with the new values (last-write-wins semantics). When
+                ``False`` (default), the edge is inserted unconditionally; a second
+                write at the same timestamp overwrites via the underlying global set,
+                which is equivalent to ``mode="insert"`` behavior.
+
+                **Note on bucket aggregates**: ``upsert=True`` replaces the edge's
+                weight in ``^KG("tout")`` but does NOT adjust the pre-computed bucket
+                aggregates in ``^KG("tagg")``. Aggregate counters (count/sum/min/max)
+                remain based on the original value. If aggregate fidelity is required,
+                call ``Purge()`` and rebuild, or use ``get_edges_in_window()`` for
+                exact per-edge statistics.
+
         ADJACENCY CONTRACT: TemporalIndex.InsertEdge writes the temporal globals
         (^KG "tout"/"tin"/buckets/aggregates) AND a shadow ^KG("out",0,...)
         adjacency entry — so temporal edges ARE visible to the ^KG-based readers
