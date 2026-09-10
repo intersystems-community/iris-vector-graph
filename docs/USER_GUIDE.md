@@ -548,6 +548,30 @@ print(result.revision.seq)  # monotonically increasing sequence number
 If another writer commits between `head()` and `commit()`, a `StaleHeadError`
 is raised and nothing is written. Retry by re-reading `head()`.
 
+### Relationship endpoints must exist
+
+`create_relationship(s, p, o)` fails at commit time if either `s` or `o` does not
+exist in the graph. Two options:
+
+```python
+from iris_vector_graph.ledger import NodeNotFoundError
+
+# Option A — explicit upsert_node before the relationship
+cs = Changeset(actor="ingest", actor_type="ingest")
+cs.upsert_node("target-B")          # ensure target exists
+cs.create_relationship("src-A", "CALLS", "target-B")
+
+# Option B — auto_stub_missing_nodes=True (prepends upsert_node stubs automatically)
+cs = Changeset(actor="ingest", actor_type="ingest", auto_stub_missing_nodes=True)
+cs.create_relationship("src-A", "CALLS", "target-B")   # target-B stubbed if absent
+
+# NodeNotFoundError is raised when a node is missing and auto_stub=False
+try:
+    engine.ledger.commit(cs_without_stub)
+except NodeNotFoundError as e:
+    print(f"Missing node: {e.missing_node}")
+```
+
 ### Idempotency
 
 Every changeset carries an idempotency fingerprint computed over `{actor, actor_type,

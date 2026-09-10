@@ -90,6 +90,7 @@ class Changeset:
     expected_head: Optional[str] = None
     idempotency_key: Optional[str] = None
     ops: List[Dict[str, Any]] = field(default_factory=list)
+    auto_stub_missing_nodes: bool = False
 
     # -- internal -----------------------------------------------------------
 
@@ -186,6 +187,11 @@ class Changeset:
         qualifiers: Optional[Dict[str, Any]] = None,
         graph: Optional[str] = None,
     ) -> OpRef:
+        if self.auto_stub_missing_nodes:
+            _existing = {op.get("id") for op in self.ops if "id" in op}
+            for nid in (source, target):
+                if nid not in _existing:
+                    self.upsert_node(nid)
         idx = self._next_index
         op: Dict[str, Any] = {
             "op": "create_rel",

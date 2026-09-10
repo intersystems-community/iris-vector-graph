@@ -87,6 +87,24 @@ class LedgerInconsistencyError(LedgerError):
     """The ledger's own structures disagree with each other."""
 
 
+class NodeNotFoundError(LedgerError):
+    """A relationship operation references a node that does not exist in the graph.
+
+    Attributes:
+        missing_node: The node ID that was not found.
+    """
+
+    def __init__(self, message: str = "", *, missing_node: str = ""):
+        self.missing_node = missing_node
+        if not message:
+            message = (
+                f"create_relationship failed: node '{missing_node}' does not exist. "
+                f"Add upsert_node('{missing_node}') to the changeset, or set "
+                f"auto_stub_missing_nodes=True on the Changeset."
+            )
+        super().__init__(message)
+
+
 _WIRE_MAP = {
     "not_enabled": LedgerNotEnabledError,
     "disabled": LedgerDisabledError,
@@ -135,5 +153,6 @@ __all__ = [
     "LedgerLockTimeoutError",
     "LedgerTransactionOpenError",
     "LedgerInconsistencyError",
+    "NodeNotFoundError",
     "from_commit_error",
 ]

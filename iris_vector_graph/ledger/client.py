@@ -260,6 +260,12 @@ class GraphLedger:
             self._emit(
                 resp.get("error", "error"), None, changeset, duration_ms, reason=resp.get("reason")
             )
+            # Check for node_not_found before generic error mapping
+            reason = resp.get("reason") or ""
+            if resp.get("error") == "failed_op" and reason.startswith("node_not_found: '"):
+                missing = reason[len("node_not_found: '"):-1]
+                from .errors import NodeNotFoundError
+                raise NodeNotFoundError(missing_node=missing)
             raise from_commit_error(resp)
 
         info = RevisionInfo.from_wire(resp["revision"])
