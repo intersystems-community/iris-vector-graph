@@ -2,6 +2,44 @@
 
 # Changelog
 
+### v2.19.0 (2026-09-10)
+
+**Temporal API: specs 219-222 — four friction-report items**
+
+Full SpecKit pipeline (specify → clarify → plan → tasks → analyze → implement)
+completed for all four specs. All tests pass: 7887 passed, 0 failures.
+
+#### Spec 221 — upsert=True now updates weight (P1 bug fix)
+
+One-character fix in `TemporalIndex.cls:54`: `$Select(upsert: "skip", ...)` →
+`$Select(upsert: "update", ...)`. Previously `upsert=True` silently discarded the new
+weight when the edge key existed; callers had to offset timestamps by +1ms to avoid
+the phantom. Now upsert=True writes the new weight and attrs (last-write-wins).
+**Known caveat**: `^KG("tagg")` bucket aggregates are not adjusted; use
+`get_edges_in_window()` for exact per-edge statistics.
+
+#### Spec 222 — find_burst_nodes now_ts + documentation
+
+- `find_burst_nodes()` gains `now_ts: int = 0` parameter (was missing from Python
+  wrapper; ObjectScript already supported it).
+- `get_edge_velocity()` and `find_burst_nodes()` docstrings document `now_ts`.
+- USER_GUIDE §Temporal Graph: new "Testing with historical fixture data" subsection
+  showing the `now_ts` pattern for fixture tests.
+
+#### Spec 219 — get_edges_in_window attrs limitation documented (doc gap)
+
+`get_edges_in_window()` docstring now states that edge attrs are not included in
+results and documents `get_edge_attrs(ts, s, p, o)` as the companion API.
+`get_edge_attrs()` also gains a proper docstring.
+
+#### Spec 220 — get_bucket_groups no-target limitation documented (doc gap)
+
+`get_bucket_groups()` docstring documents the absence of a target field (aggregates
+are per (source, predicate) only) and shows the `get_bucket_group_targets()` +
+`get_edges_in_window()` workaround pattern for per-target statistics.
+
+---
+
 ### v2.18.9 (2026-09-10)
 
 **Fix: TestEdgeEmbeddingsE2E isolation — run-scoped assertions, full wipe in setup**
@@ -1844,6 +1882,44 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.19.0 (2026-09-10)
+
+**Temporal API: specs 219-222 — four friction-report items**
+
+Full SpecKit pipeline (specify → clarify → plan → tasks → analyze → implement)
+completed for all four specs. All tests pass: 7887 passed, 0 failures.
+
+#### Spec 221 — upsert=True now updates weight (P1 bug fix)
+
+One-character fix in `TemporalIndex.cls:54`: `$Select(upsert: "skip", ...)` →
+`$Select(upsert: "update", ...)`. Previously `upsert=True` silently discarded the new
+weight when the edge key existed; callers had to offset timestamps by +1ms to avoid
+the phantom. Now upsert=True writes the new weight and attrs (last-write-wins).
+**Known caveat**: `^KG("tagg")` bucket aggregates are not adjusted; use
+`get_edges_in_window()` for exact per-edge statistics.
+
+#### Spec 222 — find_burst_nodes now_ts + documentation
+
+- `find_burst_nodes()` gains `now_ts: int = 0` parameter (was missing from Python
+  wrapper; ObjectScript already supported it).
+- `get_edge_velocity()` and `find_burst_nodes()` docstrings document `now_ts`.
+- USER_GUIDE §Temporal Graph: new "Testing with historical fixture data" subsection
+  showing the `now_ts` pattern for fixture tests.
+
+#### Spec 219 — get_edges_in_window attrs limitation documented (doc gap)
+
+`get_edges_in_window()` docstring now states that edge attrs are not included in
+results and documents `get_edge_attrs(ts, s, p, o)` as the companion API.
+`get_edge_attrs()` also gains a proper docstring.
+
+#### Spec 220 — get_bucket_groups no-target limitation documented (doc gap)
+
+`get_bucket_groups()` docstring documents the absence of a target field (aggregates
+are per (source, predicate) only) and shows the `get_bucket_group_targets()` +
+`get_edges_in_window()` workaround pattern for per-target statistics.
+
+---
 
 ### v2.18.9 (2026-09-10)
 

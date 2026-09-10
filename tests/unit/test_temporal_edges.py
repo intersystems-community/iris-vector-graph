@@ -523,15 +523,25 @@ class TestTemporalAPIGapsE2E:
         assert f"{self.PREFIX}:a" in sources
         assert f"{self.PREFIX}:b" in sources
 
-    def test_upsert_temporal_edge_no_duplicate(self):
+    def test_upsert_temporal_edge_updates_weight(self):
+        """upsert=True replaces weight in ^KG("tout"); bucket aggregate count still increments.
+
+        Known caveat (spec 221 FR-004): ^KG("tagg") aggregates are NOT corrected when
+        upsert overwrites an edge. Use get_edges_in_window() for exact per-edge stats.
+        """
         now = int(time.time())
-        for _ in range(3):
-            self.engine.create_edge_temporal(
-                f"{self.PREFIX}:src", "COST_ON", f"Date:2026-03-18",
-                now, 27.7, upsert=True)
-        count = self.engine.get_temporal_aggregate(
-            f"{self.PREFIX}:src", "COST_ON", "count", now - 10, now + 10)
-        assert count == 1
+        self.engine.create_edge_temporal(
+            f"{self.PREFIX}:src", "COST_ON", "Date:2026-03-18",
+            now, 27.7, upsert=True)
+        self.engine.create_edge_temporal(
+            f"{self.PREFIX}:src", "COST_ON", "Date:2026-03-18",
+            now, 99.9, upsert=True)
+        # Weight is updated to the latest value
+        edges = self.engine.get_edges_in_window(
+            f"{self.PREFIX}:src", "COST_ON", now - 10, now + 10)
+        ts_edges = [e for e in edges if e["ts"] == now]
+        assert len(ts_edges) == 1, f"Expected 1 edge at ts={now}, got {len(ts_edges)}"
+        assert abs(ts_edges[0]["w"] - 99.9) < 1e-6, f"Expected w=99.9, got {ts_edges[0]['w']}"
 
     def test_upsert_false_allows_duplicates(self):
         now = int(time.time())
