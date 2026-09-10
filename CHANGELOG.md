@@ -2,6 +2,49 @@
 
 # Changelog
 
+### v2.20.0 (2026-09-10)
+
+**Architecture: four module-deepening refactors**
+
+Implements all four candidates from the codebase architecture review.
+All changes are additive or internal — no public interface breaks.
+42 new unit tests, all passing.
+
+#### Candidate 1 — `extract_vlp_source_ids` (locality)
+
+Extracted the VLP source-ID extraction logic — previously duplicated verbatim
+in `_execute_var_length_labeled` and `_execute_var_length_labeled_path_funcs` —
+into a single free function in `query.py`. Three extraction paths (label-based,
+direct `node_id = ?`, full-SQL DISTINCT) live in one place with explicit
+documentation and 10 dedicated unit tests. The $C(0) bug that required 3 hours
+to debug in session is now a 5-line unit test.
+
+#### Candidate 2 — `IRISGraphEngine` sub-namespace attributes (depth)
+
+Added `engine.graph`, `engine.cypher`, `engine.temporal`, and
+`engine.algorithms` as thin-delegator namespace attributes. The 192 top-level
+methods are unchanged (additive only). Callers who only do graph mutations can
+discover the 11-method `engine.graph` interface rather than scanning 192 methods.
+Test fixtures can mock a 6-method sub-engine instead of a 192-method engine.
+
+#### Candidate 3 — `commit()` transport seam (locality)
+
+Extracted `_send_changeset(cs) -> _CommitWireResult` from `GraphLedger.commit()`.
+Transport concerns (JSON chunking, ObjectScript call, wire-response parsing) are
+now isolated from commit-semantics concerns (NKG dirty-marking, post_commit SQL,
+metrics). `_CommitWireResult` is a plain dataclass — no exceptions raised in
+transport. 8 unit tests cover each concern independently with mock `_call`.
+
+#### Candidate 4 — BFS strategy protocol (leverage)
+
+Added `_BfsStrategy` internal protocol and three concrete adapters
+(`_ArnoBfsAdapter`, `_ObjectScriptBfsAdapter`, `_SqlBfsFallbackAdapter`) inside
+`iris_sql_store.py`. `execute_bfs` now delegates to `_select_bfs_strategy()`.
+The three implicit adapters are now named, typed, and independently testable.
+Adding a fourth BFS acceleration path is one new adapter class. 11 unit tests.
+
+---
+
 ### v2.19.1 (2026-09-10)
 
 **Fix: pydantic and numpy declared as runtime dependencies**
@@ -1896,6 +1939,49 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v2.20.0 (2026-09-10)
+
+**Architecture: four module-deepening refactors**
+
+Implements all four candidates from the codebase architecture review.
+All changes are additive or internal — no public interface breaks.
+42 new unit tests, all passing.
+
+#### Candidate 1 — `extract_vlp_source_ids` (locality)
+
+Extracted the VLP source-ID extraction logic — previously duplicated verbatim
+in `_execute_var_length_labeled` and `_execute_var_length_labeled_path_funcs` —
+into a single free function in `query.py`. Three extraction paths (label-based,
+direct `node_id = ?`, full-SQL DISTINCT) live in one place with explicit
+documentation and 10 dedicated unit tests. The $C(0) bug that required 3 hours
+to debug in session is now a 5-line unit test.
+
+#### Candidate 2 — `IRISGraphEngine` sub-namespace attributes (depth)
+
+Added `engine.graph`, `engine.cypher`, `engine.temporal`, and
+`engine.algorithms` as thin-delegator namespace attributes. The 192 top-level
+methods are unchanged (additive only). Callers who only do graph mutations can
+discover the 11-method `engine.graph` interface rather than scanning 192 methods.
+Test fixtures can mock a 6-method sub-engine instead of a 192-method engine.
+
+#### Candidate 3 — `commit()` transport seam (locality)
+
+Extracted `_send_changeset(cs) -> _CommitWireResult` from `GraphLedger.commit()`.
+Transport concerns (JSON chunking, ObjectScript call, wire-response parsing) are
+now isolated from commit-semantics concerns (NKG dirty-marking, post_commit SQL,
+metrics). `_CommitWireResult` is a plain dataclass — no exceptions raised in
+transport. 8 unit tests cover each concern independently with mock `_call`.
+
+#### Candidate 4 — BFS strategy protocol (leverage)
+
+Added `_BfsStrategy` internal protocol and three concrete adapters
+(`_ArnoBfsAdapter`, `_ObjectScriptBfsAdapter`, `_SqlBfsFallbackAdapter`) inside
+`iris_sql_store.py`. `execute_bfs` now delegates to `_select_bfs_strategy()`.
+The three implicit adapters are now named, typed, and independently testable.
+Adding a fourth BFS acceleration path is one new adapter class. 11 unit tests.
+
+---
 
 ### v2.19.0 (2026-09-10)
 
