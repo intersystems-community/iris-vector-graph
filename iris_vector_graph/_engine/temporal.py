@@ -344,6 +344,26 @@ class TemporalMixin:
                 avg       (float) — mean weight (None if count == 0)
                 min       (float) — minimum weight (None if no edges)
                 max       (float) — maximum weight (None if no edges)
+
+        **No target field.** Aggregates are computed per ``(source, predicate)``
+        only — the target dimension is not preserved in ``^KG("tagg")``. When
+        multiple targets share the same ``(source, predicate)`` pair (e.g.
+        per-metric baselines), the aggregated values span all targets and cannot
+        be disaggregated.
+
+        **Workaround for per-target statistics**: use
+        ``get_bucket_group_targets(source, predicate, ts_start, ts_end)`` to get
+        distinct targets, then aggregate per target in Python::
+
+            targets = engine.get_bucket_group_targets(
+                "acme|prod", "SEGMENT_BASELINE", ts_start, ts_end
+            )
+            for target in targets:
+                edges = engine.get_edges_in_window(
+                    "acme|prod", "SEGMENT_BASELINE", ts_start, ts_end
+                )
+                target_edges = [e for e in edges if e["o"] == target]
+                avg = sum(e["w"] for e in target_edges) / len(target_edges)
         """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
@@ -362,7 +382,12 @@ class TemporalMixin:
         ts_start: int,
         ts_end: int,
     ) -> list[str]:
-        """Return distinct target node IDs for a source+predicate over a time window."""
+        """Return distinct target node IDs for a source+predicate over a time window.
+
+        Use as the first step in per-target aggregation when ``get_bucket_groups()``
+        is insufficient because it lacks the target dimension. See
+        ``get_bucket_groups()`` for a full workaround pattern.
+        """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetBucketGroupTargets",
