@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "2.19.0"
+version = "2.19.1"
 description = "Native graph database layer for InterSystems IRIS — openCypher, hybrid vector search, temporal property graph, RDF export, SHACL validation"
 readme = "README.md"
 license = "MIT"
@@ -46,6 +46,12 @@ dependencies = [
     # standard connection seam — base dependency so `import iris` always resolves to
     # the superset. See iris_vector_graph/embedded.py for the embedded context.
     "iris-embedded-python-wrapper>=0.5.20",
+    # pydantic and numpy are imported unconditionally at module level in result.py,
+    # _validate.py, cypher/translator.py, fusion.py, and vector_utils.py — all of
+    # which load when IRISGraphEngine is imported. They must be declared here, not
+    # only in [full], so that a bare `pip install iris-vector-graph` works.
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]

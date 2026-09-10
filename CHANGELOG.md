@@ -2,6 +2,20 @@
 
 # Changelog
 
+### v2.19.1 (2026-09-10)
+
+**Fix: pydantic and numpy declared as runtime dependencies**
+
+`pydantic` and `numpy` were imported unconditionally at module level in
+`result.py`, `_validate.py`, `cypher/translator.py`, `fusion.py`, and
+`vector_utils.py` — all loaded when `IRISGraphEngine` is imported. Both packages
+were listed only in the `[full]` optional extra, so a bare
+`pip install iris-vector-graph` on a clean environment would raise
+`ModuleNotFoundError` on first import. Added `pydantic>=2.0.0` and
+`numpy>=1.24.0` to `[project.dependencies]`.
+
+---
+
 ### v2.19.0 (2026-09-10)
 
 **Temporal API: specs 219-222 — four friction-report items**
