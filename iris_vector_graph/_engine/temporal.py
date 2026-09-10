@@ -171,6 +171,18 @@ class TemporalMixin:
         non-suppressed edges in inbound queries.
 
         source="" returns edges from all sources (QueryWindow all-sources path).
+
+        **Return shape**: each dict has keys ``{s, p, o, ts, w}`` (plus long-form
+        aliases ``source``, ``predicate``, ``target``, ``timestamp``, ``weight``).
+
+        **Edge attributes are NOT included.** Attrs written via
+        ``create_edge_temporal(attrs={...})`` are stored separately in
+        ``^KG("edgeprop")`` and are never returned by this method. To retrieve attrs
+        for a specific edge, call ``get_edge_attrs(ts, source, predicate, target)``::
+
+            edges = engine.get_edges_in_window("svc-auth", "CALLS", ts_start, ts_end)
+            for edge in edges:
+                attrs = engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
         """
         result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
         if result.error:
@@ -276,6 +288,18 @@ class TemporalMixin:
         return json.loads(str(result))
 
     def get_edge_attrs(self, ts: int, source: str, predicate: str, target: str) -> dict:
+        """Return the attribute dict for a specific temporal edge.
+
+        This is the companion to ``create_edge_temporal(attrs=...)``. Attrs are stored
+        in ``^KG("edgeprop")`` and are NOT included in ``get_edges_in_window()``
+        results — call this per edge when you need them::
+
+            attrs = engine.get_edge_attrs(
+                edge["ts"], edge["s"], edge["p"], edge["o"]
+            )
+
+        Returns an empty dict when no attrs were stored for this edge.
+        """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target
         )
