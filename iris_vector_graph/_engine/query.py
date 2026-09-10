@@ -11,6 +11,95 @@ from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
 
+_CARTESIAN_PAT = re.compile(
+    r'\bJOIN\s+\S+\s+(?P<alias>\w+)\s+ON\s+1\s*=\s*1\b',
+    re.IGNORECASE,
+)
+_ORDER_CLAUSE_PAT = re.compile(r'\n(?:ORDER|HAVING|GROUP)\b', re.IGNORECASE)
+
+
+def extract_vlp_source_ids(
+    sql_query,
+    source_labels: List[str],
+    source_alias: str,
+    target_alias: str,
+    store,
+) -> List[str]:
+    """Find source node IDs for a variable-length-path Cypher query.
+
+    This is the single authoritative implementation of VLP source extraction,
+    used by both _execute_var_length_labeled and
+    _execute_var_length_labeled_path_funcs.
+
+    Three paths, in priority order:
+
+    1. **Label-based** (``source_labels`` non-empty): call ``store.query_nodes``
+       per label and intersect the results.
+
+    2. **Direct node_id = ?** (WHERE clause binds ``source_alias.node_id = ?``):
+       extract the parameter value directly — no DB round-trip.
+
+    3. **Cartesian SQL** (full-SQL DISTINCT query): detect the
+       ``JOIN target_alias ON 1=1`` cartesian boundary, build a
+       ``SELECT DISTINCT source_alias.node_id`` query with all original params,
+       and run it against the store's connection.
+
+    Returns an empty list when extraction finds no source IDs (callers decide
+    what to return for empty results, since result shapes differ).
+    """
+    # ── Path 1: label-based ──────────────────────────────────────────────────
+    if source_labels:
+        label_sets = []
+        for lbl in source_labels:
+            try:
+                lbl_result = store.query_nodes(label_filter=lbl)
+                label_sets.append({row[0] for row in lbl_result.rows if row and row[0]})
+            except Exception as exc:
+                logger.debug("extract_vlp_source_ids: label lookup failed for %s: %s", lbl, exc)
+        if not label_sets:
+            return []
+        common = label_sets[0]
+        for s in label_sets[1:]:
+            common = common & s
+        return list(common)
+
+    sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+
+    # ── Path 2: direct node_id = ? fast path ────────────────────────────────
+    if source_alias:
+        direct_pat = re.compile(
+            r'\b' + re.escape(source_alias) + r'\.node_id\s*=\s*\?',
+            re.IGNORECASE,
+        )
+        if direct_pat.search(sql_str):
+            params_list = sql_query.parameters[0] if sql_query.parameters else []
+            for pv in params_list:
+                if isinstance(pv, str) and pv:
+                    return [pv]
+
+    # ── Path 3: cartesian SQL extraction ────────────────────────────────────
+    if source_alias and target_alias:
+        target_cartesian_pat = re.compile(
+            r'\bJOIN\s+\S+\s+' + re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
+            re.IGNORECASE,
+        )
+        m = target_cartesian_pat.search(sql_str)
+        if m:
+            full_from_where = sql_str[sql_str.lower().find('\nfrom '):].strip()
+            order_m = _ORDER_CLAUSE_PAT.search(full_from_where)
+            if order_m:
+                full_from_where = full_from_where[:order_m.start()].strip()
+            src_query = f"SELECT DISTINCT {source_alias}.node_id {full_from_where}"
+            params_list = sql_query.parameters[0] if sql_query.parameters else []
+            try:
+                cursor = store.conn.cursor()
+                cursor.execute(src_query, list(params_list))
+                return [row[0] for row in cursor.fetchall() if row and row[0]]
+            except Exception as exc:
+                logger.debug("extract_vlp_source_ids: cartesian SQL failed: %s", exc)
+
+    return []
+
 
 def _split_top_level_and(where_clause: str) -> list:
     """Split a SQL WHERE clause on top-level AND conjuncts only.
@@ -463,20 +552,19 @@ class QueryMixin:
         source_labels = vl0.get("source_labels") or []
         source_alias_r = vl0.get("source_alias") or ""
 
-        # Fast-path: extract source_id when the WHERE clause directly binds
-        # source_alias.node_id = ? with a single parameter. This covers the common
-        # "MATCH (a)-[*..]->(b) WHERE a.node_id = $src" pattern without needing a DB query.
+        # Fast-path: extract source_id only when the WHERE clause directly binds
+        # source_alias.node_id = ? — uses Path 2 of extract_vlp_source_ids.
+        # Multi-source cases (label-based or cartesian-SQL) are handled downstream
+        # by _execute_var_length_labeled / _execute_var_length_labeled_path_funcs.
         if source_id is None and src_id_param is None and source_alias_r:
-            import re as _re_fast
-            sql_str_fast = sql_query.sql if isinstance(sql_query.sql, str) else ""
-            direct_m = _re_fast.search(
-                r'\b' + _re_fast.escape(source_alias_r) + r'\.node_id\s*=\s*\?',
-                sql_str_fast,
-                _re_fast.IGNORECASE,
+            direct_pat = re.compile(
+                r'\b' + re.escape(source_alias_r) + r'\.node_id\s*=\s*\?',
+                re.IGNORECASE,
             )
-            if direct_m:
-                params_fast = sql_query.parameters[0] if sql_query.parameters else []
-                for pv in params_fast:
+            sql_str_chk = sql_query.sql if isinstance(sql_query.sql, str) else ""
+            if direct_pat.search(sql_str_chk):
+                params_chk = sql_query.parameters[0] if sql_query.parameters else []
+                for pv in params_chk:
                     if isinstance(pv, str) and pv:
                         source_id = pv
                         break
@@ -588,65 +676,14 @@ class QueryMixin:
         col_map = sql_query.column_name_map or {}
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
 
-        # Step 1: Collect source node IDs (same logic as _execute_var_length_labeled)
-        source_ids: list = []
-        if source_labels:
-            label_sets = []
-            for lbl in source_labels:
-                try:
-                    lbl_result = self._store.query_nodes(label_filter=lbl)
-                    label_sets.append({row[0] for row in lbl_result.rows if row and row[0]})
-                except Exception as exc:
-                    logger.debug("label lookup failed for %s: %s", lbl, exc)
-            if label_sets:
-                common = label_sets[0]
-                for s in label_sets[1:]:
-                    common = common & s
-                source_ids = list(common)
-        elif source_alias and target_alias:
-            # Source bound in prior MATCH: extract IDs from SQL
-            cartesian_pat = _re.compile(
-                r'\bJOIN\s+\S+\s+' + _re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
-                _re.IGNORECASE,
-            )
-            m = cartesian_pat.search(sql_str)
-            if m:
-                from_start = sql_str.find('\nFROM ')
-                if from_start == -1:
-                    from_start = sql_str.lower().find('\nfrom ')
-                src_portion = sql_str[from_start:m.start()].strip()
-                src_query = f"SELECT DISTINCT {source_alias}.node_id {src_portion}"
-                # Build source-ID query: use full SQL (preserving all JOINs and
-                # WHERE) but SELECT only DISTINCT source node_id. Post-boundary
-                # target aliases are stripped from SELECT but kept in FROM/WHERE so
-                # all params stay in their original order. DISTINCT collapses the
-                # Cartesian product with target rows.
-                from_start_full = sql_str.find('\nFROM ')
-                if from_start_full == -1:
-                    from_start_full = sql_str.lower().find('\nfrom ')
-                full_from_where = sql_str[from_start_full:].strip()
-                # Identify and strip ORDER/HAVING/GROUP clauses
-                order_m = _re.search(r'\n(?:ORDER|HAVING|GROUP)\b', full_from_where, _re.IGNORECASE)
-                if order_m:
-                    full_from_where = full_from_where[:order_m.start()].strip()
-                src_query = f"SELECT DISTINCT {source_alias}.node_id {full_from_where}"
-                # All original params apply (the Cartesian product with target is
-                # collapsed by DISTINCT; target prop conditions become no-ops for
-                # source-only rows since LEFT JOINs return NULL for unmatched rows).
-                params_list = sql_query.parameters[0] if sql_query.parameters else []
-                src_params = list(params_list)
-                post_params = []
-                # No post_where_conds — all WHERE conditions are passed through the query.
-                # (post_where_conds stays empty; target filtering handled by BFS result
-                # intersection + target_labels + _filter_nodes_by_post_where below.)
-                try:
-                    cursor = self._store.conn.cursor()
-                    cursor.execute(src_query, src_params)
-                    for row in cursor.fetchall():
-                        if row and row[0]:
-                            source_ids.append(row[0])
-                except Exception as exc:
-                    logger.debug("Source ID extraction query failed: %s", exc)
+        # Step 1: Collect source node IDs via the shared extraction module.
+        source_ids = extract_vlp_source_ids(
+            sql_query=sql_query,
+            source_labels=source_labels,
+            source_alias=source_alias,
+            target_alias=target_alias,
+            store=self._store,
+        )
 
         if not source_ids:
             columns = _build_path_func_columns(return_path_funcs, source_var, target_var, col_map, path_named_var)
@@ -980,64 +1017,18 @@ class QueryMixin:
             )
         )
 
-        # Step 1: Collect source node IDs
-        # Also track post-boundary conditions for target property filtering.
-        source_ids: list = []
+        # Step 1: Collect source node IDs via the shared extraction module.
+        source_ids = extract_vlp_source_ids(
+            sql_query=sql_query,
+            source_labels=source_labels,
+            source_alias=source_alias,
+            target_alias=target_alias,
+            store=self._store,
+        )
+        # post_where_conds and post_params are unused after the extraction refactor
+        # but kept to avoid NameError in downstream code that references them.
         post_where_conds: list = []
         post_params: list = []
-        if source_labels:
-            # Case 1: Source labeled in this MATCH pattern → use query_nodes per label
-            # Multiple labels use AND semantics: intersect the sets
-            label_sets = []
-            for lbl in source_labels:
-                try:
-                    lbl_result = self._store.query_nodes(label_filter=lbl)
-                    label_sets.append({row[0] for row in lbl_result.rows if row and row[0]})
-                except Exception as exc:
-                    logger.debug("label lookup failed for %s: %s", lbl, exc)
-            if label_sets:
-                common = label_sets[0]
-                for s in label_sets[1:]:
-                    common = common & s
-                source_ids = list(common)
-        elif source_alias and target_alias:
-            # Case 2: Source bound in prior MATCH — extract IDs by running a trimmed
-            # version of the SQL that stops before the Cartesian JOIN on target_alias.
-            # Pattern: "JOIN nodes {target_alias} ON 1=1" marks the boundary.
-            cartesian_pat = _re.compile(
-                r'\bJOIN\s+\S+\s+' + _re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
-                _re.IGNORECASE,
-            )
-            m = cartesian_pat.search(sql_str)
-            if m:
-                # Build: SELECT DISTINCT {source_alias}.node_id FROM ... (source joins only)
-                # Use the FROM clause up to but not including the Cartesian JOIN
-                from_start = sql_str.find('\nFROM ')
-                if from_start == -1:
-                    from_start = sql_str.lower().find('\nfrom ')
-                src_portion = sql_str[from_start:m.start()].strip()
-                # Use full SQL (all JOINs + WHERE) to extract distinct source node IDs.
-                # DISTINCT collapses the Cartesian product with target rows.
-                # All original params apply unchanged.
-                from_start_full = sql_str.find('\nFROM ')
-                if from_start_full == -1:
-                    from_start_full = sql_str.lower().find('\nfrom ')
-                full_from_where = sql_str[from_start_full:].strip()
-                order_m2 = _re.search(r'\n(?:ORDER|HAVING|GROUP)\b', full_from_where, _re.IGNORECASE)
-                if order_m2:
-                    full_from_where = full_from_where[:order_m2.start()].strip()
-                src_query = f"SELECT DISTINCT {source_alias}.node_id {full_from_where}"
-                params_list = sql_query.parameters[0] if sql_query.parameters else []
-                src_params = list(params_list)
-                post_params = []
-                try:
-                    cursor = self._store.conn.cursor()
-                    cursor.execute(src_query, src_params)
-                    for row in cursor.fetchall():
-                        if row and row[0]:
-                            source_ids.append(row[0])
-                except Exception as exc:
-                    logger.debug("Source ID extraction query failed: %s", exc)
 
         if not source_ids:
             if is_count:
