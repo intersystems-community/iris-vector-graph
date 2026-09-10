@@ -14,6 +14,20 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from .errors import ChangesetOperationError, EmptyChangesetError
 
+REVISION_ID_SENTINEL = "$REVISION_ID"
+"""Placeholder value for post_commit_properties that is substituted with the
+actual revision_id assigned by the server after a successful commit.
+
+Usage::
+
+    cs = Changeset(
+        actor="ingest", actor_type="ingest",
+        post_commit_properties={"audit-node": {"committed_rev": REVISION_ID_SENTINEL}},
+    )
+    result = engine.ledger.commit(cs)
+    # audit-node.committed_rev == result.revision.revision_id
+"""
+
 RESERVED_PROPERTIES = frozenset({"id", "__graph"})
 
 ACTOR_TYPES = ("human", "agent", "system", "ingest")
@@ -91,6 +105,7 @@ class Changeset:
     idempotency_key: Optional[str] = None
     ops: List[Dict[str, Any]] = field(default_factory=list)
     auto_stub_missing_nodes: bool = False
+    post_commit_properties: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     # -- internal -----------------------------------------------------------
 
@@ -290,7 +305,7 @@ class Changeset:
                     )
 
     def to_wire(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "actor": self.actor,
             "actor_type": self.actor_type,
             "message": self.message,
@@ -300,6 +315,9 @@ class Changeset:
             "idempotency_key": self.idempotency_key,
             "ops": [dict(op) for op in self.ops],
         }
+        if self.post_commit_properties:
+            d["post_commit_properties"] = self.post_commit_properties
+        return d
 
     def canonical_json(self) -> str:
         return canonical_dumps(self.to_wire())

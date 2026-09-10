@@ -548,6 +548,38 @@ print(result.revision.seq)  # monotonically increasing sequence number
 If another writer commits between `head()` and `commit()`, a `StaleHeadError`
 is raised and nothing is written. Retry by re-reading `head()`.
 
+### Post-commit properties
+
+To store the assigned `revision_id` as a node property (e.g. for an audit trail)
+without a mandatory second commit, use `post_commit_properties` with the
+`REVISION_ID_SENTINEL` placeholder:
+
+```python
+from iris_vector_graph.ledger.changeset import Changeset, REVISION_ID_SENTINEL
+
+cs = Changeset(
+    actor="ingest",
+    actor_type="ingest",
+    post_commit_properties={
+        "audit-node-001": {"committed_revision": REVISION_ID_SENTINEL},
+    },
+)
+cs.create_node("audit-node-001", properties={"name": "Test"})
+result = engine.ledger.commit(cs)
+
+# audit-node-001.committed_revision == result.revision.revision_id
+assert result.post_commit_applied        # True when write succeeded
+assert result.post_commit_error is None  # None when no error
+
+# Non-sentinel values are written as-is
+cs2 = Changeset(actor="ingest", actor_type="ingest",
+                post_commit_properties={"audit-node-001": {"status": "verified"}})
+```
+
+Post-commit writes use direct SQL (`rdf_props`) and do **not** create a new
+ledger revision — they are intentionally unledgered. Use a second `commit()` if
+you need the property update to appear in `history()` and `diff()`.
+
 ### Relationship endpoints must exist
 
 `create_relationship(s, p, o)` fails at commit time if either `s` or `o` does not
