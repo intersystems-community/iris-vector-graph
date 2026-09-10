@@ -27,6 +27,45 @@ engine = IRISGraphEngine(EmbeddedConnection(), embedding_dimension=768)
 engine.initialize_schema()
 ```
 
+### Per-Tenant Namespace Isolation
+
+IVG provides **complete storage-layer isolation** between tenants by deploying each
+tenant into a separate IRIS namespace. Every namespace has its own `^KG`, `^NKG`, and
+`Graph_KG.*` SQL tables — one tenant's graph data is physically unreachable from another
+tenant's engine instance, even if both connect to the same IRIS server.
+
+```python
+# Tenant A — connects to the ACME_HEALTH namespace
+conn_a = iris.connect("iris.internal", 1972, "ACME_HEALTH", "_SYSTEM", "SYS")
+engine_a = IRISGraphEngine(conn_a, namespace="ACME_HEALTH", embedding_dimension=768)
+engine_a.initialize_schema()   # creates Graph_KG.* tables inside ACME_HEALTH
+
+# Tenant B — connects to METRO_HOSPITAL; ^KG globals are independent
+conn_b = iris.connect("iris.internal", 1972, "METRO_HOSPITAL", "_SYSTEM", "SYS")
+engine_b = IRISGraphEngine(conn_b, namespace="METRO_HOSPITAL", embedding_dimension=768)
+engine_b.initialize_schema()
+
+# Temporal edge inserted for tenant A is invisible to tenant B
+engine_a.create_edge_temporal("svc-auth", "CALLS", "svc-db", timestamp=1000, weight=0.5)
+# engine_b.get_edges_in_window("svc-auth", ...) → []
+```
+
+**This is the recommended isolation model for IRIS for Health / HealthShare SaaS
+deployments.** The `{tenant}|{instance}` source-node prefix pattern (used when all
+tenants share one namespace) is a simpler alternative that works at small scale, but
+provides no storage-level boundary — a miscoded query can cross tenant lines. Per-
+namespace deployment makes that class of bug structurally impossible.
+
+**IRIS setup required:** each tenant namespace must be created in the IRIS CPF/Management
+Portal before `initialize_schema()` is called. Namespace creation is an administrative
+operation outside IVG's scope. See the [Admin Guide](ADMIN_GUIDE.md) for the CPF
+`[Namespace]` and `[Map]` blocks needed for multi-namespace deployments.
+
+**Connection routing:** when using per-namespace isolation, your ingest layer must route
+each tenant's connection to the correct namespace. The tenant identity should be verified
+at the application boundary (bearer token, mTLS, etc.) and the namespace name derived
+from the verified identity — not from a self-asserted field in the payload.
+
 ### When to Rebuild
 
 ```python
