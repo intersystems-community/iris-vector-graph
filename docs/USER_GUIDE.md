@@ -736,6 +736,55 @@ print(report.unrecorded_writes)   # writes that bypassed the ledger
 engine.ledger.verify(adopt=True)
 ```
 
+### Temporal edges in a Changeset (spec-224)
+
+Temporal edge writes can be mixed with structural ops in the same `Changeset`. Both sides commit atomically inside the ledger's `TSTART`/`TCOMMIT` transaction.
+
+```python
+from iris_vector_graph.ledger.changeset import Changeset
+
+cs = Changeset(
+    actor="ingest:acme",
+    actor_type="ingest",
+    message="service call observation with temporal edge",
+)
+
+# Structural: ensure nodes exist
+cs.upsert_node("svc-auth")
+cs.upsert_node("svc-db")
+
+# Temporal: record a call event at a specific Unix timestamp
+cs.create_temporal_edge(
+    "svc-auth", "CALLS", "svc-db",
+    ts=1_750_000_100,
+    weight=0.7,
+    graph="acme",                          # optional; None = default graph
+    attrs={"latency_ms": "42"},            # optional key-value attrs
+    mode="update",                         # default: last-write-wins
+)
+
+result = engine.ledger.commit(cs)
+
+# Verify: structural node is present
+assert engine.get_node("svc-auth") is not None
+
+# Verify: temporal edge is visible
+edges = engine.get_edges_in_window("svc-auth", "CALLS", 1_750_000_000, 1_750_000_200)
+assert any(e["ts"] == 1_750_000_100 for e in edges)
+```
+
+The temporal edge appears in the revision diff as `entity_kind="temporal_edge"`:
+
+```python
+changes = engine.ledger.diff(prev_head, result.revision.revision_id)
+for c in changes.entries:
+    if c.entity_kind == "temporal_edge":
+        print(c.entity_id)   # "svc-auth|CALLS|svc-db@1750000100"
+```
+
+**Idempotency**: `mode="update"` (the default) is last-write-wins — replaying the
+same changeset with an `idempotency_key` does not duplicate the edge.
+
 ### Concurrent writers — branch conflict
 
 ```python

@@ -1,7 +1,15 @@
 """behave step definitions: Then … result assertion steps."""
 import re
 
-from behave import then, step
+try:
+    from behave import then, step
+except ImportError:
+    def then(s):  # noqa: E306
+        def _d(f): return f
+        return _d
+    def step(s):  # noqa: E306
+        def _d(f): return f
+        return _d
 
 from tests.tck.steps.comparison import TCKValue, TCKResultTable
 from iris_vector_graph.cypher.parser import CypherParseError
