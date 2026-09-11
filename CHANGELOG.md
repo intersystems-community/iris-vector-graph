@@ -2,7 +2,10 @@
 
 # Changelog
 
-### v3.0.0 (2026-09-11)
+### v3.0.1 (2026-09-11)
+
+Re-release of v3.0.0 (yanked — spec-224 was incomplete at time of publish).
+No code changes from the v3.0.0 tag.
 
 **Spec 224 — Temporal Ops in Changeset**
 
