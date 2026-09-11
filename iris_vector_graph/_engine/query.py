@@ -47,6 +47,9 @@ def extract_vlp_source_ids(
     Returns an empty list when extraction finds no source IDs (callers decide
     what to return for empty results, since result shapes differ).
     """
+    if store is None:
+        return []
+
     # ── Path 1: label-based ──────────────────────────────────────────────────
     if source_labels:
         label_sets = []
@@ -682,7 +685,7 @@ class QueryMixin:
             source_labels=source_labels,
             source_alias=source_alias,
             target_alias=target_alias,
-            store=self._store,
+            store=getattr(self, "_store", None),
         )
 
         if not source_ids:
@@ -1023,7 +1026,7 @@ class QueryMixin:
             source_labels=source_labels,
             source_alias=source_alias,
             target_alias=target_alias,
-            store=self._store,
+            store=getattr(self, "_store", None),
         )
         # post_where_conds and post_params are unused after the extraction refactor
         # but kept to avoid NameError in downstream code that references them.
