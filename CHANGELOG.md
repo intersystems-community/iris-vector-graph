@@ -2,6 +2,50 @@
 
 # Changelog
 
+### v3.0.0 (2026-09-11)
+
+**Spec 223 — Graph-Scoped Temporal Storage (storage-layout breaking change)**
+
+Adds the graph key as the first subscript of every temporal ^KG global, making the
+temporal index graph-scoped with the same convention established for structural
+adjacency in spec-214.
+
+**Breaking storage-layout change**: existing `^KG("tout", ts, ...)` flat entries are
+no longer read by the updated methods. Deployments with pre-3.0 temporal data must
+run `TemporalIndex.MigrateToGraphScoped()` to rekey entries to `^KG("tout", 0, ts, ...)`.
+New deployments are unaffected.
+
+#### What changed
+
+- `^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")` — all five temporal globals now use
+  `graphKey` as first subscript. Default graph = integer `0` (same convention as
+  `^KG("out"/"in"/"deg"/"degp")` from spec-214).
+- All 13 `TemporalIndex` methods gain `graphId As %String = ""` as first parameter
+  (default = default graph). Existing callers with no `graphId` argument are unaffected.
+- `MigrateToGraphScoped()` classmethod added — rewrites flat entries to `(0, ts, ...)`
+  atomically in batches of 10,000. Idempotent.
+- `BenchSeeder.cls` deleted — pre-spec-214 fossil that bypassed the TemporalIndex seam.
+- `TemporalIndexMS.GetBucketCount` updated to accept and pass `graphId`.
+- `write_temporal_edge` in `store_protocol.py` and `iris_sql_store.py` gains
+  `graph: Optional[str] = None` parameter, now wired through to `InsertEdge`.
+- `get_edges_in_window` gains `graph: Optional[str] = None` — scoped queries.
+- `create_edge_temporal(graph="acme")` now writes to `^KG("tout", "acme", ts, ...)`
+  instead of the SQL-only mirror (which remains as a second write).
+
+#### Decisive test
+
+`tests/integration/test_223_temporal_graph_scope.py` — 11 tests. The decisive fixture:
+two graphs with identical source/predicate/target/timestamp. Each graph's `QueryWindow`
+returns only its own edge. Purging graph A leaves graph B untouched. Velocity, burst
+detection, and aggregate counts stay separated per graph.
+
+#### ADRs
+
+- `docs/adr/0001-graph-key-as-first-subscript.md` — the storage layout contract.
+- `docs/adr/0002-temporal-globals-are-not-directly-accessible.md` — the seam contract.
+
+---
+
 ### v2.20.0 (2026-09-10)
 
 **Architecture: four module-deepening refactors**
@@ -1939,6 +1983,50 @@ Four openCypher gaps closed, all from structured gap analysis against the openCy
 - `TableNotMappedError` raised with helpful message when `attach_embeddings_to_table` is called on unregistered label
 
 ## Changelog
+
+### v3.0.0 (2026-09-11)
+
+**Spec 223 — Graph-Scoped Temporal Storage (storage-layout breaking change)**
+
+Adds the graph key as the first subscript of every temporal ^KG global, making the
+temporal index graph-scoped with the same convention established for structural
+adjacency in spec-214.
+
+**Breaking storage-layout change**: existing `^KG("tout", ts, ...)` flat entries are
+no longer read by the updated methods. Deployments with pre-3.0 temporal data must
+run `TemporalIndex.MigrateToGraphScoped()` to rekey entries to `^KG("tout", 0, ts, ...)`.
+New deployments are unaffected.
+
+#### What changed
+
+- `^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")` — all five temporal globals now use
+  `graphKey` as first subscript. Default graph = integer `0` (same convention as
+  `^KG("out"/"in"/"deg"/"degp")` from spec-214).
+- All 13 `TemporalIndex` methods gain `graphId As %String = ""` as first parameter
+  (default = default graph). Existing callers with no `graphId` argument are unaffected.
+- `MigrateToGraphScoped()` classmethod added — rewrites flat entries to `(0, ts, ...)`
+  atomically in batches of 10,000. Idempotent.
+- `BenchSeeder.cls` deleted — pre-spec-214 fossil that bypassed the TemporalIndex seam.
+- `TemporalIndexMS.GetBucketCount` updated to accept and pass `graphId`.
+- `write_temporal_edge` in `store_protocol.py` and `iris_sql_store.py` gains
+  `graph: Optional[str] = None` parameter, now wired through to `InsertEdge`.
+- `get_edges_in_window` gains `graph: Optional[str] = None` — scoped queries.
+- `create_edge_temporal(graph="acme")` now writes to `^KG("tout", "acme", ts, ...)`
+  instead of the SQL-only mirror (which remains as a second write).
+
+#### Decisive test
+
+`tests/integration/test_223_temporal_graph_scope.py` — 11 tests. The decisive fixture:
+two graphs with identical source/predicate/target/timestamp. Each graph's `QueryWindow`
+returns only its own edge. Purging graph A leaves graph B untouched. Velocity, burst
+detection, and aggregate counts stay separated per graph.
+
+#### ADRs
+
+- `docs/adr/0001-graph-key-as-first-subscript.md` — the storage layout contract.
+- `docs/adr/0002-temporal-globals-are-not-directly-accessible.md` — the seam contract.
+
+---
 
 ### v2.20.0 (2026-09-10)
 
