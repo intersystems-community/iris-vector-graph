@@ -1,5 +1,13 @@
 """behave step definitions: When … query execution steps."""
-from behave import when, step
+try:
+    from behave import when, step
+except ImportError:
+    def when(s):  # noqa: E306
+        def _d(f): return f
+        return _d
+    def step(s):  # noqa: E306
+        def _d(f): return f
+        return _d
 
 from tests.tck.steps.comparison import TCKValue
 from tests.tck.steps.graph_setup import _inject_label

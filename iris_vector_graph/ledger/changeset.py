@@ -304,6 +304,46 @@ class Changeset:
                         i, f"op_ref {j} must point to a create_rel or upsert_rel operation"
                     )
 
+    # -- temporal edge operations (spec-224) ------------------------------------
+
+    def create_temporal_edge(
+        self,
+        source: str,
+        predicate: str,
+        target: str,
+        *,
+        ts: int,
+        weight: float = 1.0,
+        graph: Optional[str] = None,
+        attrs: Optional[Dict[str, Any]] = None,
+        mode: str = "update",
+    ) -> OpRef:
+        """Add a temporal edge write to this changeset.
+
+        The edge will be written inside the ledger's TSTART/TCOMMIT transaction,
+        atomically with all structural ops in the same changeset.
+
+        Args:
+            source: Source node ID.
+            predicate: Relationship type / metric name.
+            target: Target node ID.
+            ts: Event-time Unix timestamp (integer).
+            weight: Edge weight / metric value. Default 1.0.
+            graph: Named graph identifier. None = default graph (key 0).
+            attrs: Optional key-value attribute dict stored in ``^KG("edgeprop")``.
+            mode: Write mode — "update" (default, last-write-wins), "insert"
+                (fail if key exists), or "skip" (no-op if key exists).
+        """
+        op: Dict[str, Any] = {
+            "op": "create_temporal_edge",
+            "tuple": {"s": str(source), "p": str(predicate), "o": str(target), "graph": graph},
+            "ts": int(ts),
+            "weight": float(weight),
+            "attrs": attrs,
+            "mode": str(mode),
+        }
+        return OpRef(self._add(op))
+
     def to_wire(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "actor": self.actor,

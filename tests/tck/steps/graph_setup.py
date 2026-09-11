@@ -1,7 +1,15 @@
 """behave step definitions: Given … graph setup steps."""
 from uuid import uuid4
 
-from behave import given, step
+try:
+    from behave import given, step
+except ImportError:
+    def given(s):  # noqa: E306
+        def _d(f): return f
+        return _d
+    def step(s):  # noqa: E306
+        def _d(f): return f
+        return _d
 
 
 def _new_label() -> str:

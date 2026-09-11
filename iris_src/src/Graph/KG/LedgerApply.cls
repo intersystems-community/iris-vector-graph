@@ -35,6 +35,7 @@ ClassMethod ApplyAll(pOps As %DynamicArray, pSeq As %Integer, pSchema As %String
         ElseIf tKind = "set_qual"     { Set tReason = ..OpQual(tOp, .tCtx, .pRecords, .pFirst, .pLast, "set") }
         ElseIf tKind = "replace_quals" { Set tReason = ..OpQual(tOp, .tCtx, .pRecords, .pFirst, .pLast, "replace") }
         ElseIf tKind = "remove_qual"  { Set tReason = ..OpQual(tOp, .tCtx, .pRecords, .pFirst, .pLast, "remove") }
+        ElseIf tKind = "create_temporal_edge" { Set tReason = ..OpCreateTemporalEdge(tOp, .tCtx, .pRecords) }
         Else { Set tReason = "unknown_operation: " _ tKind }
         If tReason '= "" Return ##class(Graph.KG.Ledger).Err("failed_op", tReason, "", tI)
     }
@@ -546,6 +547,36 @@ ClassMethod OpQual(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef pFir
     Set tReason = ..MergeQuals(tSchema, tSeq, tStmt, tEdgeId, tS, tP, tO, tG, tCur, tNew, tFlags, .pRecords)
     If tReason '= "" Return tReason
     If tChanged Return ..PersistQuals(tSchema, tEdgeId, tS, tP, tO, tCur)
+    Return ""
+}
+
+/// Spec-224: write a temporal edge inside the ledger transaction.
+/// Wire format: {op, tuple:{s,p,o,graph}, ts, weight, attrs, mode}
+/// Delegates to Graph.KG.TemporalIndex.InsertEdge (spec-223 signature):
+///   InsertEdge(graphId, source, predicate, target, timestamp, weight, attrsJSON, upsert, suppressReverseIndex, mode)
+ClassMethod OpCreateTemporalEdge(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords) As %String
+{
+    Set tTuple = pOp.%Get("tuple")
+    If '$IsObject(tTuple) Return "create_temporal_edge: tuple is required"
+    Set tS  = ##class(Graph.KG.Ledger).MetaGet(tTuple, "s", "")
+    Set tP  = ##class(Graph.KG.Ledger).MetaGet(tTuple, "p", "")
+    Set tO  = ##class(Graph.KG.Ledger).MetaGet(tTuple, "o", "")
+    Set tG  = ##class(Graph.KG.Ledger).MetaGet(tTuple, "graph", "")
+    If (tS = "") || (tP = "") || (tO = "") Return "create_temporal_edge: tuple requires s, p, and o"
+    Set tTs     = ##class(Graph.KG.Ledger).MetaGet(pOp, "ts", "")
+    Set tWeight = ##class(Graph.KG.Ledger).MetaGet(pOp, "weight", "1.0")
+    Set tMode   = ##class(Graph.KG.Ledger).MetaGet(pOp, "mode", "update")
+    If tTs = "" Return "create_temporal_edge: ts is required"
+    If '$IsValidNum(tTs, 1) Return "create_temporal_edge: ts must be an integer"
+    // Attrs: JSON object or null/empty → ""
+    Set tAttrsObj = pOp.%Get("attrs")
+    Set tAttrsJSON = $Select($IsObject(tAttrsObj): tAttrsObj.%ToJSON(), 1: "")
+    // Delegate to TemporalIndex (graphId as first arg; upsert=0, suppressReverseIndex=0)
+    Set tSC = ##class(Graph.KG.TemporalIndex).InsertEdge(tG, tS, tP, tO, tTs, tWeight, tAttrsJSON, 0, 0, tMode)
+    If $$$ISERR(tSC) Return "create_temporal_edge: InsertEdge failed: " _ $System.Status.GetErrorText(tSC)
+    // Record for the revision diff
+    Set tEntityId = tS _ "|" _ tP _ "|" _ tO _ "@" _ tTs
+    Do ..Rec(.pRecords, "create_temporal_edge", "temporal_edge", tEntityId, "", ..EncNull(), ..Enc(..TupleJson(tS, tP, tO, tG)), tG)
     Return ""
 }
 
