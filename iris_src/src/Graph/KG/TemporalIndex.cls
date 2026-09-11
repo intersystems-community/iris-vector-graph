@@ -43,57 +43,52 @@ ClassMethod jsonEsc(pValue As %String) As %String [ Internal ]
 	Return result
 }
 
-ClassMethod InsertEdge(source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0, suppressReverseIndex As %Boolean = 0, mode As %String = "") As %Status
+ClassMethod InsertEdge(graphId As %String = "", source As %String, predicate As %String, target As %String, timestamp As %Integer = "", weight As %Double = 1.0, attrsJSON As %String = "", upsert As %Boolean = 0, suppressReverseIndex As %Boolean = 0, mode As %String = "") As %Status
 {
+	// Spec-223: graphId is the first subscript of all temporal globals.
+	// Empty string normalises to integer 0 (default graph) — same convention as spec-214.
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	If timestamp = "" Set timestamp = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
-	// Coerce empty weight to 1 — same guard as the batch path (:70).
-	// Prevents {"w":} in QueryWindow JSON (defect #3).
+	// Coerce empty weight to 1 — same guard as the batch path.
 	If weight = "" Set weight = 1
 	// Resolve effective mode: explicit mode overrides legacy upsert boolean.
-	// mode="" falls back to upsert semantics for backward compat.
 	If mode = "" { Set mode = $Select(upsert: "update", 1: "insert") }
-	If mode = "skip" && $Data(^KG("tout", timestamp, source, predicate, target)) { Return 1 }
+	If mode = "skip" && $Data(^KG("tout", tGKey, timestamp, source, predicate, target)) { Return 1 }
 	If mode = "update" {
-		// Kill stale edgeprop subtree before rewriting attrs.
-		Kill ^KG("edgeprop", timestamp, source, predicate, target)
+		Kill ^KG("edgeprop", tGKey, timestamp, source, predicate, target)
 	}
-	Set ^KG("tout", timestamp, source, predicate, target) = weight
-	If 'suppressReverseIndex { Set ^KG("tin", timestamp, target, predicate, source) = weight }
+	Set ^KG("tout", tGKey, timestamp, source, predicate, target) = weight
+	If 'suppressReverseIndex { Set ^KG("tin", tGKey, timestamp, target, predicate, source) = weight }
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set bucket = timestamp \ tBucketDiv
-	Set tmp = $Increment(^KG("bucket", bucket, source))
-	Set ^KG("out", 0, source, predicate, target) = weight
-	Set ^KG("in", 0, target, predicate, source) = weight
-	Set tmp = $Increment(^KG("deg", source))
+	Set tmp = $Increment(^KG("bucket", tGKey, bucket, source))
+	// Structural adjacency shadow — always at default graph key 0 for BFS/traversal.
+	Set ^KG("out", tGKey, source, predicate, target) = weight
+	Set ^KG("in", tGKey, target, predicate, source) = weight
+	Set tmp = $Increment(^KG("deg", tGKey, source))
 	// count and sum are atomic via $Increment
-	Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "count"))
-	Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "sum"), weight)
-	// WARNING: min/max updates are NOT atomic under concurrent writes (read-modify-write race).
-	// $Increment is atomic; conditional set is not. Under single-threaded ingest this is correct.
-	// Phase 2 fix: wrap in LOCK ^KG("tagg", bucket, source, predicate) for concurrent safety.
-	If '$Data(^KG("tagg", bucket, source, predicate, "min")) || (weight < ^KG("tagg", bucket, source, predicate, "min")) {
-		Set ^KG("tagg", bucket, source, predicate, "min") = weight
+	Set tmp = $Increment(^KG("tagg", tGKey, bucket, source, predicate, "count"))
+	Set tmp = $Increment(^KG("tagg", tGKey, bucket, source, predicate, "sum"), weight)
+	If '$Data(^KG("tagg", tGKey, bucket, source, predicate, "min")) || (weight < ^KG("tagg", tGKey, bucket, source, predicate, "min")) {
+		Set ^KG("tagg", tGKey, bucket, source, predicate, "min") = weight
 	}
-	If '$Data(^KG("tagg", bucket, source, predicate, "max")) || (weight > ^KG("tagg", bucket, source, predicate, "max")) {
-		Set ^KG("tagg", bucket, source, predicate, "max") = weight
+	If '$Data(^KG("tagg", tGKey, bucket, source, predicate, "max")) || (weight > ^KG("tagg", tGKey, bucket, source, predicate, "max")) {
+		Set ^KG("tagg", tGKey, bucket, source, predicate, "max") = weight
 	}
-	// HLL sketch for COUNT DISTINCT of target values per (bucket, source, predicate).
-	// 16-register HLL using SHA1 hash. $SYSTEM.Encryption.SHA1Hash verified available in IRIS 2025.1.
-	// ~26% error rate for 16 registers -- acceptable for fanout burst detection thresholds.
-	// HLL update is also NOT atomic under concurrent writes (same race as min/max above).
-	Do ..UpdateHLL(bucket, source, predicate, target)
+	Do ..UpdateHLL(tGKey, bucket, source, predicate, target)
 	If attrsJSON '= "" {
 		Set attrs = ##class(%DynamicObject).%FromJSON(attrsJSON)
 		Set iter = attrs.%GetIterator()
 		While iter.%GetNext(.key, .val) {
-			Set ^KG("edgeprop", timestamp, source, predicate, target, key) = val
+			Set ^KG("edgeprop", tGKey, timestamp, source, predicate, target, key) = val
 		}
 	}
 	Return 1
 }
 
-ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
+ClassMethod BulkInsert(graphId As %String = "", batchJSON As %String, upsert As %Boolean = 0) As %Integer
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set arr = ##class(%DynamicArray).%FromJSON(batchJSON)
 	Set n = arr.%Size()
 	Set count = 0
@@ -106,27 +101,26 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 		Set weight = item.%Get("w")
 		If weight = "" Set weight = 1
 		If ts = 0 Set ts = ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1))
-		If upsert && $Data(^KG("tout", ts, source, predicate, target)) { Continue }
+		If upsert && $Data(^KG("tout", tGKey, ts, source, predicate, target)) { Continue }
 		Set suppR = +item.%Get("sri")
-		Set ^KG("tout", ts, source, predicate, target) = weight
-		If 'suppR { Set ^KG("tin", ts, target, predicate, source) = weight }
+		Set ^KG("tout", tGKey, ts, source, predicate, target) = weight
+		If 'suppR { Set ^KG("tin", tGKey, ts, target, predicate, source) = weight }
 		Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 		Set bucket = ts \ tBucketDiv
-		Set tmp = $Increment(^KG("bucket", bucket, source))
-		Set ^KG("out", 0, source, predicate, target) = weight
-		Set ^KG("in", 0, target, predicate, source) = weight
-		Set tmp = $Increment(^KG("deg", source))
-		Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "count"))
-		Set tmp = $Increment(^KG("tagg", bucket, source, predicate, "sum"), weight)
-		// WARNING: min/max not atomic -- see InsertEdge comment. Same race condition applies.
-		If '$Data(^KG("tagg", bucket, source, predicate, "min")) || (weight < ^KG("tagg", bucket, source, predicate, "min")) { Set ^KG("tagg", bucket, source, predicate, "min") = weight }
-		If '$Data(^KG("tagg", bucket, source, predicate, "max")) || (weight > ^KG("tagg", bucket, source, predicate, "max")) { Set ^KG("tagg", bucket, source, predicate, "max") = weight }
-		Do ..UpdateHLL(bucket, source, predicate, target)
+		Set tmp = $Increment(^KG("bucket", tGKey, bucket, source))
+		Set ^KG("out", tGKey, source, predicate, target) = weight
+		Set ^KG("in", tGKey, target, predicate, source) = weight
+		Set tmp = $Increment(^KG("deg", tGKey, source))
+		Set tmp = $Increment(^KG("tagg", tGKey, bucket, source, predicate, "count"))
+		Set tmp = $Increment(^KG("tagg", tGKey, bucket, source, predicate, "sum"), weight)
+		If '$Data(^KG("tagg", tGKey, bucket, source, predicate, "min")) || (weight < ^KG("tagg", tGKey, bucket, source, predicate, "min")) { Set ^KG("tagg", tGKey, bucket, source, predicate, "min") = weight }
+		If '$Data(^KG("tagg", tGKey, bucket, source, predicate, "max")) || (weight > ^KG("tagg", tGKey, bucket, source, predicate, "max")) { Set ^KG("tagg", tGKey, bucket, source, predicate, "max") = weight }
+		Do ..UpdateHLL(tGKey, bucket, source, predicate, target)
 		Set attrs = item.%Get("attrs")
 		If attrs '= "" && ($IsObject(attrs)) {
 			Set iter = attrs.%GetIterator()
 			While iter.%GetNext(.key, .val) {
-				Set ^KG("edgeprop", ts, source, predicate, target, key) = val
+				Set ^KG("edgeprop", tGKey, ts, source, predicate, target, key) = val
 			}
 		}
 		Set count = count + 1
@@ -134,10 +128,9 @@ ClassMethod BulkInsert(batchJSON As %String, upsert As %Boolean = 0) As %Integer
 	Return count
 }
 
-ClassMethod UpdateHLL(bucket As %Integer, source As %String, predicate As %String, value As %String) [ Private ]
+ClassMethod UpdateHLL(graphKey, bucket As %Integer, source As %String, predicate As %String, value As %String) [ Private ]
 {
 	// 16-register HLL sketch. SHA1 first byte -> register index, second byte -> leading-zero count.
-	// Merge rule: keep max leading-zero count per register (standard HLL update).
 	Set hashBytes = $SYSTEM.Encryption.SHA1Hash(value)
 	Set regIdx = ($ASCII(hashBytes, 1) # 16) + 1
 	Set b1 = $ASCII(hashBytes, 2)
@@ -147,10 +140,10 @@ ClassMethod UpdateHLL(bucket As %Integer, source As %String, predicate As %Strin
 	} Else {
 		While (b1 # 2) = 0 { Set lz = lz + 1, b1 = b1 \ 2 }
 	}
-	Set hll = $Get(^KG("tagg", bucket, source, predicate, "hll"), $ListBuild(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
+	Set hll = $Get(^KG("tagg", graphKey, bucket, source, predicate, "hll"), $ListBuild(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
 	If lz > $List(hll, regIdx) {
 		Set $List(hll, regIdx) = lz
-		Set ^KG("tagg", bucket, source, predicate, "hll") = hll
+		Set ^KG("tagg", graphKey, bucket, source, predicate, "hll") = hll
 	}
 }
 
@@ -158,19 +151,18 @@ ClassMethod UpdateHLL(bucket As %Integer, source As %String, predicate As %Strin
 /// When source="" (empty string), counts across ALL sources matching the predicate.
 /// HLL registers are merged element-wise across all matching (source, predicate) pairs.
 /// Same ~26% error rate as per-source mode.
-ClassMethod GetDistinctCount(source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %Integer
+ClassMethod GetDistinctCount(graphId As %String = "", source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %Integer
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set startBucket = tsStart \ tBucketDiv
 	Set endBucket = tsEnd \ tBucketDiv
-	// Merge registers across buckets: element-wise max of 16 registers.
 	Set merged = $ListBuild(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
 	For b = startBucket:1:endBucket {
 		If source '= "" {
-			// Single-source path (original behavior)
-			Set hll = $Get(^KG("tagg", b, source, predicate, "hll"))
+			Set hll = $Get(^KG("tagg", tGKey, b, source, predicate, "hll"))
 			If hll = "" Continue
 			For i = 1:1:16 {
 				If $List(hll, i) > $List(merged, i) {
@@ -178,17 +170,16 @@ ClassMethod GetDistinctCount(source As %String, predicate As %String, tsStart As
 				}
 			}
 		} Else {
-			// All-sources path: iterate every source key in this bucket
 			Set src = ""
 			For {
-				Set src = $Order(^KG("tagg", b, src))
+				Set src = $Order(^KG("tagg", tGKey, b, src))
 				Quit:(src = "")
 				Set p = ""
 				For {
-					Set p = $Order(^KG("tagg", b, src, p))
+					Set p = $Order(^KG("tagg", tGKey, b, src, p))
 					Quit:(p = "")
 					If predicate '= "" && (p '= predicate) { Continue }
-					Set hll = $Get(^KG("tagg", b, src, p, "hll"))
+					Set hll = $Get(^KG("tagg", tGKey, b, src, p, "hll"))
 					If hll = "" Continue
 					For i = 1:1:16 {
 						If $List(hll, i) > $List(merged, i) {
@@ -210,30 +201,31 @@ ClassMethod GetDistinctCount(source As %String, predicate As %String, tsStart As
 	Return $Number(estimate, 0)
 }
 
-ClassMethod QueryWindow(source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+ClassMethod QueryWindow(graphId As %String = "", source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set result = "["
 	Set first = 1
 	Set ts = tsStart - 1
 	While 1 {
-		Set ts = $Order(^KG("tout", ts))
+		Set ts = $Order(^KG("tout", tGKey, ts))
 		If ts = "" Quit
 		If ts > tsEnd Quit
 		Set s = ""
 		While 1 {
-			Set s = $Order(^KG("tout", ts, s))
+			Set s = $Order(^KG("tout", tGKey, ts, s))
 			If s = "" Quit
 			If source '= "" { If s '= source { Continue } }
 			Set p = ""
 			While 1 {
-				Set p = $Order(^KG("tout", ts, s, p))
+				Set p = $Order(^KG("tout", tGKey, ts, s, p))
 				If p = "" Quit
 				If predicate '= "" { If p '= predicate { Continue } }
 				Set o = ""
 				While 1 {
-					Set o = $Order(^KG("tout", ts, s, p, o), 1, w)
+					Set o = $Order(^KG("tout", tGKey, ts, s, p, o), 1, w)
 					If o = "" Quit
 					If 'first Set result = result _ ","
 					Set first = 0
@@ -245,24 +237,25 @@ ClassMethod QueryWindow(source As %String, predicate As %String, tsStart As %Int
 	Return result _ "]"
 }
 
-ClassMethod QueryWindowSources(predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+ClassMethod QueryWindowSources(graphId As %String = "", predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Kill dedup
 	Set ts = tsStart - 1
 	While 1 {
-		Set ts = $Order(^KG("tout", ts))
+		Set ts = $Order(^KG("tout", tGKey, ts))
 		If ts = "" Quit
 		If ts > tsEnd Quit
 		Set s = ""
 		While 1 {
-			Set s = $Order(^KG("tout", ts, s))
+			Set s = $Order(^KG("tout", tGKey, ts, s))
 			If s = "" Quit
 			If predicate = "" {
 				Set dedup(s) = 1
 			} Else {
-				If $Data(^KG("tout", ts, s, predicate)) Set dedup(s) = 1
+				If $Data(^KG("tout", tGKey, ts, s, predicate)) Set dedup(s) = 1
 			}
 		}
 	}
@@ -277,8 +270,9 @@ ClassMethod QueryWindowSources(predicate As %String, tsStart As %Integer, tsEnd 
 	Return result _ "]"
 }
 
-ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300, nowTs As %Integer = 0) As %Integer
+ClassMethod GetVelocity(graphId As %String = "", nodeId As %String, windowSec As %Integer = 300, nowTs As %Integer = 0) As %Integer
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set now = $Select(nowTs > 0: nowTs,
 		1: ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1)))
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -286,13 +280,14 @@ ClassMethod GetVelocity(nodeId As %String, windowSec As %Integer = 300, nowTs As
 	Set endBucket = now \ tBucketDiv
 	Set total = 0
 	For b = startBucket:1:endBucket {
-		Set total = total + $Get(^KG("bucket", b, nodeId), 0)
+		Set total = total + $Get(^KG("bucket", tGKey, b, nodeId), 0)
 	}
 	Return total
 }
 
-ClassMethod FindBursts(predicate As %String, windowSec As %Integer, threshold As %Integer, nowTs As %Integer = 0) As %String
+ClassMethod FindBursts(graphId As %String = "", predicate As %String, windowSec As %Integer, threshold As %Integer, nowTs As %Integer = 0) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set now = $Select(nowTs > 0: nowTs,
 		1: ##class(%SYSTEM.SQL).DATEDIFF("ss", "1970-01-01 00:00:00", $ZDateTime($ZTimeStamp, 3, 1)))
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -302,12 +297,12 @@ ClassMethod FindBursts(predicate As %String, windowSec As %Integer, threshold As
 	Set first = 1
 	Set b = startBucket - 1
 	For {
-		Set b = $Order(^KG("bucket", b))
+		Set b = $Order(^KG("bucket", tGKey, b))
 		Quit:b=""
 		If b > endBucket Quit
 		Set node = ""
 		For {
-			Set node = $Order(^KG("bucket", b, node), 1, cnt)
+			Set node = $Order(^KG("bucket", tGKey, b, node), 1, cnt)
 			Quit:node=""
 			If '$Data(totals(node)) Set totals(node) = 0
 			Set totals(node) = totals(node) + cnt
@@ -335,70 +330,70 @@ ClassMethod Purge()
 	Kill ^KG("tagg")
 }
 
+/// Legacy method — purges raw edges and expired aggregate buckets for default graph.
 ClassMethod PurgeBefore(tsEnd As %Integer)
 {
+	Set tGKey = 0  // default graph
 	Set tsEnd = +tsEnd
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
-	// Only kill aggregate buckets strictly before the bucket containing tsEnd.
 	Set maxSafeBucket = (tsEnd \ tBucketDiv) - 1
 	Set ts = ""
 	For {
-		Set ts = $Order(^KG("tout", ts))
+		Set ts = $Order(^KG("tout", tGKey, ts))
 		Quit:(ts = "")!(ts >= tsEnd)
 		Set s = ""
 		For {
-			Set s = $Order(^KG("tout", ts, s))
+			Set s = $Order(^KG("tout", tGKey, ts, s))
 			Quit:s=""
 			Set p = ""
 			For {
-				Set p = $Order(^KG("tout", ts, s, p))
+				Set p = $Order(^KG("tout", tGKey, ts, s, p))
 				Quit:p=""
 				Set o = ""
 				For {
-					Set o = $Order(^KG("tout", ts, s, p, o))
+					Set o = $Order(^KG("tout", tGKey, ts, s, p, o))
 					Quit:o=""
-					Kill ^KG("tout", ts, s, p, o)
-					Kill ^KG("tin",  ts, o, p, s)
-					Kill ^KG("edgeprop", ts, s, p, o)
+					Kill ^KG("tout", tGKey, ts, s, p, o)
+					Kill ^KG("tin",  tGKey, ts, o, p, s)
+					Kill ^KG("edgeprop", tGKey, ts, s, p, o)
 				}
 			}
 		}
-		// Only kill aggregate buckets that are fully expired.
 		Set bucket = ts \ tBucketDiv
 		If bucket <= maxSafeBucket {
-			Kill ^KG("tagg", bucket)
-			Kill ^KG("bucket", bucket)
+			Kill ^KG("tagg", tGKey, bucket)
+			Kill ^KG("bucket", tGKey, bucket)
 		}
-		Kill ^KG("tout", ts)
+		Kill ^KG("tout", tGKey, ts)
 	}
 }
 
-/// Delete raw temporal edges in [tsStart, tsEnd), preserving aggregates and labelsets.
-/// tsStart=0 default: byte-identical to the v2.8.0 single-argument call.
-/// Returns "deleted:skipped" -- deleted count and skipped count (below tsStart).
-/// ^KG("labelset") is append-only and never touched by any purge method.
-ClassMethod PurgeRawBefore(tsEnd As %Integer, tsStart As %Integer = 0) As %String
+/// Delete raw temporal edges in [tsStart, tsEnd) for the specified graph.
+/// graphId="" targets the default graph (key 0). tsStart=0 default deletes all before tsEnd.
+/// Returns "deleted:skipped". ^KG("labelset") is never touched.
+ClassMethod PurgeRawBefore(graphId As %String = "", tsEnd As %Integer, tsStart As %Integer = 0) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsEnd = +tsEnd
 	Set tsStart = $Select(+tsStart < 0: 0, 1: +tsStart)
 	Set deleted = 0
 	Set skipped = 0
 	Set ts = ""
 	For {
-		Set ts = $Order(^KG("tout", ts))
+		Set ts = $Order(^KG("tout", tGKey, ts))
 		Quit:(ts = "")!(ts >= tsEnd)
 		If ts < tsStart {
 			Set s = ""
 			For {
-				Set s = $Order(^KG("tout", ts, s))
+				Set s = $Order(^KG("tout", tGKey, ts, s))
 				Quit:s=""
 				Set p = ""
 				For {
-					Set p = $Order(^KG("tout", ts, s, p))
+					Set p = $Order(^KG("tout", tGKey, ts, s, p))
 					Quit:p=""
 					Set o = ""
 					For {
-						Set o = $Order(^KG("tout", ts, s, p, o))
+						Set o = $Order(^KG("tout", tGKey, ts, s, p, o))
 						Quit:o=""
 						Set skipped = skipped + 1
 					}
@@ -408,45 +403,111 @@ ClassMethod PurgeRawBefore(tsEnd As %Integer, tsStart As %Integer = 0) As %Strin
 		}
 		Set s = ""
 		For {
-			Set s = $Order(^KG("tout", ts, s))
+			Set s = $Order(^KG("tout", tGKey, ts, s))
 			Quit:s=""
 			Set p = ""
 			For {
-				Set p = $Order(^KG("tout", ts, s, p))
+				Set p = $Order(^KG("tout", tGKey, ts, s, p))
 				Quit:p=""
 				Set o = ""
 				For {
-					Set o = $Order(^KG("tout", ts, s, p, o))
+					Set o = $Order(^KG("tout", tGKey, ts, s, p, o))
 					Quit:o=""
-					Kill ^KG("tout", ts, s, p, o)
-					Kill ^KG("tin",  ts, o, p, s)
-					Kill ^KG("edgeprop", ts, s, p, o)
+					Kill ^KG("tout", tGKey, ts, s, p, o)
+					Kill ^KG("tin",  tGKey, ts, o, p, s)
+					Kill ^KG("edgeprop", tGKey, ts, s, p, o)
 					Set deleted = deleted + 1
 				}
 			}
 		}
-		Kill ^KG("tout", ts)
+		Kill ^KG("tout", tGKey, ts)
 	}
 	Return deleted _ ":" _ skipped
 }
 
-/// Delete ^KG("tagg") and ^KG("bucket") entries in [bucketStart, bucketEnd] (inclusive).
-/// Raw edges (tout/tin/edgeprop) are never touched.
-/// Returns count of buckets removed. Returns 0 if bucketStart > bucketEnd.
-ClassMethod PurgeBucketRange(bucketStart As %Integer, bucketEnd As %Integer) As %Integer
+/// Delete ^KG("tagg") and ^KG("bucket") entries in [bucketStart, bucketEnd] for one graph.
+/// Raw edges (tout/tin/edgeprop) are never touched. Returns count of buckets removed.
+ClassMethod PurgeBucketRange(graphId As %String = "", bucketStart As %Integer, bucketEnd As %Integer) As %Integer
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set bucketStart = +bucketStart, bucketEnd = +bucketEnd
 	Set tCount = 0
 	If bucketStart > bucketEnd Quit 0
 	Set bucket = bucketStart - 1
 	For {
-		Set bucket = $Order(^KG("tagg", bucket))
+		Set bucket = $Order(^KG("tagg", tGKey, bucket))
 		Quit:(bucket="")!(bucket > bucketEnd)
-		Kill ^KG("tagg", bucket)
-		Kill ^KG("bucket", bucket)
+		Kill ^KG("tagg", tGKey, bucket)
+		Kill ^KG("bucket", tGKey, bucket)
 		Set tCount = tCount + 1
 	}
 	Quit tCount
+}
+
+/// Migrate flat (pre-spec-223) temporal globals to the graph-scoped layout.
+/// All flat entries at ^KG("tout", ts, ...) are moved to ^KG("tout", 0, ts, ...) (default graph).
+/// Idempotent: a second run returns 0 and leaves data unchanged.
+/// Returns the count of tout entries migrated.
+ClassMethod MigrateToGraphScoped() As %Integer
+{
+	Set migrated = 0
+	Set batchSize = 10000
+	Set batchCount = 0
+	TStart
+	Set ts = ""
+	For {
+		Set ts = $Order(^KG("tout", ts))
+		// Stop when we hit a non-integer key (graph-scoped entries have string or int first subscript)
+		// Flat entries have a timestamp integer as first subscript.
+		// Graph-scoped entries have integer 0 or a string graph name.
+		// We only process integer timestamps > 0 (flat entries).
+		If ts = "" Quit
+		If ts = 0 Quit  // already the graph key — scoped data, stop
+		If '$IsValidNum(ts) Quit  // string graph key — scoped data, stop
+		If +ts = ts && ts > 1000000 {
+			// Looks like a Unix timestamp (>1M) — flat entry
+			Set s = ""
+			For {
+				Set s = $Order(^KG("tout", ts, s))
+				Quit:s=""
+				If '$IsValidNum(s) {
+					// s is a node ID string — this is a flat entry at (ts, s, ...)
+					Set p = ""
+					For {
+						Set p = $Order(^KG("tout", ts, s, p))
+						Quit:p=""
+						Set o = ""
+						For {
+							Set o = $Order(^KG("tout", ts, s, p, o), 1, w)
+							Quit:o=""
+							// Write at new scoped location (default graph = 0)
+							If '$Data(^KG("tout", 0, ts, s, p, o)) {
+								Set ^KG("tout", 0, ts, s, p, o) = w
+								Set ^KG("tin",  0, ts, o, p, s) = w
+								// Migrate edgeprop
+								Set k = ""
+								For {
+									Set k = $Order(^KG("edgeprop", ts, s, p, o, k), 1, v)
+									Quit:k=""
+									Set ^KG("edgeprop", 0, ts, s, p, o, k) = v
+								}
+								Kill ^KG("edgeprop", ts, s, p, o)
+								Kill ^KG("tout", ts, s, p, o)
+								Kill ^KG("tin",  ts, o, p, s)
+								Set migrated = migrated + 1
+								Set batchCount = batchCount + 1
+								If batchCount >= batchSize { TCommit  TStart  Set batchCount = 0 }
+							}
+						}
+					}
+				}
+			}
+		} Else {
+			Quit  // not a flat timestamp
+		}
+	}
+	TCommit
+	Return migrated
 }
 
 /// Intern an attribute JSON object: canonicalize, hash, store once, return SHA1 hex.
@@ -516,30 +577,31 @@ ClassMethod ResolveLabelSet(hash As %String) As %String
 /// are NOT visible via this method. Those edges write only to ^KG("tout") and have
 /// no ^KG("tin") entry. This is intentional. Callers mixing suppressed and
 /// non-suppressed edges will see only non-suppressed edges here.
-ClassMethod QueryWindowInbound(target As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+ClassMethod QueryWindowInbound(graphId As %String = "", target As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set result = "["
 	Set first = 1
 	Set ts = tsStart - 1
 	While 1 {
-		Set ts = $Order(^KG("tin", ts))
+		Set ts = $Order(^KG("tin", tGKey, ts))
 		If ts = "" Quit
 		If ts > tsEnd Quit
 		Set o = ""
 		While 1 {
-			Set o = $Order(^KG("tin", ts, o))
+			Set o = $Order(^KG("tin", tGKey, ts, o))
 			If o = "" Quit
 			If target '= "" { If o '= target { Continue } }
 			Set p = ""
 			While 1 {
-				Set p = $Order(^KG("tin", ts, o, p))
+				Set p = $Order(^KG("tin", tGKey, ts, o, p))
 				If p = "" Quit
 				If predicate '= "" { If p '= predicate { Continue } }
 				Set s = ""
 				While 1 {
-					Set s = $Order(^KG("tin", ts, o, p, s), 1, w)
+					Set s = $Order(^KG("tin", tGKey, ts, o, p, s), 1, w)
 					If s = "" Quit
 					If 'first Set result = result _ ","
 					Set first = 0
@@ -551,8 +613,9 @@ ClassMethod QueryWindowInbound(target As %String, predicate As %String, tsStart 
 	Return result _ "]"
 }
 
-ClassMethod GetAggregate(source As %String, predicate As %String, metric As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+ClassMethod GetAggregate(graphId As %String = "", source As %String, predicate As %String, metric As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -561,10 +624,10 @@ ClassMethod GetAggregate(source As %String, predicate As %String, metric As %Str
 	Set totalCount = 0, totalSum = 0
 	Set globalMin = "", globalMax = ""
 	For b = startBucket:1:endBucket {
-		Set cnt = +$Get(^KG("tagg", b, source, predicate, "count"), 0)
-		Set sm = +$Get(^KG("tagg", b, source, predicate, "sum"), 0)
-		Set mn = $Get(^KG("tagg", b, source, predicate, "min"))
-		Set mx = $Get(^KG("tagg", b, source, predicate, "max"))
+		Set cnt = +$Get(^KG("tagg", tGKey, b, source, predicate, "count"), 0)
+		Set sm = +$Get(^KG("tagg", tGKey, b, source, predicate, "sum"), 0)
+		Set mn = $Get(^KG("tagg", tGKey, b, source, predicate, "min"))
+		Set mx = $Get(^KG("tagg", tGKey, b, source, predicate, "max"))
 		Set totalCount = totalCount + cnt
 		Set totalSum = totalSum + sm
 		If mn '= "" { If globalMin = "" || (mn < globalMin) Set globalMin = mn }
@@ -578,8 +641,9 @@ ClassMethod GetAggregate(source As %String, predicate As %String, metric As %Str
 	Return ""
 }
 
-ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As %Integer, sourcePrefix As %String = "") As %String
+ClassMethod GetBucketGroups(graphId As %String = "", predicate As %String, tsStart As %Integer, tsEnd As %Integer, sourcePrefix As %String = "") As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
@@ -593,18 +657,18 @@ ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As 
 		Quit:(b > endBucket)
 		Set src = ""
 		For {
-			Set src = $Order(^KG("tagg", b, src))
+			Set src = $Order(^KG("tagg", tGKey, b, src))
 			Quit:(src = "")
 			If prefixLen > 0 && ($Extract(src, 1, prefixLen) '= sourcePrefix) { Continue }
 			Set p = ""
 			For {
-				Set p = $Order(^KG("tagg", b, src, p))
+				Set p = $Order(^KG("tagg", tGKey, b, src, p))
 				Quit:(p = "")
 				If predicate '= "" && (p '= predicate) { Continue }
-				Set cnt = +$Get(^KG("tagg", b, src, p, "count"), 0)
-				Set sm = +$Get(^KG("tagg", b, src, p, "sum"), 0)
-				Set mn = $Get(^KG("tagg", b, src, p, "min"))
-				Set mx = $Get(^KG("tagg", b, src, p, "max"))
+				Set cnt = +$Get(^KG("tagg", tGKey, b, src, p, "count"), 0)
+				Set sm = +$Get(^KG("tagg", tGKey, b, src, p, "sum"), 0)
+				Set mn = $Get(^KG("tagg", tGKey, b, src, p, "min"))
+				Set mx = $Get(^KG("tagg", tGKey, b, src, p, "max"))
 				If '$Data(totals(src, p, "count")) { Set totals(src, p, "count") = 0, totals(src, p, "sum") = 0, totals(src, p, "min") = "", totals(src, p, "max") = "" }
 				Set totals(src, p, "count") = totals(src, p, "count") + cnt
 				Set totals(src, p, "sum") = totals(src, p, "sum") + sm
@@ -635,25 +699,26 @@ ClassMethod GetBucketGroups(predicate As %String, tsStart As %Integer, tsEnd As 
 	Return result _ "]"
 }
 
-ClassMethod GetBucketGroupTargets(source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
+ClassMethod GetBucketGroupTargets(graphId As %String = "", source As %String, predicate As %String, tsStart As %Integer, tsEnd As %Integer) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set tsStart = +tsStart
 	Set tsEnd = +tsEnd
 	Set ts = tsStart - 1
 	Kill dedup
 	For {
-		Set ts = $Order(^KG("tout", ts))
+		Set ts = $Order(^KG("tout", tGKey, ts))
 		Quit:(ts = "")
 		If ts > tsEnd Quit
-		If $Data(^KG("tout", ts, source)) {
+		If $Data(^KG("tout", tGKey, ts, source)) {
 			Set p = ""
 			For {
-				Set p = $Order(^KG("tout", ts, source, p))
+				Set p = $Order(^KG("tout", tGKey, ts, source, p))
 				Quit:(p = "")
 				If predicate '= "" && (p '= predicate) { Continue }
 				Set o = ""
 				For {
-					Set o = $Order(^KG("tout", ts, source, p, o))
+					Set o = $Order(^KG("tout", tGKey, ts, source, p, o))
 					Quit:(o = "")
 					Set dedup(o) = 1
 				}
@@ -671,13 +736,14 @@ ClassMethod GetBucketGroupTargets(source As %String, predicate As %String, tsSta
 	Return result _ "]"
 }
 
-ClassMethod GetEdgeAttrs(ts As %Integer, source As %String, predicate As %String, target As %String) As %String
+ClassMethod GetEdgeAttrs(graphId As %String = "", ts As %Integer, source As %String, predicate As %String, target As %String) As %String
 {
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
 	Set ts = +ts
 	Set result = ##class(%DynamicObject).%New()
 	Set key = ""
 	While 1 {
-		Set key = $Order(^KG("edgeprop", ts, source, predicate, target, key), 1, val)
+		Set key = $Order(^KG("edgeprop", tGKey, ts, source, predicate, target, key), 1, val)
 		If key = "" Quit
 		Do result.%Set(key, val)
 	}

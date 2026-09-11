@@ -163,7 +163,7 @@ class TestPurgeBucketRangeWrapper:
         store._call_classmethod = MagicMock(return_value="5")
         result = store.purge_bucket_range(100, 200)
         store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeBucketRange", 100, 200
+            "Graph.KG.TemporalIndex", "PurgeBucketRange", "", 100, 200
         )
         assert result == 5
 

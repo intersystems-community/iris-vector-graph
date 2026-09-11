@@ -97,14 +97,14 @@ class MockGraphStore:
     def execute_knn_vec(self, query_vector, k, label_filter):
         return self._record("execute_knn_vec", query_vector=query_vector, k=k, label_filter=label_filter)
 
-    def write_temporal_edge(self, source_id, predicate, target_id, timestamp, weight=1.0, attrs=None, upsert=False, suppress_reverse_index=False, mode=""):
+    def write_temporal_edge(self, source_id, predicate, target_id, timestamp, weight=1.0, attrs=None, upsert=False, suppress_reverse_index=False, mode="", graph=None):
         return self._record("write_temporal_edge", source_id=source_id, predicate=predicate,
                             target_id=target_id, timestamp=timestamp, weight=weight, attrs=attrs, upsert=upsert)
 
     def bulk_write_temporal_edges(self, edges, upsert=False):
         return self._record("bulk_write_temporal_edges", edges=edges, upsert=upsert)
 
-    def execute_temporal_window_query(self, source_id, predicate, ts_start, ts_end, direction="out"):
+    def execute_temporal_window_query(self, source_id, predicate, ts_start, ts_end, direction="out", graph=None):
         return self._record("execute_temporal_window_query", source_id=source_id,
                             predicate=predicate, ts_start=ts_start, ts_end=ts_end, direction=direction)
 

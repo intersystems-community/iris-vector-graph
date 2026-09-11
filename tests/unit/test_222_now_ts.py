@@ -26,7 +26,7 @@ class TestNowTsParams:
         call_args = iris_obj.classMethodValue.call_args[0]
         assert call_args[0] == "Graph.KG.TemporalIndex"
         assert call_args[1] == "GetVelocity"
-        assert call_args[4] == 12345
+        assert call_args[5] == 12345
 
     def test_find_burst_nodes_accepts_now_ts(self):
         """T002: find_burst_nodes(now_ts=T) passes T to FindBursts ObjectScript."""

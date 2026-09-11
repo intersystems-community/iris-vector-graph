@@ -1004,14 +1004,17 @@ class IRISGraphStore:
         upsert: bool = False,
         suppress_reverse_index: bool = False,
         mode: str = "",
+        graph: Optional[str] = None,
     ) -> IVGResult:
         import json as _json
 
         attrs_json = _json.dumps(attrs) if attrs else ""
+        graph_id = graph if graph is not None else ""
         try:
             self._call_classmethod(
                 "Graph.KG.TemporalIndex",
                 "InsertEdge",
+                graph_id,          # first param: graphId (spec-223)
                 source_id,
                 predicate,
                 target_id,
@@ -1057,6 +1060,7 @@ class IRISGraphStore:
                     self._call_classmethod(
                         "Graph.KG.TemporalIndex",
                         "BulkInsert",
+                        "",                    # graphId: "" = default graph (key 0)
                         _json.dumps(batch),
                         str(int(upsert)),
                     )
@@ -1082,7 +1086,9 @@ class IRISGraphStore:
 
     def purge_bucket_range(self, bucket_start: int, bucket_end: int) -> int:
         result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "PurgeBucketRange", bucket_start, bucket_end
+            "Graph.KG.TemporalIndex", "PurgeBucketRange",
+            "",            # graphId: "" = default graph
+            bucket_start, bucket_end,
         )
         return int(str(result))
 
@@ -1091,7 +1097,9 @@ class IRISGraphStore:
 
         ts_start = max(0, int(ts_start))
         result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", str(ts_end), str(ts_start)
+            "Graph.KG.TemporalIndex", "PurgeRawBefore",
+            "",            # graphId: "" = default graph
+            str(ts_end), str(ts_start),
         )
         raw = str(result)
         if ":" in raw:
@@ -1112,16 +1120,19 @@ class IRISGraphStore:
         return str(result)
 
     def execute_temporal_window_query(
-        self, source_id: str, predicate: str, ts_start: int, ts_end: int, direction: str = "out"
+        self, source_id: str, predicate: str, ts_start: int, ts_end: int,
+        direction: str = "out", graph: Optional[str] = None,
     ) -> IVGResult:
         import json as _json
 
+        graph_id = graph if graph is not None else ""
         try:
             method = "QueryWindowInbound" if direction == "in" else "QueryWindow"
             result_json = str(
                 self._call_classmethod(
                     "Graph.KG.TemporalIndex",
                     method,
+                    graph_id,          # first param: graphId (spec-223)
                     source_id,
                     predicate,
                     str(ts_start),
@@ -1193,6 +1204,7 @@ class IRISGraphStore:
             val = self._call_classmethod(
                 "Graph.KG.TemporalIndex",
                 "GetAggregate",
+                "",          # graphId: "" = default graph
                 source_id,
                 predicate,
                 metric,

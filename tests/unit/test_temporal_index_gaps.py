@@ -75,7 +75,7 @@ class TestPurgeRawBefore:
         store._call_classmethod = MagicMock(return_value="5")
         result = store.purge_raw_before(250)
         store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "250", "0"
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "250", "0"
         )
         assert result.deleted == 5
 

@@ -8,11 +8,12 @@ Parameter TSUNIT As %String = "ms";
 
 Parameter BUCKETMS As %Integer = 300000;
 
-/// Return the edge count stored in ^KG("bucket", bucket, node).
-/// Used by tests to verify bucket key assignment without embedded Python.
-ClassMethod GetBucketCount(bucket As %Integer, node As %String) As %Integer
+/// Return the edge count stored in ^KG("bucket", graphKey, bucket, node).
+/// graphId="" = default graph (key 0). Used by tests to verify bucket key assignment.
+ClassMethod GetBucketCount(graphId As %String = "", bucket As %Integer, node As %String) As %Integer
 {
-	Return +$Get(^KG("bucket", bucket, node), 0)
+	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
+	Return +$Get(^KG("bucket", tGKey, bucket, node), 0)
 }
 
 }

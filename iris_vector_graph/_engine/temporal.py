@@ -71,12 +71,13 @@ class TemporalMixin:
         if timestamp is not None:
             TemporalEdgeInput(source=source, predicate=predicate, target=target,
                               timestamp=int(timestamp), weight=weight)
-        result = self._store.write_temporal_edge(
+        result = self._store.write_temporal_edge(  # type: ignore[call-arg]
             source, predicate, target,
             timestamp=int(timestamp) if timestamp is not None else 0,
             weight=weight, attrs=attrs, upsert=upsert,
             suppress_reverse_index=suppress_reverse_index,
             mode=mode,
+            graph=graph,
         )
         if result.error is None and graph is not None and _ledger_strict(self):
             logger.debug("ledger strict mode: temporal structural mirror skipped for %s -[%s]-> %s", source, predicate, target)
@@ -161,6 +162,7 @@ class TemporalMixin:
         start: int = 0,
         end: int = 0,
         direction: str = "out",
+        graph: Optional[str] = None,
     ) -> list:
         """Return edges in a time window.
 
@@ -184,7 +186,7 @@ class TemporalMixin:
             for edge in edges:
                 attrs = engine.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
         """
-        result = self._store.execute_temporal_window_query(source, predicate, start, end, direction)
+        result = self._store.execute_temporal_window_query(source, predicate, start, end, direction, graph=graph)
         if result.error:
             return []
         cols = result.columns
@@ -260,7 +262,9 @@ class TemporalMixin:
         """
         w = window if window is not None else window_seconds
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetVelocity", node_id, w, now_ts
+            "Graph.KG.TemporalIndex", "GetVelocity",
+            "",        # graphId: "" = default graph
+            node_id, w, now_ts,
         )
         return int(result)
 
@@ -282,8 +286,9 @@ class TemporalMixin:
                 so the detection window covers the fixture timestamps.
         """
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "FindBursts", predicate, window_seconds, threshold,
-            now_ts,
+            "Graph.KG.TemporalIndex", "FindBursts",
+            "",        # graphId: "" = default graph
+            predicate, window_seconds, threshold, now_ts,
         )
         return json.loads(str(result))
 
@@ -301,7 +306,9 @@ class TemporalMixin:
         Returns an empty dict when no attrs were stored for this edge.
         """
         result = self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "GetEdgeAttrs", ts, source, predicate, target
+            "Graph.KG.TemporalIndex", "GetEdgeAttrs",
+            "",        # graphId: "" = default graph
+            ts, source, predicate, target,
         )
         return json.loads(str(result))
 
@@ -368,6 +375,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetBucketGroups",
+            "",            # graphId: "" = default graph
             predicate,
             ts_start,
             ts_end,
@@ -391,6 +399,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetBucketGroupTargets",
+            "",        # graphId: "" = default graph
             source,
             predicate,
             ts_start,
@@ -429,6 +438,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "QueryWindowSources",
+            "",        # graphId: "" = default graph
             predicate,
             ts_start,
             ts_end,
@@ -445,6 +455,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetDistinctCount",
+            "",        # graphId: "" = default graph
             source,
             predicate,
             ts_start,
@@ -462,6 +473,7 @@ class TemporalMixin:
         result_json = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "QueryWindow",
+            "",        # graphId: "" = default graph
             s_filter,
             p_filter,
             ts_start,

@@ -337,9 +337,10 @@ class TestTemporalPreAggUnit:
         args = mock.classMethodValue.call_args[0]
         assert args[0] == "Graph.KG.TemporalIndex"
         assert args[1] == "QueryWindowSources"
-        assert args[2] == "COST_ON"
-        assert args[3] == 100
-        assert args[4] == 200
+        assert args[2] == ""  # graphId: default graph
+        assert args[3] == "COST_ON"
+        assert args[4] == 100
+        assert args[5] == 200
 
     # ── ENH-3: docstring test ────────────────────────────────────────
     def test_get_bucket_groups_docstring(self):
@@ -358,6 +359,7 @@ class TestTemporalPreAggUnit:
         mock.classMethodValue.assert_called_once()
         call_args = mock.classMethodValue.call_args[0]
         assert "GetDistinctCount" in call_args
+        assert call_args[2] == ""  # graphId
         assert isinstance(result, int)
         assert result == 7
 

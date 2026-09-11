@@ -73,7 +73,7 @@ class TestPurgeRawBeforeV2:
         store._call_classmethod = MagicMock(return_value="5:0")
         store.purge_raw_before(250, ts_start=100)
         store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "250", "100"
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "250", "100"
         )
 
     def test_store_calls_classmethod_default_zero(self):
@@ -83,7 +83,7 @@ class TestPurgeRawBeforeV2:
         store._call_classmethod = MagicMock(return_value="3:0")
         store.purge_raw_before(500)
         store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "500", "0"
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "500", "0"
         )
 
     def test_negative_tsstart_clamped_to_zero(self):
@@ -93,7 +93,7 @@ class TestPurgeRawBeforeV2:
         store._call_classmethod = MagicMock(return_value="0:0")
         store.purge_raw_before(500, ts_start=-1)
         args = store._call_classmethod.call_args[0]
-        assert args[3] == "0"
+        assert args[4] == "0"
 
     def test_engine_purge_raw_before_returns_purge_result(self):
         from iris_vector_graph._engine.temporal import PurgeResult
@@ -143,7 +143,7 @@ class TestBulkInsertSRI:
              "timestamp": 2, "weight": 1.0, "attrs": {}},
         ]
         store.bulk_write_temporal_edges(edges, suppress_reverse_index=True)
-        batch_arg = store._call_classmethod.call_args[0][2]
+        batch_arg = store._call_classmethod.call_args[0][3]
         items = json.loads(batch_arg)
         assert all(item.get("sri") == 1 for item in items)
 
@@ -157,7 +157,7 @@ class TestBulkInsertSRI:
              "timestamp": 1, "weight": 1.0, "attrs": {}},
         ]
         store.bulk_write_temporal_edges(edges, suppress_reverse_index=False)
-        batch_arg = store._call_classmethod.call_args[0][2]
+        batch_arg = store._call_classmethod.call_args[0][3]
         items = json.loads(batch_arg)
         assert all(item.get("sri", 0) == 0 for item in items)
 
@@ -352,7 +352,7 @@ class TestAllSourcesDistinctCount:
         with patch.object(type(engine), "_iris_obj", return_value=iris_mock):
             result = engine.get_distinct_count("", "PRECEDED_BY", 0, 1000)
         iris_mock.classMethodValue.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "GetDistinctCount", "", "PRECEDED_BY", 0, 1000
+            "Graph.KG.TemporalIndex", "GetDistinctCount", "", "", "PRECEDED_BY", 0, 1000
         )
         assert result == 42
 
@@ -363,7 +363,7 @@ class TestAllSourcesDistinctCount:
         with patch.object(type(engine), "_iris_obj", return_value=iris_mock):
             result = engine.get_distinct_count("src1", "PRECEDED_BY", 0, 1000)
         iris_mock.classMethodValue.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "GetDistinctCount", "src1", "PRECEDED_BY", 0, 1000
+            "Graph.KG.TemporalIndex", "GetDistinctCount", "", "src1", "PRECEDED_BY", 0, 1000
         )
         assert result == 7
 
