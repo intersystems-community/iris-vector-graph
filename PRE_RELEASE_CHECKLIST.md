@@ -171,12 +171,26 @@ gh release create v<version> \
 
 ## Sign-off
 
-| Gate                     | Status    | Notes                                                                               |
-| ------------------------ | --------- | ----------------------------------------------------------------------------------- |
-| Tests pass               | ✅        | 35 spec-214 integration, 7807 unit pass; 32 pre-existing failures unchanged         |
-| Coverage ≥ 89%           | ✅        | 89% combined unit+integration (2026-09-06)                                          |
-| No benchmark regressions | ⚠️ Waived | bench_utils.py uses SQLUser.\* views; pre-existing infra issue identical to v2.16.0 |
-| Lint clean               | ✅        | No new ruff errors introduced by spec-214                                           |
-| ObjectScript compiles    | ✅        | All 12 changed classes verified compiled on ivg-iris-enterprise                     |
+Measured 2026-09-16 on `225-upgrade-artifact-fidelity` at `07d2cae`, against
+`ivg-iris-enterprise` (port 31972). This is a gate-status record, not a release:
+no version bump, tag, or publish has been done. Every ⚠️ below is written up in
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-Date: **2026-09-06** Release: v**2.17.0**
+| Gate                     | Status      | Notes                                                                                                      |
+| ------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------- |
+| Unit tests               | ✅          | 8672 passed, 20 skipped                                                                                    |
+| Integration tests        | ⚠️          | Cannot run in one process (SIGSEGV at ~30%). As chunks: 51 failed / 4 errors, all pre-existing at `v3.0.1` |
+| Coverage ≥ 89%           | ⬜ Not run  | Requires a full integration pass, which the segfault blocks                                                |
+| No benchmark regressions | ⬜ Not run  | Same waiver as v2.17.0: `bench_utils.py` reads `SQLUser.*` views                                           |
+| Lint clean               | ⚠️          | `ruff check .` = 2048 findings, all pre-existing; no `[tool.ruff]` section exists to scope the gate        |
+| ObjectScript compiles    | ⚠️          | Every `Graph.KG.*` class clean; `User.PageRankEmbedded` fails with #5559 (pre-existing)                    |
+| Documentation parity     | ✅          | README banner no longer carries a version string, so it cannot drift from `pyproject.toml`                 |
+| Version bump             | ⬜ Deferred | `3.1.0` is the right next number (`mode=` is additive API); CHANGELOG stays under `Unreleased`             |
+
+Date: **2026-09-16** Release: **none — gate record only**
+
+### Earlier sign-offs
+
+| Date       | Release | Result                                                                         |
+| ---------- | ------- | ------------------------------------------------------------------------------ |
+| 2026-09-06 | v2.17.0 | All gates passed; benchmarks waived for the `bench_utils.py` `SQLUser.*` issue |

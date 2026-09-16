@@ -57,6 +57,8 @@ data/
 
 # Test coverage
 coverage/
+coverage*.json
+*,cover
 .nyc_output
 
 # Python cache
