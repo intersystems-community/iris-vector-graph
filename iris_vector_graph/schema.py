@@ -415,6 +415,14 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         tightening it did not achieve.  Every writer in the package names ``graph_id``
         explicitly, so the repair alone is enough to keep the second spelling out.
 
+        Note that ``rdf_edges`` legitimately appears twice in the catalog: IRIS
+        auto-generates a compatibility view ``SQLUser.rdf_edges`` over
+        ``Graph_KG.rdf_edges``.  Probe with ``TABLE_SCHEMA = 'Graph_KG'``; the view
+        carries no column defaults, so reading its row makes a required ``graph_id``
+        look nullable.  This migration only reaches a namespace with the
+        ``Graph.KG.*`` classes deployed — a namespace whose schema was built by DDL
+        alone keeps the nullable column forever.
+
         Returns:
             ``{"rows_repaired": int, "not_null": bool, "default_set": bool}``
         """

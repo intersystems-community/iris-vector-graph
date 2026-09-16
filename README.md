@@ -280,14 +280,49 @@ different namespace, pass `namespace=` at engine construction:
 from iris_vector_graph import IRISGraphEngine
 import iris.dbapi as dbapi
 
-conn = dbapi.connect(hostname="...", port=1972, namespace="HSCUSTOM", ...)
-engine = IRISGraphEngine(conn, namespace="HSCUSTOM")
+conn = dbapi.connect(hostname="...", port=1972, namespace="MYGRAPH", ...)
+engine = IRISGraphEngine(conn, namespace="MYGRAPH")
 ```
+
+`MYGRAPH` is a placeholder — use a namespace you own and have deployed IVG
+into. A namespace an installed product manages (a HealthShare/Ensemble
+platform or customization namespace) is the wrong home for IVG's schema: that
+product's own upgrade process owns the class and table set there.
 
 On first use, the engine probes `$Data(^KG("deg"))` to verify the `^KG`
 globals are accessible. If they are absent a `WARNING` is logged naming the
 namespace and the fix. Set `IVG_STRICT_NAMESPACE=1` to upgrade the warning
 to a raised `NamespaceMismatchWarning`.
+
+### A namespace is an IVG namespace only once the classes are deployed
+
+`Graph.KG.*` ObjectScript is what gives a namespace IVG's behaviour. A
+namespace whose schema was built by DDL alone — plain `CREATE TABLE`, or
+`initialize_schema(auto_deploy_objectscript=False)` — is a shell that looks
+right and behaves differently:
+
+| Property                                                               | Classes deployed                            | DDL only       |
+| ---------------------------------------------------------------------- | ------------------------------------------- | -------------- |
+| `rdf_edges.graph_id`                                                   | required, defaults to the default-graph key | nullable       |
+| `rdf_edges` primary key                                                | `ID`                                        | `edge_id`      |
+| `Graph.KG.Edge` / `Eraser` / `TemporalIndex`                           | present                                     | absent         |
+| Schema migrations (`tighten_graph_id_column`, `add_graph_id_to_nodes`) | applied                                     | never reach it |
+| Traversal, temporal and erasure acceleration                           | native ObjectScript                         | none           |
+
+Check a namespace before trusting it:
+
+```sql
+SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Edge'
+```
+
+Zero means DDL-only. Deploy the classes into that namespace — `initialize_schema()`
+with auto-deploy, or `$SYSTEM.OBJ.LoadDir("<path>/iris_src/src", "ck", .err, 1)`
+from a session in that namespace — before writing data.
+
+Also note IRIS auto-generates a compatibility view `SQLUser.rdf_edges` over
+`Graph_KG.rdf_edges`. When you query the catalog, filter
+`TABLE_SCHEMA = 'Graph_KG'`; the view carries no column defaults, so reading
+the wrong row makes a required `graph_id` look nullable.
 
 ### CPF global mapping
 
@@ -295,12 +330,13 @@ If your graph data lives in a separate database, map the `^KG` global in the
 IRIS CPF file so the probe passes without copying data:
 
 ```ini
-[Map.HSCUSTOM]
+[Map.MYGRAPH]
 Global=^KG,Directory=/db/IRISLOCALDATA/
 ```
 
-After mapping, `$Data(^KG("deg"))` returns non-zero in `HSCUSTOM` and no
-warning is emitted.
+After mapping, `$Data(^KG("deg"))` returns non-zero in that namespace and no
+warning is emitted. Global mapping brings the data, not the behaviour — the
+classes still have to be deployed into the namespace.
 
 ### Env var controls
 

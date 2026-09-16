@@ -81,7 +81,7 @@ class TestNamespaceProperty:
         assert eng.namespace == "HSANALYTICS"
 
     def test_namespace_is_string(self):
-        eng, _, _ = _make_engine(namespace="HSCUSTOM")
+        eng, _, _ = _make_engine(namespace="MYGRAPH")
         assert isinstance(eng.namespace, str)
 
     def test_no_iris_cursor_call_on_construction(self):
@@ -124,13 +124,13 @@ class TestNamespaceProbe:
         assert "USER" in msg
 
     def test_probe_strict_message_contains_both_namespaces(self):
-        store, mock_conn, mock_cursor = self._store_with_cursor(0, engine_namespace="HSCUSTOM")
+        store, mock_conn, mock_cursor = self._store_with_cursor(0, engine_namespace="MYGRAPH")
         mock_cursor.fetchone.return_value = (0,)
         with patch.dict("os.environ", {"IVG_STRICT_NAMESPACE": "1"}):
             with pytest.warns(NamespaceMismatchWarning) as w_info:
                 store._check_namespace()
         msg = str(w_info[0].message)
-        assert "HSCUSTOM" in msg
+        assert "MYGRAPH" in msg
 
     def test_probe_passes_when_kgdata_nonzero(self, caplog):
         store, mock_conn, mock_cursor = self._store_with_cursor(1)

@@ -16,15 +16,24 @@ Architecture guarantee being tested:
     namespace isolation is the storage-layer guarantee.
 
 Test namespaces:
-    Primary:   USER      (the standard IVG test namespace, already initialized)
-    Secondary: HSCUSTOM  (an existing namespace on HealthShare enterprise images)
+    Primary:   USER  (the standard IVG test namespace, already initialized)
+    Secondary: whatever ``IVG_SECONDARY_NAMESPACE`` names — opt-in, no default.
 
-    If HSCUSTOM is unavailable the suite falls back to architecture-documentation
+    The secondary namespace must be a real IVG namespace: reachable *and*
+    carrying the compiled `Graph.KG.*` classes. A namespace whose schema was
+    built by DDL alone is a shell — `graph_id` nullable instead of required, PK
+    `edge_id` instead of `ID`, no `Graph.KG.Edge`/`Eraser`/`TemporalIndex`, and
+    no schema migration ever reaches it. Proving isolation against a shell
+    proves it for a deployment no consumer should be running, which is why this
+    suite refuses to build one and skips instead.
+
+    When the env var is unset the suite falls back to architecture-documentation
     tests that verify the _check_namespace probe and explain why namespace
     creation requires an interactive management session.
 
 Run:
     IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \\
+    IVG_SECONDARY_NAMESPACE=MYGRAPH \\
     pytest tests/integration/test_namespace_isolation.py -v
 """
 
@@ -39,7 +48,18 @@ import pytest
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 _PREFIX = f"nsiso_{uuid.uuid4().hex[:8]}"
-_SECONDARY_NAMESPACE = "HSCUSTOM"  # always present on HealthShare enterprise images
+# Opt-in, no default: the secondary namespace has to be one IVG was deployed
+# into. Naming a namespace that merely exists on the image gets a DDL-only
+# shell, and the suite would then assert isolation against it.
+_SECONDARY_NAMESPACE = os.environ.get("IVG_SECONDARY_NAMESPACE", "").strip()
+
+_DEPLOY_HINT = (
+    "the secondary namespace must carry the compiled Graph.KG.* classes "
+    "(check: SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE "
+    "Name='Graph.KG.Edge'). Deploy with $SYSTEM.OBJ.LoadDir on iris_src/src "
+    "from a session in that namespace, or initialize_schema() with auto-deploy. "
+    "See README.md §Non-USER Namespace Deployment."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -49,12 +69,18 @@ _SECONDARY_NAMESPACE = "HSCUSTOM"  # always present on HealthShare enterprise im
 
 @pytest.fixture(scope="module")
 def secondary_conn():
-    """Open a connection to the secondary (HSCUSTOM) namespace.
+    """Open a connection to the secondary namespace named by IVG_SECONDARY_NAMESPACE.
 
-    Skips the whole module if HSCUSTOM is not reachable — the isolation
+    Skips the whole module if it is unset or unreachable — the isolation
     architecture is still valid; only the live proof tests are skipped.
     """
     import iris
+
+    if not _SECONDARY_NAMESPACE:
+        pytest.skip(
+            "IVG_SECONDARY_NAMESPACE is unset. Set it to a namespace IVG is "
+            f"deployed into to run the live isolation proof; {_DEPLOY_HINT}"
+        )
 
     container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
     port = int(os.environ.get("IVG_PORT", "31972"))
@@ -85,7 +111,7 @@ def secondary_conn():
             f"Secondary namespace {_SECONDARY_NAMESPACE!r} not reachable: {exc}. "
             f"Namespace isolation is architecture-guaranteed (IRIS global stores are "
             f"namespace-scoped); this test provides live proof but is not the only "
-            f"evidence. See docs/USER_GUIDE.md §Namespace Deployment."
+            f"evidence. See README.md §Non-USER Namespace Deployment."
         )
 
 
@@ -95,10 +121,31 @@ def engines(iris_connection, secondary_conn):
     from iris_vector_graph.engine import IRISGraphEngine
 
     warnings.filterwarnings("ignore")
+
+    # Refuse to build the secondary schema by DDL. initialize_schema() with
+    # auto-deploy off would happily create a shell — nullable graph_id, PK
+    # edge_id, no Edge/Eraser/TemporalIndex, and no migration ever applied —
+    # and every assertion below would then be about that shell.
+    cur = secondary_conn.cursor()
+    cur.execute(
+        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Edge'"
+    )
+    if not (cur.fetchone() or [0])[0]:
+        pytest.skip(
+            f"{_SECONDARY_NAMESPACE} has no Graph.KG.Edge, so it is not an IVG "
+            f"namespace — only a DDL shell could be built there. Isolation is "
+            f"still storage-layer guaranteed (see "
+            f"TestNamespaceIsolationArchitecture); to run the live proof, "
+            f"{_DEPLOY_HINT}"
+        )
+
     e1 = IRISGraphEngine(iris_connection, embedding_dimension=768, namespace="USER")
     e2 = IRISGraphEngine(
         secondary_conn, embedding_dimension=768, namespace=_SECONDARY_NAMESPACE
     )
+    # Idempotent on a deployed namespace: fills in the indexes and the vector
+    # table the class layer does not create. It cannot create the shell here,
+    # because the guard above proved the classes are already present.
     e2.initialize_schema(auto_deploy_objectscript=False)
     yield e1, e2
 
@@ -144,7 +191,7 @@ class TestStructuralIsolation:
     """Graph_KG SQL tables are per-namespace; a row in one does not appear in the other."""
 
     def test_node_created_in_primary_absent_from_secondary(self, engines):
-        """A node written to namespace USER must not appear in HSCUSTOM."""
+        """A node written to namespace USER must not appear in the secondary namespace."""
         e1, e2 = engines
         nid = f"{_PREFIX}_struc_n1"
         e1.create_node(nid, labels=["IsoTest"], properties={"ns": "primary"})
@@ -160,7 +207,7 @@ class TestStructuralIsolation:
         )
 
     def test_node_created_in_secondary_absent_from_primary(self, engines):
-        """A node written to HSCUSTOM must not appear in USER."""
+        """A node written to the secondary namespace must not appear in USER."""
         e1, e2 = engines
         nid = f"{_PREFIX}_struc_n2"
         e2.create_node(nid, labels=["IsoTest"], properties={"ns": "secondary"})
@@ -256,13 +303,14 @@ class TestTemporalIsolation:
         return json.loads(raw)
 
     def _check_secondary_has_classes(self, e2):
-        """Skip temporal tests when ObjectScript classes aren't in the secondary namespace.
+        """Skip temporal tests when TemporalIndex isn't in the secondary namespace.
 
-        In a production deployment, IVG classes are compiled into every namespace
-        that hosts a graph. In the test container, they're only in USER. The global
-        isolation still holds regardless — ^KG globals are namespace-scoped at the
-        IRIS storage layer independent of class availability. This skip is not a
-        test failure; it's a test-environment limitation.
+        The `engines` fixture already proved `Graph.KG.Edge` is there; this
+        catches a partial deployment where the temporal class specifically is
+        missing. IVG classes have to be compiled into every namespace that hosts
+        a graph. Global isolation holds regardless — ^KG globals are
+        namespace-scoped at the IRIS storage layer, independent of class
+        availability — so this is a deployment gap, not a test failure.
         """
         try:
             e2._store._iris_obj().classMethodValue(
@@ -276,6 +324,25 @@ class TestTemporalIsolation:
                     f"^KG global isolation is storage-layer guaranteed regardless — "
                     f"see TestNamespaceIsolationArchitecture.test_iris_globals_are_namespace_scoped_by_design."
                 )
+
+        # Deployed is not the same as current. Pre-spec-223 releases have no
+        # graphId first parameter, so these calls would land the graph key in a
+        # timestamp subscript and fail with <SUBSCRIPT>/<PARAMETER> instead of
+        # saying what is actually wrong.
+        cur = e2.conn.cursor()
+        cur.execute(
+            "SELECT FormalSpec FROM %Dictionary.MethodDefinition "
+            "WHERE parent = 'Graph.KG.TemporalIndex' AND Name = 'InsertEdge'"
+        )
+        row = cur.fetchone()
+        spec = str(row[0]) if row and row[0] is not None else ""
+        if not spec.startswith("graphId"):
+            pytest.skip(
+                f"{_SECONDARY_NAMESPACE} has a pre-graph-scoped Graph.KG.TemporalIndex "
+                f"(InsertEdge formal spec {spec.split(',')[0]!r}, expected 'graphId'). "
+                f"Redeploy the current iris_src/src into that namespace — the classes "
+                f"being present is not enough, they have to match this release."
+            )
 
     def test_temporal_edge_absent_from_other_namespace(self, engines):
         """A temporal edge in namespace 1 must not appear in namespace 2's QueryWindow."""

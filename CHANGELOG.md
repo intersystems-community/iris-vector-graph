@@ -4,6 +4,25 @@
 
 ### Unreleased
 
+**Changed — a namespace is an IVG namespace only once the classes are deployed**
+
+The non-USER deployment docs named a specific HealthShare customization namespace as
+the place to connect. Following that gets whatever that namespace happens to hold, and
+in the common case that is a DDL-only shell: `rdf_edges.graph_id` nullable instead of
+required, primary key `edge_id` instead of `ID`, no `Graph.KG.Edge`/`Eraser`/
+`TemporalIndex`, no native acceleration, and no schema migration
+(`tighten_graph_id_column`, `add_graph_id_to_nodes`) ever applied. README now states
+the rule, gives the one-line catalog check
+(`SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Edge'`), and
+notes that CPF global mapping brings the data but not the behaviour.
+
+`tests/integration/test_namespace_isolation.py` had been building that shell itself and
+asserting isolation against it, which is why its temporal cases had always skipped. The
+secondary namespace is now opt-in via `IVG_SECONDARY_NAMESPACE`, and the suite skips —
+rather than creating a shell — unless the namespace already carries `Graph.KG.Edge` and
+a graph-scoped `TemporalIndex`. Against a properly deployed secondary namespace all 15
+cases now run, temporal isolation included.
+
 **Fixed — `bulk_create_edges_temporal` upsert semantics (spec-221 US-3)**
 
 `upsert=True` updated an existing edge's weight through `create_edge_temporal` but
