@@ -4,6 +4,71 @@
 
 ### Unreleased
 
+**Added — erasure has one path, and it reaches every store (ADR-0004)**
+
+`erase_graph(graph=None)` removes one graph's content from every store that holds
+it; `erase_all()` also clears the stores no per-graph erase can reach (`rdf_labels`
+and `rdf_props` are keyed by node id alone, `^NKG` ignores `graph_id`).
+
+`drop_graph()` is now a deprecated alias for `erase_graph()` and goes away in 4.0.0.
+The name survives, the behaviour does not: it used to delete rows from five tables
+and leave `^KG`/`^NKG` answering traversals for a graph with no rows — its own
+comment said so ("BYPASS: SQL rows deleted without touching ^KG/^NKG; flag stale").
+It now removes the adjacency too, so there is no stale flag for a caller to
+remember. Callers that relied on the globals surviving a `drop_graph` will see the
+difference.
+
+`Graph.KG.Eraser` is that single path, `Graph.KG.GraphStores` declares the `^KG`
+inventory it walks, and erasure removes content, not ledger history (ADR-0004).
+
+**Added — `verify_graph()`, which can see the drift `verify_sync` cannot**
+
+`verify_sync` compares one SQL count against `^NKG`'s `edgeCount`: graph-blind, and
+one-directional by design, because `^NKG` interning is append-only and ignores
+`graph_id` so its counter over-counts. It flags `sql_edges > global_edges` and stays
+quiet on the reverse — which is exactly what every deletion path produced. After the
+old `drop_graph`, `sql_edges` sat _below_ `global_edges` and `verify_sync` reported
+in sync.
+
+`engine.verify_graph(graph=None)` is scoped to one graph, bidirectional, and reads
+`^KG` directly. `Graph.KG.GraphVerify` holds the check. `verify_sync` keeps its
+contract.
+
+**Added — `delete_edge_temporal()`**
+
+The inverse of `create_edge_temporal`. Removing a single temporal edge previously
+meant reaching for a time-based sweep — `purge_before`, `purge_raw_before`,
+`purge_bucket_range` — and taking its neighbours with it. Exposed on the facade as
+`engine.temporal.delete_edge_temporal(source, predicate, target, timestamp, graph=None)`.
+
+`purge_raw_before`, `purge_bucket_range` and `get_edge_attrs` gain `graph=None`, so a
+purge can be scoped to one graph instead of the default one.
+
+**Changed — graph-key derivation has exactly one owner (ADR-0003)**
+
+`Graph.KG.GraphKey` owns the three derivations: `ForIndex` (default graph =
+integer `0`), `ForLedger` (`$Char(1)`), `ForName` (the SQL `''` spelling). Call sites
+that re-derived a key inline agreed with it right up until one of them didn't.
+
+`validate_graph_name()` mirrors `GraphKey:Validate` in Python, so a name that cannot
+be a subscript raises `ValueError` naming the graph instead of a `RuntimeError`
+carrying an IRIS `<THROW>` from several frames down a DBAPI round trip.
+
+Two graph-scope bugs fixed on the way: `delete_edge(all_graphs=True)` built its index
+key from a `graph_id` assigned only in the other branch, so it raised
+`UnboundLocalError` inside a `try` that logs and swallows — every row left SQL and
+every `^KG` entry stayed. Deletion predicates now `COALESCE` both sides, because the
+default graph has two spellings (`create_edge` writes `''`; every INSERT that omits
+the column writes `NULL`) and a predicate matching one of them deletes half the
+default graph and reports success. `list_graphs()` excludes both spellings.
+
+**Changed — `NodeNotFoundError` is a `ChangesetOperationError`**
+
+Spec 217 made it a sibling, so the most common authoring mistake was the one
+rejection that would not tell you which operation was at fault. It now carries
+`op_index` and `reason` alongside `missing_node`, and its message is unchanged.
+`except ChangesetOperationError` now catches it.
+
 **Changed — a namespace is an IVG namespace only once the classes are deployed**
 
 The non-USER deployment docs named a specific HealthShare customization namespace as
