@@ -2,7 +2,18 @@
 
 # Changelog
 
-### Unreleased
+### v3.1.0 (2026-09-16)
+
+Graph scope is now enforced where the data actually lives. Erasure, verification
+and temporal deletion each get one owner that reaches every store, and the
+graph-key derivations that call sites used to re-implement inline moved behind
+`Graph.KG.GraphKey`. Additive at the interface: no method was removed and no
+signature lost a parameter.
+
+**Read first if you call `drop_graph()`.** It is now a deprecated alias for
+`erase_graph()` and behaves differently under the same name — it removes the `^KG`
+adjacency and the temporal trees it used to leave behind. If you relied on the
+globals surviving a `drop_graph`, that is gone. Details in the first entry below.
 
 **Added — erasure has one path, and it reaches every store (ADR-0004)**
 
@@ -138,6 +149,21 @@ for what old archives cannot carry and which hazards apply to pre-2.17 databases
 version bridge was called by a name the module never imported and the `except` ate
 the `NameError`. `ivg_version` was hardcoded `"1.58.0"` and is now the installed
 package version, so an archive can be attributed to the code that wrote it.
+
+**Known issues**
+
+Open findings, with what is verified and what is still a decision, are in
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md). The ones that affect this release:
+five integration files segfault in the driver on their first test and give no
+result, so the suite has to be run as separate processes (~66 failures and 26
+errors as chunks, all pre-existing at `v3.0.1`, all tests written against a pre-v3
+API); `_detect_arno` probes with a node that does not exist and so disables a
+healthy Arno; `Graph.KG.EdgeScan.MatchEdges` still overloads graph key `0`;
+`USE GRAPH` predicates match one of the default graph's two spellings; four
+`graph_id` writers in `cypher/translator.py` and `bulk_loader.py` are still
+graph-blind.
+
+---
 
 ### v3.0.1 (2026-09-11)
 

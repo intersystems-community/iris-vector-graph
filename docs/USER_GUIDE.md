@@ -147,12 +147,29 @@ temporal_edges = [
     {"s": "svc:pay", "p": "CALLS_AT", "o": "svc:db", "ts": 1712000001, "w": 8.1},
 ]
 engine.bulk_create_edges_temporal(temporal_edges)
+
+# mode= means on the batch path what it means on create_edge_temporal:
+# "update" overwrites an edge already at (s, p, o, ts), "skip" keeps the first
+# write, "insert" writes unconditionally. Omitting it defers to upsert=.
+engine.bulk_create_edges_temporal(temporal_edges, mode="update", graph="umls")
 ```
 
 ### Delete
 
 ```python
 engine.delete_edge("service:auth", "CALLS", "service:payment")
+
+# One temporal edge, addressed by its timestamp. The inverse of
+# create_edge_temporal: removes the ^KG("tout"/"tin"/"bucket"/"tagg"/"edgeprop")
+# entries and the rdf_edges mirror row, and leaves its neighbours in the bucket
+# alone. Returns True when an edge was there.
+engine.delete_edge_temporal(
+    "service:auth", "CALLS", "service:payment", timestamp=1_750_000_000
+)
+
+# Time-based sweeps take graph= too, so a purge stays inside one graph
+engine.purge_raw_before(ts_end=1_750_000_000, graph="umls")
+engine.purge_bucket_range(bucket_start, bucket_end, graph="umls")
 ```
 
 ### Named Graphs
@@ -181,9 +198,34 @@ engine.delete_edge("C0027051", "ISA", "C0085580", graph="umls")
 # Delete an edge regardless of which graph it belongs to
 engine.delete_edge("C0027051", "ISA", "C0085580", all_graphs=True)
 
-# Drop all nodes and edges in a named graph (FK-safe order)
-engine.drop_graph("staging")
+# Remove one graph's content from every store: the SQL rows, the ^KG adjacency,
+# the counters, and all five temporal trees. Returns the number of edges removed.
+engine.erase_graph("staging")
+
+# The default graph, both of its spellings ('' and a legacy NULL)
+engine.erase_graph("")
+
+# Every graph, plus the stores no per-graph erase can reach: rdf_labels and
+# rdf_props are keyed by node id alone, and ^NKG ignores graph_id
+engine.erase_all()
+
+# Which graphs currently hold anything
+engine.list_graphs()   # ['staging', 'umls']
+
+# Check a graph for drift between the SQL rows and ^KG, in both directions
+report = engine.verify_graph("umls")
+report["ok"]      # 1 when the stores agree
+report["drift"]   # what disagrees, per store, when they do not
 ```
+
+`drop_graph()` is a deprecated alias for `erase_graph()` and will be removed in
+the next major release. It used to leave `^KG`/`^NKG` answering traversals for a
+graph whose rows were gone; under the kept name it now removes the adjacency too.
+
+`verify_graph()` is per-graph and bidirectional. `verify_sync()` compares one SQL
+count against `^NKG`'s `edgeCount`, which is graph-blind and only flags
+`sql_edges > global_edges` — after a deletion the drift runs the other way, so
+`verify_sync()` cannot see it.
 
 The `^KG` adjacency index partitions by graph key so BFS and variable-length
 paths stay within their graph. Existing callers that never pass `graph=` are
@@ -851,7 +893,11 @@ For Prometheus integration see
 | Add node (named graph)   | `engine.create_node("id", graph="umls")`                         |
 | Add edge                 | `engine.create_edge("src", "pred", "tgt", qualifiers={...})`     |
 | Add edge (named graph)   | `engine.create_edge("src", "pred", "tgt", graph="umls")`         |
-| Drop named graph         | `engine.drop_graph("staging")`                                   |
+| Erase named graph        | `engine.erase_graph("staging")`                                  |
+| Erase every graph        | `engine.erase_all()`                                             |
+| List graphs              | `engine.list_graphs()`                                           |
+| Verify one graph         | `engine.verify_graph("umls")`                                    |
+| Delete temporal edge     | `engine.delete_edge_temporal("s", "p", "o", timestamp=ts)`       |
 | Query                    | `engine.execute_cypher("MATCH (n) RETURN n.name LIMIT 10")`      |
 | Enable ledger            | `engine.ledger.enable()`                                         |
 | Commit changeset         | `engine.ledger.commit(cs)`                                       |

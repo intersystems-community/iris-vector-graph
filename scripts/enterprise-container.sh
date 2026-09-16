@@ -250,9 +250,13 @@ for cls_file in cls_files:
         stream.invokeVoid("WriteLine", line)
     stream.invokeVoid("%Save")
     result = irisobj.classMethodValue("%SYSTEM.OBJ", "Load", dest, "ck-d")
-    if not result:
+    # A failed %Status is a non-empty string starting with "0 " — truthy in
+    # Python. `if not result` never fired, so every compile error was reported
+    # as a success. Ask IRIS what the status means.
+    if not irisobj.classMethodValue("%SYSTEM.Status", "IsOK", result):
         errors.append(cls_file)
-        print(f"  ERROR: {cls_file}")
+        text = irisobj.classMethodValue("%SYSTEM.Status", "GetOneErrorText", result)
+        print(f"  ERROR: {cls_file}: {text}")
 
 if errors:
     print(f"tcp-deploy: {len(errors)} compile error(s)")

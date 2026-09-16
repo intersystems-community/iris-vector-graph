@@ -11,33 +11,62 @@ with the evidence, so the same suspicion is not re-raised.
 
 ## Test and build environment (verified 2026-09-16)
 
-### The integration suite cannot complete in one pytest process
+### Five integration files segfault on their first test
 
 `pytest tests/integration` dies with `Fatal Python error: Segmentation fault`
-(exit 139) roughly 30% of the way in. It is not one query shape: the crash
-lands in `test_cypher_multi_type.py`, and with that file ignored it lands in
-`test_cypher_rd.py:6` on a plain single-node `MATCH`. The driver is the thing
-that gives out, after ~1000 tests share one session-scoped connection.
+(exit 139). The earlier reading of this — "the driver gives out after ~1000
+tests share one session-scoped connection" — is wrong. Run one file per
+process and five of them crash **alone, on their first test**, with nothing
+before them:
 
-Run the suite as separate processes to get a real result:
+```text
+tests/integration/test_cypher_multi_type.py
+tests/integration/test_cypher_rd.py
+tests/integration/test_cypher_rel_vars.py
+tests/integration/test_cypher_single_type.py
+tests/integration/test_cypher_untyped.py
+```
+
+Every crash lands at `tests/integration/conftest.py:139`, in `_execute`, inside
+the driver's own `cursor.execute`. The shape they share is a
+relationship-variable `MATCH` with a `LIMIT`:
+
+```cypher
+MATCH (t:Transaction)-[r]->(b) RETURN t.node_id, r, b.node_id LIMIT 10
+```
+
+That is the query shape already recorded in the `driver_segfault_query_shape`
+and `qaqpre_fetch_first_join_crash` notes: a multi-table JOIN over VARCHAR keys
+with a row limit, crashing in `%qaqpre` below the Python layer. It is an IRIS/driver
+defect, not an endurance limit, and a 19-file run of the remaining chunk-1 files
+completes without a crash.
+
+Run the suite as separate processes, and expect the five files above to give no
+result at all:
 
 ```bash
-files=($(ls tests/integration/test_*.py)); half=$((${#files[@]}/3))
+files=($(ls tests/integration/test_*.py)); third=$((${#files[@]}/3))
 IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
-  .venv/bin/python -m pytest "${files[@]:0:$half}" -q -p no:randomly
+  .venv/bin/python -m pytest "${files[@]:0:$third}" -q -p no:randomly
 # ...repeat for the remaining two thirds
 ```
 
 Until this is fixed, §2 of `PRE_RELEASE_CHECKLIST.md` cannot be satisfied by the
 single command it prints.
 
-### 55 integration tests fail against the v3 API, all of them pre-existing
+### ~66 integration failures and 26 errors against the v3 API, all pre-existing
 
-Run as chunks, the suite gives 51 failures and 4 errors. The same 55 node IDs
-fail at the `v3.0.1` tag (checked in a worktree at `15f3d78`, `45 failed, 10
-errors` — the six that differ are teardown errors there and assertion failures
-now), so nothing in `a0b30ca` or `07d2cae` introduced them. What they have in
-common is a test written against a pre-v3 API:
+Run as chunks with the five crashing files excluded, the suite gives roughly 66
+failures and 26 errors. An earlier count of "51 failures and 4 errors" was
+measured with a chunk that segfaulted early and lost its own results; this is the
+fuller number.
+
+None of it is a regression. The 36 node IDs newly counted here were replayed at
+the `v3.0.1` tag in a worktree at `15f3d78`: zero passed there (`6 failed, 24
+errors, 6 skipped`). The only six that differ are Arno cases that skip at
+`v3.0.1` because no enterprise container was attached and fail here for the
+`_detect_arno` reason below. What the rest have in common is a test written
+against a pre-v3 API:
 
 | Cause                                                        | Count | Example                                                       |
 | ------------------------------------------------------------ | ----- | ------------------------------------------------------------- |
@@ -47,7 +76,10 @@ common is a test written against a pre-v3 API:
 | LazyKG results keyed by node ID, not label                   | 4     | `test_lazykg_algorithms.py:59`                                |
 | `from iris_vector_graph._engine.vector import _table`        | 2     | `test_vector_engine_deep.py:190`                              |
 | FK on `rdf_edges` not enforced, so no exception raised       | 3     | `test_nodepk_constraints.py:152`, `test_diabolical_qa.py:200` |
-| Remaining one-offs (embed queue, PPR, chunked Arno, RRF)     | 15    | see the recipe below                                           |
+| Remaining one-offs (embed queue, PPR, chunked Arno, RRF)     | 15    | see the recipe below                                          |
+
+The counts in that table classify the 55 cases catalogued on the first pass; the
+36 added by the fuller run fall into the same groups and are not re-tallied here.
 
 Reproduce the list:
 
@@ -60,6 +92,57 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
 The FK group is the one worth reading as a product question rather than test
 rot: `create_edge` to a nonexistent node returns `True`, and inserting an edge
 with a missing endpoint raises nothing.
+
+### One unit test depends on container state: the k-hop fast path
+
+```text
+FAILED tests/unit/test_193_bfs_nkg_fast_path.py::TestKhopFastPathE2E::test_khop_fast_path_count_matches_bfs_count
+```
+
+Named a unit test, it talks to IRIS, so it reads whatever `^NKG` the container
+currently holds. It fails on a pristine tree — proven earlier by stashing every
+local change and redeploying — and it passes on a container whose `^NKG` was just
+rebuilt, which is why the same suite reports `8672 passed` on one run and
+`8671 passed, 1 failed` on the next. The suite total is stable at 8672; only
+which side of the line this case falls on moves.
+
+It belongs in `tests/integration/`, or it needs a fixture that rebuilds `^NKG`
+before asserting. Until then, treat it as the one expected unit failure and check
+it against `engine.status()` rather than re-running.
+
+### `_detect_arno`'s smoke probe disables a healthy Arno
+
+`stores/iris_sql_store.py:211` smokes the callout once before trusting it:
+
+```python
+iris_obj.classMethodValue("Graph.KG.NKGAccel", "BFSJson", "__ivg_arno_probe__", "[]", 1, 1)
+```
+
+`__ivg_arno_probe__` is a node that deliberately does not exist, and
+`NKGAccelTraversal.cls:BFSJson` cannot return an empty result: the Rust callout
+hands back no chunks, the reassembly loop at `:371` builds `json = ""`, and
+`%DynamicArray.%FromJSON("")` throws `<THROW> *%Exception.General Parsing error 3
+Line 1 Offset 1`. The probe treats any exception as "callout not runnable in this
+process" and sets `_arno_available = False`, so Arno is disabled in every process
+whose graph does not happen to contain that node — which is every process.
+
+Verified over TCP against `ivg-iris-enterprise` with the callout loaded
+(`rust_callout=true`, `rust_algorithms=["pagerank","wcc","cdlp","bfs"]`):
+
+```text
+BFSJson("__pa", ...)                -> SORTED:197013_bfs     # real node, works
+BFSJson("__ivg_arno_probe__", ...)  -> Parsing error 3        # missing node, throws
+```
+
+This is what the 9 remaining Arno integration failures are —
+`test_rust_algorithms_nonempty`, `test_pagerank_uses_rust_path`,
+`TestPPRDispatch::test_ppr_arno_*`, `TestArnoDetection::test_detect_arno_via_store`,
+`test_arno_capabilities_cached` and two more. Not container state: the container
+reports Arno loaded and a real seed traverses through it.
+
+Fix is in two places, tests first: guard the blank `raw` in `BFSJson` so an empty
+result returns an empty array instead of throwing, and give the probe a seed that
+exists (or accept "no such node" as a pass).
 
 ### `User.PageRankEmbedded` does not compile
 
@@ -83,6 +166,32 @@ it and its caller go. Every `Graph.KG.*` class compiles clean.
 checklist asks for zero and has never been met. The 41 `F821` are worth triaging
 first — an undefined name is a real defect wherever it is not a star-import artifact.
 Pin a rule set before treating this gate as meaningful.
+
+### The container drifts from the tree, and the deploy script used to hide it
+
+Three separate pieces of drift were found in `ivg-iris-enterprise` while measuring
+the gates, each of which read as a code regression until the container was
+inspected:
+
+| Symptom                                                                                           | Actual cause                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 53 fixture errors, `Eraser::EraseAll` → `ERROR #5001: erase failed on rdf_edges with SQLCODE -30` | `Graph_KG.rdf_edges` did not exist in the USER namespace — class definition present, never projected. `nodes`, `rdf_labels`, `rdf_props` were all there |
+| 12 Arno failures, `rust_algorithms == []`                                                         | `libarno_callout.so` was not loaded into the running instance                                                                                           |
+| 68 `Graph.KG.*` classes in the container against 56 `.cls` files on disk                          | stale `TestEdge`, `BenchSeeder` and friends left from earlier specs                                                                                     |
+
+Repair both of the first two before believing any Arno or erasure result:
+
+```bash
+bash scripts/enterprise-container.sh tcp-deploy     # write + compile each .cls over TCP
+bash scripts/enterprise-container.sh tcp-load-arno  # stream the .so, then ArnoAccel::Load
+```
+
+`tcp-deploy` reported success on a class that failed to compile. An IRIS error
+`%Status` is a non-empty string starting with `"0 "` — truthy in Python — so the
+`if not result` test never fired. It now asks IRIS
+(`%SYSTEM.Status::IsOK` / `GetOneErrorText`) and prints the error text, which is
+how `User.PageRankEmbedded`'s `#5559` below finally surfaced. Any other script
+that checks a `%Status` for Python truth has the same defect.
 
 ---
 

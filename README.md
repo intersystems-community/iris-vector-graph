@@ -208,8 +208,15 @@ engine.execute_cypher("USE GRAPH umls CREATE (n:Concept {id: 'C0001234'})")
 # Import an NDJSON file into a named graph
 engine.import_graph_ndjson("export.ndjson", graph="staging")
 
-# Drop everything scoped to a named graph (nodes, edges, labels, props)
-engine.drop_graph("staging")
+# Erase one graph's content from every store: SQL rows, ^KG adjacency,
+# degree counters, all five temporal trees. drop_graph() is a deprecated alias.
+engine.erase_graph("staging")
+
+# Erase every graph, including the stores no per-graph erase can reach
+engine.erase_all()
+
+# Independent per-graph, bidirectional drift check between SQL and ^KG
+engine.verify_graph("umls")["ok"]
 
 # delete_edge defaults to the default graph; pass all_graphs=True to sweep all
 engine.delete_edge("C0027051", "ISA", "C0085580", graph="umls")

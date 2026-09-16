@@ -171,23 +171,33 @@ gh release create v<version> \
 
 ## Sign-off
 
-Measured 2026-09-16 on `225-upgrade-artifact-fidelity` at `07d2cae`, against
-`ivg-iris-enterprise` (port 31972). This is a gate-status record, not a release:
-no version bump, tag, or publish has been done. Every ⚠️ below is written up in
-[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
+Measured 2026-09-16 on `225-upgrade-artifact-fidelity` at `3c795e9`, against
+`ivg-iris-enterprise` (port 31972), after repairing that container's drift
+(`tcp-deploy` + `tcp-load-arno` — see KNOWN_ISSUES). §1–§8b are measured; §9
+(PyPI publish, GitHub release) has not been run and no tag has been cut. Every
+⚠️ below is written up in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
-| Gate                     | Status      | Notes                                                                                                      |
-| ------------------------ | ----------- | ---------------------------------------------------------------------------------------------------------- |
-| Unit tests               | ✅          | 8672 passed, 20 skipped                                                                                    |
-| Integration tests        | ⚠️          | Cannot run in one process (SIGSEGV at ~30%). As chunks: 51 failed / 4 errors, all pre-existing at `v3.0.1` |
-| Coverage ≥ 89%           | ⬜ Not run  | Requires a full integration pass, which the segfault blocks                                                |
-| No benchmark regressions | ⬜ Not run  | Same waiver as v2.17.0: `bench_utils.py` reads `SQLUser.*` views                                           |
-| Lint clean               | ⚠️          | `ruff check .` = 2048 findings, all pre-existing; no `[tool.ruff]` section exists to scope the gate        |
-| ObjectScript compiles    | ⚠️          | Every `Graph.KG.*` class clean; `User.PageRankEmbedded` fails with #5559 (pre-existing)                    |
-| Documentation parity     | ✅          | README banner no longer carries a version string, so it cannot drift from `pyproject.toml`                 |
-| Version bump             | ⬜ Deferred | `3.1.0` is the right next number (`mode=` is additive API); CHANGELOG stays under `Unreleased`             |
+| Gate                     | Status    | Notes                                                                                                                                          |
+| ------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | ✅        | `225-upgrade-artifact-fidelity`, clean linear history                                                                                          |
+| Unit tests               | ⚠️        | 8671 passed / 1 failed — the k-hop fast path, container state, expected. Total stable at 8672                                                  |
+| Integration tests        | ⚠️        | Five files segfault alone on their first test and give no result. Remaining chunks: ~66 failed / 26 errors, all pre-existing                   |
+| Arno (enterprise)        | ⚠️        | 9 failed / 71 passed / 4 skipped. All 9 trace to `_detect_arno`'s probe using a node that does not exist                                       |
+| Coverage ≥ 89%           | ✅ 90%    | `coverage run` for unit, `--append` per integration chunk, so a crashed chunk loses only its own data. `--fail-under=89` → 0                   |
+| No benchmark regressions | ⬜ Waived | Same waiver as v2.17.0: `bench_utils.py` writes `SQLUser.*` (lines 11, 16, 22)                                                                 |
+| Lint clean               | ⚠️        | `ruff check .` = 2048 findings, all pre-existing; no `[tool.ruff]` section exists, so this gate has never been meaningful                      |
+| ObjectScript compiles    | ⚠️ 55/56  | Every `Graph.KG.*` class clean; `User.PageRankEmbedded` fails with #5559 (pre-existing, and only visible since the `%Status` fix)              |
+| Known issues logged      | ✅        | Segfault repro rewritten, counts corrected, Arno probe and container drift added                                                               |
+| Version bump             | ✅        | `pyproject.toml` at `3.1.0`; CHANGELOG section retitled `### v3.1.0 (2026-09-16)` with a trailing `---` for §9's `awk`                         |
+| Documentation parity     | ✅        | `erase_graph`, `erase_all`, `verify_graph`, `delete_edge_temporal` now have usage examples; README and USER_GUIDE no longer teach `drop_graph` |
 
-Date: **2026-09-16** Release: **none — gate record only**
+Coverage detail — no public-API module under 80%: `engine.py` 92, `_engine/query.py`
+91, `nodes_edges.py` 94, `sdk.py` 95, `cypher_api.py` 94, and the new code
+`admin.py` 95, `temporal.py` 94, `_validate.py` 98. Under 80%: `api_auth.py` 68%
+(its test file is in this checklist's own ignore list) and `text_search.py` 79%
+(known baseline gap).
+
+Date: **2026-09-16** Release: **3.1.0 prepared — not tagged, not published**
 
 ### Earlier sign-offs
 
