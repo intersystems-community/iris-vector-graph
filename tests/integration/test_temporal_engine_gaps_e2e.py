@@ -34,14 +34,14 @@ def _purge(engine):
 def _insert(engine, src, pred, tgt, ts, weight=1.0):
     """Insert via InsertEdge classmethod (native path)."""
     engine._iris_obj().classMethodVoid(
-        "Graph.KG.TemporalIndex", "InsertEdge", src, pred, tgt, ts, weight
+        "Graph.KG.TemporalIndex", "InsertEdge", "", src, pred, tgt, ts, weight
     )
 
 
 def _insert_suppressed(engine, src, pred, tgt, ts, weight=1.0):
     """Insert with suppressReverseIndex=1."""
     engine._iris_obj().classMethodVoid(
-        "Graph.KG.TemporalIndex", "InsertEdge",
+        "Graph.KG.TemporalIndex", "InsertEdge", "",
         src, pred, tgt, ts, weight, "", 0, 1
     )
 
@@ -51,7 +51,7 @@ def _purge_raw(engine, ts_end, ts_start=0):
     from iris_vector_graph._engine.temporal import PurgeResult
 
     raw = str(engine._iris_obj().classMethodValue(
-        "Graph.KG.TemporalIndex", "PurgeRawBefore", ts_end, ts_start
+        "Graph.KG.TemporalIndex", "PurgeRawBefore", "", ts_end, ts_start
     ))
     if ":" in raw:
         d, _, s = raw.partition(":")
@@ -62,7 +62,7 @@ def _purge_raw(engine, ts_end, ts_start=0):
 def _query_tout(engine, src, pred, ts_start, ts_end):
     """QueryWindow via classMethodValue, return parsed list."""
     raw = str(engine._iris_obj().classMethodValue(
-        "Graph.KG.TemporalIndex", "QueryWindow",
+        "Graph.KG.TemporalIndex", "QueryWindow", "",
         src, pred, ts_start, ts_end
     ))
     return json.loads(raw)
@@ -71,7 +71,7 @@ def _query_tout(engine, src, pred, ts_start, ts_end):
 def _query_tin(engine, tgt, pred, ts_start, ts_end):
     """QueryWindowInbound via classMethodValue, return parsed list."""
     raw = str(engine._iris_obj().classMethodValue(
-        "Graph.KG.TemporalIndex", "QueryWindowInbound",
+        "Graph.KG.TemporalIndex", "QueryWindowInbound", "",
         tgt, pred, ts_start, ts_end
     ))
     return json.loads(raw)
@@ -80,7 +80,7 @@ def _query_tin(engine, tgt, pred, ts_start, ts_end):
 def _get_aggregate(engine, src, pred, metric, ts_start, ts_end):
     """GetAggregate via classMethodValue."""
     raw = str(engine._iris_obj().classMethodValue(
-        "Graph.KG.TemporalIndex", "GetAggregate",
+        "Graph.KG.TemporalIndex", "GetAggregate", "",
         src, pred, metric, ts_start, ts_end
     ))
     return int(raw) if metric == "count" else (float(raw) if raw else 0)
@@ -89,7 +89,7 @@ def _get_aggregate(engine, src, pred, metric, ts_start, ts_end):
 def _bulk_insert(engine, items_json, upsert=0):
     """BulkInsert via classMethodValue."""
     return int(str(engine._iris_obj().classMethodValue(
-        "Graph.KG.TemporalIndex", "BulkInsert", items_json, upsert
+        "Graph.KG.TemporalIndex", "BulkInsert", "", items_json, upsert
     )))
 
 
@@ -111,7 +111,7 @@ def _purge_before(engine, ts_end):
 
 def _get_distinct_count(engine, src, pred, ts_start, ts_end):
     return int(str(engine._iris_obj().classMethodValue(
-        "Graph.KG.TemporalIndex", "GetDistinctCount",
+        "Graph.KG.TemporalIndex", "GetDistinctCount", "",
         src, pred, ts_start, ts_end
     )))
 

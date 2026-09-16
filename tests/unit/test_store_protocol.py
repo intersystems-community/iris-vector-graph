@@ -101,7 +101,12 @@ class MockGraphStore:
         return self._record("write_temporal_edge", source_id=source_id, predicate=predicate,
                             target_id=target_id, timestamp=timestamp, weight=weight, attrs=attrs, upsert=upsert)
 
-    def bulk_write_temporal_edges(self, edges, upsert=False):
+    def delete_temporal_edge(self, source_id, predicate, target_id, timestamp, graph=None):
+        self._record("delete_temporal_edge", source_id=source_id, predicate=predicate,
+                     target_id=target_id, timestamp=timestamp, graph=graph)
+        return True
+
+    def bulk_write_temporal_edges(self, edges, upsert=False, suppress_reverse_index=False, graph=None):
         return self._record("bulk_write_temporal_edges", edges=edges, upsert=upsert)
 
     def execute_temporal_window_query(self, source_id, predicate, ts_start, ts_end, direction="out", graph=None):
@@ -112,7 +117,7 @@ class MockGraphStore:
         return self._record("execute_temporal_cypher", source_id=source_id, predicates=predicates,
                             ts_start=ts_start, ts_end=ts_end, direction=direction, max_hops=max_hops)
 
-    def get_temporal_aggregate(self, source_id, predicate, metric, ts_start, ts_end):
+    def get_temporal_aggregate(self, source_id, predicate, metric, ts_start, ts_end, graph=None):
         return self._record("get_temporal_aggregate", source_id=source_id, predicate=predicate,
                             metric=metric, ts_start=ts_start, ts_end=ts_end)
 
@@ -170,10 +175,10 @@ class MockGraphStore:
     def execute_k_core(self, top_k, progress_callback=None):
         return self._record("execute_k_core", top_k=top_k)
 
-    def purge_bucket_range(self, bucket_start, bucket_end):
+    def purge_bucket_range(self, bucket_start, bucket_end, graph=None):
         return self._record("purge_bucket_range", bucket_start=bucket_start, bucket_end=bucket_end)
 
-    def purge_raw_before(self, ts_end):
+    def purge_raw_before(self, ts_end, ts_start=0, graph=None):
         return self._record("purge_raw_before", ts_end=ts_end)
 
     def intern_label_set(self, attrs_json):

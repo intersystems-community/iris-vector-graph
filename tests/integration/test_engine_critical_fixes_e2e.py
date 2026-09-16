@@ -26,7 +26,7 @@ def _purge_temporal(engine):
 
 def _insert_edge(engine, src, pred, tgt, ts, weight=1.0):
     engine._iris_obj().classMethodVoid(
-        "Graph.KG.TemporalIndex", "InsertEdge", src, pred, tgt, ts, weight
+        "Graph.KG.TemporalIndex", "InsertEdge", "", src, pred, tgt, ts, weight
     )
 
 

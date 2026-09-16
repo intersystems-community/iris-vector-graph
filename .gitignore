@@ -35,6 +35,11 @@ Thumbs.db
 *.tar
 *.rar
 
+# ...except the snapshot archives old releases wrote. These are test fixtures: an
+# upgrade test needs an artifact a previous version actually produced, and that
+# cannot be regenerated once the release is in the past.
+!tests/fixtures/snapshots/*.zip
+
 # Data directories (large test datasets)
 data/
 

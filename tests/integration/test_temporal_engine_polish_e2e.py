@@ -182,7 +182,7 @@ class TestGetVelocityMs:
         for i in range(3):
             ts = now_ms - i * 1000
             engine._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndexMS", "InsertEdge", src, "TICK", tgt, ts, 1.0
+                "Graph.KG.TemporalIndexMS", "InsertEdge", "", src, "TICK", tgt, ts, 1.0
             )
 
         # get_edge_velocity with explicit now_ts in ms

@@ -318,6 +318,15 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
         status["add_graph_id_column"] = GraphSchema.add_graph_id_column(cursor)
         status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor)
+        # The repair itself is unguarded inside the migration — a caller that runs it
+        # directly must hear that the default graph still has two spellings. Schema
+        # setup is not that caller: it records the failure and carries on, the same
+        # way every migration above it does.
+        try:
+            status["tighten_graph_id_column"] = GraphSchema.tighten_graph_id_column(cursor)
+        except Exception as e:
+            logger.debug("graph_id tightening skipped: %s", e)
+            status["tighten_graph_id_column"] = {"error": str(e)}
         status["update_spo_unique_constraint"] = GraphSchema.update_spo_unique_constraint(cursor)
         status["add_graph_id_to_nodes"] = GraphSchema.add_graph_id_to_nodes(cursor)
 
@@ -379,6 +388,61 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             if "already exists" in err_lower or "duplicate" in err_lower or "unique" in err_lower:
                 return True
             return False
+
+    @staticmethod
+    def tighten_graph_id_column(cursor) -> Dict[str, Any]:
+        """Give the default graph one spelling in ``rdf_edges``, and keep it that way.
+
+        A fresh install creates ``graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''``.
+        ``add_graph_id_column`` adds it ``NULL`` with no default, so an upgraded
+        database holds both spellings of the default graph at once and every reader
+        needs both predicates forever.
+
+        Two steps, reported separately because they fail separately:
+
+        1. ``UPDATE ... SET graph_id = '' WHERE graph_id IS NULL``.  This runs first:
+           the ALTER cannot succeed while a single NULL row remains.
+        2. ``ALTER COLUMN graph_id NOT NULL`` so nothing writes the second spelling
+           again.  The type is deliberately *not* restated — ``ALTER COLUMN`` has no
+           way to say ``%EXACT``, so a form that repeated ``VARCHAR(256)`` would drop
+           the column back to the default collation and graph keys would stop
+           comparing exactly.  ``SET DEFAULT ''`` follows so an INSERT that omits the
+           column lands in the default graph rather than failing.
+
+        The DDL half needs IRIS to resolve the table, which it cannot do while a
+        second class also claims ``SqlTableName = rdf_edges``.  When that happens the
+        repair has still happened, and the result says so rather than claiming a
+        tightening it did not achieve.  Every writer in the package names ``graph_id``
+        explicitly, so the repair alone is enough to keep the second spelling out.
+
+        Returns:
+            ``{"rows_repaired": int, "not_null": bool, "default_set": bool}``
+        """
+        result: Dict[str, Any] = {"rows_repaired": 0, "not_null": False, "default_set": False}
+
+        cursor.execute("UPDATE Graph_KG.rdf_edges SET graph_id = '' WHERE graph_id IS NULL")
+        rowcount = getattr(cursor, "rowcount", 0)
+        try:
+            result["rows_repaired"] = max(0, int(rowcount))
+        except (TypeError, ValueError):
+            result["rows_repaired"] = 0
+
+        try:
+            cursor.execute("ALTER TABLE Graph_KG.rdf_edges ALTER COLUMN graph_id NOT NULL")
+            result["not_null"] = True
+        except Exception as e:
+            if "already" in str(e).lower():
+                result["not_null"] = True
+            else:
+                logger.debug("graph_id could not be made NOT NULL: %s", e)
+
+        try:
+            cursor.execute("ALTER TABLE Graph_KG.rdf_edges ALTER COLUMN graph_id SET DEFAULT ''")
+            result["default_set"] = True
+        except Exception as e:
+            logger.debug("graph_id default could not be set: %s", e)
+
+        return result
 
     @staticmethod
     def add_graph_id_to_nodes(cursor, recreate_pk: bool = False) -> Dict[str, Any]:
@@ -616,7 +680,11 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "nodes_with_graph": "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ?)",
             "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
             "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
-            "rdf_edges": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
+            # graph_id is named explicitly, not left to the column default: on a
+            # database upgraded from before spec-214 the column is nullable with no
+            # default, and an omitted graph_id lands in the NULL spelling of the
+            # default graph that no graph-aware reader looks at.
+            "rdf_edges": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
             "rdf_edges_with_graph": "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND (graph_id = ? OR (graph_id IS NULL AND ? IS NULL)))",
             "kg_NodeEmbeddings": "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) SELECT ?, TO_VECTOR(?), ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
         }

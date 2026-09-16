@@ -592,7 +592,11 @@ class SchemaMixin:
         cursor = self.conn.cursor()
         inferred_count = 0
 
-        graph_filter_sql = " AND graph_id = ?" if graph else " AND (graph_id IS NULL)"
+        # The default graph is spelled '' by create_edge and NULL by any writer that
+        # omitted the column before it was tightened, so both spellings have to
+        # answer here — matching only one made default-graph inference read an empty
+        # table and report success having inferred nothing.
+        graph_filter_sql = " AND graph_id = ?" if graph else " AND COALESCE(graph_id, '') = ''"
         graph_filter_params = [graph] if graph else []
 
         def _fetch_edges(predicate):
@@ -612,7 +616,8 @@ class SchemaMixin:
                 )
             else:
                 cursor.execute(
-                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND (graph_id IS NULL)",
+                    "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? "
+                    "AND COALESCE(graph_id, '') = ''",
                     [s, p, o],
                 )
             row = cursor.fetchone()
@@ -630,7 +635,8 @@ class SchemaMixin:
                             )
                         else:
                             cursor.execute(
-                                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                                "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) "
+                                "VALUES (?, ?, ?, ?, '')",
                                 [s, p, o, INFERRED_JSON],
                             )
                         inferred_count += 1

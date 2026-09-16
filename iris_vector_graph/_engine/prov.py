@@ -184,6 +184,8 @@ class ProvMixin:
             result_json = iris_obj.classMethodValue(
                 "Graph.KG.TemporalIndex",
                 "QueryWindow",
+                "",  # graphId (spec 223): the default graph. PROV-O export has no
+                # graph parameter yet, so it never sees a named graph's edges.
                 "",  # s_filter: all sources
                 "",  # p_filter: all predicates
                 int(ts_start) if ts_start is not None else 0,

@@ -15,7 +15,7 @@ No IRIS connection needed — mocks conn and cursor.
 """
 import json
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from iris_vector_graph.engine import IRISGraphEngine
 
 
@@ -442,24 +442,87 @@ class TestSetEdgeWeight:
 
 
 # ---------------------------------------------------------------------------
-# drop_graph (lines 564-572)
+# erase_graph / erase_all / drop_graph
+#
+# These used to assert the SQL `drop_graph` emitted through a mocked cursor: the
+# table list, the FK order, the two rowcount reads. That is testing the
+# implementation, and it is why the temporal leak survived — a test that asserts
+# which DELETEs are emitted passes just as happily when the list is incomplete.
+#
+# The behaviour is now Graph.KG.Eraser's, tested against the live container in
+# tests/integration/test_erase_graph.py. What is left at this seam is what the
+# facade itself owns: which classmethod it calls, with which graph name, what it
+# returns, and that a failed erase surfaces rather than being reported as a count.
 # ---------------------------------------------------------------------------
 
-class TestDropGraph:
+class TestEraseGraph:
 
-    def test_returns_deleted_count(self):
-        # drop_graph returns nodes_deleted + edges_deleted (two rowcount reads)
-        eng, conn, cursor = _make_eng()
-        cursor.rowcount = 5
-        result = eng.drop_graph("g1")
-        assert result == 10  # 5 edges + 5 nodes
+    def _eraser(self, eng, removed=0, error=None):
+        iris_obj = MagicMock()
+        if error is not None:
+            iris_obj.classMethodValue.side_effect = error
+        else:
+            iris_obj.classMethodValue.return_value = removed
+        return patch.object(eng, "_iris_obj", return_value=iris_obj), iris_obj
 
-    def test_commit_failure_doesnt_raise(self):
+    def test_delegates_to_the_eraser(self):
         eng, conn, cursor = _make_eng()
-        cursor.rowcount = 3
-        conn.commit.side_effect = RuntimeError("commit failed")
-        result = eng.drop_graph("g1")
-        assert result == 0  # commit failure → rollback → return 0
+        patcher, iris_obj = self._eraser(eng, removed=10)
+        with patcher:
+            result = eng.erase_graph("g1")
+        assert result == 10
+        # The ledger guard probes through the same seam first, so assert the erase
+        # is the call that ends the method rather than the only call made.
+        assert iris_obj.classMethodValue.call_args == call(
+            "Graph.KG.Eraser", "EraseGraph", "g1"
+        )
+
+    def test_the_default_graph_reaches_the_eraser_as_the_empty_string(self):
+        """`None` and `""` are the same graph; the Eraser derives both spellings."""
+        eng, conn, cursor = _make_eng()
+        patcher, iris_obj = self._eraser(eng)
+        with patcher:
+            eng.erase_graph(None)
+        assert iris_obj.classMethodValue.call_args.args[2] == ""
+
+    def test_a_failed_erase_raises_rather_than_returning_a_count(self):
+        """ADR-0004: a partial erasure is a defect, not an outcome."""
+        eng, conn, cursor = _make_eng()
+        patcher, _ = self._eraser(eng, error=RuntimeError("erase failed on rdf_edges"))
+        with patcher, pytest.raises(RuntimeError):
+            eng.erase_graph("g1")
+
+    def test_erase_does_not_defer_the_inconsistency_to_a_rebuild(self):
+        """`drop_graph` set `_nkg_dirty` and left ^NKG holding the erased edges.
+
+        The Eraser drops ^NKG instead, so there is nothing left for a caller to
+        remember to resolve.
+        """
+        eng, conn, cursor = _make_eng()
+        eng._nkg_dirty = True
+        patcher, _ = self._eraser(eng, removed=3)
+        with patcher:
+            eng.erase_graph("g1")
+        assert eng._nkg_dirty is False
+
+    def test_erase_all_delegates_to_the_eraser(self):
+        eng, conn, cursor = _make_eng()
+        patcher, iris_obj = self._eraser(eng, removed=7)
+        with patcher:
+            result = eng.erase_all()
+        assert result == 7
+        assert iris_obj.classMethodValue.call_args == call("Graph.KG.Eraser", "EraseAll")
+
+    def test_drop_graph_is_erase_graph(self):
+        """The old name survives until 4.0.0; the old bypass does not."""
+        eng, conn, cursor = _make_eng()
+        patcher, iris_obj = self._eraser(eng, removed=10)
+        with patcher:
+            result = eng.drop_graph("g1")
+        assert result == 10
+        assert iris_obj.classMethodValue.call_args == call(
+            "Graph.KG.Eraser", "EraseGraph", "g1"
+        )
 
 
 # ---------------------------------------------------------------------------

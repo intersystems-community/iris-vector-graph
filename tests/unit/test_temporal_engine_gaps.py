@@ -108,7 +108,7 @@ class TestPurgeRawBeforeV2:
     def test_engine_passes_tsstart_to_store(self):
         engine, store = _make_engine()
         engine.purge_raw_before(ts_end=500, ts_start=200)
-        store.purge_raw_before.assert_called_once_with(500, ts_start=200)
+        store.purge_raw_before.assert_called_once_with(500, ts_start=200, graph=None)
 
 
 # ─── US2: BulkInsert sri key ──────────────────────────────────────────────────

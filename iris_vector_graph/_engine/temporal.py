@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from typing import NamedTuple, Optional
 
-from iris_vector_graph._validate import TemporalEdgeInput
+from iris_vector_graph._validate import TemporalEdgeInput, validate_graph_name
 from iris_vector_graph._engine.ledger import ledger_strict as _ledger_strict
 
 
@@ -96,7 +96,8 @@ class TemporalMixin:
                 cursor.execute(
                     f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, graph_id) "
                     f"SELECT ?, ?, ?, ? WHERE NOT EXISTS "
-                    f"(SELECT 1 FROM {self._t('rdf_edges')} WHERE s=? AND p=? AND o_id=? AND graph_id=?)",
+                    f"(SELECT 1 FROM {self._t('rdf_edges')} WHERE s=? AND p=? AND o_id=? "
+                    f"AND COALESCE(graph_id, '') = COALESCE(?, ''))",
                     [source, predicate, target, graph, source, predicate, target, graph],
                 )
                 self.conn.commit()
@@ -104,11 +105,70 @@ class TemporalMixin:
                 pass
         return result.error is None
 
+    def delete_edge_temporal(
+        self,
+        source: str,
+        predicate: str,
+        target: str,
+        timestamp: int,
+        graph: Optional[str] = None,
+    ) -> bool:
+        """Remove one timestamped edge, and everything derived from it.
+
+        The inverse of ``create_edge_temporal``. Until this existed, the only ways
+        to remove a temporal edge were time-based and coarse — ``purge_before``,
+        ``purge_raw_before``, ``purge_bucket_range`` — so removing one edge meant
+        removing every other edge in the same window, and deleting a structural
+        edge left its temporal entries behind for good.
+
+        Returns ``False`` when no edge existed at those coordinates, so a caller
+        can tell a delete from a no-op rather than treating both as success.
+
+        ``InsertEdge`` writes nine stores and three of them cannot be run
+        backwards: ``min`` and ``max`` are running extremes, and the distinct-count
+        sketch is a HyperLogLog whose registers only move up. Those are recomputed
+        from the bucket's surviving edges rather than adjusted, which is why this
+        is one call and not a set of decrements — the caller cannot know which
+        stores are invertible.
+
+        The structural shadow in ``^KG("out")`` is removed only when no temporal
+        edge for ``(source, predicate, target)`` survives in this graph, because
+        the shadow means "this edge exists at some time".
+
+        KNOWN AMBIGUITY: ``create_edge`` writes the same ``^KG("out")`` entry with
+        no marker distinguishing it from a temporal shadow. If both wrote the same
+        triple in the same graph, removing the last temporal edge removes the
+        structural edge too. Rebuild with ``BuildKG()`` if you mix the two paths
+        on one triple.
+        """
+        TemporalEdgeInput(
+            source=source, predicate=predicate, target=target,
+            timestamp=int(timestamp),
+        )
+        return self._store.delete_temporal_edge(
+            source, predicate, target, int(timestamp), graph=graph
+        )
+
     def bulk_create_edges_temporal(
         self, edges: list, upsert: bool = False,
         suppress_reverse_index: bool = False, graph: Optional[str] = None,
         mode: str = "",
     ) -> int:
+        """Write a batch of timestamped edges.
+
+        ``graph`` reaches the temporal globals as well as the ``rdf_edges``
+        mirror. It used to reach only the mirror: the batch went into ``^KG`` at
+        the default graph key whatever was asked for, so a named-graph bulk load
+        was invisible to every graph-scoped temporal reader while the SQL rows
+        looked correct.
+
+        ``mode`` means here what it means on ``create_edge_temporal``:
+        ``"update"`` overwrites an edge already at ``(s, p, o, ts)``, ``"skip"``
+        keeps the first write, ``"insert"`` writes unconditionally. Empty defers
+        to ``upsert``, which is ``"update"`` when true. Bucket aggregates in
+        ``^KG("tagg")`` are not adjusted for an overwritten weight — the FR-004
+        caveat, and it applies to this path identically.
+        """
         normalized = [
             {
                 "source": e.get("s") or e.get("source_id") or e.get("source", ""),
@@ -121,7 +181,8 @@ class TemporalMixin:
             for e in edges
         ]
         result = self._store.bulk_write_temporal_edges(
-            normalized, upsert=upsert, suppress_reverse_index=suppress_reverse_index
+            normalized, upsert=upsert, suppress_reverse_index=suppress_reverse_index,
+            graph=graph, mode=mode,
         )
         try:
             count = int(result.rows[0][0]) if result.rows else 0
@@ -143,7 +204,8 @@ class TemporalMixin:
                     cursor.execute(
                         f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, graph_id) "
                         f"SELECT ?, ?, ?, ? WHERE NOT EXISTS "
-                        f"(SELECT 1 FROM {self._t('rdf_edges')} WHERE s=? AND p=? AND o_id=? AND graph_id=?)",
+                        f"(SELECT 1 FROM {self._t('rdf_edges')} WHERE s=? AND p=? AND o_id=? "
+                        f"AND COALESCE(graph_id, '') = COALESCE(?, ''))",
                         [e["source"], e["predicate"], e["target"], graph,
                          e["source"], e["predicate"], e["target"], graph],
                     )
@@ -204,27 +266,40 @@ class TemporalMixin:
         return result.rows
 
     def purge_before(self, ts: int) -> None:
+        """Purge the *default graph* only, aggregates included.
+
+        The one temporal operation with no ``graph`` parameter, because the
+        underlying ``PurgeBefore`` hardcodes key 0 and is kept for callers written
+        before the temporal globals were graph-scoped. Use ``purge_raw_before``
+        and ``purge_bucket_range`` for any named graph.
+        """
         self._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts)
         )
 
-    def purge_bucket_range(self, bucket_start: int, bucket_end: int) -> int:
+    def purge_bucket_range(
+        self, bucket_start: int, bucket_end: int, graph: Optional[str] = None
+    ) -> int:
         """Delete ^KG("tagg") and ^KG("bucket") entries in [bucket_start, bucket_end].
 
-        Raw edges (tout/tin/edgeprop) are never touched.
+        Raw edges (tout/tin/edgeprop) are never touched — pair this with
+        ``purge_raw_before`` to remove both, or the aggregates go on describing
+        edges that are gone (and vice versa).
         bucket = timestamp // BUCKET_SIZE (300 for seconds, 300000 for ms).
         Returns count of buckets removed. Returns 0 if bucket_start > bucket_end.
         """
-        return self._store.purge_bucket_range(bucket_start, bucket_end)
+        return self._store.purge_bucket_range(bucket_start, bucket_end, graph=graph)
 
-    def purge_raw_before(self, ts_end: int, ts_start: int = 0) -> "PurgeResult":
+    def purge_raw_before(
+        self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None
+    ) -> "PurgeResult":
         """Delete raw temporal edges in [ts_start, ts_end). Preserves aggregates
         and ^KG("labelset") (append-only, never purged).
 
         ts_start=0 (default): byte-identical to v2.8.0 behavior.
         Returns PurgeResult(deleted, skipped). int(result) == result.deleted.
         """
-        return self._store.purge_raw_before(ts_end, ts_start=ts_start)
+        return self._store.purge_raw_before(ts_end, ts_start=ts_start, graph=graph)
 
     def intern_label_set(self, attrs: dict) -> str:
         """Canonicalize, hash, and intern an attribute dict. Returns SHA1 hex hash.
@@ -249,6 +324,7 @@ class TemporalMixin:
         window_seconds: int = 300,
         window: int = None,
         now_ts: int = 0,
+        graph: Optional[str] = None,
     ) -> int:
         """Count edges arriving at ``node_id`` within the last ``window_seconds``.
 
@@ -263,7 +339,7 @@ class TemporalMixin:
         w = window if window is not None else window_seconds
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "GetVelocity",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             node_id, w, now_ts,
         )
         return int(result)
@@ -274,6 +350,7 @@ class TemporalMixin:
         window_seconds: int = 300,
         threshold: int = 50,
         now_ts: int = 0,
+        graph: Optional[str] = None,
     ) -> list:
         """Find nodes whose inbound edge count in the last window exceeds threshold.
 
@@ -287,12 +364,15 @@ class TemporalMixin:
         """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "FindBursts",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             predicate, window_seconds, threshold, now_ts,
         )
         return json.loads(str(result))
 
-    def get_edge_attrs(self, ts: int, source: str, predicate: str, target: str) -> dict:
+    def get_edge_attrs(
+        self, ts: int, source: str, predicate: str, target: str,
+        graph: Optional[str] = None,
+    ) -> dict:
         """Return the attribute dict for a specific temporal edge.
 
         This is the companion to ``create_edge_temporal(attrs=...)``. Attrs are stored
@@ -307,7 +387,7 @@ class TemporalMixin:
         """
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "GetEdgeAttrs",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             ts, source, predicate, target,
         )
         return json.loads(str(result))
@@ -319,8 +399,11 @@ class TemporalMixin:
         metric: str,
         ts_start: int,
         ts_end: int,
+        graph: Optional[str] = None,
     ):
-        result = self._store.get_temporal_aggregate(source, predicate, metric, ts_start, ts_end)
+        result = self._store.get_temporal_aggregate(
+            source, predicate, metric, ts_start, ts_end, graph=graph
+        )
         if result.rows:
             val = result.rows[0][0]
             return int(val) if metric == "count" else float(val)
@@ -332,6 +415,7 @@ class TemporalMixin:
         ts_start: int = 0,
         ts_end: int = 0,
         source_prefix: str = "",
+        graph: Optional[str] = None,
     ) -> list:
         """Return pre-aggregated statistics per (source, predicate) pair over a time window.
 
@@ -375,7 +459,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetBucketGroups",
-            "",            # graphId: "" = default graph
+            validate_graph_name(graph),
             predicate,
             ts_start,
             ts_end,
@@ -389,6 +473,7 @@ class TemporalMixin:
         predicate: str,
         ts_start: int,
         ts_end: int,
+        graph: Optional[str] = None,
     ) -> list[str]:
         """Return distinct target node IDs for a source+predicate over a time window.
 
@@ -399,7 +484,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetBucketGroupTargets",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             source,
             predicate,
             ts_start,
@@ -412,6 +497,7 @@ class TemporalMixin:
         predicate: str,
         ts_start: int,
         ts_end: int,
+        graph: Optional[str] = None,
     ) -> list[str]:
         """Return distinct source node IDs with at least one edge for a
         predicate over a time window, without materializing per-edge JSON.
@@ -438,7 +524,7 @@ class TemporalMixin:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "QueryWindowSources",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             predicate,
             ts_start,
             ts_end,
@@ -451,11 +537,12 @@ class TemporalMixin:
         predicate: str,
         ts_start: int,
         ts_end: int,
+        graph: Optional[str] = None,
     ) -> int:
         result = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "GetDistinctCount",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             source,
             predicate,
             ts_start,
@@ -464,7 +551,8 @@ class TemporalMixin:
         return int(str(result))
 
     def export_temporal_edges_ndjson(
-        self, path: str, start: int = None, end: int = None, predicate: str = None
+        self, path: str, start: int = None, end: int = None, predicate: str = None,
+        graph: Optional[str] = None,
     ) -> dict:
         s_filter = ""
         p_filter = predicate or ""
@@ -473,7 +561,7 @@ class TemporalMixin:
         result_json = self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex",
             "QueryWindow",
-            "",        # graphId: "" = default graph
+            validate_graph_name(graph),
             s_filter,
             p_filter,
             ts_start,
@@ -483,7 +571,9 @@ class TemporalMixin:
 
         with open(path, "w") as f:
             for edge in edges:
-                attrs = self.get_edge_attrs(edge["ts"], edge["s"], edge["p"], edge["o"])
+                attrs = self.get_edge_attrs(
+                    edge["ts"], edge["s"], edge["p"], edge["o"], graph=graph
+                )
                 event = {
                     "kind": "temporal_edge",
                     "source": edge["s"],

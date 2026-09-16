@@ -1518,6 +1518,19 @@ class TestSnapshotInfo:
                 os.unlink(path)
 
 
+def _restore_iris_stub():
+    """A non-merge restore clears through `Graph.KG.Eraser`, so the seam has to work.
+
+    These used to stub `_iris_obj` as unreachable, which was harmless when restore
+    cleared with its own inline SQL. It now calls `erase_all()` (ADR-0004), so an
+    unreachable seam is a failed restore rather than a silent merge into the
+    previous database.
+    """
+    iris_obj = MagicMock()
+    iris_obj.classMethodValue.return_value = 0
+    return iris_obj
+
+
 class TestRestoreSnapshot:
     def _make_zip(self, nodes_ndjson="", edges_ndjson=""):
         metadata = {
@@ -1538,7 +1551,7 @@ class TestRestoreSnapshot:
 
     def test_restore_empty_snapshot(self):
         eng, conn, cur = make_engine()
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch.object(eng, "_iris_obj", return_value=_restore_iris_stub()):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip())
                 path = f.name
@@ -1553,7 +1566,7 @@ class TestRestoreSnapshot:
     def test_restore_with_nodes(self):
         eng, conn, cur = make_engine()
         nodes_data = json.dumps({"node_id": "n1", "created_at": None}) + "\n"
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch.object(eng, "_iris_obj", return_value=_restore_iris_stub()):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip(nodes_ndjson=nodes_data))
                 path = f.name
@@ -1581,7 +1594,7 @@ class TestRestoreSnapshot:
     def test_restore_with_edges_strips_id(self):
         eng, conn, cur = make_engine()
         edges_data = json.dumps({"id": 1, "s": "n1", "p": "rel", "o_id": "n2"}) + "\n"
-        with patch.object(eng, "_iris_obj", side_effect=Exception("no iris")):
+        with patch.object(eng, "_iris_obj", return_value=_restore_iris_stub()):
             with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
                 f.write(self._make_zip(edges_ndjson=edges_data))
                 path = f.name

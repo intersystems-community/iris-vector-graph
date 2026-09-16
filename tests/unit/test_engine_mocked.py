@@ -230,9 +230,13 @@ class TestEngineCreateDelete:
         assert int(result) >= 0
 
     def test_drop_graph(self):
-        self.cursor.rowcount = 5
-        result = self.engine.drop_graph("test_graph")
-        assert isinstance(result, int)
+        # drop_graph now delegates to Graph.KG.Eraser, which owns the transaction
+        # (ADR-0004), so there is no cursor to mock at this seam.
+        mock_iris = MagicMock()
+        mock_iris.classMethodValue.return_value = 5
+        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+            result = self.engine.drop_graph("test_graph")
+        assert result == 5
 
 
 class TestEngineQueryMethods:
@@ -459,11 +463,17 @@ class TestEngineExtraAPIs:
         result = self.engine.bulk_delete_nodes([])
         assert int(result) == 0
 
-    def test_drop_graph_calls_delete(self):
-        self.cursor.execute.return_value = None
-        self.cursor.rowcount = 5
-        result = self.engine.drop_graph("test_graph")
-        assert isinstance(result, int)
+    def test_drop_graph_calls_the_eraser(self):
+        mock_iris = MagicMock()
+        mock_iris.classMethodValue.return_value = 5
+        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+            result = self.engine.drop_graph("test_graph")
+        assert result == 5
+        # The ledger guard probes through the same seam first, so assert the erase
+        # is the call that ends the method rather than the only call made.
+        assert mock_iris.classMethodValue.call_args == call(
+            "Graph.KG.Eraser", "EraseGraph", "test_graph"
+        )
 
     def test_get_unembedded_nodes_with_data(self):
         self.cursor.fetchall.return_value = [("n1",), ("n2",)]

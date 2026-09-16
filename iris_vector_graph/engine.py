@@ -170,6 +170,7 @@ class _TemporalSubEngine:
     __slots__ = ("_e",)
     def __init__(self, e): self._e = e
     def create_edge_temporal(self, *a, **kw): return self._e.create_edge_temporal(*a, **kw)
+    def delete_edge_temporal(self, *a, **kw): return self._e.delete_edge_temporal(*a, **kw)
     def bulk_create_edges_temporal(self, *a, **kw): return self._e.bulk_create_edges_temporal(*a, **kw)
     def get_edges_in_window(self, *a, **kw): return self._e.get_edges_in_window(*a, **kw)
     def get_edge_velocity(self, *a, **kw): return self._e.get_edge_velocity(*a, **kw)

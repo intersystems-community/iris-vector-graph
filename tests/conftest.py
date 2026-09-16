@@ -364,44 +364,40 @@ def iris_master_cleanup(iris_connection):
         pytest.skip(f"iris_connection unusable (likely corrupted by a prior "
                      f"test's native API call) — skipping cleanup: {e}")
     try:
-        for table in [
-            "Graph_KG.rdf_edges",
-            "Graph_KG.rdf_labels",
-            "Graph_KG.rdf_props",
-            "Graph_KG.kg_NodeEmbeddings",
-            "Graph_KG.kg_NodeEmbeddings_optimized",
-            "Graph_KG.kg_EdgeEmbeddings",
-            "Graph_KG.nodes",
-            "Graph_KG.docs",
-        ]:
-            with contextlib.suppress(Exception):
-                cursor.execute(f"DELETE FROM {table}")
+        # Graph_KG.docs is not graph content, so the Eraser's inventory does not
+        # name it and this is the one table cleaned here.
+        with contextlib.suppress(Exception):
+            cursor.execute("DELETE FROM Graph_KG.docs")
         with contextlib.suppress(Exception):
             iris_connection.commit()
-        with contextlib.suppress(Exception):
-            # Use a short-lived *separate* connection for createIRIS so the
-            # session-scoped iris_connection is never touched by the native API.
-            # Calling createIRIS() on a connection and then executing cursor DDL
-            # (DROP INDEX / CREATE INDEX) on the same connection permanently
-            # corrupts the IRIS driver's parameter binding state for that connection.
-            import iris as _iris
-            import iris.dbapi as _tmp_dbapi
-            _tmp_conn = _tmp_dbapi.connect(
-                hostname=iris_connection.hostname,
-                port=iris_connection.port,
-                namespace=iris_connection.namespace,
-                username="_SYSTEM",
-                password="SYS",
-            )
-            try:
-                _iris_obj = _iris.createIRIS(_tmp_conn)
-                _iris_obj.kill("^KG")
-                _iris_obj.kill("^NKG")
-            finally:
-                with contextlib.suppress(Exception):
-                    _tmp_conn.close()
-        with contextlib.suppress(Exception):
-            cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
+
+        # Everything else is Graph.KG.Eraser's (ADR-0004). This fixture used to
+        # keep its own list of seven tables and then kill ^KG/^NKG through a
+        # short-lived dbapi connection — which never worked: iris.createIRIS is
+        # monkeypatched at session setup and only redirects the *session*
+        # connection to the dedicated native one, so that call fell through to
+        # the original, which rejects a dbapi connection outright. The whole
+        # block sat inside contextlib.suppress, so every integration test ran
+        # against whatever ^KG the previous run had left behind while the
+        # fixture reported a clean database. See
+        # tests/integration/test_master_cleanup.py.
+        #
+        # Passing iris_connection is what the monkeypatch is for: it swaps in the
+        # dedicated native connection, so the session connection is never touched
+        # by the native API and its parameter-binding state stays intact.
+        #
+        # A cleanup that cannot clean is not something to suppress — every
+        # assertion after it would be measuring the previous test's state — so a
+        # failure here is raised.
+        import iris as _iris
+
+        _iris.createIRIS(iris_connection).classMethodValue(
+            "Graph.KG.Eraser", "EraseAll"
+        )
+
+        # `Do ##class(Graph.KG.Traversal).BuildKG()` used to sit here. IRIS SQL
+        # rejects a Do statement at prepare time (SQLCODE -51), so it never ran
+        # — and there is nothing to rebuild from an emptied database.
         iris_connection.commit()
     finally:
         with contextlib.suppress(Exception):
@@ -413,32 +409,48 @@ def iris_master_cleanup(iris_connection):
 def arno_master_cleanup(arno_iris_connection):
     """Enterprise-side cleanup: wipe all tables and globals, same as iris_master_cleanup."""
     cursor = arno_iris_connection.cursor()
+    _native = None
     try:
-        for table in [
-            "Graph_KG.rdf_edges",
-            "Graph_KG.rdf_labels",
-            "Graph_KG.rdf_props",
-            "Graph_KG.kg_NodeEmbeddings",
-            "Graph_KG.kg_NodeEmbeddings_optimized",
-            "Graph_KG.kg_EdgeEmbeddings",
-            "Graph_KG.nodes",
-            "Graph_KG.docs",
-        ]:
-            with contextlib.suppress(Exception):
-                cursor.execute(f"DELETE FROM {table}")
+        # Graph_KG.docs is not graph content, so the Eraser's inventory does not
+        # name it and this is the one table cleaned here.
+        with contextlib.suppress(Exception):
+            cursor.execute("DELETE FROM Graph_KG.docs")
         with contextlib.suppress(Exception):
             arno_iris_connection.commit()
-        with contextlib.suppress(Exception):
-            import iris as _iris
-            _iris_obj = _iris.createIRIS(arno_iris_connection)
-            _iris_obj.kill("^KG")
-            _iris_obj.kill("^NKG")
-        with contextlib.suppress(Exception):
-            cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
+
+        # Everything else is Graph.KG.Eraser's (ADR-0004). This used to keep its
+        # own list of eight tables and then kill ^KG/^NKG through
+        # iris.createIRIS(arno_iris_connection) — which never ran: the
+        # session-level createIRIS monkeypatch redirects only the *session*
+        # connection, so the call reached the original, which rejects a dbapi
+        # connection, inside contextlib.suppress. The tables were cleared and
+        # the globals were not, which is the exact drift shape the Eraser exists
+        # to end. See tests/integration/test_arno_master_cleanup.py.
+        #
+        # A dedicated native connection, opened and closed here: the monkeypatch
+        # exists to keep the *session* connection away from the native API, and
+        # this is not that connection.
+        import iris as _iris
+
+        _native = _iris.connect(
+            hostname=arno_iris_connection.hostname,
+            port=arno_iris_connection.port,
+            namespace=arno_iris_connection.namespace,
+            username="_SYSTEM",
+            password="SYS",
+        )
+        _iris.createIRIS(_native).classMethodValue("Graph.KG.Eraser", "EraseAll")
+
+        # `Do ##class(Graph.KG.Traversal).BuildKG()` used to sit here. IRIS SQL
+        # rejects a Do statement at prepare time (SQLCODE -51), so it never ran
+        # either — and there is nothing to rebuild from an emptied database.
         arno_iris_connection.commit()
     finally:
         with contextlib.suppress(Exception):
             cursor.close()
+        if _native is not None:
+            with contextlib.suppress(Exception):
+                _native.close()
     yield
 
 
@@ -568,18 +580,24 @@ def node_graph_reset(iris_connection, iris_master_cleanup):
     Deletes all rows with graph_id != '' (non-default-graph) from the four
     structural tables in FK-safe order, then delegates to iris_master_cleanup
     for default-graph cleanup.
+
+    COALESCE because graph_id is nullable and the default graph has two
+    spellings: create_edge writes '', any INSERT omitting the column leaves NULL.
+    A bare `graph_id <> ''` evaluates to unknown for the NULL rows and so happens
+    to spare them, which is what this fixture wants — but only by accident. Said
+    explicitly, it survives someone reading it as a bug and "fixing" it.
     """
     def _wipe_named_graphs():
         cursor = iris_connection.cursor()
         try:
             with contextlib.suppress(Exception):
-                cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE graph_id <> ''")
+                cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE COALESCE(graph_id, '') <> ''")
             with contextlib.suppress(Exception):
-                cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s IN (SELECT node_id FROM Graph_KG.nodes WHERE graph_id <> '')")
+                cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s IN (SELECT node_id FROM Graph_KG.nodes WHERE COALESCE(graph_id, '') <> '')")
             with contextlib.suppress(Exception):
-                cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s IN (SELECT node_id FROM Graph_KG.nodes WHERE graph_id <> '')")
+                cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s IN (SELECT node_id FROM Graph_KG.nodes WHERE COALESCE(graph_id, '') <> '')")
             with contextlib.suppress(Exception):
-                cursor.execute("DELETE FROM Graph_KG.nodes WHERE graph_id <> ''")
+                cursor.execute("DELETE FROM Graph_KG.nodes WHERE COALESCE(graph_id, '') <> ''")
             with contextlib.suppress(Exception):
                 iris_connection.commit()
         finally:

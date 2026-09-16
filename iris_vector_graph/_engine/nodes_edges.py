@@ -3,7 +3,12 @@ import logging
 from typing import Any, Dict, List, NamedTuple, Optional
 
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
-from iris_vector_graph._validate import EdgeInput, NodeIdInput
+from iris_vector_graph._validate import (
+    EdgeInput,
+    NodeIdInput,
+    graph_index_key,
+    validate_graph_name,
+)
 from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
@@ -712,6 +717,7 @@ class NodesEdgesMixin:
         """
         _ledger_check(self, "create_edge")
         EdgeInput(source_id=source_id, predicate=predicate, target_id=target_id)
+        graph_key = graph_index_key(graph)
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
@@ -742,7 +748,7 @@ class NodesEdgesMixin:
                 predicate,
                 target_id,
                 str(float(weight)),
-                graph if graph else 0,
+                graph_key,
             )
         except Exception as e:
             logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
@@ -793,8 +799,19 @@ class NodesEdgesMixin:
         Breaking change: default (no graph, all_graphs=False) deletes only the
         default-graph row (graph_id=''), not all rows matching (s, p, o_id).
         Callers that relied on cross-graph deletion must pass all_graphs=True.
+
+        Raises:
+            ValueError: if ``graph`` cannot be represented as a subscript
+                (ADR-0003), before the row is touched.
         """
         _ledger_check(self, "delete_edge")
+        # Derive before branching. The index key used to be built inline at the
+        # ^KG call from a graph_id assigned only in the else branch below, so
+        # all_graphs=True raised UnboundLocalError there. The call sits in a try
+        # that logs and swallows, so every row left SQL and every ^KG entry
+        # stayed: the exact drift verify_graph exists to catch, in the one path
+        # that opts into touching every graph.
+        graph_key = graph_index_key(graph)
         cursor = self.conn.cursor()
         try:
             if all_graphs:
@@ -803,10 +820,15 @@ class NodesEdgesMixin:
                     [source_id, predicate, target_id],
                 )
             else:
-                graph_id = graph if graph is not None else ""
+                # COALESCE both sides: graph_id is nullable and the default graph
+                # has two spellings. create_edge writes '', but every INSERT that
+                # omits the column — the bulk loaders, the map_sql_table bridge —
+                # writes NULL. A predicate matching only one of them deletes half
+                # the default graph and reports success.
                 cursor.execute(
-                    f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?",
-                    [source_id, predicate, target_id, graph_id],
+                    f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? "
+                    "AND COALESCE(graph_id, '') = COALESCE(?, '')",
+                    [source_id, predicate, target_id, "" if graph_key == 0 else graph_key],
                 )
             self.conn.commit()
         except Exception as e:
@@ -814,81 +836,119 @@ class NodesEdgesMixin:
             logger.error(f"delete_edge failed: {e}")
             return False
         try:
-            self._iris_obj().classMethodVoid(
-                "Graph.KG.EdgeScan",
-                "DeleteAdjacency",
-                source_id,
-                predicate,
-                target_id,
-                graph_id if graph_id else 0,
-            )
+            if all_graphs:
+                # Every graph is not a key value, so it cannot be expressed by
+                # passing one. EdgeScan walks its own tree and delegates per edge.
+                self._iris_obj().classMethodVoid(
+                    "Graph.KG.EdgeScan",
+                    "DeleteAdjacencyAllGraphs",
+                    source_id,
+                    predicate,
+                    target_id,
+                )
+            else:
+                self._iris_obj().classMethodVoid(
+                    "Graph.KG.EdgeScan",
+                    "DeleteAdjacency",
+                    source_id,
+                    predicate,
+                    target_id,
+                    graph_key,
+                )
         except Exception as e:
             logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
         return True
 
     def list_graphs(self) -> List[str]:
+        """The named graphs that have edges. The default graph is not one of them.
+
+        Both spellings of the default graph are excluded. The predicate used to be
+        ``graph_id IS NOT NULL``, which excluded only the NULL-spelled rows and
+        returned '' for the rows create_edge wrote — so whether the default graph
+        appeared in this list depended on which writer had produced its edges.
+        """
         cursor = self.conn.cursor()
         cursor.execute(
-            "SELECT DISTINCT graph_id FROM Graph_KG.rdf_edges WHERE graph_id IS NOT NULL ORDER BY graph_id"
+            f"SELECT DISTINCT graph_id FROM {self._t('rdf_edges')} "
+            "WHERE COALESCE(graph_id, '') <> '' ORDER BY graph_id"
         )
         return [row[0] for row in cursor.fetchall()]
 
-    def drop_graph(self, graph_id: str) -> int:
-        """Drop all nodes, edges, labels and props scoped to graph_id (spec 214 FR-008).
+    def erase_graph(self, graph: Optional[str] = None) -> int:
+        """Remove one graph's content from every store that holds it.
 
-        Deletes in FK-safe order: labels → props → embeddings → edges → nodes.
-        Returns combined row count of nodes + edges deleted.
+        The single deletion path. ``drop_graph`` deleted rows from five tables and
+        said so in its own comment — ``# BYPASS: SQL rows deleted without touching
+        ^KG/^NKG; flag stale`` — leaving the structural adjacency answering
+        traversals for a graph that no longer had a row, the whole temporal index
+        untouched, and ``_nkg_dirty`` set so the inconsistency waited on a rebuild
+        that might never run. ``restore_snapshot`` cleared a different list, and
+        ``bulk_delete_adjacency`` produced the mirror-image drift.
+
+        The work happens in ``Graph.KG.Eraser``, which owns its own transaction.
+        That is not an implementation detail of this method: the Native API rides
+        the same connection as the DBAPI cursor, so ``Kill`` and SQL ``DELETE``
+        share one transaction context, but ``$TLevel`` is invisible from here.
+        Splitting the transaction across the seam is what made a partial erasure
+        possible (ADR-0004).
+
+        Args:
+            graph: The graph to erase. ``None`` and ``""`` both mean the default
+                graph, which is erased in both of its spellings — ``graph_id`` is
+                nullable, so ``create_edge`` writes ``''`` while an INSERT omitting
+                the column leaves NULL.
+
+        Returns:
+            The number of ``Graph_KG.nodes`` and ``Graph_KG.rdf_edges`` rows
+            removed. ``0`` means nothing matched, which is not an error.
+
+        Raises:
+            ValueError: if ``graph`` cannot be represented as a subscript
+                (ADR-0003), before anything is deleted.
+            Exception: if any step fails, after the whole erase has rolled back.
+                Erasure either completes or leaves the graph untouched; a partial
+                erasure is a defect, not an outcome, so this raises rather than
+                returning a count that looks like success.
         """
-        _ledger_check(self, "drop_graph")
-        cursor = self.conn.cursor()
-        deleted = 0
-        try:
-            cursor.execute("START TRANSACTION")
-            # Labels belonging to named-graph nodes
-            cursor.execute(
-                f"DELETE FROM {self._t('rdf_labels')} "
-                f"WHERE s IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
-                [graph_id],
-            )
-            # Props belonging to named-graph nodes
-            cursor.execute(
-                f'DELETE FROM {self._t("rdf_props")} '
-                f"WHERE s IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
-                [graph_id],
-            )
-            # Embeddings
-            cursor.execute(
-                f"DELETE FROM {self._t('kg_NodeEmbeddings')} "
-                f"WHERE id IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
-                [graph_id],
-            )
-            try:
-                cursor.execute(
-                    f"DELETE FROM {self._t('kg_NodeEmbeddings_optimized')} "
-                    f"WHERE id IN (SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?)",
-                    [graph_id],
-                )
-            except Exception:
-                pass
-            # Edges
-            cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE graph_id = ?", [graph_id])
-            edges_deleted = cursor.rowcount if cursor.rowcount is not None else 0
-            # Nodes
-            cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE graph_id = ?", [graph_id])
-            nodes_deleted = cursor.rowcount if cursor.rowcount is not None else 0
-            deleted = nodes_deleted + edges_deleted
-            self.conn.commit()
-        except Exception as e:
-            logger.error("drop_graph failed: %s", e)
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
-            return 0
-        # BYPASS: SQL rows deleted without touching ^KG/^NKG; flag stale.
-        if deleted:
-            self._nkg_dirty = True
-        return deleted
+        _ledger_check(self, "erase_graph")
+        canonical = validate_graph_name(graph)
+        removed = int(
+            self._iris_obj().classMethodValue("Graph.KG.Eraser", "EraseGraph", canonical)
+        )
+        # No _nkg_dirty. The Eraser drops ^NKG rather than flagging it, so there is
+        # no deferred inconsistency left for a caller to remember to resolve.
+        self._nkg_dirty = False
+        return removed
+
+    def erase_all(self) -> int:
+        """Remove every graph's content, including the stores no per-graph erase reaches.
+
+        ``rdf_labels`` and ``rdf_props`` are keyed by node id alone, ``^NKG``
+        interns identifiers with no graph dimension, ``^KG("labelset")`` is
+        append-only by design, and ``^ArnoKG`` caches a whole-database snapshot.
+        None can be split by graph — which is why they accumulate. "All" has no
+        attribution problem, so this is the only operation that can empty them
+        honestly.
+
+        ``^IVG.Ledger("rec")`` survives: erasure removes content, not history
+        (ADR-0004).
+
+        Returns:
+            The number of ``Graph_KG.nodes`` and ``Graph_KG.rdf_edges`` rows removed.
+        """
+        _ledger_check(self, "erase_all")
+        removed = int(self._iris_obj().classMethodValue("Graph.KG.Eraser", "EraseAll"))
+        self._nkg_dirty = False
+        return removed
+
+    def drop_graph(self, graph_id: str) -> int:
+        """Deprecated name for :meth:`erase_graph`. Removed in 4.0.0.
+
+        The name survives the change; the behaviour does not. Keeping the name is
+        a compatibility decision, and keeping the old body would have meant two
+        deletion paths again — which is the thing the Eraser exists to end.
+        """
+        return self.erase_graph(graph_id)
 
     def bulk_create_nodes(
         self,
@@ -1170,7 +1230,7 @@ class NodesEdgesMixin:
             s, p, o = edge["s"], edge["p"], edge["o"]
             try:
                 cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')",
                     [s, p, o],
                 )
             except Exception as ex:
@@ -1373,7 +1433,8 @@ class NodesEdgesMixin:
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
             cursor.execute(
-                f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
+                f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "
+                "VALUES (?, ?, ?, ?, '')",
                 [source_id, predicate, target_id, qual_json],
             )
             self.conn.commit()

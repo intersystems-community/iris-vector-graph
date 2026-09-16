@@ -1,7 +1,7 @@
 """Spec 214 — unit tests for named graph node dimension (no IRIS required).
 
 T005: TestSchemaMigration — create_node graph sentinel, __graph removed, idempotency
-T006: TestDropGraphExtended — drop_graph FK-safe order, count, default graph untouched
+T006: TestEraseGraphExtended — erase delegates to Graph.KG.Eraser; the Eraser keeps FK order and both default-graph spellings
 T016: TestAdjacencyLayout — WriteAdjacency/DeleteAdjacency use graph subscript
 T039: TestDeleteEdgeScoping — delete_edge graph/all_graphs SQL generation
 T044: TestGraphAwareAlgorithms — algorithm calls pass graph filter
@@ -10,6 +10,8 @@ T056: TestImportNdjsonGraph — import_graph_ndjson graph param
 """
 
 import os
+import re
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -95,10 +97,34 @@ class TestSchemaMigration:
         GraphSchema.add_graph_id_to_nodes(cursor)  # must not raise
 
 
-# ─── T006: drop_graph extended ────────────────────────────────────────────────
+# ─── T006: erase extended ─────────────────────────────────────────────────────
 
 
-class TestDropGraphExtended:
+class TestEraseGraphExtended:
+    """T006 asserted the SQL `drop_graph` emitted: the table list, the FK order,
+    the presence of a `graph_id` predicate. That is the implementation, and
+    asserting it is why the temporal leak survived — the emitted DELETEs were in
+    FK-safe order and correctly filtered, and the adjacency and the whole temporal
+    index still outlived the graph.
+
+    The deletes are now `Graph.KG.Eraser`'s, one transaction it owns in
+    ObjectScript (ADR-0004). The FK order and the two spellings of the default
+    graph are asserted against the live container in
+    tests/integration/test_erase_graph.py. What survives here are the two claims
+    that can be checked without one: the facade delegates rather than emitting SQL
+    of its own, and the Eraser's source keeps the invariants that a passing
+    integration test would not have caught the loss of.
+    """
+
+    ERASER = (
+        Path(__file__).resolve().parents[2]
+        / "iris_src"
+        / "src"
+        / "Graph"
+        / "KG"
+        / "Eraser.cls"
+    )
+
     def _make_engine(self):
         from iris_vector_graph.engine import IRISGraphEngine
 
@@ -112,49 +138,81 @@ class TestDropGraphExtended:
         eng._store = MagicMock()
         eng.__dict__["_ledger_guard_obj"] = MagicMock()
         eng.__dict__["_ledger_guard_obj"].check_structural_write = MagicMock()
-        return eng, cursor
+        iris_obj = MagicMock()
+        iris_obj.classMethodValue.return_value = 3
+        eng._iris_obj = MagicMock(return_value=iris_obj)
+        return eng, cursor, iris_obj
 
-    def test_drop_graph_executes_in_fk_safe_order(self):
-        eng, cursor = self._make_engine()
-        eng.drop_graph("umls")
-        sqls = [str(c.args[0]) for c in cursor.execute.call_args_list if c.args]
-        # After spec-214, drop_graph must delete nodes too
-        node_deletes = [s for s in sqls if "Graph_KG.nodes" in s and "DELETE" in s.upper()]
-        edge_deletes = [s for s in sqls if "rdf_edges" in s and "DELETE" in s.upper()]
-        assert node_deletes, "drop_graph does not delete nodes (spec-214 extension missing)"
-        assert edge_deletes, "drop_graph does not delete edges"
-        # labels/props must be deleted before nodes (FK safety)
-        label_deletes = [
-            i for i, s in enumerate(sqls) if "rdf_labels" in s and "DELETE" in s.upper()
+    def test_the_facade_emits_no_sql_of_its_own(self):
+        """Two deletion paths is the thing the Eraser exists to end.
+
+        A `cursor.execute` here would mean the facade deletes some of the graph
+        outside the Eraser's transaction, which is a partial erasure on any failure.
+        """
+        eng, cursor, iris_obj = self._make_engine()
+
+        eng.erase_graph("umls")
+
+        assert not cursor.execute.called, (
+            "the facade still deletes outside the Eraser's transaction"
+        )
+        iris_obj.classMethodValue.assert_called_once_with(
+            "Graph.KG.Eraser", "EraseGraph", "umls"
+        )
+
+    def test_erase_non_existent_returns_zero(self):
+        eng, cursor, iris_obj = self._make_engine()
+        iris_obj.classMethodValue.return_value = 0
+
+        assert eng.erase_graph("nonexistent") == 0
+
+    def test_the_eraser_deletes_the_dependents_before_the_rows_they_name(self):
+        """FK order, read off the source rather than off the emitted SQL.
+
+        Labels and props name a node id and reifications name an edge id, so all
+        three have to be deleted before the rows they point at.
+        """
+        text = self.ERASER.read_text()
+
+        def first_delete(table):
+            idx = text.find(f"DELETE FROM Graph_KG.{table}")
+            assert idx != -1, f"the Eraser never deletes from {table}"
+            return idx
+
+        assert first_delete("rdf_labels") < first_delete("nodes")
+        assert first_delete("rdf_props") < first_delete("nodes")
+        assert first_delete("rdf_reifications") < first_delete("rdf_edges")
+
+    def test_the_eraser_matches_both_spellings_of_the_default_graph(self):
+        """`graph_id` is nullable, so the default graph has two spellings.
+
+        `create_edge` writes '' explicitly; an INSERT omitting the column leaves
+        NULL. And in IRIS embedded SQL an empty host variable binds as SQL NULL,
+        not as the empty string — so COALESCE is needed on BOTH sides. Either
+        omission erases half the default graph and returns a count that looks like
+        success.
+        """
+        text = self.ERASER.read_text()
+        predicates = [
+            line.strip()
+            for line in text.splitlines()
+            if "graph_id" in line and "=" in line and not line.strip().startswith("//")
         ]
-        # Only lines that DELETE directly from nodes (not sub-query references)
-        # e.g. "DELETE FROM Graph_KG.nodes WHERE graph_id = ?"
-        node_delete_idx = [
-            i
-            for i, stmt in enumerate(sqls)
-            if stmt.lower().strip().startswith("delete from graph_kg.nodes")
-            or stmt.lower().strip().startswith("delete from graph_kg.nodes_new")
-        ]
-        if label_deletes and node_delete_idx:
-            assert min(label_deletes) < min(
-                node_delete_idx
-            ), "labels deleted AFTER nodes (FK violation)"
+        assert predicates, "the Eraser has no graph_id predicate at all"
+        for predicate in predicates:
+            assert predicate.count("COALESCE") == 2, (
+                f"a graph_id predicate is not COALESCEd on both sides: {predicate}"
+            )
 
-    def test_drop_graph_non_existent_returns_zero(self):
-        eng, cursor = self._make_engine()
-        cursor.rowcount = 0
-        result = eng.drop_graph("nonexistent")
-        assert result == 0
-
-    def test_drop_graph_does_not_touch_default_graph(self):
-        eng, cursor = self._make_engine()
-        eng.drop_graph("umls")
-        sqls = [str(c.args) for c in cursor.execute.call_args_list if c.args]
-        # No DELETE should omit the graph_id filter (that would delete the default graph)
-        unfiltered = [s for s in sqls if "DELETE FROM Graph_KG.nodes" in s and "graph_id" not in s]
-        assert (
-            not unfiltered
-        ), "drop_graph deletes nodes without a graph_id filter (would wipe default graph)"
+    def test_the_eraser_does_not_erase_every_graph_when_given_one(self):
+        """An unfiltered DELETE belongs to EraseAll and nowhere else."""
+        text = self.ERASER.read_text()
+        per_graph = text[text.index("ClassMethod EraseGraph") : text.index("ClassMethod EraseAll")]
+        for statement in re.findall(r"DELETE FROM Graph_KG\.\w+[^)]*", per_graph):
+            assert "WHERE" in statement, (
+                f"EraseGraph deletes without a predicate, which would empty every "
+                f"graph: {statement.strip()}"
+            )
 
 
 # ─── T016: Adjacency layout ────────────────────────────────────────────────────

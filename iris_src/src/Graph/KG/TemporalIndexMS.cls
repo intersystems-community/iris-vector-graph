@@ -12,7 +12,7 @@ Parameter BUCKETMS As %Integer = 300000;
 /// graphId="" = default graph (key 0). Used by tests to verify bucket key assignment.
 ClassMethod GetBucketCount(graphId As %String = "", bucket As %Integer, node As %String) As %Integer
 {
-	Set tGKey = $Select(graphId = "": 0, 1: $ZStrip(graphId, "*C"))
+	Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(graphId)
 	Return +$Get(^KG("bucket", tGKey, bucket, node), 0)
 }
 

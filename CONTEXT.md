@@ -21,6 +21,12 @@ default graph or a non-empty string for named graphs. Never the empty string —
 does not support empty intermediate subscripts. Derived via
 `$Select(graphId="": 0, 1: $ZStrip(graphId,"*C"))`.
 
+The ledger stores a second, incompatible form for the default graph (`$Char(1)` rather
+than `0`). Both forms are derived from the `graphId`, never converted from each other:
+a caller holding a `graphId` asks for the form belonging to the tree it is about to
+touch. Using one tree's key on the other reads nothing and writes into a subtree no
+reader scans.
+
 **Structural Edge**
 A typed, directed relationship between two nodes (`source -[predicate]→ target`),
 optionally carrying qualifier key-value pairs. Lives in `rdf_edges` (SQL) and
@@ -64,6 +70,22 @@ include structural (`create_node`, `create_rel`, `set_prop`, etc.) and temporal
 The append-only revision history of a graph. Enables diff, reconstruct, and verify
 across any time range. Implemented by `GraphLedger` (Python) and `Graph.KG.Ledger`
 (ObjectScript). The ledger owns `TSTART/TCOMMIT` — it is the transaction boundary.
+
+**Erasure**
+The removal of graph content from every store that holds it — relational rows, native
+adjacency, temporal index, and live statements — as one atomic operation. Erasure
+removes content, not history: the **Revision** records of an erased graph survive,
+because a single revision may span several graphs and pruning it would destroy history
+the caller did not ask to erase. What erasure guarantees is that no live statement
+outlives its content. Erasure either completes or leaves the graph untouched; a partial
+erasure is a defect, not an outcome. Implemented by the **Eraser**, which owns its own
+`TSTART/TCOMMIT` boundary.
+
+**Drift**
+Disagreement between two stores about the same graph content — most often SQL rows
+that exist without their adjacency entries, or adjacency entries that outlive their
+rows. Drift makes traversal return nodes that no longer exist. Any write path that
+touches one store without the other is a **bypass** and produces drift.
 
 **Execution Context** _(planned — spec-224+)_
 A session-scoped, immutable graph identity derived from an authenticated principal.

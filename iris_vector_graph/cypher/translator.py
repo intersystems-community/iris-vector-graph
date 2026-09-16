@@ -3567,7 +3567,7 @@ def _create_node_literal(node, node_id_expr, context):
         )
     else:
         context.add_dml(
-            f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND graph_id = '')",
+            f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
             [node_id, node_id],
         )
     for label in node.labels:
@@ -3646,7 +3646,7 @@ def _create_node_from_alias(node, node_id_expr, var_alias, context):
         )
     else:
         context.add_dml(
-            f"{cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT t.node_id, '' FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id AND graph_id = '')",
+            f"{cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT t.node_id, '' FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = t.node_id AND COALESCE(graph_id, '') = '')",
             p,
         )
     for label in node.labels:

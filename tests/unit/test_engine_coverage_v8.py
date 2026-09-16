@@ -69,6 +69,22 @@ def _patch_t(eng):
     eng._t = lambda name: f"Graph_KG.{name}"
 
 
+def _stub_eraser(eng):
+    """A non-merge restore clears the database through `Graph.KG.Eraser`.
+
+    `restore_snapshot` used to keep its own six-table clear list plus whichever
+    globals the snapshot's metadata happened to name, so a snapshot written
+    without global metadata left the previous database's ^KG in place. It now
+    calls `erase_all()` (ADR-0004), which means an unreachable IRIS is a failed
+    restore rather than a silent merge into the previous database — so these tests
+    have to give the seam something to reach.
+    """
+    iris_obj = MagicMock()
+    iris_obj.classMethodValue.return_value = 0
+    eng._iris_obj = MagicMock(return_value=iris_obj)
+    return iris_obj
+
+
 # ---------------------------------------------------------------------------
 # snapshot.py — load_networkx
 # ---------------------------------------------------------------------------
@@ -326,7 +342,7 @@ class TestRestoreSnapshot:
         """Lines 534-535 — basic restore without merge."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        _stub_eraser(eng)
 
         node_line = json.dumps({"node_id": "n1"})
         snap_path = self._make_zip(tmp_path, {"Graph_KG_nodes.ndjson": node_line})
@@ -348,7 +364,7 @@ class TestRestoreSnapshot:
         """rdf_edges row — 'id' key stripped before insert."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        _stub_eraser(eng)
 
         edge_line = json.dumps({"id": 99, "s": "a", "p": "rel", "o_id": "b"})
         snap_path = self._make_zip(
@@ -363,7 +379,7 @@ class TestRestoreSnapshot:
         """Lines 596-597 — vector embeddings file restored."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        _stub_eraser(eng)
 
         vec_line = json.dumps({"id": "n1", "emb": "[0.1, 0.2]", "metadata": None})
         snap_path = self._make_zip(
@@ -391,7 +407,7 @@ class TestRestoreSnapshot:
         """Lines 643 / 667-668 — edge embeddings file restored."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        _stub_eraser(eng)
 
         ee_line = json.dumps({"s": "a", "p": "rel", "o_id": "b", "emb": "[0.1]"})
         snap_path = self._make_zip(
@@ -434,10 +450,17 @@ class TestRestoreSnapshot:
         assert "restored_globals" in result
 
     def test_restore_globals_import_failure_logged(self, tmp_path):
-        """Lines 693 — global import failure is caught and logged."""
+        """Lines 693 — global import failure is caught and logged.
+
+        A non-merge restore reaches IRIS twice now — once to clear, once to import
+        the globals — so the failure has to be aimed at the import specifically. An
+        unreachable seam would fail the clear instead, which is a failed restore,
+        not a logged warning.
+        """
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("iris down"))
+        _stub_eraser(eng)
+        eng._import_global_from_ndjson = MagicMock(side_effect=Exception("iris down"))
 
         snap_path = self._make_zip(tmp_path)
         with zipfile.ZipFile(snap_path, "a") as zf:
@@ -454,7 +477,7 @@ class TestRestoreSnapshot:
         # return shape here.
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        _stub_eraser(eng)
 
         snap_path = self._make_zip(tmp_path)
         result = eng.restore_snapshot(snap_path, merge=False)
@@ -464,19 +487,25 @@ class TestRestoreSnapshot:
         """Lines 596-597 — conn.commit() called after each table batch."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        _stub_eraser(eng)
 
         node_line = json.dumps({"node_id": "n1"})
         snap_path = self._make_zip(tmp_path, {"Graph_KG_nodes.ndjson": node_line})
         eng.restore_snapshot(snap_path, merge=False)
         assert conn.commit.called
 
-    def test_restore_kill_subscript_globals_before_clear(self, tmp_path):
-        """Lines 519-524 — kill with subscripts when not merging."""
+    def test_restore_clears_through_the_eraser_not_the_snapshot_metadata(self, tmp_path):
+        """The clear no longer depends on what the snapshot says it contains.
+
+        This used to kill the subscripts named in the snapshot's own `globals`
+        metadata, which meant a snapshot written without that metadata restored
+        rows on top of the previous database's ^KG. The inventory has one owner
+        now (ADR-0004), so the clear is `erase_all()` regardless of what the
+        snapshot claims.
+        """
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        iris_obj = MagicMock()
-        eng._iris_obj = MagicMock(return_value=iris_obj)
+        iris_obj = _stub_eraser(eng)
 
         meta = {
             "version": "1.1",
@@ -490,9 +519,13 @@ class TestRestoreSnapshot:
         with zipfile.ZipFile(snap_path, "w") as zf:
             zf.writestr("metadata.json", json.dumps(meta))
 
-        result = eng.restore_snapshot(snap_path, merge=False)
-        # iris_obj.kill should have been called for each subscript
-        assert iris_obj.kill.called or "restored_layers" in result
+        eng.restore_snapshot(snap_path, merge=False)
+
+        iris_obj.classMethodValue.assert_any_call("Graph.KG.Eraser", "EraseAll")
+        assert not iris_obj.kill.called, (
+            "restore still kills the globals the snapshot metadata names, so a "
+            "snapshot without that metadata leaves the previous database's ^KG"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1113,22 +1146,30 @@ class TestDeleteEdge:
 # ---------------------------------------------------------------------------
 
 class TestDropGraph:
-    def test_drop_graph_sets_nkg_dirty(self):
-        """Lines 1042-1050 — deleted > 0 sets _nkg_dirty."""
+    def test_erase_clears_the_dirty_flag_rather_than_setting_it(self):
+        """`drop_graph` set `_nkg_dirty` and left ^NKG holding the erased edges.
+
+        The flag deferred a known inconsistency into a rebuild that might never
+        run, and until it ran the BFS fast path traversed erased edges. The Eraser
+        drops ^NKG inside the erase transaction instead, so there is nothing left
+        to defer — an absent ^NKG is a state every reader already handles.
+        """
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        cur.rowcount = 3
+        eng._nkg_dirty = True
+        iris_obj = _stub_eraser(eng)
+        iris_obj.classMethodValue.return_value = 3
 
         eng.drop_graph("g1")
-        assert eng._nkg_dirty is True
+        assert eng._nkg_dirty is False
 
-    def test_drop_graph_zero_deleted_no_dirty(self):
-        """Lines 1064-1066 — zero deleted doesn't set _nkg_dirty."""
+    def test_erase_with_nothing_to_remove_returns_zero(self):
+        """0 means nothing matched, which is not an error (ADR-0004)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        cur.rowcount = 0
+        _stub_eraser(eng)
 
-        eng.drop_graph("g1")
+        assert eng.drop_graph("g1") == 0
         assert eng._nkg_dirty is False
 
     def test_list_graphs_returns_ids(self):

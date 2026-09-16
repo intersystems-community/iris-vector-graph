@@ -1,5 +1,6 @@
+import json
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from iris_vector_graph.status import (
     EngineStatus,
@@ -448,6 +449,49 @@ class AdminMixin:
                 report.detail = (detail or "") + f" | heal failed: {str(e)[:120]}"
 
         return report
+
+    def verify_graph(self, graph: Optional[str] = None) -> Dict[str, Any]:
+        """Check whether one graph's ^KG adjacency still agrees with its rows.
+
+        Additive alongside ``verify_sync``, which cannot see the drift that
+        matters here. ``verify_sync`` compares one SQL count against ^NKG's
+        ``edgeCount``: graph-blind, and one-directional by design, because ^NKG
+        interning is append-only and ignores ``graph_id`` so its counter
+        over-counts. It flags ``sql_edges > global_edges`` and stays silent on
+        the reverse — which is precisely what every deletion path produces.
+        ``drop_graph`` deletes the rows and leaves the adjacency behind, so
+        afterwards ``sql_edges`` is *below* ``global_edges`` and ``verify_sync``
+        reports in-sync over a graph that still answers traversals.
+
+        This one is scoped to a single graph, bidirectional, and reads ^KG
+        directly.
+
+        Args:
+            graph: The graph to check. ``None`` and ``""`` both mean the default
+                graph. Names that cannot be represented as a subscript raise
+                ``ValueError`` before the round trip (see ADR-0003).
+
+        Returns:
+            The report as a dict, with keys ``graph``, ``graphKey``, ``ok``,
+            ``counts``, ``drift``, ``checked``, ``unverified`` and ``unscoped``.
+
+            A dict rather than a dataclass on purpose: ``Graph.KG.GraphVerify``
+            produces the report and is its single owner. A Python class mirroring
+            the shape would be a second declaration of it, free to drift — the
+            same failure the one-inventory rule exists to remove.
+
+            ``ok`` answers only "does this graph's adjacency agree with its
+            rows?". ``unscoped`` lists stores that hold graph content but carry
+            no graph column at all; that is a standing schema gap rather than
+            per-graph drift, so it does not move ``ok``.
+        """
+        from iris_vector_graph._validate import validate_graph_name
+
+        canonical = validate_graph_name(graph)
+        raw = self._iris_obj().classMethodValue(
+            "Graph.KG.GraphVerify", "VerifyGraph", canonical
+        )
+        return json.loads(str(raw))
 
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Return active IRIS SQL queries.

@@ -38,7 +38,23 @@ def make_engine():
     eng.embedding_dimension = 128
     eng._nkg_dirty = False
     eng.vector_dtype = "DOUBLE"
+    _stub_eraser(eng)
     return eng, cur
+
+
+def _stub_eraser(eng):
+    """A non-merge restore clears the database through `Graph.KG.Eraser`.
+
+    `restore_snapshot` used to keep its own clear list plus whichever globals the
+    snapshot's metadata happened to name, so a snapshot written without global
+    metadata restored rows on top of the previous database's ^KG. It now calls
+    `erase_all()` (ADR-0004), so an unreachable IRIS is a failed restore rather
+    than a silent merge into the previous database.
+    """
+    iris_obj = MagicMock()
+    iris_obj.classMethodValue.return_value = 0
+    eng._iris_obj = MagicMock(return_value=iris_obj)
+    return iris_obj
 
 
 def make_snapshot_zip(
@@ -298,9 +314,16 @@ def test_restore_snapshot_empty_lines_skipped():
         os.unlink(path)
 
 
-def test_restore_snapshot_clear_tables_on_overwrite():
-    """Non-merge restore: DELETE called for each table."""
+def test_restore_snapshot_clears_through_erase_all():
+    """Non-merge restore clears by calling erase_all, not by emitting its own SQL.
+
+    It used to name six tables inline here and kill whichever globals the
+    snapshot's metadata happened to list. A restore whose clear list is shorter
+    than the inventory leaves content the restored rows then inherit, which is the
+    drift the Eraser exists to end (ADR-0004).
+    """
     eng, cur = make_engine()
+    iris_obj = eng._iris_obj()
 
     snapshot_data = make_snapshot_zip(
         metadata={
@@ -317,30 +340,35 @@ def test_restore_snapshot_clear_tables_on_overwrite():
 
     try:
         eng.restore_snapshot(path, merge=False)
+        iris_obj.classMethodValue.assert_any_call("Graph.KG.Eraser", "EraseAll")
         executed = [str(c[0][0]) for c in cur.execute.call_args_list]
-        delete_calls = [s for s in executed if s.strip().startswith("DELETE")]
-        assert len(delete_calls) >= 1
+        assert not [s for s in executed if s.strip().upper().startswith("DELETE")], (
+            "restore still deletes outside the Eraser's transaction"
+        )
     finally:
         os.unlink(path)
 
 
-def test_restore_snapshot_delete_rollback_on_error():
-    """DELETE failure triggers rollback."""
+def test_restore_snapshot_raises_when_the_clear_fails():
+    """A restore that cannot clear must not go on to insert.
+
+    The old code cleared table by table and committed after each, swallowing the
+    failures, so a clear that failed halfway left the database in neither state and
+    the restored rows merged into whatever survived. erase_all is one transaction:
+    it either clears or leaves the database untouched, and a failure here is a
+    failed restore.
+    """
     eng, cur = make_engine()
-    call_n = [0]
-    def selective(sql, *args, **kwargs):
-        call_n[0] += 1
-        if "DELETE" in str(sql):
-            raise Exception("delete failed")
-    cur.execute.side_effect = selective
+    eng._iris_obj().classMethodValue.side_effect = Exception("erase failed on nodes")
 
     snapshot_data = make_snapshot_zip(
         metadata={
             "version": "2.5.0",
             "created_ts": 0,
-            "tables": {},
+            "tables": {"Graph_KG.nodes": 1},
             "globals": {},
-        }
+        },
+        sql_files={"sql/Graph_KG_nodes.ndjson": json.dumps({"node_id": "n1"})},
     )
 
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
@@ -348,8 +376,14 @@ def test_restore_snapshot_delete_rollback_on_error():
         path = f.name
 
     try:
-        eng.restore_snapshot(path, merge=False)
-        eng.conn.rollback.assert_called()
+        with pytest.raises(Exception, match="erase failed"):
+            eng.restore_snapshot(path, merge=False)
+        inserts = [
+            str(c[0][0])
+            for c in cur.execute.call_args_list
+            if str(c[0][0]).strip().upper().startswith("INSERT")
+        ]
+        assert not inserts, "restore inserted rows into a database it failed to clear"
     finally:
         os.unlink(path)
 

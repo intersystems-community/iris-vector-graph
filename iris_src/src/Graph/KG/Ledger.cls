@@ -40,9 +40,11 @@ ClassMethod State() As %String
     Return $Get(^IVG.Ledger("meta", "state"), "never-enabled")
 }
 
+/// The ledger's subscript for a graph. Delegates to Graph.KG.GraphKey, which
+/// owns the derivation and rejects the names that cannot be represented.
 ClassMethod GKey(pGraph As %String) As %String
 {
-    Return $Select(pGraph = "": $Char(1), 1: pGraph)
+    Return ##class(Graph.KG.GraphKey).ForLedger(pGraph)
 }
 
 ClassMethod MetaGet(pObj As %DynamicObject, pKey As %String, pDefault As %String = "") As %String

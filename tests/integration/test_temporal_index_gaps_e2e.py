@@ -243,14 +243,14 @@ class TestTSUNITMSE2E:
         wrong_bucket = 2000       # 600_000 // 300 — only if TSUNIT="" (sec mode)
         src, pred, tgt = f"{_PREFIX}_ms1_src", "METRIC_AT", f"{_PREFIX}_ms1_tgt"
         engine._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndexMS", "InsertEdge", src, pred, tgt, ts_ms
+            "Graph.KG.TemporalIndexMS", "InsertEdge", "", src, pred, tgt, ts_ms
         )
         # GetBucketCount is a helper defined on TemporalIndexMS
         bucket_correct = int(str(engine._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndexMS", "GetBucketCount", expected_bucket, src
+            "Graph.KG.TemporalIndexMS", "GetBucketCount", "", expected_bucket, src
         )))
         bucket_wrong = int(str(engine._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndexMS", "GetBucketCount", wrong_bucket, src
+            "Graph.KG.TemporalIndexMS", "GetBucketCount", "", wrong_bucket, src
         )))
         assert bucket_correct >= 1, "ms-mode bucket key 2 not populated"
         assert bucket_wrong == 0, "sec-mode bucket key 2000 should be empty in ms mode"
@@ -265,18 +265,18 @@ class TestTSUNITMSE2E:
         src_a = f"{_PREFIX}_ms2_a"
         pred, tgt = "METRIC_AT", f"{_PREFIX}_ms2_tgt"
         engine._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndexMS", "InsertEdge", src_b, pred, tgt, ts_before
+            "Graph.KG.TemporalIndexMS", "InsertEdge", "", src_b, pred, tgt, ts_before
         )
         engine._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndexMS", "InsertEdge", src_a, pred, tgt, ts_at_end
+            "Graph.KG.TemporalIndexMS", "InsertEdge", "", src_a, pred, tgt, ts_at_end
         )
         deleted = int(str(engine._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", ts_end
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", ts_end
         )).split(":")[0])
         assert deleted >= 1, "at least ts_before edge should be purged"
         # Edge at ts_at_end must survive (strict < boundary)
         surviving_bucket = int(str(engine._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndexMS", "GetBucketCount",
+            "Graph.KG.TemporalIndexMS", "GetBucketCount", "",
             ts_at_end // 300_000, src_a
         )))
         # bucket for ts_at_end (200_000 ms) = 200_000 // 300_000 = 0
@@ -290,10 +290,10 @@ class TestTSUNITMSE2E:
         ts_sec = 900
         src, pred, tgt = f"{_PREFIX}_sec_src", "METRIC_AT", f"{_PREFIX}_sec_tgt"
         engine._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "InsertEdge", src, pred, tgt, ts_sec
+            "Graph.KG.TemporalIndex", "InsertEdge", "", src, pred, tgt, ts_sec
         )
         # Reuse GetBucketCount helper — it reads ^KG("bucket", bucket, node)
         bucket_val = int(str(engine._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndexMS", "GetBucketCount", 3, src
+            "Graph.KG.TemporalIndexMS", "GetBucketCount", "", 3, src
         )))
         assert bucket_val >= 1, "sec-mode bucket key 3 (900 // 300) should be populated"

@@ -32,7 +32,7 @@ _PREFIX = f"tjson_{uuid.uuid4().hex[:8]}"
 def _insert(store, src, pred, tgt, ts, weight):
     """Insert directly via ObjectScript, bypassing Python's pydantic weight≥0 guard."""
     store._call_classmethod(
-        "Graph.KG.TemporalIndex", "InsertEdge",
+        "Graph.KG.TemporalIndex", "InsertEdge", "",
         src, pred, tgt, str(ts), str(weight),
     )
 
@@ -40,7 +40,7 @@ def _insert(store, src, pred, tgt, ts, weight):
 def _qw_strict(store, src, pred, ts_start, ts_end):
     """Call QueryWindow and parse with strict Python json.loads — the gate that matters."""
     raw = str(store._call_classmethod(
-        "Graph.KG.TemporalIndex", "QueryWindow",
+        "Graph.KG.TemporalIndex", "QueryWindow", "",
         src, pred, str(ts_start), str(ts_end),
     ))
     return json.loads(raw)   # raises on .nnn, bare :, unescaped chars
@@ -48,7 +48,7 @@ def _qw_strict(store, src, pred, ts_start, ts_end):
 
 def _qw_in_strict(store, tgt, pred, ts_start, ts_end):
     raw = str(store._call_classmethod(
-        "Graph.KG.TemporalIndex", "QueryWindowInbound",
+        "Graph.KG.TemporalIndex", "QueryWindowInbound", "",
         tgt, pred, str(ts_start), str(ts_end),
     ))
     return json.loads(raw)
@@ -135,11 +135,11 @@ class TestQueryWindowStringEscaping:
         # (going through ObjectScript to bypass Python-side validation)
         try:
             tstore._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndex", "InsertEdge",
+                "Graph.KG.TemporalIndex", "InsertEdge", "",
                 src + '"quoted"', "PRED", tgt, "4000", "1",
             )
             raw = str(tstore._call_classmethod(
-                "Graph.KG.TemporalIndex", "QueryWindow",
+                "Graph.KG.TemporalIndex", "QueryWindow", "",
                 src + '"quoted"', "PRED", "0", "9999999",
             ))
             result = json.loads(raw)
@@ -152,11 +152,11 @@ class TestQueryWindowStringEscaping:
         src = f"{_PREFIX}_bs_s"; tgt = f"{_PREFIX}_bs_t"
         try:
             tstore._iris_obj().classMethodVoid(
-                "Graph.KG.TemporalIndex", "InsertEdge",
+                "Graph.KG.TemporalIndex", "InsertEdge", "",
                 src, "PRED\\TYPE", tgt, "5000", "1",
             )
             raw = str(tstore._call_classmethod(
-                "Graph.KG.TemporalIndex", "QueryWindow",
+                "Graph.KG.TemporalIndex", "QueryWindow", "",
                 src, "PRED\\TYPE", "0", "9999999",
             ))
             result = json.loads(raw)
@@ -174,7 +174,7 @@ class TestInsertEdgeEmptyWeight:
         """InsertEdge(weight='') must default to 1, not store literal empty string."""
         src = f"{_PREFIX}_ew"; tgt = f"{src}_t"
         tstore._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "InsertEdge",
+            "Graph.KG.TemporalIndex", "InsertEdge", "",
             src, "PRED", tgt, "6000", "",
         )
         rows = _qw_strict(tstore, src, "PRED", 0, 9999999)
@@ -185,11 +185,11 @@ class TestInsertEdgeEmptyWeight:
         """Even if weight=1 after coercion, json.loads must not raise."""
         src = f"{_PREFIX}_ewv"; tgt = f"{src}_t"
         tstore._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "InsertEdge",
+            "Graph.KG.TemporalIndex", "InsertEdge", "",
             src, "PRED", tgt, "7000", "",
         )
         raw = str(tstore._call_classmethod(
-            "Graph.KG.TemporalIndex", "QueryWindow",
+            "Graph.KG.TemporalIndex", "QueryWindow", "",
             src, "PRED", "0", "9999999",
         ))
         # Must not raise ValueError
@@ -282,11 +282,11 @@ class TestControlCharEscaping:
     def test_nul_byte_in_source_parses_strictly(self, tstore):
         """NUL in node id must emit \\u0000, not a raw NUL byte."""
         tstore._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "InsertEdge",
+            "Graph.KG.TemporalIndex", "InsertEdge", "",
             self.NUL_SRC, "CALLS", f"{_PREFIX}_svc", "10000", "1",
         )
         raw = str(tstore._call_classmethod(
-            "Graph.KG.TemporalIndex", "QueryWindow",
+            "Graph.KG.TemporalIndex", "QueryWindow", "",
             self.NUL_SRC, "CALLS", "0", "99999999",
         ))
         result = json.loads(raw)   # raises if NUL is unescaped
@@ -300,11 +300,11 @@ class TestControlCharEscaping:
         )
         src = f"{_PREFIX}_ctrl_{uuid.uuid4().hex[:4]}"
         tstore._iris_obj().classMethodVoid(
-            "Graph.KG.TemporalIndex", "InsertEdge",
+            "Graph.KG.TemporalIndex", "InsertEdge", "",
             src + other_controls, "CALLS", f"{_PREFIX}_svc2", "11000", "1",
         )
         raw = str(tstore._call_classmethod(
-            "Graph.KG.TemporalIndex", "QueryWindow",
+            "Graph.KG.TemporalIndex", "QueryWindow", "",
             src + other_controls, "CALLS", "0", "99999999",
         ))
         result = json.loads(raw)

@@ -950,10 +950,13 @@ class TestBugHunting:
         assert result is not None
 
     def test_drop_graph_empty_string(self):
-        self.cursor.execute.return_value = None
-        self.cursor.rowcount = 0
-        result = self.engine.drop_graph("")
-        assert isinstance(result, int)
+        """The empty graph name is the default graph, not a rejected name."""
+        mock_iris = MagicMock()
+        mock_iris.classMethodValue.return_value = 0
+        with patch.object(self.engine, "_iris_obj", return_value=mock_iris):
+            result = self.engine.drop_graph("")
+        assert result == 0
+        assert mock_iris.classMethodValue.call_args.args[2] == ""
 
     def test_execute_cypher_returns_ivgresult_type(self):
         from iris_vector_graph.result import IVGResult

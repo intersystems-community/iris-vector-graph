@@ -16,6 +16,61 @@ def _nonempty(v: str, name: str) -> str:
     return v
 
 
+def validate_graph_name(graph: Optional[str]) -> str:
+    """Canonicalize a graph name, raising ValueError if it cannot be represented.
+
+    Mirrors ``Graph.KG.GraphKey:Validate``, which is the check that actually
+    guards every write to ``^KG`` and ``^IVG.Ledger``. This one exists so the
+    caller gets a ``ValueError`` naming the graph instead of a ``RuntimeError``
+    carrying an IRIS ``<THROW>`` from several frames down a DBAPI round trip.
+
+    Empty and ``None`` both mean the default graph. ``$Char(0)`` padding is
+    stripped, because IRIS SQL returns it for an empty-string VARCHAR; every
+    other control character is rejected. See ADR-0003.
+    """
+    if graph is None:
+        return ""
+    if not isinstance(graph, str):
+        raise ValueError(
+            f"graph must be a string or None, got {type(graph).__name__} ({graph!r})"
+        )
+    canonical = graph.replace("\x00", "")
+    if canonical == "0":
+        raise ValueError(
+            'graph name "0" is reserved: IRIS canonicalizes the subscript "0" to '
+            "the integer 0 that keys the default graph"
+        )
+    control = next((c for c in canonical if ord(c) < 32 or ord(c) == 127), None)
+    if control is not None:
+        raise ValueError(
+            f"graph name {graph!r} contains a control character "
+            f"(0x{ord(control):02x}), which cannot be used as a subscript"
+        )
+    return canonical
+
+
+def graph_index_key(graph: Optional[str]) -> Any:
+    """Derive the ``^KG`` index key for a graph name: ``0``, or the name itself.
+
+    The single Python-side mirror of ``Graph.KG.GraphKey:ForIndex``. ADR-0003
+    gives that method sole ownership of the derivation and forbids callers
+    re-deriving, and this is the one place Python is allowed to.
+
+    Python needs the value locally: ``WriteAdjacency`` and ``DeleteAdjacency``
+    take an already-derived key, so it has to exist before the round trip, and
+    asking IRIS for it would cost a round trip per edge in ``create_edge``. The
+    rule ADR-0003 is really protecting is that the derivation has one home — the
+    inline ``graph if graph else 0`` was written out at each call site, and
+    ``delete_edge`` ended up deriving a key it had never assigned.
+
+    Returns the *integer* 0 for the default graph, never the string ``"0"``:
+    ``ForIndex`` rejects ``"0"`` as reserved, so the result of this function
+    cannot be fed back through validation. Derive once, at the call site.
+    """
+    canonical = validate_graph_name(graph)
+    return 0 if canonical == "" else canonical
+
+
 def _finite_floats(vec: list, name: str) -> list:
     for i, x in enumerate(vec):
         try:

@@ -312,12 +312,9 @@ class GraphLedger:
             self._emit(
                 resp.get("error", "error"), None, changeset, duration_ms, reason=resp.get("reason")
             )
-            # Check for node_not_found before generic error mapping
-            reason = resp.get("reason") or ""
-            if resp.get("error") == "failed_op" and reason.startswith("node_not_found: '"):
-                missing = reason[len("node_not_found: '"):-1]
-                from .errors import NodeNotFoundError
-                raise NodeNotFoundError(missing_node=missing)
+            # `from_commit_error` owns every wire code, including narrowing a
+            # `failed_op` whose reason names a missing node to NodeNotFoundError.
+            # Parsing it a second time here is how the op index got dropped.
             raise from_commit_error(resp)
 
         resp = wire.raw_resp

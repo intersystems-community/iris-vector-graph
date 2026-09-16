@@ -7,11 +7,26 @@ Class Graph.KG.TraversalBuild Extends %RegisteredObject
 ClassMethod BuildKG() As %Status
 {
 	Try {
+		TStart
 		// Kill only the subscripts we rebuild. Spec 206: do NOT Kill ^KG bare —
 		// that would destroy temporal subscripts. Spec 214: kill full "out"/"in"
 		// trees (all graph subscripts) plus "deg"/"degp"/"label"/"prop".
+		//
+		// Inside the transaction rather than one line above it. Killing first meant
+		// that any row the rebuild could not process — one whose graph_id is not a
+		// legal subscript (ADR-0003), a <STORE>, a halted process — left the
+		// adjacency deleted while the rows stayed, and the Catch's TRollback had
+		// nothing to restore. Stale adjacency is recoverable by re-running the
+		// rebuild; destroyed adjacency looks to every reader like a graph with no
+		// edges, which is the drift Graph.KG.Eraser exists to end (ADR-0004)
+		// arriving from the rebuild path instead of the delete path.
+		//
+		// The chunked TCommit further down bounds this: past 50000 edges the Kill
+		// is already committed and a later failure still leaves a partial rebuild.
+		// A rebuild of that size cannot be one transaction, so the guarantee is
+		// deliberately narrow — a rebuild that fails early leaves the previous
+		// adjacency intact.
 		Kill ^KG("label"), ^KG("prop"), ^KG("out"), ^KG("in"), ^KG("deg"), ^KG("degp")
-		TStart
 
 		// 1. Labels
 		&sql(DECLARE c1 CURSOR FOR SELECT s, label FROM Graph_KG.rdf_labels)
@@ -42,10 +57,9 @@ ClassMethod BuildKG() As %Status
 			Quit:SQLCODE'=0
 			If (s = "") || (p = "") || (o = "") Continue
 			// graph_id is '' (empty) for the default graph (spec 214 FR-003 sentinel).
-			// IRIS SQL %GetData returns $C(0) for empty-string VARCHAR NOT NULL, so strip
-			// control characters before comparing to distinguish default vs named graph.
-			Set edgeGraph = $ZStrip(edgeGraph, "*C")
-			Set g = $Select(edgeGraph="":0, 1:edgeGraph)
+			// IRIS SQL %GetData returns $C(0) for empty-string VARCHAR NOT NULL; ForIndex
+			// strips control characters, so default and named graphs stay distinct.
+			Set g = ##class(Graph.KG.GraphKey).ForIndex(edgeGraph)
 			Set weight = 1.0
 			If qual '= "" {
 				Try {

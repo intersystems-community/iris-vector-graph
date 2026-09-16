@@ -1,9 +1,10 @@
-/// Graph.KG.Edge - RDF-style edge storage with functional graph index
-/// 
-/// Uses Graph.KG.GraphIndex to maintain ^KG adjacency list global:
-///   ^KG("out", s, p, o) = rowID
-///   ^KG("in", o, p, s) = rowID  
-///   ^KG("deg", node) = count
+/// Graph.KG.Edge - RDF-style edge storage
+///
+/// Adjacency (^KG("out"/"in"/"deg"/"degp")) is NOT maintained by this class.
+/// It is written by Graph.KG.EdgeScan:WriteAdjacency, which is graph-scoped.
+/// This class carried a functional index (Graph.KG.GraphIndex) that wrote
+/// ^KG("out", 0, ...) for every graph and ^KG("deg", s) with no graph key,
+/// silently routing named-graph edges into the default graph. See ADR-0001.
 ///
 /// IMPORTANT: Class must be Final to avoid %%CLASSNAME implicit clustering
 Class Graph.KG.Edge Extends %Persistent [ Final, DdlAllowed, SqlTableName = rdf_edges ]
@@ -23,9 +24,6 @@ Property qualifiers As %String(MAXLEN = "") [ SqlColumnNumber = 5 ];
 
 /// Named graph identifier for USE GRAPH filtering
 Property graphId As %String(COLLATION = "EXACT", MAXLEN = 500) [ SqlColumnNumber = 6, SqlFieldName = graph_id ];
-
-/// Functional index that populates ^KG graph global
-Index GraphIdx On (s, p, oId, qualifiers) As Graph.KG.GraphIndex;
 
 /// UNIQUE constraint on (s, p, o_id) to prevent duplicate edges
 Index uspo On (s, p, oId) [ Unique ];

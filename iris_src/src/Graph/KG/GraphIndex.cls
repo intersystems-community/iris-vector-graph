@@ -1,7 +1,19 @@
-Class Graph.KG.GraphIndex Extends %Library.FunctionalIndex
+/// Graph.KG.GraphIndex - ^NKG interning and structural HLL helpers.
+///
+/// NOT a functional index. It extended %Library.FunctionalIndex and was attached
+/// to Graph.KG.Edge as "Index GraphIdx", where InsertIndex wrote
+/// ^KG("out", 0, s, p, o) for edges in EVERY graph and ^KG("deg", s) with no
+/// graph key at all — routing named-graph edges into the default graph's
+/// adjacency and putting the degree counters at the wrong subscript depth. Both
+/// violate ADR-0001. PurgeIndex did a bare `Kill ^KG`, destroying the temporal
+/// subtrees (the spec 206 class of data loss; see Graph.KG.Ledger).
+///
+/// The index role is removed. What survives is the ^NKG interning and HLL
+/// helpers that Graph.KG.EdgeScan, Graph.KG.TraversalBuild and
+/// Graph.KG.NKGAccelTraversal call. The class name is now misleading and is
+/// worth renaming, but that is a separate change across three callers.
+Class Graph.KG.GraphIndex Extends %RegisteredObject
 {
-
-Parameter SUPPORTSSHARDING = 1;
 
 ClassMethod InitStructuralLabels()
 {
@@ -56,32 +68,6 @@ ClassMethod InternLabel(label As %String) As %Integer
 	Set ^NKG("$LI", label) = idx
 	Lock -^NKG("$LI", label)
 	Return idx
-}
-
-ClassMethod InsertIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "") As %Status [ ServerOnly = 1 ]
-{
-	Set weight = ##class(Graph.KG.GraphIndex).ExtractWeight(qualifiers)
-
-	// Shard-0 layout — MUST match EdgeScan.WriteAdjacency / TraversalBuild.BuildKG.
-	// Every live reader (MatchEdges, Algorithms, Centrality, NKG BFS) scans
-	// ^KG("out", 0, ...). Writing the legacy no-shard layout here would populate
-	// globals nothing reads. See Graph.KG.EdgeScan:WriteAdjacency for the canonical form.
-	Set ^KG("out", 0, s, p, o) = weight
-	Set ^KG("in", 0, o, p, s) = weight
-	Set tmp = $Increment(^KG("deg", s))
-	Set tmp = $Increment(^KG("degp", s, p))
-
-	Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
-	Set oIdx = ##class(Graph.KG.GraphIndex).InternNode(o)
-	Set pIdx = ##class(Graph.KG.GraphIndex).InternLabel(p)
-	Set ^NKG(-1, sIdx, -(pIdx+1), oIdx) = weight
-	Set ^NKG(-2, oIdx, -(pIdx+1), sIdx) = weight
-	Set tmp = $Increment(^NKG(-3, sIdx))
-	Set tmp = $Increment(^NKG("$meta", "version"))
-
-	Do ##class(Graph.KG.GraphIndex).UpdateStructuralHLL(sIdx, pIdx, oIdx)
-
-	Quit $$$OK
 }
 
 ClassMethod UpdateStructuralHLL(sIdx As %Integer, pIdx As %Integer, oIdx As %Integer)
@@ -143,21 +129,20 @@ ClassMethod GetLabelIdx(label As %String) As %String
 	Return $Get(^NKG("$LI", label), "")
 }
 
-ClassMethod UpdateIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "", olds As %Binary, oldp As %Binary, oldo As %Binary, oldqualifiers As %Binary = "") As %Status [ ServerOnly = 1 ]
+/// Remove one edge's ^NKG entries. Called by Graph.KG.EdgeScan:DeleteAdjacency.
+///
+/// ^NKG only. This used to remove ^KG adjacency too, and that second owner is
+/// where the deletion bugs lived: the graph key was hardcoded to 0, so deleting a
+/// named-graph edge reached into the default graph and removed its entry for the
+/// same triple, while the counters were spelled ^KG("deg", s) — one subscript
+/// short, putting the node id where the graph key belongs. EdgeScan owns ^KG
+/// adjacency and its counters; this owns ^NKG interning. One global, one owner.
+///
+/// ^NKG carries no graph dimension by design: interning is append-only and
+/// ignores graph_id, which is why its ids cannot be attributed to one graph
+/// (see Graph.KG.GraphStores).
+ClassMethod DeleteIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "") As %Status
 {
-	Do ##class(Graph.KG.GraphIndex).DeleteIndex(pID, olds, oldp, oldo, oldqualifiers)
-	Quit ##class(Graph.KG.GraphIndex).InsertIndex(pID, s, p, o, qualifiers)
-}
-
-ClassMethod DeleteIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary, qualifiers As %Binary = "") As %Status [ ServerOnly = 1 ]
-{
-	Kill ^KG("out", 0, s, p, o)
-	Kill ^KG("in", 0, o, p, s)
-	Set tmp = $Increment(^KG("deg", s), -1)
-	Set tmp = $Increment(^KG("degp", s, p), -1)
-	If $Get(^KG("deg", s)) <= 0 Kill ^KG("deg", s)
-	If $Get(^KG("degp", s, p)) <= 0 Kill ^KG("degp", s, p)
-
 	Set sIdx = $Get(^NKG("$NI", s))
 	Set oIdx = $Get(^NKG("$NI", o))
 	Set pIdx = $Get(^NKG("$LI", p))
@@ -167,36 +152,6 @@ ClassMethod DeleteIndex(pID As %String, s As %Binary, p As %Binary, o As %Binary
 	Set tmp = $Increment(^NKG(-3, sIdx), -1)
 	Set tmp = $Increment(^NKG("$meta", "version"))
 
-	Quit $$$OK
-}
-
-ClassMethod ExtractWeight(qualifiers As %String) As %Double
-{
-	Set result = 1.0
-	If qualifiers = "" Return result
-	Try {
-		Set obj = ##class(%DynamicObject).%FromJSON(qualifiers)
-		Set weight = obj.weight
-		If weight '= "" Set result = weight
-	} Catch ex {
-	}
-	Return result
-}
-
-ClassMethod PurgeIndex(pClassName As %String, pIndexName As %String) As %Status [ ServerOnly = 1 ]
-{
-	Kill ^KG
-	Kill ^NKG
-	Quit $$$OK
-}
-
-ClassMethod SortBeginIndex() As %Status [ ServerOnly = 1 ]
-{
-	Quit $$$OK
-}
-
-ClassMethod SortEndIndex(pCommit As %Integer = 1) As %Status [ ServerOnly = 1 ]
-{
 	Quit $$$OK
 }
 

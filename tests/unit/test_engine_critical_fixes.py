@@ -189,5 +189,5 @@ class TestPurgeBucketRangeWrapper:
         e._store = MagicMock()
         e._store.purge_bucket_range.return_value = 7
         result = e.purge_bucket_range(10, 20)
-        e._store.purge_bucket_range.assert_called_once_with(10, 20)
+        e._store.purge_bucket_range.assert_called_once_with(10, 20, graph=None)
         assert result == 7

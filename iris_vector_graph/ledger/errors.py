@@ -87,23 +87,46 @@ class LedgerInconsistencyError(LedgerError):
     """The ledger's own structures disagree with each other."""
 
 
-class NodeNotFoundError(LedgerError):
-    """A relationship operation references a node that does not exist in the graph.
+class NodeNotFoundError(ChangesetOperationError):
+    """A relationship operation references a node that does not exist (FR-008, spec 217).
+
+    A `ChangesetOperationError`, because it *is* one: the server rejected a single
+    operation and said which. Spec 217 originally made it a sibling, which meant the
+    most common authoring mistake was the one rejection that would not tell you which
+    of your operations was at fault.
+
+    The base's `__init__` is deliberately not inherited — it would replace the
+    actionable message below with "changeset operation 4 failed".
 
     Attributes:
         missing_node: The node ID that was not found.
+        op_index: Zero-based index of the operation that failed, or -1 if the server
+            did not say.
+        reason: The server's raw reason string.
     """
 
-    def __init__(self, message: str = "", *, missing_node: str = ""):
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        missing_node: str = "",
+        op_index: int = -1,
+        reason: str = "",
+    ):
         self.missing_node = missing_node
+        self.op_index = op_index
+        self.reason = reason
         if not message:
             message = (
                 f"create_relationship failed: node '{missing_node}' does not exist. "
                 f"Add upsert_node('{missing_node}') to the changeset, or set "
                 f"auto_stub_missing_nodes=True on the Changeset."
             )
-        super().__init__(message)
+        LedgerError.__init__(self, message)
 
+
+# How Graph.KG.LedgerApply spells "the relationship pointed at a node that is not there".
+_MISSING_NODE_PREFIX = "node_not_found: '"
 
 _WIRE_MAP = {
     "not_enabled": LedgerNotEnabledError,
@@ -131,7 +154,16 @@ def from_commit_error(payload: Dict[str, Any]) -> LedgerError:
         return StaleHeadError(reason or "stale head", current_head=payload.get("head"))
     if cls is ChangesetOperationError:
         idx = payload.get("op_index")
-        return ChangesetOperationError(int(idx) if idx is not None else -1, reason)
+        op_index = int(idx) if idx is not None else -1
+        # The one rejection that names the node it could not find gets the narrower
+        # type (spec 217) without losing the index and reason FR-008 requires.
+        if reason.startswith(_MISSING_NODE_PREFIX):
+            return NodeNotFoundError(
+                missing_node=reason[len(_MISSING_NODE_PREFIX) : -1],
+                op_index=op_index,
+                reason=reason,
+            )
+        return ChangesetOperationError(op_index, reason)
     if cls is ChangesetTooLargeError:
         limit = payload.get("limit")
         return ChangesetTooLargeError(int(limit) if limit is not None else None, reason)

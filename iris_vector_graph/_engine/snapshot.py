@@ -7,6 +7,101 @@ from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 logger = logging.getLogger(__name__)
 
 
+def _ivg_version() -> str:
+    """The installed package version, resolved late.
+
+    Imported inside the function because `iris_vector_graph/__init__.py` imports
+    the engine, which imports this module — at module scope this is a cycle.
+    """
+    try:
+        from iris_vector_graph import __version__
+
+        return str(__version__)
+    except Exception:  # pragma: no cover - a broken install, not a snapshot bug
+        return "unknown"
+
+
+# The storage layout a snapshot was taken from. Before spec-223 the temporal
+# globals had no graph subscript, so a pre-223 archive's `^KG("tout")` keys read
+# `(timestamp, source, ...)` where a graph key now belongs. Importing one puts
+# timestamps in the graph position: every window query then finds nothing, and the
+# restore reports success. The stamp exists so that restore can refuse instead.
+SNAPSHOT_LAYOUT = "graph-scoped"
+
+# `Graph.KG.GraphStores.Inventory()` is the one declared inventory of stores holding
+# graph content: the Eraser walks it to remove a graph, and the snapshot walks it to
+# export one (ADR-0004, grilling Q20). Every name that inventory returns appears
+# here, mapped to what the snapshot does with it:
+#
+#   "sql"     — exported as a table
+#   "global"  — exported as an NDJSON global subtree
+#   "derived" — deliberately not exported, rebuilt from a store that is; the reason
+#               is recorded in DERIVED_REASONS
+#
+# A store that is merely *absent* is the defect this table exists to prevent. The
+# globals list used to be hand-written next to the export loop and named `out` and
+# `in` only, so all five temporal subtrees, plus `label`, `prop` and `labelset`,
+# were silently dropped from every archive. tests/integration/test_snapshot_inventory.py
+# compares these keys against the live inventory so the two cannot drift again.
+STORE_PLAN = {
+    # SQL
+    "Graph_KG.nodes": "sql",
+    "Graph_KG.rdf_edges": "sql",
+    "Graph_KG.rdf_labels": "sql",
+    "Graph_KG.rdf_props": "sql",
+    "Graph_KG.rdf_reifications": "sql",
+    "Graph_KG.kg_NodeEmbeddings": "sql",
+    "Graph_KG.kg_EdgeEmbeddings": "sql",
+    "Graph_KG.kg_NodeEmbeddings_optimized": "derived",
+    # ^KG — structural adjacency and its counters
+    '^KG("out")': "global",
+    '^KG("in")': "global",
+    '^KG("deg")': "global",
+    '^KG("degp")': "global",
+    # ^KG — the temporal index, all five subtrees
+    '^KG("tout")': "global",
+    '^KG("tin")': "global",
+    '^KG("bucket")': "global",
+    '^KG("tagg")': "global",
+    '^KG("edgeprop")': "global",
+    # ^KG — the subtrees with no graph dimension, exported whole
+    '^KG("label")': "global",
+    '^KG("prop")': "global",
+    '^KG("labelset")': "global",
+    # Other globals
+    "^NKG": "global",
+    '^IVG.Ledger("tuple")': "global",
+    '^IVG.Ledger("stmt")': "global",
+    "^ArnoKG": "derived",
+}
+
+DERIVED_REASONS = {
+    "Graph_KG.kg_NodeEmbeddings_optimized": (
+        "the reindexed twin of kg_NodeEmbeddings, rebuilt by the vector-index "
+        "migration from the rows this snapshot does carry"
+    ),
+    "^ArnoKG": (
+        "a whole-database JSON materialization of ^KG, rebuilt on demand and "
+        "invalidated by ^KG(\"__version\"); exporting it would restore a second, "
+        "independently stale copy of everything already in the archive"
+    ),
+}
+
+
+def kg_export_subscripts() -> List[List[str]]:
+    """The ``^KG`` subtrees ``save_snapshot`` walks, read off ``STORE_PLAN``.
+
+    Derived rather than restated: a second hand-maintained list is exactly how the
+    temporal subtrees came to be in the inventory and absent from the export.
+    """
+    prefix, suffix = '^KG("', '")'
+    return [
+        [name[len(prefix) : -len(suffix)]]
+        for name, disposition in STORE_PLAN.items()
+        if name.startswith(prefix) and disposition == "global"
+    ]
+
+
 class SnapshotMixin:
     """Graph snapshot/serialization mixin for IRISGraphEngine.
 
@@ -111,7 +206,7 @@ class SnapshotMixin:
     ) -> Dict[str, int]:
         _ledger_check(self, "import_rdf")
         try:
-            import rdflib
+            import rdflib  # noqa: F401 - presence probe; the ImportError below is the point
             from rdflib import (
                 BNode,
                 ConjunctiveGraph,
@@ -184,7 +279,7 @@ class SnapshotMixin:
                         )
                     else:
                         cursor.execute(
-                            f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND graph_id IS NULL)",
+                            f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, graph_id) SELECT ?, ?, ?, '' WHERE NOT EXISTS (SELECT 1 FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = '')",
                             [s, p, o, s, p, o],
                         )
                     edges_inserted += 1
@@ -270,15 +365,18 @@ class SnapshotMixin:
     ) -> Dict[str, Any]:
         import json as _json
         import time as _time
-        import uuid as _uuid
         import zipfile as _zipfile
 
         if layers is None:
             layers = ["sql", "globals"]
 
         ts = int(_time.time() * 1000)
-        run_id = _uuid.uuid4().hex[:8]
         import sys as _sys
+
+        # Imported here, not at module scope: the name was used below without ever
+        # being imported, so the version probe raised NameError, the bare `except`
+        # ate it, and every archive ever written recorded "unknown".
+        from iris_vector_graph.schema import _call_classmethod
 
         try:
             iris_ver = str(_call_classmethod(self.conn, "%SYSTEM.Version", "GetVersion"))
@@ -286,9 +384,13 @@ class SnapshotMixin:
             iris_ver = "unknown"
         metadata: Dict[str, Any] = {
             "version": "1.1",
+            "layout": SNAPSHOT_LAYOUT,
             "globals_format": "ndjson",
             "created_ts": ts,
-            "ivg_version": "1.58.0",
+            # The installed package version, not a literal: a hardcoded string
+            # names whichever release last edited this line, and an archive that
+            # cannot be attributed to the code that wrote it is no help upgrading.
+            "ivg_version": _ivg_version(),
             "iris_version": iris_ver,
             "python_version": f"{_sys.version_info.major}.{_sys.version_info.minor}",
             "has_vector_sql": False,
@@ -386,7 +488,9 @@ class SnapshotMixin:
 
         if "globals" in layers:
             GLOBALS_EXPORT = [
-                ("KG", [["out"], ["in"]]),
+                # Every ^KG subtree STORE_PLAN declares exported, not a second list
+                # of them. The two lists disagreed for as long as both existed.
+                ("KG", kg_export_subscripts()),
                 ("BM25Idx", [[]]),
                 ("IVF", [[]]),
                 ("PLAID", [[]]),
@@ -454,6 +558,9 @@ class SnapshotMixin:
             "tables": metadata.get("tables", {}),
             "has_vector_sql": metadata.get("has_vector_sql", False),
             "version": metadata.get("version", "unknown"),
+            # None means the archive predates the stamp, which is a different fact
+            # from "graph-scoped" and has to stay distinguishable from it.
+            "layout": metadata.get("layout"),
             "snapshot_ts": metadata.get("created_ts", 0),
             "globals": metadata.get("globals", {}),
         }
@@ -465,10 +572,7 @@ class SnapshotMixin:
     ) -> Dict[str, Any]:
         _ledger_check(self, "restore_snapshot")
         import json as _json
-        import uuid as _uuid
         import zipfile as _zipfile
-
-        run_id = _uuid.uuid4().hex[:8]
 
         with _zipfile.ZipFile(path, "r") as zf:
             names = zf.namelist()
@@ -477,7 +581,26 @@ class SnapshotMixin:
             sql_files = {n: zf.read(n).decode("utf-8") for n in names if n.startswith("sql/")}
             global_files = {n: zf.read(n) for n in names if n.startswith("globals/")}
 
+        # A snapshot from another layout has its ^KG subscripts in different
+        # positions, so importing it writes timestamps where graph keys belong and
+        # every scoped read afterwards finds nothing. Refuse rather than succeed
+        # emptily.
+        #
+        # An archive with no stamp predates the stamp, which means it predates
+        # spec-223 and carries no temporal globals at all — there is nothing in it
+        # for the layout to be wrong about, so it restores. Refusing those would
+        # break every existing archive to guard against a mismatch that cannot bite.
+        declared_layout = metadata.get("layout")
+        if declared_layout is not None and declared_layout != SNAPSHOT_LAYOUT:
+            raise ValueError(
+                f"snapshot was taken from the {declared_layout!r} storage layout and "
+                f"cannot be restored into a {SNAPSHOT_LAYOUT!r} database: its ^KG "
+                "subscripts mean different things. Restore it into a database of its "
+                "own layout and migrate there."
+            )
+
         restored_tables: Dict[str, int] = {}
+        failed_rows: Dict[str, int] = {}
         restored_globals: List[str] = []
         cursor = self.conn.cursor()
 
@@ -491,35 +614,19 @@ class SnapshotMixin:
         VECTOR_FILE = "Graph_KG_kg_NodeEmbeddings.ndjson"
 
         if not merge:
-            table_clear_order = [
-                "Graph_KG.rdf_reifications",
-                "Graph_KG.rdf_labels",
-                "Graph_KG.rdf_props",
-                "Graph_KG.rdf_edges",
-                "Graph_KG.kg_NodeEmbeddings",
-                "Graph_KG.nodes",
-            ]
-            globals_in_snapshot = metadata.get("globals", {})
-            for gname, ginfo in globals_in_snapshot.items():
-                subscripts = ginfo.get("subscripts", []) if isinstance(ginfo, dict) else []
-                try:
-                    iris_obj = self._iris_obj()
-                    if subscripts:
-                        for sub in subscripts:
-                            iris_obj.kill(f"^{gname}", sub)
-                    else:
-                        iris_obj.kill(f"^{gname}")
-                except Exception as e:
-                    logger.debug("restore: kill ^%s failed: %s", gname, e)
-            for table in table_clear_order:
-                try:
-                    cursor.execute(f"DELETE FROM {table}")
-                    self.conn.commit()
-                except Exception:
-                    try:
-                        self.conn.rollback()
-                    except Exception:
-                        pass
+            # A non-merge restore replaces the database, so it needs exactly what
+            # erase_all provides. It used to keep its own list: six tables named
+            # here, plus whichever globals the snapshot's own metadata happened to
+            # name. A snapshot written without global metadata therefore left the
+            # previous database's ^KG and ^NKG in place, and the restored rows
+            # inherited adjacency for content that was never restored — a fourth
+            # spelling of the same drift, and the reason the inventory has one
+            # owner now (ADR-0004).
+            #
+            # It also cleared table by table with a commit after each, so a failure
+            # halfway left the database in neither state. erase_all is one
+            # transaction.
+            self.erase_all()
 
         def _insert_row(table: str, row: Dict[str, Any]) -> bool:
             if not row:
@@ -548,6 +655,7 @@ class SnapshotMixin:
                 continue
             table_name = fname_short.replace("Graph_KG_", "Graph_KG.").replace(".ndjson", "")
             count = 0
+            failed = 0
             for line in sql_files[fname].splitlines():
                 line = line.strip()
                 if not line:
@@ -557,6 +665,13 @@ class SnapshotMixin:
                     # Strip RowID/identity columns that cannot be explicitly inserted
                     if table_name == "Graph_KG.rdf_edges":
                         row = {k: v for k, v in row.items() if k.lower() != "id"}
+                    # An archive written before the graph key was tightened spells the
+                    # default graph NULL; ADR-0003 spells it ''. They mean the same
+                    # graph, and the live column is Required — so a NULL here is a
+                    # spelling to translate, not a row to drop. v2.16 wrote exactly
+                    # this, and the row loss it used to cause was silent.
+                    if "graph_id" in row and row["graph_id"] is None:
+                        row["graph_id"] = ""
                     cols = list(row.keys())
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
@@ -574,12 +689,25 @@ class SnapshotMixin:
                         )
                     count += 1
                 except Exception as e:
+                    # Keep going: one bad row should not abandon an upgrade. But it
+                    # is reported, because `restored_tables` alone cannot tell a
+                    # dropped row from an archive that never held it.
+                    failed += 1
                     logger.debug("restore: row insert failed for %s: %s", table_name, e)
             try:
                 self.conn.commit()
             except Exception:
                 pass
             restored_tables[table_name] = count
+            if failed:
+                failed_rows[table_name] = failed
+                logger.warning(
+                    "restore: %d of %d row(s) for %s did not land; see failed_rows in "
+                    "the result",
+                    failed,
+                    failed + count,
+                    table_name,
+                )
 
         if f"sql/{VECTOR_FILE}" in sql_files:
             count = 0
@@ -594,24 +722,35 @@ class SnapshotMixin:
                     meta_val = row.get("metadata")
                     if nid and emb_str:
                         try:
+                            # `save_snapshot` exports the metadata column, so the
+                            # restore writes it. It used to read it into a local and
+                            # insert (id, emb) only, which lost every embedding's
+                            # provenance without a symptom — the vectors came back, so
+                            # nothing looked wrong.
                             if merge:
                                 cursor.execute(
-                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
-                                    f"SELECT ?, TO_VECTOR('{emb_str}', {self.vector_dtype}) "
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) "
+                                    f"SELECT ?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ? "
                                     "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
-                                    [nid, nid],
+                                    [nid, meta_val, nid],
                                 )
                             else:
                                 cursor.execute(
-                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) "
-                                    f"VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
-                                    [nid],
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) "
+                                    f"VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ?)",
+                                    [nid, meta_val],
                                 )
                             count += 1
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            failed_rows["Graph_KG.kg_NodeEmbeddings"] = (
+                                failed_rows.get("Graph_KG.kg_NodeEmbeddings", 0) + 1
+                            )
+                            logger.debug("restore: embedding insert failed for %s: %s", nid, e)
+                except Exception as e:
+                    failed_rows["Graph_KG.kg_NodeEmbeddings"] = (
+                        failed_rows.get("Graph_KG.kg_NodeEmbeddings", 0) + 1
+                    )
+                    logger.debug("restore: embedding row unreadable: %s", e)
             try:
                 self.conn.commit()
             except Exception:
@@ -648,10 +787,16 @@ class SnapshotMixin:
                                     [s_val, p_val, o_val],
                                 )
                             count += 1
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            failed_rows["Graph_KG.kg_EdgeEmbeddings"] = (
+                                failed_rows.get("Graph_KG.kg_EdgeEmbeddings", 0) + 1
+                            )
+                            logger.debug("restore: edge embedding insert failed: %s", e)
+                except Exception as e:
+                    failed_rows["Graph_KG.kg_EdgeEmbeddings"] = (
+                        failed_rows.get("Graph_KG.kg_EdgeEmbeddings", 0) + 1
+                    )
+                    logger.debug("restore: edge embedding row unreadable: %s", e)
             try:
                 self.conn.commit()
             except Exception:
@@ -688,6 +833,10 @@ class SnapshotMixin:
 
         return {
             "restored_tables": restored_tables,
+            # Per-table counts of what the archive held and the database refused.
+            # Empty means a complete restore; anything else is data the consumer
+            # does not have, and the only place they can see it.
+            "failed_rows": failed_rows,
             "restored_globals": restored_globals,
             "restored_layers": restored_layers,
             "snapshot_ts": metadata.get("created_ts", 0),
@@ -697,10 +846,17 @@ class SnapshotMixin:
         import json as _json
 
         lines = []
-        gname_clean = global_name.lstrip("^")
+
+        # "" is the only start sentinel that collates before every subscript, and it
+        # is the one $Order/nextSubscript is documented to take. Seeding with 0 asked
+        # for the subscript *after* 0, so the one key the walk could never emit was 0
+        # itself — which is the default graph (ADR-0003) at the graph level, and the
+        # epoch at the timestamp level. No default-graph content has ever reached a
+        # snapshot.
+        START = ""
 
         def _recurse(subs: list):
-            cur = subs[-1] if subs else 0
+            cur = subs[-1] if subs else START
             while True:
                 nxt = (
                     iris_obj.nextSubscript(False, global_name, *subs[:-1], cur)
@@ -713,10 +869,10 @@ class SnapshotMixin:
                 val = iris_obj.get(global_name, *new_subs)
                 if val is not None:
                     lines.append(_json.dumps({"k": new_subs, "v": str(val)}))
-                _recurse(new_subs + [0])
+                _recurse(new_subs + [START])
                 cur = nxt
 
-        seed = prefix_subs + [0] if prefix_subs else [0]
+        seed = prefix_subs + [START] if prefix_subs else [START]
         _recurse(seed)
         return lines
 
@@ -786,7 +942,7 @@ class SnapshotMixin:
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError:
-                    logger.warning(f"Skipping malformed NDJSON line")
+                    logger.warning("Skipping malformed NDJSON line")
                     continue
 
                 kind = event.get("kind", "")

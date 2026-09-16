@@ -154,7 +154,7 @@ class TestMaintenanceSurvival:
         n = _rev_count(engine.conn)
         engine.create_edge_temporal("a", "T", "b", timestamp=1_000)
         io = engine._iris_obj()
-        io.classMethodValue("Graph.KG.TemporalIndex", "PurgeRawBefore", 10**12)
+        io.classMethodValue("Graph.KG.TemporalIndex", "PurgeRawBefore", "", 10**12)
         engine.sync()
         io.classMethodValue("Graph.KG.Traversal", "BuildKG")
         assert engine.ledger.head().revision_id == head.revision_id

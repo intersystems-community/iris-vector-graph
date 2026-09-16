@@ -114,7 +114,7 @@ ClassMethod FindEdge(pSchema As %String, pS As %String, pP As %String, pO As %St
 {
     Set pQuals = {}
     If pGraph = "" {
-        Set tRS = ..Run("SELECT %ID, qualifiers FROM " _ pSchema _ ".rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id IS NULL", pS, pP, pO)
+        Set tRS = ..Run("SELECT %ID, qualifiers FROM " _ pSchema _ ".rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''", pS, pP, pO)
     } Else {
         Set tRS = ..Run("SELECT %ID, qualifiers FROM " _ pSchema _ ".rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?", pS, pP, pO, pGraph)
     }
@@ -441,7 +441,7 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     // create
     Set tQJson = ..QualsJson(tQuals)
     If tG = "" {
-        Set tRS = ..Run("INSERT INTO " _ tSchema _ ".rdf_edges (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)", tS, tP, tO, tQJson)
+        Set tRS = ..Run("INSERT INTO " _ tSchema _ ".rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, '')", tS, tP, tO, tQJson)
     } Else {
         Set tRS = ..Run("INSERT INTO " _ tSchema _ ".rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)", tS, tP, tO, tQJson, tG)
     }
@@ -449,7 +449,12 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     Set tStmt = ..AllocStmt(tSeq, tS, tP, tO, tG, .pFirst, .pLast)
     // Adjacency: when the Graph.KG.GraphIndex functional index is compiled it already
     // wrote ^KG("out"/"in") for this row; only set the weight then. Otherwise maintain it.
-    Set tGKey = ##class(Graph.KG.Ledger).GKey(tG)
+    //
+    // ForIndex, not GKey: ^KG spells the default graph as the integer 0 and the
+    // ledger's own tuple index spells it $Char(1) (ADR-0003). Deriving the ^KG key
+    // with GKey put every default-graph commit at ^KG("out", $Char(1), ...), which
+    // no reader walks — the SQL row was right and the traversal saw nothing.
+    Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(tG)
     If $Data(^KG("out", tGKey, tS, tP, tO)) {
         Set ^KG("out", tGKey, tS, tP, tO) = ..WeightOf(tQuals)
         Set ^KG("in", tGKey, tO, tP, tS) = ..WeightOf(tQuals)
@@ -490,17 +495,22 @@ ClassMethod MergeQuals(pSchema As %String, pSeq As %Integer, pStmt As %String, p
         Set tChanged = 1
     }
     If 'tChanged Return ""
-    Return ..PersistQuals(pSchema, pEdgeId, pS, pP, pO, pCur)
+    Return ..PersistQuals(pSchema, pEdgeId, pS, pP, pO, pG, pCur)
 }
 
-ClassMethod PersistQuals(pSchema As %String, pEdgeId As %String, pS, pP, pO, pQuals As %DynamicObject) As %String
+ClassMethod PersistQuals(pSchema As %String, pEdgeId As %String, pS, pP, pO, pG, pQuals As %DynamicObject) As %String
 {
     Set tRS = ..Run("UPDATE " _ pSchema _ ".rdf_edges SET qualifiers = ? WHERE %ID = ?", ..QualsJson(pQuals), pEdgeId)
     If tRS.%SQLCODE < 0 Return "update qualifiers failed: " _ tRS.%Message
     // weight projection (FR-009b): update adjacency value without touching degree counters
+    //
+    // The key is derived from the relationship's own graph. Hardcoding 0 refreshed
+    // the default graph's weight for a change made in a named graph: the named
+    // graph kept the stale weight and a graph the changeset never mentioned moved.
+    Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pG)
     Set tW = ..WeightOf(pQuals)
-    If $Data(^KG("out", 0, pS, pP, pO)) Set ^KG("out", 0, pS, pP, pO) = tW
-    If $Data(^KG("in", 0, pO, pP, pS)) Set ^KG("in", 0, pO, pP, pS) = tW
+    If $Data(^KG("out", tGKey, pS, pP, pO)) Set ^KG("out", tGKey, pS, pP, pO) = tW
+    If $Data(^KG("in", tGKey, pO, pP, pS)) Set ^KG("in", tGKey, pO, pP, pS) = tW
     Return ""
 }
 
@@ -525,7 +535,7 @@ ClassMethod OpQual(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef pFir
         Set tPrior = "" _ tCur.%Get(tKey)
         Do tCur.%Remove(tKey)
         Do ..Rec(.pRecords, "remove_qual", "rel", tStmt, tKey, ..Enc(tPrior), ..EncNull(), tG, tFlags)
-        Return ..PersistQuals(tSchema, tEdgeId, tS, tP, tO, tCur)
+        Return ..PersistQuals(tSchema, tEdgeId, tS, tP, tO, tG, tCur)
     }
     // replace: remove keys not supplied, then merge supplied
     Set tNew = pOp.%Get("quals")
@@ -546,7 +556,7 @@ ClassMethod OpQual(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef pFir
     }
     Set tReason = ..MergeQuals(tSchema, tSeq, tStmt, tEdgeId, tS, tP, tO, tG, tCur, tNew, tFlags, .pRecords)
     If tReason '= "" Return tReason
-    If tChanged Return ..PersistQuals(tSchema, tEdgeId, tS, tP, tO, tCur)
+    If tChanged Return ..PersistQuals(tSchema, tEdgeId, tS, tP, tO, tG, tCur)
     Return ""
 }
 
@@ -619,7 +629,12 @@ ClassMethod DeleteRelInternal(pSchema As %String, pSeq As %Integer, pStmt As %St
     Set tRow = $Get(^IVG.Ledger("stmt", pStmt), "")
     If tRow '= "" Set ^IVG.Ledger("stmt", pStmt) = $ListBuild($ListGet(tRow, 1), $ListGet(tRow, 2), $ListGet(tRow, 3), $ListGet(tRow, 4), $ListGet(tRow, 5), pSeq)
     // Adjacency: the functional index (when compiled) already removed the entries.
-    If $Data(^KG("out", 0, pS, pP, pO)) Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO, 0)
+    //
+    // The graph the relationship was in, not the default one. Hardcoding 0 left a
+    // named graph still answering traversals for a deleted relationship, and
+    // deleted the default graph's entry for the same triple along with its counters.
+    Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pG)
+    If $Data(^KG("out", tGKey, pS, pP, pO)) Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO, tGKey)
     Do ..Rec(.pRecords, "delete_rel", "rel", pStmt, "", ..Enc(tPriorObj.%ToJSON()), ..EncNull(), pG, pFlags)
     Set pCtx("deletedStmt", pStmt) = 1
     Return ""

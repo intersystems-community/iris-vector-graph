@@ -41,7 +41,7 @@ def find_dataset_range():
     src, pred = top["source"], "CALLS_AT"
     # Find ts range from bucket index
     ts_start = iriso.classMethodValue(
-        "Graph.KG.TemporalIndex", "GetAggregate", src, pred, "count", 0, 9_999_999_999)
+        "Graph.KG.TemporalIndex", "GetAggregate", "", src, pred, "count", 0, 9_999_999_999)
     # Use all-time window for representative numbers
     return src, pred, 1_705_917_385, 1_712_000_000
 

@@ -2,6 +2,58 @@
 
 # Changelog
 
+### Unreleased
+
+**Fixed — `bulk_create_edges_temporal` upsert semantics (spec-221 US-3)**
+
+`upsert=True` updated an existing edge's weight through `create_edge_temporal` but
+skipped it through the batch path: `Graph.KG.TemporalIndex.BulkInsert` carried its own
+copy of the store-write body and kept the pre-spec-221 meaning, so a re-ingested
+sample silently kept the first weight. `BulkInsert` now takes `mode` and resolves it
+exactly as `InsertEdge` does, both write through one private `WriteStores()`, and
+`mode=` threads from `bulk_create_edges_temporal` through `bulk_write_temporal_edges`
+to `BulkInsert` — it was accepted at the engine and dropped before the store.
+`mode="skip"` keeps the old batch behaviour under its real name. The per-edge fallback
+in `bulk_write_temporal_edges` also dropped `graph` and `mode`, writing to the default
+graph in insert-only mode while reporting every edge as written; it now forwards both.
+
+As on the single path, an overwritten weight does not adjust the `^KG("tagg")` bucket
+aggregates or the HLL sketch (spec-221 FR-004/FR-011).
+
+**Upgrade tests against artifacts real releases wrote**
+
+`tests/fixtures/snapshots/` now holds frozen v2.16.0 and v2.20.0 artifacts — the
+archive each release's own `save_snapshot` produced, plus every `^KG`/`^NKG` node in
+that release's layout, captured from a scratch namespace running that tag's compiled
+ObjectScript. Regenerate with `scripts/fixtures/generate_old_snapshot.py`.
+
+Two e2e suites consume them, one per upgrade path:
+`tests/e2e/test_upgrade_snapshot_restore_e2e.py` (restore an old archive onto the
+current schema) and `tests/e2e/test_upgrade_migrate_globals_e2e.py` (load old
+globals verbatim, then `MigrateToGraphScoped`). See
+[docs/migration/upgrading-from-older-releases.md](docs/migration/upgrading-from-older-releases.md)
+for what old archives cannot carry and which hazards apply to pre-2.17 databases.
+
+**Fixed — `restore_snapshot`**
+
+- A v2.16 archive spells the default graph `NULL` in `rdf_edges.graph_id`; the live
+  column is required, so those rows could not land. They are now translated to
+  ADR-0003's `''`. Previously 1 of 4 edges restored, silently.
+- Row insert failures were swallowed by a `logger.debug`. The result now carries
+  `failed_rows` — per-table counts of what the archive held and the database refused
+  — and logs a warning. `restored_tables` alone cannot tell a dropped row from an
+  archive that never held it.
+- Embedding restores read the `metadata` column into a local and inserted
+  `(id, emb)`, losing every embedding's provenance. Both the merge and non-merge
+  paths now write it.
+
+**Fixed — `save_snapshot` metadata**
+
+`iris_version` was the literal `"unknown"` in every archive ever written: the
+version bridge was called by a name the module never imported and the `except` ate
+the `NameError`. `ivg_version` was hardcoded `"1.58.0"` and is now the installed
+package version, so an archive can be attributed to the code that wrote it.
+
 ### v3.0.1 (2026-09-11)
 
 Re-release of v3.0.0 (yanked — spec-224 was incomplete at time of publish).

@@ -246,7 +246,7 @@ class TestTemporalIsolation:
         raw = str(
             store._call_classmethod(
                 "Graph.KG.TemporalIndex",
-                "QueryWindow",
+                "QueryWindow", "",
                 src,
                 pred,
                 str(ts_start),
@@ -288,7 +288,7 @@ class TestTemporalIsolation:
         # Insert only in primary
         e1._store._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex",
-            "InsertEdge",
+            "InsertEdge", "",
             src, "TEMP_REL", tgt, str(ts), "0.7",
         )
 
@@ -308,12 +308,12 @@ class TestTemporalIsolation:
 
         e1._store._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex",
-            "InsertEdge",
+            "InsertEdge", "",
             src, "SHARED_REL", tgt, "60000", "1",
         )
         e2._store._iris_obj().classMethodVoid(
             "Graph.KG.TemporalIndex",
-            "InsertEdge",
+            "InsertEdge", "",
             src, "SHARED_REL", tgt, "70000", "2",
         )
 
@@ -337,7 +337,7 @@ class TestTemporalIsolation:
             src = f"{_PREFIX}_json_{ns_label}"
             store._iris_obj().classMethodVoid(
                 "Graph.KG.TemporalIndex",
-                "InsertEdge",
+                "InsertEdge", "",
                 src, "REL", f"{src}_t", "80000", "0.453",
             )
             rows = self._qw(store, src, "REL", 0, 999999)

@@ -106,6 +106,49 @@ class TestSaveSnapshot:
             )
         assert "tables" in result
 
+    def test_the_metadata_records_the_iris_version_it_asked_for(self, tmp_path):
+        """Every archive ever written says `iris_version: "unknown"`.
+
+        The version bridge is called by a name `snapshot.py` never imported, and
+        the call site catches `Exception` — so the NameError became the literal
+        string "unknown" on every path. Nothing failed and nothing warned; it
+        surfaced only when the frozen old-release fixtures were read back (see
+        tests/unit/test_old_release_fixtures.py), both showing "unknown".
+        """
+        eng, conn, cursor = _make_eng()
+        self._make_cursor_with_tables(cursor)
+        path = str(tmp_path / "snap_ver.zip")
+
+        with patch(
+            "iris_vector_graph.schema._call_classmethod",
+            return_value="IRIS for UNIX 2026.3",
+        ):
+            eng.save_snapshot(path, layers=["sql"])
+
+        with zipfile.ZipFile(path) as zf:
+            meta = json.loads(zf.read("metadata.json"))
+        assert meta["iris_version"] == "IRIS for UNIX 2026.3"
+
+    def test_the_metadata_records_the_package_version_that_wrote_it(self, tmp_path):
+        """A hardcoded version string names whichever release last edited the line.
+
+        `ivg_version` said "1.58.0" while the package was on 3.x, so an archive
+        could not be attributed to the code that produced it — the one question
+        metadata exists to answer during an upgrade.
+        """
+        from iris_vector_graph import __version__
+
+        eng, conn, cursor = _make_eng()
+        self._make_cursor_with_tables(cursor)
+        path = str(tmp_path / "snap_pkg.zip")
+
+        with patch("iris_vector_graph.schema._call_classmethod", return_value="2025.1"):
+            eng.save_snapshot(path, layers=["sql"])
+
+        with zipfile.ZipFile(path) as zf:
+            meta = json.loads(zf.read("metadata.json"))
+        assert meta["ivg_version"] == __version__
+
     def test_globals_layer_covered(self, tmp_path):
         """Lines 398-444: globals export path."""
         eng, conn, cursor = _make_eng()

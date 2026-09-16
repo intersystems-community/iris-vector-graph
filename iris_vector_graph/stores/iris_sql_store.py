@@ -4,6 +4,7 @@ import os
 import warnings
 from typing import Any, Callable, Dict, List, Optional
 
+from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 
 logger = logging.getLogger(__name__)
@@ -409,7 +410,7 @@ class IRISGraphStore:
                 continue
             try:
                 cursor.execute(
-                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                    "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')",
                     [s, p, o],
                 )
             except Exception as e:
@@ -1009,7 +1010,7 @@ class IRISGraphStore:
         import json as _json
 
         attrs_json = _json.dumps(attrs) if attrs else ""
-        graph_id = graph if graph is not None else ""
+        graph_id = validate_graph_name(graph)
         try:
             self._call_classmethod(
                 "Graph.KG.TemporalIndex",
@@ -1030,8 +1031,36 @@ class IRISGraphStore:
             return IVGResult(columns=[], rows=[], error=str(e)[:200])
         return IVGResult(columns=[], rows=[])
 
+    def delete_temporal_edge(
+        self,
+        source_id: str,
+        predicate: str,
+        target_id: str,
+        timestamp: int,
+        graph: Optional[str] = None,
+    ) -> bool:
+        """Remove one timestamped edge and everything InsertEdge derived from it.
+
+        Returns False when no edge existed at those coordinates, so a caller can
+        tell a delete from a no-op. Errors propagate rather than being logged and
+        swallowed: a partial temporal delete leaves aggregates describing edges
+        that are gone, and that is not something to discover later from a drift
+        report.
+        """
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex",
+            "DeleteTemporalEdge",
+            validate_graph_name(graph),
+            str(int(timestamp)),
+            source_id,
+            predicate,
+            target_id,
+        )
+        return str(result) == "1"
+
     def bulk_write_temporal_edges(
-        self, edges: list, upsert: bool = False, suppress_reverse_index: bool = False
+        self, edges: list, upsert: bool = False, suppress_reverse_index: bool = False,
+        graph: Optional[str] = None, mode: str = "",
     ) -> IVGResult:
         import json as _json
 
@@ -1060,9 +1089,10 @@ class IRISGraphStore:
                     self._call_classmethod(
                         "Graph.KG.TemporalIndex",
                         "BulkInsert",
-                        "",                    # graphId: "" = default graph (key 0)
+                        validate_graph_name(graph),
                         _json.dumps(batch),
                         str(int(upsert)),
+                        mode,
                     )
                 )
             )
@@ -1070,6 +1100,9 @@ class IRISGraphStore:
             logger.warning("BulkInsert failed, falling back to per-edge: %s", e)
             inserted = 0
             for edge in edges:
+                # Keyword form from here on: the positional call dropped `graph`
+                # and `mode`, so the fallback wrote to the default graph in
+                # insert-only mode and still reported every edge as written.
                 r = self.write_temporal_edge(
                     edge.get("source", ""),
                     edge.get("predicate", ""),
@@ -1077,28 +1110,34 @@ class IRISGraphStore:
                     edge.get("timestamp", 0),
                     float(edge.get("weight", 1.0)),
                     edge.get("attrs") or {},
-                    upsert,
-                    suppress_reverse_index,
+                    upsert=upsert,
+                    suppress_reverse_index=suppress_reverse_index,
+                    mode=mode,
+                    graph=graph,
                 )
                 if not r.error:
                     inserted += 1
         return IVGResult(columns=["inserted"], rows=[[inserted]])
 
-    def purge_bucket_range(self, bucket_start: int, bucket_end: int) -> int:
+    def purge_bucket_range(
+        self, bucket_start: int, bucket_end: int, graph: Optional[str] = None
+    ) -> int:
         result = self._call_classmethod(
             "Graph.KG.TemporalIndex", "PurgeBucketRange",
-            "",            # graphId: "" = default graph
+            validate_graph_name(graph),
             bucket_start, bucket_end,
         )
         return int(str(result))
 
-    def purge_raw_before(self, ts_end: int, ts_start: int = 0):
+    def purge_raw_before(
+        self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None
+    ):
         from iris_vector_graph._engine.temporal import PurgeResult
 
         ts_start = max(0, int(ts_start))
         result = self._call_classmethod(
             "Graph.KG.TemporalIndex", "PurgeRawBefore",
-            "",            # graphId: "" = default graph
+            validate_graph_name(graph),
             str(ts_end), str(ts_start),
         )
         raw = str(result)
@@ -1198,13 +1237,14 @@ class IRISGraphStore:
             return IVGResult(columns=["id", "hops", "pred", "ts"], rows=[])
 
     def get_temporal_aggregate(
-        self, source_id: str, predicate: str, metric: str, ts_start: int, ts_end: int
+        self, source_id: str, predicate: str, metric: str, ts_start: int, ts_end: int,
+        graph: Optional[str] = None,
     ) -> IVGResult:
         try:
             val = self._call_classmethod(
                 "Graph.KG.TemporalIndex",
                 "GetAggregate",
-                "",          # graphId: "" = default graph
+                validate_graph_name(graph),
                 source_id,
                 predicate,
                 metric,

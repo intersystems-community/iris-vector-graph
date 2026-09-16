@@ -1,0 +1,193 @@
+{
+  "captured_globals": {
+    "^KG(\"bucket\")": 3,
+    "^KG(\"deg\")": 4,
+    "^KG(\"deg2p\")": 1,
+    "^KG(\"degp\")": 4,
+    "^KG(\"in\")": 4,
+    "^KG(\"label\")": 6,
+    "^KG(\"out\")": 4,
+    "^KG(\"prop\")": 14,
+    "^KG(\"tagg\")": 15,
+    "^KG(\"tin\")": 3,
+    "^KG(\"tout\")": 3,
+    "^NKG(\"$LI\")": 5,
+    "^NKG(\"$LS\")": 5,
+    "^NKG(\"$ND\")": 6,
+    "^NKG(\"$NI\")": 6,
+    "^NKG(\"$agg\")": 4,
+    "^NKG(\"$meta\")": 4,
+    "^NKG(\"-1\")": 4,
+    "^NKG(\"-2\")": 4,
+    "^NKG(\"-3\")": 4
+  },
+  "embedding_dimension": 8,
+  "named_graph": "acme",
+  "namespace": "IVGFIX",
+  "save_snapshot_result": {
+    "globals": [
+      "KG",
+      "NKG"
+    ],
+    "path": "tests/fixtures/snapshots/ivg-2.20.0.zip",
+    "snapshot_ts": 1789558273027,
+    "tables": {
+      "Graph_KG.kg_EdgeEmbeddings": 0,
+      "Graph_KG.kg_NodeEmbeddings": 2,
+      "Graph_KG.nodes": 6,
+      "Graph_KG.rdf_edges": 4,
+      "Graph_KG.rdf_labels": 6,
+      "Graph_KG.rdf_props": 14,
+      "Graph_KG.rdf_reifications": 0
+    }
+  },
+  "seeded": {
+    "edges": [
+      {
+        "o_id": "n2",
+        "p": "knows",
+        "s": "n1",
+        "weight": 1.0
+      },
+      {
+        "o_id": "n3",
+        "p": "knows",
+        "s": "n2",
+        "weight": 1.0
+      },
+      {
+        "o_id": "n4",
+        "p": "cites",
+        "s": "n3",
+        "weight": 2.5
+      }
+    ],
+    "embeddings": [
+      {
+        "embedding": [
+          0.1,
+          0.2,
+          0.3,
+          0.4,
+          0.5,
+          0.6,
+          0.7,
+          0.8
+        ],
+        "metadata": {
+          "seq": "1",
+          "src": "fixture"
+        },
+        "node_id": "n1"
+      },
+      {
+        "embedding": [
+          0.8,
+          0.7,
+          0.6,
+          0.5,
+          0.4,
+          0.3,
+          0.2,
+          0.1
+        ],
+        "metadata": {
+          "seq": "2",
+          "src": "fixture"
+        },
+        "node_id": "n2"
+      }
+    ],
+    "named_edges": [
+      {
+        "graph_id": "acme",
+        "o_id": "n6",
+        "p": "knows",
+        "s": "n5",
+        "weight": 1.0
+      }
+    ],
+    "nodes": [
+      {
+        "labels": [
+          "Person"
+        ],
+        "node_id": "n1",
+        "properties": {
+          "name": "Ada",
+          "role": "author"
+        }
+      },
+      {
+        "labels": [
+          "Person"
+        ],
+        "node_id": "n2",
+        "properties": {
+          "name": "Bes",
+          "role": "reviewer"
+        }
+      },
+      {
+        "labels": [
+          "Person"
+        ],
+        "node_id": "n3",
+        "properties": {
+          "name": "Cyd"
+        }
+      },
+      {
+        "labels": [
+          "Paper"
+        ],
+        "node_id": "n4",
+        "properties": {
+          "title": "On Upgrades"
+        }
+      },
+      {
+        "labels": [
+          "Person"
+        ],
+        "node_id": "n5",
+        "properties": {
+          "name": "Dov"
+        }
+      },
+      {
+        "labels": [
+          "Person"
+        ],
+        "node_id": "n6",
+        "properties": {
+          "name": "Eve"
+        }
+      }
+    ],
+    "temporal": [
+      {
+        "predicate": "calls",
+        "source": "n1",
+        "target": "n2",
+        "timestamp": 1700000000,
+        "weight": 1.5
+      },
+      {
+        "predicate": "calls",
+        "source": "n1",
+        "target": "n3",
+        "timestamp": 1700000300,
+        "weight": 2.0
+      },
+      {
+        "predicate": "calls",
+        "source": "n2",
+        "target": "n3",
+        "timestamp": 1700000600,
+        "weight": 0.5
+      }
+    ]
+  },
+  "tag": "v2.20.0"
+}
