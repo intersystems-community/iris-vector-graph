@@ -10,7 +10,8 @@
 it; `erase_all()` also clears the stores no per-graph erase can reach (`rdf_labels`
 and `rdf_props` are keyed by node id alone, `^NKG` ignores `graph_id`).
 
-`drop_graph()` is now a deprecated alias for `erase_graph()` and goes away in 4.0.0.
+`drop_graph()` is now a deprecated alias for `erase_graph()`, to be removed in the
+next major release.
 The name survives, the behaviour does not: it used to delete rows from five tables
 and leave `^KG`/`^NKG` answering traversals for a graph with no rows — its own
 comment said so ("BYPASS: SQL rows deleted without touching ^KG/^NKG; flag stale").

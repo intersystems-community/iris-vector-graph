@@ -265,7 +265,7 @@ def test_a_rejected_graph_name_raises_before_anything_is_deleted(engine):
 
 
 def test_drop_graph_is_the_eraser_now(engine):
-    """The old name survives until 4.0.0 (grilling Q16) but not the old behaviour.
+    """The old name survives to the next major (grilling Q16) but not the old behaviour.
 
     Keeping the name is a compatibility decision; keeping the bypass would mean
     two deletion paths again, which is what the Eraser exists to end.

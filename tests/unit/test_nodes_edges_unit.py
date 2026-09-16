@@ -514,7 +514,7 @@ class TestEraseGraph:
         assert iris_obj.classMethodValue.call_args == call("Graph.KG.Eraser", "EraseAll")
 
     def test_drop_graph_is_erase_graph(self):
-        """The old name survives until 4.0.0; the old bypass does not."""
+        """The old name survives to the next major; the old bypass does not."""
         eng, conn, cursor = _make_eng()
         patcher, iris_obj = self._eraser(eng, removed=10)
         with patcher:

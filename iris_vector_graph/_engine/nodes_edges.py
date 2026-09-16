@@ -942,7 +942,7 @@ class NodesEdgesMixin:
         return removed
 
     def drop_graph(self, graph_id: str) -> int:
-        """Deprecated name for :meth:`erase_graph`. Removed in 4.0.0.
+        """Deprecated name for :meth:`erase_graph`. Removed in the next major release.
 
         The name survives the change; the behaviour does not. Keeping the name is
         a compatibility decision, and keeping the old body would have meant two
