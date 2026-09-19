@@ -370,7 +370,15 @@ width wrote which rows. Detecting the disagreement itself needs a stored expecta
 
 ## Packaging (verified 2026-09-19)
 
-### `pip install iris-vector-graph` alone cannot import the package
+### `pip install iris-vector-graph` alone could not import the package
+
+**Fixed in 3.1.1** by adding `requests>=2.28.0` to core `dependencies`. Affected
+every release from 3.0.0 through 3.1.0; if you are on one of those, install an extra
+or add `requests`. Kept here because the shape of the mistake is worth remembering:
+the packaging metadata and the import graph disagreed, and no test compared them.
+`tests/unit/test_core_dependencies_cover_eager_imports.py` now does.
+
+The original report follows.
 
 `import iris_vector_graph` raises
 `ModuleNotFoundError: No module named 'requests'`. `__init__.py:45` imports
@@ -386,13 +394,11 @@ defect dates to `c46dc1b` (spec 027, FHIR-KG Clinical Bridge), which added the
 `fhir_bridge` import to `__init__.py` without moving its dependency. It stayed
 invisible because every development and CI path installs an extra.
 
-Two candidate fixes, both one line, neither applied: add `requests>=2.28.0` to core
-`dependencies`, or guard the import in `fhir_bridge.py` and raise on first use.
-Guarding keeps the core install lean and matches how the rest of the optional stack
-behaves; adding the dependency is what the eager `__init__` currently promises.
-Either needs a `3.1.1` publish to reach anyone, so the choice is Tom's.
-
-Workaround today: `pip install "iris-vector-graph[full]"` (or add `requests`).
+Two candidate fixes were on the table, both one line: add `requests>=2.28.0` to core
+`dependencies`, or guard the import in `fhir_bridge.py` and raise on first use. The
+first was taken — it is what the eager `__init__` already promises, and it keeps
+`get_kg_anchors` and friends working on a bare install rather than trading one failure
+mode for another.
 
 ---
 

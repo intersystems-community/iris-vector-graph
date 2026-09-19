@@ -2,6 +2,44 @@
 
 # Changelog
 
+### v3.1.1 (2026-09-19)
+
+One packaging fix. No library behaviour changed.
+
+**Fixed — `pip install iris-vector-graph` produces a package you can import**
+
+Since 3.0.0, the advertised install did not work:
+
+```console
+$ pip install iris-vector-graph
+$ python -c "import iris_vector_graph"
+ModuleNotFoundError: No module named 'requests'
+```
+
+`__init__.py` imports `fhir_bridge` eagerly and `fhir_bridge.py` imports `requests`
+at module level, but `requests` was declared only in the `[full]` extra. So the
+failure was not a degraded feature — the package had no working entry point at all.
+`requests>=2.28.0` is now a core dependency.
+
+The defect dates to the FHIR-KG Clinical Bridge (spec 027), which added the
+`fhir_bridge` import to `__init__.py` without moving its dependency across, and it
+shipped in every release from 3.0.0 through 3.1.0. Nothing in this repo caught it
+because every development and CI path installs an extra, so `requests` was always
+already present. `numpy` and `pydantic` had been moved into core dependencies earlier
+for the same reason; that was done as a one-off, and the rule was never enforced.
+
+`tests/unit/test_core_dependencies_cover_eager_imports.py` now enforces it. The test
+walks the unconditional module-level imports reachable from `__init__.py` and fails if
+any of them resolves to a distribution that is not in core `dependencies`. It reads
+declarations instead of importing, so it still fails in a development environment
+where the module happens to be installed. Imports inside functions or behind
+`try`/`except ImportError` are untouched and stay in their extras.
+
+If you install with any extra — `[full]`, `[rdf]`, `[cli]` — you were never affected
+and nothing changes for you.
+
+---
+
 ### v3.1.0 (2026-09-19)
 
 Graph scope is now enforced where the data actually lives. Erasure, verification

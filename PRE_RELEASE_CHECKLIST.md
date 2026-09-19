@@ -173,6 +173,39 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 3.1.1 — packaging fix (2026-09-19)
+
+One-line dependency change plus its test. The gates that a `pyproject.toml`
+`dependencies` entry cannot affect were not re-measured; they still stand at the
+3.1.0 numbers below. Status words here are ASCII on purpose: `prettier` pads table
+cells by display width and `markdownlint` MD060 checks them by code point, so a ✅ in
+a column whose width it sets makes the two tools disagree permanently.
+
+| Gate                 | Status  | Notes                                                                                                                    |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Unit tests           | pass    | 8709 passed / 0 failed / 20 skipped — the 8705 baseline plus 4 new in `test_core_dependencies_cover_eager_imports.py`    |
+| Bare-install E2E     | pass    | `pip install dist/*.whl` into an empty 3.13 venv, no extras, then `import iris_vector_graph` from a neutral cwd: imports |
+| Extras stay optional | pass    | That venv has `requests`, `numpy`, `pydantic` and none of `rdflib`, `pyshacl`, `fastapi` — core did not swallow a group  |
+| Lint clean           | pass    | `ruff check` on the new test file: all checks passed. Repo-wide count unchanged, see the 3.1.0 row                       |
+| Artifact metadata    | pass    | `twine check dist/*` PASSED for both wheel and sdist, under twine 7.0.0                                                  |
+| Version bump         | pass    | `pyproject.toml` at `3.1.1`; CHANGELOG `### v3.1.1 (2026-09-19)`, trailing `---`                                         |
+| Known issues logged  | pass    | KNOWN_ISSUES §Packaging now records the defect as fixed in 3.1.1 rather than open                                        |
+| §9 publish           | not run | Artifacts built and checked; no tag cut, nothing pushed, nothing uploaded                                                |
+
+The first unit run of this session returned 184 errors, and the cause was the
+documented `conftest.py` fall-through, not the change under test:
+`ivg-iris-enterprise` was `Exited (255)` and the suite silently dialled
+`localhost:1972`. Starting the container took the same tree to 8709/0. That defect
+has now cost two measurements — see KNOWN_ISSUES §`conftest.py` cannot tell a stopped
+container from a missing one, and run `docker ps` first.
+
+Startup also reported `Detected 2 errors during load` and aborted its own
+compile-all, but the deployment is complete: 67 `Graph.KG.*` classes compiled, and the
+only class defined-but-not-compiled is the stale `Graph.KG.TestEdge` leftover already
+in §Loose ends. `User.PageRankEmbedded` is the other, per the 3.1.0 row.
+
+### 3.1.0 gates
+
 Re-measured 2026-09-18 on `225-upgrade-artifact-fidelity`, against
 `ivg-iris-enterprise` (port 31972), after the embedding-dimension fixes. Supersedes
 the 2026-09-16 measurement at `3c795e9` (kept below). §1–§8b are measured; §9 was

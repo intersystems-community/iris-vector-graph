@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "iris-vector-graph"
-version = "3.1.0"
+version = "3.1.1"
 description = "Native graph database layer for InterSystems IRIS — openCypher, hybrid vector search, temporal property graph, RDF export, SHACL validation"
 readme = "README.md"
 license = "MIT"
@@ -52,6 +52,13 @@ dependencies = [
     # only in [full], so that a bare `pip install iris-vector-graph` works.
     "pydantic>=2.0.0",
     "numpy>=1.24.0",
+    # requests is the same case: __init__.py imports fhir_bridge eagerly and
+    # fhir_bridge.py imports requests at module level, so a bare install that lacks
+    # it cannot `import iris_vector_graph` at all. Declaring it only in [full]
+    # shipped an unimportable package in 3.0.1 and 3.1.0.
+    # tests/unit/test_core_dependencies_cover_eager_imports.py enforces this rule
+    # for every eager import, not just these.
+    "requests>=2.28.0",
 ]
 
 [project.optional-dependencies]
