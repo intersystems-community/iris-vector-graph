@@ -368,6 +368,34 @@ width wrote which rows. Detecting the disagreement itself needs a stored expecta
 
 ---
 
+## Packaging (verified 2026-09-19)
+
+### `pip install iris-vector-graph` alone cannot import the package
+
+`import iris_vector_graph` raises
+`ModuleNotFoundError: No module named 'requests'`. `__init__.py:45` imports
+`fhir_bridge` eagerly, `fhir_bridge.py:20` imports `requests` unconditionally, and
+`requests>=2.28.0` is declared only in the `[full]` extra (`pyproject.toml:67`), not
+in core `dependencies`. Installing `requests` into the same venv makes the import
+succeed with nothing else missing, so this is the only gap of its kind in the eager
+import chain.
+
+Not a 3.1.0 regression. Verified against both wheels installed from PyPI into clean
+3.13 venvs on 2026-09-19 — 3.0.1 fails identically from its own `site-packages`. The
+defect dates to `c46dc1b` (spec 027, FHIR-KG Clinical Bridge), which added the
+`fhir_bridge` import to `__init__.py` without moving its dependency. It stayed
+invisible because every development and CI path installs an extra.
+
+Two candidate fixes, both one line, neither applied: add `requests>=2.28.0` to core
+`dependencies`, or guard the import in `fhir_bridge.py` and raise on first use.
+Guarding keeps the core install lean and matches how the rest of the optional stack
+behaves; adding the dependency is what the eager `__init__` currently promises.
+Either needs a `3.1.1` publish to reach anyone, so the choice is Tom's.
+
+Workaround today: `pip install "iris-vector-graph[full]"` (or add `requests`).
+
+---
+
 ## Deployment and namespaces
 
 A namespace has IVG's behaviour only once the `Graph.KG.*` classes are deployed

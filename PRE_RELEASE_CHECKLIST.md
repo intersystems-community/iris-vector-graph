@@ -175,9 +175,9 @@ gh release create v<version> \
 
 Re-measured 2026-09-18 on `225-upgrade-artifact-fidelity`, against
 `ivg-iris-enterprise` (port 31972), after the embedding-dimension fixes. Supersedes
-the 2026-09-16 measurement at `3c795e9` (kept below). §1–§8b are measured; §9
-(PyPI publish, GitHub release) has not been run and no tag has been cut. Every
-⚠️ below is written up in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
+the 2026-09-16 measurement at `3c795e9` (kept below). §1–§8b are measured; §9 was
+run on 2026-09-19. Every ⚠️ below is written up in
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 | Gate                     | Status    | Notes                                                                                                                                          |
 | ------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -213,7 +213,23 @@ void, not merely different: `ivg-iris-enterprise` had been `Exited` for 12 hours
 `irispython-dx-iris` on `localhost:1972`. See KNOWN_ISSUES §Test and build
 environment. Confirm `docker ps` before trusting any number here.
 
-Date: **2026-09-18** Release: **3.1.0 prepared — not tagged, not published**
+§9 ran 2026-09-19 with Tom's explicit instruction: `main` fast-forwarded to `20725bd`
+and pushed, annotated tag `v3.1.0` pushed, both artifacts uploaded to PyPI, GitHub
+release `v3.1.0` created from the CHANGELOG section. `twine check` needed twine 7.0.0
+— 6.2.0 with packaging 25.0 rejects the `Metadata-Version: 2.5` that the isolated
+build env's hatchling emits, and the published 3.0.1 wheel is also 2.5, so PyPI
+accepts it. The 3.0.1 artifacts were moved to `/tmp/ivg-dist-archive/`, not deleted.
+
+The clean-venv install check is the one §9 item that failed, and it failed for a
+reason that predates this release: `pip install iris-vector-graph==3.1.0` followed by
+`import iris_vector_graph` raises `ModuleNotFoundError: No module named 'requests'`.
+3.0.1 fails identically. With `requests` present the 3.1.0 wheel imports and the
+embedding-dimension fix behaves as designed — `get_embedding_dimension(cursor,
+table_name='Graph_KG.kg_NodeEmbeddings')`, `DEFAULT_EMBEDDING_DIMENSION == 768`,
+`derive_class_name('Graph_KG.kg_EdgeEmbeddings') == 'Graph.KG.kgEdgeEmbeddings'`. See
+KNOWN_ISSUES §Packaging; fixing it needs a `3.1.1`.
+
+Date: **2026-09-18** (gates) / **2026-09-19** (§9) Release: **3.1.0 published**
 
 ### Earlier sign-offs
 
