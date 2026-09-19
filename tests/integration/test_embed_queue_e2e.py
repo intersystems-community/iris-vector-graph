@@ -19,6 +19,30 @@ SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 
 
+def _live_width(engine) -> int:
+    """The width `kg_NodeEmbeddings.emb` is declared at right now.
+
+    Not a constant: this suite's own `engine` fixture initializes at 768 and re-migrates
+    the columns to 128 on teardown, so the declared width depends on which fixture ran
+    last. A stand-in embedder hardcoded to 384 disagrees with both, and IRIS rejects the
+    INSERT (`SQLCODE -104`) — or, since spec 226, the registry refuses it first with a
+    clearer message. Either way the queue entry fails for a reason that has nothing to do
+    with the queue.
+    """
+    from iris_vector_graph.schema import GraphSchema
+
+    cur = engine.conn.cursor()
+    try:
+        return GraphSchema.get_embedding_dimension(
+            cur, "Graph_KG.kg_NodeEmbeddings"
+        ) or 128
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
 def _deterministic_embedder(dim=384):
     """A stable stand-in: hashes text into a fixed-dim vector. Same text → same vector,
     so vector search is meaningful. `encode([...])` returns one vector per input."""
@@ -54,7 +78,7 @@ def _make_nodes(engine, node_ids):
 class TestEmbedQueueE2E:
     # ----- US1: enqueue → batched process → search (T016, the MVP gate) -----
     def test_enqueue_process_search_roundtrip(self, engine):
-        engine.embedder = _deterministic_embedder(384)
+        engine.embedder = _deterministic_embedder(_live_width(engine))
         ids = [_unique("eqn1"), _unique("eqn2"), _unique("eqn3")]
         _make_nodes(engine, ids)
 
@@ -81,7 +105,7 @@ class TestEmbedQueueE2E:
         assert int(cur.fetchone()[0]) == len(ids)
 
     def test_process_respects_batch_size_live(self, engine):
-        engine.embedder = _deterministic_embedder(384)
+        engine.embedder = _deterministic_embedder(_live_width(engine))
         ids = [_unique("eqb") for _ in range(5)]
         _make_nodes(engine, ids)
         engine.enqueue_for_embedding(node_ids=ids)
@@ -93,7 +117,7 @@ class TestEmbedQueueE2E:
     def test_pending_count_and_clear_done(self, engine):
         # Shared ^EmbedQueue global → use deltas, not absolute counts (other tests may
         # leave entries). Clear DONE up front so our run starts from a known floor.
-        engine.embedder = _deterministic_embedder(384)
+        engine.embedder = _deterministic_embedder(_live_width(engine))
         engine.clear_done()
         ids = [_unique("eqm") for _ in range(3)]
         _make_nodes(engine, ids)
@@ -114,7 +138,7 @@ class TestEmbedQueueE2E:
     # ----- US3: per-entry failure isolation (T025) -----
     def test_one_failure_does_not_sink_batch(self, engine):
         # An embedder that raises on a specific poison text, succeeds otherwise.
-        base = _deterministic_embedder(384)
+        base = _deterministic_embedder(_live_width(engine))
 
         class _Poison:
             def encode(self, texts):

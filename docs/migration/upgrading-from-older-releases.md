@@ -39,6 +39,37 @@ the structural upgrade too — the temporal migration does not touch `^KG("out")
   detects this; rebuild adjacency from `rdf_edges` with `sync()` rather than
   carrying the old tree forward.
 
+## Upgrading to 3.2.0: embedding identity is enforced
+
+`initialize_schema()` creates `Graph_KG.embedding_registry` and adopts an identity for each
+embedding table from what its vector column already declares — width and dtype, with
+`model_key` left `NULL` because a model is not recoverable from the vectors. No
+re-embedding, no operator action, and the adoption is idempotent.
+
+The width half of that row is enforced from the first write onward, so **an existing width
+contradiction can surface as a new refusal on upgrade**. A second writer configured at a
+different width than the column declares now raises `EmbeddingIdentityConflict` where it
+previously logged `needs_manual_migration` and then attempted an INSERT the column could
+not take. The contradiction predates the upgrade; the refusal is what is new. Read
+`Graph_KG.embedding_registry` for the recorded width, then write at that width or re-embed.
+See [OPERATIONS.md](../OPERATIONS.md#the-embedding-registry).
+
+Downgrading is safe: a pre-3.2.0 install ignores the registry table, and 3.2.0 treats a
+missing registry as "nothing recorded" rather than an error.
+
+## Scheduled for removal in 4.0.0
+
+Each of these still works and emits a `DeprecationWarning` (or, for the SQL parameters, is
+documented as ignored). Fix call sites before upgrading to 4.0.0.
+
+| Deprecated                                                                                        | Deprecated in | Replacement                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `engine.drop_graph()`                                                                             | 3.1.0         | `engine.erase_graph()` — already the implementation; the alias goes away                                                                                                                                                    |
+| `engine.rebuild_kg()`, `engine.rebuild_nkg()`                                                     | 3.1.0         | `engine.sync()`                                                                                                                                                                                                             |
+| `GraphSchema.get_procedures_sql_list(embedding_dimension=...)`                                    | 3.2.0         | Drop the argument. It is ignored on purpose — see [ADR-0005](../adr/0005-vector-width-is-not-declared-in-to-vector.md). Declare the width on the vector column; identity is enforced through `Graph_KG.embedding_registry`. |
+| `kg_KNN_VEC`'s `IN embeddingConfig VARCHAR(128)`                                                  | 3.2.0         | Drop the fourth argument. The procedure compares a vector it is handed, so a model name selects nothing.                                                                                                                    |
+| `kg_RRF_FUSE`'s four-argument `kg_KNN_VEC(:queryVector, :k1, NULL, NULL)` call (`schema.py:1011`) | 3.2.0         | Regenerated with three arguments when `embeddingConfig` is removed. Reinstall the stored procedures after upgrading.                                                                                                        |
+
 ## Portability: what old archives do not contain
 
 Restoring an old archive is lossy in ways the result dict now reports but cannot

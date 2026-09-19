@@ -1065,18 +1065,27 @@ class TestHandleShowCommand:
 # ---------------------------------------------------------------------------
 
 class TestShowIndexes:
-    def test_hnsw_online_when_populated(self):
+    """`SHOW INDEXES` reports the indexes the dictionary holds — spec 226, FR-018.
+
+    Before 3.2.0 these tests asserted a `hnsw_node_embeddings` row that was appended
+    unconditionally, its state derived from the row count of
+    `kg_NodeEmbeddings_optimized` (`ONLINE` with rows, `BUILDING` without). No index was
+    ever behind that row, and on the shipped schema none can be: both embedding tables
+    key on a VARCHAR `id` and IRIS refuses an ANN index there (ERROR #7222).
+    """
+
+    def test_no_hnsw_row_when_dictionary_holds_none(self):
         eng, conn, cur = make_engine()
-        cur.fetchone.return_value = (5,)  # 5 rows in optimized table
+        cur.fetchone.return_value = (5,)  # rows in the optimized table — not an index
         cur.fetchall.return_value = []
         iris_mock = MagicMock()
         iris_mock.classMethodValue.return_value = "0"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             result = eng._show_indexes()
-        rows_dict = {r[0]: r for r in result.rows}
-        assert rows_dict["hnsw_node_embeddings"][5] == "ONLINE"
+        assert not [r for r in result.rows if r[1] == "VECTOR(HNSW)"]
+        assert "hnsw_node_embeddings" not in [r[0] for r in result.rows]
 
-    def test_hnsw_building_when_empty(self):
+    def test_empty_table_reports_no_build_in_progress(self):
         eng, conn, cur = make_engine()
         cur.fetchone.return_value = (0,)
         cur.fetchall.return_value = []
@@ -1084,8 +1093,26 @@ class TestShowIndexes:
         iris_mock.classMethodValue.return_value = "0"
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             result = eng._show_indexes()
+        assert "BUILDING" not in [r[5] for r in result.rows]
+
+    def test_hnsw_row_emitted_when_dictionary_holds_one(self):
+        eng, conn, cur = make_engine()
+        cur.fetchone.return_value = (0,)
+        cur.fetchall.return_value = []
+        iris_mock = MagicMock()
+        iris_mock.classMethodValue.return_value = "0"
+        with patch.object(eng, "_iris_obj", return_value=iris_mock), patch.object(
+            eng,
+            "_hnsw_indexes",
+            side_effect=lambda table: (
+                [("my_hnsw", "emb")] if table.endswith("kg_NodeEmbeddings") else []
+            ),
+        ):
+            result = eng._show_indexes()
         rows_dict = {r[0]: r for r in result.rows}
-        assert rows_dict["hnsw_node_embeddings"][5] == "BUILDING"
+        assert rows_dict["my_hnsw"][1] == "VECTOR(HNSW)"
+        assert rows_dict["my_hnsw"][4] == ["emb"]
+        assert rows_dict["my_hnsw"][5] == "ONLINE"
 
     def test_ivf_indexes_shown(self):
         eng, conn, cur = make_engine()
@@ -1103,7 +1130,8 @@ class TestShowIndexes:
         with patch.object(eng, "_iris_obj", return_value=iris_mock):
             result = eng._show_indexes()
         names = [r[0] for r in result.rows]
-        assert "hnsw_node_embeddings" in names
+        assert "my_ivf" in names
+        assert "hnsw_node_embeddings" not in names
 
     def test_nkg_adjacency_online(self):
         eng, conn, cur = make_engine()

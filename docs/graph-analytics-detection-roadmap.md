@@ -22,7 +22,7 @@ IRIS + IVG already has the graph. The missing primitive is **time** — and once
 | k-hop ego graph extraction  | `BFSFastJson`, `kg_SUBGRAPH`    | 1-20ms |
 | PPR-guided subgraph         | `PPRGuidedJson`                 | 62ms   |
 | Community detection         | `WCCJson`, `CDLPJson`           | batch  |
-| Node similarity             | `kg_KNN_VEC` (HNSW)             | 1.7ms  |
+| Node similarity             | `kg_KNN_VEC` (VECTOR_COSINE)    | 1.7ms  |
 | Multi-vector search         | PLAIDSearch                     | 9ms    |
 | Pattern matching            | Cypher `[*1..3]`, EXISTS, UNION | varies |
 | Edge reification (metadata) | `rdf_reifications`              | 5ms    |
@@ -206,4 +206,4 @@ Alert when neighborhood structure changes beyond threshold
 1. Is the target deployment dpgenai1 (IRIS + FHIR data) or a separate security/fraud instance?
 2. Does the Coinbase use case require streaming ingest (Kafka/Pulsar) or batch? If streaming, that's the TrustGraph integration (spec 004-trustgraph).
 3. Is the primary audience for READY talk: (a) healthcare fraud, (b) financial fraud, (c) IT security, or (d) industrial anomaly? Affects which demo dataset to use.
-4. Should the anomaly baseline use HNSW (existing) or VecIndex (new)? HNSW is higher recall; VecIndex is more controllable.
+4. Should the anomaly baseline use the `kg_KNN_VEC` scan (existing) or VecIndex (new)? The scan is exact but linear; VecIndex is more controllable. HNSW is not an option on the embedding tables — they key on a VARCHAR `id` and IRIS refuses an ANN index there (`ERROR #7222`).

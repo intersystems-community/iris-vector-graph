@@ -74,15 +74,16 @@ engine.initialize_schema()
 
 **What it creates:**
 
-| Object                       | Purpose                                      |
-| ---------------------------- | -------------------------------------------- |
-| `Graph_KG.nodes`             | Node registry                                |
-| `Graph_KG.rdf_edges`         | Edge store                                   |
-| `Graph_KG.rdf_labels`        | Node labels                                  |
-| `Graph_KG.rdf_props`         | Node properties                              |
-| `Graph_KG.kg_NodeEmbeddings` | HNSW vector index                            |
-| `Graph_KG.kg_EdgeEmbeddings` | Edge embeddings                              |
-| SQL stored procedures        | `kg_KNN_VEC`, `kg_NEIGHBORS`, `kg_PPR`, etc. |
+| Object                        | Purpose                                                                                                         |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `Graph_KG.nodes`              | Node registry                                                                                                   |
+| `Graph_KG.rdf_edges`          | Edge store                                                                                                      |
+| `Graph_KG.rdf_labels`         | Node labels                                                                                                     |
+| `Graph_KG.rdf_props`          | Node properties                                                                                                 |
+| `Graph_KG.kg_NodeEmbeddings`  | Node embeddings (`emb VECTOR(DOUBLE, n)`; no HNSW index — see [OPERATIONS.md](OPERATIONS.md#hnsw-vector-index)) |
+| `Graph_KG.kg_EdgeEmbeddings`  | Edge embeddings                                                                                                 |
+| `Graph_KG.embedding_registry` | Which model and width each embedding table holds ([registry](OPERATIONS.md#the-embedding-registry))             |
+| SQL stored procedures         | `kg_KNN_VEC`, `kg_NEIGHBORS`, `kg_PPR`, etc.                                                                    |
 
 `initialize_schema()` is **idempotent** — safe to call on an existing deployment. It checks for each object before creating it.
 
@@ -219,7 +220,7 @@ Key fields in the returned `EngineStatus` object:
 | Field                     | What it means                                                   |
 | ------------------------- | --------------------------------------------------------------- |
 | `ready_for_bfs`           | `^NKG` is built — algorithms will work                          |
-| `ready_for_vector_search` | HNSW index has embeddings                                       |
+| `ready_for_vector_search` | `kg_NodeEmbeddings` holds embeddings                            |
 | `ready_for_full_text`     | BM25 index is built                                             |
 | `kg_edge_count`           | Edges in `^KG` (should match SQL `rdf_edges` count)             |
 | `nkg_node_count`          | Nodes indexed in `^NKG`                                         |
@@ -281,8 +282,8 @@ Verify: `engine.status().adjacency.bfs_path == "arno"`.
 
 **3. Embedding insert fails with dimension mismatch** (troubleshooting)
 
-Cause: `kg_NodeEmbeddings` HNSW index was created with a different vector dimension than what you're inserting.  
-Fix: Drop and recreate the table. `engine.initialize_schema()` alone won't change the dimension — you must explicitly drop `Graph_KG.kg_NodeEmbeddings` first.
+Cause: the `emb` column of `kg_NodeEmbeddings` is declared `VECTOR(DOUBLE, n)` for a different `n` than the vector you are inserting, or the embedding registry records a different width or model for the table than the writer declares. There is no HNSW index involved — none exists on this table (see [OPERATIONS.md](OPERATIONS.md#hnsw-vector-index)).  
+Fix: read `Graph_KG.embedding_registry` to see the recorded width and model, then either write at that width or re-embed. `engine.initialize_schema()` alters the column only when the table is **empty**; on a populated table it logs `needs_manual_migration` and leaves the declaration alone, so you must clear or drop `Graph_KG.kg_NodeEmbeddings` first.
 
 **4. `BuildNKG` fails silently (no error, but `^NKG` empty)**
 

@@ -77,9 +77,9 @@ Benefit grows with graph size — at 100K+ nodes the Rust callout significantly 
 
 ---
 
-## Vector Search (HNSW)
+## Vector Search
 
-From IRIS 2024.1+ with HNSW indexing:
+From IRIS 2024.1+, on a table that can carry an HNSW index:
 
 | Search type                        | Latency     | Dataset                |
 | ---------------------------------- | ----------- | ---------------------- |
@@ -87,7 +87,13 @@ From IRIS 2024.1+ with HNSW indexing:
 | K-NN **without** HNSW (table scan) | **~5.8s**   | Same dataset           |
 | HNSW speedup                       | **~3,400×** |                        |
 
-Always call `engine.initialize_schema(embedding_dimension=N)` to build the HNSW index.
+**The `with HNSW index` row does not describe IVG's own embedding tables.**
+`initialize_schema()` creates no vector index, and neither `kg_NodeEmbeddings` nor
+`kg_NodeEmbeddings_optimized` can carry one: both key on a VARCHAR `id`, and IRIS refuses
+an ANN index there (`ERROR #7222`). `kg_KNN_VEC` is the table-scan row — a
+`VECTOR_COSINE` scan, linear in the embedding count. See
+[OPERATIONS.md](OPERATIONS.md#hnsw-vector-index); `ivf_build` / IVFFlat and PLAID are the
+index paths that do work on this schema.
 
 ---
 
@@ -97,7 +103,7 @@ End-to-end on moderate biomedical dataset — all inside IRIS, no separate syste
 
 | Phase                      | Latency      |
 | -------------------------- | ------------ |
-| Vector K-NN (HNSW, top-15) | ~1.7ms       |
+| Vector K-NN (top-15)       | ~1.7ms       |
 | BM25 text search           | ~5–20ms      |
 | RRF fusion + PPR reranking | ~30–100ms    |
 | **Total**                  | **~30–80ms** |

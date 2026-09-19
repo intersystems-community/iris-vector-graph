@@ -12,6 +12,37 @@ logger = logging.getLogger(__name__)
 _GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
 
+def container_state_is_running(state) -> bool:
+    """True only for Docker's `running` state.
+
+    `IRISContainer.attach` succeeds against a container that is merely *present*, so a
+    stopped container is indistinguishable from a healthy one by attach alone. Every
+    connection then falls through to whatever is listening on localhost:1972 and the
+    suite reports green against the wrong database.
+
+    Compares for equality, not containment: `not-running` must not read as running.
+    """
+    if not state:
+        return False
+    return state.strip().lower() == "running"
+
+
+def docker_container_state(container_name: str):
+    """The container's Docker state, or None when it does not exist or Docker is absent."""
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Status}}", container_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
 def _deploy_objectscript(container_name: str) -> None:
     subprocess.run(
         ["docker", "exec", container_name, "mkdir", "-p", "/tmp/src"],
@@ -89,6 +120,20 @@ def iris_test_container():
         )
 
     name = container.get_container_name()
+
+    # `attach` above succeeds on a container that exists but is not running. Deploying
+    # into a stopped container silently sends every later connection to localhost:1972.
+    # Gate 1 requires a fail, not a skip — a stopped container is as broken as a missing
+    # one, and is harder to notice.
+    state = docker_container_state(name)
+    if not container_state_is_running(state):
+        pytest.fail(
+            f"IRIS container '{name}' exists but its Docker state is "
+            f"'{state or 'unknown'}', not 'running'. Tests would fall through to "
+            f"localhost:1972 and report green against the wrong database.\n"
+            f"Start it with: scripts/enterprise-container.sh up"
+        )
+
     _deploy_objectscript(name)
 
     yield container

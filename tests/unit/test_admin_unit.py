@@ -95,20 +95,40 @@ class TestShowIndexes:
             result = eng._show_indexes()
         assert isinstance(result, IVGResult)
         names = [r[0] for r in result.rows]
-        assert "hnsw_node_embeddings" in names
         assert "pk_nodes" in names
+        # No `hnsw_node_embeddings`: spec 226 / FR-018. This test asserted its presence
+        # for as long as the row was fabricated, which is how a fiction stays shipped.
+        assert "hnsw_node_embeddings" not in names
 
-    def test_hnsw_online_when_optimized_table_has_rows(self):
+    def test_no_hnsw_row_when_no_hnsw_index_exists(self):
+        """Rows in `kg_NodeEmbeddings_optimized` were the old state input: many rows meant
+        `ONLINE`, none meant `BUILDING`. Neither is an index, so neither is reported."""
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "5"
-        call_seq = iter([(10,), (1,)])
-        cursor.fetchone.side_effect = lambda: next(call_seq)
+        cursor.fetchone.return_value = (10,)
         cursor.fetchall.return_value = []
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng._show_indexes()
-        hnsw = next(r for r in result.rows if r[0] == "hnsw_node_embeddings")
-        assert hnsw[5] == "ONLINE"
+            with patch.object(eng, "_hnsw_indexes", return_value=[]):
+                result = eng._show_indexes()
+        assert not [r for r in result.rows if "HNSW" in str(r[1]).upper()]
+
+    def test_a_real_hnsw_index_is_reported_online_under_its_own_name(self):
+        eng, conn, cursor = _make_eng()
+        iris_obj = MagicMock()
+        iris_obj.classMethodValue.return_value = "0"
+        cursor.fetchone.return_value = (0,)
+        cursor.fetchall.return_value = []
+        with patch.object(eng, "_iris_obj", return_value=iris_obj):
+            with patch.object(
+                eng, "_hnsw_indexes", side_effect=[[("my_ann_idx", "emb")], []]
+            ):
+                result = eng._show_indexes()
+        hnsw = [r for r in result.rows if "HNSW" in str(r[1]).upper()]
+        assert len(hnsw) == 1
+        assert hnsw[0][0] == "my_ann_idx"
+        assert hnsw[0][4] == ["emb"]
+        assert hnsw[0][5] == "ONLINE"
 
     def test_nkg_adjacency_online_when_populated(self):
         eng, conn, cursor = _make_eng()

@@ -140,8 +140,8 @@ A `pytest_runtest_setup` hook in `tests/conftest.py` enforces marker-fixture con
 
 ### Why No Mocking?
 
-1. **IRIS-Specific Behavior**: IRIS SQL has unique behaviors (HNSW indexes, `%ID` columns, stored procedures) that mocks cannot replicate
-2. **Vector Operations**: Embedding similarity calculations require real HNSW index traversal
+1. **IRIS-Specific Behavior**: IRIS SQL has unique behaviors (`VECTOR` column width enforcement, `%ID` columns, stored procedures) that mocks cannot replicate
+2. **Vector Operations**: Embedding similarity calculations require a real `VECTOR_COSINE` scan over declared-width columns
 3. **Graph Queries**: Multi-hop traversals and RRF fusion depend on actual data distribution
 4. **Regression Prevention**: Mocked tests pass while production fails—we've learned this the hard way
 

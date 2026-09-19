@@ -7,6 +7,8 @@ Class Graph.KG.EmbedQueue Extends %RegisteredObject
 ///   ^EmbedQueue(reqId, "node_id")   = node id (node-keyed entries) or ""
 ///   ^EmbedQueue(reqId, "result")    = "<f1>,<f2>,...,<fN>" comma-joined vector (on DONE)
 ///   ^EmbedQueue(reqId, "error")     = message (on ERROR)
+///   ^EmbedQueue(reqId, "config")    = embedding config the entry asked for ("" = the
+///                                     worker's own model, whatever that is)
 ///   ^EmbedQueue(reqId, "queued_at") = $ZDateTime timestamp
 ///
 /// reqId = node_id (node-keyed enqueue; re-enqueue overwrites — one entry per node)
@@ -77,8 +79,12 @@ ClassMethod BulkEnqueueText(texts As %String, embeddingConfig As %String = "") A
     Quit count
 }
 
-/// Return up to batchSize PENDING entries as JSON [{reqId,text,node_id}, ...].
+/// Return up to batchSize PENDING entries as JSON [{reqId,text,node_id,config}, ...].
 /// Plain ordered scan (single-processor; no claim state).
+///
+/// ``config`` is what the entry was enqueued with (spec 226). Enqueue has always stored
+/// it; without it on the wire a worker cannot tell which model an entry asked for, so the
+/// queue would be the one write path that escapes the embedding identity registry.
 ClassMethod ClaimPendingBatch(batchSize As %Integer = 100) As %String
 {
     Set arr = []
@@ -94,6 +100,7 @@ ClassMethod ClaimPendingBatch(batchSize As %Integer = 100) As %String
         Set obj.reqId = reqId
         Set obj.text = $Get(^EmbedQueue(reqId, "text"))
         Set obj."node_id" = $Get(^EmbedQueue(reqId, "node_id"))
+        Set obj.config = $Get(^EmbedQueue(reqId, "config"))
         Do arr.%Push(obj)
         Set n = n + 1
         Quit:n>=batchSize
@@ -115,6 +122,21 @@ ClassMethod SetResult(reqId As %String, status As %String, payload As %String = 
         Set ^EmbedQueue(reqId, "error") = payload
     }
     Quit $$$OK
+}
+
+/// One entry's own state as JSON {reqId,status,error,config,node_id}. A claim only ever
+/// returns PENDING entries, so before this there was nothing that could read back why a
+/// single entry failed — the queue's only Python-visible state was aggregate counts
+/// (spec 226). Returns a record with an empty status when reqId is unknown.
+ClassMethod GetEntry(reqId As %String) As %String
+{
+    Set obj = {}
+    Set obj.reqId = reqId
+    Set obj.status = ..NormStatus($Get(^EmbedQueue(reqId, "status")))
+    Set obj.error = $Get(^EmbedQueue(reqId, "error"))
+    Set obj.config = $Get(^EmbedQueue(reqId, "config"))
+    Set obj."node_id" = $Get(^EmbedQueue(reqId, "node_id"))
+    Quit obj.%ToJSON()
 }
 
 ClassMethod PendingCount() As %Integer

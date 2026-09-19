@@ -5,6 +5,13 @@ from typing import Dict, Any, Optional, List
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.constants import VECTOR_TABLE_NAMES
+from iris_vector_graph.embedding_identity import (
+    MECHANISMS,
+    EmbeddingIdentity,
+    conflicts,
+    identity_from_config,
+)
+from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
@@ -14,6 +21,74 @@ logger = logging.getLogger(__name__)
 #: 3.1.0 the untyped-column branch altered only the two node tables, and the
 #: mismatch branch altered the edge table under a bare ``except: pass``.
 VECTOR_TABLES = VECTOR_TABLE_NAMES
+
+def _alter_tolerated_errors() -> tuple:
+    """Exception types ``initialize_schema`` tolerates from the dimension migration.
+
+    Spec 226, FR-012: the migration step used to sit under a bare ``except Exception``,
+    so an embedding identity refusal — or a plainly invalid ``embedding_dimension`` —
+    became a log line and ``initialize_schema`` returned success. Only what the driver
+    raises for a DDL statement belongs here. ``ValueError`` (hence
+    ``EmbeddingIdentityConflict``) and ``TypeError`` are programming and contract errors
+    and must reach the caller.
+
+    Falls back to the DB-API base classes' names via the embedded driver when
+    ``iris.dbapi`` is unavailable; an empty tuple means nothing is tolerated, which is the
+    safe direction — a real driver error then surfaces instead of hiding.
+    """
+    errors: list = []
+    for module_name in ("iris.dbapi", "intersystems_iris.dbapi"):
+        try:
+            module = __import__(module_name, fromlist=["Error"])
+        except Exception:
+            continue
+        base = getattr(module, "Error", None)
+        if isinstance(base, type) and issubclass(base, Exception):
+            errors.append(base)
+    return tuple(errors)
+
+
+#: See :func:`_alter_tolerated_errors`. Resolved once at import.
+_ALTER_TOLERATED_ERRORS = _alter_tolerated_errors()
+
+#: The registry table (spec 226). Written exactly as ``contracts/embedding_registry.sql``
+#: specifies; no trailing semicolon, because the Python DB-API rejects one.
+EMBEDDING_REGISTRY_TABLE = "embedding_registry"
+
+_EMBEDDING_REGISTRY_DDL = """CREATE TABLE {table} (
+    table_name      VARCHAR(128)  NOT NULL,
+    graph_id        VARCHAR(256)  NOT NULL DEFAULT '',
+    mechanism       VARCHAR(32),
+    model_key       VARCHAR(256),
+    declared_config VARCHAR(512),
+    dimension       INTEGER,
+    dtype           VARCHAR(16)   NOT NULL DEFAULT 'DOUBLE',
+    set_at          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    set_by          VARCHAR(128),
+    CONSTRAINT pk_embedding_registry PRIMARY KEY (table_name, graph_id)
+)"""
+
+
+def _embedder_model_name(embedder) -> Optional[str]:
+    """The model name an embedder can state about itself, or None.
+
+    Returns None rather than a placeholder when nothing is discoverable — a callable with
+    no name genuinely does not know what produced its vectors, and the honest result is the
+    undeclared identity (width enforced, model not compared). Inventing a key here would
+    let two unrelated embedders compare equal.
+    """
+    if embedder is None:
+        return None
+    for attr in ("model_name", "model_name_or_path", "model_id", "name"):
+        value = getattr(embedder, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    inner = getattr(embedder, "model", None)
+    for attr in ("name_or_path", "model_name"):
+        value = getattr(inner, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 class SchemaMixin:
@@ -92,6 +167,501 @@ class SchemaMixin:
         row = cur.fetchone()
         return row is not None and int(row[0]) > 0
 
+    # ----------------------------------------------------------------- embedding identity
+
+    def _registry_table(self) -> str:
+        return self._t(EMBEDDING_REGISTRY_TABLE)
+
+    def _ensure_embedding_registry(self, cursor) -> bool:
+        """Create ``embedding_registry`` if absent. True when it exists afterwards."""
+        try:
+            cursor.execute(_EMBEDDING_REGISTRY_DDL.format(table=self._registry_table()))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            err = str(e).lower()
+            if "already exists" in err or "already has a" in err:
+                return True
+            logger.warning(
+                "Could not create %s: %s — embedding identity will not be enforced",
+                self._registry_table(),
+                e,
+            )
+            return False
+
+    def _offered_embedding_identity(
+        self,
+        *,
+        dimension: Optional[int] = None,
+        dtype: Optional[str] = None,
+        config: Optional[str] = None,
+    ) -> EmbeddingIdentity:
+        """The identity *this engine* declares, derived from how it is configured.
+
+        The mechanism follows the configuration, not the call site: an engine configured
+        with ``embedding_config`` offers ``iris-embedding-config`` from every seam it owns,
+        including ``store_embedding``. Deriving it from the function called would make such
+        an engine conflict with its own registry row on every direct vector write.
+
+        An engine with no config and no nameable embedder offers the **undeclared** identity
+        — no model is compared, the width still is.
+
+        ``config`` names a model declared for one specific piece of work rather than by the
+        engine: an ``enqueue_for_embedding`` call, or a queue entry's own
+        ``^EmbedQueue(reqId, "config")``. It takes precedence over the engine's own
+        configuration, because it is the model that work asked for. An empty or missing
+        ``config`` is **not** an unknown model — it means "whatever this worker is", so the
+        engine's own identity is what gets compared (spec 226, FR-011).
+        """
+        _dtype = (dtype or getattr(self, "vector_dtype", None) or "DOUBLE").upper()
+
+        if config and str(config).strip():
+            return identity_from_config(str(config), dimension=dimension, dtype=_dtype)
+
+        config = getattr(self, "embedding_config", None)
+        if config and str(config).strip():
+            return identity_from_config(str(config), dimension=dimension, dtype=_dtype)
+
+        model_name = _embedder_model_name(getattr(self, "embedder", None))
+        if model_name:
+            return identity_from_config(
+                model_name,
+                mechanism="sentence-transformers",
+                dimension=dimension,
+                dtype=_dtype,
+            )
+
+        return EmbeddingIdentity(
+            mechanism=None, model_key=None, dimension=dimension, dtype=_dtype
+        )
+
+    def get_embedding_identity(
+        self, table_name: str = "kg_NodeEmbeddings", *, graph_id: str = ""
+    ) -> Optional[EmbeddingIdentity]:
+        """The identity recorded for ``table_name``, or None when nothing is recorded.
+
+        Reads only. Does not adopt, does not claim, does not write. Returns None on a
+        pre-3.2.0 schema that has no registry table — there is nothing recorded to
+        conflict with, and creating the table is ``initialize_schema``'s job.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT mechanism, model_key, declared_config, dimension, dtype "
+                f"FROM {self._registry_table()} WHERE table_name = ? AND graph_id = ?",
+                [table_name, graph_id],
+            )
+            row = cursor.fetchone()
+            # Materialize before the cursor closes. The IRIS driver's DataRow is a live
+            # view onto the cursor: reading it after close() raises
+            # <COMMUNICATION LINK ERROR> Cursor closed, not a stale-value bug.
+            values = None if row is None else tuple(row)
+        except Exception as e:
+            logger.debug("Embedding registry not readable (%s): %s", table_name, e)
+            return None
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+        # One policy for the whole read: anything this method cannot interpret means
+        # "nothing recorded". A row that is not five values cannot come from the fixed
+        # SELECT list above against a real registry table, so raising here would only ever
+        # fire on a stand-in cursor — and it would take down `initialize_schema` with it,
+        # which is a worse outcome than the read the `except` above already tolerates.
+        if values is None or len(values) != 5:
+            if values is not None:
+                logger.debug(
+                    "Embedding registry row for %s has %d values, expected 5",
+                    table_name,
+                    len(values),
+                )
+            return None
+
+        mechanism, model_key, declared_config, dimension, dtype = values
+        return EmbeddingIdentity(
+            mechanism=mechanism or None,
+            model_key=model_key or None,
+            declared_config=declared_config or None,
+            dimension=int(dimension) if dimension is not None else None,
+            dtype=(dtype or "DOUBLE"),
+        )
+
+    def set_embedding_identity(
+        self,
+        identity: EmbeddingIdentity,
+        table_name: str = "kg_NodeEmbeddings",
+        *,
+        graph_id: str = "",
+        force: bool = False,
+    ) -> EmbeddingIdentity:
+        """Record ``identity`` for ``table_name``.
+
+        Four cases: insert when nothing is recorded; claim an adopted row whose model is
+        unknown; no-op when the same model is already recorded; raise
+        :class:`EmbeddingIdentityConflict` when a different one is.
+
+        The claim is atomic (FR-009). ``UPDATE ... WHERE model_key IS NULL`` is the
+        arbitration: IRIS locks the row, so the second of two concurrent claimants
+        re-evaluates the predicate after the first commits, matches nothing, re-reads, and
+        is refused. Nothing here reads-then-writes.
+
+        ``force=True`` overwrites unconditionally and records ``set_by='forced'``. That
+        invalidates every vector already in the table, so it is an operator action and is
+        logged at WARNING saying so.
+        """
+        if table_name not in VECTOR_TABLE_NAMES:
+            raise ValueError(
+                f"table_name {table_name!r} is not an embedding table. Expected one of "
+                f"{VECTOR_TABLE_NAMES}."
+            )
+        if graph_id != "":
+            raise ValueError(
+                f"graph_id must be '' in 3.2.0, got {graph_id!r}. The column exists so "
+                f"per-graph identity can be added without a migration; nothing reads it "
+                f"as anything other than 'all graphs' yet (FR-003)."
+            )
+        if identity is None or identity.is_unknown:
+            raise ValueError(
+                "set_embedding_identity requires a declared model. Only "
+                "adopt_embedding_identities records an unknown one (FR-007)."
+            )
+        if identity.mechanism not in MECHANISMS:
+            raise ValueError(
+                f"mechanism {identity.mechanism!r} is not one of {MECHANISMS}."
+            )
+
+        offered = identity.normalized()
+        table = self._registry_table()
+        cursor = self.conn.cursor()
+
+        try:
+            if force:
+                cursor.execute(
+                    f"UPDATE {table} SET mechanism = ?, model_key = ?, declared_config = ?, "
+                    "dimension = ?, dtype = ?, set_at = CURRENT_TIMESTAMP, set_by = 'forced' "
+                    "WHERE table_name = ? AND graph_id = ?",
+                    [
+                        offered.mechanism,
+                        offered.model_key,
+                        offered.declared_config,
+                        offered.dimension,
+                        offered.dtype,
+                        table_name,
+                        graph_id,
+                    ],
+                )
+                self.conn.commit()
+                if self.get_embedding_identity(table_name, graph_id=graph_id) is None:
+                    self._insert_identity(cursor, table_name, graph_id, offered, "forced")
+                logger.warning(
+                    "Forced embedding identity on %s to %s. Every vector already stored "
+                    "was produced by something else and is no longer comparable — re-embed "
+                    "the table.",
+                    table_name,
+                    offered.describe(),
+                )
+                return offered
+
+            recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
+
+            if recorded is None:
+                try:
+                    self._insert_identity(
+                        cursor, table_name, graph_id, offered, "claimed"
+                    )
+                    return offered
+                except Exception as e:
+                    # A concurrent writer won the primary key. Re-read and compare.
+                    logger.debug("Registry insert for %s lost the race: %s", table_name, e)
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
+                    recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
+                    if recorded is None:
+                        raise
+
+            if recorded.is_unknown:
+                cursor.execute(
+                    f"UPDATE {table} SET mechanism = ?, model_key = ?, declared_config = ?, "
+                    "dimension = COALESCE(dimension, ?), set_at = CURRENT_TIMESTAMP, "
+                    "set_by = 'claimed' WHERE table_name = ? AND graph_id = ? "
+                    "AND model_key IS NULL AND (dimension IS NULL OR dimension = ?)",
+                    [
+                        offered.mechanism,
+                        offered.model_key,
+                        offered.declared_config,
+                        offered.dimension,
+                        table_name,
+                        graph_id,
+                        offered.dimension,
+                    ],
+                )
+                self.conn.commit()
+                # The re-read, not the rowcount, decides: drivers disagree about rowcount
+                # on UPDATE, and the winner is whoever's model_key is in the row.
+                recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
+                if (
+                    recorded is not None
+                    and recorded.model_key == offered.model_key
+                    and recorded.mechanism == offered.mechanism
+                ):
+                    return recorded
+                if recorded is None:
+                    raise EmbeddingIdentityConflict(
+                        table_name,
+                        EmbeddingIdentity(mechanism=None, model_key=None),
+                        offered,
+                        "the registry row disappeared while it was being claimed",
+                    )
+
+            reason = conflicts(recorded, offered)
+            if reason:
+                raise EmbeddingIdentityConflict(table_name, recorded, offered, reason)
+            return recorded
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _declared_vector_dtype(cursor, table: str) -> str:
+        """The element type IRIS declares for ``table.emb``, defaulting to ``DOUBLE``.
+
+        Read from the same ``%Dictionary.CompiledProperty`` blob
+        :meth:`GraphSchema.get_embedding_dimension` parses the width out of
+        (``...,DATATYPE,DOUBLE,...,LEN,128,...``), because adoption must describe the live
+        column and not the engine's configuration.
+        """
+        from iris_vector_graph.schema import sanitize_identifier
+
+        class_name = GraphSchema.resolve_table_class(
+            cursor, table
+        ) or GraphSchema.derive_class_name(table)
+        try:
+            safe_class = sanitize_identifier(class_name)
+        except ValueError:
+            return "DOUBLE"
+
+        try:
+            cursor.execute(
+                "SELECT Parameters FROM %Dictionary.CompiledProperty "
+                f"WHERE Name = 'emb' AND Parent = '{safe_class}'"
+            )
+            for row in cursor.fetchall():
+                parts = str(row[0]).split(",")
+                for i, part in enumerate(parts):
+                    if part == "DATATYPE" and i + 1 < len(parts) and parts[i + 1]:
+                        return parts[i + 1].strip().upper()
+        except Exception as e:
+            logger.debug("Could not read declared dtype for %s: %s", table, e)
+        return "DOUBLE"
+
+    def adopt_embedding_identities(self, cursor=None) -> Dict[str, str]:
+        """Give every embedding table a registry row, with the model left unknown.
+
+        This is what an installation that predates the registry gets, without operator
+        action and without re-embedding (FR-006, FR-007, FR-020). The width and dtype come
+        from the live column declaration in the data dictionary — never from
+        ``constants.DEFAULT_EMBEDDING_DIMENSION``, never from a checked-in ``.cls``, and
+        never from this engine's ``embedding_config``. A ``DdlAllowed`` class is rewritten
+        by DDL, so the file on disk is not evidence about the live column.
+
+        The model is recorded as explicitly unknown rather than assumed: nothing in the
+        database knows what produced the existing vectors, and the first writer to declare
+        a model at the recorded width claims the row (FR-008). Until then the width half of
+        the contract is still enforced.
+
+        Never overwrites an existing row, and never reads or writes vector data.
+
+        Returns one outcome per table name:
+
+        ``adopted``
+            a row was created from the declared width and dtype.
+        ``adopted_no_declared_width``
+            the column has no declared length, so ``dimension`` is ``NULL``. This is the
+            ``SQLCODE -260`` shape: -260 is raised off the column declaration, not the data.
+        ``already_recorded``
+            a row was already there; it was left exactly as it was.
+        ``absent``
+            no such table in this namespace.
+        """
+        owns_cursor = cursor is None
+        cursor = cursor if cursor is not None else self.conn.cursor()
+        outcomes: Dict[str, str] = {}
+        try:
+            for name in VECTOR_TABLE_NAMES:
+                table = self._t(name)
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    cursor.fetchone()
+                except Exception:
+                    outcomes[name] = "absent"
+                    continue
+
+                if self.get_embedding_identity(name) is not None:
+                    outcomes[name] = "already_recorded"
+                    continue
+
+                dimension = GraphSchema.get_embedding_dimension(cursor, table)
+                dtype = self._declared_vector_dtype(cursor, table)
+                adopted = EmbeddingIdentity(
+                    mechanism=None,
+                    model_key=None,
+                    declared_config=None,
+                    dimension=dimension,
+                    dtype=dtype,
+                )
+                try:
+                    self._insert_identity(cursor, name, "", adopted, "adopted")
+                except Exception as e:
+                    # A concurrent writer got there first. Its row stands.
+                    logger.debug("Adoption of %s lost the race: %s", name, e)
+                    try:
+                        self.conn.rollback()
+                    except Exception:
+                        pass
+                    outcomes[name] = "already_recorded"
+                    continue
+
+                outcomes[name] = (
+                    "adopted" if dimension is not None else "adopted_no_declared_width"
+                )
+        finally:
+            if owns_cursor:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
+        return outcomes
+
+    def enforce_embedding_identity(
+        self,
+        table_name: str = "kg_NodeEmbeddings",
+        *,
+        dimension: Optional[int] = None,
+        dtype: Optional[str] = None,
+        config: Optional[str] = None,
+        graph_id: str = "",
+    ) -> Optional[EmbeddingIdentity]:
+        """Refuse a write whose identity disagrees with what ``table_name`` records.
+
+        Called by every seam that writes vectors, before anything is written and before
+        any width is inferred. ``dimension`` is the width of the vector actually being
+        offered — not the engine's configured dimension — so a wrong-width write is
+        refused whether or not a model is declared (the width half of the 2×2 in
+        :func:`~iris_vector_graph.embedding_identity.conflicts`).
+
+        ``config`` names a model declared for this one piece of work — a queue entry's
+        ``config``, or the ``embedding_config`` passed to ``enqueue_for_embedding`` — and
+        takes precedence over the engine's own. Empty means "this worker's own model".
+
+        Returns the recorded identity, or ``None`` when nothing is recorded: a pre-3.2.0
+        schema with no registry table has nothing to conflict with, and creating the table
+        is ``initialize_schema``'s job. Enforcement is not opt-in (FR-014) — there is no
+        argument, environment variable, or flag that turns this into a warning.
+
+        Raises:
+            EmbeddingIdentityConflict: the recorded and offered identities disagree.
+        """
+        recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
+        if recorded is None:
+            return None
+
+        offered = self._offered_embedding_identity(
+            dimension=dimension, dtype=dtype, config=config
+        )
+        reason = conflicts(recorded, offered)
+        if reason:
+            raise EmbeddingIdentityConflict(table_name, recorded, offered, reason)
+        return recorded
+
+    def _sync_recorded_dimension(self, table_name: str, dimension: int) -> None:
+        """Move a registry row's width to ``dimension`` after the column was altered.
+
+        The column declaration is the truth about width (FR-006), so a successful
+        ``ALTER TABLE ... ALTER COLUMN emb VECTOR(...)`` has to carry the recorded width
+        with it — otherwise the engine that just migrated the column would be refused by
+        its own registry row on the next write. The model is never touched here: the
+        registry is the only thing that knows it, and an ALTER says nothing about it.
+
+        Never inserts. A table with no row is adoption's business, not this method's.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"UPDATE {self._registry_table()} SET dimension = ?, "
+                "set_at = CURRENT_TIMESTAMP WHERE table_name = ? AND dimension <> ?",
+                [dimension, table_name, dimension],
+            )
+            self.conn.commit()
+        except Exception as e:
+            logger.debug("Could not sync recorded width for %s: %s", table_name, e)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def _insert_identity(
+        self,
+        cursor,
+        table_name: str,
+        graph_id: str,
+        identity: EmbeddingIdentity,
+        set_by: str,
+    ) -> None:
+        cursor.execute(
+            f"INSERT INTO {self._registry_table()} (table_name, graph_id, mechanism, "
+            "model_key, declared_config, dimension, dtype, set_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                table_name,
+                graph_id,
+                identity.mechanism,
+                identity.model_key,
+                identity.declared_config,
+                identity.dimension,
+                identity.dtype,
+                set_by,
+            ],
+        )
+        self.conn.commit()
+
+    def _record_configured_embedding_identity(self, cursor) -> Dict[str, str]:
+        """Claim the engine's declared identity on every embedding table that exists.
+
+        Runs from ``initialize_schema``. An engine that declares no model records nothing:
+        there is no model to claim, and adoption has already recorded the width.
+
+        The width offered here is the table's **live declared width**, not the engine's
+        configured dimension. A column the migration could not alter (because it holds
+        rows) keeps its width, and recording that width is what lets the write seams refuse
+        the engine's wrong-width vectors with a message about the column declaration —
+        rather than failing schema initialization for a database that was fine a moment ago.
+        """
+        outcomes: Dict[str, str] = {}
+        offered = self._offered_embedding_identity()
+        if offered.is_unknown:
+            return outcomes
+
+        for name in VECTOR_TABLE_NAMES:
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {self._t(name)}")
+                cursor.fetchone()
+            except Exception:
+                continue  # table absent in this namespace (DDL-only, or optimized table)
+
+            dim = GraphSchema.get_embedding_dimension(cursor, self._t(name))
+            from dataclasses import replace as _replace
+
+            self.set_embedding_identity(_replace(offered, dimension=dim), name)
+            outcomes[name] = "claimed"
+        return outcomes
+
     def _migrate_vector_dimensions(self, cursor, dim: int) -> Dict[str, Any]:
         """Bring every vector column in ``VECTOR_TABLES`` to ``dim``.
 
@@ -119,6 +689,7 @@ class SchemaMixin:
             "needs_manual_migration": [],
             "failed": {},
         }
+        altered_names: List[str] = []
 
         for name in VECTOR_TABLES:
             table = self._t(name)
@@ -161,6 +732,7 @@ class SchemaMixin:
                     f"ALTER TABLE {table} ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
                 )
                 report["altered"].append(table)
+                altered_names.append(name)
             except Exception as e:
                 # Not swallowed: kg_NodeEmbeddings_optimized is absent in
                 # DDL-only namespaces, but so is a genuinely failed migration,
@@ -173,6 +745,11 @@ class SchemaMixin:
                 self.conn.commit()
             except Exception as e:
                 logger.warning("Could not commit vector dimension migration: %s", e)
+            # The registry's width follows the column it describes (spec 226). Without
+            # this, the engine that just altered the column would be refused by its own
+            # recorded width on the very next write.
+            for name in altered_names:
+                self._sync_recorded_dimension(name, dim)
 
         return report
 
@@ -269,18 +846,39 @@ class SchemaMixin:
         # add_graph_id_to_nodes which adds the column if absent.
         self._nodes_has_graph_id = self._probe_nodes_graph_id()
 
-        # 4. Bring every vector column to the configured dimension
+        # 3b. Embedding identity registry (spec 226). Created before anything alters a
+        # vector column, so the recorded expectation exists before the width can move.
+        self._ensure_embedding_registry(cursor)
+
+        # 3c. Adopt whatever the columns already declare (spec 226, FR-006). Runs before
+        # the migration below so the recorded expectation exists before a width can move,
+        # and so an installation that predates the registry needs no operator action.
+        self.adopt_embedding_identities(cursor)
+
+        # 4. Bring every vector column to the configured dimension.
+        #
+        # The handler is deliberately narrow (spec 226, FR-012). It used to be
+        # `except Exception`, which turned every refusal and every bad argument into a log
+        # line and let initialize_schema report success: an EmbeddingIdentityConflict and a
+        # `embedding_dimension=0` both became warnings. Only the DB-API errors an ALTER
+        # legitimately raises are tolerated here; ValueError and
+        # EmbeddingIdentityConflict propagate.
         try:
             self._migrate_vector_dimensions(cursor, dim)
-        except Exception as e:
+        except _ALTER_TOLERATED_ERRORS as e:
             logger.warning("Could not verify embedding dimension: %s", e)
+
+        # 4b. Record what this engine says produces the vectors. An engine that declares
+        # no model records nothing.
+        self._record_configured_embedding_identity(cursor)
 
         # 5. Install stored procedures
         procedure_errors = []
-        for stmt in GraphSchema.get_procedures_sql_list(
-            table_schema="Graph_KG",
-            embedding_dimension=dim,
-        ):
+        # No width is passed: `get_procedures_sql_list` ignores it and, since 3.2.0,
+        # deprecates it (ADR-0005 — the query vector is converted unlengthed on purpose).
+        # Passing `dim` here would fire that warning on every initialize_schema, on a path
+        # no caller can fix, which teaches people to filter the warning out.
+        for stmt in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"):
             if not stmt.strip():
                 continue
             try:

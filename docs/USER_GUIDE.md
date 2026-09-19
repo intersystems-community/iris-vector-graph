@@ -536,16 +536,60 @@ Dispatch is automatic and transparent. See [performance/GRAPH_ALGORITHMS.md](per
 ### Vector Search
 
 ```python
-# Find 10 nearest neighbors to a gene embedding
+# Find 10 nearest neighbors to a gene embedding.
+# The column names are passed through to SQL verbatim: on the shipped schema
+# kg_NodeEmbeddings is keyed `id` and holds the vector in `emb`.
 results = engine.vector_search(
     table="kg_NodeEmbeddings",
-    vector_col="embedding",
+    vector_col="emb",
     query_embedding=my_vector,
     top_k=10,
-    id_col="node_id"
+    id_col="id"
 )
 # [{"id": "gene:BRCA1", "score": 0.95}, ...]
 ```
+
+### Embedding Identity
+
+An embedding table records which model produced its vectors, and a writer that declares a
+different model is refused. Two models at the same width is the case that needs this: no
+IRIS error fires, the distances compute, and the rankings are meaningless.
+
+```python
+engine = IRISGraphEngine(conn, embedding_config="my-model-v1", embedding_dimension=768)
+engine.initialize_schema()
+
+engine.get_embedding_identity("kg_NodeEmbeddings")
+# EmbeddingIdentity(mechanism='iris-embedding-config', model_key='my-model-v1',
+#                   declared_config='my-model-v1', dimension=768, dtype='DOUBLE')
+```
+
+A second engine declaring another model cannot write to that table:
+
+```python
+from iris_vector_graph.exceptions import EmbeddingIdentityConflict
+
+other = IRISGraphEngine(conn, embedding_config="different-model-v2", embedding_dimension=768)
+try:
+    other.store_embedding("gene:BRCA1", my_vector)
+except EmbeddingIdentityConflict as exc:
+    print(exc)   # names the table, the recorded model, and the model offered
+```
+
+Upgrading an existing database needs no action. The first `initialize_schema` **adopts**
+what the columns already declare, recording the width and dtype it can read and
+`model_key=None` — explicitly unknown rather than guessed. The first writer that declares a
+model at that width claims the row:
+
+```python
+engine.get_embedding_identity("kg_NodeEmbeddings").is_unknown   # True right after adoption
+engine.store_embedding("gene:BRCA1", my_vector)                 # claims the row
+```
+
+Identity is per table and namespace-wide; named graphs cannot carry different models. To
+re-point a table at a new model, `set_embedding_identity(..., force=True)` overrides the
+record — which invalidates every vector already stored, so re-embed after using it. See
+[OPERATIONS.md](OPERATIONS.md) for the registry's columns and `set_by` values.
 
 ### BM25 Lexical Search
 

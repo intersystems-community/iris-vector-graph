@@ -7,6 +7,7 @@ Extracted from the biomedical-specific implementation for reusability.
 """
 
 import logging
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -778,6 +779,39 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return f"{schema.replace('_', '.')}.{table.replace('_', '')}"
 
     @staticmethod
+    def hnsw_indexes(cursor, table_name: str) -> List[tuple]:
+        """The HNSW indexes IRIS holds on ``table_name``, as ``(sql_name, properties)``.
+
+        The one place that answers "does this table have an ANN index", so the two index
+        reports (``AdminMixin._show_indexes`` and ``IRISGraphStore.list_indexes``) cannot
+        drift apart again — both used to synthesize a row from a table's row count
+        (spec 226, FR-018).
+
+        An ANN index is distinguished by ``TypeClass`` (``%SQL.Index.HNSW``), not by
+        ``Type``, which reads ``index`` for a plain index and an HNSW one alike;
+        ``INFORMATION_SCHEMA.INDEXES`` carries no index type at all.
+
+        Empty when the table has no such index, has no projecting class, or does not exist:
+        ``kg_NodeEmbeddings_optimized`` is absent in DDL-only namespaces, and an index
+        report has to survive that rather than raise from the middle of itself.
+        """
+        class_name = GraphSchema.resolve_table_class(cursor, table_name)
+        if not class_name:
+            return []
+        try:
+            # Literal interpolation, as in `resolve_table_class`: parameterised binds do
+            # not match reliably against the `%Dictionary.*` tables. `class_name` came from
+            # the dictionary itself, so it is not caller input.
+            cursor.execute(
+                "SELECT SqlName, Properties FROM %Dictionary.CompiledIndex "
+                f"WHERE parent = '{class_name}' AND TypeClass LIKE '%HNSW%'"
+            )
+            return [(row[0], row[1]) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.debug("Could not read HNSW indexes for %s: %s", table_name, e)
+            return []
+
+    @staticmethod
     def resolve_table_class(cursor, table_name: str) -> Optional[str]:
         """Ask IRIS which class projects to ``table_name``. None if no class does.
 
@@ -887,26 +921,42 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     @staticmethod
     def get_procedures_sql_list(
         table_schema: str = "Graph_KG",
-        embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION,
+        embedding_dimension: Optional[int] = None,
     ) -> List[str]:
         """
         Get a list of SQL statements to install retrieval stored procedures.
 
         Args:
             table_schema: SQL schema containing the data tables (e.g. "Graph_KG").
-            embedding_dimension: **Currently unused.** It is accepted so callers
-                that pass the real dimension keep working, and so the signature
-                is ready if kg_KNN_VEC ever declares a width. As generated today
-                that procedure says ``TO_VECTOR(:queryInput, DOUBLE)`` with no
-                length, so nothing here depends on the value. Its default was
-                1000 before 3.1.0 while every table-creating path defaulted to
-                768 — a disagreement that never reached SQL only by accident.
-                Now ``DEFAULT_EMBEDDING_DIMENSION``, same as the DDL path.
+            embedding_dimension: **Deprecated, ignored, and not to be wired in.**
+                Passing it emits a ``DeprecationWarning``; it is removed in 4.0.0.
+                The generated ``kg_KNN_VEC`` converts the query vector with
+                ``TO_VECTOR(:queryInput, DOUBLE)`` — no length — and that is a
+                decision, not an omission: declaring a length makes IRIS pad or
+                truncate the query vector to it and score against the reshaped
+                value, so a six-element query against a four-wide column returned
+                a perfect-match 1.0 instead of an error. Unlengthed, IRIS compares
+                the two widths and raises ``SQLCODE -257``. See ADR-0005; the
+                measurement is pinned by
+                ``tests/integration/test_to_vector_width_regression_e2e.py``.
+                Widths are enforced where that is useful: on the column
+                declaration, and against ``Graph_KG.embedding_registry``.
 
         Returns:
             List of SQL DDL strings in execution order. Each is a complete
             statement suitable for cursor.execute().
         """
+        if embedding_dimension is not None:
+            warnings.warn(
+                "embedding_dimension is ignored by get_procedures_sql_list and will be "
+                "removed in 4.0.0. The query vector is converted with "
+                "TO_VECTOR(:queryInput, DOUBLE) on purpose: a declared length makes IRIS "
+                "reshape the query vector and return a plausible wrong score instead of "
+                "SQLCODE -257. Do not wire this parameter in — see ADR-0005. Declare the "
+                "width on the vector column instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         return [
             "CREATE SCHEMA iris_vector_graph",
             """
@@ -947,10 +997,16 @@ CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
   IN k INT,
   IN labelFilter VARCHAR(128),
+  -- embeddingConfig is accepted and ignored. It names a model, but this procedure only
+  -- compares a vector it is handed, so there is nothing here to select with it. Removed
+  -- in 4.0.0 together with kg_RRF_FUSE's four-argument call below.
   IN embeddingConfig VARCHAR(128)
 )
 LANGUAGE SQL
 BEGIN
+  -- The query vector is converted with no length, deliberately: a declared length makes
+  -- IRIS pad or truncate the query to it and score the reshaped value, turning a wrong
+  -- width into a plausible number instead of SQLCODE -257. See ADR-0005.
   SELECT TOP :k n.id, VECTOR_COSINE(n.emb, TO_VECTOR(:queryInput, DOUBLE)) AS score
   FROM {table_schema}.kg_NodeEmbeddings n
   LEFT JOIN {table_schema}.rdf_labels L ON L.s = n.id

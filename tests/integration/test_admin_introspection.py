@@ -45,21 +45,32 @@ class TestShowIndexes:
             f"Expected ^KG or ^NKG index entry, got: {names}"
         )
 
-    def test_show_indexes_contains_hnsw_entry(self, engine):
+    def test_show_indexes_reports_no_hnsw_on_default_install(self, engine):
+        """Spec 226, FR-018: nothing is synthesized.
+
+        This test asserted the opposite — that an HNSW row is "always reported (even if
+        BUILDING state)". Nothing built one: the row was appended unconditionally and its
+        state read off the row count of `kg_NodeEmbeddings_optimized`. On this schema an
+        HNSW index cannot exist at all, because both embedding tables key on a VARCHAR
+        `id` and IRIS refuses an ANN index there (ERROR #7222).
+        """
         r = engine._show_indexes()
-        types = [row[r.columns.index("type")] for row in r.rows]
-        # HNSW index should always be reported (even if BUILDING state)
-        assert any("hnsw" in t.lower() or "vector" in t.lower() for t in types), (
-            f"Expected HNSW/VECTOR index entry, got: {types}"
-        )
+        name_idx, type_idx = r.columns.index("name"), r.columns.index("type")
+        hnsw = [row for row in r.rows if "hnsw" in str(row[type_idx]).lower()]
+        assert hnsw == [], f"No HNSW index exists on this schema, but got: {hnsw}"
+        assert "hnsw_node_embeddings" not in [row[name_idx] for row in r.rows]
 
     def test_show_indexes_all_rows_have_state(self, engine):
         r = engine._show_indexes()
         state_idx = r.columns.index("state")
         for row in r.rows:
-            assert row[state_idx] in ("ONLINE", "BUILDING", "OFFLINE", "UNKNOWN"), (
-                f"Unexpected state: {row[state_idx]}"
-            )
+            assert row[state_idx] in (
+                "ONLINE",
+                "BUILDING",
+                "OFFLINE",
+                "UNKNOWN",
+                "NOT_BUILT",
+            ), f"Unexpected state: {row[state_idx]}"
 
 
 # ---------------------------------------------------------------------------

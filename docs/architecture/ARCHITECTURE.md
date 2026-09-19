@@ -33,8 +33,8 @@ iris-vector-graph is a knowledge graph engine built on InterSystems IRIS. All da
 │  ^KG         │  ^BM25Idx    │  ^VecIdx     │  ^PLAID   │  ^NKG  │
 │  (graph)     │  (BM25 idx)  │  (RP-tree)   │  (PLAID)  │  (int) │
 │              │              │              │           │         │
-│  Graph_KG.*  │              │  HNSW VECTOR │  fhir_    │         │
-│  (SQL tables) │             │  (SQL index) │  bridges  │         │
+│  Graph_KG.*  │              │  emb VECTOR  │  fhir_    │         │
+│  (SQL tables) │             │  (no index)  │  bridges  │         │
 ├──────────────────────────────────────────────────────────────────┤
 │                  InterSystems IRIS 2024.1+                       │
 └──────────────────────────────────────────────────────────────────┘

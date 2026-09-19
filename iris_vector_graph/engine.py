@@ -216,7 +216,8 @@ class IRISGraphEngine(
 ):
     """
     Domain-agnostic IRIS graph engine providing:
-    - HNSW-optimized vector search (50ms performance)
+    - Vector search via `VECTOR_COSINE` (`kg_KNN_VEC`) — an exact scan, linear in the
+      embedding count; the embedding tables carry no HNSW index and cannot (`ERROR #7222`)
     - Native IRIS iFind text search
     - Graph traversal with confidence filtering
     - Reciprocal Rank Fusion for hybrid ranking

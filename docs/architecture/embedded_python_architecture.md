@@ -394,7 +394,7 @@ ClassMethod CorrectApproach() [ Language = python ]
 
 The `iris_vector_graph` package is designed to work in **two deployment scenarios**:
 
-1. **Production IRIS** - ObjectScript classes loaded, HNSW tables created, SQL functions available
+1. **Production IRIS** - ObjectScript classes loaded, embedding tables created, SQL functions available (no HNSW index: none is created automatically, and the embedding tables cannot carry one — see [OPERATIONS.md](../OPERATIONS.md#hnsw-vector-index))
 2. **Development/Testing IRIS** - Vanilla IRIS with just basic tables, no optimization setup
 
 To support both scenarios, performance-critical operations implement a **fallback pattern**:

@@ -41,7 +41,17 @@ from .errors import (
     NodeNotFoundError,
     PrerequisiteError,
 )
-from .exceptions import NamespaceConsistencyError, NamespaceMismatchWarning
+from .embedding_identity import (
+    MECHANISMS,
+    EmbeddingIdentity,
+    identity_from_config,
+    normalize_model_key,
+)
+from .exceptions import (
+    EmbeddingIdentityConflict,
+    NamespaceConsistencyError,
+    NamespaceMismatchWarning,
+)
 from .fhir_bridge import (
     FHIRSearchTool,
     GetPatientKGNeighborhoodTool,
@@ -83,6 +93,11 @@ except Exception:
 
 __all__ = [
     "IRISGraphEngine",
+    "EmbeddingIdentity",
+    "EmbeddingIdentityConflict",
+    "MECHANISMS",
+    "identity_from_config",
+    "normalize_model_key",
     "GraphSchema",
     "IRISCapabilities",
     "VectorOptimizer",

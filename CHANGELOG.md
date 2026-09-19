@@ -2,13 +2,162 @@
 
 # Changelog
 
-### v3.1.1 (2026-09-19)
+### v3.2.0 (2026-09-19)
 
-One packaging fix. No library behaviour changed.
+An embedding table now states which model produced its vectors and how wide they are,
+and a write that disagrees is refused instead of stored. Before this, that expectation
+lived only in whichever engine object happened to be writing, so two differently
+configured writers in one namespace each concluded the schema agreed with them.
 
-**Fixed — `pip install iris-vector-graph` produces a package you can import**
+**Read first if you run two writers against one namespace.** `initialize_schema()` adopts
+whatever your embedding columns already declare, so an existing contradiction can surface
+as a **new refusal on the first upgraded write**. The contradiction predates the upgrade —
+it was being silently tolerated. See "Upgrading" below.
 
-Since 3.0.0, the advertised install did not work:
+**Added — `Graph_KG.embedding_registry`**
+
+One row per embedding table, keyed `(table_name, graph_id)`:
+
+| Column                                      | Meaning                                                                 |
+| ------------------------------------------- | ----------------------------------------------------------------------- |
+| `table_name`                                | `kg_NodeEmbeddings`, `kg_NodeEmbeddings_optimized`, `kg_EdgeEmbeddings` |
+| `graph_id`                                  | reserved; always `''` in 3.2.0, meaning "all graphs"                    |
+| `mechanism`, `model_key`, `declared_config` | which model, normalized and raw                                         |
+| `dimension`, `dtype`                        | the width and element type the column declares                          |
+| `set_at`, `set_by`                          | when the identity was recorded, and how                                 |
+
+`set_by` is `claimed` when a writer declared a model, `adopted` when the row was derived
+from the column declaration alone (see Upgrading), and `forced` after an operator override.
+
+New public API, exported from `iris_vector_graph`:
+
+```python
+from iris_vector_graph import EmbeddingIdentity, EmbeddingIdentityConflict
+
+engine.get_embedding_identity("kg_NodeEmbeddings")       # -> EmbeddingIdentity | None
+engine.set_embedding_identity(identity, "kg_NodeEmbeddings")
+engine.adopt_embedding_identities()                      # run by initialize_schema()
+```
+
+plus the pure helpers `normalize_model_key`, `identity_from_config`, and the closed
+`MECHANISMS` set in the new dependency-free module `iris_vector_graph/embedding_identity.py`.
+
+The registry is state, not history, and it deliberately does **not** live in the revision
+ledger — the ledger is opt-in and off by default, no embedding write passes through a
+changeset, `ledger_stats` is a namespace-wide singleton, and folding a revision log is the
+wrong access pattern for a check on every write. Reasoning in
+[ADR-0006](docs/adr/0006-embedding-identity-lives-in-a-registry-not-the-ledger.md).
+
+**Added — conflicting embedding writes raise instead of storing**
+
+`EmbeddingIdentityConflict` (a `ValueError` subclass, so existing `except ValueError`
+handlers still work) is raised before anything is written by `store_embedding`,
+`store_embeddings_batch`, `enqueue_embed_requests`, `process_embed_queue`, and the
+`_upsert_node_embedding` seam the queue writes through. Nothing is written when it raises
+and the registry row is unchanged; a refused batch writes no partial prefix, because the
+check runs before the transaction. A refused queue entry is marked `ERROR` with the reason
+and the rest of the batch proceeds.
+
+The case that matters is **same width, different model**. IRIS accepts that INSERT,
+distances compute, and rankings are meaningless — no column declaration and no index can
+detect it.
+
+The first-writer claim over an adopted row is atomic: `UPDATE ... WHERE model_key IS NULL`
+plus a re-read, so of two concurrent writers declaring different models exactly one wins
+and the other is refused.
+
+**Added — `Graph.KG.EmbedQueue.GetEntry()` and `config` on the wire**
+
+`ClaimPendingBatch` now returns each entry's `config`, which enqueue had always stored but
+never surfaced — without it a worker cannot tell which model an entry asked for, so the
+queue was the one write path around the registry. `GetEntry(reqId)` reads back one entry's
+status and error; a claim only ever returns PENDING entries, so before this a per-entry
+failure had no Python-visible state at all.
+
+**Changed — `SHOW INDEXES` reports indexes that exist**
+
+The HNSW row is now read from `%Dictionary.CompiledIndex` (`TypeClass LIKE '%HNSW%'` — the
+`Type` column reads `index` for both plain and ANN indexes, and `INFORMATION_SCHEMA.INDEXES`
+carries no type at all), under the index's real `SqlName`, and nothing is emitted when no
+index exists.
+
+Before 3.2.0, `_show_indexes` appended one `hnsw_node_embeddings` row unconditionally and
+derived its state from the row count of `kg_NodeEmbeddings_optimized`: `ONLINE` with rows,
+`BUILDING` without. A row count is not an index, and `BUILDING` told operators to wait for
+a build that was not running. On the shipped schema that row could not have been true:
+both embedding classes key on `id As %String`, and IRIS refuses an ANN index there —
+`ERROR #7222: %SQL.Index ANN indices are only supported when the IDKEY is based on a single
+positive integer attribute`. There is no HNSW index on any embedding table; vector search
+runs as a `VECTOR_COSINE` scan through `kg_KNN_VEC`. IVFFlat and PLAID are the index paths
+that do work.
+
+`IRISGraphStore.list_indexes()` — the store-level report behind the CLI's `indexes list` —
+carried the same synthesized row, `ONLINE` with rows in `kg_NodeEmbeddings_optimized` and
+`NOT_BUILT` without, and now reads the dictionary the same way. Docs that described the
+absent index as present were corrected too: `BENCHMARKS.md` no longer says
+`initialize_schema()` builds an HNSW index (its "with HNSW index" measurement does not
+describe IVG's own tables), and `ADMIN_GUIDE.md`, `OPERATIONS.md`, `TESTING_POLICY.md`,
+`ARCHITECTURE.md`, `embedded_python_architecture.md` and
+`graph-analytics-detection-roadmap.md` now name the scan.
+
+**Changed — `initialize_schema`'s dimension-migration handler is narrow**
+
+It used to sit under a bare `except Exception`, which would have swallowed an identity
+refusal into a log line. It now tolerates only the specific ALTER errors it was written
+for.
+
+**Changed — the test container fixture fails loudly when the container is stopped**
+
+`tests/conftest.py` verified only that a container object could be attached, so a stopped
+container let the suite fall through to `localhost:1972` and pass against whatever was
+listening. It now checks the Docker state and `pytest.fail`s. Two measurements in this
+project had already been voided this way.
+
+**Deprecated — removed in 4.0.0**
+
+- `GraphSchema.get_procedures_sql_list(embedding_dimension=...)`. Accepted, ignored, and
+  **not to be wired in**. Measured: the three-argument `TO_VECTOR(:q, DOUBLE, n)` form pads
+  or truncates the _query_ vector to `n` and scores the reshaped value — a six-element query
+  against a four-wide column returned `1.0` — whereas the unlengthed form makes IRIS compare
+  widths and raise `SQLCODE -257`. Declaring the width would replace a loud refusal with a
+  plausible wrong answer. Passing the parameter now emits a `DeprecationWarning`. Reasoning
+  in [ADR-0005](docs/adr/0005-vector-width-is-not-declared-in-to-vector.md); the measurement
+  is pinned by `tests/integration/test_to_vector_width_regression_e2e.py`.
+- `kg_KNN_VEC`'s `IN embeddingConfig VARCHAR(128)` parameter, and `kg_RRF_FUSE`'s matching
+  four-argument call site. The procedure compares a vector it is handed; there is nothing
+  for a model name to select.
+
+**Upgrading**
+
+`initialize_schema()` adopts identities from the column declarations before it migrates
+dimensions, so an upgraded namespace gets a registry row per embedding table with
+`set_by='adopted'`, `model_key = NULL`, and the width and dtype the column already has. No
+re-embedding, no operator action.
+
+The width half of that row is enforced immediately. So if a second writer has been
+configured at a different width all along, its first embedding write after the upgrade
+raises `EmbeddingIdentityConflict` where it previously logged `needs_manual_migration` and
+then attempted an INSERT the column could not take. **The contradiction is not new; the
+refusal is.** Read `Graph_KG.embedding_registry` to see the recorded width, then either
+write at that width or re-embed.
+
+`model_key = NULL` never conflicts, so the first writer to declare a model claims the row
+and later writers are held to it.
+
+`set_embedding_identity(..., force=True)` overrides a recorded identity. It invalidates
+every vector already stored in that table — the old vectors remain, from a model that is
+no longer the table's — so re-embed after using it.
+
+This release does **not** add per-graph embedding models. `graph_id` is reserved in the
+registry so that can arrive without a migration, but it is always `''` today; the blockers
+are still the absence of `graph_id` on the embedding tables and `uq_nodes_nodeid UNIQUE
+(node_id)` on `Graph_KG.nodes`. `docs/KNOWN_ISSUES.md` records the unchanged shape of the
+dimension-migration hole.
+
+**Also fixed — `pip install iris-vector-graph` produces a package you can import**
+
+This fix was prepared as `3.1.1` and never published; it ships here instead, so there is
+no `3.1.1` release and nothing to skip. Since 3.0.0, the advertised install did not work:
 
 ```console
 $ pip install iris-vector-graph

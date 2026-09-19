@@ -42,13 +42,16 @@ def test_get_base_schema_sql_uses_the_constant():
     )
 
 
-def test_get_procedures_sql_list_no_longer_defaults_to_1000():
-    """The one site that disagreed. A procedure declared at 1000 against a 768
-    column fails at insert time, far from the call that chose the number."""
-    assert (
-        _default_of(GraphSchema.get_procedures_sql_list, "embedding_dimension")
-        == DEFAULT_EMBEDDING_DIMENSION
-    )
+def test_get_procedures_sql_list_no_longer_carries_a_width_at_all():
+    """The one site that disagreed — now it has no opinion.
+
+    3.1.0 collapsed this default from 1000 to 768, on the theory that the parameter would
+    one day be wired in. Spec 226 measured what wiring it in would do (ADR-0005: IRIS
+    reshapes the query vector and returns a plausible wrong score instead of raising) and
+    deprecated the parameter instead. A default of `None` is how "supplied" is told from
+    "omitted" so the deprecation can fire only on the former.
+    """
+    assert _default_of(GraphSchema.get_procedures_sql_list, "embedding_dimension") is None
 
 
 def test_the_ddl_declares_the_constant():
@@ -66,8 +69,14 @@ def test_get_procedures_sql_list_does_not_actually_use_its_dimension():
     That is why the 1000/768 disagreement never reached SQL. If someone wires
     the width in, this test fails and the docstring has to be corrected with it.
     """
+    import warnings
+
     at_default = "\n".join(GraphSchema.get_procedures_sql_list())
-    at_384 = "\n".join(GraphSchema.get_procedures_sql_list(embedding_dimension=384))
+    with warnings.catch_warnings():
+        # Deprecated since spec 226, and deliberately still passed here: the value being
+        # ignored is the thing under test.
+        warnings.simplefilter("ignore", DeprecationWarning)
+        at_384 = "\n".join(GraphSchema.get_procedures_sql_list(embedding_dimension=384))
 
     assert at_default == at_384
     assert "TO_VECTOR(:queryInput, DOUBLE)" in at_default
@@ -109,6 +118,10 @@ def test_no_module_carries_its_own_dimension_literal():
     offenders = []
     for path in sorted(pkg.rglob("*.py")):
         for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            # A comment cannot carry a default, and prose about a rejected width (e.g. a
+            # note that `embedding_dimension=0` now warns) is not a fifth default.
+            if line.lstrip().startswith("#"):
+                continue
             match = pattern.search(line)
             if match and int(match.group(1)) != DEFAULT_EMBEDDING_DIMENSION:
                 offenders.append(f"{path.relative_to(pkg)}:{lineno}: {line.strip()}")

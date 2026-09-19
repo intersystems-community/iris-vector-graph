@@ -1307,21 +1307,37 @@ class IRISGraphStore:
             "SELECT DISTINCT p FROM Graph_KG.rdf_edges ORDER BY p", "relationshipType"
         )
 
+    def _hnsw_indexes(self, table_name: str) -> List[tuple]:
+        """The HNSW indexes IRIS holds on ``table_name``, as ``(name, properties)``.
+
+        Delegates to :meth:`GraphSchema.hnsw_indexes`, the one owner of that dictionary
+        read, so this report and ``SHOW INDEXES`` cannot disagree.
+        """
+        from iris_vector_graph.schema import GraphSchema
+
+        cursor = self.conn.cursor()
+        try:
+            return GraphSchema.hnsw_indexes(cursor, table_name)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
     def list_indexes(self) -> IVGResult:
         cols = ["name", "type", "state"]
         rows = []
         cursor = self.conn.cursor()
 
-        def _try_count(sql):
-            try:
-                cursor.execute(sql)
-                r = cursor.fetchone()
-                return int(r[0]) if r else 0
-            except Exception:
-                return -1
-
-        hnsw = _try_count("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings_optimized")
-        rows.append(["hnsw_node_embeddings", "VECTOR(HNSW)", "ONLINE" if hnsw > 0 else "NOT_BUILT"])
+        # HNSW vector indexes as the class dictionary holds them, and nothing when it holds
+        # none (spec 226, FR-018). This used to append one `hnsw_node_embeddings` row
+        # unconditionally, `ONLINE` when `Graph_KG.kg_NodeEmbeddings_optimized` had rows and
+        # `NOT_BUILT` when it did not. A row count is not an index, and no index was ever
+        # behind that row: both embedding tables key on a VARCHAR `id`, and IRIS refuses an
+        # ANN index there (ERROR #7222).
+        for table in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized"):
+            for index_name, _properties in self._hnsw_indexes(table):
+                rows.append([index_name, "VECTOR(HNSW)", "ONLINE"])
 
         for table, idx_type in [
             ("Graph_KG.kg_IVFMeta", "VECTOR(IVF)"),

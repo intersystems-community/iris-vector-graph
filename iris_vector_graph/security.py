@@ -16,6 +16,8 @@ VALID_GRAPH_TABLES = {
     "kg_IVFMeta",
     "kg_BM25Meta",
     "kg_PlaidMeta",
+    # spec 226: what model produced each embedding table's vectors, and how wide they are
+    "embedding_registry",
 }
 
 def sanitize_identifier(identifier: str) -> str:

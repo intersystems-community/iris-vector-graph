@@ -27,7 +27,7 @@ curl http://localhost:8200/schema
 
 ### `GET /indexes`
 
-Returns the full index inventory: HNSW, IVF, BM25, PLAID, ^NKG, ^KG adjacency indexes, and SQL unique constraints.
+Returns the full index inventory: HNSW, IVF, BM25, PLAID, ^NKG, ^KG adjacency indexes, and SQL unique constraints. Only indexes that exist are listed — a default installation has no HNSW index, so no HNSW row appears (before 3.2.0 one was reported unconditionally).
 
 ```bash
 curl http://localhost:8200/indexes
@@ -37,7 +37,6 @@ curl http://localhost:8200/indexes
 {
   "columns": ["name", "type", "entityType", "labelsOrTypes", "properties", "state"],
   "indexes": [
-    ["hnsw_node_embeddings", "VECTOR(HNSW)", "NODE", ["*"], ["emb"], "ONLINE"],
     ["nkg_adjacency", "ADJACENCY(^NKG)", "RELATIONSHIP", ["*"], ["*"], "ONLINE"],
     ["kg_adjacency", "ADJACENCY(^KG)", "RELATIONSHIP", ["*"], ["*"], "ONLINE"],
     ["pk_nodes", "UNIQUE", "NODE", ["*"], ["node_id"], "ONLINE"]

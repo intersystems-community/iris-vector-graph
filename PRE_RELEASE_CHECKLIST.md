@@ -173,6 +173,58 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 3.2.0 — embedding identity contract (2026-09-19)
+
+Spec 226 plus the packaging fix that was prepared as `3.1.1` and never published, so
+`3.1.1` has no tag and no PyPI release. Measured on `226-embedding-identity-contract`
+against `ivg-iris-enterprise` (port 31972), `docker ps` confirmed healthy first. Status
+words are ASCII for the reason given in the 3.1.1 row.
+
+| Gate                     | Status | Notes                                                                                                                                         |
+| ------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | pass   | Clean linear history on the feature branch; `main` fast-forwarded, no merge commit                                                            |
+| Unit tests               | pass   | 8777 passed / 0 failed / 20 skipped / 13 deselected. k-hop fast path passed this run — container `^NKG` state, still not a gate               |
+| Integration tests        | known  | Run as chunks (five files segfault alone and give no result). Every failure was replayed at HEAD; see the paragraph below for the single diff |
+| Arno (enterprise)        | known  | Unchanged from 3.1.0 — the `_detect_arno` probe failures are in the chunk totals and reproduce at HEAD                                        |
+| Coverage >= 89%          | pass   | 91% (22907 statements, 2173 missed). Unit phase then integration chunks with `--append`; `--fail-under=89` exit 0                             |
+| No benchmark regressions | waived | Same waiver as v2.17.0: `bench_utils.py` writes `SQLUser.*` (lines 11, 16, 22)                                                                |
+| Lint clean               | known  | `ruff check .` = 2048 findings, byte-identical to the 3.1.0 count; the new modules contribute none                                            |
+| ObjectScript compiles    | 55/56  | `tcp-deploy` compiled 55 classes clean; `User.PageRankEmbedded` still fails #5559 (pre-existing)                                              |
+| Known issues logged      | pass   | Added: a recorded width can go stale against its column; `test_embeddings_api.py` depends on leftover column width                            |
+| Version bump             | pass   | `pyproject.toml` at `3.2.0`; CHANGELOG `### v3.2.0 (2026-09-19)`, trailing `---`; the 3.1.1 section folded in, not left dangling              |
+| Documentation parity     | pass   | USER_GUIDE section 8 now documents `get_embedding_identity` / `set_embedding_identity` / `embedding_registry`; README has no version string   |
+| Artifact metadata        | pass   | `twine check dist/*` PASSED for wheel and sdist under twine 7.0.0. The 3.1.1 artifacts were moved to `/tmp/ivg-dist-archive/`, not deleted    |
+| Bare-install E2E         | pass   | Wheel into an empty 3.13 venv, no extras, `import iris_vector_graph` from a neutral cwd: imports. `rdflib`/`pyshacl`/`fastapi` still absent   |
+
+Coverage detail — no public-API module under 80%: `engine.py` 92, `_engine/query.py` 91,
+`_engine/nodes_edges.py` 95, `sdk.py` 95, `cypher_api.py` 96. New code in this release:
+`embedding_identity.py` 100%, `exceptions.py` 100%, `_engine/schema.py` 89%. Under 80%
+and unchanged: `api_auth.py` 70% (in this checklist's own ignore list) and
+`text_search.py` 79%.
+
+The integration diff is the number that matters, because the chunk totals move with
+chunk boundaries and leftover container state. The 25 files not covered by the chunk
+lists were run on the branch and again at HEAD with the tree stashed, and the failure
+sets differ by exactly three cases. Two fail at HEAD and pass here —
+`test_embed_queue_e2e.py::test_enqueue_process_search_roundtrip` and
+`::test_pending_count_and_clear_done`, both of which 226 fixes. One passes at HEAD and
+failed here: `test_embeddings_api.py::test_store_embedding_and_knn`, raising
+`EmbeddingIdentityConflict: recorded dimension 384 but this writer declares 768`. That
+is container state, not a regression: its fixture declares 768 and can only widen a
+column whose table is empty, and a prior file had left five rows behind. From a cleared
+state both tests in the file pass. Written up in KNOWN_ISSUES
+§`test_embeddings_api.py` depends on the embedding column's leftover width.
+
+Two measurement lessons from this round, both recorded in `specs/226-.../tasks.md`.
+Chunk `ad` returned `6 passed, 547 errors` when it ran straight after chunk `ac`, and
+`2 failed, 547 passed, 2 skipped, 2 errors` when run alone — chunk `ac`'s namespace
+tests leave state behind, so a chunk total is only meaningful re-run in isolation. And
+`git stash push -u` removes untracked test files, so a HEAD baseline that passes the
+branch's file list to pytest reports a bare `collected 0 items` instead of erroring;
+filter to files that exist at HEAD first.
+
+Date: **2026-09-19** Release: **3.2.0**
+
 ### 3.1.1 — packaging fix (2026-09-19)
 
 One-line dependency change plus its test. The gates that a `pyproject.toml`

@@ -250,9 +250,19 @@ class TestUpsertAndNodeLanding:
         with patch(SEAM, side_effect=[claim, ""]):
             report = eng.process_embed_queue(batch_size=10)
         assert report["processed"] == 1
-        # No node_id → _upsert_node_embedding must NOT run, so no new execute() calls
-        # during processing (result is stored on the queue entry via SetResult only).
-        assert cursor.execute.call_count == before
+        # No node_id → _upsert_node_embedding must NOT run; the result is stored on the
+        # queue entry via SetResult only. Asserted on what the statements say rather than
+        # on how many there are: since spec 226 the worker also reads
+        # Graph_KG.embedding_registry to check the entry's model before encoding, so a
+        # count is no longer a proxy for "nothing was written".
+        new_sqls = [
+            str(c.args[0])
+            for c in cursor.execute.call_args_list[before:]
+            if c.args
+        ]
+        assert not [
+            s for s in new_sqls if "kg_NodeEmbeddings" in s and "SELECT" not in s.upper()
+        ], f"a write reached the embeddings table: {new_sqls}"
 
 
 class TestStartBackground:

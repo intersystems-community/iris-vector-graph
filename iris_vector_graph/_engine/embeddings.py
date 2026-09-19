@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 import json
 import logging
 
+from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,14 @@ class EmbeddingsMixin:
         _dtype = (dtype or self.vector_dtype).upper()
         self._assert_node_exists(node_id)
 
+        # spec 226: before anything is written, and before the fallback below can infer a
+        # width from the input and mutate self.embedding_dimension to it. The width offered
+        # is the vector's own length — that is what IRIS would reject at INSERT, and what a
+        # writer declaring no model is still held to.
+        self.enforce_embedding_identity(
+            "kg_NodeEmbeddings", dimension=len(embedding), dtype=_dtype
+        )
+
         try:
             dim = self._get_embedding_dimension()
         except ValueError:
@@ -216,6 +225,14 @@ class EmbeddingsMixin:
         _dtype = (dtype or self.vector_dtype).upper()
         if not items:
             return True
+
+        # spec 226: one registry read for the whole batch, before the first INSERT and
+        # before the inference fallback below. A refused batch writes nothing — not a
+        # partial prefix — because the check runs outside the transaction entirely.
+        for offered_width in sorted({len(item["embedding"]) for item in items}):
+            self.enforce_embedding_identity(
+                "kg_NodeEmbeddings", dimension=offered_width, dtype=_dtype
+            )
 
         try:
             dim = self._get_embedding_dimension()
@@ -673,9 +690,25 @@ class EmbeddingsMixin:
           - ``texts``: free-text entries (always-new; never deduplicated).
         Both may be supplied; an empty/None pair returns 0. Degrades gracefully
         (returns 0 + warns) when the queue backend is unavailable.
+
+        Raises:
+            EmbeddingIdentityConflict: ``embedding_config`` (or, when empty, this engine's
+                own model) disagrees with what ``kg_NodeEmbeddings`` records. Queueing work
+                that cannot be honoured only moves the failure onto a worker, away from
+                whoever asked for it — so this is refused here, before anything is queued
+                (spec 226, FR-011). Unlike the backend-unavailable case below, a conflict is
+                never downgraded to a warning.
         """
         from iris_vector_graph.schema import _call_classmethod
         import json as _json
+
+        # Deliberately outside the try/except blocks below, which exist to tolerate a
+        # missing queue backend. A conflict is not a degraded backend.
+        if node_ids or texts:
+            self.enforce_embedding_identity(
+                "kg_NodeEmbeddings", config=embedding_config
+            )
+
         total = 0
         if node_ids:
             try:
@@ -725,6 +758,28 @@ class EmbeddingsMixin:
         if not entries:
             return {"processed": 0, "errors": 0}
 
+        # spec 226 / FR-011: fail conflicting entries before the model runs. Each entry
+        # carries the model it asked for (`config`); an empty config is this worker's own
+        # identity, not an unknown. Filtering here rather than inside the loop below keeps
+        # the batched encode aligned with the entries it is for, spends no model time on
+        # work that could never be stored, and — the point of the batch — lets one bad
+        # entry fail without stalling the rest.
+        honoured = []
+        refused = 0
+        for entry in entries:
+            try:
+                self.enforce_embedding_identity(
+                    "kg_NodeEmbeddings", config=entry.get("config") or ""
+                )
+            except EmbeddingIdentityConflict as e:
+                refused += 1
+                self._fail_queue_entry(entry.get("reqId", ""), str(e))
+                continue
+            honoured.append(entry)
+        entries = honoured
+        if not entries:
+            return {"processed": 0, "errors": refused}
+
         texts = [e.get("text", "") for e in entries]
         # Single batched embedder call (SC-002). If the whole call fails, fall back to
         # per-entry so one poison text does not fail the entire batch (FR-007).
@@ -735,7 +790,7 @@ class EmbeddingsMixin:
             logger.warning("batch encode failed, falling back per-entry: %s", e)
 
         processed = 0
-        errors = 0
+        errors = refused
         for idx, entry in enumerate(entries):
             req_id = entry.get("reqId", "")
             node_id = entry.get("node_id", "") or ""
@@ -754,14 +809,23 @@ class EmbeddingsMixin:
                 processed += 1
             except Exception as e:
                 errors += 1
-                try:
-                    _call_classmethod(
-                        self.conn, "Graph.KG.EmbedQueue", "SetResult",
-                        req_id, "ERROR", str(e)[:500],
-                    )
-                except Exception as se:
-                    logger.warning("SetResult ERROR failed for %s: %s", req_id, se)
+                self._fail_queue_entry(req_id, str(e))
         return {"processed": processed, "errors": errors}
+
+    def _fail_queue_entry(self, req_id: str, message: str) -> None:
+        """Mark one queue entry ERROR with the reason, leaving the rest of the batch alone.
+
+        The reason is readable back via ``Graph.KG.EmbedQueue.GetEntry``, which is the only
+        way a per-entry failure is visible at all: a claim returns PENDING entries only.
+        """
+        from iris_vector_graph.schema import _call_classmethod
+        try:
+            _call_classmethod(
+                self.conn, "Graph.KG.EmbedQueue", "SetResult",
+                req_id, "ERROR", message[:500],
+            )
+        except Exception as se:
+            logger.warning("SetResult ERROR failed for %s: %s", req_id, se)
 
     def _encode_batch(self, texts: List[str]) -> list:
         """Embed a list of texts in one embedder call, resolving the engine embedder
@@ -782,7 +846,14 @@ class EmbeddingsMixin:
         raise TypeError(f"Embedder {type(embedder)} has no encode/embed and is not callable")
 
     def _upsert_node_embedding(self, node_id: str, vec) -> None:
-        """Write a node's embedding into kg_NodeEmbeddings so vector search finds it."""
+        """Write a node's embedding into kg_NodeEmbeddings so vector search finds it.
+
+        Subject to the same identity contract as ``store_embedding`` (spec 226, FR-011):
+        this is the seam the embed queue writes through, so skipping it here would leave
+        the queue as the way past the registry.
+        """
+        vec = list(vec)
+        self.enforce_embedding_identity("kg_NodeEmbeddings", dimension=len(vec))
         emb_str = ",".join(str(float(x)) for x in vec)
         cursor = self.conn.cursor()
         try:

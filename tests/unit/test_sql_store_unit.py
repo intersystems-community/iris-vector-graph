@@ -309,6 +309,37 @@ class TestListIndexes:
         result = store.list_indexes()
         assert isinstance(result, IVGResult)
 
+    def test_no_phantom_hnsw_row(self):
+        """Spec 226 FR-018: a row count is not an index.
+
+        This path used to append `hnsw_node_embeddings` unconditionally, `ONLINE` when
+        `kg_NodeEmbeddings_optimized` had rows and `NOT_BUILT` when it did not — the same
+        fiction `_show_indexes` reported, in a second place.
+        """
+        store, conn, cursor = _make_store()
+        cursor.fetchone.return_value = (7,)  # rows in the optimized table
+        cursor.fetchall.return_value = []
+        result = store.list_indexes()
+        names = [r[0] for r in result.rows]
+        assert "hnsw_node_embeddings" not in names
+        assert not [r for r in result.rows if r[1] == "VECTOR(HNSW)"]
+
+    def test_hnsw_row_emitted_when_dictionary_holds_one(self):
+        store, conn, cursor = _make_store()
+        cursor.fetchone.return_value = (0,)
+        cursor.fetchall.return_value = []
+        with patch.object(
+            store,
+            "_hnsw_indexes",
+            side_effect=lambda table: (
+                [("my_hnsw", "emb")] if table.endswith("kg_NodeEmbeddings") else []
+            ),
+        ):
+            result = store.list_indexes()
+        rows_dict = {r[0]: r for r in result.rows}
+        assert rows_dict["my_hnsw"][1] == "VECTOR(HNSW)"
+        assert rows_dict["my_hnsw"][2] == "ONLINE"
+
 
 class TestBetweennessExecution:
 

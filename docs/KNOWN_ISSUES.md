@@ -111,6 +111,37 @@ It belongs in `tests/integration/`, or it needs a fixture that rebuilds `^NKG`
 before asserting. Until then, treat it as the one expected unit failure and check
 it against `engine.status()` rather than re-running.
 
+### `test_embeddings_api.py` depends on the embedding column's leftover width
+
+```text
+FAILED tests/integration/test_embeddings_api.py::test_store_embedding_and_knn
+E   iris_vector_graph.exceptions.EmbeddingIdentityConflict: dimension mismatch:
+    recorded dimension 384 but this writer declares 768
+```
+
+The `engine` fixture (`tests/integration/conftest.py:34`) declares
+`embedding_dimension=768` and then calls `initialize_schema`, which can only widen a
+vector column while its table is **empty**. Any earlier test that left rows in
+`Graph_KG.kg_NodeEmbeddings` sends the ALTER to `needs_manual_migration` — logged
+`CRITICAL: ... is VECTOR(DOUBLE, 384) but the engine is configured for 768, and the
+table is not empty (5 rows)` — and the write is then refused by the identity check.
+The fixture's own teardown deletes the rows and restores width 128, so the failure only
+appears when a _previous_ file's rows survive.
+
+From a clean state both tests in the file pass:
+
+```bash
+# clear the embedding tables and the registry, then
+IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
+  .venv/bin/pytest tests/integration/test_embeddings_api.py -p no:randomly -q
+# 2 passed
+```
+
+This is container state, not a 3.2.0 regression. The pre-226 behaviour was no better —
+the `CRITICAL` line already said every write of the configured width would be rejected;
+226 only moved the rejection from an `SQLCODE -104` at INSERT to a named refusal. The
+fixture should clear the embedding tables **before** it migrates, not only after.
+
 ### `conftest.py` cannot tell a stopped container from a missing one
 
 `tests/conftest.py:56` does `IRISContainer.attach("ivg-iris-enterprise")`, and
@@ -345,6 +376,14 @@ graph B is not "isolated per graph" — it is one row being overwritten. Multipl
 models today means **one namespace per model**. The `metadata` column can record
 which model produced a vector, but nothing enforces or filters on it.
 
+**Still true in 3.2.0, deliberately.** Spec 226 makes the namespace-wide identity
+explicit and enforced rather than per-graph: `Graph_KG.embedding_registry` reserves a
+`graph_id VARCHAR(256) DEFAULT ''` column in its primary key, but 3.2.0 writes and reads
+only `''`, meaning "all graphs". Per-graph models remain blocked by the two schema facts
+above — no `graph_id` on either embedding table, and `uq_nodes_nodeid UNIQUE (node_id)` —
+and lifting them is not what 226 does. The reserved column exists so that work can arrive
+later without a registry migration.
+
 ### `get_procedures_sql_list(embedding_dimension=...)` is inert
 
 The parameter is accepted and never interpolated; the generated `kg_KNN_VEC` is
@@ -356,6 +395,14 @@ so wiring the width into `TO_VECTOR` will fail that test and require the docstri
 change with it. Left alone here because it changes generated stored-procedure SQL and
 needs live verification against a populated table.
 
+**Resolved as a deprecation in 3.2.0, not as a fix.** Live measurement showed the
+three-argument `TO_VECTOR(:q, DOUBLE, n)` form pads or truncates the _query_ and then
+scores the reshaped value — a 6-element query truncated to 4 returned a cosine of `1.0` —
+while the unlengthed form makes IRIS compare widths and raise `SQLCODE -257`. Wiring the
+width in would replace a loud refusal with a silently wrong score, so the parameter is now
+documented as ignored, emits a `DeprecationWarning`, and is removed in 4.0.0. See
+[ADR-0005](adr/0005-vector-width-is-not-declared-in-to-vector.md).
+
 ### The dimension migration cannot see a second writer
 
 `_migrate_vector_dimensions` compares each vector column against the dimension the
@@ -363,8 +410,60 @@ needs live verification against a populated table.
 the same namespace at different widths will each believe the schema agrees with them:
 the second one's ALTER is refused if rows exist (logged `CRITICAL`,
 `needs_manual_migration`) and silently applied if they do not. Nothing records which
-width wrote which rows. Detecting the disagreement itself needs a stored expectation
-— the ledger is the natural place — not a wider comparison here.
+width wrote which rows. Detecting the disagreement itself needs a stored expectation, not
+a wider comparison here.
+
+**Addressed in 3.2.0 by spec 226**, and this write-up's original conclusion — "the ledger
+is the natural place" — was wrong. The expectation lives in `Graph_KG.embedding_registry`;
+see [ADR-0006](adr/0006-embedding-identity-lives-in-a-registry-not-the-ledger.md). The
+ledger cannot hold it for four independent reasons: it is opt-in and off by default, so it
+is absent exactly where an unguarded second writer is most likely; no embedding write
+passes through a changeset, so there is no revision to attach identity to;
+`ledger_stats` is a namespace-wide singleton and `ledger_revisions` has no `graph_id`, so
+it cannot carry per-table identity at all; and it is a history, whereas this is a
+current-state assertion read on every write, which is the wrong access pattern to satisfy
+by folding a revision log.
+
+The migration hole itself is **unchanged**: a column at the wrong width whose table is
+non-empty still goes to `needs_manual_migration` with the declaration left alone. What
+3.2.0 adds is that the disagreement is now _recorded_ and the next write is _refused_
+(`EmbeddingIdentityConflict`) instead of being attempted at a width the column cannot
+take.
+
+### A recorded width can go stale against the column it describes
+
+**Open in 3.2.0.** `Graph_KG.embedding_registry.dimension` is a snapshot taken when the row
+was written. `_sync_recorded_dimension` (`iris_vector_graph/_engine/schema.py:582`) carries
+it forward only for tables the current `_migrate_vector_dimensions` call actually altered —
+`for name in altered_names` at `:751-752`. A column that reaches its target width by any
+other route leaves the old number recorded, and the refusal then blames the writer for a
+width the column no longer declares:
+
+```text
+dimension mismatch: recorded dimension 768 but this writer declares 128
+```
+
+Measured on `ivg-iris-enterprise` while walking spec 226's quickstart: all three vector
+columns read `LEN,128` while `kg_NodeEmbeddings` and `kg_NodeEmbeddings_optimized` still had
+`dimension = 768, set_by = 'adopted'` left behind by an earlier 768 fixture. Every write at
+the column's real width was refused, and the error named the wrong culprit.
+
+Compare the two before believing the message — they are read from different places:
+
+```python
+GraphSchema.get_embedding_dimension(cursor, "Graph_KG.kg_NodeEmbeddings")  # the column
+```
+
+```sql
+SELECT dimension, set_by FROM Graph_KG.embedding_registry
+ WHERE table_name = 'kg_NodeEmbeddings'                                    -- the record
+```
+
+When they disagree, delete the registry row and re-run `initialize_schema`; adoption re-reads
+the live column declaration. The narrow fix is for adoption to reconcile a recorded width
+against the column on every `initialize_schema` rather than only after an ALTER, which is a
+behaviour change (it would silently rewrite a recorded width) and so is deliberately not in
+3.2.0.
 
 ---
 
@@ -372,7 +471,8 @@ width wrote which rows. Detecting the disagreement itself needs a stored expecta
 
 ### `pip install iris-vector-graph` alone could not import the package
 
-**Fixed in 3.1.1** by adding `requests>=2.28.0` to core `dependencies`. Affected
+**Fixed in 3.2.0** by adding `requests>=2.28.0` to core `dependencies`. The fix was
+prepared as `3.1.1`, which was never published. Affected
 every release from 3.0.0 through 3.1.0; if you are on one of those, install an extra
 or add `requests`. Kept here because the shape of the mistake is worth remembering:
 the packaging metadata and the import graph disagreed, and no test compared them.

@@ -82,6 +82,24 @@ class AdminMixin:
             return self._show_constraints()
         return IVGResult(columns=["value"], rows=[])
 
+    def _hnsw_indexes(self, table_name: str) -> List[tuple]:
+        """The HNSW indexes IRIS actually holds on ``table_name``, as ``(name, properties)``.
+
+        Delegates to :meth:`GraphSchema.hnsw_indexes`, which owns the dictionary read. The
+        name is the index's ``SqlName`` — what the operator typed in ``CREATE INDEX`` and
+        what they would type to drop it.
+        """
+        from iris_vector_graph.schema import GraphSchema
+
+        cursor = self.conn.cursor()
+        try:
+            return GraphSchema.hnsw_indexes(cursor, table_name)
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
     def _show_indexes(self) -> "IVGResult":
         cols = ["name", "type", "entityType", "labelsOrTypes", "properties", "state"]
         rows = []
@@ -94,24 +112,26 @@ class AdminMixin:
             except Exception:
                 return default or []
 
-        # HNSW vector index on kg_NodeEmbeddings
-        hnsw_count = 0
-        try:
-            cursor.execute(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings_optimized')}")
-            r = cursor.fetchone()
-            hnsw_count = int(r[0]) if r else 0
-        except Exception:
-            pass
-        rows.append(
-            [
-                "hnsw_node_embeddings",
-                "VECTOR(HNSW)",
-                "NODE",
-                ["*"],
-                ["emb"],
-                "ONLINE" if hnsw_count > 0 else "BUILDING",
-            ]
-        )
+        # HNSW vector indexes, read from the class dictionary. Nothing is emitted when no
+        # index exists (spec 226, FR-018): this used to append a `hnsw_node_embeddings` row
+        # unconditionally and derive its state from the row count of
+        # `kg_NodeEmbeddings_optimized` — `ONLINE` with rows, `BUILDING` without. A row
+        # count is not an index, and `BUILDING` told operators to wait for a build that was
+        # never running. On the shipped schema it could not run: both embedding tables key
+        # on a VARCHAR `id`, and IRIS refuses ANN indices there (ERROR #7222).
+        for table_name in ("kg_NodeEmbeddings", "kg_NodeEmbeddings_optimized"):
+            table = self._t(table_name)
+            for index_name, properties in self._hnsw_indexes(table):
+                rows.append(
+                    [
+                        index_name,
+                        "VECTOR(HNSW)",
+                        "NODE",
+                        [table],
+                        [p for p in str(properties).split(",") if p] or ["emb"],
+                        "ONLINE",
+                    ]
+                )
 
         for (name,) in _try(f"SELECT DISTINCT name FROM {self._t('kg_IVFMeta')}"):
             rows.append([name, "VECTOR(IVF)", "NODE", ["*"], ["emb"], "ONLINE"])
