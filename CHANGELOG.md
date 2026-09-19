@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v3.1.0 (2026-09-16)
+### v3.1.0 (2026-09-19)
 
 Graph scope is now enforced where the data actually lives. Erasure, verification
 and temporal deletion each get one owner that reaches every store, and the

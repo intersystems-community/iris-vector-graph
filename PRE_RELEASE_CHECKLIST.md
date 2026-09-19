@@ -156,9 +156,11 @@ grep -E "v[0-9]+\.[0-9]+\.[0-9]+" README.md | grep -v "$(grep '^version' pyproje
 python -m build
 twine upload dist/*
 git push && git push --tags
+# `head -n -1` is GNU-only and fails on macOS BSD head; `sed '$d'` drops the
+# trailing `---` portably.
 gh release create v<version> \
   --title "v<version>" \
-  --notes "$(awk '/^### v<version>/,/^---$/{print}' CHANGELOG.md | head -n -1)"
+  --notes "$(awk '/^### v<version>/,/^---$/' CHANGELOG.md | sed '$d')"
 ```
 
 - [ ] Explicit publish instruction received from Tom
@@ -188,7 +190,7 @@ the 2026-09-16 measurement at `3c795e9` (kept below). §1–§8b are measured; �
 | Lint clean               | ⚠️        | `ruff check .` = 2048 findings, all pre-existing; no `[tool.ruff]` section exists, so this gate has never been meaningful                      |
 | ObjectScript compiles    | ⚠️ 55/56  | Every `Graph.KG.*` class clean; `User.PageRankEmbedded` fails with #5559 (pre-existing, and only visible since the `%Status` fix)              |
 | Known issues logged      | ✅        | Added: `conftest.py` cannot tell a stopped container from a missing one; no per-graph embedding model; inert `get_procedures_sql_list` param   |
-| Version bump             | ✅        | `pyproject.toml` at `3.1.0`; CHANGELOG section retitled `### v3.1.0 (2026-09-16)` with a trailing `---` for §9's `awk`                         |
+| Version bump             | ✅        | `pyproject.toml` at `3.1.0`; CHANGELOG `### v3.1.0 (2026-09-19)`, trailing `---`. §9's `head -n -1` is GNU-only — use `sed '$d'` on macOS      |
 | Documentation parity     | ✅        | `erase_graph`, `erase_all`, `verify_graph`, `delete_edge_temporal` now have usage examples; README and USER_GUIDE no longer teach `drop_graph` |
 
 Coverage detail — no public-API module under 80%: `engine.py` 92, `_engine/query.py`
