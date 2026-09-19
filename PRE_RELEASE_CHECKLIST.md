@@ -223,7 +223,22 @@ tests leave state behind, so a chunk total is only meaningful re-run in isolatio
 branch's file list to pytest reports a bare `collected 0 items` instead of erroring;
 filter to files that exist at HEAD first.
 
-Date: **2026-09-19** Release: **3.2.0**
+§9 ran the same day with Tom's explicit instruction, all five items: `main`
+fast-forwarded to `18dfe74` (no merge commit) and pushed, annotated tag `v3.2.0`
+pushed, both artifacts uploaded to PyPI, GitHub release `v3.2.0` created from the
+CHANGELOG section, and the clean-venv install verified —
+`pip install iris-vector-graph==3.2.0` with no extras imports, and
+`EmbeddingIdentity`, `EmbeddingIdentityConflict` and both engine identity methods are
+present in the published wheel. That last item is the one that **failed** for 3.1.0;
+the `requests` fix folded in here is what closed it.
+
+PyPI's index lags its upload by a minute or two: the JSON API reported 3.2.0 while
+`pip install` still resolved against a cached index page and said
+`No matching distribution found`. Confirm with
+`curl -s https://pypi.org/pypi/iris-vector-graph/json` and retry with
+`--no-cache-dir` rather than concluding the upload failed.
+
+Date: **2026-09-19** Release: **3.2.0 published**
 
 ### 3.1.1 — packaging fix (2026-09-19)
 
