@@ -9,7 +9,7 @@ with the evidence, so the same suspicion is not re-raised.
 
 ---
 
-## Test and build environment (verified 2026-09-16)
+## Test and build environment (verified 2026-09-16, re-measured 2026-09-18)
 
 ### Five integration files segfault on their first test
 
@@ -54,12 +54,13 @@ IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
 Until this is fixed, §2 of `PRE_RELEASE_CHECKLIST.md` cannot be satisfied by the
 single command it prints.
 
-### ~66 integration failures and 26 errors against the v3 API, all pre-existing
+### ~70 integration failures and 26 errors against the v3 API, all pre-existing
 
-Run as chunks with the five crashing files excluded, the suite gives roughly 66
-failures and 26 errors. An earlier count of "51 failures and 4 errors" was
-measured with a chunk that segfaulted early and lost its own results; this is the
-fuller number.
+Run as chunks with the five crashing files excluded, the suite gives roughly 70
+failures and 26 errors (2026-09-18: 70/26; 2026-09-16: ~66/26 — the count moves with
+where the chunk boundaries fall, the errors do not). An earlier count of "51 failures
+and 4 errors" was measured with a chunk that segfaulted early and lost its own
+results; this is the fuller number.
 
 None of it is a regression. The 36 node IDs newly counted here were replayed at
 the `v3.0.1` tag in a worktree at `15f3d78`: zero passed there (`6 failed, 24
@@ -109,6 +110,35 @@ which side of the line this case falls on moves.
 It belongs in `tests/integration/`, or it needs a fixture that rebuilds `^NKG`
 before asserting. Until then, treat it as the one expected unit failure and check
 it against `engine.status()` rather than re-running.
+
+### `conftest.py` cannot tell a stopped container from a missing one
+
+`tests/conftest.py:56` does `IRISContainer.attach("ivg-iris-enterprise")`, and
+`attach` **succeeds on a container that is `Exited`** — it resolves the name, not a
+live instance. So the `pytest.fail` guard at `:76` never fires, and the connection
+chain behind it (OrbStack DNS → container IP → `localhost:$IVG_PORT` →
+iris_devtester's default) keeps walking until something answers. On 2026-09-18 that
+was `irispython-dx-iris` at `localhost:1972`: a whole suite ran against another
+project's instance, reported `547 passed`, and the only signal was two
+`<CLASS DOES NOT EXIST> Graph.KG.Traversal` failures in `test_engine_status.py`.
+
+The passes are the dangerous part — a green run against the wrong instance is not a
+measurement. The guard needs to check the container is actually `running` (and that
+the connection it hands back is the container's own port), not merely that the name
+resolves. Until then, confirm `docker ps` shows `ivg-iris-enterprise` up **before**
+trusting any gate number, and treat a run that produced unexplained
+`CLASS DOES NOT EXIST` failures as void rather than partial.
+
+A related tripwire already exists for `los-iris` at `:177-186`; nothing checks for
+the dx instance.
+
+### `irispython-dx-iris` holds a stale partial IVG deployment
+
+The instance that answered above carries 22 of the 56 `Graph.KG.*` classes and a
+`Graph_KG.nodes` table — enough to satisfy a connection and most schema reads, not
+enough to run the suite. Its presence is why the fall-through above stays quiet
+instead of erroring on the first query. It is not this project's container; do not
+deploy to it and do not clean it up from here.
 
 ### `_detect_arno`'s smoke probe disables a healthy Arno
 
@@ -289,6 +319,52 @@ the four writers.
 spec-214 removed. Nothing lives at that subscript, so `Build2HopExactStats`'
 merged fallback always returns `exact = 0` rather than a count. The class
 header comment at `:2` and the note at `:51` also describe the pre-214 layout.
+
+---
+
+## Embeddings and vector width (verified 2026-09-18)
+
+### A named graph cannot carry its own embedding model or dimension
+
+There is no per-graph embedding anywhere in the schema, and this is a design fact,
+not a missing filter:
+
+- `kg_NodeEmbeddings` is `id VARCHAR(256) %EXACT PRIMARY KEY, emb VECTOR(DOUBLE, N),
+metadata` — no `graph_id` column. The primary key is `id` alone, so a node has
+  exactly one embedding row, and `Graph_KG.nodes` carries `UNIQUE (node_id)`, so the
+  same node cannot exist twice to hold two.
+- `kg_EdgeEmbeddings` is keyed `(s, p, o_id)` — also no `graph_id`.
+- `embedding_config` (native IRIS `EMBEDDING()`) is set per engine instance
+  (`engine.py:246`), not per graph.
+- `kg_KNN_VEC` accepts `IN embeddingConfig VARCHAR(128)` (`schema.py:949`) and never
+  reads it, so passing a different config per query changes nothing.
+
+Two graphs in one namespace therefore share one vector space and one width. Writing
+a 384-wide embedding for a node in graph A and a 768-wide one for the same node in
+graph B is not "isolated per graph" — it is one row being overwritten. Multiple
+models today means **one namespace per model**. The `metadata` column can record
+which model produced a vector, but nothing enforces or filters on it.
+
+### `get_procedures_sql_list(embedding_dimension=...)` is inert
+
+The parameter is accepted and never interpolated; the generated `kg_KNN_VEC` is
+`SELECT TOP :k n.id, VECTOR_COSINE(n.emb, TO_VECTOR(:queryInput, DOUBLE)) AS score`
+with no declared length anywhere. This is why the pre-3.1.0 default of 1000 never
+produced a procedure at the wrong width. Pinned by
+`tests/unit/test_embedding_dimension_default.py::test_get_procedures_sql_list_does_not_actually_use_its_dimension`,
+so wiring the width into `TO_VECTOR` will fail that test and require the docstring to
+change with it. Left alone here because it changes generated stored-procedure SQL and
+needs live verification against a populated table.
+
+### The dimension migration cannot see a second writer
+
+`_migrate_vector_dimensions` compares each vector column against the dimension the
+**calling engine** was configured with. Two processes calling `initialize_schema` on
+the same namespace at different widths will each believe the schema agrees with them:
+the second one's ALTER is refused if rows exist (logged `CRITICAL`,
+`needs_manual_migration`) and silently applied if they do not. Nothing records which
+width wrote which rows. Detecting the disagreement itself needs a stored expectation
+— the ledger is the natural place — not a wider comparison here.
 
 ---
 

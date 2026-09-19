@@ -171,36 +171,51 @@ gh release create v<version> \
 
 ## Sign-off
 
-Measured 2026-09-16 on `225-upgrade-artifact-fidelity` at `3c795e9`, against
-`ivg-iris-enterprise` (port 31972), after repairing that container's drift
-(`tcp-deploy` + `tcp-load-arno` — see KNOWN_ISSUES). §1–§8b are measured; §9
+Re-measured 2026-09-18 on `225-upgrade-artifact-fidelity`, against
+`ivg-iris-enterprise` (port 31972), after the embedding-dimension fixes. Supersedes
+the 2026-09-16 measurement at `3c795e9` (kept below). §1–§8b are measured; §9
 (PyPI publish, GitHub release) has not been run and no tag has been cut. Every
 ⚠️ below is written up in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 | Gate                     | Status    | Notes                                                                                                                                          |
 | ------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | Branch and history       | ✅        | `225-upgrade-artifact-fidelity`, clean linear history                                                                                          |
-| Unit tests               | ⚠️        | 8671 passed / 1 failed — the k-hop fast path, container state, expected. Total stable at 8672                                                  |
-| Integration tests        | ⚠️        | Five files segfault alone on their first test and give no result. Remaining chunks: ~66 failed / 26 errors, all pre-existing                   |
+| Unit tests               | ✅        | 8705 passed / 0 failed / 20 skipped (8672 baseline + 33 new). k-hop fast path passed this run: container `^NKG` state, still not a gate        |
+| Integration tests        | ⚠️        | Five files segfault alone on their first test and give no result. Remaining chunks: 70 failed / 26 errors, all pre-existing                    |
 | Arno (enterprise)        | ⚠️        | 9 failed / 71 passed / 4 skipped. All 9 trace to `_detect_arno`'s probe using a node that does not exist                                       |
-| Coverage ≥ 89%           | ✅ 90%    | `coverage run` for unit, `--append` per integration chunk, so a crashed chunk loses only its own data. `--fail-under=89` → 0                   |
+| Coverage ≥ 89%           | ✅ 91%    | `coverage run` for unit, `--append` per integration chunk, so a crashed chunk loses only its own data. `--fail-under=89` → 0                   |
 | No benchmark regressions | ⬜ Waived | Same waiver as v2.17.0: `bench_utils.py` writes `SQLUser.*` (lines 11, 16, 22)                                                                 |
 | Lint clean               | ⚠️        | `ruff check .` = 2048 findings, all pre-existing; no `[tool.ruff]` section exists, so this gate has never been meaningful                      |
 | ObjectScript compiles    | ⚠️ 55/56  | Every `Graph.KG.*` class clean; `User.PageRankEmbedded` fails with #5559 (pre-existing, and only visible since the `%Status` fix)              |
-| Known issues logged      | ✅        | Segfault repro rewritten, counts corrected, Arno probe and container drift added                                                               |
+| Known issues logged      | ✅        | Added: `conftest.py` cannot tell a stopped container from a missing one; no per-graph embedding model; inert `get_procedures_sql_list` param   |
 | Version bump             | ✅        | `pyproject.toml` at `3.1.0`; CHANGELOG section retitled `### v3.1.0 (2026-09-16)` with a trailing `---` for §9's `awk`                         |
 | Documentation parity     | ✅        | `erase_graph`, `erase_all`, `verify_graph`, `delete_edge_temporal` now have usage examples; README and USER_GUIDE no longer teach `drop_graph` |
 
 Coverage detail — no public-API module under 80%: `engine.py` 92, `_engine/query.py`
-91, `nodes_edges.py` 94, `sdk.py` 95, `cypher_api.py` 94, and the new code
-`admin.py` 95, `temporal.py` 94, `_validate.py` 98. Under 80%: `api_auth.py` 68%
-(its test file is in this checklist's own ignore list) and `text_search.py` 79%
-(known baseline gap).
+91, `nodes_edges.py` 94, `sdk.py` 95, `cypher_api.py` 96, `schema.py` 89,
+`_engine/schema.py` 93, `constants.py` 100, and `admin.py` 95, `temporal.py` 94,
+`_validate.py` 98. Under 80%: `api_auth.py` 70% (its test file is in this
+checklist's own ignore list) and `text_search.py` 79% (known baseline gap).
 
-Date: **2026-09-16** Release: **3.1.0 prepared — not tagged, not published**
+Two notes on the deltas from 2026-09-16. The integration count moved from ~66 to 70
+failures at the same 26 errors; the additional cases are chunk-boundary dependent and
+all are pre-existing API drift — the only dimension-adjacent one,
+`test_vector_engine_deep.py::TestValidateVectorTable::test_validate_kg_node_embeddings`,
+fails on `ImportError: cannot import name '_table'`, and `_table` is absent from
+`_engine/vector.py` at `3c795e9` too. And `ruff` reports the same 21 findings across
+the six touched modules as it does at `3c795e9`, so the new code adds none.
+
+The 2026-09-16 run of the unit gate was measured against the wrong instance and is
+void, not merely different: `ivg-iris-enterprise` had been `Exited` for 12 hours,
+`IRISContainer.attach` succeeded on it anyway, and the suite silently ran against
+`irispython-dx-iris` on `localhost:1972`. See KNOWN_ISSUES §Test and build
+environment. Confirm `docker ps` before trusting any number here.
+
+Date: **2026-09-18** Release: **3.1.0 prepared — not tagged, not published**
 
 ### Earlier sign-offs
 
-| Date       | Release | Result                                                                         |
-| ---------- | ------- | ------------------------------------------------------------------------------ |
-| 2026-09-06 | v2.17.0 | All gates passed; benchmarks waived for the `bench_utils.py` `SQLUser.*` issue |
+| Date       | Release | Result                                                                                     |
+| ---------- | ------- | ------------------------------------------------------------------------------------------ |
+| 2026-09-16 | 3.1.0   | Void — unit gate ran against `irispython-dx-iris`, not `ivg-iris-enterprise`. Coverage 90% |
+| 2026-09-06 | v2.17.0 | All gates passed; benchmarks waived for the `bench_utils.py` `SQLUser.*` issue             |

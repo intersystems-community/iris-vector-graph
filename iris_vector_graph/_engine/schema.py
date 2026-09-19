@@ -4,9 +4,16 @@ from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import GraphSchema, _call_classmethod
 from iris_vector_graph.capabilities import IRISCapabilities
+from iris_vector_graph.constants import VECTOR_TABLE_NAMES
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
 logger = logging.getLogger(__name__)
+
+#: Every table whose ``emb`` column the dimension migration must keep in step.
+#: ``kg_EdgeEmbeddings`` is in this list because it was the one left out: before
+#: 3.1.0 the untyped-column branch altered only the two node tables, and the
+#: mismatch branch altered the edge table under a bare ``except: pass``.
+VECTOR_TABLES = VECTOR_TABLE_NAMES
 
 
 class SchemaMixin:
@@ -85,6 +92,89 @@ class SchemaMixin:
         row = cur.fetchone()
         return row is not None and int(row[0]) > 0
 
+    def _migrate_vector_dimensions(self, cursor, dim: int) -> Dict[str, Any]:
+        """Bring every vector column in ``VECTOR_TABLES`` to ``dim``.
+
+        Each table is read on its own — a column already at ``dim`` is left
+        alone, an untyped column is typed, and a column at the wrong width is
+        altered only when its table is empty. ALTER on a populated vector column
+        is not free, so a non-empty mismatch is reported and left for a human.
+
+        Before 3.1.0 this logic read one dimension (the node table's) and
+        compared it against the configured ``dim``, so a second writer sending a
+        different width to ``kg_EdgeEmbeddings`` was invisible: the node column
+        agreed with the engine, the check passed, and every edge insert was
+        rejected row by row. A consumer lost 1,099 writes an hour for weeks that way.
+
+        Returns a report — ``altered``, ``unchanged``, ``needs_manual_migration``,
+        ``failed`` — so callers can see what happened instead of inferring it
+        from the absence of an exception.
+        """
+        if not isinstance(dim, int) or isinstance(dim, bool) or dim <= 0:
+            raise ValueError(f"embedding dimension must be a positive int, got {dim!r}")
+
+        report: Dict[str, Any] = {
+            "altered": [],
+            "unchanged": [],
+            "needs_manual_migration": [],
+            "failed": {},
+        }
+
+        for name in VECTOR_TABLES:
+            table = self._t(name)
+            db_dim = GraphSchema.get_embedding_dimension(cursor, table)
+
+            if db_dim == dim:
+                report["unchanged"].append(table)
+                continue
+
+            if db_dim is not None:
+                row_count = None
+                try:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                    row = cursor.fetchone()
+                    row_count = int(row[0]) if row else None
+                except Exception as e:
+                    logger.debug("Could not count %s: %s", table, e)
+                if row_count != 0:
+                    logger.error(
+                        "CRITICAL: %s.emb is VECTOR(DOUBLE, %d) but the engine is configured "
+                        "for %d, and the table is not empty (%s rows). Every write of the "
+                        "configured width will be rejected. Drop and recreate the table, or "
+                        "re-embed at %d.",
+                        table, db_dim, dim, row_count, db_dim,
+                    )
+                    report["needs_manual_migration"].append(table)
+                    continue
+                logger.info(
+                    "%s.emb is %d, configured %d, table EMPTY — altering to %d",
+                    table, db_dim, dim, dim,
+                )
+            else:
+                logger.info(
+                    "%s.emb has no declared dimension — altering to VECTOR(DOUBLE, %d)",
+                    table, dim,
+                )
+
+            try:
+                cursor.execute(
+                    f"ALTER TABLE {table} ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
+                )
+                report["altered"].append(table)
+            except Exception as e:
+                # Not swallowed: kg_NodeEmbeddings_optimized is absent in
+                # DDL-only namespaces, but so is a genuinely failed migration,
+                # and the caller has to be able to tell them apart.
+                logger.warning("Could not ALTER %s to dim %d: %s", table, dim, e)
+                report["failed"][table] = str(e)
+
+        if report["altered"]:
+            try:
+                self.conn.commit()
+            except Exception as e:
+                logger.warning("Could not commit vector dimension migration: %s", e)
+
+        return report
 
     def initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
         """
@@ -179,64 +269,9 @@ class SchemaMixin:
         # add_graph_id_to_nodes which adds the column if absent.
         self._nodes_has_graph_id = self._probe_nodes_graph_id()
 
-        # 4. Check for dimension mismatch on existing tables; fix untyped vector column
+        # 4. Bring every vector column to the configured dimension
         try:
-            db_dim = GraphSchema.get_embedding_dimension(cursor)
-            if db_dim is None:
-                # Column exists but has no dimension (e.g. created without VECTOR(DOUBLE,N)).
-                # ALTER TABLE to add the dimension so procedure compilation succeeds.
-                logger.info(
-                    "kg_NodeEmbeddings.emb has no dimension — altering to VECTOR(DOUBLE, %d)",
-                    dim,
-                )
-                try:
-                    cursor.execute(
-                        f"ALTER TABLE Graph_KG.kg_NodeEmbeddings ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
-                    )
-                    cursor.execute(
-                        f"ALTER TABLE Graph_KG.kg_NodeEmbeddings_optimized ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
-                    )
-                    self.conn.commit()
-                    logger.info("ALTER TABLE succeeded — dimension set to %d", dim)
-                except Exception as alter_e:
-                    logger.warning("Could not alter emb column dimension: %s", alter_e)
-            elif db_dim != dim:
-                row_count = None
-                try:
-                    cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
-                    row_count = cursor.fetchone()[0]
-                except Exception:
-                    row_count = None
-                if row_count == 0:
-                    logger.info(
-                        "Embedding dimension mismatch (DB=%d, configured=%d) on EMPTY table — "
-                        "altering VECTOR column to %d",
-                        db_dim, dim, dim,
-                    )
-                    for _t in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_NodeEmbeddings_optimized"):
-                        try:
-                            cursor.execute(
-                                f"ALTER TABLE {_t} ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
-                            )
-                        except Exception as _ae:
-                            logger.warning("Could not ALTER %s to dim %d: %s", _t, dim, _ae)
-                    for _t in ("Graph_KG.kg_EdgeEmbeddings",):
-                        try:
-                            cursor.execute(
-                                f"ALTER TABLE {_t} ALTER COLUMN emb VECTOR(DOUBLE, {dim})"
-                            )
-                        except Exception:
-                            pass
-                    self.conn.commit()
-                else:
-                    logger.error(
-                        "CRITICAL: Embedding dimension mismatch! DB has %d but engine configured for %d. "
-                        "Vector operations will fail. Table is non-empty (%s rows) — drop and recreate "
-                        "kg_NodeEmbeddings manually to change dimension.",
-                        db_dim,
-                        dim,
-                        row_count,
-                    )
+            self._migrate_vector_dimensions(cursor, dim)
         except Exception as e:
             logger.warning("Could not verify embedding dimension: %s", e)
 

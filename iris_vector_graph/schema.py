@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .capabilities import IRISCapabilities
+from .constants import DEFAULT_EMBEDDING_DIMENSION, DEFAULT_EMBEDDING_TABLE
 from .security import sanitize_identifier, validate_table_name
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,15 @@ class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
 
     @staticmethod
-    def get_base_schema_sql(embedding_dimension: int = 768) -> str:
+    def get_base_schema_sql(
+        embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION,
+    ) -> str:
         """Get SQL for base schema. Using explicit Graph_KG schema qualification and robust types.
 
         Args:
-            embedding_dimension: Dimension of the vector embeddings. Defaults to 768 for
-                                 backward compatibility, but should be set to match your
+            embedding_dimension: Dimension of the vector embeddings. Defaults to
+                                 ``DEFAULT_EMBEDDING_DIMENSION`` (768) for backward
+                                 compatibility, but should be set to match your
                                  actual embedding model (e.g. 384 for all-MiniLM-L6-v2).
         """
         return f"""
@@ -748,30 +752,93 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return status
 
     @staticmethod
-    def get_embedding_dimension(
-        cursor, table_name: str = "Graph_KG.kg_NodeEmbeddings"
-    ) -> Optional[int]:
+    def _split_table_name(table_name: str) -> tuple:
+        """Split ``Graph_KG.kg_EdgeEmbeddings`` into ``("Graph_KG", "kg_EdgeEmbeddings")``.
+
+        An unqualified name is taken to be in the Graph_KG schema.
         """
-        Detects the vector embedding dimension for a table using IRIS metadata.
+        schema, _, table = table_name.rpartition(".")
+        return (schema or "Graph_KG"), table
+
+    @staticmethod
+    def derive_class_name(table_name: str) -> str:
+        """Derive the persistent class name IRIS generates for a SQL table name.
+
+        Schema underscores become package dots, table underscores are dropped:
+        ``Graph_KG.kg_NodeEmbeddings`` -> ``Graph.KG.kgNodeEmbeddings``, which is
+        exactly what ``iris_src/src/Graph/KG/kgNodeEmbeddings.cls`` declares via
+        ``SqlTableName``.
+
+        This is a *guess*, used only when the class dictionary cannot be read.
+        A DDL-created table (``kg_EdgeEmbeddings`` has no hand-written .cls) gets
+        whatever class name IRIS chose, which may not follow this rule — prefer
+        :meth:`resolve_table_class`.
         """
-        # IRIS stores vector dimension in class metadata
-        # Table Graph_KG.kg_NodeEmbeddings is usually class Graph.KG.kgNodeEmbeddings
-        # We'll search for the 'emb' property across classes containing 'Graph' and 'NodeEmbeddings'
+        schema, table = GraphSchema._split_table_name(table_name)
+        return f"{schema.replace('_', '.')}.{table.replace('_', '')}"
+
+    @staticmethod
+    def resolve_table_class(cursor, table_name: str) -> Optional[str]:
+        """Ask IRIS which class projects to ``table_name``. None if no class does.
+
+        The class dictionary is keyed by class name, not SQL name, so anything
+        reading ``%Dictionary.CompiledProperty`` for a table has to make this
+        hop first. Note the literal interpolation: parameterised binds do not
+        match reliably against ``%Dictionary.CompiledClass``.
+        """
+        schema, table = GraphSchema._split_table_name(table_name)
         try:
-            # Query IRIS CompiledProperty metadata — restrict to kgNodeEmbeddings only
+            safe_schema = sanitize_identifier(schema)
+            safe_table = sanitize_identifier(table)
+        except ValueError:
+            logger.warning("Invalid table name for class lookup: %r", table_name)
+            return None
+
+        try:
             cursor.execute(
-                """
-                SELECT Parameters
-                FROM %Dictionary.CompiledProperty
-                WHERE Name = 'emb'
-                  AND Parent = 'Graph.KG.kgNodeEmbeddings'
-                """
+                "SELECT Name FROM %Dictionary.CompiledClass "
+                f"WHERE SqlSchemaName = '{safe_schema}' AND SqlTableName = '{safe_table}'"
+            )
+            row = cursor.fetchone()
+            if row and row[0]:
+                return str(row[0])
+        except Exception as e:
+            logger.debug("Could not resolve class for %s: %s", table_name, e)
+        return None
+
+    @staticmethod
+    def get_embedding_dimension(
+        cursor, table_name: str = DEFAULT_EMBEDDING_TABLE
+    ) -> Optional[int]:
+        """Detect the VECTOR width of ``table_name``'s ``emb`` column, or None.
+
+        None means "this table has no ``emb`` column with a declared width" —
+        either the table does not exist, or the column was created untyped. It
+        does **not** mean "use the default": before 3.1.0 this method ignored
+        ``table_name`` entirely and answered about ``Graph.KG.kgNodeEmbeddings``
+        whatever it was asked, so a caller checking the edge column was handed
+        the node column's width and read a broken schema as healthy.
+        """
+        class_name = GraphSchema.resolve_table_class(
+            cursor, table_name
+        ) or GraphSchema.derive_class_name(table_name)
+
+        try:
+            safe_class = sanitize_identifier(class_name)
+        except ValueError:
+            logger.warning("Invalid table name for dimension lookup: %r", table_name)
+            return None
+
+        try:
+            cursor.execute(
+                "SELECT Parameters FROM %Dictionary.CompiledProperty "
+                f"WHERE Name = 'emb' AND Parent = '{safe_class}'"
             )
             rows = cursor.fetchall()
             for row in rows:
                 params = str(row[0])
                 if "LEN," in params:
-                    # Parse 'LEN,768' from params string
+                    # Parse 'LEN,768' out of the flat Parameters blob
                     parts = params.split(",")
                     for i, p in enumerate(parts):
                         if p == "LEN" and i + 1 < len(parts):
@@ -780,10 +847,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             pass
 
         # Fallback to INFORMATION_SCHEMA (though IRIS often reports VECTOR as VARCHAR there)
-        schema = "Graph_KG"
-        table = "kg_NodeEmbeddings"
-        if "." in table_name:
-            schema, table = table_name.split(".", 1)
+        schema, table = GraphSchema._split_table_name(table_name)
 
         try:
             result = None
@@ -823,17 +887,21 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     @staticmethod
     def get_procedures_sql_list(
         table_schema: str = "Graph_KG",
-        embedding_dimension: int = 1000,
+        embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION,
     ) -> List[str]:
         """
         Get a list of SQL statements to install retrieval stored procedures.
 
         Args:
             table_schema: SQL schema containing the data tables (e.g. "Graph_KG").
-            embedding_dimension: Vector dimension for the DECLARE clause inside
-                kg_KNN_VEC. Must match the emb column dimension in
-                kg_NodeEmbeddings. Default 1000 for backward compatibility;
-                internal callers (initialize_schema) MUST pass the real dimension.
+            embedding_dimension: **Currently unused.** It is accepted so callers
+                that pass the real dimension keep working, and so the signature
+                is ready if kg_KNN_VEC ever declares a width. As generated today
+                that procedure says ``TO_VECTOR(:queryInput, DOUBLE)`` with no
+                length, so nothing here depends on the value. Its default was
+                1000 before 3.1.0 while every table-creating path defaulted to
+                768 — a disagreement that never reached SQL only by accident.
+                Now ``DEFAULT_EMBEDDING_DIMENSION``, same as the DDL path.
 
         Returns:
             List of SQL DDL strings in execution order. Each is a complete

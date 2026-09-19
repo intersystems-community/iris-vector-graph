@@ -4,6 +4,8 @@ import json
 import os
 import sys
 
+from .constants import DEFAULT_EMBEDDING_DIMENSION
+
 try:
     import click
     _HAS_CLICK = True
@@ -114,7 +116,9 @@ if _HAS_CLICK:
         pass
 
     @schema.command("init")
-    @click.option("--embedding-dim", default=768, show_default=True)
+    @click.option(
+        "--embedding-dim", default=DEFAULT_EMBEDDING_DIMENSION, show_default=True
+    )
     @click.pass_context
     def schema_init(ctx, embedding_dim):
         c = _client(ctx.obj["url"], ctx.obj["api_key"])

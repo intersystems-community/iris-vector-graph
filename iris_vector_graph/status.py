@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
+from .constants import DEFAULT_EMBEDDING_DIMENSION
+
 IndexState = Literal["ready", "empty", "building", "absent"]
 
 
@@ -115,7 +117,7 @@ class EngineStatus:
     objectscript: ObjectScriptStatus = field(default_factory=ObjectScriptStatus)
     arno: ArnoStatus = field(default_factory=ArnoStatus)
     indexes: IndexInventory = field(default_factory=IndexInventory)
-    embedding_dimension: int = 768
+    embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION
     probe_ms: float = 0.0
     errors: List[str] = field(default_factory=list)
     pending_sync: bool = False

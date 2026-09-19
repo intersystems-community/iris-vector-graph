@@ -150,6 +150,64 @@ version bridge was called by a name the module never imported and the `except` a
 the `NameError`. `ivg_version` was hardcoded `"1.58.0"` and is now the installed
 package version, so an archive can be attributed to the code that wrote it.
 
+**Fixed — `get_embedding_dimension(cursor, table_name)` reads the table you name**
+
+It accepted `table_name` and ignored it: the dictionary query hardcoded
+`Parent = 'Graph.KG.kgNodeEmbeddings'`, so every caller got the node width no matter
+what they asked about, and a table that cannot exist got a confident number rather
+than `None`. On a deployment whose node tables are 384 and whose
+`kg_EdgeEmbeddings` is 768 — the shape reported against 2.18.6, and reproduced on
+`ivg-iris-enterprise` — anything sizing an edge write from this answer sized it
+wrong and the write failed downstream, far from the call that chose the number.
+
+It now resolves the class behind the table from `%Dictionary.CompiledClass`
+(`SqlSchemaName`/`SqlTableName`), falling back to the name IRIS derives by
+convention (schema `_`→`.`, underscores dropped from the table part) only when the
+catalog cannot be read. The default argument is `Graph_KG.kg_NodeEmbeddings`, so
+existing callers keep the answer they had. `None` now means "no `emb` column with a
+declared width here", not "use the default" — callers that treated a falsy return as
+384 need to look again.
+
+`resolve_table_class()` and `derive_class_name()` are public on `GraphSchema` for
+callers that need the mapping itself.
+
+**Fixed — one default embedding dimension for the whole library**
+
+Four entry points carried three different literals, so the width a table got
+depended on which one created it and nothing recorded which one that was:
+`get_base_schema_sql`, `AdminSchemaRequest`, `EngineStatus` and the CLI's
+`--embedding-dim` said 768; `get_procedures_sql_list` said **1000**. All five now
+read `iris_vector_graph.constants.DEFAULT_EMBEDDING_DIMENSION`, which is 768 — the
+value that shipped. A test scans the package so a sixth site cannot reappear.
+
+Nothing was ever built at 1000: `get_procedures_sql_list` never interpolates
+`embedding_dimension` at all — the generated `kg_KNN_VEC` says
+`TO_VECTOR(:queryInput, DOUBLE)` with no length — so the disagreement never reached
+SQL. Its docstring claimed a `DECLARE ... VECTOR(DOUBLE, N)` clause that does not
+exist, and now says the parameter is unused. `initialize_schema` is unaffected; it
+still refuses to guess and raises `ValueError` when no dimension was configured or
+inferred.
+
+**Fixed — the empty-table dimension migration covers `kg_EdgeEmbeddings`**
+
+`initialize_schema`'s auto-ALTER walked the two node tables and, in its
+`db_dim is None` branch, skipped the edge table entirely — so a namespace whose edge
+column was created at another width kept it. The mismatch branch did issue the ALTER,
+under a bare `except Exception: pass` that discarded the failure, which is the other
+half of why this was quiet for weeks.
+
+The block is now `_migrate_vector_dimensions(cursor, dim)`, returning a report of
+`unchanged` / `altered` / `needs_manual_migration` / `failed`. All three vector
+tables are covered in both branches, a failed ALTER is recorded and logged rather
+than swallowed, a non-empty table at the wrong width is logged `CRITICAL` and left
+alone, and table names go through the engine's `_t()` so a prefixed namespace is
+migrated instead of `Graph_KG` regardless of where the engine points.
+
+It still compares each column against the dimension **this engine** was configured
+with, so it cannot see a second writer that disagrees. Two processes initializing the
+same namespace at different widths remains undetectable here; the ledger is where
+that would have to be caught.
+
 **Known issues**
 
 Open findings, with what is verified and what is still a decision, are in
@@ -161,7 +219,11 @@ API); `_detect_arno` probes with a node that does not exist and so disables a
 healthy Arno; `Graph.KG.EdgeScan.MatchEdges` still overloads graph key `0`;
 `USE GRAPH` predicates match one of the default graph's two spellings; four
 `graph_id` writers in `cypher/translator.py` and `bulk_loader.py` are still
-graph-blind.
+graph-blind; `conftest.py` cannot tell a stopped container from a missing one and
+falls through to whatever answers `localhost:1972`, so confirm the container is up
+before trusting a gate number; and a named graph cannot carry its own embedding model
+or width — the embedding tables have no `graph_id`, so multiple models means a
+namespace per model.
 
 ---
 

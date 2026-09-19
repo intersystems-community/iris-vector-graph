@@ -27,6 +27,7 @@ except (ImportError, Exception):
 
 from contextlib import asynccontextmanager
 
+from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION
 from iris_vector_graph.engine import IRISGraphEngine
 
 
@@ -449,7 +450,7 @@ def get_stats():
 
 
 class AdminSchemaRequest(BaseModel):
-    embedding_dimension: int = 768
+    embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION
     auto_deploy_objectscript: bool = False
 
 
