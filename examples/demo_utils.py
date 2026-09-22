@@ -13,9 +13,74 @@ Used by demo_biomedical.py, demo_fraud_detection.py, and demo_working_system.py.
 """
 
 import os
+import subprocess
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+#: The container this project owns. `tests/conftest.py` reads the same variable, so a
+#: demo and the suite cannot end up on two different instances.
+DEFAULT_DEMO_CONTAINER = "ivg-iris-enterprise"
+
+
+def resolve_demo_container() -> str:
+    """Which container a demo must connect to.
+
+    By **name**, never by discovery. `auto_detect_iris_host_and_port()` answered
+    `('localhost', 41972)` on this machine — another project's container, not this
+    one's — and the workspace rule is that each project owns exactly one.
+    """
+    return (os.environ.get("IVG_TEST_CONTAINER") or "").strip() or DEFAULT_DEMO_CONTAINER
+
+
+def _docker_inspect(container_name: str, fmt: str) -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", fmt, container_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def _demo_connection_targets(container_name: str) -> List[Tuple[str, str, int]]:
+    """Every (label, host, port) worth trying for `container_name`, in order.
+
+    The same order `tests/conftest.py` uses: OrbStack DNS, then the container IP, then
+    the published host port. The first two reach the container's internal 1972, which is
+    why a published-port variable cannot redirect them — see KNOWN_ISSUES
+    §`IVG_PORT` is inert on the two paths the fixture actually takes.
+    """
+    targets: List[Tuple[str, str, int]] = []
+
+    import socket
+
+    orb_host = f"{container_name}.orb.local"
+    try:
+        targets.append(("OrbStack DNS", socket.gethostbyname(orb_host), 1972))
+    except socket.gaierror:
+        pass
+
+    container_ip = _docker_inspect(
+        container_name,
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+    )
+    if container_ip:
+        targets.append(("container IP", container_ip, 1972))
+
+    published = _docker_inspect(
+        container_name,
+        '{{(index (index .NetworkSettings.Ports "1972/tcp") 0).HostPort}}',
+    )
+    if published and published.isdigit():
+        targets.append(("published port", "localhost", int(published)))
+
+    return targets
 
 
 # ANSI color codes for terminal output
@@ -151,22 +216,58 @@ class DemoRunner:
 
     def get_connection(self):
         """
-        Get database connection using iris-devtester.
+        Connect to the container this project owns, resolved by name.
 
-        Raises DemoError with next steps if connection fails.
+        Deliberately does **not** call `auto_detect_iris_host_and_port()`: on 2026-09-22
+        that answered `localhost:41972`, which belongs to a different repo. A demo that
+        writes nodes into another project's container is the silent corruption the workspace
+        container-exclusivity rule exists to prevent, and a demo has no way to notice —
+        the first statement either works against the wrong data or fails with a class
+        error that reads like a broken install.
+
+        Raises DemoError with next steps if the container cannot be reached.
         """
         if self.connection:
             return self.connection
 
+        container_name = resolve_demo_container()
         try:
-            from iris_devtester.connections import auto_detect_iris_host_and_port
             from iris_devtester.utils.dbapi_compat import get_connection as dbapi_connect
 
-            host, port = auto_detect_iris_host_and_port()
-            if port is None:
-                port = 1972  # Default fallback
+            targets = _demo_connection_targets(container_name)
+            if not targets:
+                raise DemoError(
+                    f"Container '{container_name}' is not running, so there is nothing "
+                    "to connect to. A demo will not fall back to another instance.",
+                    next_steps=[
+                        "Start it: scripts/enterprise-container.sh up",
+                        "Or name another with IVG_TEST_CONTAINER=<name>",
+                        "Check: docker ps",
+                    ],
+                )
 
-            self.connection = dbapi_connect(host or "localhost", port, "USER", "_SYSTEM", "SYS")
+            errors = []
+            for label, host, port in targets:
+                try:
+                    self.connection = dbapi_connect(host, port, "USER", "_SYSTEM", "SYS")
+                except Exception as exc:  # noqa: BLE001 - try the next route
+                    errors.append(f"{label} ({host}:{port}): {exc}")
+                    continue
+                print(
+                    Colors.info(
+                        f"  connected to {container_name} via {label} {host}:{port}"
+                    )
+                )
+                break
+            else:
+                raise DemoError(
+                    f"Could not reach container '{container_name}' on any route.",
+                    next_steps=[
+                        "Start it: scripts/enterprise-container.sh up",
+                        *errors,
+                    ],
+                )
+
             # Ensure Graph_KG schema is used
             cursor = self.connection.cursor()
             try:
@@ -178,6 +279,8 @@ class DemoRunner:
                     pass
             return self.connection
 
+        except DemoError:
+            raise
         except ImportError:
             raise DemoError(
                 "iris-devtester package not installed",

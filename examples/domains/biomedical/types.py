@@ -107,91 +107,83 @@ class Protein(Node):
         limit: int = 10,
         threshold: float = 0.7
     ) -> List["SimilarProtein"]:
+        """Find similar proteins using vector embeddings.
+
+        This used to hand-write SQL against `Graph_KG.kg_NodeEmbeddings` keyed on an
+        `id` column, and answered `[]` in every deployment for three reasons:
+
+        * post-4.0.0 that table is keyed `(graph_id, node_id)` and has no `id`
+          column — but a DDL-created table still carries an implicit RowID spelled
+          `ID`, so `WHERE id = 'PROTEIN:TP53'` parses, matches nothing, and the
+          existence check returned early;
+        * spec 227 routes vectors to a per-`(graph, model)` table, so one hardcoded
+          table name is not where a graph's vectors necessarily live;
+        * both queries were wrapped in `except Exception: return []`, which reported
+          "no similar proteins" for every failure, including the one above.
+
+        The engine seam handles routing, graph scope and the KNN itself. The search
+        runs in the default graph, which is the only graph this example addresses.
         """
-        Find similar proteins using vector embeddings with HNSW index.
-
-        REQUIRES: InterSystems IRIS 2025.1+ with Vector Search feature enabled.
-
-        NOTE: This implementation will return empty results if VECTOR functions
-        are not available. For full vector search support, use IRIS with:
-        - VECTOR_DOT_PRODUCT() function
-        - VECTOR_COSINE() function
-        - HNSW index on kg_NodeEmbeddings.emb
-
-        See docs/setup/IRIS_PASSWORD_RESET.md for IRIS version requirements.
-        """
-        # Get database connection from context
-        db_connection = info.context.get("db_connection")
-        if not db_connection:
-            return []
-
-        cursor = db_connection.cursor()
-
-        # Check if embeddings exist for this protein
-        try:
-            cursor.execute(
-                "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?",
-                (str(self.id),)
-            )
-            count = cursor.fetchone()[0]
-            if count == 0:
+        engine = info.context.get("engine")
+        if engine is None:
+            db_connection = info.context.get("db_connection")
+            if db_connection is None:
                 return []
-        except Exception:
+            from iris_vector_graph.engine import IRISGraphEngine
+
+            engine = IRISGraphEngine(db_connection)
+
+        own = engine.get_embedding(str(self.id))
+        if not own or not own.get("embedding"):
             return []
 
-        query = """
-            SELECT TOP ?
-                e2.id,
-                VECTOR_DOT_PRODUCT(e1.emb, e2.emb) as similarity
-            FROM Graph_KG.kg_NodeEmbeddings e1,
-                 Graph_KG.kg_NodeEmbeddings e2
-            WHERE e1.id = ?
-              AND e2.id != ?
-              AND VECTOR_DOT_PRODUCT(e1.emb, e2.emb) >= ?
-            ORDER BY similarity DESC
-        """
+        # Not wrapped in a blanket `except`: a failed KNN must reach the caller as a
+        # GraphQL error rather than as "this protein has no similar proteins".
+        rows = engine.search_nodes_by_vector(
+            query=list(own["embedding"]),
+            k=limit + 1,
+            label_filter="Protein",
+        )
 
-        try:
-            cursor.execute(query, (limit, str(self.id), str(self.id), threshold))
-            rows = cursor.fetchall()
-        except Exception as e:
-            # VECTOR functions not available - requires IRIS 2025.1+ with Vector Search
-            # Return empty list (graceful degradation)
+        similar_results = []
+        for node_id, similarity in rows:
+            if node_id == str(self.id):
+                continue
+            if similarity < threshold:
+                continue
+            similar_results.append((node_id, float(similarity)))
+            if len(similar_results) >= limit:
+                break
+
+        if not similar_results:
             return []
 
-        if not rows:
-            return []
+        # Keyed by ID, not by position: `get_nodes` drops an ID it cannot find, and
+        # indexing by position then pairs a node with another node's similarity.
+        nodes_data = {
+            n["id"]: n for n in engine.get_nodes([nid for nid, _ in similar_results]) if n
+        }
 
-        # Batch load proteins using ProteinLoader
-        protein_loader = info.context["protein_loader"]
-        protein_ids = [row[0] for row in rows]
-
-        proteins_data = await protein_loader.load_many(protein_ids)
-
-        # Build SimilarProtein results
         results = []
-        for i, row in enumerate(rows):
-            protein_id = row[0]
-            similarity = float(row[1]) if row[1] is not None else 0.0
-
-            protein_data = proteins_data[i]
-            if protein_data:
-                protein = Protein(
-                    id=strawberry.ID(protein_data["id"]),
-                    labels=protein_data.get("labels", []),
-                    properties=protein_data.get("properties", {}),
-                    created_at=protein_data.get("created_at"),
-                    name=protein_data.get("name", ""),
-                    function=protein_data.get("function"),
-                    organism=protein_data.get("organism"),
-                    confidence=protein_data.get("confidence"),
-                )
-
-                results.append(SimilarProtein(
-                    protein=protein,
-                    similarity=similarity,
-                    distance=None  # Distance not computed in this query
-                ))
+        for node_id, similarity in similar_results:
+            protein_data = nodes_data.get(node_id)
+            if not protein_data:
+                continue
+            protein = Protein(
+                id=strawberry.ID(protein_data["id"]),
+                labels=protein_data.get("labels", []),
+                properties=protein_data.get("properties", {}),
+                created_at=protein_data.get("created_at"),
+                name=protein_data.get("name", ""),
+                function=protein_data.get("function"),
+                organism=protein_data.get("organism"),
+                confidence=protein_data.get("confidence"),
+            )
+            results.append(SimilarProtein(
+                protein=protein,
+                similarity=similarity,
+                distance=None,  # Distance not computed by the KNN path
+            ))
 
         return results
 

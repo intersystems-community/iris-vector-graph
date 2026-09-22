@@ -145,10 +145,10 @@ def main():
             else:
                 cursor.execute(
                     """
-                    SELECT TOP 3 e2.id, VECTOR_COSINE(e1.emb, e2.emb) as similarity
+                    SELECT TOP 3 e2.node_id, VECTOR_COSINE(e1.emb, e2.emb) as similarity
                     FROM Graph_KG.kg_NodeEmbeddings e1, Graph_KG.kg_NodeEmbeddings e2
-                    WHERE e1.id = 'ACCOUNT:RING_001'
-                    AND e2.id != e1.id
+                    WHERE e1.node_id = 'ACCOUNT:RING_001'
+                    AND e2.node_id != e1.node_id
                     ORDER BY similarity DESC
                 """
                 )
