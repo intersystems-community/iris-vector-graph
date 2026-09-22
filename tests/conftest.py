@@ -11,6 +11,12 @@ logger = logging.getLogger(__name__)
 
 _GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
+#: The vector width the session namespace is bootstrapped at, and the one the
+#: vector suite assumes for the shared `Graph_KG.kg_NodeEmbeddings`. Matches
+#: `schema.py`'s own default in `get_base_schema_sql`. See
+#: `_restore_session_embedding_width` for why it has to be put back at teardown.
+SESSION_EMBEDDING_DIM = 768
+
 
 def container_state_is_running(state) -> bool:
     """True only for Docker's `running` state.
@@ -43,6 +49,116 @@ def docker_container_state(container_name: str):
     return result.stdout.strip() or None
 
 
+def requires_running_container(container_name: str):
+    """A `skipif` marker that skips unless `container_name` is *running*.
+
+    `docker inspect <name>` exits 0 for a container in any state, so a guard built on its
+    exit code lets a test body run against a stopped container and fail with Docker's
+    `container ... is not running`. `ivg-iris` is exactly that case here: it exists and is
+    deliberately left down, because `MaxServerConn=1` makes it unusable for the suite.
+
+    Evaluated at import, like every `skipif` condition, so the state is read once per
+    session. Looks `docker_container_state` up through the module rather than closing over
+    it, so a unit test can substitute it.
+    """
+    state = globals()["docker_container_state"](container_name)
+    return pytest.mark.skipif(
+        not container_state_is_running(state),
+        reason=f"container {container_name} is {state or 'absent'}, not running",
+    )
+
+
+def container_hostname_matches(reported, expected_hostname="", container_id="") -> bool:
+    """True only when `reported` identifies the container we asked for.
+
+    An IRIS instance reports its own hostname (`%SYSTEM.INetInfo::LocalHostName`), and
+    inside Docker that is `{{.Config.Hostname}}` — by default the first twelve characters
+    of `{{.Id}}`. Comparing the two turns "the container is running" into "the connection
+    reached *that* container", which is the assertion `container_state_is_running` cannot
+    make.
+
+    Fails closed in every direction: an unreadable hostname, or nothing to compare it
+    against, is not a pass. A helper that returned True on an empty reading would be a
+    no-op on exactly the builds where the probe does not work.
+
+    A prefix match requires the full twelve characters; a shorter string is a prefix of
+    too many IDs to mean anything.
+    """
+    def _norm(value) -> str:
+        return str(value).strip().lower() if value else ""
+
+    got = _norm(reported)
+    if not got:
+        return False
+    if got == _norm(expected_hostname):
+        return True
+    cid = _norm(container_id)
+    return bool(cid) and len(got) >= 12 and cid.startswith(got)
+
+
+def _docker_inspect(container_name: str, fmt: str):
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", "-f", fmt, container_name],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
+
+
+def docker_container_id(container_name: str):
+    """The container's full ID, or None when it does not exist or Docker is absent."""
+    return _docker_inspect(container_name, "{{.Id}}")
+
+
+def docker_container_hostname(container_name: str):
+    """The hostname Docker gave the container, or None when it cannot be read."""
+    return _docker_inspect(container_name, "{{.Config.Hostname}}")
+
+
+def probe_instance_hostname(conn):
+    """Ask the instance behind `conn` for its own hostname, or None if it cannot say.
+
+    Measured on `irishealth:2026.3.0AI.113.0` (2026-09-21): there is no SQL route to this.
+    `SELECT $SYSTEM.INetInfo.LocalHostName()`, `SELECT $ZU(110)` and
+    `SELECT $SYSTEM.Util.InstallDirectory()` all fail `SQLCODE -12 <A term expected>`;
+    `CALL %SYSTEM.INetInfo_LocalHostName()` and a `%SYS.ProcessQuery` select both hang
+    past 120 seconds. The Native API answers immediately and needs no user table, so it
+    works on all four of `iris_connection`'s fallback paths.
+
+    Opens its **own** handle and closes it. `createIRIS` on a connection that also runs
+    cursor DDL permanently corrupts the driver's parameter binding — see the
+    `_safe_createIRIS` monkeypatch below — so a probe that reused the session connection
+    would break the very session it is validating.
+    """
+    import iris as _iris
+
+    native = None
+    try:
+        native = _iris.connect(
+            hostname=conn.hostname,
+            port=conn.port,
+            namespace=conn.namespace,
+            username="_SYSTEM",
+            password="SYS",
+        )
+        return _iris.createIRIS(native).classMethodValue(
+            "%SYSTEM.INetInfo", "LocalHostName"
+        )
+    except Exception as exc:  # pragma: no cover - build-dependent
+        logger.warning("Could not read the instance's hostname: %s", exc)
+        return None
+    finally:
+        if native is not None:
+            with contextlib.suppress(Exception):
+                native.close()
+
+
 def _deploy_objectscript(container_name: str) -> None:
     subprocess.run(
         ["docker", "exec", container_name, "mkdir", "-p", "/tmp/src"],
@@ -67,6 +183,67 @@ def _deploy_objectscript(container_name: str) -> None:
             input=f'Do $system.OBJ.Load("/tmp/src/{rel}","ck-d")\nH\n',
             capture_output=True, text=True, timeout=30,
         )
+
+
+_NATIVE_CONNECTION_IS_GONE = (
+    "COMMUNICATION LINK ERROR",
+    "COMMUNICATION ERROR",
+    "CONNECTION CLOSED",
+    "CONNECTION LOST",
+    "BROKEN PIPE",
+    "EPIPE",
+    "ECONNRESET",
+)
+
+
+def native_error_means_the_connection_is_gone(exc: BaseException) -> bool:
+    """Is this the socket dying, rather than IRIS answering with an error?
+
+    Only a dead connection is worth retrying: an ObjectScript error means the call
+    reached IRIS and got a real answer, and running it twice would repeat whatever
+    it did before it failed.
+    """
+    text = str(exc).upper()
+    return any(marker in text for marker in _NATIVE_CONNECTION_IS_GONE)
+
+
+class ReconnectingNative:
+    """An IRIS native object that reopens its connection once if it dies.
+
+    The session shares one dedicated native connection — `createIRIS` on the
+    connection that also runs cursor DDL corrupts the driver's parameter binding,
+    so every `createIRIS(session_connection)` call is redirected to this one. Until
+    4.0.0 nothing noticed when it died. The T074 gate measured the cost: one EPIPE
+    became 69 `ERROR at setup` entries at `iris_master_cleanup`, each one a test
+    that never ran, and the single real event was buried in the 69th copy of its
+    own message.
+
+    So one retry, after reopening, and the death is logged at `ERROR` rather than
+    swallowed: the point is to name the event once, not to hide it.
+    """
+
+    def __init__(self, open_native, on_reconnect=None):
+        self._open_native = open_native
+        self._on_reconnect = on_reconnect
+        self._native = open_native()
+
+    def __getattr__(self, name):
+        attr = getattr(self._native, name)
+        if not callable(attr):
+            return attr
+
+        def _call_with_one_retry(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except Exception as exc:
+                if not native_error_means_the_connection_is_gone(exc):
+                    raise
+                if self._on_reconnect is not None:
+                    self._on_reconnect(exc)
+                self._native = self._open_native()
+                return getattr(self._native, name)(*args, **kwargs)
+
+        return _call_with_one_retry
 
 
 @pytest.fixture(scope="session")
@@ -162,6 +339,7 @@ def iris_connection(iris_test_container):
     _IVG_PORT = int(os.environ.get("IVG_PORT", "31972"))
 
     conn = None
+    _which_path = "none"
 
     # Try OrbStack DNS first: {container}.orb.local resolves to the OrbStack-routable IP,
     # which allows direct :1972 connections without port-forwarding or socat.
@@ -176,6 +354,7 @@ def iris_connection(iris_test_container):
                 hostname=_orb_ip, port=1972, namespace="USER",
                 username="_SYSTEM", password="SYS",
             )
+            _which_path = f"OrbStack DNS {_orb_host} ({_orb_ip}):1972"
             logger.info("Connected to %s via OrbStack DNS %s (%s):1972", container_name, _orb_host, _orb_ip)
         except Exception as _e:
             logger.info("OrbStack %s:1972 connect failed (%s) — falling back", _orb_ip, _e)
@@ -191,6 +370,7 @@ def iris_connection(iris_test_container):
                 hostname=cip, port=1972, namespace="USER",
                 username="_SYSTEM", password="SYS",
             )
+            _which_path = f"container IP {cip}:1972"
             logger.info("Connected to %s via container IP %s:1972", container_name, cip)
         except Exception as _e:
             logger.info("Container IP %s:1972 not routable (%s) — falling back", cip, _e)
@@ -204,6 +384,7 @@ def iris_connection(iris_test_container):
                 hostname="localhost", port=_IVG_PORT, namespace="USER",
                 username="_SYSTEM", password="SYS",
             )
+            _which_path = f"localhost:{_IVG_PORT} (socat proxy)"
             logger.info("Connected to %s via localhost:%s (socat proxy)", container_name, _IVG_PORT)
         except Exception as _e:
             logger.info("localhost:%s connect failed (%s) — trying iris_devtester", _IVG_PORT, _e)
@@ -211,30 +392,42 @@ def iris_connection(iris_test_container):
 
     if conn is None:
         # iris_devtester path: works on macOS Docker Desktop, OrbStack, and Linux.
-        # Also verifies we're NOT accidentally hitting los-iris via an SSH tunnel.
         try:
             from iris_devtester import IRISContainer as _IRC
             _fresh = _IRC.attach(container_name)
             _fresh._connection = None
             conn = _fresh.get_connection()
-            _c = conn.cursor()
-            try:
-                _c.execute("SELECT COUNT(*) FROM %Dictionary.CompiledClass WHERE Name='Graph.KG.LOSBriefingJob'")
-                _los_count = _c.fetchone()[0]
-            finally:
-                with contextlib.suppress(Exception):
-                    _c.close()
-            if _los_count > 0:
-                raise RuntimeError(
-                    f"localhost:{_IVG_PORT} is los-iris (SSH tunnel), NOT ivg-iris. "
-                    "Stop the SSH tunnel or configure ivg-iris on a different host port."
-                )
+            _which_path = "iris_devtester"
             logger.info("Connected to %s via iris_devtester", container_name)
-        except RuntimeError:
-            raise
         except Exception as e:
             logger.error("Could not connect to %s: %s", container_name, e)
             raise
+
+    # Whichever path produced the connection, prove it reached the named container.
+    #
+    # This replaces a negative probe that only caught one known impostor (los-iris, by
+    # looking for a class of its own). On 2026-09-18 a suite ran against
+    # `irispython-dx-iris` on localhost:1972 and reported `547 passed`; that instance
+    # holds no LOS class, so the negative probe said nothing. A positive assertion
+    # catches every impostor, named or not.
+    _expected_hostname = docker_container_hostname(container_name)
+    _expected_id = docker_container_id(container_name)
+    _reported = probe_instance_hostname(conn)
+    if not container_hostname_matches(_reported, _expected_hostname, _expected_id):
+        pytest.fail(
+            f"The connection obtained via the {_which_path} path does not belong to "
+            f"container '{container_name}'.\n"
+            f"  the instance reports hostname: {_reported or '<unreadable>'}\n"
+            f"  docker says the container is:  "
+            f"{_expected_hostname or '<unknown>'} (id {(_expected_id or '?')[:12]})\n"
+            f"A suite that runs against another instance reports a number that measures "
+            f"nothing. Check for an SSH tunnel or another container on port "
+            f"{_IVG_PORT}, then: scripts/enterprise-container.sh up"
+        )
+    logger.info(
+        "Instance identity confirmed: %s answered as %s (%s path)",
+        container_name, _reported, _which_path,
+    )
 
     # Install the createIRIS monkeypatch BEFORE any operation touches the session
     # connection via the native IRIS API.  iris.createIRIS(conn) + cursor DDL on
@@ -252,26 +445,40 @@ def iris_connection(iris_test_container):
     _original_createIRIS = _iris_module.createIRIS
     _native_conn_holder: list = [None]  # mutable cell so the closure can update it
 
-    def _get_or_open_native_conn():
+    def _open_native_iris_object():
         if _native_conn_holder[0] is None:
-            try:
-                import iris as _iris_native
-                _native_conn_holder[0] = _iris_native.connect(
-                    hostname=conn.hostname,
-                    port=conn.port,
-                    namespace=conn.namespace,
-                    username="_SYSTEM",
-                    password="SYS",
-                )
-            except Exception as _e:
-                logger.warning("Could not create native conn for session isolation: %s", _e)
-        return _native_conn_holder[0]
+            import iris as _iris_native
+            _native_conn_holder[0] = _iris_native.connect(
+                hostname=conn.hostname,
+                port=conn.port,
+                namespace=conn.namespace,
+                username="_SYSTEM",
+                password="SYS",
+            )
+        return _original_createIRIS(_native_conn_holder[0])
+
+    def _discard_dead_native_conn(exc):
+        # Named once, at ERROR, and attributable: the test running right now is the
+        # one that killed the connection.  Before 4.0.0 this event was silent and
+        # every later test that needed the native API failed at setup instead.
+        logger.error(
+            "The session's dedicated native connection died (%s) — reopening it. "
+            "The test running at this point is the one that killed it.", exc,
+        )
+        dead = _native_conn_holder[0]
+        _native_conn_holder[0] = None
+        if dead is not None:
+            with contextlib.suppress(Exception):
+                dead.close()
 
     def _safe_createIRIS(target_conn):
         if target_conn is conn:
-            native = _get_or_open_native_conn()
-            if native is not None:
-                return _original_createIRIS(native)
+            try:
+                return ReconnectingNative(
+                    _open_native_iris_object, on_reconnect=_discard_dead_native_conn
+                )
+            except Exception as _e:
+                logger.warning("Could not create native conn for session isolation: %s", _e)
         return _original_createIRIS(target_conn)
 
     _iris_module.createIRIS = _safe_createIRIS
@@ -293,18 +500,151 @@ def iris_connection(iris_test_container):
     try:
         # 768 matches schema.py's own default (get_base_schema_sql) and what
         # most of the e2e/integration suite assumes for kg_NodeEmbeddings.
-        eng = IRISGraphEngine(conn, embedding_dimension=768)
+        eng = IRISGraphEngine(conn, embedding_dimension=SESSION_EMBEDDING_DIM)
         eng.initialize_schema(auto_deploy_objectscript=False)
     except Exception as e:
         logger.warning("Schema init failed (may already exist): %s", e)
 
+    # Hand the connection to the per-test width guard, which must not request this
+    # fixture: requesting it would open the connection for every unit test.
+    _RESOLVED_SESSION_CONN[0] = conn
+
     yield conn
+
+    _RESOLVED_SESSION_CONN[0] = None
+    _restore_session_embedding_width(conn)
 
     _iris_module.createIRIS = _original_createIRIS
     with contextlib.suppress(Exception):
         if _native_conn_holder[0] is not None:
             _native_conn_holder[0].close()
     conn.close()
+
+
+def _restore_session_embedding_width(conn) -> None:
+    """Put `Graph_KG.kg_NodeEmbeddings` back at the session width, loudly.
+
+    The shared legacy embedding table has one `emb VECTOR(DOUBLE, n)` declaration
+    for the whole namespace, and `initialize_schema()` alters it to the calling
+    engine's width whenever the table is empty. Live tests legitimately build
+    engines at other widths — 4, 8, 128, 384, 1536 all appear, some of them
+    exercising the width migration itself — so any of them can leave the shared
+    column narrowed.
+
+    That state is sticky: once rows exist at the narrow width the engine refuses to
+    widen (it cannot invent the missing dimensions), so every later run logs
+    `CRITICAL: ... is VECTOR(DOUBLE, 4) but the engine is configured for 768` and
+    every configured-width write is rejected with SQLCODE -104. It survived several
+    runs before being spotted, because the message reads as a warning about the
+    run's own data rather than as damage the previous run left behind.
+
+    Restoring here rather than failing: a width-migration test that ends on another
+    width is doing its job, so the drift is not by itself a defect — leaving it
+    behind for the next session is. The log line names the width found, so a test
+    that pollutes is still visible.
+    """
+    try:
+        from iris_vector_graph.schema import GraphSchema
+
+        cursor = conn.cursor()
+        try:
+            table = "Graph_KG.kg_NodeEmbeddings"
+            found = GraphSchema.get_embedding_dimension(cursor, table)
+            if found is None or found == SESSION_EMBEDDING_DIM:
+                return
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            row = cursor.fetchone()
+            rows = int(row[0]) if row else 0
+            logger.warning(
+                "Session teardown: %s.emb is VECTOR(DOUBLE, %s), not the session "
+                "width %s, and holds %s row(s). Some test in this run re-declared "
+                "the shared table; restoring it so the next session starts clean.",
+                table, found, SESSION_EMBEDDING_DIM, rows,
+            )
+            if rows:
+                # The rows are this run's own test data at a width nothing else can
+                # read, and they are what blocks the widening.
+                cursor.execute(f"DELETE FROM {table}")
+            conn.commit()
+            from iris_vector_graph.engine import IRISGraphEngine
+
+            IRISGraphEngine(
+                conn, embedding_dimension=SESSION_EMBEDDING_DIM
+            ).initialize_schema(auto_deploy_objectscript=False)
+            restored = GraphSchema.get_embedding_dimension(cursor, table)
+            if restored != SESSION_EMBEDDING_DIM:
+                logger.error(
+                    "Session teardown: could not restore %s.emb to %s — it is still "
+                    "VECTOR(DOUBLE, %s). The next session will log a width mismatch.",
+                    table, SESSION_EMBEDDING_DIM, restored,
+                )
+        finally:
+            with contextlib.suppress(Exception):
+                cursor.close()
+    except Exception as e:  # teardown must never fail the run
+        logger.warning("Session teardown: embedding width restore skipped: %s", e)
+
+
+def touches_shared_namespace(fixturenames) -> bool:
+    """Could this test have re-declared the shared legacy embedding table?
+
+    Only a test wired to the live session connection could. pytest resolves the
+    whole fixture closure into `request.fixturenames`, so asking about
+    `iris_connection` covers every fixture that depends on it. `arno_iris_connection`
+    is a different namespace and shares no table with it.
+    """
+    return "iris_connection" in fixturenames
+
+
+# Set by the `iris_connection` fixture once it has a live connection, so the
+# per-test width guard can reach it without requesting (and thereby creating) it.
+_RESOLVED_SESSION_CONN: list = [None]
+
+
+@pytest.fixture(autouse=True)
+def _keep_shared_embedding_width(request):
+    """Restore the shared `emb` width after any test that could have changed it.
+
+    Session teardown already restores it for the *next* run. This restores it for
+    the next *test*, which is where the T074 gate lost four tests to a width some
+    earlier test left behind, with nothing in the failure naming the cause.
+
+    The drift is not treated as a failure — a width-migration test that ends on
+    another width is doing its job — but it is logged at `ERROR` against the nodeid
+    that caused it, so the polluter is named once instead of its victims failing
+    anonymously later.
+    """
+    yield
+
+    if not touches_shared_namespace(request.fixturenames):
+        return
+    # Never force the fixture into existence: a test that skipped before touching
+    # the connection has nothing to restore, and opening one here would undo the
+    # laziness that keeps Community's connection limit intact.
+    conn = _RESOLVED_SESSION_CONN[0]
+    if conn is None:
+        return
+
+    try:
+        from iris_vector_graph.schema import GraphSchema
+
+        cursor = conn.cursor()
+        try:
+            found = GraphSchema.get_embedding_dimension(cursor, "Graph_KG.kg_NodeEmbeddings")
+        finally:
+            with contextlib.suppress(Exception):
+                cursor.close()
+        if found is None or found == SESSION_EMBEDDING_DIM:
+            return
+        logger.error(
+            "%s left Graph_KG.kg_NodeEmbeddings.emb at VECTOR(DOUBLE, %s) instead of "
+            "the session width %s. Restoring it — without this the next vector test "
+            "fails with SQLCODE -104 or a dimension mismatch and nothing names this "
+            "test.", request.node.nodeid, found, SESSION_EMBEDDING_DIM,
+        )
+        _restore_session_embedding_width(conn)
+    except Exception as e:  # a teardown guard must never fail the test it guards
+        logger.warning("Per-test embedding width restore skipped: %s", e)
 
 
 _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
@@ -380,8 +720,8 @@ def arno_iris_connection():
     # Skip schema init if enterprise container is already the primary test container
     # (iris_connection fixture will have already deployed + initialized it). Running
     # initialize_schema() concurrently from two connections causes SQLCODE -110
-    # (lock on Graph.KG.Edge class definition during CREATE INDEX).
-    _primary = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
+    # (lock on a Graph.KG.* class definition during CREATE INDEX).
+    _primary = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
     if _primary != _ARNO_CONTAINER:
         try:
             IRISGraphEngine(conn, embedding_dimension=768).initialize_schema()
@@ -409,8 +749,11 @@ def iris_master_cleanup(iris_connection):
         pytest.skip(f"iris_connection unusable (likely corrupted by a prior "
                      f"test's native API call) — skipping cleanup: {e}")
     try:
-        # Graph_KG.docs is not graph content, so the Eraser's inventory does not
-        # name it and this is the one table cleaned here.
+        # Graph_KG.docs is graph content as of 4.0.0 — it carries graph_id and its
+        # `id` names a node — and Graph.KG.Eraser::EraseAll deletes it. This DELETE
+        # is kept because a container may still hold a pre-4.0.0 Eraser, whose
+        # inventory does not name the table; against a current one it is redundant
+        # rather than wrong.
         with contextlib.suppress(Exception):
             cursor.execute("DELETE FROM Graph_KG.docs")
         with contextlib.suppress(Exception):
@@ -456,8 +799,11 @@ def arno_master_cleanup(arno_iris_connection):
     cursor = arno_iris_connection.cursor()
     _native = None
     try:
-        # Graph_KG.docs is not graph content, so the Eraser's inventory does not
-        # name it and this is the one table cleaned here.
+        # Graph_KG.docs is graph content as of 4.0.0 — it carries graph_id and its
+        # `id` names a node — and Graph.KG.Eraser::EraseAll deletes it. This DELETE
+        # is kept because a container may still hold a pre-4.0.0 Eraser, whose
+        # inventory does not name the table; against a current one it is redundant
+        # rather than wrong.
         with contextlib.suppress(Exception):
             cursor.execute("DELETE FROM Graph_KG.docs")
         with contextlib.suppress(Exception):
@@ -521,8 +867,13 @@ def clean_test_data(iris_connection):
     try:
         with contextlib.suppress(Exception):
             for t in ["kg_NodeEmbeddings", "rdf_edges", "rdf_props", "rdf_labels", "nodes"]:
-                col = "id" if "Emb" in t else "node_id" if t == "nodes" else "s"
-                cursor.execute(f"DELETE FROM {t} WHERE {col} LIKE ?", (f"{prefix}%",))
+                # `node_id` on the embedding table since 4.0.0, and `Graph_KG.` because
+                # an unqualified `kg_NodeEmbeddings` resolves to SQLUSER (SQLCODE -30).
+                # Both failures were silent: the whole loop sits in a suppress().
+                col = "node_id" if ("Emb" in t or t == "nodes") else "s"
+                cursor.execute(
+                    f"DELETE FROM Graph_KG.{t} WHERE {col} LIKE ?", (f"{prefix}%",)
+                )
             iris_connection.commit()
     finally:
         with contextlib.suppress(Exception):
