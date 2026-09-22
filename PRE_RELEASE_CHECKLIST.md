@@ -173,6 +173,67 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.0.0 — per-graph embeddings and the pre-4.0.0 correctness sweep (2026-09-22)
+
+Spec 227 (embeddings become a graph-scoped, per-model resource) plus spec 230 (the
+correctness sweep that found and fixed the graph-scope leaks around it). Breaking:
+`Graph_KG.nodes` is keyed `(graph_id, node_id)`, so `UNIQUE (node_id)` is gone.
+Measured on `227-per-graph-embeddings` against `ivg-iris-enterprise` (port 31972).
+Status words are ASCII for the reason given in the 3.1.1 row.
+
+`docker ps` first, and it mattered this round: the container had **exited** between
+sessions, and the first integration chunk returned `2 passed, 5 skipped, 136 errors`
+in 2.25s rather than reporting green against `localhost:1972`. That fail-closed
+behaviour is itself a 4.0.0 fix (KNOWN_ISSUES §`conftest.py` cannot tell a stopped
+container from a missing one). Every gate below was measured after
+`docker start ivg-iris-enterprise` reported `Up (healthy)` on
+`0.0.0.0:31972->1972/tcp`.
+
+| Gate                     | Status | Notes                                                                                                                                                                  |
+| ------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | pass   | Linear history on `227-per-graph-embeddings`; five story commits (US1-US5), then one `fix:` commit per swept defect, then the version bump                             |
+| Unit tests               | pass   | Clean run: 10083 passed / 0 failed / 15 skipped / 13 deselected in 342.14s                                                                                             |
+| Unit after integration   | known  | Same suite straight after the integration chunks: 2 failed, 5 errors. All seven pass alone; shared-state pollution, see the paragraph below                            |
+| Integration tests        | pass   | Eight chunks of 20 files: 143+442+321+255+167+344+458+322 = 2452 passed, 55 skipped, 5 deselected, 1 xpassed, 0 failed, no segfaults                                   |
+| Integration (GraphQL)    | pass   | `tests/integration/gql`: 19 passed, 2 skipped                                                                                                                          |
+| Story E2Es               | pass   | US1-US5: 5 + 16 + 3 + 4 + 3 = 31 passed. Spec 227's own E2E set: 62 passed in 145.35s across 8 files                                                                   |
+| Success criteria         | pass   | SC-011 `test_spec_hygiene_gates.py` 17 passed; SC-009 `test_230_container_identity.py` 13 passed                                                                       |
+| Coverage >= 89%          | pass   | 90% (25390 statements, 2435 missed); `--fail-under=89` exit 0. Per-module floors below                                                                                 |
+| No benchmark regressions | waived | Same waiver as 3.2.0 and 2.17.0: `bench_utils.py` writes `SQLUser.*` (lines 11, 16, 22)                                                                                |
+| Lint clean               | known  | `ruff check .` = 2039 findings, down from the 3.2.0 baseline of 2048; the files this release touched are clean                                                         |
+| ObjectScript compiles    | 53/53  | `tcp-deploy` deployed and compiled 53 classes, 0 errors                                                                                                                |
+| Known issues logged      | pass   | Every swept defect is recorded in `specs/230-.../tasks.md` and CHANGELOG; environmental entries stay in KNOWN_ISSUES permanently                                       |
+| Version bump             | pass   | `pyproject.toml` at `4.0.0`; CHANGELOG `### v4.0.0 (2026-09-22)`, trailing `---`                                                                                       |
+| Documentation parity     | pass   | `examples/demo_per_graph_embeddings.py` runs green 7/7 and `docs/demos/PER_GRAPH_EMBEDDINGS_DEMO.md` documents it; `docs/migration/v4.0.0.md` covers the 3.2.0 upgrade |
+| Migration rehearsal      | pass   | Real `pip install iris-vector-graph==3.2.0` into a scratch venv, its own `initialize_schema` into a scratch namespace, populated, migrated                             |
+| Artifact metadata        | pass   | `twine check dist/*` PASSED for `iris_vector_graph-4.0.0-py3-none-any.whl` and `.tar.gz`, rebuilt after the final doc and demo edits                                   |
+| Bare-install E2E         | pass   | Wheel into an empty venv, no extras: reports version 4.0.0, engine imports, `rdflib`/`pyshacl`/`fastapi` absent                                                        |
+
+Coverage detail — no public-API module under 80%: `engine.py` 93, `_engine/query.py`
+91, `_engine/nodes_edges.py` 95, `sdk.py` 95, `cypher_api.py` 96,
+`_engine/vector.py` 97, `_engine/embeddings.py` 94, `_engine/schema.py` 89. Under 80%
+and unchanged: `api_auth.py` 70% (in this checklist's own ignore list) and
+`text_search.py` 79%. `migrations/upgrade.py` first read 40% and
+`migrations/docs_and_edge_vectors.py` similarly low — a measurement gap, not a
+coverage hole, because coverage is collected over `tests/unit` + `tests/integration`
+and the migration's exercise is a live E2E. Appending `tests/e2e/test_230_migration.py`
+(3 passed) lifted them to 84% and 86%.
+
+The post-integration unit failures are the documented shared-state class, not
+regressions: `test_structural_guard_e2e.py` (2 failures), `test_rrf_fuse_e2e.py` (4
+errors) and `test_weighted_shortest_path.py` (1 error). Run alone they are 11 passed
+and 2 passed. The cause is in KNOWN_ISSUES §Two fixtures reshape shared state, and the
+failure lands on another test — `tests/e2e/test_stress_ingest.py` builds an engine with
+`embedding_dimension=4` and initializes, altering the column width for the whole
+session, and a second fixture inserts nodes with raw SQL and omits the `id` property
+row that `.id` resolves through. The clean re-run above is the number to read.
+
+§9 has not run. Per Tom's release answer this round, 4.0.0 stops at a local, unpushed
+annotated tag plus these notes; push, PyPI upload and the GitHub release need a
+separate explicit instruction. The 3.2.0 §9 grant does not carry over.
+
+Date: **2026-09-22** Release: **4.0.0 tagged locally, unpublished**
+
 ### 3.2.0 — embedding identity contract (2026-09-19)
 
 Spec 226 plus the packaging fix that was prepared as `3.1.1` and never published, so
