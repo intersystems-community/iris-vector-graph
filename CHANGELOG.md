@@ -4,10 +4,10 @@
 
 ### v4.0.0 (2026-09-22)
 
-An embedding is a **graph-scoped, per-model** resource now. Through 3.2.0 a vector was
+An embedding is a graph-scoped, per-model resource now. Through 3.2.0 a vector was
 namespace-wide and graph-blind, so a KNN in a shared namespace could return a neighbour
-belonging to another graph, and two graphs could not hold two models — one row was being
-overwritten. Fixing that moves rows rather than altering columns, so this release breaks
+belonging to another graph, and two graphs could not hold two models, because one row was
+being overwritten. Fixing that moves rows rather than altering columns, so this release breaks
 the storage layout.
 
 **Run the migration before writing anything.** Full upgrade path, including the one silent
@@ -20,7 +20,7 @@ report = migrate_to_graph_scoped_embeddings(conn, dry_run=True)   # predict
 report = migrate_to_graph_scoped_embeddings(conn)                 # do it
 ```
 
-It is re-runnable. If it is killed, run it again.
+It is re-runnable, so if it is killed, run it again.
 
 **Breaking — the embedding tables are re-keyed, and the `id` column is gone**
 
@@ -36,19 +36,19 @@ metadata  %Library.DynamicObject,
 CONSTRAINT uq_emb_graph_node UNIQUE (graph_id, node_id)
 ```
 
-`emb_rowid` exists so an HNSW index is legal — IRIS refuses an ANN index unless the IDKEY
-is a single positive integer (`ERROR #7222`), which the old `id As %String` key was not.
+`emb_rowid` exists so an HNSW index is legal. IRIS refuses an ANN index unless the IDKEY is
+a single positive integer (`ERROR #7222`), and the old `id As %String` key was not.
 
 Anything reading or writing `id` on these tables must change to `node_id`, and the failure
 modes are inconsistent, so test rather than reason:
 
 | Statement                                 | 4.0.0 behaviour                |
 | ----------------------------------------- | ------------------------------ |
-| `SELECT id FROM kg_NodeEmbeddings`        | returns the **RowID**          |
-| `... WHERE id = 'some:node'`              | `0` rows, **no error**         |
+| `SELECT id FROM kg_NodeEmbeddings`        | returns the RowID              |
+| `... WHERE id = 'some:node'`              | `0` rows, no error             |
 | `INSERT INTO ... (id, emb) VALUES (?, ?)` | `SQLCODE -108`, required field |
 
-The middle row is the dangerous one: a filter on `id` is silently unsatisfiable.
+The middle row is the dangerous one. A filter on `id` is silently unsatisfiable.
 
 **Breaking — `nodes` no longer declares `UNIQUE (node_id)`**
 
@@ -58,7 +58,7 @@ carry a `graph_id` and include it in their uniqueness, so a node ID present in t
 holds a separate label set and a separate property set per graph (FR-034), and a label that
 exists only in another graph no longer matches a label-filtered search (FR-035).
 
-Consequence for writers: **an edge requires both endpoints in its own graph.** `node_id`
+An edge requires both endpoints in its own graph. `node_id`
 alone no longer identifies a node, so an endpoint resolves as `(graph_id, node_id)` and an
 edge cannot straddle two graphs.
 
@@ -72,11 +72,11 @@ The slot was `IN embeddingConfig VARCHAR(128)` (accepted, ignored). It is
 CALL Graph_KG.kg_KNN_VEC(?, 10, NULL, 'all-MiniLM-L6-v2')
 
 -- 4.0.0: still compiles. Searches a graph *named* "all-MiniLM-L6-v2",
--- which does not exist, so it returns zero rows — no error.
+-- which does not exist, so it returns zero rows, with no error.
 ```
 
 Audit every four-argument `kg_KNN_VEC` call site before upgrading. Pass `''` or `NULL` for
-the default graph. `kg_RRF_FUSE` is the opposite case and fails loudly: it takes **seven**
+the default graph. `kg_RRF_FUSE` is the opposite case and fails loudly. It takes seven
 parameters now, so a six-argument `CALL` is a runtime arity error.
 `Graph.KG.PyOps.HybridSearch` gained a trailing `graph As %String = ""` to match.
 
@@ -89,16 +89,16 @@ install is `Graph.KG.Eraser`:
 SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Eraser'
 ```
 
-Zero means a DDL-only namespace — deploy `iris_src/src` into it before writing data.
+Zero means a DDL-only namespace. Deploy `iris_src/src` into it before writing data.
 `Graph.KG.Ledger.RebuildEdgeIndices` now rebuilds `rdf_edges` as well as `^KG`.
 
 **Breaking — Cypher `n.id` is `n.node_id`**
 
-A property named `id` on a node is just a property now.
+A property named `id` on a node is an ordinary property now.
 
 **Breaking — the snapshot NDJSON node record changed**
 
-`{"id": ...}` became `{"graph_id": ..., "node_id": ...}`. Reads accept **both**, so a 3.2.0
+`{"id": ...}` became `{"graph_id": ..., "node_id": ...}`. Reads accept both, so a 3.2.0
 snapshot restores into 4.0.0; a 4.0.0 snapshot does not restore into 3.2.0.
 
 **Breaking — `embed_nodes(where=...)` is removed**
@@ -111,7 +111,7 @@ equivalents are `predicate=`, `source_label=`, `target_label=`.
 
 **Breaking — `get_procedures_sql_list(embedding_dimension=...)` is removed**
 
-Inert since it was added, deprecated in 3.2.0, gone now — passing it is a `TypeError`. The
+Inert since it was added, deprecated in 3.2.0, gone now, so passing it is a `TypeError`. The
 query vector is converted with an unlengthened `TO_VECTOR` on purpose
 ([ADR-0005](docs/adr/0005-vector-width-is-not-declared-in-to-vector.md)): a declared length
 makes IRIS reshape the query and score the reshaped value, returning `1.0` for a query that
@@ -123,7 +123,7 @@ should have raised `SQLCODE -257`.
 kg_emb_<first 16 hex of sha256(graph_id + "\0" + (model_key or ""))>
 ```
 
-Opaque on purpose: DDL strips underscores deriving a class name and de-duplicates
+The name is opaque on purpose. DDL strips underscores deriving a class name and de-duplicates
 collisions with a numeric suffix, and the derived name has a 220-character ceiling, so a
 readable `kg_emb_<graph>_<model>` breaks on both. A hash also keeps a caller-supplied graph
 ID out of an identifier entirely. One graph per table (FR-037), created by the first write
@@ -134,11 +134,11 @@ registered in `Graph_KG.embedding_registry` (keyed `(table_name, graph_id)`, ind
 **Never derive a name to find a route.** `route_table_name()` says what a route *would* be
 called; the registry row is the only authority on what it *is* called.
 
-A `(graph, model_key)` pair with no routed table **does not fall back to a namespace-wide
-scan**: a read returns `None`/`[]`/`0`, a write creates the route. Tested ceiling is
+A `(graph, model_key)` pair with no routed table does not fall back to a namespace-wide
+scan. A read returns `None`/`[]`/`0`, and a write creates the route. Tested ceiling is
 50 graphs × 2 models = 100 routed tables, created in 12.4 s and erased in 2.0 s on
-`ivg-iris-enterprise`, every one reporting `index_state='present'`. That is a measurement,
-not an architectural limit, and not an unbounded one either.
+`ivg-iris-enterprise`, every one reporting `index_state='present'`. That is a measured
+figure rather than a declared ceiling, and not a claim that routes are unlimited.
 
 **Added — a keyword-only `graph` (and `model_key` where a route is selected)**
 
@@ -146,14 +146,14 @@ On `store_embedding`, `store_embeddings`, `get_embedding`, `get_embeddings`, `em
 `embedding_count`, `attach_embeddings_to_table`, `vector_search`, `kg_KNN_VEC`,
 `kg_RRF_FUSE`, `HybridSearchFusion.multi_modal_search`, and `node_exists`.
 
-In every one, `graph=None` means **the default graph** (`''`), never every graph. A scoped
+In every one, `graph=None` means the default graph (`''`), never every graph. A scoped
 lookup never falls back to an unscoped scan.
 
-One exception, and it raises rather than defaulting: `vector_search` aimed at a routed table
-(`kg_emb_<hash>`) with no `graph` **refuses** (FR-041). That table holds one graph's vectors
+One case raises instead of defaulting. `vector_search` aimed at a routed table
+(`kg_emb_<hash>`) with no `graph` refuses (FR-041). That table holds one graph's vectors
 for one model, so `''` would ask for the default graph's rows from a table that does not
-hold them, and dropping the predicate would scan the route. The test is the table *name*,
-not a registry lookup — the refusal must not depend on a database read.
+hold them, and dropping the predicate would scan the route. The test is the table *name*
+rather than a registry lookup, because the refusal must not depend on a database read.
 
 **Added — the quarantine**
 
@@ -178,12 +178,12 @@ quarantine entirely.
 **Added — `engine.embedding_inventory()` and `ivg embeddings inventory`**
 
 One row per route, plus one row per graph that has nodes and no route at all
-(`table_name=None` — reported rather than omitted, because "the vectors are in another
+(`table_name=None`, reported rather than omitted, because "the vectors are in another
 route" and "there are no vectors" need opposite actions). `index_state` is
 `present`/`refused`/`absent`, read from `%Dictionary.CompiledIndex` and never from the
 registry's recorded state or from a row count. `recall_measured` is `NULL` until something
-measures it; `NULL` means unknown, not perfect. Measured recall@10 is 1.0000 on both routes
-of the two-model fixture (`tests/e2e/test_227_recall.py`).
+measures it, and a `NULL` means unknown rather than perfect. Measured recall@10 is 1.0000 on
+both routes of the two-model fixture (`tests/e2e/test_227_recall.py`).
 
 **Fixed — a recorded width can no longer go stale against its column (FR-031)**
 
@@ -191,7 +191,7 @@ of the two-model fixture (`tests/e2e/test_227_recall.py`).
 registry on each `initialize_schema`, rather than only for tables the current
 `_migrate_vector_dimensions` call altered. `altered_names` is empty exactly when the columns
 already hold the configured width, which is the state a second writer finds after the first
-one migrated — and exactly when its own stale row needs carrying forward.
+one migrated, and exactly when its own stale row needs carrying forward.
 
 **Fixed — `kg_PERSONALIZED_PAGERANK(bidirectional=True)` traverses reverse edges**
 
@@ -206,10 +206,10 @@ on a deployed install:
   compat)" and only ever walked `^KG("out")`.
 
 All three are fixed. `RunJson` now walks `^KG("in")` as well when `bidir = 1`, with the
-Python fallback's arithmetic: a node's divisor counts its forward **and** reverse edges,
+Python fallback's arithmetic, so a node's divisor counts its forward and reverse edges,
 and `revWeight` scales what a reverse hop carries, never the divisor. `revWeight` is not
-linear in the score — the power method compounds, so halving it cut one measured score by
-~77%, not 50%.
+linear in the score. The power method compounds, so halving it cut one measured score by
+~77% rather than 50%.
 
 `Graph.KG.ArnoAccel.PPRJson` takes seeds, damping and iterations only, so a bidirectional
 request now skips the accelerator instead of being silently served forward-only by it. A
@@ -220,12 +220,12 @@ routes to the Python fallback rather than returning a wrong answer.
 
 `Graph_KG.docs`, `^KG("deg2p")` and `^KG("deg2p_exact")` were in
 `Graph.KG.GraphStores`' inventory and in none of `_engine/snapshot.py`'s plan, and the
-plan is what `kg_export_subscripts()` derives the walked `^KG` subtrees from — so a
+plan is what `kg_export_subscripts()` derives the walked `^KG` subtrees from, so a
 restore came back with an empty `kg_TXT` and no two-hop counts while reporting every
 store it knew about as complete. All three are exported now; the two-hop counts are
 carried rather than rebuilt because a rebuild on restore needs Arno loaded on whichever
-machine is restoring. `^KG("deg2p_exact_merged")` stays derived and says why: `^NKG`'s
-interning has no graph dimension, so its counts cannot be attributed to a graph.
+machine is restoring. `^KG("deg2p_exact_merged")` stays derived, because `^NKG`'s
+interning has no graph dimension and its counts cannot be attributed to a graph.
 
 Nothing caught this because the two hand-maintained lists agreed with each other.
 `tests/integration/test_snapshot_inventory.py` now round-trips a document and a two-hop
@@ -234,7 +234,7 @@ count, and compares the plan against the live inventory in both directions.
 **Fixed — `MATCH (a), (b) MERGE (a)-[:R]->(b)` could not be prepared**
 
 That shape inserts through `SELECT _ge.c1, … FROM (…) AS _ge`, whose outer SELECT has no
-WHERE — every predicate is inside the derived table. The idempotency rewrite looked for
+WHERE, because every predicate is inside the derived table. The idempotency rewrite looked for
 `" WHERE "` anywhere after the `INSERT INTO`, found the derived table's own, and appended
 a bare `AND` to a finished statement: `SQLCODE -25 Input encountered after end of query`.
 The guard now reads the columns the derived table projects (`_ge.c1`, `_ge.c3`) rather
@@ -250,8 +250,8 @@ introspection will see the scalar rename; queries and responses are unchanged, s
 custom scalar is serialised the same either way.
 
 The fix had to be applied twice, in `api/gql/core/types.py` and `api/gql/types.py`. Only the
-first is reachable from the shipped schema — see docs/KNOWN_ISSUES.md for the duplicate type
-layer that made the first attempt look like a no-op.
+first is reachable from the shipped schema. See `docs/KNOWN_ISSUES.md` for the duplicate
+type layer that made the first attempt look like a no-op.
 
 **Fixed — the GraphQL endpoint enforces its query depth limit**
 
@@ -259,8 +259,8 @@ Spec 003 specified a 10-level limit and its quickstart ticked it off as done; no
 implemented it. `strawberry.Schema` was constructed with `extensions=[DatabaseConnectionExtension]`
 and no depth limiter, so a client could nest the recursive graph fields
 (`protein { interactsWith { interactsWith { … } } }`) as deep as it liked and turn one
-request into an unbounded number of database round trips — the same hole as the missing hop
-cap on `/api/cypher`, which 4.0.0 also closes.
+request into an unbounded number of database round trips. That is the same hole as the
+missing hop cap on `/api/cypher`, which 4.0.0 also closes.
 
 `QueryDepthLimiter` now rejects anything past the cap during validation, before a resolver
 runs. `IVG_GRAPHQL_MAX_DEPTH` overrides the default of 10; a zero, negative or unparseable
@@ -271,14 +271,14 @@ deployment's environment must not silently remove a safety limit.
 
 `examples/demo_utils.py`'s `DemoRunner.get_connection` called
 `iris_devtester.connections.auto_detect_iris_host_and_port()`. On a machine running more than
-one IRIS container that answers whichever one it finds first: here it returned
+one IRIS container, that answers whichever one it finds first. Here it returned
 `localhost:41972`, a container belonging to a different project. Every script under
-`examples/` took that route, and a demo cannot tell — its first statement either works
+`examples/` took that route, and a demo cannot tell. Its first statement either works
 against the wrong data or fails with a class error that reads like a broken install.
 
-The container is resolved by **name** now, from `IVG_TEST_CONTAINER`, defaulting to
-`ivg-iris-enterprise` — the same variable the test suite reads, so a demo and the suite
-cannot end up on two different instances. OrbStack DNS, then the container IP, then the
+The container is resolved by name now, from `IVG_TEST_CONTAINER`, defaulting to
+`ivg-iris-enterprise`. That is the same variable the test suite reads, so a demo and the
+suite cannot end up on two different instances. OrbStack DNS, then the container IP, then the
 published host port are tried in that order, and an unreachable container raises `DemoError`
 naming it and how to start it. There is no fallback to discovery.
 
@@ -293,10 +293,11 @@ graph leaving the other's vectors, and recall measured per route. Walkthrough in
 
 **Upgrading — `initialize_schema()` before the migration, in that order**
 
-An upgraded package meeting a 3.2.0 table cannot compile `kg_KNN_VEC`: the 4.0.0 body reads
-`n.node_id` and `n.graph_id`, and a table still keyed `id` has neither. The migration that
-fixes the table needs `embedding_quarantine`, which only `initialize_schema` creates. So
-`initialize_schema()` **defers** `kg_KNN_VEC` on a pre-migration install, logs a warning
+An upgraded package meeting a 3.2.0 table cannot compile `kg_KNN_VEC`, because the 4.0.0
+body reads `n.node_id` and `n.graph_id` and a table still keyed `id` has neither. The
+migration that fixes the table needs `embedding_quarantine`, which only
+`initialize_schema` creates. So
+`initialize_schema()` defers `kg_KNN_VEC` on a pre-migration install, logs a warning
 naming the migration call, and installs every other procedure; the migration installs it
 when done. Server-side vector search is unavailable in between, nothing else is.
 
@@ -307,19 +308,18 @@ migrate_to_graph_scoped_embeddings(engine.conn)     # moves rows, installs it
 
 `report.rows_accounted` must equal the pre-upgrade row count, with zero deleted (FR-026).
 A non-empty `report.structural_blockers` means the `rdf_labels`/`rdf_props` re-key was
-**refused, not attempted**: a child row whose node is not in exactly one graph has no
+refused rather than attempted. A child row whose node is not in exactly one graph has no
 recoverable graph, and `MIN(graph_id)` would be the silent version of this migration.
 
 **Known gaps**
 
-The IVF leg stays graph-blind, and says so instead of guessing: `Graph.KG.IVFIndex` is keyed
-by index name and holds no graph, so `search_nodes_by_vector` **refuses** a call that names
-both a graph and an `ivf_name` rather than searching every graph's vectors through the index.
+The IVF leg stays graph-blind and refuses rather than guessing. `Graph.KG.IVFIndex` is keyed
+by index name and holds no graph, so `search_nodes_by_vector` rejects a call that names both
+a graph and an `ivf_name` instead of searching every graph's vectors through the index.
 `ivf_build` itself reads the routed table for one `(graph, model_key)` pair.
 
-`^KG("deg2p_exact_merged")` stays derived and graph-blind by definition — it is Arno's
-interned sketch, and `^NKG`'s interning has no graph dimension, so its counts cannot be
-attributed to a graph. A snapshot carries the per-graph `^KG("deg2p")` and
+`^KG("deg2p_exact_merged")` is Arno's interned sketch and stays graph-blind, for the reason
+given under the snapshot fix above. A snapshot carries the per-graph `^KG("deg2p")` and
 `^KG("deg2p_exact")` and rebuilds the merged sketch rather than restoring it.
 
 **A graph ID is not an authorisation boundary.** Client-supplied graph IDs are collision
