@@ -91,16 +91,16 @@ def vector_test_nodes(iris_engine):
             except Exception:
                 pass
             vec_json = json.dumps(vec)
-            try:
-                # NOTE: kg_NodeEmbeddings uses 'id' as PK column (not 'node_id')
-                cursor.execute(
-                    f"INSERT INTO {_table('kg_NodeEmbeddings')} (id, emb) "
-                    f"SELECT ?, TO_VECTOR(?) WHERE NOT EXISTS "
-                    f"(SELECT 1 FROM {_table('kg_NodeEmbeddings')} WHERE id = ?)",
-                    [node_id, vec_json, node_id],
-                )
-            except Exception:
-                pass
+            # Not swallowed, and keyed on `node_id`: the table is keyed
+            # `(graph_id, node_id)` and its `id` is the implicit RowID, so the old
+            # spelling was `SQLCODE -108` on every row and the fixture then tested
+            # vector search against an empty table.
+            cursor.execute(
+                f"INSERT INTO {_table('kg_NodeEmbeddings')} (node_id, emb) "
+                f"SELECT ?, TO_VECTOR(?) WHERE NOT EXISTS "
+                f"(SELECT 1 FROM {_table('kg_NodeEmbeddings')} WHERE node_id = ?)",
+                [node_id, vec_json, node_id],
+            )
         conn.commit()
     except Exception:
         try:
@@ -127,7 +127,7 @@ def vector_test_nodes(iris_engine):
     try:
         for node_id in node_ids:
             cursor.execute(
-                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id = ?", [node_id]
+                f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id = ?", [node_id]
             )
             cursor.execute(
                 f"DELETE FROM {_table('rdf_labels')} WHERE s = ?", [node_id]
@@ -177,7 +177,9 @@ class TestVectorSearchE2E:
             f"CALL ivg.vector.search('Gene', 'embedding', {self.Q}, 5) "
             "YIELD node, score RETURN node, score"
         )
-        node_col = result["columns"].index("node_id")
+        # The CALL yields `node`, so that is the column name it answers with —
+        # `node_id` is the *table* column and was never a result column.
+        node_col = result["columns"].index("node")
         node_ids = [row[node_col] for row in result["rows"]]
         drug_ids = [nid for nid in node_ids if nid.startswith(f"{TEST_PREFIX}drug")]
         assert drug_ids == [], f"Drug nodes appeared in Gene search: {drug_ids}"
@@ -197,7 +199,9 @@ class TestVectorSearchE2E:
             "YIELD node, score RETURN node, score"
         )
         assert len(result["rows"]) >= 1
-        node_col = result["columns"].index("node_id")
+        # The CALL yields `node`, so that is the column name it answers with —
+        # `node_id` is the *table* column and was never a result column.
+        node_col = result["columns"].index("node")
         top_node = result["rows"][0][node_col]
         assert top_node == f"{TEST_PREFIX}gene-a", (
             f"Expected gene-a as nearest, got {top_node}"

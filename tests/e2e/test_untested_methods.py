@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "1972"))
+IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 SKIP = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
 
@@ -36,7 +36,10 @@ def test_is_ready_false_on_broken_connection():
     mock_conn = MagicMock()
     mock_conn.cursor.return_value.execute.side_effect = Exception("dead")
     eng.conn = mock_conn
-    assert eng.is_ready is False
+    # `is_ready` is a method (_engine/schema.py), not a property. Read as an
+    # attribute it yields a bound method, which is truthy, so `is False` failed
+    # and `if engine.is_ready:` in caller code would pass on a dead connection.
+    assert eng.is_ready() is False
 
 
 def test_bulk_ingest_edges_empty_returns_zero(engine):
@@ -56,7 +59,7 @@ def test_khop2_count_exact_empty_raises():
 
 @pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")
 def test_is_ready_returns_true(engine):
-    assert engine.is_ready is True
+    assert engine.is_ready() is True
 
 
 @pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")
@@ -159,6 +162,14 @@ def test_bulk_ingest_edges_count(engine):
 
 @pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")
 def test_bulk_ingest_edges_dirty_flag(engine):
+    """`auto_sync=False` leaves the index stale and says so.
+
+    The default is `auto_sync=True`, which sets `_nkg_dirty` and then calls
+    `sync()`, which clears it — so the flag is `False` on return by design and a
+    test that asserted `True` after a default call was asserting the opposite of
+    the contract. `auto_sync=False` is the case where the flag is the caller's
+    only signal that a rebuild is owed.
+    """
     cur = engine.conn.cursor()
     for nid in ("bie_c", "bie_d"):
         cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id=?", [nid])
@@ -166,28 +177,59 @@ def test_bulk_ingest_edges_dirty_flag(engine):
             cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
     engine.conn.commit()
     engine._nkg_dirty = False
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        engine.bulk_ingest_edges([{"s": "bie_c", "p": "T2", "o": "bie_d"}])
-    assert engine._nkg_dirty is True
-    cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE p='T2'")
+    try:
+        engine.bulk_ingest_edges(
+            [{"s": "bie_c", "p": "T2", "o": "bie_d"}], auto_sync=False
+        )
+        assert engine._nkg_dirty is True
+        assert engine.status().pending_sync is True
+
+        # And the default does sync, so it does not leave the flag set.
+        engine.bulk_ingest_edges([{"s": "bie_c", "p": "T2b", "o": "bie_d"}])
+        assert engine._nkg_dirty is False
+    finally:
+        engine.sync()
+    cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE p IN ('T2','T2b')")
     for nid in ("bie_c", "bie_d"):
         cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
     engine.conn.commit()
 
 
 @pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")
-def test_bulk_ingest_edges_warning(engine):
+def test_bulk_ingest_edges_stale_index_blocks_var_length_query(engine):
+    """An unsynced bulk ingest makes the next var-length query raise, not warn.
+
+    This test used to assert a `RuntimeWarning` from `bulk_ingest_edges` itself.
+    Ingest emits none: it uses `logger.warning` for its own fallbacks, and the
+    stale-index signal belongs to the *consumer*. The only enforcement of a stale
+    `^NKG` is `IndexNotSyncedError`, raised from the two var-length Cypher routes
+    in `_engine/query.py` before any traversal runs. A caller who ingests without
+    syncing and then asks for a path gets an error, which is the contract worth
+    pinning — a swallowed warning would let a wrong answer through.
+    """
+    from iris_vector_graph.errors import IndexNotSyncedError
+
     cur = engine.conn.cursor()
     for nid in ("bie_e", "bie_f"):
         cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id=?", [nid])
         if cur.fetchone()[0] == 0:
             cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
     engine.conn.commit()
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        engine.bulk_ingest_edges([{"s": "bie_e", "p": "T3", "o": "bie_f"}])
-    assert any(issubclass(x.category, RuntimeWarning) for x in w)
+
+    vlp = "MATCH (a)-[*1..2]->(b) WHERE a.node_id = 'bie_e' RETURN b"
+    try:
+        engine.bulk_ingest_edges(
+            [{"s": "bie_e", "p": "T3", "o": "bie_f"}], auto_sync=False
+        )
+        with pytest.raises(IndexNotSyncedError):
+            engine.execute_cypher(vlp)
+
+        # After the sync the same query is answerable — so the raise above was the
+        # stale index, not a translation failure.
+        engine.sync()
+        engine.execute_cypher(vlp)
+    finally:
+        engine.sync()
     cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE p='T3'")
     for nid in ("bie_e", "bie_f"):
         cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
@@ -292,7 +334,18 @@ def test_kg_neighborhood_expansion_empty_seeds(engine):
 
 
 @pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")
-def test_embed_text_without_embedder_returns_list(engine):
+def test_embed_text_without_embedder_depends_on_the_optional_extra(engine):
+    """With no embedder and no `embedding_config`, `embed_text` needs the extra.
+
+    `embed_text` auto-loads `SentenceTransformer("all-MiniLM-L6-v2")` as its last
+    resort and raises `RuntimeError` naming the missing package when
+    `sentence-transformers` is not installed — the same behaviour 3.2.0 shipped.
+    Asserting a list unconditionally passed only on an install that happened to
+    carry the `[full]` extra, so the branch taken here is decided by what is
+    importable rather than assumed.
+    """
+    import importlib.util
+
     from iris_vector_graph.engine import IRISGraphEngine
     eng = object.__new__(IRISGraphEngine)
     eng.conn = engine.conn
@@ -306,7 +359,12 @@ def test_embed_text_without_embedder_returns_list(engine):
     eng.embedding_config = None
     eng.embedder = None
     eng.embedding_dimension = 768
-    assert isinstance(eng.embed_text("hello world"), list)
+
+    if importlib.util.find_spec("sentence_transformers") is None:
+        with pytest.raises(RuntimeError, match="sentence-transformers"):
+            eng.embed_text("hello world")
+    else:
+        assert isinstance(eng.embed_text("hello world"), list)
 
 
 @pytest.mark.skipif(SKIP, reason="SKIP_IRIS_TESTS=true")

@@ -343,6 +343,17 @@ def arno_call(conn, fn_name: str, *args: Any) -> str:
             f"Supported: {sorted(_SQL_FN_DISPATCH.keys())}"
         )
 
+    # Each wrapper is a distinct SQL function with a fixed signature, so the marker list
+    # in the dispatch table *is* the arity. Checked here because IRIS reports the mismatch
+    # as `<ARGUMENT ERROR> Incorrect number of parameters`, which names neither the
+    # function the caller asked for nor either count.
+    expected = sql_fn[1].count("?")
+    if len(args) != expected:
+        raise ArnoError(
+            f"{fn_name!r} expects {expected} argument(s) after the library path, "
+            f"got {len(args)}: {list(args)!r}"
+        )
+
     try:
         cur = conn.cursor()
         cur.execute(f"SELECT {sql_fn[0]}(?, {sql_fn[1]})", [lib_path, *args])

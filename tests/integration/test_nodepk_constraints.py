@@ -27,6 +27,50 @@ def _close(cursor):
         cursor.close()
 
 
+def _emb_dim(conn):
+    """The width `kg_NodeEmbeddings.emb` actually declares.
+
+    IRIS rejects any other width at INSERT (SQLCODE -104), and this file used to
+    hardcode 768. On a database built at a different dimension the FK tests below
+    then passed for the wrong reason: the insert they expected to fail on
+    `fk_emb_node` failed on the width instead, and `pytest.raises(Exception)` cannot
+    tell those apart.
+    """
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    return IRISGraphEngine(conn)._get_embedding_dimension()
+
+
+@pytest.fixture
+def constraint_conn(iris_connection):
+    """A connection of this test's own, because the SQL error text is the assertion.
+
+    Rebuilding a class's indices poisons error decoding on every *other* connection
+    in the process: `%BuildIndices` on `Graph.KG.nodes` — which is what a `%NOINDEX`
+    bulk load does, e.g. `load_networkx` in `test_engine_misc_paths.py` — leaves the
+    shared session connection reporting -119, -104 and -121 alike as
+    `<LIST ERROR> Incorrect list format ... type detected : 0`, for the rest of that
+    connection's life. Measured: neither `rollback()`, nor `$SYSTEM.SQL.PurgeForTable`,
+    nor issuing `BUILD INDEX FOR TABLE` clears it, and `BUILD INDEX` poisons the same
+    way `%BuildIndices` does. A connection opened afterwards decodes correctly, so the
+    tests that read constraint messages get their own.
+    """
+    import iris.dbapi as _dbapi
+
+    conn = _dbapi.connect(
+        hostname=iris_connection.hostname,
+        port=iris_connection.port,
+        namespace=iris_connection.namespace,
+        username="_SYSTEM",
+        password="SYS",
+    )
+    try:
+        yield conn
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()
+
+
 @pytest.fixture(autouse=True)
 def cleanup_test_data(iris_connection):
     """Clean up test data before and after each test."""
@@ -87,7 +131,7 @@ class TestNodeCreation:
         finally:
             _close(cursor)
 
-    def test_create_node_duplicate_fails(self, iris_connection):
+    def test_create_node_duplicate_fails(self, constraint_conn):
         """
         GIVEN: a node with ID 'TEST:node1' already exists
         WHEN: attempting to insert another node with same ID
@@ -95,6 +139,9 @@ class TestNodeCreation:
 
         Expected: FAIL initially (nodes table doesn't exist)
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:node1'])
@@ -110,7 +157,7 @@ class TestNodeCreation:
         assert 'unique' in error_msg or 'duplicate' in error_msg or 'constraint' in error_msg, \
             f"Expected UNIQUE constraint violation, got: {exc_info.value}"
 
-    def test_create_node_null_id_fails(self, iris_connection):
+    def test_create_node_null_id_fails(self, constraint_conn):
         """
         GIVEN: nodes table exists
         WHEN: attempting to insert node with NULL node_id
@@ -118,6 +165,9 @@ class TestNodeCreation:
 
         Expected: FAIL initially (nodes table doesn't exist)
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         cursor = iris_connection.cursor()
         try:
             with pytest.raises(Exception) as exc_info:
@@ -136,7 +186,7 @@ class TestNodeCreation:
 class TestEdgeForeignKeys:
     """Contract 2: Create Edge with Node Validation tests."""
 
-    def test_edge_insert_requires_source_node(self, iris_connection):
+    def test_edge_insert_requires_source_node(self, constraint_conn):
         """
         GIVEN: nodes table with no node 'INVALID:source'
         WHEN: inserting edge with s='INVALID:source'
@@ -144,6 +194,9 @@ class TestEdgeForeignKeys:
 
         Expected: FAIL initially (FK constraint doesn't exist)
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:dest'])
@@ -162,7 +215,7 @@ class TestEdgeForeignKeys:
         assert 'foreign key' in error_msg or 'constraint' in error_msg or 'fk_edges_source' in error_msg, \
             f"Expected FK constraint violation for source node, got: {exc_info.value}"
 
-    def test_edge_insert_requires_dest_node(self, iris_connection):
+    def test_edge_insert_requires_dest_node(self, constraint_conn):
         """
         GIVEN: nodes table with no node 'INVALID:dest'
         WHEN: inserting edge with o_id='INVALID:dest'
@@ -170,6 +223,9 @@ class TestEdgeForeignKeys:
 
         Expected: FAIL initially (FK constraint doesn't exist)
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:source'])
@@ -362,9 +418,15 @@ class TestPropertyForeignKeys:
 
 @pytest.mark.requires_database
 @pytest.mark.integration
-@pytest.mark.skip(reason="kg_NodeEmbeddings requires VECTOR type support not available in test environment")
 class TestEmbeddingForeignKeys:
-    """Contract 5: Create Embedding for Node tests."""
+    """Contract 5: Create Embedding for Node tests.
+
+    These ran under `skip(reason="VECTOR type support not available")` until 4.0.0.
+    The enterprise container declares `emb` as a VECTOR and always did, so the skip
+    was stating something untrue about the environment — and it is what kept the
+    `id`-vs-`node_id` re-key from being caught here: a skipped FK test cannot notice
+    that its INSERT names a column the table no longer has.
+    """
 
     def test_embedding_requires_node(self, iris_connection):
         """
@@ -374,12 +436,12 @@ class TestEmbeddingForeignKeys:
 
         Expected: FAIL initially (FK constraint doesn't exist)
         """
-        dummy_vector = '[' + ','.join(['0.1'] * 768) + ']'
+        dummy_vector = '[' + ','.join(['0.1'] * _emb_dim(iris_connection)) + ']'
         cursor = iris_connection.cursor()
         try:
             with pytest.raises(Exception) as exc_info:
                 cursor.execute(
-                    "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                     ['INVALID:node', dummy_vector]
                 )
                 iris_connection.commit()
@@ -398,19 +460,19 @@ class TestEmbeddingForeignKeys:
 
         Expected: FAIL initially (nodes table doesn't exist)
         """
-        dummy_vector = '[' + ','.join([str(0.001 * i) for i in range(768)]) + ']'
+        dummy_vector = '[' + ','.join([str(0.001 * i) for i in range(_emb_dim(iris_connection))]) + ']'
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['PROTEIN:TP53'])
             iris_connection.commit()
 
             cursor.execute(
-                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                 ['PROTEIN:TP53', dummy_vector]
             )
             iris_connection.commit()
 
-            cursor.execute("SELECT id FROM kg_NodeEmbeddings WHERE id = ?", ['PROTEIN:TP53'])
+            cursor.execute("SELECT node_id FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", ['PROTEIN:TP53'])
             result = cursor.fetchone()
 
             assert result is not None, "Embedding should exist after insertion"
@@ -424,15 +486,20 @@ class TestEmbeddingForeignKeys:
 class TestNodeDeletion:
     """Contract 6: Delete Node (Cascade Behavior) tests."""
 
-    @pytest.mark.xfail(reason="IRIS does not enforce FK constraints by default")
-    def test_delete_node_blocked_by_edge(self, iris_connection):
+    def test_delete_node_blocked_by_edge(self, constraint_conn):
         """
         GIVEN: node 'NODE:A' has edges referencing it
         WHEN: attempting to delete 'NODE:A'
         THEN: FK constraint violation (ON DELETE RESTRICT)
 
-        Expected: FAIL initially (FK constraints don't exist)
+        Held as xfail ("IRIS does not enforce FK constraints by default") until
+        4.0.0, which declares `fk_edges_source` / `fk_edges_dest` on
+        `rdf_edges` — composite, against `nodes (graph_id, node_id)`. IRIS does
+        enforce those, so the delete is refused and the marker was xpassing.
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
@@ -453,7 +520,7 @@ class TestNodeDeletion:
         assert 'foreign key' in error_msg or 'constraint' in error_msg or 'restrict' in error_msg, \
             f"Expected FK constraint violation (ON DELETE RESTRICT), got: {exc_info.value}"
 
-    def test_delete_node_blocked_by_label(self, iris_connection):
+    def test_delete_node_blocked_by_label(self, constraint_conn):
         """
         GIVEN: node has labels assigned
         WHEN: attempting to delete node
@@ -461,6 +528,9 @@ class TestNodeDeletion:
 
         Expected: FAIL initially (FK constraints don't exist)
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
@@ -502,8 +572,7 @@ class TestNodeDeletion:
         assert 'foreign key' in error_msg or 'constraint' in error_msg, \
             f"Expected FK constraint violation, got: {exc_info.value}"
 
-    @pytest.mark.skip(reason="kg_NodeEmbeddings requires VECTOR type support not available in test environment")
-    def test_delete_node_blocked_by_embedding(self, iris_connection):
+    def test_delete_node_blocked_by_embedding(self, constraint_conn):
         """
         GIVEN: node has embedding
         WHEN: attempting to delete node
@@ -511,12 +580,15 @@ class TestNodeDeletion:
 
         Expected: FAIL initially (FK constraints don't exist)
         """
-        dummy_vector = '[' + ','.join(['0.1'] * 768) + ']'
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
+        dummy_vector = '[' + ','.join(['0.1'] * _emb_dim(iris_connection)) + ']'
         cursor = iris_connection.cursor()
         try:
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['NODE:A'])
             cursor.execute(
-                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                 ['NODE:A', dummy_vector]
             )
             iris_connection.commit()
@@ -560,7 +632,7 @@ class TestNodeDeletion:
 class TestConcurrentNodeInsertion:
     """Contract 7 (partial): Test concurrent node insertion handling."""
 
-    def test_concurrent_insert_same_node_id(self, iris_connection):
+    def test_concurrent_insert_same_node_id(self, constraint_conn):
         """
         GIVEN: two processes trying to insert same node_id
         WHEN: executing concurrent INSERTs
@@ -568,6 +640,9 @@ class TestConcurrentNodeInsertion:
 
         Expected: FAIL initially (nodes table doesn't exist)
         """
+        # This test asserts on the constraint message, so it runs on its own
+        # connection; see `constraint_conn`.
+        iris_connection = constraint_conn
         import threading
 
         results = {'thread1': None, 'thread2': None}

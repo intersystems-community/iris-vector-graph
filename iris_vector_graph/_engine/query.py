@@ -80,6 +80,19 @@ def extract_vlp_source_ids(
                 if isinstance(pv, str) and pv:
                     return [pv]
 
+        # ── Path 2b: the same binding written as a literal ──────────────────
+        # `MATCH (a {node_id: 'x'})` inlines the id into the statement instead of
+        # binding it, so Path 2 found nothing and callers fell through to a SQL
+        # round trip — or, in `approx_count_distinct`, to answering 0 (spec 230).
+        literal_pat = re.compile(
+            r'\b' + re.escape(source_alias) + r"\.node_id\s*=\s*"
+            r"(?:CAST\s*\(\s*)?'((?:[^']|'')*)'",
+            re.IGNORECASE,
+        )
+        lit = literal_pat.search(sql_str)
+        if lit:
+            return [lit.group(1).replace("''", "'")]
+
     # ── Path 3: cartesian SQL extraction ────────────────────────────────────
     if source_alias and target_alias:
         target_cartesian_pat = re.compile(
@@ -102,6 +115,25 @@ def extract_vlp_source_ids(
                 logger.debug("extract_vlp_source_ids: cartesian SQL failed: %s", exc)
 
     return []
+
+
+def _extract_sql_row_limit(sql: str) -> int:
+    """The row cap the translated statement carries, or 0 when it carries none.
+
+    Three spellings reach here for the same Cypher `LIMIT n`: IRIS SQL's
+    `FETCH FIRST n ROWS ONLY`, the `SELECT TOP n` the build-106 %qaqpre workaround
+    emits instead, and a bare `LIMIT n`. Every route that answers a var-length
+    pattern outside SQL has to read the cap itself, because the statement it was
+    lifted from never runs.
+    """
+    if not sql:
+        return 0
+    m = re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", sql, re.IGNORECASE)
+    if not m:
+        m = re.search(r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+(\d+)\b", sql, re.IGNORECASE)
+    if not m:
+        m = re.search(r"\bLIMIT\s+(\d+)", sql, re.IGNORECASE)
+    return int(m.group(1)) if m else 0
 
 
 def _split_top_level_and(where_clause: str) -> list:
@@ -407,7 +439,15 @@ class QueryMixin:
         return self._execute_parsed(parsed, parameters, procedures)
     def _execute_parsed(self, parsed, parameters, procedures=None):
         if parsed.procedure_call is not None:
-            result = self._try_system_procedure(parsed.procedure_call)
+            # `USE GRAPH` and the query's parameters live on the parsed query, not on
+            # the procedure call. This interception runs *before* the translator that
+            # spec 227 scoped, so dropping them here answered a scoped CALL with an
+            # unscoped search and a `$param` vector with an empty one.
+            result = self._try_system_procedure(
+                parsed.procedure_call,
+                parameters=parameters,
+                graph=getattr(parsed, "graph_context", None),
+            )
             if result is not None:
                 return result
         sql_query = translate_to_sql(parsed, parameters, engine=self, procedures=procedures)
@@ -519,6 +559,7 @@ class QueryMixin:
             1,
             traversal["direction"],
             0,
+            graph=getattr(sql_query, "graph_context", None),
         )
         if isinstance(raw, list):
             rows = [[r.get("node_id", r.get("id", "")), r.get("hops", 1)] for r in raw]
@@ -532,6 +573,10 @@ class QueryMixin:
             from iris_vector_graph.errors import IndexNotSyncedError
             raise IndexNotSyncedError()
         vl0 = sql_query.var_length_paths[0]
+        # `USE GRAPH` never reaches the SQL on this route — we call BFS instead of
+        # running the translated statement — so the graph has to travel on the
+        # SQLQuery and be handed to every traversal below (spec 227).
+        graph = getattr(sql_query, "graph_context", None)
         if vl0.get("weighted"):
             return self._execute_weighted_shortest_path(sql_query, parameters)
         if vl0.get("shortest") or vl0.get("all_shortest"):
@@ -581,8 +626,17 @@ class QueryMixin:
             # When path functions (length/nodes/relationships) are in RETURN,
             # use dedicated method that tracks (source, target, hop) triples.
             if vl0.get("return_path_funcs"):
-                return self._execute_var_length_labeled_path_funcs(sql_query, parameters, vl0)
-            return self._execute_var_length_labeled(sql_query, parameters, vl0)
+                labeled = self._execute_var_length_labeled_path_funcs(
+                    sql_query, parameters, vl0
+                )
+            else:
+                labeled = self._execute_var_length_labeled(sql_query, parameters, vl0)
+            # Neither labeled route runs the statement it was translated from, so the
+            # `LIMIT` on it has to be applied here. Before this, `MATCH (x)-[r*1..1]->(y)
+            # WHERE x.id = $id RETURN y.id LIMIT 5` over a 20-neighbour hub returned all
+            # 20 rows — the ID-bound route reads the cap and passes it to BFS, so only
+            # the property-bound form was wrong (spec 230, FR-032).
+            return self._apply_sql_row_limit(labeled, sql_query)
 
         if vl0.get("min_hops", 1) > 1 or vl0.get("properties") or vl0.get("return_path_funcs"):
             return self._execute_var_length_cypher(sql_query, parameters)
@@ -607,37 +661,62 @@ class QueryMixin:
         predicates = vl0.get("types", [])
         max_hops = vl0.get("max_hops", 5)
         direction = vl0.get("direction", "out")
-        def _extract_limit(s: str) -> int:
-            # IRIS SQL uses FETCH FIRST N ROWS ONLY; the build-106 %qaqpre workaround
-            # emits SELECT TOP N instead; fall back to LIMIT N.
-            m = _re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", s, _re.IGNORECASE)
-            if not m:
-                m = _re.search(r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+(\d+)\b", s, _re.IGNORECASE)
-            if not m:
-                m = _re.search(r"\bLIMIT\s+(\d+)", s, _re.IGNORECASE)
-            return int(m.group(1)) if m else 0
-
-        max_results = _extract_limit(sql_str) if sql_str else 0
 
         if count_match:
             col_name = count_match.group(1)
-            bfs_result = self._store.execute_bfs(source_id, predicates, max_hops, direction, 0)
+            bfs_result = self._store.execute_bfs(
+                source_id, predicates, max_hops, direction, 0, graph=graph
+            )
             cnt = len(bfs_result.rows) if not bfs_result.error else 0
             return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
-        max_results = _extract_limit(sql_str) if sql_str else 0
+        row_limit = _extract_sql_row_limit(sql_str)
 
         direction = vl0.get("direction", "out")
         predicates = vl0.get("types", [])
         max_hops = vl0.get("max_hops", 5)
 
+        # This route answers from BFS instead of running the statement it was translated
+        # from, so the statement's `DISTINCT` has to be honoured here. BFS reports one row
+        # per reached edge — an undirected walk reaches the same node at two hops and by
+        # two predicates — so `RETURN DISTINCT b.node_id` came back with duplicates
+        # (spec 230). The cap then has to move out of BFS: truncating raw hits would cap
+        # the wrong thing, leaving `LIMIT 20` holding 11 distinct nodes.
+        distinct = bool(_re.search(r'\bSELECT\s+DISTINCT\b', sql_str, _re.IGNORECASE))
+        max_results = 0 if distinct else row_limit
+
         if vl0.get("temporal_window"):
             ts_start = vl0.get("ts_start", 0)
             ts_end = vl0.get("ts_end", 9999999999)
             result = self._store.execute_temporal_cypher(
-                source_id, predicates, ts_start, ts_end, direction, max_hops
+                source_id, predicates, ts_start, ts_end, direction, max_hops, graph=graph
             )
         else:
-            result = self._store.execute_bfs(source_id, predicates, max_hops, direction, max_results)
+            result = self._store.execute_bfs(
+                source_id, predicates, max_hops, direction, max_results, graph=graph
+            )
+
+        if distinct and result.rows:
+            # Keep the first row for an id: BFS emits in hop order, so that is its
+            # shortest hop and the `hops` column stays meaningful.
+            seen_ids: set = set()
+            deduped = []
+            for row in result.rows:
+                if not row:
+                    continue
+                if row[0] in seen_ids:
+                    continue
+                seen_ids.add(row[0])
+                deduped.append(row)
+            if row_limit:
+                deduped = deduped[:row_limit]
+            result = IVGResult(
+                columns=result.columns,
+                rows=deduped,
+                sql=result.sql,
+                params=result.params,
+                metadata=result.metadata,
+                error=result.error,
+            )
 
         return_properties = getattr(sql_query.query_metadata, "return_properties", None)
         if return_properties and result.rows:
@@ -652,6 +731,33 @@ class QueryMixin:
                     metadata=result.metadata,
                 )
         return result
+
+    def _apply_sql_row_limit(self, result, sql_query) -> "IVGResult":
+        """Cap a route's own rows at the translated statement's `LIMIT`.
+
+        Skipped when the statement also carries an `ORDER BY`: these routes assemble
+        their rows from BFS output, which carries no sort, so the first n rows are not
+        the n the sort asked for. Truncating there would turn "too many rows" into "the
+        wrong rows", so the cap is dropped and the gap logged — visibly over-returning
+        beats silently answering something else.
+        """
+        sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+        limit = _extract_sql_row_limit(sql_str)
+        if not limit or not result.rows or len(result.rows) <= limit:
+            return result
+        if re.search(r"\bORDER\s+BY\b", sql_str, re.IGNORECASE):
+            logger.warning(
+                "var-length path: LIMIT %d not applied because the query also has an "
+                "ORDER BY, which this route cannot honour — returning all %d rows",
+                limit,
+                len(result.rows),
+            )
+            return result
+        return IVGResult(
+            columns=result.columns,
+            rows=result.rows[:limit],
+            metadata=result.metadata,
+        )
 
     def _execute_var_length_labeled_path_funcs(self, sql_query, parameters, vl0) -> "IVGResult":
         """Execute a var-length path query with path functions (length/nodes/relationships)
@@ -708,7 +814,8 @@ class QueryMixin:
                 # Use _bfs_with_paths to get full node/edge sequence per path
                 try:
                     for node_list, edge_list in self._bfs_with_paths(
-                        src_id, predicates, max_hops, direction
+                        src_id, predicates, max_hops, direction,
+                        graph=getattr(sql_query, "graph_context", None),
                     ):
                         if not node_list:
                             continue
@@ -721,7 +828,10 @@ class QueryMixin:
                     logger.debug("BFS with paths failed for %s: %s", src_id, exc)
             else:
                 try:
-                    bfs_result = self._store.execute_bfs(src_id, predicates, max_hops, direction, 0)
+                    bfs_result = self._store.execute_bfs(
+                        src_id, predicates, max_hops, direction, 0,
+                        graph=getattr(sql_query, "graph_context", None),
+                    )
                     if bfs_result and not getattr(bfs_result, "error", False):
                         for row in bfs_result.rows:
                             tgt_id = row[0] if row else None
@@ -1055,7 +1165,10 @@ class QueryMixin:
             try:
                 if _rel_in_sql:
                     # Path-tracking BFS to reconstruct edge sequences for RETURN r
-                    paths = self._bfs_with_paths(src_id, predicates, max_hops, direction)
+                    paths = self._bfs_with_paths(
+                        src_id, predicates, max_hops, direction,
+                        graph=getattr(sql_query, "graph_context", None),
+                    )
                     for path_nodes, path_edges in paths:
                         if not path_nodes:
                             continue
@@ -1068,7 +1181,10 @@ class QueryMixin:
                             min_hop_per_node[target_id] = hop
                         path_edges_by_target.setdefault(target_id, []).append(path_edges)
                 else:
-                    bfs_result = self._store.execute_bfs(src_id, predicates, max_hops, direction, 0)
+                    bfs_result = self._store.execute_bfs(
+                        src_id, predicates, max_hops, direction, 0,
+                        graph=getattr(sql_query, "graph_context", None),
+                    )
                     if bfs_result and not getattr(bfs_result, "error", False):
                         for row in bfs_result.rows:
                             nid = row[0] if row else None
@@ -1184,23 +1300,25 @@ class QueryMixin:
                 metadata=sql_query.query_metadata,
             )
 
-        # Step 4: Fetch requested properties for each target node
+        # Step 4: Fetch requested properties for each target node.
+        # `node_id` is the node's identity, not a row in `rdf_props`, so asking the
+        # store for it as a property missed every time and `RETURN b.node_id` answered
+        # a column of None — the right rows with no values in them (spec 230). Project
+        # it from the id we already hold and ask the store only for real properties.
         prop_keys = [pk for _, pk in return_props]
-        props_result = self._store.get_nodes(target_ids, prop_keys)
+        stored_keys = [pk for pk in prop_keys if pk != "node_id"]
+        props_result = self._store.get_nodes(target_ids, stored_keys)
         # get_nodes returns rows: [node_id, labels_json, prop1, prop2, ...]
         props_by_id: dict = {}
         for row in (props_result.rows if props_result else []):
             if row:
                 nid = row[0]
-                props_by_id[nid] = list(row[2:])  # skip node_id and labels
+                props_by_id[nid] = dict(zip(stored_keys, list(row[2:])))
 
         rows_out = []
         for nid in target_ids:
-            prop_vals = list(props_by_id.get(nid, []))
-            # Pad to expected column count
-            while len(prop_vals) < len(prop_keys):
-                prop_vals.append(None)
-            rows_out.append(prop_vals[:len(prop_keys)])
+            vals = props_by_id.get(nid, {})
+            rows_out.append([nid if pk == "node_id" else vals.get(pk) for pk in prop_keys])
 
         return IVGResult(
             columns=out_cols,
@@ -1239,13 +1357,19 @@ class QueryMixin:
         return result
 
     def _bfs_with_paths(
-        self, source_id: str, predicates: list, max_hops: int, direction: str
+        self, source_id: str, predicates: list, max_hops: int, direction: str,
+        graph: Optional[str] = None,
     ) -> list:
-        """BFS that tracks the full path (node + edge-type sequence).
+        """BFS that tracks the full path (node + edge-type sequence), one graph only.
 
         Returns a list of (node_list, edge_type_list) tuples.
         node_list[0] == source_id; node_list[-1] == target node.
         edge_type_list has len(node_list) - 1 entries.
+
+        This is a second hop-by-hop walk of rdf_edges alongside
+        _sql_bfs_fallback, and it was unscoped for the same reason: no caller had a
+        graph to give it. COALESCE on both sides — an upgraded row can read as NULL
+        and IRIS returns $Char(0) for an empty VARCHAR (spec 227).
         """
         import re as _re
         try:
@@ -1271,21 +1395,22 @@ class QueryMixin:
                 placeholders_p = ",".join("?" * len(predicates))
                 preds_clause = f" AND p IN ({placeholders_p})"
             placeholders_f = ",".join("?" * len(all_src_ids))
+            graph_clause = " AND COALESCE(graph_id, '') = COALESCE(?, '')"
             try:
-                params = all_src_ids + (predicates if predicates else [])
+                params = all_src_ids + (predicates if predicates else []) + [graph or ""]
                 if direction in ("out", "outbound"):
-                    sql = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}"
+                    sql = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
                     cursor.execute(sql, params)
                     edges = list(cursor.fetchall())
                 elif direction in ("in", "inbound"):
-                    sql = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}"
+                    sql = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
                     cursor.execute(sql, params)
                     edges = list(cursor.fetchall())
                 else:
-                    sql_o = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}"
+                    sql_o = f"SELECT s, o_id, p FROM {edges_table} WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
                     cursor.execute(sql_o, params)
                     edges = list(cursor.fetchall())
-                    sql_i = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}"
+                    sql_i = f"SELECT o_id, s, p FROM {edges_table} WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
                     cursor.execute(sql_i, params)
                     edges += list(cursor.fetchall())
             except Exception as exc:
@@ -1536,19 +1661,9 @@ class QueryMixin:
                 metadata= sql_query.query_metadata
             )
 
-        max_results = 0
         import re as _re
         sql_str = sql_query.sql if isinstance(sql_query.sql, str) else (sql_query.sql[0] if sql_query.sql else "")
-        if sql_query.sql:
-            # IRIS SQL uses "FETCH FIRST N ROWS ONLY"; the build-106 %qaqpre workaround
-            # emits SELECT TOP N instead; fall back to LIMIT N.
-            m = _re.search(r"FETCH\s+FIRST\s+(\d+)\s+ROWS\s+ONLY", sql_str, _re.IGNORECASE)
-            if not m:
-                m = _re.search(r"\bSELECT\s+(?:DISTINCT\s+)?TOP\s+(\d+)\b", sql_str, _re.IGNORECASE)
-            if not m:
-                m = _re.search(r"\bLIMIT\s+(\d+)", sql_str, _re.IGNORECASE)
-            if m:
-                max_results = int(m.group(1))
+        max_results = _extract_sql_row_limit(sql_str)
 
         count_match = _re.search(r'SELECT\s+COUNT\s*\(\s*DISTINCT\s+.*?\)\s+AS\s+(\w+)', sql_str, _re.IGNORECASE)
         if count_match:
@@ -1878,7 +1993,10 @@ class QueryMixin:
         from iris_vector_graph.cypher.translator import translate_to_sql
         try:
             q = parse_query(cypher_query)
-            sql_query = translate_to_sql(q, params=parameters or {})
+            # `engine=self`, like every other translate call on an engine: without it the
+            # translator loses the label-to-table mapping, the child-graph scoping and the
+            # FETCH-FIRST-crash workaround.
+            sql_query = translate_to_sql(q, params=parameters or {}, engine=self)
         except Exception:
             return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
 
@@ -1904,7 +2022,37 @@ class QueryMixin:
                 source_id = next(iter(parameters.values()), None) if parameters else None
 
         if not source_id:
-            return IVGResult(columns=[col_name], rows=[[0]], sql="", params=[])
+            # A literal id in the pattern is inlined into the statement, so the scan of
+            # bound parameters above finds nothing; the shared extractor knows every
+            # spelling. Before this, a literal source answered 0 (spec 230).
+            extracted = extract_vlp_source_ids(
+                sql_query=sql_query,
+                source_labels=vl.get("source_labels") or [],
+                source_alias=vl.get("source_alias") or "",
+                target_alias=vl.get("target_alias") or "",
+                store=getattr(self, "_store", None),
+            )
+            if extracted:
+                source_id = extracted[0]
+
+        if not source_id:
+            # Reporting 0 here reads as "no distinct neighbours", which is a different
+            # claim from "I could not tell where to start" (spec 230).
+            from iris_vector_graph.cypher.translator import QueryMetadata
+
+            return IVGResult(
+                columns=[col_name],
+                rows=[[0]],
+                sql="",
+                params=[],
+                metadata=QueryMetadata(
+                    warnings=[
+                        "approx_count_distinct: no source node could be resolved from "
+                        "this pattern, so 0 is not a count — bind the source node's id "
+                        "(for example `MATCH (a {node_id: $src})`)"
+                    ]
+                ),
+            )
 
         try:
             raw = str(_call_classmethod(

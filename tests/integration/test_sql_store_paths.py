@@ -76,24 +76,61 @@ def store(store_eng):
 
 class TestArnoCallChunkedPath:
 
-    def test_chunked_path_in_arno_call(self, store):
-        # _arno_call at L83-85: when result starts with CHUNKED: it reads chunks
+    @staticmethod
+    def _arno_mock(answer, chunks=()):
+        """A fake whose answers are keyed by method, not by call order.
+
+        `_arno_call` probes `ArnoAccel.IsAvailable` before it calls anything, so an
+        ordered `side_effect` list hands the availability probe the first answer and
+        shifts every later one — which made this test read `part_one` as the whole
+        result and pass its `CHUNKED:` header to a boolean.
+        """
+        answers = {
+            "IsAvailable": 1,
+            "SomeMethod": answer,
+            "ReadLargeOutChunk": None,
+        }
+
+        def call(cls, method, *args):
+            if method == "ReadLargeOutChunk":
+                return chunks[args[1] - 1]
+            return answers[method]
+
         mock_iris = MagicMock()
-        mock_iris.classMethodValue.side_effect = [
-            "CHUNKED:tag1:2",
-            "part_one",
-            "part_two",
-        ]
+        mock_iris.classMethodValue.side_effect = call
+        return mock_iris
+
+    def test_chunked_path_in_arno_call(self, store):
+        """A `CHUNKED:<tag>:<n>` header means the value did not fit one return, so
+        the n chunks are read by ordinal and joined in order."""
+        mock_iris = self._arno_mock("CHUNKED:tag1:2", chunks=("part_one", "part_two"))
+
         with patch.object(store, "_iris_obj", return_value=mock_iris):
             result = store._arno_call("SomeClass", "SomeMethod")
+
         assert result == "part_onepart_two"
+        reads = [
+            c.args
+            for c in mock_iris.classMethodValue.call_args_list
+            if c.args[1] == "ReadLargeOutChunk"
+        ]
+        assert reads == [
+            ("SomeClass", "ReadLargeOutChunk", "tag1", 1),
+            ("SomeClass", "ReadLargeOutChunk", "tag1", 2),
+        ]
 
     def test_non_chunked_path_in_arno_call(self, store):
-        mock_iris = MagicMock()
-        mock_iris.classMethodValue.return_value = "normal_result"
+        mock_iris = self._arno_mock("normal_result")
+
         with patch.object(store, "_iris_obj", return_value=mock_iris):
             result = store._arno_call("SomeClass", "SomeMethod")
+
         assert result == "normal_result"
+        assert not [
+            c
+            for c in mock_iris.classMethodValue.call_args_list
+            if c.args[1] == "ReadLargeOutChunk"
+        ], "a plain value must not trigger a chunk read"
 
 
 # ---------------------------------------------------------------------------

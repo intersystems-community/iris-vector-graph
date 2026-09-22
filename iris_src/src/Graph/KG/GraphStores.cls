@@ -32,12 +32,42 @@ ClassMethod Inventory() As %DynamicArray
 	// --- graph-scoped SQL ---------------------------------------------------
 	Do tStores.%Push(..Entry("Graph_KG.rdf_edges", "sql", "graph_id", 1))
 	Do tStores.%Push(..Entry("Graph_KG.nodes", "sql", "graph_id", 1))
+	// Spec 227 gave the child tables and both legacy embedding tables a graph_id
+	// of their own, so the Eraser reaches them by that column instead of through
+	// "s IN (SELECT node_id FROM nodes WHERE graph_id = ...)" — a subquery that
+	// returned the shared node id after the re-key and took both graphs' rows.
+	Do tStores.%Push(..Entry("Graph_KG.rdf_labels", "sql", "graph_id", 1))
+	Do tStores.%Push(..Entry("Graph_KG.rdf_props", "sql", "graph_id", 1))
+	Do tStores.%Push(..Entry("Graph_KG.kg_NodeEmbeddings", "sql", "graph_id", 1))
+	Do tStores.%Push(..Entry("Graph_KG.kg_NodeEmbeddings_optimized", "sql", "graph_id", 1))
+	// Spec 230 gave these two the same treatment. kg_EdgeEmbeddings was keyed by
+	// the (s, p, o_id) triple alone, which the Eraser reached through a correlated
+	// EXISTS against rdf_edges — correct only while a triple belonged to one graph.
+	// Graph_KG.docs was in no inventory and in no erase path at all, so a graph's
+	// BM25 corpus outlived the graph.
+	Do tStores.%Push(..Entry("Graph_KG.kg_EdgeEmbeddings", "sql", "graph_id", 1))
+	Do tStores.%Push(..Entry("Graph_KG.docs", "sql", "graph_id", 1))
+	// The routed tables kg_emb_<hash> and kg_eemb_<hash> are not listed one by one:
+	// which of them exists is a fact about the registry, not about this class. The
+	// Eraser reads Graph_KG.embedding_registry for a graph's routes and drops each
+	// after the commit; the registry itself is named below.
+	Do tStores.%Push(..Entry("Graph_KG.embedding_registry", "sql", "graph_id", 1))
 
 	// --- graph-scoped globals: structural adjacency (spec 214) -------------
 	Do tStores.%Push(..Entry("^KG(""out"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""in"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""deg"")", "global", "subscript 2", 1))
 	Do tStores.%Push(..Entry("^KG(""degp"")", "global", "subscript 2", 1))
+
+	// --- graph-scoped globals: node stores and two-hop counts (spec 230) ----
+	// Spec 214 keyed adjacency and left these behind, so a per-graph erase had to
+	// walk them by node id — which stopped being correct once the same node id
+	// could live in two graphs. They are keyed the same way now, and the erase is
+	// four more Kills instead of two SQL cursors and two nested walks.
+	Do tStores.%Push(..Entry("^KG(""label"")", "global", "subscript 2", 1))
+	Do tStores.%Push(..Entry("^KG(""prop"")", "global", "subscript 2", 1))
+	Do tStores.%Push(..Entry("^KG(""deg2p"")", "global", "subscript 2", 1))
+	Do tStores.%Push(..Entry("^KG(""deg2p_exact"")", "global", "subscript 2", 1))
 
 	// --- graph-scoped globals: temporal index (spec 223) -------------------
 	Do tStores.%Push(..Entry("^KG(""tout"")", "global", "subscript 2", 1))
@@ -55,19 +85,16 @@ ClassMethod Inventory() As %DynamicArray
 
 	// --- not graph-scoped ---------------------------------------------------
 	//
-	// Everything below can be emptied wholesale but not split by graph. A
-	// per-graph erase reaches these by node id or by triple, accepting that a node
-	// or triple named by two graphs loses content shared with the other. That is
-	// the schema gap, stated once here rather than rediscovered by each consumer.
-	Do tStores.%Push(..Entry("Graph_KG.rdf_labels", "sql", "", 0, "keyed by node id alone, so a node's labels are shared by every graph naming that node"))
-	Do tStores.%Push(..Entry("Graph_KG.rdf_props", "sql", "", 0, "keyed by node id and key alone, so a node's properties are shared by every graph naming that node"))
+	// Everything below can be emptied wholesale but not split by graph. Spec 230
+	// removed the entries that were only reachable by node id or by triple, so what
+	// is left is the content whose graph identity does not exist to be recovered:
+	// interning that never carried one, a statistic computed over that interning, an
+	// append-only content-addressed store, a whole-database snapshot, and one table
+	// (rdf_reifications) that still has no graph column. Stated once here rather
+	// than rediscovered by each consumer.
 	Do tStores.%Push(..Entry("Graph_KG.rdf_reifications", "sql", "", 0, "keyed by reifier and edge id alone, with no graph column and no join to one"))
-	Do tStores.%Push(..Entry("Graph_KG.kg_NodeEmbeddings", "sql", "", 0, "keyed by node id alone, so a node's embedding is shared by every graph naming that node"))
-	Do tStores.%Push(..Entry("Graph_KG.kg_NodeEmbeddings_optimized", "sql", "", 0, "the reindexed twin of kg_NodeEmbeddings, keyed by node id alone"))
-	Do tStores.%Push(..Entry("Graph_KG.kg_EdgeEmbeddings", "sql", "", 0, "keyed by the (s, p, o_id) triple alone, so an edge embedding is shared by every graph holding that triple"))
 	Do tStores.%Push(..Entry("^NKG", "global", "", 0, "node interning is append-only and ignores graph_id, so its counters over-count and its ids cannot be attributed to one graph"))
-	Do tStores.%Push(..Entry("^KG(""label"")", "global", "", 0, "keyed (label, node) with no graph subscript; read by the destination-label filter in Graph.KG.TraversalBFS, so a stale entry keeps answering label-filtered traversals"))
-	Do tStores.%Push(..Entry("^KG(""prop"")", "global", "", 0, "keyed (node, key) with no graph subscript; read by Graph.KG.Subgraph when materializing node properties"))
+	Do tStores.%Push(..Entry("^KG(""deg2p_exact_merged"")", "global", "", 0, "Arno's two-hop counts, computed over ^NKG by Graph.KG.NKGAccelTraversal:Build2HopExact; since ^NKG's interning carries no graph, the number cannot be attributed to one graph and is kept apart from the scoped ^KG(""deg2p_exact"") rather than written into it"))
 	Do tStores.%Push(..Entry("^KG(""labelset"")", "global", "", 0, "content-addressed interning of temporal label sets, deliberately append-only: Graph.KG.TemporalIndex documents that no purge touches it"))
 	Do tStores.%Push(..Entry("^ArnoKG", "global", "", 0, "a whole-database JSON snapshot keyed by graph name ""KG"" with no graph dimension, invalidated by comparing ^KG(""__version"") rather than by content, so erasing content without bumping that stamp leaves Arno serving the erased graph"))
 

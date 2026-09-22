@@ -1,4 +1,7 @@
+import json
+
 import pytest
+
 
 def test_single_relationship_type(execute_cypher):
     """Test MATCH (a)-[:TYPE]->(b)"""
@@ -25,6 +28,9 @@ def test_relationship_with_variable(execute_cypher):
     assert "r" in result["columns"]
     
     # Columns: t_id, t_labels, t_props, r, a_id, a_labels, a_props
-    # r is at index 3
+    # r is at index 3, and carries the whole relationship — type and properties — not
+    # just `edge.p`, which is what this line used to assert.
     for row in result["rows"]:
-        assert row[3] == "FROM_ACCOUNT"  # r maps to edge.p (the relationship type)
+        rel = json.loads(row[3])
+        assert rel["type"] == "FROM_ACCOUNT"
+        assert isinstance(rel["props"], dict)

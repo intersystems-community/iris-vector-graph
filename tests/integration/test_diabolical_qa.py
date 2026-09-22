@@ -191,22 +191,28 @@ class TestSelfLoopsAndCycles:
 
 class TestForeignKeyBehavior:
 
-    def test_edge_to_nonexistent_node_returns_false(self, engine, iris_connection):
-        """Creating an edge to a nonexistent node returns False (FK constraint).
-        create_edge() swallows the exception and returns False — it does not raise.
-        This is the documented API contract."""
+    def test_edge_to_unregistered_node_registers_it(self, engine, iris_connection):
+        """An edge names its endpoints, so writing it registers them.
+
+        This used to assert `create_edge` returned False on `fk_edges_dest`, which
+        made the FK look like the API's contract. It is not: under the 227 composite
+        key `(graph_id, node_id)` a node loaded in the default graph no longer
+        satisfies an edge written in a named one, so *every* pre-227 load order hit
+        that FK — and `create_edge` reports it with the same False it uses for a
+        duplicate. `_ensure_edge_endpoints` now registers what the edge names, so the
+        edge is written and the endpoint exists.
+        """
         engine.create_node("fk_src")
-        result = engine.create_edge("fk_src", "R", "__nonexistent_fk_target__")
-        assert result is False, (
-            "create_edge to nonexistent target should return False, got True. "
-            "FK constraint may not be enforced."
-        )
-        # Verify no edge was written
+        result = engine.create_edge("fk_src", "R", "__unregistered_fk_target__")
+        assert result is True, "an edge that names an unregistered endpoint must register it"
         cur = iris_connection.cursor()
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s='fk_src'")
+        assert int(cur.fetchone()[0]) == 1
         cur.execute(
-            "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s='fk_src'"
+            "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id=?",
+            ["__unregistered_fk_target__"],
         )
-        assert int(cur.fetchone()[0]) == 0
+        assert int(cur.fetchone()[0]) == 1, "the endpoint was not registered"
 
     def test_bulk_ingest_to_nonexistent_node_handled(self, engine):
         """bulk_ingest_edges to a nonexistent node should not silently succeed

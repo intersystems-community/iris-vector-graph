@@ -6,24 +6,29 @@ and no injection risk from special characters in query text.
 
 Requires: ivg-iris or ivg-iris-enterprise container running.
 """
+
 from __future__ import annotations
 
 import pytest
 
 
-@pytest.mark.parametrize("cypher,desc", [
-    (
-        "CALL ivg.bm25.search('nonexistent_idx', 'heart failure', 5) YIELD node RETURN node",
-        "bm25 with normal query text",
-    ),
-    (
-        "CALL ivg.bm25.search('nonexistent_idx', 'query with spaces and numbers 123', 3) YIELD node RETURN node",
-        "bm25 with spaces and numbers",
-    ),
-])
+@pytest.mark.parametrize(
+    "cypher,desc",
+    [
+        (
+            "CALL ivg.bm25.search('nonexistent_idx', 'heart failure', 5) YIELD node RETURN node",
+            "bm25 with normal query text",
+        ),
+        (
+            "CALL ivg.bm25.search('nonexistent_idx', 'query with spaces and numbers 123', 3) YIELD node RETURN node",
+            "bm25 with spaces and numbers",
+        ),
+    ],
+)
 def test_bm25_parameterized_executes_on_iris(iris_connection, cypher, desc):
     """BM25 queries with parameterized args should execute without SQL errors."""
     from iris_vector_graph.engine import IRISGraphEngine
+
     engine = IRISGraphEngine(iris_connection)
     # Will error on SQL syntax/parse if parameterization broke the query structure.
     # Empty result is fine — index likely doesn't exist in test DB.
@@ -35,24 +40,61 @@ def test_bm25_parameterized_executes_on_iris(iris_connection, cypher, desc):
         err = str(e).lower()
         # "index not found" or "table not found" are acceptable — means SQL was valid
         # but the BM25 index/function doesn't exist in the test DB.
-        if any(x in err for x in ["not found", "does not exist", "unknown function",
-                                    "no such", "sqlcode", "undefined"]):
+        if any(
+            x in err
+            for x in [
+                "not found",
+                "does not exist",
+                "unknown function",
+                "no such",
+                "sqlcode",
+                "undefined",
+            ]
+        ):
             pytest.skip(f"BM25 function not available in test IRIS: {e}")
         raise
 
 
 def test_retrieve_parameterized_executes_on_iris(iris_connection):
-    """ivg.retrieve with parameterized query text should not cause SQL injection."""
+    """ivg.retrieve with parameterized query text should not cause SQL injection.
+
+    The engine is given an embedder because `ivg.retrieve`'s vector arm needs a query
+    vector and this namespace has no `%Embedding.Config` (spec 227,
+    `_retrieve_query_vector`). Without one the engine raises before any SQL is built,
+    and this test used to be skipped by the `does not exist` branch below — it matched
+    the server's `SQLCODE -280 %Embedding.Config ' ' does not exist`, so the injection
+    assertion never actually ran. The width is read off the column: IRIS checks vector
+    width at Query Open even against an empty table.
+    """
     from iris_vector_graph.engine import IRISGraphEngine
-    engine = IRISGraphEngine(iris_connection)
+    from iris_vector_graph.schema import GraphSchema
+
+    cursor = iris_connection.cursor()
+    try:
+        width = GraphSchema.get_embedding_dimension(cursor, "kg_NodeEmbeddings")
+    finally:
+        cursor.close()
+    if not width:
+        pytest.skip("kg_NodeEmbeddings.emb has no declared width in this namespace")
+
+    engine = IRISGraphEngine(iris_connection, embedder=lambda text: [0.1] * int(width))
     cypher = "CALL ivg.retrieve('test query text', 3) YIELD node RETURN node"
     try:
         result = engine.execute_cypher(cypher)
         assert result is not None
     except Exception as e:
         err = str(e).lower()
-        if any(x in err for x in ["not found", "does not exist", "unknown function",
-                                    "no such", "sqlcode", "undefined"]):
+        if any(
+            x in err
+            for x in [
+                "not found",
+                "does not exist",
+                "unknown function",
+                "no such",
+                "sqlcode",
+                "undefined",
+            ]
+        ):
             pytest.skip(f"BM25/vector function not available in test IRIS: {e}")
         raise
 
@@ -60,6 +102,7 @@ def test_retrieve_parameterized_executes_on_iris(iris_connection):
 def test_injection_attempt_safe_on_iris(iris_connection):
     """Single-quote injection in BM25 query text must not cause SQL errors."""
     from iris_vector_graph.engine import IRISGraphEngine
+
     engine = IRISGraphEngine(iris_connection)
     # This would cause SQL errors if interpolated inline; with ? binding it's safe.
     cypher = "CALL ivg.bm25.search('idx', 'it\\'s a test query', 5) YIELD node RETURN node"
@@ -74,7 +117,16 @@ def test_injection_attempt_safe_on_iris(iris_connection):
                 f"SQL injection via single-quote produced a syntax error — "
                 f"parameterization failed: {e}"
             ) from e
-        if any(x in err for x in ["not found", "does not exist", "unknown function",
-                                    "no such", "sqlcode", "undefined"]):
+        if any(
+            x in err
+            for x in [
+                "not found",
+                "does not exist",
+                "unknown function",
+                "no such",
+                "sqlcode",
+                "undefined",
+            ]
+        ):
             pytest.skip(f"BM25 function not available in test IRIS: {e}")
         raise

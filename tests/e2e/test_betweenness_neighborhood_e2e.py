@@ -19,7 +19,6 @@ def karate_engine(iris_connection):
     iris_obj.classMethodVoid("Graph.KG.NKGAccel", "Unload")
     iris_obj.classMethodValue("Graph.KG.NKGAccel", "Load", ARNO_LIB)
     iris_obj.classMethodValue("%SYSTEM.OBJ", "Compile", "Graph.KG.Traversal", "cuk-d")
-    iris_obj.classMethodValue("%SYSTEM.OBJ", "Compile", "Graph.KG.Edge", "cuk-d")
     iris_obj.classMethodValue("%SYSTEM.OBJ", "Compile", "Graph.KG.EdgeScan", "cuk-d")
 
     cursor = conn.cursor()

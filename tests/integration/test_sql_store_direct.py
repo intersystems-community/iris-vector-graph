@@ -206,9 +206,13 @@ class TestExecutePPR:
         assert result is not None
         assert hasattr(result, "rows")
 
-    def test_execute_ppr_empty_seeds(self, store):
-        result = store.execute_ppr([], damping=0.85, max_iterations=5)
-        assert result is not None
+    def test_execute_ppr_empty_seeds_raises(self, store):
+        """Spec 209 FR-006: no seeds means no personalization vector, so there is
+        nothing for PPR to be personalized *to* — it refuses before reaching IRIS
+        rather than answering with a plain PageRank. Pinned in
+        `tests/unit/test_dispatch_routing.py`; this asserts the live store agrees."""
+        with pytest.raises(ValueError, match="seed_ids"):
+            store.execute_ppr([], damping=0.85, max_iterations=5)
 
 
 # ---------------------------------------------------------------------------

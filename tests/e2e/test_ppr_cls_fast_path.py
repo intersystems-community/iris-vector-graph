@@ -125,7 +125,7 @@ def chain_graph(iris_connection, engine):
 
 @pytest.mark.e2e
 def test_cls_layer_deployed(engine):
-    """initialize_schema() compiles Graph.KG.Edge into IRIS."""
+    """initialize_schema() compiles the Graph.KG.* classes into IRIS."""
     if not engine.capabilities.objectscript_deployed:
         pytest.skip("ObjectScript .cls deployment not supported on this IRIS instance")
     assert engine.capabilities.objectscript_deployed

@@ -32,11 +32,19 @@ ClassMethod jsonEsc(pValue As %String) As %String [ Internal ]
 	Return result
 }
 
-ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "") As %DynamicArray
+/// BFS the adjacency index for one graph.
+///
+/// `graph` is a graph *name*, not a subscript: the empty string means the default
+/// graph and ##class(Graph.KG.GraphKey).ForIndex() turns it into the integer 0 that
+/// keys it in ^KG (ADR-0003 — no caller re-derives either graph key). Every helper
+/// below takes the derived subscript as `pGraph` rather than deriving its own, which
+/// is how the two would come to disagree about which graph they are walking.
+ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", graph As %String = "") As %DynamicArray
 {
     Set results = ##class(%DynamicArray).%New()
     If (srcId = "") || (maxHops <= 0) Return results
-    
+
+    Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(graph)
     Set pathId = 0
     Set seen(srcId) = ""
     Set frontier(srcId) = ""
@@ -66,9 +74,9 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
             If s = "" Quit
             
             If fixedP '= "" {
-                Do ..TraverseWithPredicate(s, fixedP, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
+                Do ..TraverseWithPredicate(pGraph, s, fixedP, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
             } Else {
-                Do ..TraverseAllPredicates(s, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
+                Do ..TraverseAllPredicates(pGraph, s, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
             }
         }
         
@@ -84,11 +92,17 @@ ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integ
     }
     Return results
 }
-ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %Integer
+/// BFS into the ^||BFS.Results process-private global, scoped to one graph.
+///
+/// `graph` is a name, not a subscript — see BFS() above. ForIndex() also validates
+/// it, so a graph name that could collide with the default graph's subscript throws
+/// here rather than silently walking the wrong subtree.
+ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %Integer
 {
     Kill ^||BFS.Results
     If (srcId = "") || (maxHops <= 0) Return 0
-    
+
+    Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(graph)
     Set count = 0
     Set seen(srcId) = ""
     Set frontier(srcId) = ""
@@ -123,17 +137,17 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
             
             If direction = "out" || (direction = "both") {
                 If fixedP '= "" {
-                    Do ..TraverseWithPredicateFast(s, fixedP, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+                    Do ..TraverseWithPredicateFast(pGraph, s, fixedP, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
                 } Else {
-                    Do ..TraverseAllPredicatesFast(s, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+                    Do ..TraverseAllPredicatesFast(pGraph, s, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
                 }
             }
-            
+
             If direction = "in" || (direction = "both") {
                 If fixedP '= "" {
-                    Do ..TraverseWithPredicateFastInbound(s, fixedP, hop, .count, .nextFrontier, .seen)
+                    Do ..TraverseWithPredicateFastInbound(pGraph, s, fixedP, hop, .count, .nextFrontier, .seen)
                 } Else {
-                    Do ..TraverseAllPredicatesFastInbound(s, hop, .count, .nextFrontier, .seen)
+                    Do ..TraverseAllPredicatesFastInbound(pGraph, s, hop, .count, .nextFrontier, .seen)
                 }
             }
         }
@@ -150,11 +164,11 @@ ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %I
     }
     Return count
 }
-ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Integer = 2, dstLabel As %String = "") As %DynamicArray
+ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Integer = 2, dstLabel As %String = "", graph As %String = "") As %DynamicArray
 {
-    Return ..BFS(srcId, preds, maxHops, dstLabel)
+    Return ..BFS(srcId, preds, maxHops, dstLabel, graph)
 }
-ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
+ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %String
 {
     // Parse predicates JSON into a %DynamicArray (null/"" means all predicates)
     Set preds = ""
@@ -167,7 +181,7 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
     }
 
     // Run BFSFast -- writes to ^||BFS.Results(i) = $ListBuild(s,p,o,w,step)
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, 0, graph)
 
     If count = 0 Return "[]"
 
@@ -190,14 +204,14 @@ ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As 
 /// BFSFastJsonDirect — same semantics as BFSFastJson but builds the JSON string
 /// via direct concatenation instead of %DynamicObject allocation (one per row).
 /// Drop-in replacement: identical signature, identical output format.
-ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
+ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %String
 {
     Set preds = ""
     If (predsJson '= "") && (predsJson '= "null") {
         Try { Set preds = ##class(%DynamicArray).%FromJSON(predsJson) } Catch { Set preds = "" }
     }
 
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, 0, graph)
     If count = 0 Return "[]"
 
     // Build JSON without per-row %DynamicObject allocation.
@@ -222,7 +236,7 @@ ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHo
     }
     Return result _ "]"
 }
-ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
+ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
 {
     Set preds = ""
     If (predsJson '= "") && (predsJson '= "null") {
@@ -233,7 +247,7 @@ ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxH
         }
     }
 
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph)
 
     If count = 0 Return "CHUNKED:0"
     If (maxResults > 0) && (count > maxResults) Set count = maxResults
@@ -264,7 +278,7 @@ ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxH
 
     Return "CHUNKED:" _ tag _ ":" _ chunkNum
 }
-ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
+ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
 {
     Set preds = ""
     If (predsJson '= "") && (predsJson '= "null") {
@@ -275,7 +289,7 @@ ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHo
         }
     }
 
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph)
 
     If count = 0 Return "SORTED:0"
     If (maxResults > 0) && (count > maxResults) Set count = maxResults
@@ -295,7 +309,7 @@ ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHo
 
     Return "SORTED:" _ tag _ ":" _ count
 }
-ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %Integer
+ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %Integer
 {
     Set preds = ""
     If (predsJson '= "") && (predsJson '= "null") {
@@ -305,7 +319,7 @@ ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", ma
             Set preds = ""
         }
     }
-    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction)
+    Set count = ..BFSFast(srcId, preds, maxHops, dstLabel, direction, 0, graph)
     Set distinct = 0
     Set seen2 = ""
     For i = 1:1:count {
@@ -401,16 +415,15 @@ ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %Strin
     Kill ^ArnoKG("bfs_r", tag)
     Return "{""items"":["_result_"],""next_step"":-1,""next_o"":"""",""done"":true}"
 }
-ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef pathId As %Integer, results As %DynamicArray, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+ClassMethod TraverseWithPredicate(pGraph As %String, s As %String, p As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef pathId As %Integer, results As %DynamicArray, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
-	Set pGraph = 0
     Set o = ""
     For {
         Set o = $Order(^KG("out", pGraph, s, p, o))
         If o = "" Quit
         
         // Filter by label if requested
-        If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
+        If (dstLabel '= "") && ('$Data(^KG("label", pGraph, dstLabel, o))) Continue
         
         // T014: O(1) Hop Rejection
         If (hop < maxHops) && (nextP '= "") && ('$Data(^KG("degp", pGraph, o, nextP))) Continue
@@ -428,24 +441,22 @@ ClassMethod TraverseWithPredicate(s As %String, p As %String, hop As %Integer, m
         If '$Data(seen(o)) Set nextFrontier(o) = ""
     }
 }
-ClassMethod TraverseAllPredicates(s As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef pathId As %Integer, results As %DynamicArray, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+ClassMethod TraverseAllPredicates(pGraph As %String, s As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef pathId As %Integer, results As %DynamicArray, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
-	Set pGraph = 0
     Set p = ""
     For {
         Set p = $Order(^KG("out", pGraph, s, p))
         If p = "" Quit
-        Do ..TraverseWithPredicate(s, p, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
+        Do ..TraverseWithPredicate(pGraph, s, p, hop, maxHops, nextP, dstLabel, .pathId, results, .nextFrontier, .seen)
     }
 }
-ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+ClassMethod TraverseWithPredicateFast(pGraph As %String, s As %String, p As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
-	Set pGraph = 0
     Set o = ""
     For {
         Set o = $Order(^KG("out", pGraph, s, p, o))
         If o = "" Quit
-        If (dstLabel '= "") && ('$Data(^KG("label", dstLabel, o))) Continue
+        If (dstLabel '= "") && ('$Data(^KG("label", pGraph, dstLabel, o))) Continue
         
         // Always record this hop's result — leaf nodes at hop N are valid results
         // even when hop N < maxHops.
@@ -463,19 +474,17 @@ ClassMethod TraverseWithPredicateFast(s As %String, p As %String, hop As %Intege
         }
     }
 }
-ClassMethod TraverseAllPredicatesFast(s As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+ClassMethod TraverseAllPredicatesFast(pGraph As %String, s As %String, hop As %Integer, maxHops As %Integer, nextP As %String, dstLabel As %String, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
-	Set pGraph = 0
     Set p = ""
     For {
         Set p = $Order(^KG("out", pGraph, s, p))
         If p = "" Quit
-        Do ..TraverseWithPredicateFast(s, p, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
+        Do ..TraverseWithPredicateFast(pGraph, s, p, hop, maxHops, nextP, dstLabel, .count, .nextFrontier, .seen)
     }
 }
-ClassMethod TraverseWithPredicateFastInbound(s As %String, p As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+ClassMethod TraverseWithPredicateFastInbound(pGraph As %String, s As %String, p As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
-	Set pGraph = 0
     Set o = ""
     For {
         Set o = $Order(^KG("in", pGraph, s, p, o))
@@ -485,14 +494,13 @@ ClassMethod TraverseWithPredicateFastInbound(s As %String, p As %String, hop As 
         If '$Data(seen(o)) Set nextFrontier(o) = ""
     }
 }
-ClassMethod TraverseAllPredicatesFastInbound(s As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
+ClassMethod TraverseAllPredicatesFastInbound(pGraph As %String, s As %String, hop As %Integer, ByRef count As %Integer, ByRef nextFrontier, ByRef seen) [ Internal, Private ]
 {
-	Set pGraph = 0
     Set p = ""
     For {
         Set p = $Order(^KG("in", pGraph, s, p))
         If p = "" Quit
-        Do ..TraverseWithPredicateFastInbound(s, p, hop, .count, .nextFrontier, .seen)
+        Do ..TraverseWithPredicateFastInbound(pGraph, s, p, hop, .count, .nextFrontier, .seen)
     }
 }
 ClassMethod TraverseWithPredicatePy(s As %String, p As %String, hop As %Integer, dstLabel As %String) [ Internal, Private, Language = python ]

@@ -251,12 +251,16 @@ class TestBulkLoader:
         assert "nodes" in stats or "edges" in stats or isinstance(stats, dict)
 
     def test_rebuild_indices_calls_build_indices(self):
+        """The rebuild goes through the native bridge, not SQL — there is no
+        `%SYSTEM_SQL.BuildIndices` for it to execute (SQLCODE -359)."""
         from iris_vector_graph.bulk_loader import BulkLoader
         conn, cursor = self._make_conn()
-        cursor.execute.return_value = None
         bl = BulkLoader(conn)
-        bl._rebuild_indices(cursor, "Graph_KG.nodes")
-        assert cursor.execute.called
+        with patch(
+            "iris_vector_graph.bulk_loader._call_classmethod", return_value=1
+        ) as call:
+            assert bl._rebuild_indices(cursor, "Graph_KG.nodes") is True
+        assert call.call_args.args[1:] == ("Graph_KG.nodes", "%BuildIndices")
 
     def test_load_nodes_empty(self):
         from iris_vector_graph.bulk_loader import BulkLoader

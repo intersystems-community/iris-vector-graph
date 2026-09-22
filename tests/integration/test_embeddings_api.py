@@ -7,7 +7,7 @@ from iris_vector_graph.engine import IRISGraphEngine
 
 def _cleanup_embeddings(engine):
     cursor = engine.conn.cursor()
-    cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE ?", ["EMB_TEST:%"])
+    cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE ?", ["EMB_TEST:%"])
     cursor.execute("DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN (SELECT edge_id FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?)", ["EMB_TEST:%", "EMB_TEST:%"])
     cursor.execute("DELETE FROM Graph_KG.rdf_edges WHERE s LIKE ? OR o_id LIKE ?", ["EMB_TEST:%", "EMB_TEST:%"])
     cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE ?", ["EMB_TEST:%"])

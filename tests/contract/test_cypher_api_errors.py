@@ -9,15 +9,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-# TDD Gate: Tests require biomedical API stack with full error classification
+# TDD Gate: Tests require biomedical API stack with full error classification.
+# See the note in test_cypher_api.py: the field names are the `fields` mapping's
+# keys, and reading `.name` off a `GraphQLField` kept this gate shut.
 try:
     from api.main import app
     from api.gql.schema import schema as _bio_schema
     _mutation_type = _bio_schema.graphql_schema.mutation_type
     APP_EXISTS = _mutation_type is not None and any(
-        "protein" in f.name.lower() for f in (_mutation_type.fields.values() if _mutation_type else [])
+        "protein" in name.lower() for name in _mutation_type.fields
     )
-except (ImportError, AttributeError, Exception):
+except ImportError:
     APP_EXISTS = False
     app = None
 

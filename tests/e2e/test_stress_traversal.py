@@ -102,7 +102,7 @@ class TestVariableLengthPaths:
         r = engine.execute_cypher(
             f"MATCH (a {{node_id: '{pfx}:0'}})-[:NEXT*1..2]->(b) RETURN DISTINCT b.node_id LIMIT 10"
         )
-        ids = {row[0] for row in r.get("rows", [])}
+        ids = {row[0] for row in r.rows}
         assert f"{pfx}:1" in ids
         assert f"{pfx}:2" in ids
 
@@ -111,7 +111,7 @@ class TestVariableLengthPaths:
         r = engine.execute_cypher(
             f"MATCH (a {{node_id: '{pfx}:0'}})-[:NEXT*3]->(b) RETURN DISTINCT b.node_id"
         )
-        ids = {row[0] for row in r.get("rows", [])}
+        ids = {row[0] for row in r.rows}
         assert f"{pfx}:3" in ids
 
     def test_vl_deep_path_no_crash(self, engine, chain_graph):
@@ -126,7 +126,7 @@ class TestVariableLengthPaths:
         r = engine.execute_cypher(
             f"MATCH (a {{node_id: '{pfx}:5'}})-[:NEXT*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 20"
         )
-        ids = {row[0] for row in r.get("rows", [])}
+        ids = {row[0] for row in r.rows}
         assert f"{pfx}:4" in ids
         assert f"{pfx}:6" in ids
 
@@ -144,7 +144,7 @@ class TestVariableLengthPaths:
             f"MATCH (a {{node_id: '{center}'}})-[:SPOKE*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 50"
         )
         ms = (time.perf_counter() - t0) * 1000
-        assert len(r.get("rows", [])) > 0
+        assert len(r.rows) > 0
         assert ms < 5000, f"VL LIMIT 50 took {ms:.0f}ms"
 
     def test_approx_count_distinct(self, engine, star_graph):
@@ -153,7 +153,7 @@ class TestVariableLengthPaths:
             f"MATCH (a {{node_id: '{center}'}})-[:SPOKE*1..2]-(b) RETURN approx_count_distinct(b) AS c"
         )
         assert r["rows"][0][0] >= 0
-        warnings = getattr(r.get("metadata"), "warnings", []) or []
+        warnings = getattr(r.metadata, "warnings", []) or []
         assert any("approx" in w.lower() for w in warnings)
 
 
@@ -183,19 +183,19 @@ class TestCypherEdgeCases:
 
     def test_empty_graph_match_returns_empty(self, engine):
         r = engine.execute_cypher("MATCH (n:__NonExistentLabel__42) RETURN n.node_id LIMIT 1")
-        assert list(r.get("rows", [])) == []
+        assert list(r.rows) == []
 
     def test_match_with_no_results_returns_empty_columns(self, engine):
         r = engine.execute_cypher("MATCH (n:__NeverExists__) RETURN n.node_id")
         assert "columns" in r
-        assert list(r.get("rows", [])) == []
+        assert list(r.rows) == []
 
     def test_large_limit_no_crash(self, engine, chain_graph):
         pfx, n = chain_graph
         r = engine.execute_cypher(
             f"MATCH (n:ChainNode) WHERE n.node_id STARTS WITH '{pfx}' RETURN n.node_id LIMIT 100000"
         )
-        assert len(r.get("rows", [])) >= n
+        assert len(r.rows) >= n
 
     def test_cypher_with_null_parameter(self, engine):
         r = engine.execute_cypher("MATCH (n) WHERE n.node_id = $id RETURN n.node_id", {"id": None})
@@ -274,4 +274,4 @@ class TestCypherParseErrors:
             ORDER BY a.idx
             LIMIT 5
         """)
-        assert len(r.get("rows", [])) >= 1
+        assert len(r.rows) >= 1

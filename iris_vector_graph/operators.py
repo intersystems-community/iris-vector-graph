@@ -11,15 +11,23 @@ class IRISGraphOperators:
         self.conn = connection
         self._engine = IRISGraphEngine(connection)
 
-    def kg_KNN_VEC(self, query_vector, k=50, label_filter=None):
-        return self._engine.kg_KNN_VEC(query_vector, k=k, label_filter=label_filter)
+    def kg_KNN_VEC(self, query_vector, k=50, label_filter=None, graph=None,
+                   model_key=None):
+        return self._engine.kg_KNN_VEC(
+            query_vector, k=k, label_filter=label_filter,
+            graph=graph, model_key=model_key,
+        )
 
-    def kg_TXT(self, query_text, k=50, min_confidence=0):
-        return self._engine.kg_TXT(query_text, k=k, min_confidence=min_confidence)
+    def kg_TXT(self, query_text, k=50, min_confidence=0, graph=None):
+        return self._engine.kg_TXT(
+            query_text, k=k, min_confidence=min_confidence, graph=graph
+        )
 
-    def kg_RRF_FUSE(self, k=50, k1=200, k2=200, c=60, query_vector="[]", query_text=""):
+    def kg_RRF_FUSE(self, k=50, k1=200, k2=200, c=60, query_vector="[]", query_text="",
+                    graph=None):
         return self._engine.kg_RRF_FUSE(k=k, k1=k1, k2=k2, c=c,
-                                         query_vector=query_vector, query_text=query_text)
+                                         query_vector=query_vector, query_text=query_text,
+                                         graph=graph)
 
     def kg_GRAPH_PATH(self, src_id, pred1, pred2, max_hops=2):
         return self._engine.kg_GRAPH_PATH(src_id, pred1, pred2, max_hops=max_hops)
@@ -37,13 +45,14 @@ class IRISGraphOperators:
 
     def kg_VECTOR_GRAPH_SEARCH(self, query_vector, query_text=None, k=15,
                                k_vector=None, k_final=None, expansion_depth=1,
-                               min_confidence=0.5):
+                               min_confidence=0.5, graph=None):
         return self._engine.kg_VECTOR_GRAPH_SEARCH(
             query_vector=query_vector,
             query_text=query_text,
             k=k_final or k_vector or k,
             expansion_depth=expansion_depth,
             min_confidence=min_confidence,
+            graph=graph,
         )
 
     def kg_PAGERANK(self, seed_entities=None, damping=0.85, max_iterations=20,

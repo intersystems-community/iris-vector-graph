@@ -1,268 +1,222 @@
+"""Contract tests for the GraphQL example queries.
+
+Every query text below is copied from
+`specs/archive/003-add-graphql-endpoint/contracts/example_queries.graphql`. The point of
+the file is that the *published* schema accepts them.
+
+They were TDD gates that never got unskipped: one asserted
+`from api.graphql.schema import schema` raises `ImportError` — which it does forever,
+since the module is `api.gql` — and the rest carried
+`@pytest.mark.skip("Will be unskipped when schema is implemented")` while the schema
+shipped underneath them. The docstring even said "will fail on EXECUTION until resolvers
+are implemented"; the resolvers landed in spec 003 and nobody came back.
+
+Validation, not execution: these run `graphql.validate` against the schema rather than
+`execute_sync`, so they assert the contract's shape without needing a database. The
+exception is the depth limit, which strawberry enforces during the validation phase and
+which therefore answers without touching a resolver.
 """
-Contract Tests for GraphQL Query Execution
 
-These tests validate that example queries from the contract can be parsed and executed.
-They test VALIDATION (syntax) and will fail on EXECUTION until resolvers are implemented.
-
-Per TDD principles: Validation passes, execution fails until resolvers implemented.
-"""
-
+import graphql
 import pytest
-from pathlib import Path
+
+from api.gql.schema import schema
+
+
+def _validation_errors(query: str) -> list:
+    return list(graphql.validate(schema._schema, graphql.parse(query)))
+
+
+def _assert_valid(query: str) -> None:
+    errors = _validation_errors(query)
+    assert errors == [], f"contract query rejected by the shipped schema: {errors}"
 
 
 class TestQueryValidationContract:
-    """Test that contract queries are valid GraphQL"""
+    def test_simple_protein_query(self):
+        """Query 1: GetProtein"""
+        _assert_valid(
+            """
+            query GetProtein {
+                protein(id: "PROTEIN:TP53") {
+                    id
+                    name
+                    function
+                    organism
+                    confidence
+                }
+            }
+            """
+        )
 
-    def test_schema_not_implemented_yet(self) -> None:
-        """This test ensures schema doesn't exist yet (TDD gate)"""
-        with pytest.raises(ImportError):
-            from api.graphql.schema import schema  # noqa: F401
+    def test_nested_interactions_query(self):
+        """Query 2: ProteinWithInteractions"""
+        _assert_valid(
+            """
+            query ProteinWithInteractions {
+                protein(id: "PROTEIN:TP53") {
+                    id
+                    name
+                    function
+                    interactsWith(first: 5) {
+                        id
+                        name
+                        function
+                    }
+                }
+            }
+            """
+        )
 
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_simple_protein_query_validation(self) -> None:
-        """Query 1: GetProtein - validates successfully"""
-        from api.graphql.schema import schema
+    def test_vector_similarity_query(self):
+        """Query 4: SimilarProteins"""
+        _assert_valid(
+            """
+            query SimilarProteins {
+                protein(id: "PROTEIN:TP53") {
+                    name
+                    similar(limit: 10, threshold: 0.8) {
+                        protein {
+                            id
+                            name
+                            function
+                        }
+                        similarity
+                        distance
+                    }
+                }
+            }
+            """
+        )
 
-        query = """
-        query GetProtein {
-            protein(id: "PROTEIN:TP53") {
+    def test_graph_stats_query_ships_as_stats(self):
+        """Query 10: Stats — the contract's `graphStats` is spelled `stats`.
+
+        The `GraphStats` type itself matches the contract field for field; only the root
+        field name diverges. Asserted as shipped, because renaming a published field is a
+        breaking API change and belongs in a release note. Recorded in
+        docs/KNOWN_ISSUES.md.
+        """
+        body = """
+            {
+                %s {
+                    totalNodes
+                    totalEdges
+                    nodesByLabel
+                    edgesByType
+                }
+            }
+        """
+        assert _validation_errors(body % "graphStats") != []
+        _assert_valid(body % "stats")
+
+
+class TestFragmentContract:
+    def test_fragment_query(self):
+        """Query 14: WithFragments"""
+        _assert_valid(
+            """
+            fragment ProteinDetails on Protein {
                 id
                 name
                 function
                 organism
                 confidence
             }
-        }
-        """
 
-        # Validation should pass
-        result = schema.execute_sync(query)
-
-        # Execution will fail (no resolvers yet), but validation should pass
-        # We're just checking the query is syntactically valid
-        assert result is not None
-
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_nested_interactions_query_validation(self) -> None:
-        """Query 2: ProteinWithInteractions - validates successfully"""
-        from api.graphql.schema import schema
-
-        query = """
-        query ProteinWithInteractions {
-            protein(id: "PROTEIN:TP53") {
-                id
-                name
-                function
-                interactsWith(first: 5) {
-                    id
-                    name
-                    function
+            query WithFragments {
+                protein(id: "PROTEIN:TP53") {
+                    ...ProteinDetails
+                    interactsWith(first: 5) {
+                        ...ProteinDetails
+                    }
                 }
             }
-        }
-        """
+            """
+        )
 
-        result = schema.execute_sync(query)
-        assert result is not None
 
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_vector_similarity_query_validation(self) -> None:
-        """Query 4: SimilarProteins - validates successfully"""
-        from api.graphql.schema import schema
-
-        query = """
-        query SimilarProteins {
-            protein(id: "PROTEIN:TP53") {
-                name
-                similar(limit: 10, threshold: 0.8) {
-                    protein {
-                        id
+class TestInterfaceQueryContract:
+    def test_interface_query(self):
+        """Query 15: InterfaceQuery — inline fragment on the Node interface."""
+        _assert_valid(
+            """
+            query InterfaceQuery {
+                node(id: "PROTEIN:TP53") {
+                    id
+                    labels
+                    createdAt
+                    ... on Protein {
                         name
                         function
                     }
-                    similarity
-                    distance
                 }
             }
-        }
-        """
-
-        result = schema.execute_sync(query)
-        assert result is not None
-
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_graph_stats_query_validation(self) -> None:
-        """Query 10: Stats - validates successfully"""
-        from api.graphql.schema import schema
-
-        query = """
-        query Stats {
-            graphStats {
-                totalNodes
-                totalEdges
-                nodesByLabel
-                edgesByType
-            }
-        }
-        """
-
-        result = schema.execute_sync(query)
-        assert result is not None
-
-
-class TestQueryExecutionFailsBeforeResolvers:
-    """Test that queries fail execution until resolvers implemented"""
-
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    @pytest.mark.requires_database
-    def test_simple_protein_query_execution_fails(self) -> None:
-        """Query 1: GetProtein - execution fails without resolver"""
-        from api.graphql.schema import schema
-
-        query = """
-        query GetProtein {
-            protein(id: "PROTEIN:TP53") {
-                id
-                name
-                function
-            }
-        }
-        """
-
-        result = schema.execute_sync(query)
-
-        # Execution should fail (no resolver implemented yet)
-        assert result.errors is not None or result.data["protein"] is None
-
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    @pytest.mark.requires_database
-    def test_nested_query_execution_fails(self) -> None:
-        """Query 2: ProteinWithInteractions - execution fails without resolver"""
-        from api.graphql.schema import schema
-
-        query = """
-        query ProteinWithInteractions {
-            protein(id: "PROTEIN:TP53") {
-                name
-                interactsWith(first: 5) {
-                    name
-                }
-            }
-        }
-        """
-
-        result = schema.execute_sync(query)
-
-        # Execution should fail (no resolver implemented yet)
-        assert result.errors is not None or result.data is None
-
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    @pytest.mark.requires_database
-    def test_vector_similarity_execution_fails(self) -> None:
-        """Query 4: SimilarProteins - execution fails without resolver"""
-        from api.graphql.schema import schema
-
-        query = """
-        query SimilarProteins {
-            protein(id: "PROTEIN:TP53") {
-                similar(limit: 10) {
-                    protein { name }
-                    similarity
-                }
-            }
-        }
-        """
-
-        result = schema.execute_sync(query)
-
-        # Execution should fail (no resolver implemented yet)
-        assert result.errors is not None or result.data is None
+            """
+        )
 
 
 class TestDepthLimitContract:
-    """Test query depth limits"""
+    """The contract's 10-level depth limit, which shipped unenforced.
 
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_deep_nesting_query_validation(self) -> None:
-        """Query 3: DeepNesting - validates but should fail on depth limit"""
-        from api.graphql.schema import schema
+    `specs/archive/003-add-graphql-endpoint/tasks.md:586` specifies it, quickstart.md:631
+    ticks it off as done, and `api/gql/schema.py` passed
+    `extensions=[DatabaseConnectionExtension]` — nothing else. On a graph API that is not
+    cosmetic: `interactsWith` is recursive, so an unauthenticated client can nest it as
+    far as it likes and make one request fan out into an unbounded number of round trips.
+    Same class of hole as the missing hop cap on `/api/cypher`.
+    """
 
-        query = """
-        query DeepNesting {
-            protein(id: "PROTEIN:TP53") {
-                name
-                interactsWith(first: 3) {
+    def test_contract_depth_is_allowed(self):
+        """Query 3: DeepNesting — three levels, well inside the limit."""
+        result = schema.execute_sync(
+            """
+            query DeepNesting {
+                protein(id: "PROTEIN:TP53") {
                     name
                     interactsWith(first: 3) {
                         name
                         interactsWith(first: 3) {
                             name
+                            interactsWith(first: 3) {
+                                name
+                            }
                         }
                     }
                 }
             }
-        }
-        """
+            """
+        )
+        depth_errors = [e for e in (result.errors or []) if "depth" in str(e).lower()]
+        assert depth_errors == [], f"a 4-deep query must not be rejected: {depth_errors}"
+
+    def test_excessive_depth_is_rejected(self):
+        """A query past the limit is refused during validation, before any resolver runs."""
+        nesting = "interactsWith(first: 2) { name "
+        query = (
+            "query TooDeep { protein(id: \"PROTEIN:TP53\") { name "
+            + nesting * 12
+            + "}" * 13
+            + "}"
+        )
 
         result = schema.execute_sync(query)
 
-        # Query is valid GraphQL, but may be rejected by depth limit extension
-        assert result is not None
+        assert result.errors, "a 13-deep query must be rejected"
+        assert any("depth" in str(e).lower() for e in result.errors), (
+            f"rejection must name the depth limit; got {result.errors}"
+        )
 
+    def test_limit_is_configurable(self):
+        """`IVG_GRAPHQL_MAX_DEPTH` sets the cap, as `IVG_CYPHER_MAX_HOPS` does for Cypher."""
+        from api.gql.schema import _max_query_depth
 
-class TestFragmentContract:
-    """Test fragment usage in queries"""
+        assert _max_query_depth({}) == 10
+        assert _max_query_depth({"IVG_GRAPHQL_MAX_DEPTH": "4"}) == 4
 
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_fragment_query_validation(self) -> None:
-        """Query 14: WithFragments - validates successfully"""
-        from api.graphql.schema import schema
+    @pytest.mark.parametrize("bad", ["0", "-1", "", "ten"])
+    def test_unusable_limit_falls_back_to_the_default(self, bad):
+        """A depth cap is a safety limit; a typo in the env must not disable it."""
+        from api.gql.schema import _max_query_depth
 
-        query = """
-        fragment ProteinDetails on Protein {
-            id
-            name
-            function
-            organism
-            confidence
-        }
-
-        query WithFragments {
-            protein(id: "PROTEIN:TP53") {
-                ...ProteinDetails
-                interactsWith(first: 5) {
-                    ...ProteinDetails
-                }
-            }
-        }
-        """
-
-        result = schema.execute_sync(query)
-        assert result is not None
-
-
-class TestInterfaceQueryContract:
-    """Test Node interface queries"""
-
-    @pytest.mark.skip(reason="Will be unskipped when schema is implemented")
-    def test_interface_query_validation(self) -> None:
-        """Query 15: InterfaceQuery - validates successfully"""
-        from api.graphql.schema import schema
-
-        query = """
-        query InterfaceQuery {
-            node(id: "PROTEIN:TP53") {
-                id
-                labels
-                createdAt
-                ... on Protein {
-                    name
-                    function
-                }
-            }
-        }
-        """
-
-        result = schema.execute_sync(query)
-        assert result is not None
+        assert _max_query_depth({"IVG_GRAPHQL_MAX_DEPTH": bad}) == 10

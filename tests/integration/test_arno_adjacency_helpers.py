@@ -61,6 +61,13 @@ def arno_adj_conn(arno_iris_connection):
         with contextlib.suppress(Exception):
             native_conn.close()
 
+    # These are process-global and this is a module fixture, so anything that
+    # runs after this file in the same pytest process inherits them unless they
+    # are put back. They used to leak: with IVG_ARNO_LIB still pointing at a
+    # libarno that really is deployed, `arno_available` came back True in later
+    # files and TestBuildKgAdjacencyChunkedRaises stopped raising.
+    _prev_lib = os.environ.get("IVG_ARNO_LIB")
+    _prev_disable = os.environ.get("IVG_DISABLE_ARNO")
     os.environ["IVG_ARNO_LIB"] = _SO_CONTAINER_PATH
     os.environ.pop("IVG_DISABLE_ARNO", None)
 
@@ -87,6 +94,14 @@ def arno_adj_conn(arno_iris_connection):
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'adj208_%'")
         arno_iris_connection.commit()
     cursor.close()
+
+    if _prev_lib is None:
+        os.environ.pop("IVG_ARNO_LIB", None)
+    else:
+        os.environ["IVG_ARNO_LIB"] = _prev_lib
+    if _prev_disable is not None:
+        os.environ["IVG_DISABLE_ARNO"] = _prev_disable
+    clear_probe_cache()
 
 
 class TestArnoBridgeAdjacency:

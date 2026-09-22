@@ -111,7 +111,9 @@ class TestDegree:
 
         deg = lkg.degree("alice")
         assert deg == 5
-        mock.get.assert_called_with("^KG", "deg", "alice")
+        # The graph key sits between the tree name and the node (spec 214): omitting
+        # it read one subscript short and always answered 0.
+        mock.get.assert_called_with("^KG", "deg", 0, "alice")
 
     def test_degree_returns_zero_for_missing(self, lazy_kg):
         lkg, mock = lazy_kg
@@ -136,7 +138,7 @@ class TestDegreeForPredicate:
 
         deg = lkg.degree_for_predicate("alice", "CITES")
         assert deg == 2
-        mock.get.assert_called_with("^KG", "degp", "alice", "CITES")
+        mock.get.assert_called_with("^KG", "degp", 0, "alice", "CITES")
 
     def test_degree_for_predicate_caches_per_pair(self, lazy_kg):
         lkg, mock = lazy_kg

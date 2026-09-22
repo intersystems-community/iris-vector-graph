@@ -1,7 +1,7 @@
 """LDBC SNB SF10 full-schema loader using IVG engine methods.
 
 Loads all entity types and relationships from CsvBasic-LongDateFormatter format
-into the enterprise IRIS container via bulk_create_nodes + BulkIngestEdges.
+into the enterprise IRIS container via bulk_create_nodes + BulkIngestEdgesSQL.
 
 Usage:
     python tests/benchmarks/ldbc_full_loader.py [--skip-comments] [--skip-posts] [--dry-run]
@@ -131,7 +131,7 @@ def _bulk_ingest_edges(conn, edges_batch, predicate):
     from iris_vector_graph.schema import _call_classmethod_large
     import iris as iris_mod
     o = iris_mod.createIRIS(conn)
-    _call_classmethod_large(o, "Graph.KG.EdgeScan", "BulkIngestEdges", json.dumps(edges_batch), predicate)
+    _call_classmethod_large(o, "Graph.KG.EdgeScan", "BulkIngestEdgesSQL", json.dumps(edges_batch), predicate)
 
 
 def load_edges_file(conn, path, col_s, col_o, predicate, prefix_s, prefix_o, dry_run=False):

@@ -19,6 +19,36 @@ from iris_vector_graph.security import validate_table_name, VALID_GRAPH_TABLES
 
 logger = logging.getLogger(__name__)
 
+# The embedding tables live in `Graph_KG`. An unqualified name resolves in the
+# caller's default schema, where it does not exist, and every method here swallows
+# the "table not found" into a dict — so an unqualified name read as "HNSW is not
+# available" rather than as a bug.
+_SCHEMA = "Graph_KG"
+
+# 4.0.0 declares both embedding tables `VECTOR(DOUBLE, n)`. `TO_VECTOR(?)` with no
+# dtype is `SQLCODE -259` against such a column (checked at query open, so an empty
+# table errors too), and `FLOAT` is a different datatype from `DOUBLE`.
+_DTYPE = "DOUBLE"
+
+
+class UndeclaredVectorWidth(RuntimeError):
+    """The `emb` column has no declared width, so no query can be built for it.
+
+    `SQLCODE -260` is what IRIS answers for a vector column declared with no length. The
+    width used to be the module constant `_DIM = 768`, which meant every method here
+    queried at 768 whatever the column said: against the 384 that `get_base_schema_sql()`
+    declares by default, IRIS raised `SQLCODE -257` and each method reported it as an
+    absence — "HNSW is not available", "0 rows migrated", a benchmark leg missing from the
+    results. Guessing a width turns a reportable error into a wrong answer, so this is
+    raised instead.
+    """
+
+
+def _qualify(table_name: str) -> str:
+    """Validate against the allowlist, then qualify with the Graph_KG schema."""
+    validate_table_name(table_name)
+    return table_name if "." in table_name else f"{_SCHEMA}.{table_name}"
+
 
 class VectorOptimizer:
     """
@@ -28,6 +58,28 @@ class VectorOptimizer:
     def __init__(self, connection):
         """Initialize with IRIS database connection"""
         self.conn = connection
+
+    def _declared_width(self, table_name: str, cursor=None) -> int:
+        """The `emb` column's declared VECTOR width, read from the catalog.
+
+        Raises `UndeclaredVectorWidth` rather than falling back to a default: a width that
+        does not match the column makes every read `SQLCODE -257`, and each caller here
+        turns an exception into a dict that reads as "nothing found".
+        """
+        from iris_vector_graph.schema import GraphSchema
+
+        own_cursor = cursor is None
+        cursor = cursor or self.conn.cursor()
+        try:
+            dim = GraphSchema.get_embedding_dimension(cursor, table_name)
+        finally:
+            if own_cursor:
+                cursor.close()
+        if not dim:
+            raise UndeclaredVectorWidth(
+                f"{table_name}.emb has no declared VECTOR width in this namespace"
+            )
+        return int(dim)
 
     def check_hnsw_availability(self, table_name: str = "kg_NodeEmbeddings_optimized") -> Dict[str, Any]:
         """
@@ -39,9 +91,8 @@ class VectorOptimizer:
         Returns:
             Dictionary with availability status and performance metrics
         """
-        # Validate table name against allowlist
-        validate_table_name(table_name)
-        
+        table_name = _qualify(table_name)
+
         cursor = self.conn.cursor()
         try:
             # Check if optimized table exists
@@ -56,12 +107,21 @@ class VectorOptimizer:
                     'record_count': 0
                 }
 
-            # Test performance with a simple query
-            test_vector = [0.1] * 768
+            # Test performance with a simple query, at the width the column declares.
+            try:
+                dim = self._declared_width(table_name, cursor)
+            except UndeclaredVectorWidth as e:
+                return {
+                    'available': False,
+                    'reason': f'Undeclared vector width: {e}',
+                    'table_name': table_name,
+                    'record_count': count,
+                }
+            test_vector = [0.1] * dim
             start_time = time.time()
 
             cursor.execute(f"""
-                SELECT TOP 5 id, VECTOR_COSINE(emb, TO_VECTOR(?)) as similarity
+                SELECT TOP 5 node_id, VECTOR_COSINE(emb, TO_VECTOR(?, {_DTYPE}, {dim})) as similarity
                 FROM {table_name}
                 ORDER BY similarity DESC
             """, [json.dumps(test_vector)])
@@ -102,10 +162,9 @@ class VectorOptimizer:
         Returns:
             Migration results
         """
-        # Validate table names against allowlist
-        validate_table_name(source_table)
-        validate_table_name(target_table)
-        
+        source_table = _qualify(source_table)
+        target_table = _qualify(target_table)
+
         cursor = self.conn.cursor()
         insert_cursor = self.conn.cursor()
 
@@ -124,16 +183,14 @@ class VectorOptimizer:
 
             logger.info(f"Starting migration of {total_count} records from {source_table} to {target_table}")
 
-            # Create target table if it doesn't exist
-            create_sql = f"""
-                CREATE TABLE IF NOT EXISTS {target_table} (
-                    id VARCHAR(256) PRIMARY KEY,
-                    emb VECTOR(FLOAT, 768) NOT NULL
-                )
-            """
-            cursor.execute(create_sql)
+            target_dim = self._declared_width(target_table, cursor)
 
-            # Create HNSW index
+            # The target's shape belongs to `initialize_schema`: it is keyed
+            # `(graph_id, node_id)` with an identity primary key and a
+            # VECTOR(DOUBLE, n) column, and it carries `fk_emb_node_opt`. This
+            # helper used to CREATE it as `(id VARCHAR PRIMARY KEY, emb
+            # VECTOR(FLOAT, 768))` when absent — a different key and a different
+            # datatype, which made every later read `SQLCODE -259`.
             index_sql = f"""
                 CREATE INDEX IF NOT EXISTS HNSW_{target_table.replace('.', '_')}_Optimized
                 ON {target_table}(emb)
@@ -141,13 +198,14 @@ class VectorOptimizer:
             """
             cursor.execute(index_sql)
 
-            # Migrate in batches
+            # `graph_id` travels with the row: `fk_emb_node_opt` references
+            # `nodes (graph_id, node_id)`, so a copy that drops the graph is either
+            # refused (`SQLCODE -121`) or lands in the default graph, which is the
+            # scope leak spec 227 exists to close.
             cursor.execute(f"""
-                SELECT id, emb FROM {source_table}
+                SELECT graph_id, node_id, emb FROM {source_table}
                 WHERE emb IS NOT NULL
-                GROUP BY id
-                HAVING COUNT(*) >= 1
-                ORDER BY id
+                ORDER BY graph_id, node_id
             """)
 
             migrated = 0
@@ -159,7 +217,7 @@ class VectorOptimizer:
                 if not batch:
                     break
 
-                for entity_id, emb_csv in batch:
+                for graph_id, entity_id, emb_csv in batch:
                     try:
                         # Parse CSV to array
                         if isinstance(emb_csv, str):
@@ -167,18 +225,23 @@ class VectorOptimizer:
                         else:
                             emb_array = np.array(emb_csv)
 
-                        # Validate dimension
-                        if len(emb_array) != 768:
+                        # Validate against the *target* column's declared width. This was
+                        # `!= _DIM` (768), so migrating into a table declared at any other
+                        # width skipped every row and still reported `success: True`.
+                        if len(emb_array) != target_dim:
                             logger.warning(f"Skipping {entity_id}: wrong dimension {len(emb_array)}")
                             failed += 1
                             continue
 
                         # Insert using TO_VECTOR
                         insert_sql = f"""
-                            INSERT INTO {target_table} (id, emb)
-                            VALUES (?, TO_VECTOR(?))
+                            INSERT INTO {target_table} (graph_id, node_id, emb)
+                            VALUES (?, ?, TO_VECTOR(?, {_DTYPE}, {target_dim}))
                         """
-                        insert_cursor.execute(insert_sql, [entity_id, json.dumps(emb_array.tolist())])
+                        insert_cursor.execute(
+                            insert_sql,
+                            [graph_id or "", entity_id, json.dumps(emb_array.tolist())],
+                        )
                         migrated += 1
 
                     except Exception as e:
@@ -229,9 +292,17 @@ class VectorOptimizer:
         Returns:
             Performance benchmark results
         """
+        opt_table = f"{_SCHEMA}.kg_NodeEmbeddings_optimized"
+        try:
+            dim = self._declared_width(opt_table)
+        except UndeclaredVectorWidth as e:
+            return {'hnsw_error': str(e), 'test_iterations': iterations, 'k': k}
+
         if test_vectors is None:
-            # Generate random test vectors
-            test_vectors = [np.random.rand(768).tolist() for _ in range(iterations)]
+            # At the column's width, not 768: a 768-long vector against a narrower column
+            # is `SQLCODE -257` at query open, which this method filed under
+            # `results['hnsw_error']` and reported the other leg's timings as the answer.
+            test_vectors = [np.random.rand(dim).tolist() for _ in range(iterations)]
 
         results = {
             'hnsw_optimized': [],
@@ -247,8 +318,8 @@ class VectorOptimizer:
                 start_time = time.time()
 
                 cursor.execute(f"""
-                    SELECT TOP {k} id, VECTOR_COSINE(emb, TO_VECTOR(?)) as similarity
-                    FROM kg_NodeEmbeddings_optimized
+                    SELECT TOP {k} node_id, VECTOR_COSINE(emb, TO_VECTOR(?, {_DTYPE}, {dim})) as similarity
+                    FROM {_SCHEMA}.kg_NodeEmbeddings_optimized
                     ORDER BY similarity DESC
                 """, [json.dumps(test_vector)])
 
@@ -273,7 +344,14 @@ class VectorOptimizer:
                 start_time = time.time()
 
                 # Simulate CSV parsing performance
-                cursor.execute("SELECT TOP 100 id, emb FROM kg_NodeEmbeddings WHERE emb IS NOT NULL")
+                # Deliberately namespace-wide: this measures scan cost over whatever
+                # the table holds. `id` was the RowID after the spec 227 re-key —
+                # harmless here (nothing joins on it), but it would have made the
+                # benchmark the only surviving reader of a removed column.
+                cursor.execute(
+                    f"SELECT TOP 100 node_id, emb FROM {_SCHEMA}.kg_NodeEmbeddings "
+                    "WHERE emb IS NOT NULL"
+                )
                 rows = cursor.fetchall()
 
                 query_vector = np.array(test_vector)
@@ -362,9 +440,8 @@ class VectorOptimizer:
         Returns:
             Vector statistics
         """
-        # Validate table name against allowlist
-        validate_table_name(table_name)
-        
+        table_name = _qualify(table_name)
+
         cursor = self.conn.cursor()
         try:
             # Basic counts

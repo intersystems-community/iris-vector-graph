@@ -22,14 +22,20 @@ except ImportError:
     IRIS_AVAILABLE = False
     pytest.skip("IRIS Python driver not available", allow_module_level=True)
 
-# Use iris-devtester for auto-discovery of IRIS container
+# Use iris-devtester for auto-discovery of IRIS container. The container name comes from
+# the environment: `ivg-iris` is the Community container, which this project does not run
+# (MaxServerConn=1 makes it fail on licences), so hardcoding it pointed the fallback at a
+# server that is not there.
+IRIS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+IRIS_USER = os.environ.get("IVG_IRIS_USER", "_SYSTEM")
+IRIS_PASSWORD = os.environ.get("IVG_IRIS_PASSWORD", "SYS")
 try:
     from iris_devtester.connections import auto_detect_iris_host_and_port
-    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port(container_name="ivg-iris")
+    IRIS_HOST, IRIS_PORT = auto_detect_iris_host_and_port(container_name=IRIS_CONTAINER)
 except ImportError:
     # Fallback to defaults if iris-devtester not available
     IRIS_HOST = 'localhost'
-    IRIS_PORT = 1972
+    IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 
 try:
     import networkx as nx  # type: ignore[import]
@@ -390,13 +396,16 @@ class TestIRISPythonSDK(GraphNodeHelper):
         def worker_thread(thread_id):
             """Worker thread for concurrent testing"""
             try:
-                # Create separate connection for each thread using test credentials
+                # A connection per thread. The credentials used to be hardcoded
+                # `test`/`test`, which no IVG container defines, so every worker died on
+                # `<COMMUNICATION LINK ERROR> ... Access Denied` and the test reported the
+                # failure as a concurrency problem.
                 local_conn = iris.connect(  # type: ignore[attr-defined]
                     hostname=host,
                     port=port,
                     namespace='USER',
-                    username='test',
-                    password='test'
+                    username=IRIS_USER,
+                    password=IRIS_PASSWORD
                 )
 
                 cursor = local_conn.cursor()

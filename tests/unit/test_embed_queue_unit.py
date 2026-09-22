@@ -22,12 +22,29 @@ def _make_eng(dim=4):
     conn = MagicMock()
     cursor = MagicMock()
     conn.cursor.return_value = cursor
-    cursor.execute.return_value = None
     cursor.executemany.return_value = None
     cursor.fetchall.return_value = []
-    cursor.fetchone.return_value = None
     cursor.description = []
     cursor.close.return_value = None
+
+    # The queue's write path goes through `store_embedding` since spec 227, which counts
+    # the node in its graph before writing a vector for it — so the nodes these entries
+    # are keyed on have to exist. Answered from the statement rather than by setting
+    # `fetchone` to `(1,)` outright: a blanket count of one is also an answer to "how
+    # many registry rows" and "how wide is this column", which nothing here should claim.
+    last = {"sql": ""}
+
+    def execute(sql, params=None, *args, **kwargs):
+        last["sql"] = " ".join(str(sql).split())
+        return None
+
+    def fetchone():
+        if "COUNT(*)" in last["sql"] and ".nodes" in last["sql"]:
+            return (1,)
+        return None
+
+    cursor.execute.side_effect = execute
+    cursor.fetchone.side_effect = fetchone
     eng = IRISGraphEngine(conn, embedding_dimension=dim)
     return eng, conn, cursor
 

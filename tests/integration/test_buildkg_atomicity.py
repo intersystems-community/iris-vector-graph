@@ -61,9 +61,27 @@ def _build_kg(engine):
 
 
 def _poison(engine):
-    """A row the rebuild cannot process, inserted the way a migration would."""
+    """A row the rebuild cannot process, inserted the way a migration would.
+
+    Its endpoints are registered in graph "0" first. Spec 227 put a composite
+    foreign key on `rdf_edges` — `(graph_id, s)` and `(graph_id, o_id)` both
+    reference `nodes (graph_id, node_id)` — so an edge whose endpoints are not
+    nodes *of its own graph* is now refused with `SQLCODE -121` and never reaches
+    the rebuild. That is exactly the case the module docstring reserved: the
+    specific row became impossible, and the demonstration needs some other row
+    that still fails. Registering the two nodes in graph "0" is enough, because
+    what `BuildKG` chokes on is the graph name and not the endpoints —
+    `Graph.KG.GraphKey.ForIndex` rejects "0" (IRIS canonicalizes the subscript
+    "0" onto the integer 0 that keys the default graph, ADR-0003), and nothing
+    stops a row from naming it.
+    """
     cursor = engine.conn.cursor()
     try:
+        for node_id in ("poison_s", "poison_o"):
+            cursor.execute(
+                "INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '0')",
+                [node_id],
+            )
         cursor.execute(
             "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) "
             "VALUES ('poison_s', 'POISONS', 'poison_o', '0')"

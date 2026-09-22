@@ -27,8 +27,11 @@ def test_fraud_schema_exists(engine):
 
 @pytest.mark.e2e
 def test_account_query_by_id(engine):
+    # `n.node_id`, not `n.id`: identity lives in the `node_id` column, and `id` is an
+    # absent property, so `RETURN n.id` answered a column of NULLs and this assertion
+    # failed on a namespace that does hold nodes.
     result = engine.execute_cypher(
-        "MATCH (n) RETURN n.id LIMIT 1"
+        "MATCH (n) RETURN n.node_id LIMIT 1"
     )
     if not result.rows:
         pytest.skip("No nodes in database")
@@ -43,9 +46,14 @@ def test_account_with_risk_score(engine, iris_connection):
     if not created:
         pytest.skip("Schema not initialized — cannot create test node")
     result = engine.execute_cypher(
-        "MATCH (n) WHERE n.risk_score IS NOT NULL RETURN n.id, n.risk_score LIMIT 5"
+        "MATCH (n) WHERE n.risk_score IS NOT NULL RETURN n.node_id, n.risk_score LIMIT 5"
     )
     engine.delete_node(pfx)
+    # `delete_node` removes edge rows from SQL without maintaining `^KG`/`^NKG`, so it
+    # leaves the engine flagged dirty on purpose. The engine fixture is module-scoped:
+    # without this rebuild every later variable-length query in the file raises
+    # IndexNotSyncedError, which is the guard working, not a traversal bug.
+    engine.sync()
     assert len(result.rows) >= 1
     for _, score in result.rows:
         assert 0.0 <= float(score) <= 1.0
@@ -73,13 +81,15 @@ def test_transaction_graph_traversal(engine):
 
 @pytest.mark.e2e
 def test_multi_hop_transaction_path(engine):
-    src = engine.execute_cypher("MATCH (n)-[r]->(m) RETURN n.id LIMIT 1")
+    src = engine.execute_cypher("MATCH (n)-[r]->(m) RETURN n.node_id LIMIT 1")
     if not src["rows"]:
         pytest.skip("No edges available")
     source = src["rows"][0][0]
     t0 = time.perf_counter()
+    # `{id: $id}` stays: on the variable-length route the map key `id` is how the source
+    # node is named (`_engine/query.py:523`), unrelated to the absent `id` property.
     result = engine.execute_cypher(
-        "MATCH (n {id: $id})-[*1..2]->(m) RETURN m.id LIMIT 10",
+        "MATCH (n {id: $id})-[*1..2]->(m) RETURN m.node_id LIMIT 10",
         {"id": source}
     )
     assert (time.perf_counter() - t0) * 1000 < 10000

@@ -6,10 +6,10 @@ import json
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "1972"))
+IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.environ.get("IRIS_USERNAME", "test")
-IRIS_PASS = os.environ.get("IRIS_PASSWORD", "test")
+IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
+IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
 API_BASE = os.environ.get("IVG_API_URL", "http://localhost:8000")
 
 
@@ -120,10 +120,28 @@ class TestCypherRESTEndpoint:
         assert body["rowCount"] >= 500
 
     def test_sql_execution_error_returns_500(self, api_client):
+        # `1/0` used to stand in for an execution error here and answered 200: the
+        # translator guards a zero divisor with a NaN CASE, so the division never
+        # reaches IRIS (tests/unit/test_230_division_by_zero_semantics.py). `sqrt(-1)`
+        # does reach it and fails with <ILLEGAL VALUE> at Query Open.
         r = api_client.post("/api/cypher", json={
-            "query": "MATCH (n) WHERE 1/0 = 1 RETURN n.node_id"
+            "query": "MATCH (n) RETURN sqrt(-1) LIMIT 1"
         })
-        assert r.status_code in (400, 500)
+        assert r.status_code in (400, 500), r.text
+        assert r.json()["errorType"] == "execution"
+
+    def test_division_by_zero_is_a_null_not_an_error(self, api_client):
+        """Documented deviation from openCypher, asserted at the endpoint.
+
+        openCypher raises an arithmetic error; IVG answers NaN, which serializes to
+        JSON null. Recorded in docs/KNOWN_ISSUES.md.
+        """
+        r = api_client.post("/api/cypher", json={
+            "query": "MATCH (n) RETURN 1/0 LIMIT 1"
+        })
+        assert r.status_code == 200, r.text
+        rows = r.json()["rows"]
+        assert rows and rows[0][0] is None, rows
 
     def test_write_query_create_node(self, api_client):
         pfx = f"wq_{uuid.uuid4().hex[:6]}"
@@ -182,15 +200,19 @@ class TestCypherRESTEndpoint:
 class TestGraphQLEndpoint:
 
     def test_gql_stats_query(self, gql_client):
+        # `nodeCount`/`edgeCount`/`labelCount` are the admin REST payload's names
+        # (docs/ADMIN_API.md:22) and ^NKG's meta subscripts. `GraphStats` publishes
+        # totals, and GraphQL rejected the old spelling at validation without ever
+        # reaching the resolver. Pinned in tests/contract/test_graphql_schema.py.
         r = gql_client.post("/graphql", json={
-            "query": "{ stats { nodeCount edgeCount labelCount } }"
+            "query": "{ stats { totalNodes totalEdges nodesByLabel } }"
         })
         assert r.status_code == 200
         body = r.json()
-        assert "data" in body
+        assert body.get("errors") is None, body["errors"]
         stats = body["data"].get("stats")
         assert stats is not None
-        assert "nodeCount" in stats
+        assert isinstance(stats["totalNodes"], int)
 
     def test_gql_node_query_by_id(self, gql_client, iris_conn):
         conn, engine = iris_conn
@@ -201,7 +223,12 @@ class TestGraphQLEndpoint:
         })
         assert r.status_code == 200
         body = r.json()
-        assert "data" in body
+        # `assert "data" in body` used to be the whole test, and `data` is present (as
+        # null) even for a query GraphQL refused — which is how an unregistered
+        # GenericNode and an engine-less context both went unnoticed here.
+        assert body.get("errors") is None, body["errors"]
+        assert body["data"]["node"]["id"] == f"{pfx}:g1"
+        assert "GQLNode" in body["data"]["node"]["labels"]
 
     def test_gql_nodes_query_with_label(self, iris_conn):
         conn, engine = iris_conn
@@ -212,12 +239,13 @@ class TestGraphQLEndpoint:
         from api.main import create_app
         fresh_app = create_app(engine=engine)
         client = TestClient(fresh_app)
+        # `nodes` filters on a list: `labels`, not `label` (CoreQuery.nodes).
         r = client.post("/graphql", json={
-            "query": '{ nodes(label: "GQLNodes", limit: 10) { id labels } }'
+            "query": '{ nodes(labels: ["GQLNodes"], limit: 10) { id labels } }'
         })
         assert r.status_code == 200
         body = r.json()
-        assert "data" in body
+        assert body.get("errors") is None, body["errors"]
         nodes = body["data"].get("nodes", [])
         assert len(nodes) >= 5
 
@@ -225,12 +253,17 @@ class TestGraphQLEndpoint:
         conn, engine = iris_conn
         pfx = f"gqlc_{uuid.uuid4().hex[:6]}"
         engine.create_node(f"{pfx}:c1", labels=["GQLCypher"])
+        # The field is `executeCypher`; `cypher` has never existed, and GraphQL answered
+        # `{"data": null, "errors": [...]}`, which satisfied the old `"data" in body`.
         r = gql_client.post("/graphql", json={
-            "query": f'{{ cypher(query: "MATCH (n:GQLCypher) WHERE n.node_id = \\"{pfx}:c1\\" RETURN n.node_id") }}'
+            "query": f'{{ executeCypher(query: "MATCH (n:GQLCypher) WHERE n.node_id = \\"{pfx}:c1\\" RETURN n.node_id") }}'
         })
         assert r.status_code == 200
         body = r.json()
-        assert "data" in body
+        assert body.get("errors") is None, body["errors"]
+        rows = body["data"]["executeCypher"]
+        assert isinstance(rows, list), rows
+        assert any(f"{pfx}:c1" in str(row) for row in rows), rows
 
     def test_gql_introspection(self, gql_client):
         r = gql_client.post("/graphql", json={

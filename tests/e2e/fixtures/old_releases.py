@@ -58,6 +58,7 @@ class OldRelease:
     zip_path: Path
     globals_path: Path
     manifest: dict
+    ddl_path: Path | None = None
 
     @property
     def seeded(self) -> dict:
@@ -70,6 +71,28 @@ class OldRelease:
     @property
     def embedding_dimension(self) -> int:
         return self.manifest["embedding_dimension"]
+
+    def ddl_statements(self) -> list[str]:
+        """The `CREATE TABLE`/`ALTER TABLE` statements this release's own
+        `initialize_schema` issued, in the order it issued them.
+
+        The content fixtures above answer "what did the old release store"; this one
+        answers "what shape did it store it in", which is what a migration test needs
+        to start from. Rendering the shape from the current catalog instead would make
+        the test agree with whatever shape happens to be installed.
+
+        Returns `[]` for a release frozen without `--ddl`, which is a real answer about
+        what was captured rather than an error.
+
+        Replaying them is not idempotent and is not meant to be: the list is what the
+        release issues against a *live* namespace, so it includes the ALTERs it uses to
+        bring an older install forward, and those fail against tables its own CREATEs
+        just made correctly. A caller replays the list and tolerates per-statement
+        failure, exactly as `initialize_schema` does.
+        """
+        if self.ddl_path is None or not self.ddl_path.exists():
+            return []
+        return list(json.loads(self.ddl_path.read_text())["statements"])
 
     def archive_metadata(self) -> dict:
         """The `metadata.json` that release wrote inside its own archive."""
@@ -161,10 +184,40 @@ def old_releases() -> list[OldRelease]:
                 zip_path=SNAPSHOT_DIR / f"{stem}.zip",
                 globals_path=SNAPSHOT_DIR / f"{stem}.globals.ndjson",
                 manifest=manifest,
+                ddl_path=SNAPSHOT_DIR / f"{stem}.ddl.json",
             )
         )
     return out
 
 
+def release(tag: str) -> OldRelease:
+    """One frozen release by tag, e.g. ``v3.2.0``. Raises when it is not frozen."""
+    for candidate in old_releases():
+        if candidate.tag == tag:
+            return candidate
+    raise LookupError(
+        f"no frozen snapshot for {tag}; have {[c.tag for c in old_releases()]}. "
+        f"Generate one with scripts/fixtures/generate_old_snapshot.py."
+    )
+
+
 OLD_RELEASES = old_releases()
 RELEASE_IDS = [r.tag for r in OLD_RELEASES]
+
+#: Releases frozen before spec 223 gave the temporal globals a graph subscript.
+#: Their `save_snapshot` exports `^KG("out")` and `^KG("in")` and stops, and their
+#: captured globals hold `^KG("tout", ts, s, p, o)` with no graph key.
+#:
+#: Declared here because three test files partition the fixtures this way, and a
+#: hand-kept copy per file is how `test_upgrade_migrate_globals_e2e.py` came to
+#: assert a flat starting layout against the graph-scoped v3.2.0 fixture. A tag
+#: list rather than a probe of each archive: asking the artifact what it holds and
+#: asserting that answer back tests nothing — `tests/unit/test_old_release_fixtures.py`
+#: is where each release is checked against the side it is listed under.
+PRE_223_TAGS = frozenset({"v2.16.0", "v2.20.0"})
+
+PRE_223_RELEASES = [r for r in OLD_RELEASES if r.tag in PRE_223_TAGS]
+PRE_223_IDS = [r.tag for r in PRE_223_RELEASES]
+
+GRAPH_SCOPED_RELEASES = [r for r in OLD_RELEASES if r.tag not in PRE_223_TAGS]
+GRAPH_SCOPED_IDS = [r.tag for r in GRAPH_SCOPED_RELEASES]

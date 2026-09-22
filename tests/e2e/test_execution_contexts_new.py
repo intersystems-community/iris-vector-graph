@@ -1,6 +1,7 @@
 import pytest
-import warnings
 from unittest.mock import MagicMock, patch
+
+from tests.conftest import requires_running_container
 
 
 @pytest.fixture
@@ -161,18 +162,22 @@ class TestEmbeddedConnectionUnit:
         assert cursor.description[0][0] == "name"
         assert cursor.description[1][0] == "age"
 
-    def test_embed_nodes_where_deprecation(self):
+    def test_embed_nodes_where_is_gone_not_deprecated(self):
+        """`where=` was removed, so it raises rather than warning.
+
+        It was a raw SQL fragment, deprecated in 2.x in favour of the typed
+        `label=` / `node_ids=` / `exclude_pattern=` selection that `EmbedSelector`
+        builds. This test asserted a `DeprecationWarning` and failed with `TypeError`
+        once the parameter was dropped — the removal is real, and 4.0.0 records it.
+        """
         engine = self._make_mock_engine({})
         engine.embedder = None
         engine.embedding_dimension = 768
         engine._connection_params = None
         mock_model = MagicMock()
         mock_model.encode.return_value = []
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
+        with pytest.raises(TypeError, match="where"):
             engine.embed_nodes(where="node_id LIKE 'test:%'", model=mock_model)
-        dep_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-        assert len(dep_warnings) >= 1
 
     def test_embed_nodes_label_param_accepted(self):
         engine = self._make_mock_engine({})
@@ -185,13 +190,10 @@ class TestEmbeddedConnectionUnit:
         assert isinstance(result, dict)
 
 
-@pytest.mark.skipif(
-    __import__('subprocess').run(
-        ['docker', 'inspect', 'iris-vector-graph-enterprise'],
-        capture_output=True
-    ).returncode != 0,
-    reason="iris-vector-graph-enterprise container not running"
-)
+# `docker inspect` exits 0 for a container in any state, so the guard this replaced ran the
+# `docker exec` bodies against a container that merely existed and failed with Docker's own
+# `container ... is not running`.
+@requires_running_container('iris-vector-graph-enterprise')
 class TestObjectScriptCypherEngine:
 
     def _iris_exec(self, *statements: str) -> str:

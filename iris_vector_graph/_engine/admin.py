@@ -9,6 +9,7 @@ from iris_vector_graph.status import (
     ObjectScriptStatus,
     ArnoStatus,
     IndexInventory,
+    SyncReport,
 )
 from iris_vector_graph.result import IVGResult
 
@@ -215,8 +216,80 @@ class AdminMixin:
             pass
         return IVGResult(columns=cols, rows=rows)
 
+    def _embedding_tables(self, cursor, kind: str) -> List[str]:
+        """Every table this install can hold ``kind`` vectors in (spec 230, FR-006).
+
+        The legacy table first — it is the default route, and on an install that has
+        never routed anything it is the whole answer — then every route the registry
+        names of that kind.
+
+        Kind comes off the registry row, not off a prefix test: `kg_eemb_` and `kg_emb_`
+        are unreachable from each other by ``startswith``, but the name is a hash and the
+        row is the record of what was created (FR-011). A row with no kind is a node
+        route, which is what every row written before 4.0.0 is.
+
+        ``kg_NodeEmbeddings_optimized`` is deliberately not in the node list: it mirrors
+        `kg_NodeEmbeddings`'s rows for the ANN index, so adding it would double-count an
+        install that built one.
+        """
+        from iris_vector_graph._engine.schema import ROUTE_KIND_EDGE, ROUTE_KIND_NODE
+        from iris_vector_graph.security import (
+            is_routed_edge_embedding_table,
+            is_routed_embedding_table,
+        )
+
+        is_route = (
+            is_routed_edge_embedding_table
+            if kind == ROUTE_KIND_EDGE
+            else is_routed_embedding_table
+        )
+        legacy = self._legacy_table_for(kind)
+        tables = [legacy]
+        seen = {legacy.lower()}
+        try:
+            cursor.execute(
+                "SELECT DISTINCT table_name, COALESCE(kind, 'node')"
+                f" FROM {self._registry_table()}"
+            )
+            rows = cursor.fetchall() or []
+        except Exception:
+            # No registry: a 3.2.0 database, where the legacy table is every table
+            # there is. Not an error on the report — nothing is missing.
+            return tables
+        for row in rows:
+            name = str(row[0]) if row and row[0] else ""
+            row_kind = str(row[1]) if len(row) > 1 and row[1] else ROUTE_KIND_NODE
+            if row_kind != kind or not is_route(name) or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            tables.append(name)
+        return tables
+
+    def _embedding_row_count(self, cursor, kind: str, errors: list) -> int:
+        """Rows of ``kind`` across every table that holds them (spec 230, FR-006).
+
+        Counting one table name reported zero for an install whose vectors are all
+        routed — a number an operator reads as "the embeddings are gone" while a search
+        over the same rows answers fine.
+
+        A table the registry names but the database has lost is reported and skipped:
+        the sum is then short, and saying so is the difference between a count that can
+        be acted on and a wrong one.
+        """
+        total = 0
+        for table in self._embedding_tables(cursor, kind):
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {self._t(table)}")
+                row = cursor.fetchone()
+                total += int(row[0]) if row else 0
+            except Exception as e:
+                errors.append(f"count probe failed for {table}: {e}")
+        return total
+
     def status(self, internals: bool = False) -> "EngineStatus":
         import time as _time
+
+        from iris_vector_graph._engine.schema import ROUTE_KIND_EDGE, ROUTE_KIND_NODE
 
         t0 = _time.perf_counter()
         errors: list = []
@@ -236,8 +309,8 @@ class AdminMixin:
             edges=_count(f"SELECT COUNT(*) FROM {self._t('rdf_edges')}"),
             labels=_count(f"SELECT COUNT(*) FROM {self._t('rdf_labels')}"),
             props=_count(f"SELECT COUNT(*) FROM {self._t('rdf_props')}"),
-            node_embeddings=_count(f"SELECT COUNT(*) FROM {self._t('kg_NodeEmbeddings')}"),
-            edge_embeddings=_count(f"SELECT COUNT(*) FROM {self._t('kg_EdgeEmbeddings')}"),
+            node_embeddings=self._embedding_row_count(cursor, ROUTE_KIND_NODE, errors),
+            edge_embeddings=self._embedding_row_count(cursor, ROUTE_KIND_EDGE, errors),
         )
 
         kg_count = 0
@@ -397,8 +470,6 @@ class AdminMixin:
             in-process ``_nkg_dirty`` flag is set. ``bool(report)`` mirrors
             ``in_sync`` for ``if not engine.verify_sync(): engine.sync()`` usage.
         """
-        from iris_vector_graph.status import SyncReport
-
         sql_edges = 0
         global_edges = 0
         global_nodes = 0

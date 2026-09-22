@@ -43,6 +43,15 @@ class GraphAIDemonstration:
             print("Make sure to run: ./scripts/setup/setup-test-env.sh")
             sys.exit(1)
 
+        # The width the *column* declares, not a width this script picks. IRIS
+        # enforces a declared VECTOR width at INSERT (SQLCODE -104), so the 768
+        # this demo used to hardcode seeded nothing on any database built at a
+        # different dimension — and every later step then reported "no embeddings".
+        from iris_vector_graph.engine import IRISGraphEngine
+
+        self.dim = IRISGraphEngine(self.conn)._get_embedding_dimension()
+        print(f"✓ Embedding width from the live column: {self.dim}")
+
     def validate_schema(self) -> bool:
         """Validate that all required schema components exist"""
         print("\n=== 1. Schema Validation ===")
@@ -124,7 +133,7 @@ class GraphAIDemonstration:
 
         try:
             # Test kg_KNN_VEC procedure
-            test_vector = np.random.rand(768).tolist()
+            test_vector = np.random.rand(self.dim).tolist()
             cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
                 json.dumps(test_vector),
                 5,  # top 5 results
@@ -162,7 +171,7 @@ class GraphAIDemonstration:
         cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'DEMO_%'")
         cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'DEMO_%'")
         cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'DEMO_%'")
-        cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'DEMO_%'")
+        cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE node_id LIKE 'DEMO_%'")
 
         # Create demo entities
         demo_entities = [
@@ -224,18 +233,18 @@ class GraphAIDemonstration:
             demo_props
         )
 
-        # Create demo embeddings (768-dimensional vectors)
+        # Create demo embeddings at the column's own width (see __init__)
         demo_embeddings = [
-            ('DEMO_PROTEIN_BRCA1', np.random.rand(768)),
-            ('DEMO_PROTEIN_TP53', np.random.rand(768)),
-            ('DEMO_PROTEIN_PTEN', np.random.rand(768)),
-            ('DEMO_DRUG_TAMOXIFEN', np.random.rand(768)),
-            ('DEMO_DRUG_CISPLATIN', np.random.rand(768))
+            ('DEMO_PROTEIN_BRCA1', np.random.rand(self.dim)),
+            ('DEMO_PROTEIN_TP53', np.random.rand(self.dim)),
+            ('DEMO_PROTEIN_PTEN', np.random.rand(self.dim)),
+            ('DEMO_DRUG_TAMOXIFEN', np.random.rand(self.dim)),
+            ('DEMO_DRUG_CISPLATIN', np.random.rand(self.dim))
         ]
 
         for entity_id, embedding in demo_embeddings:
             cursor.execute(
-                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                "INSERT INTO kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                 [entity_id, json.dumps(embedding.tolist())]
             )
 
@@ -297,7 +306,7 @@ class GraphAIDemonstration:
         cursor = self.conn.cursor()
 
         # Get BRCA1 embedding for similarity search
-        cursor.execute("SELECT emb FROM kg_NodeEmbeddings WHERE id = 'DEMO_PROTEIN_BRCA1'")
+        cursor.execute("SELECT emb FROM kg_NodeEmbeddings WHERE node_id = 'DEMO_PROTEIN_BRCA1'")
         result = cursor.fetchone()
 
         if result:
@@ -306,18 +315,18 @@ class GraphAIDemonstration:
 
             # Direct SQL similarity search
             cursor.execute("""
-                SELECT TOP 5 id, VECTOR_COSINE(emb, ?) as similarity
+                SELECT TOP 5 node_id, VECTOR_COSINE(emb, ?) as similarity
                 FROM kg_NodeEmbeddings
-                WHERE id LIKE 'DEMO_%'
+                WHERE node_id LIKE 'DEMO_%'
                 ORDER BY similarity DESC
             """)
             # For the query parameter, we need to pass the vector as it is stored
             cursor.execute("""
-                SELECT TOP 5 id, VECTOR_COSINE(emb,
-                    (SELECT emb FROM kg_NodeEmbeddings WHERE id = 'DEMO_PROTEIN_BRCA1')
+                SELECT TOP 5 node_id, VECTOR_COSINE(emb,
+                    (SELECT emb FROM kg_NodeEmbeddings WHERE node_id = 'DEMO_PROTEIN_BRCA1')
                 ) as similarity
                 FROM kg_NodeEmbeddings
-                WHERE id LIKE 'DEMO_%'
+                WHERE node_id LIKE 'DEMO_%'
                 ORDER BY similarity DESC
             """)
             results = cursor.fetchall()
@@ -328,12 +337,12 @@ class GraphAIDemonstration:
             # Using stored procedure
             print("\n  6.2 Using kg_KNN_VEC stored procedure:")
             # Convert vector back to JSON for the procedure
-            cursor.execute("SELECT emb FROM kg_NodeEmbeddings WHERE id = 'DEMO_PROTEIN_BRCA1'")
+            cursor.execute("SELECT emb FROM kg_NodeEmbeddings WHERE node_id = 'DEMO_PROTEIN_BRCA1'")
             brca1_vector = cursor.fetchone()[0]
 
             # We need to convert the vector to a JSON string for the procedure
             # For now, let's use a sample vector
-            sample_vector = np.random.rand(768).tolist()
+            sample_vector = np.random.rand(self.dim).tolist()
 
             cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
                 json.dumps(sample_vector),
@@ -356,7 +365,7 @@ class GraphAIDemonstration:
 
         try:
             # Use RRF fusion for hybrid search
-            cancer_vector = np.random.rand(768).tolist()
+            cancer_vector = np.random.rand(self.dim).tolist()
 
             print("  7.1 Hybrid search for 'DNA repair' + vector similarity:")
             cursor.execute("CALL kg_RRF_FUSE(?, ?, ?, ?, ?, ?)", [
@@ -467,7 +476,7 @@ class GraphAIDemonstration:
 
         # Test 3: Vector search (if embeddings exist)
         try:
-            test_vector = np.random.rand(768).tolist()
+            test_vector = np.random.rand(self.dim).tolist()
             start_time = time.time()
             for _ in range(10):
                 cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
@@ -595,7 +604,7 @@ class GraphAIDemonstration:
             cursor.execute("DELETE FROM rdf_edges WHERE s LIKE 'DEMO_%'")
             cursor.execute("DELETE FROM rdf_labels WHERE s LIKE 'DEMO_%'")
             cursor.execute("DELETE FROM rdf_props WHERE s LIKE 'DEMO_%'")
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'DEMO_%'")
+            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE node_id LIKE 'DEMO_%'")
             cursor.close()
             print("\n✓ Demo data cleaned up")
         except:

@@ -35,7 +35,11 @@ def _setup_data(engine, conn):
 def _cleanup(engine, conn):
     p = f"{PREFIX}%"
     cursor = conn.cursor()
-    cursor.execute("SELECT node_id FROM nodes WHERE node_id LIKE ?", [p])
+    # `Graph_KG.` is not decoration: unqualified `nodes` resolves against SQLUser, where
+    # `initialize_schema` leaves a compatibility view that projects (node_id, created_at)
+    # only. Reading the base table keeps the cleanup on the same rows the fixture wrote,
+    # and DISTINCT covers a node ID that spec 227 now allows in more than one graph.
+    cursor.execute("SELECT DISTINCT node_id FROM Graph_KG.nodes WHERE node_id LIKE ?", [p])
     node_ids = [row[0] for row in cursor.fetchall()]
     cursor.close()
     if node_ids:
@@ -85,18 +89,25 @@ class TestSubqueryCallE2E:
         assert int(row["cnt"]) >= 2
 
     def test_correlated_subquery_degree(self):
-        """T027"""
+        """T027
+
+        `p.node_id`, not `p.id`: identity is the `node_id` column, and `p.id` is an absent
+        property, so it answered a column of NULLs. Rows are read through `_row_dict`
+        because the `CALL { ... }` aggregate is projected before the outer expression
+        whatever order `RETURN` names them in — see
+        `tests/unit/test_230_call_subquery_column_order.py`.
+        """
         engine = self._engine()
         result = engine.execute_cypher(
             "MATCH (p:Protein) "
             "CALL { WITH p MATCH (p)-[:INTERACTS_WITH]->(q) RETURN count(q) AS deg } "
-            "RETURN p.id, deg"
+            "RETURN p.node_id, deg"
         )
         assert len(result["rows"]) >= 2
         degrees = {}
         for i in range(len(result["rows"])):
             row = _row_dict(result, i)
-            degrees[row["p_id"]] = int(row["deg"])
+            degrees[row["p.node_id"]] = int(row["deg"])
         assert degrees[self.nodes["prot1"]] == 2
         assert degrees[self.nodes["prot2"]] == 0
 

@@ -51,7 +51,7 @@ def iris_connection_with_vectors():
         cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'BENCH:%'")
         # Try to clean kg_NodeEmbeddings if it exists
         try:
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'BENCH:%'")
+            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'BENCH:%'")
         except:
             pass
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'BENCH:%'")
@@ -117,7 +117,7 @@ def iris_connection_with_vectors():
             vector_str = '[' + ','.join(map(str, vector)) + ']'
 
             cursor.execute(
-                "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                 [node_id, vector_str]
             )
             embeddings_added += 1
@@ -162,7 +162,7 @@ def iris_connection_with_vectors():
         cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'BENCH:%'")
         cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'BENCH:%'")
         try:
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE 'BENCH:%'")
+            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'BENCH:%'")
         except:
             pass
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'BENCH:%'")
@@ -192,7 +192,7 @@ class TestAdvancedQueryPatterns:
 
         # Check if vector embeddings are available
         try:
-            cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings WHERE id LIKE 'BENCH:%'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'BENCH:%'")
             emb_count = cursor.fetchone()[0]
             if emb_count == 0:
                 pytest.skip("Vector embeddings not available (VECTOR type not supported)")
@@ -207,7 +207,7 @@ class TestAdvancedQueryPatterns:
         # Warm up
         cursor.execute("""
             SELECT TOP 10 e.id, VECTOR_DOT_PRODUCT(e.emb, TO_VECTOR(?)) as similarity
-            FROM kg_NodeEmbeddings e
+            FROM Graph_KG.kg_NodeEmbeddings e
             INNER JOIN Graph_KG.nodes n ON e.id = n.node_id
             WHERE e.id LIKE 'BENCH:%'
             ORDER BY similarity DESC
@@ -222,7 +222,7 @@ class TestAdvancedQueryPatterns:
             start = time.perf_counter()
             cursor.execute("""
                 SELECT TOP 10 e.id, VECTOR_DOT_PRODUCT(e.emb, TO_VECTOR(?)) as similarity
-                FROM kg_NodeEmbeddings e
+                FROM Graph_KG.kg_NodeEmbeddings e
                 INNER JOIN Graph_KG.nodes n ON e.id = n.node_id
                 WHERE e.id LIKE 'BENCH:%'
                 ORDER BY similarity DESC
@@ -318,7 +318,7 @@ class TestAdvancedQueryPatterns:
 
         # Check if vector embeddings are available
         try:
-            cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings WHERE id LIKE 'BENCH:%'")
+            cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'BENCH:%'")
             emb_count = cursor.fetchone()[0]
             if emb_count == 0:
                 pytest.skip("Vector embeddings not available")
@@ -340,7 +340,7 @@ class TestAdvancedQueryPatterns:
             l.label AS neighbor_label
         FROM (
             SELECT TOP 20 e.id, VECTOR_DOT_PRODUCT(e.emb, TO_VECTOR(?)) as similarity
-            FROM kg_NodeEmbeddings e
+            FROM Graph_KG.kg_NodeEmbeddings e
             INNER JOIN Graph_KG.nodes n ON e.id = n.node_id
             WHERE e.id LIKE 'BENCH:%'
             ORDER BY similarity DESC

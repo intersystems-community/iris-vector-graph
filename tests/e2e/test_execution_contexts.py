@@ -46,7 +46,7 @@ class TestColumnsNeverEmpty:
 
     def test_select_with_as_aliases(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN n.name AS name, n.age AS age")
-        assert r.get("columns"), f"columns must not be empty: {r}"
+        assert r.columns, f"columns must not be empty: {r}"
         assert "name" in r["columns"] and "age" in r["columns"]
         assert len(r["rows"]) > 0
 
@@ -54,12 +54,12 @@ class TestColumnsNeverEmpty:
         r = populated_db.execute_cypher(
             "MATCH (s:Person)-[r]->(t:Person) RETURN s.id AS source, t.id AS target, type(r) AS rel LIMIT 10"
         )
-        assert r.get("columns"), "columns must not be empty for source/target/rel"
+        assert r.columns, "columns must not be empty for source/target/rel"
 
     def test_count_query(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN count(n) AS total")
-        assert r.get("columns"), f"columns must not be empty for count: {r}"
-        assert len(r.get("rows", [])) > 0
+        assert r.columns, f"columns must not be empty for count: {r}"
+        assert len(r.rows) > 0
 
     def test_fallback_regex_extracts_aliases(self):
         sql = "SELECT a.node_id AS source, b.node_id AS target, e.p AS rel FROM ..."
@@ -78,17 +78,17 @@ class TestInlinePropertyFilter:
 
     def test_inline_filter_basic(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person {name:'Alice'}) RETURN n.name")
-        assert len(r.get("rows", [])) >= 1, f"Expected at least 1 row: {r}"
+        assert len(r.rows) >= 1, f"Expected at least 1 row: {r}"
         assert all(row[0] == "Alice" for row in r["rows"]), f"All rows should be Alice: {r}"
 
     def test_inline_filter_no_label(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n {name:'Alice'}) RETURN n.name")
-        assert len(r.get("rows", [])) >= 1
+        assert len(r.rows) >= 1
 
     def test_inline_filter_equals_where(self, populated_db):
         r1 = populated_db.execute_cypher("MATCH (n:Person {name:'Alice'}) RETURN n.name")
         r2 = populated_db.execute_cypher("MATCH (n:Person) WHERE n.name = 'Alice' RETURN n.name")
-        assert r1.get("rows") == r2.get("rows")
+        assert r1.rows == r2.rows
 
     def test_inline_filter_params_balanced(self):
         r = translate_to_sql(parse_query("MATCH (n:Person {name:'Alice'}) RETURN n.name AS n"), {})
@@ -100,19 +100,19 @@ class TestCoalesce:
 
     def test_string_default(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN coalesce(n.name, 'unknown') AS name LIMIT 3")
-        assert not r.get("error"), f"coalesce(str): {r.get('error')}"
+        assert not r.error, f"coalesce(str): {r.error}"
 
     def test_int_default_no_type_error(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN coalesce(n.age, 0) AS age LIMIT 3")
-        assert not r.get("error"), f"coalesce(int) SQLCODE -378: {r.get('error')}"
+        assert not r.error, f"coalesce(int) SQLCODE -378: {r.error}"
 
     def test_bool_default(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN coalesce(n.active, false) AS active LIMIT 3")
-        assert not r.get("error"), f"coalesce(bool): {r.get('error')}"
+        assert not r.error, f"coalesce(bool): {r.error}"
 
     def test_float_default(self, populated_db):
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN coalesce(n.score, 0.0) AS score LIMIT 3")
-        assert not r.get("error"), f"coalesce(float): {r.get('error')}"
+        assert not r.error, f"coalesce(float): {r.error}"
 
     def test_cast_in_sql(self):
         r = translate_to_sql(parse_query("MATCH (n) RETURN coalesce(n.age, 0) AS age"), {})
@@ -146,7 +146,7 @@ class TestBacktickIdentifiers:
     def test_execute_with_backtick_prop(self, populated_db):
         populated_db.execute_cypher("MATCH (n:Person {name:'Alice'}) SET n.`first name` = 'Alice Smith'")
         r = populated_db.execute_cypher("MATCH (n:Person) RETURN n.`first name` AS fname LIMIT 1")
-        assert not r.get("error"), f"backtick execute: {r.get('error')}"
+        assert not r.error, f"backtick execute: {r.error}"
 
 
 class TestGracefulErrorReturn:
@@ -233,7 +233,7 @@ class TestObjectScriptContext:
 class TestEngineReadiness:
 
     def test_is_ready(self, engine):
-        assert engine.is_ready is True
+        assert engine.is_ready() is True
 
     def test_initialize_schema_returns_status_dict(self, engine):
         status = engine.initialize_schema()

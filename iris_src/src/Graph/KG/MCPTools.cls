@@ -197,7 +197,7 @@ Method EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject 
 		import iris
 		
 		# Check if embeddings exist
-		stmt = iris.sql.prepare("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
+		stmt = iris.sql.prepare("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE COALESCE(graph_id, '') = ''")
 		rs = stmt.execute()
 		rs.next()
 		count = rs.getColumn(1)
@@ -205,10 +205,13 @@ Method EvidenceSearch(query As %String, topK As %Integer = 5) As %DynamicObject 
 		if count == 0:
 			return {"status": "OK", "results": [], "message": "No embeddings loaded in kg_NodeEmbeddings"}
 		
-		# Use IRIS vector search
+		# Use IRIS vector search. `node_id`, not `id` (spec 227 re-keyed the table),
+		# and restricted to the default graph: a scan of every graph's vectors would
+		# answer this tool with another graph's documents.
 		sql = """
-			SELECT TOP ? id, VECTOR_DOT_PRODUCT(emb, (SELECT TOP 1 emb FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)) AS score
+			SELECT TOP ? node_id, VECTOR_DOT_PRODUCT(emb, (SELECT TOP 1 emb FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ? AND COALESCE(graph_id, '') = '')) AS score
 			FROM Graph_KG.kg_NodeEmbeddings
+			WHERE COALESCE(graph_id, '') = ''
 			ORDER BY score DESC
 		"""
 		stmt = iris.sql.prepare(sql)

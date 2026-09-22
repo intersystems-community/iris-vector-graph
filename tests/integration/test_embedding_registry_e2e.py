@@ -17,7 +17,7 @@ import uuid
 
 import pytest
 
-from iris_vector_graph.constants import VECTOR_TABLE_NAMES
+from iris_vector_graph.constants import ROUTE_TABLE_PREFIX, VECTOR_TABLE_NAMES
 from iris_vector_graph.embedding_identity import (
     EmbeddingIdentity,
     identity_from_config,
@@ -98,7 +98,53 @@ def _registry_rows(conn):
             cur.close()
 
 
+def _routed_tables(conn):
+    """Every routed embedding table in this namespace, read from the catalog.
+
+    From the catalog and not from the registry, because the tables that matter to a
+    reset are exactly the ones the registry has stopped naming. `%STARTSWITH` and not
+    `LIKE 'kg_emb_%'`: `_` is a LIKE wildcard, so the LIKE form also matches names
+    this has no business dropping.
+    """
+    cur = _cursor(conn)
+    try:
+        cur.execute(
+            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME %STARTSWITH ?",
+            [ROUTE_TABLE_PREFIX],
+        )
+        return [row[0] for row in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        with contextlib.suppress(Exception):
+            cur.close()
+
+
 def _clear_registry(conn):
+    """Forget every recorded route, and drop the tables that recorded them.
+
+    Deleting the rows alone manufactures orphans. `CREATE TABLE` is DDL and durable
+    the moment it runs, so a routed table outlives the registry row naming it, and the
+    next test to route the same `(graph, model)` pair at another width finds a column
+    it did not declare. The engine now reconciles against that column instead of
+    recording the caller's width — but a fixture has no business creating the state
+    that proves the point, and a suite whose first run differs from its second is not
+    telling anyone the truth.
+
+    `kg_NodeEmbeddings` is deliberately left alone: it is the default pair's home
+    (FR-015), not a route, and dropping it would take the schema with it.
+    """
+    for table in _routed_tables(conn):
+        cur = _cursor(conn)
+        try:
+            with contextlib.suppress(Exception):
+                cur.execute(f"DROP TABLE Graph_KG.{table}")
+            conn.commit()
+        finally:
+            with contextlib.suppress(Exception):
+                cur.close()
+
     cur = _cursor(conn)
     try:
         with contextlib.suppress(Exception):
@@ -279,11 +325,22 @@ class TestSetEmbeddingIdentityRejections:
         with pytest.raises(ValueError):
             engine.set_embedding_identity(ident, "Graph_KG.nodes")
 
-    def test_non_empty_graph_id_raises(self, engine, iris_connection):
-        """3.2.0 must not interpret graph_id as anything other than 'all graphs'."""
-        ident = identity_from_config("m", dimension=_live_dimension(iris_connection) or 128)
-        with pytest.raises(ValueError):
-            engine.set_embedding_identity(ident, _NODE_TABLE, graph_id="tenant-a")
+    def test_a_non_empty_graph_id_is_recorded_now(self, engine, iris_connection):
+        """227 makes `graph_id` real; 3.2.0 refused it because nothing read the column.
+
+        The row is keyed `(table_name, graph_id)`, so recording one graph's identity for a
+        table says nothing about another's — which is the whole point of the key, and is
+        why the refusal this replaces had to go rather than be relaxed.
+        """
+        dim = _live_dimension(iris_connection) or 128
+        ident = identity_from_config("m", dimension=dim)
+        engine.set_embedding_identity(ident, _NODE_TABLE, graph_id="tenant-a")
+
+        recorded = engine.get_embedding_identity(_NODE_TABLE, graph_id="tenant-a")
+        assert recorded is not None and recorded.model_key == "m"
+        assert engine.get_embedding_identity(_NODE_TABLE) is None, (
+            "a graph's identity was also recorded for the default graph"
+        )
 
     def test_mechanism_outside_the_closed_set_raises(self, engine):
         ident = EmbeddingIdentity(mechanism="hand-rolled", model_key="m", dimension=128)

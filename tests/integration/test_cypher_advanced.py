@@ -48,9 +48,14 @@ def test_integration_create_delete_lifecycle(execute_cypher):
     result = execute_cypher(match_query)
     assert len(result["rows"]) == 0
 
-@pytest.mark.xfail(reason="IRIS JSON_TABLE doesn't support parameterized input")
 def test_integration_unwind_create(execute_cypher):
-    """Test bulk node creation using UNWIND"""
+    """Test bulk node creation using UNWIND
+
+    Marked xfail on "IRIS JSON_TABLE doesn't support parameterized input" until
+    the translator stopped using JSON_TABLE here: `UNWIND` + `CREATE` is expanded
+    at translation time into three plain INSERTs per element, so a parameterized
+    list works and the marker was xpassing.
+    """
     node_ids = [f"TEST:UNWIND_{i}" for i in range(5)]
     
     # 1. Bulk create

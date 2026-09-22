@@ -35,7 +35,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
+if TYPE_CHECKING:  # `rdflib` is an optional extra — annotation only, never imported
+    import rdflib
 
 logger = logging.getLogger(__name__)
 

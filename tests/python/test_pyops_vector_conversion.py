@@ -28,13 +28,34 @@ except ImportError:
         pytest.skip("IRIS Python driver not available", allow_module_level=True)
 
 
-# iris.cls is only available in embedded/in-process Python, not external connections
-IRIS_CLS_AVAILABLE = IRIS_AVAILABLE and hasattr(iris_module, 'cls') if IRIS_AVAILABLE else False
+def _requires_oref(what: str):
+    """Skip: `what` needs a `%DynamicArray` OREF, which only embedded Python can make.
+
+    Over the Native API the proxy marshals `%DynamicArray` into a plain Python list, so
+    `iris.cls('%DynamicArray')._New()` hands back `[]` with no `_Push`. `vectorToJson`
+    tests for `_Size` and refuses a list ("vector required"), so these cases are
+    genuinely unreachable from an external interpreter — they were only ever "passing"
+    against the wrapper's mock.
+    """
+    pytest.skip(f"{what} requires a %DynamicArray OREF (embedded Python only)")
 
 
 @pytest.fixture(scope="module", autouse=True)
-def inject_iris_connection(iris_connection):
-    """Inject iris_connection and iris module into PyOps tests."""
+def inject_iris_connection(iris_connection, native_iris_runtime):
+    """Inject iris_connection and iris module into PyOps tests.
+
+    `native_iris_runtime` is what makes `iris.cls(...)` a live proxy; without it the
+    wrapper returns a `MagicMock` and every assertion below is meaningless. See
+    `tests/python/conftest.py`.
+    """
+    from unittest.mock import MagicMock
+
+    try:
+        probe = iris_module.cls("%SYSTEM.Version")
+    except Exception:
+        probe = MagicMock()
+    if isinstance(probe, MagicMock):
+        pytest.skip("iris.cls has no runtime bound — it would return a MagicMock")
     for cls in [TestPyOpsVectorConversion, TestPyOpsIrisVectorRagCompatibility]:
         cls.conn = iris_connection
         cls.iris = iris_module
@@ -42,10 +63,6 @@ def inject_iris_connection(iris_connection):
 
 @pytest.mark.integration
 @pytest.mark.requires_database
-@pytest.mark.skipif(
-    not IRIS_CLS_AVAILABLE,
-    reason="iris.cls not available in external Python mode (requires embedded IRIS)",
-)
 class TestPyOpsVectorConversion:
     """Test suite for Graph.KG.PyOps vector conversion refactoring"""
 
@@ -84,8 +101,10 @@ class TestPyOpsVectorConversion:
     # =========================================================================
 
     def _create_dynamic_array(self, values: list):
-        """Create a %DynamicArray from a Python list"""
+        """Create a %DynamicArray from a Python list, or skip if we cannot."""
         arr = self.iris.cls('%DynamicArray')._New()
+        if not hasattr(arr, "_Push"):
+            _requires_oref("this test")
         for v in values:
             arr._Push(v)
         return arr
@@ -146,13 +165,72 @@ class TestPyOpsVectorConversion:
     def test_dimension_from_schema_matches_default(self):
         """Test schema dimension detection works or falls back correctly"""
         pyops = self._get_pyops_class()
-        
+
         dim = pyops.getExpectedDimension()
-        default_dim = int(pyops._GetParameter("DEFAULT_EMBEDDING_DIMENSION"))
-        
+        # `DEFAULT_EMBEDDING_DIMENSION` is not a parameter — PyOps.cls:6 records that it
+        # is a ClassMethod deliberately, "due to IRIS Python-method compatibility issue".
+        # `_GetParameter` on a name that does not exist returns None, and `int(None)`
+        # was the whole failure.
+        default_dim = int(pyops.getDefaultDimension())
+
         # Either schema lookup worked, or we got the fallback
         # Both are valid outcomes
         print(f"✓ Dimension detection returned {dim} (default fallback: {default_dim})")
+
+    # =========================================================================
+    # Schema-first detection has to actually read the schema
+    # =========================================================================
+
+    def _vector_column_row(self):
+        """(schema, table, column, declared char length) as INFORMATION_SCHEMA has it."""
+        pyops = self._get_pyops_class()
+        table_full = pyops.getVectorTable()
+        schema, table = (
+            table_full.split(".", 1) if "." in table_full else ("SQLUser", table_full)
+        )
+        column = pyops.getVectorColumn()
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                [schema, table, column],
+            )
+            row = cursor.fetchone()
+            # Read the value before closing: the driver's row is a live view on the
+            # cursor, and `row[0]` after `close()` raises <COMMUNICATION LINK ERROR>.
+            char_length = None if row is None else row[0]
+        finally:
+            cursor.close()
+        return schema, table, column, char_length
+
+    def test_the_column_it_looks_up_exists(self):
+        """`getVectorColumn()` must name a column that is really there.
+
+        It returned "embedding". No 4.0.0 table has that column — the vector column is
+        `emb` — so the INFORMATION_SCHEMA lookup inside `getExpectedDimension` matched
+        no row and the method fell through to `getDefaultDimension()` every call. The
+        fallback hid it: 768 is also the usual declared width, so a wrong answer and
+        the right answer were the same number.
+        """
+        schema, table, column, char_length = self._vector_column_row()
+        assert char_length is not None, (
+            f"{schema}.{table} has no column {column!r}, so the schema-first dimension "
+            "lookup can only ever return the hardcoded default"
+        )
+
+    def test_dimension_is_the_declared_width(self):
+        """The reported dimension is the column's declared width.
+
+        Decisive together with `test_the_column_it_looks_up_exists`: that one proves the
+        lookup resolves to a real column, this one proves the width it reports is the
+        one the column declares rather than a coincidence.
+        """
+        pyops = self._get_pyops_class()
+        _, _, _, char_length = self._vector_column_row()
+        if char_length is None:
+            pytest.fail("the vector column does not exist; see the test above")
+        assert pyops.getExpectedDimension() == round(int(char_length) / 346)
 
     # =========================================================================
     # FR-006: Identical validation error messages
@@ -359,10 +437,6 @@ class TestPyOpsVectorConversion:
 
 @pytest.mark.integration
 @pytest.mark.requires_database
-@pytest.mark.skipif(
-    not IRIS_CLS_AVAILABLE,
-    reason="iris.cls not available in external Python mode (requires embedded IRIS)",
-)
 class TestPyOpsIrisVectorRagCompatibility:
     """Test iris-vector-rag compatibility patterns"""
 
@@ -400,17 +474,22 @@ class TestPyOpsIrisVectorRagCompatibility:
         
         # Create wrong-dimension vector
         arr = self.iris.cls('%DynamicArray')._New()
+        if not hasattr(arr, "_Push"):
+            _requires_oref("this test")
         for i in range(10):
             arr._Push(0.1)
-        
+
         with pytest.raises(Exception) as exc_info:
             pyops.vectorToJson(arr)
-        
+
         error = str(exc_info.value)
-        
-        # iris-vector-rag format: "Query embedding dimension {actual} doesn't match expected {expected}"
+
+        # `vectorToJson` raises "Query embedding dimension {actual} does not match
+        # expected {expected}" (PyOps.cls:69). This used to look for "doesn't match",
+        # with `or "doesn" in error` as an apostrophe hedge that matches neither — the
+        # test could only ever have passed against a mock.
         assert "dimension" in error.lower()
-        assert "doesn't match" in error or "doesn" in error  # Handle apostrophe variations
+        assert "does not match" in error
         
         print(f"✓ Error format matches iris-vector-rag: {error}")
 
@@ -422,9 +501,10 @@ class TestPyOpsIrisVectorRagCompatibility:
         
         pyops = self.iris.cls("Graph.KG.PyOps")
         
-        # Get the table and column parameters
-        table = pyops._GetParameter("VECTOR_TABLE")
-        column = pyops._GetParameter("VECTOR_COLUMN")
+        # `VECTOR_TABLE` / `VECTOR_COLUMN` are ClassMethods, not Parameters (PyOps.cls:6),
+        # so `_GetParameter` returned None for both and printed "None.None".
+        table = pyops.getVectorTable()
+        column = pyops.getVectorColumn()
         
         print(f"✓ Schema lookup configured for {table}.{column}")
         

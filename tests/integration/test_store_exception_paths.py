@@ -88,7 +88,12 @@ class TestPageRankExceptionPath:
         assert result.rows == []
 
     def test_ppr_exception_returns_empty(self, store):
-        with patch.object(store, "_call_classmethod", side_effect=RuntimeError("forced")):
+        """`ppr` is in the Rust callout's capability list, so the ObjectScript route
+        this test is about is only taken when Arno is out of the picture. Patching
+        `_call_classmethod` alone left the Rust path answering with real scores."""
+        with patch.object(store, "_detect_arno", return_value=False), patch.object(
+            store, "_call_classmethod", side_effect=RuntimeError("forced")
+        ):
             result = store.execute_ppr(["ex_0"], damping=0.85, max_iterations=5)
         assert result is not None
         assert result.rows == []
@@ -150,7 +155,11 @@ class TestExecuteSubgraph:
                 seed_ids=["ex_0"], k_hops=1, edge_types=[], max_nodes=5
             )
         assert result is not None
-        assert result.rows == [["[]", "[]"]]
+        # Four columns, not two: `execute_subgraph` carries `properties` and `labels`
+        # out of `SubgraphJson` now, and its failure envelope has to match its success
+        # envelope or a caller reading row[2] gets an IndexError only on failure.
+        assert result.rows == [["[]", "[]", "{}", "{}"]]
+        assert result.columns == ["nodes", "edges", "properties", "labels"]
 
 
 # ---------------------------------------------------------------------------

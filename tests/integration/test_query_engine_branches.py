@@ -34,7 +34,9 @@ class TestExplainPrefix:
     def test_explain_basic(self, qe_graph):
         result = qe_graph.execute_cypher("EXPLAIN MATCH (n:QE) RETURN n.node_id")
         assert result is not None
-        assert result.get("columns") == ["Plan"] or (hasattr(result, "columns") and result.columns == ["Plan"])
+        # `IVGResult.get` refuses on purpose, and `hasattr(result, "get")` is
+        # True for that refusal — so the dict-shaped branch was the one taken.
+        assert result.columns == ["Plan"]
 
     def test_explain_create_returns_plan(self, qe_graph):
         result = qe_graph.execute_cypher("EXPLAIN CREATE (n:Test {id: 'x'})")
@@ -87,7 +89,7 @@ class TestSubsequentQueries:
             "MATCH (m:QE) WHERE m.v = 3 RETURN m.node_id AS id"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert rows is not None
 
     def test_chained_query_empty_first_result(self, qe_graph):
@@ -112,7 +114,7 @@ class TestBFSCountPath:
             "MATCH (a {node_id: 'qe_0'})-[:QE_REL*1..2]->(b) RETURN count(DISTINCT b) AS cnt"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert rows is not None and len(rows) > 0
 
     def test_bfs_id_only_path(self, qe_graph):
@@ -121,7 +123,7 @@ class TestBFSCountPath:
             "MATCH (a {node_id: 'qe_0'})-[:QE_REL*1..3]->(b) RETURN DISTINCT b.node_id AS id"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert rows is not None
 
     def test_bfs_with_limit(self, qe_graph):
@@ -148,7 +150,7 @@ class TestBFSCountPath:
             "MATCH (a {node_id: 'qe_4'})-[:QE_REL*1..2]->(b) RETURN b.node_id AS id"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert rows == [] or rows is not None
 
     def test_bfs_with_parameter(self, qe_graph):
@@ -218,7 +220,7 @@ class TestBFSFullPropsPath:
             "RETURN b.node_id AS bid, labels(b) AS lbl"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert rows == []
 
 
@@ -272,7 +274,7 @@ class TestNodeOnlyQueryPath:
 
     def test_simple_node_scan_with_limit(self, qe_graph):
         result = qe_graph.execute_cypher("MATCH (n:QE) RETURN n.node_id LIMIT 2")
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert len(rows) <= 2
 
     def test_match_properties_in_return(self, qe_graph):

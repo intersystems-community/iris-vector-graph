@@ -186,20 +186,25 @@ def vec_test_table(iris_connection, iris_master_cleanup):
 class TestValidateVectorTable:
 
     def test_validate_kg_node_embeddings(self, vec_graph):
-        # kg_NodeEmbeddings table should exist with embeddings stored
-        from iris_vector_graph._engine.vector import _table
-        tbl = _table("kg_NodeEmbeddings")
-        try:
-            result = vec_graph.validate_vector_table(tbl, "emb")
-            assert "row_count" in result
-            assert "dimension" in result or result.get("dimension") is None
-        except Exception:
-            pytest.skip("validate_vector_table not applicable in this env")
+        # `_t` is how a mixin qualifies a table name; there is no module-level
+        # `_table` in `_engine.vector`, and the import of one used to make both of
+        # these tests fail on collection.
+        tbl = vec_graph._t("kg_NodeEmbeddings")
+
+        result = vec_graph.validate_vector_table(tbl, "emb")
+
+        assert result["table"] == tbl
+        assert result["vector_col"] == "emb"
+        assert isinstance(result["row_count"], int)
+        # None when the table is empty; the width of the first stored vector otherwise.
+        assert result["dimension"] is None or isinstance(result["dimension"], int)
 
     def test_validate_missing_column_raises(self, vec_graph):
-        from iris_vector_graph._engine.vector import _table
-        tbl = _table("kg_NodeEmbeddings")
-        with pytest.raises((ValueError, Exception)):
+        """A bare `Exception` here would be satisfied by the import error this test
+        used to raise, so the column name has to appear in the message."""
+        tbl = vec_graph._t("kg_NodeEmbeddings")
+
+        with pytest.raises(ValueError, match="no_such_col"):
             vec_graph.validate_vector_table(tbl, "no_such_col")
 
 

@@ -9,6 +9,9 @@ from iris_vector_graph._validate import (
     graph_index_key,
     validate_graph_name,
 )
+from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
+from iris_vector_graph.constants import DEFAULT_GRAPH
+from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,36 @@ def _batch_size_for(ids: list) -> int:
         return 200
     avg_len = sum(len(i) for i in ids[:20]) / min(20, len(ids))
     return max(10, int(_IRIS_MAX_STMT // (avg_len + 3)))
+
+
+def _swallow_duplicate(conn, exc: Exception, exists_sql: str, params: list) -> None:
+    """Return if `exc` is a duplicate-key error, otherwise re-raise it.
+
+    The usual case is text we can match: `SQLCODE -119`, "duplicate", "unique".
+    The awkward case is a connection whose cached INSERT for a class predates
+    another connection's `%BuildIndices` on that same class — which is what a
+    `%NOINDEX` bulk load does. It can no longer decode that class's own -119, and
+    the violation arrives as `<LIST ERROR> Incorrect list format ... type detected
+    : 0`, permanently, with nothing in the text to match on. Rather than treat
+    every `<LIST ERROR>` as a duplicate, ask the database whether the row is in
+    fact there; if it is not, the error was something else and is re-raised.
+    """
+    txt = str(exc)
+    low = txt.lower()
+    if "-119" in txt or "duplicate" in low or "unique" in low:
+        return
+    if "<list error>" not in low:
+        raise exc
+    cur = conn.cursor()
+    try:
+        cur.execute(exists_sql, params)
+        found = cur.fetchone() is not None
+    except Exception:
+        raise exc
+    finally:
+        cur.close()
+    if not found:
+        raise exc
 
 
 class _BulkLoadSession:
@@ -167,13 +200,25 @@ class NodesEdgesMixin:
             logger.warning("backfill_2hop_exact failed: %s", str(e)[:120])
             return 0
 
-    def _assert_node_exists(self, node_id: str) -> None:
+    def _assert_node_exists(self, node_id: str, *, graph: Optional[str] = None) -> None:
+        """Does this node exist *in this graph*?
+
+        Scoped since spec 227 broke `UNIQUE (node_id)`: a node ID can now exist in
+        graph B and not in graph A, so an unscoped count says yes to a write that
+        has nothing to attach to. The legacy embedding tables declare no FK, so
+        this check is the only thing standing between that write and an orphan row.
+        """
+        graph_id = DEFAULT_GRAPH if graph is None else graph
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"SELECT COUNT(*) FROM {self._t('nodes')} WHERE node_id = ?", [node_id])
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {self._t('nodes')}"
+                f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
+                [node_id, graph_id],
+            )
             result = cursor.fetchone()
             if not result or result[0] == 0:
-                raise ValueError(f"Node does not exist: {node_id}")
+                raise ValueError(f"Node does not exist in graph '{graph_id}': {node_id}")
         except ValueError:
             raise
         except Exception:
@@ -182,7 +227,7 @@ class NodesEdgesMixin:
             if hasattr(cursor, "close"):
                 cursor.close()
 
-    def get_node(self, node_id: str) -> Optional[Dict[str, Any]]:
+    def get_node(self, node_id: str, graph: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Retrieve a node by ID using optimized direct SQL.
 
@@ -190,11 +235,14 @@ class NodesEdgesMixin:
 
         Args:
             node_id: Node identifier
+            graph: Named graph to read from; omitted means the default graph. Since
+                spec 227 a node ID can exist in more than one graph, so an unscoped
+                read would merge their labels and properties into one node.
 
         Returns:
             Dict with 'id', 'labels', and properties, or None if not found
         """
-        nodes = self.get_nodes([node_id])
+        nodes = self.get_nodes([node_id], graph=graph)
         return nodes[0] if nodes else None
 
     def _filter_edges_by_properties(self, bfs_results: list, prop_filter: dict) -> list:
@@ -246,7 +294,9 @@ class NodesEdgesMixin:
 
         return [r for r in bfs_results if (r.get("s"), r.get("p"), r.get("o")) in passing]
 
-    def get_nodes(self, node_ids: List[str]) -> List[Dict[str, Any]]:
+    def get_nodes(
+        self, node_ids: List[str], graph: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Retrieve multiple nodes by ID using optimized batch SQL.
 
@@ -255,12 +305,18 @@ class NodesEdgesMixin:
 
         Args:
             node_ids: List of node identifiers
+            graph: Named graph to read from; omitted means the default graph. Every
+                statement below is scoped to it — spec 227 allows one node ID in several
+                graphs, and an unscoped read merged their label lists and let one graph's
+                property values overwrite another's.
 
         Returns:
             List of node dicts with 'id', 'labels', and properties
         """
         if not node_ids:
             return []
+
+        graph_id = DEFAULT_GRAPH if graph is None else graph
 
         _IN_CHUNK = 499
 
@@ -273,16 +329,18 @@ class NodesEdgesMixin:
                 placeholders = ",".join(["?"] * len(chunk))
 
                 cursor.execute(
-                    f"SELECT s, label FROM {self._t('rdf_labels')} WHERE s IN ({placeholders})",
-                    chunk,
+                    f"SELECT s, label FROM {self._t('rdf_labels')} "
+                    f"WHERE graph_id = ? AND s IN ({placeholders})",
+                    [graph_id] + list(chunk),
                 )
                 for s, label in cursor.fetchall():
                     if s in node_map:
                         node_map[s]["labels"].append(label)
 
                 cursor.execute(
-                    f'SELECT s, "key", val FROM {self._t("rdf_props")} WHERE s IN ({placeholders})',
-                    chunk,
+                    f'SELECT s, "key", val FROM {self._t("rdf_props")} '
+                    f"WHERE graph_id = ? AND s IN ({placeholders})",
+                    [graph_id] + list(chunk),
                 )
                 _STRUCTURAL_KEYS = ("id", "labels")
                 for s, key, val in cursor.fetchall():
@@ -310,8 +368,9 @@ class NodesEdgesMixin:
                     chunk = empty_nids[i : i + _IN_CHUNK]
                     e_placeholders = ",".join(["?"] * len(chunk))
                     cursor.execute(
-                        f"SELECT node_id FROM {self._t('nodes')} WHERE node_id IN ({e_placeholders})",
-                        chunk,
+                        f"SELECT node_id FROM {self._t('nodes')} "
+                        f"WHERE graph_id = ? AND node_id IN ({e_placeholders})",
+                        [graph_id] + list(chunk),
                     )
                     existing_empty.update(row[0] for row in cursor.fetchall())
                 return [
@@ -656,12 +715,23 @@ class NodesEdgesMixin:
                     [node_id],
                 )
 
+            # Spec 227 (FR-034): the children carry the graph too. Without this the
+            # node lands in `graph` and its labels and properties land in the default
+            # graph, so a scoped read of `graph` finds a node with no labels while the
+            # default graph acquires labels for a node it does not hold.
+            _children_scoped = getattr(self, "_children_have_graph_id", True)
+
             if labels:
-                label_data = [[node_id, label] for label in labels]
-                cursor.executemany(
-                    f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
-                    label_data,
-                )
+                if _children_scoped:
+                    cursor.executemany(
+                        f"INSERT INTO {self._t('rdf_labels')} (graph_id, s, label) VALUES (?, ?, ?)",
+                        [[graph_id, node_id, label] for label in labels],
+                    )
+                else:
+                    cursor.executemany(
+                        f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
+                        [[node_id, label] for label in labels],
+                    )
 
             props = dict(properties) if properties else {}
             if "id" not in props:
@@ -673,9 +743,23 @@ class NodesEdgesMixin:
                 if v is None:
                     continue
                 val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                prop_data.append([node_id, k, val_str, node_id, k])
+                if _children_scoped:
+                    prop_data.append([graph_id, node_id, k, val_str, graph_id, node_id, k])
+                else:
+                    prop_data.append([node_id, k, val_str, node_id, k])
 
-            prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)'
+            if _children_scoped:
+                # The guard is scoped as well as the insert: keyed on (s, "key") alone it
+                # reports "already there" for another graph's property of the same name
+                # and skips the write, and create_node still returns True.
+                prop_sql = (
+                    f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
+                    f"SELECT ?, ?, ?, ? WHERE NOT EXISTS ("
+                    f'SELECT 1 FROM {self._t("rdf_props")} '
+                    f'WHERE graph_id = ? AND s = ? AND "key" = ?)'
+                )
+            else:
+                prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)'
             cursor.executemany(prop_sql, prop_data)
 
             cursor.execute("COMMIT")
@@ -688,6 +772,51 @@ class NodesEdgesMixin:
             else:
                 logger.error(f"create_node failed: {e}")
             return False
+
+    def _ensure_edge_endpoints(self, cursor, pairs) -> None:
+        """Make sure `nodes` holds a row for every `(graph, node_id)` an edge names.
+
+        Spec 227 re-keyed `nodes` on `(graph_id, node_id)`, so `rdf_edges` carries
+        composite foreign keys — `fk_edges_source (graph_id, s)` and `fk_edges_dest
+        (graph_id, o_id)`. Under the old single-column key a node created once, in
+        any graph, satisfied an edge written in every graph; under the composite key
+        it satisfies only edges in its own graph. Every pre-227 caller loads nodes
+        into the default graph and then writes edges into a named one, and that pair
+        of calls is now `SQLCODE -121`.
+
+        The writers swallow that: `create_edge` returns the same False it returns for
+        a duplicate, `BulkIngestEdgesSQL` skips the row and does not count it. So the
+        endpoint rows are ensured here rather than left to the caller — `nodes` is the
+        registry of what the graph contains, not an input the caller has to prepare
+        twice.
+
+        Duplicates within one call are collapsed, and a row a concurrent writer got to
+        first is not an error.
+
+        Args:
+            cursor: the caller's cursor, so this shares the caller's transaction.
+            pairs: `(graph_id, node_id)` tuples; `None` graph means the default graph.
+        """
+        scoped = getattr(self, "_nodes_has_graph_id", True)
+        sql = GraphSchema.get_bulk_insert_sql("nodes_with_graph" if scoped else "nodes")
+        seen = set()
+        for graph_id, node_id in pairs:
+            if not node_id:
+                continue
+            graph_id = graph_id or ""
+            if (graph_id, node_id) in seen:
+                continue
+            seen.add((graph_id, node_id))
+            try:
+                if scoped:
+                    cursor.execute(sql, [node_id, graph_id, node_id, graph_id])
+                else:
+                    cursor.execute(sql, [node_id, node_id])
+            except Exception as e:
+                # Lost the race to another writer: the row is there, which is all
+                # the foreign key asked for.
+                if "unique" not in str(e).lower() and "-119" not in str(e):
+                    raise
 
     def create_edge(
         self,
@@ -708,6 +837,11 @@ class NodesEdgesMixin:
             qualifiers: Optional relationship properties.
             graph: Optional named graph identifier.
 
+        Both endpoints are registered in `nodes` for `graph` if they are not there
+        already (see `_ensure_edge_endpoints`): an edge names its endpoints, and since
+        227 re-keyed `nodes` on `(graph_id, node_id)` a node created in the default
+        graph does not satisfy an edge written in a named one.
+
         Returns:
             True if a NEW edge was created. False if the edge already existed
             (UNIQUE violation, swallowed safely) OR on error. The duplicate case is
@@ -721,6 +855,7 @@ class NodesEdgesMixin:
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
+            self._ensure_edge_endpoints(cursor, ((graph, source_id), (graph, target_id)))
             if graph:
                 cursor.execute(
                     f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
@@ -909,6 +1044,10 @@ class NodesEdgesMixin:
                 Erasure either completes or leaves the graph untouched; a partial
                 erasure is a defect, not an outcome, so this raises rather than
                 returning a count that looks like success.
+
+        A graph ID is collision avoidance, not an authorisation boundary: it is
+        supplied by the caller, so it cannot decide what that caller may read
+        (FR-032).
         """
         _ledger_check(self, "erase_graph")
         canonical = validate_graph_name(graph)
@@ -918,6 +1057,10 @@ class NodesEdgesMixin:
         # No _nkg_dirty. The Eraser drops ^NKG rather than flagging it, so there is
         # no deferred inconsistency left for a caller to remember to resolve.
         self._nkg_dirty = False
+        # An erase takes this graph's routed tables and registry rows with it. A cached
+        # route would outlive them and send the next write at a table that is gone,
+        # which surfaces as a missing table rather than as a stale cache.
+        self.invalidate_route_cache(canonical)
         return removed
 
     def erase_all(self) -> int:
@@ -939,6 +1082,7 @@ class NodesEdgesMixin:
         _ledger_check(self, "erase_all")
         removed = int(self._iris_obj().classMethodValue("Graph.KG.Eraser", "EraseAll"))
         self._nkg_dirty = False
+        self.invalidate_route_cache()
         return removed
 
     def drop_graph(self, graph_id: str) -> int:
@@ -1028,8 +1172,16 @@ class NodesEdgesMixin:
             node_sql = GraphSchema.get_bulk_insert_sql(
                 "nodes_with_graph" if _graph_col else "nodes"
             )
-            label_sql = GraphSchema.get_bulk_insert_sql("rdf_labels")
-            prop_sql = GraphSchema.get_bulk_insert_sql("rdf_props")
+            # Spec 227 (FR-034): the children carry the graph too, probed
+            # separately because a 214-era schema has graph_id on `nodes` and not
+            # on rdf_labels / rdf_props, where naming it is SQLCODE -29.
+            _children_scoped = getattr(self, "_children_have_graph_id", True)
+            label_sql = GraphSchema.get_bulk_insert_sql(
+                "rdf_labels_with_graph" if _children_scoped else "rdf_labels"
+            )
+            prop_sql = GraphSchema.get_bulk_insert_sql(
+                "rdf_props_with_graph" if _children_scoped else "rdf_props"
+            )
 
             # 3. Collect and prepare data
             all_labels = []
@@ -1042,29 +1194,43 @@ class NodesEdgesMixin:
                     continue
 
                 created_ids.append(node_id)
-                # params depend on template: nodes_with_graph needs [node_id, graph_id, node_id];
-                # plain nodes needs [node_id, node_id]
+                # The requested graph goes in the column, not in a `__graph`
+                # property (spec 227 FR-034; spec 214 FR-019 replaced the
+                # pseudo-property and schema.py:614 deletes every row of it, so a
+                # graph claimed that way disappears on the next upgrade).
+                node_graph = node.get("graph") or ""
+                # params depend on template: nodes_with_graph needs
+                # [node_id, graph_id, node_id, graph_id] — its guard names the graph
+                # too; plain nodes needs [node_id, node_id]
                 if _graph_col:
-                    valid_nodes.append([node_id, "", node_id])
+                    valid_nodes.append([node_id, node_graph, node_id, node_graph])
                 else:
                     valid_nodes.append([node_id, node_id])
 
                 for label in node.get("labels", []):
-                    # params: [s, label, s, label]
-                    all_labels.append((node_id, label, node_id, label))
+                    if _children_scoped:
+                        # params: [graph_id, s, label, graph_id, s, label]
+                        all_labels.append((node_graph, node_id, label, node_graph, node_id, label))
+                    else:
+                        # params: [s, label, s, label]
+                        all_labels.append((node_id, label, node_id, label))
 
                 props = node.get("properties", {})
                 if "id" not in props:
                     props["id"] = node_id
-                if node.get("graph"):
-                    props["__graph"] = node["graph"]
 
                 for k, v in props.items():
                     if v is None:
                         continue
                     val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
-                    # params: [s, key, val, s, key]
-                    all_props.append((node_id, k, val_str, node_id, k))
+                    if _children_scoped:
+                        # params: [graph_id, s, key, val, graph_id, s, key]
+                        all_props.append(
+                            (node_graph, node_id, k, val_str, node_graph, node_id, k)
+                        )
+                    else:
+                        # params: [s, key, val, s, key]
+                        all_props.append((node_id, k, val_str, node_id, k))
 
             # 4. Batch Execution (Transactional phases for FK safety)
             # Phase 1: Nodes
@@ -1141,6 +1307,18 @@ class NodesEdgesMixin:
             edge_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
             edge_params = []
             has_graph = graph is not None or any(e.get("graph") for e in edges)
+            # Before any edge row: the composite foreign keys need the endpoints in
+            # the edge's own graph (see _ensure_edge_endpoints). A batch names each
+            # endpoint many times, so the helper's de-duplication does the work here.
+            self._ensure_edge_endpoints(
+                cursor,
+                (
+                    (e.get("graph", graph), e[key])
+                    for e in edges
+                    if all(k in e for k in ("source_id", "predicate", "target_id"))
+                    for key in ("source_id", "target_id")
+                ),
+            )
             if has_graph:
                 graph_sql = GraphSchema.get_bulk_insert_sql("rdf_edges_with_graph")
                 plain_sql = GraphSchema.get_bulk_insert_sql("rdf_edges")
@@ -1149,10 +1327,19 @@ class NodesEdgesMixin:
                         s, p, o = e["source_id"], e["predicate"], e["target_id"]
                         g = e.get("graph", graph)
                         if g is not None:
-                            edge_params.append([s, p, o, g, s, p, o, g, g])
-                            cursor.execute(graph_sql, [s, p, o, g, s, p, o, g, g])
+                            # One graph parameter, not two: the guard coalesces both
+                            # sides rather than spelling the NULL case separately
+                            # (spec 230, FR-005).
+                            row = [s, p, o, g, s, p, o, g]
+                            edge_params.append(row)
+                            cursor.execute(graph_sql, row)
                         else:
-                            cursor.execute(plain_sql, [s, p, o, s, p, o])
+                            # Counted as well as written. This branch used to execute
+                            # the row and skip the append, so a batch mixing named and
+                            # default-graph edges reported fewer edges than it wrote.
+                            row = [s, p, o, s, p, o]
+                            edge_params.append(row)
+                            cursor.execute(plain_sql, row)
             else:
                 for e in edges:
                     if all(k in e for k in ("source_id", "predicate", "target_id")):
@@ -1226,6 +1413,10 @@ class NodesEdgesMixin:
         cursor = self.conn.cursor()
         n = 0
         err_lower = lambda ex: ("unique" in str(ex).lower() or "-119" in str(ex))
+        # This path writes the default graph only, so that is where the endpoints go.
+        self._ensure_edge_endpoints(
+            cursor, ((None, e[k]) for e in normalized for k in ("s", "o"))
+        )
         for edge in normalized:
             s, p, o = edge["s"], edge["p"], edge["o"]
             try:
@@ -1253,7 +1444,13 @@ class NodesEdgesMixin:
         _ledger_check(self, "delete_node")
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE id = ?", [node_id])
+            # `WHERE id = ?` compared a node ID against the table's RowID, matched
+            # nothing, and reported nothing: a deleted node kept its vector. Reach
+            # stays namespace-wide, like every other delete in this method
+            # (reader-inventory.md §10) — the key was what was wrong.
+            cursor.execute(
+                f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE node_id = ?", [node_id]
+            )
             cursor.execute(
                 f"SELECT edge_id FROM {self._t('rdf_edges')} WHERE s = ? OR o_id = ?",
                 [node_id, node_id],
@@ -1313,7 +1510,8 @@ class NodesEdgesMixin:
                     batch,
                 )
                 cursor.execute(
-                    f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE id IN ({phs})", batch
+                    f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE node_id IN ({phs})",
+                    batch,
                 )
                 cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE s IN ({phs})", batch)
                 cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE o_id IN ({phs})", batch)
@@ -1368,16 +1566,48 @@ class NodesEdgesMixin:
         node_id: str,
         properties: Optional[Dict[str, Any]] = None,
         labels: Optional[List[str]] = None,
+        graph: Optional[str] = None,
     ) -> bool:
+        """Legacy writer, now graph-scoped like `create_node`.
+
+        Naming `graph_id` is not only the spec 227 scope fix. A one-column
+        `INSERT INTO nodes (node_id) VALUES (?)` cached on this connection stops
+        being decodable once any other connection runs `%BuildIndices` on
+        `Graph.KG.nodes` — a `%NOINDEX` bulk load does exactly that — and the
+        duplicate then arrives as `<LIST ERROR> ... type detected : 0` instead of
+        `SQLCODE -119`, which the string match below cannot recognise. Naming the
+        column decodes correctly, so the duplicate stays idempotent.
+        """
         _ledger_check(self, "store_node")
+        graph_id = graph if graph is not None else ""
+        _scoped = getattr(self, "_nodes_has_graph_id", True)
+        _children_scoped = getattr(self, "_children_have_graph_id", True)
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id])
+            if _scoped:
+                cursor.execute(
+                    f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
+                    [node_id, graph_id],
+                )
+            else:
+                cursor.execute(f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)", [node_id])
             self.conn.commit()
         except Exception as e:
-            err_lower = str(e).lower()
-            if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
-                raise
+            if _scoped:
+                _swallow_duplicate(
+                    self.conn,
+                    e,
+                    f"SELECT 1 FROM {self._t('nodes')} WHERE node_id = ? "
+                    "AND COALESCE(graph_id, '') = COALESCE(?, '')",
+                    [node_id, graph_id],
+                )
+            else:
+                _swallow_duplicate(
+                    self.conn,
+                    e,
+                    f"SELECT 1 FROM {self._t('nodes')} WHERE node_id = ?",
+                    [node_id],
+                )
         finally:
             cursor.close()
         if properties:
@@ -1385,14 +1615,28 @@ class NodesEdgesMixin:
                 val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
                 cursor2 = self.conn.cursor()
                 try:
-                    cursor2.execute(
-                        f"DELETE FROM {self._t('rdf_props')} WHERE s = ? AND \"key\" = ?",
-                        [node_id, k],
-                    )
-                    cursor2.execute(
-                        f"INSERT INTO {self._t('rdf_props')} (s, \"key\", val) VALUES (?, ?, ?)",
-                        [node_id, k, val_str],
-                    )
+                    if _children_scoped:
+                        # Scope the DELETE too: keyed on (s, "key") alone it wipes
+                        # another graph's property of the same name.
+                        cursor2.execute(
+                            f'DELETE FROM {self._t("rdf_props")} '
+                            'WHERE graph_id = ? AND s = ? AND "key" = ?',
+                            [graph_id, node_id, k],
+                        )
+                        cursor2.execute(
+                            f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
+                            "VALUES (?, ?, ?, ?)",
+                            [graph_id, node_id, k, val_str],
+                        )
+                    else:
+                        cursor2.execute(
+                            f'DELETE FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?',
+                            [node_id, k],
+                        )
+                        cursor2.execute(
+                            f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
+                            [node_id, k, val_str],
+                        )
                     self.conn.commit()
                 except Exception:
                     pass
@@ -1402,19 +1646,35 @@ class NodesEdgesMixin:
             for lbl in labels:
                 cursor3 = self.conn.cursor()
                 try:
-                    cursor3.execute(
-                        f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
-                        [node_id, lbl],
-                    )
+                    if _children_scoped:
+                        cursor3.execute(
+                            f"INSERT INTO {self._t('rdf_labels')} (graph_id, s, label) "
+                            "VALUES (?, ?, ?)",
+                            [graph_id, node_id, lbl],
+                        )
+                    else:
+                        cursor3.execute(
+                            f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
+                            [node_id, lbl],
+                        )
                     self.conn.commit()
                 except Exception as e:
-                    err_lower = str(e).lower()
-                    if (
-                        "-119" not in str(e)
-                        and "duplicate" not in err_lower
-                        and "unique" not in err_lower
-                    ):
-                        raise
+                    if _children_scoped:
+                        _swallow_duplicate(
+                            self.conn,
+                            e,
+                            f"SELECT 1 FROM {self._t('rdf_labels')} "
+                            "WHERE COALESCE(graph_id, '') = COALESCE(?, '') "
+                            "AND s = ? AND label = ?",
+                            [graph_id, node_id, lbl],
+                        )
+                    else:
+                        _swallow_duplicate(
+                            self.conn,
+                            e,
+                            f"SELECT 1 FROM {self._t('rdf_labels')} WHERE s = ? AND label = ?",
+                            [node_id, lbl],
+                        )
                 finally:
                     cursor3.close()
         return True
@@ -1425,23 +1685,37 @@ class NodesEdgesMixin:
         predicate: str,
         target_id: str,
         qualifiers: Optional[Dict[str, Any]] = None,
+        graph: Optional[str] = None,
     ) -> bool:
+        """Legacy writer. The endpoints register in the edge's own graph.
+
+        The 4.0.0 composite FKs `fk_edges_source (graph_id, s)` and
+        `fk_edges_dest (graph_id, o_id)` point at `nodes (graph_id, node_id)`, so
+        an edge in graph `g` whose endpoints sit in the default graph is rejected
+        with `SQLCODE -121`.
+        """
         _ledger_check(self, "store_edge")
-        self.store_node(source_id)
-        self.store_node(target_id)
+        graph_id = graph if graph is not None else ""
+        self.store_node(source_id, graph=graph_id)
+        self.store_node(target_id, graph=graph_id)
         cursor = self.conn.cursor()
         try:
             qual_json = json.dumps(qualifiers) if qualifiers else None
             cursor.execute(
                 f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, qualifiers, graph_id) "
-                "VALUES (?, ?, ?, ?, '')",
-                [source_id, predicate, target_id, qual_json],
+                "VALUES (?, ?, ?, ?, ?)",
+                [source_id, predicate, target_id, qual_json, graph_id],
             )
             self.conn.commit()
         except Exception as e:
-            err_lower = str(e).lower()
-            if "-119" not in str(e) and "duplicate" not in err_lower and "unique" not in err_lower:
-                raise
+            _swallow_duplicate(
+                self.conn,
+                e,
+                f"SELECT 1 FROM {self._t('rdf_edges')} "
+                "WHERE COALESCE(graph_id, '') = COALESCE(?, '') "
+                "AND s = ? AND p = ? AND o_id = ?",
+                [graph_id, source_id, predicate, target_id],
+            )
         finally:
             cursor.close()
         return True

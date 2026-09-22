@@ -128,7 +128,7 @@ def cypher_full():
 
 p50, mn, mx, r = timeit(cypher_full, warmup=3, runs=10)
 print(f"\n5. execute_cypher RETURN n.node_id  [Cypher→SQL, full stack]")
-print(f"   p50={p50:.3f}ms  min={mn:.3f}ms  max={mx:.3f}ms  results={len(r.get('rows',[]))}")
+print(f"   p50={p50:.3f}ms  min={mn:.3f}ms  max={mx:.3f}ms  results={len(r.rows)}")
 
 # 6. execute_cypher — count only (no property join)
 def cypher_count():
@@ -139,7 +139,7 @@ def cypher_count():
 
 p50, mn, mx, r = timeit(cypher_count, warmup=3, runs=10)
 print(f"\n6. execute_cypher COUNT(n)  [avoids rdf_props JOIN]")
-print(f"   p50={p50:.3f}ms  min={mn:.3f}ms  max={mx:.3f}ms  result={r.get('rows')}")
+print(f"   p50={p50:.3f}ms  min={mn:.3f}ms  max={mx:.3f}ms  result={r.rows}")
 
 # 7. Measure Python parse+translate overhead alone (no IRIS)
 from iris_vector_graph.cypher.parser import parse_query

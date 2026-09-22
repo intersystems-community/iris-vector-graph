@@ -253,7 +253,7 @@ class TestVectorPaths:
         vec = [0.1] * eng.embedding_dimension
         try:
             result = eng.multi_vector_search(
-                sources=[{"table": "Graph_KG.kg_NodeEmbeddings", "id_col": "id", "vec_col": "emb"}],
+                sources=[{"table": "Graph_KG.kg_NodeEmbeddings", "id_col": "node_id", "vec_col": "emb"}],
                 query_embedding=vec,
                 top_k=5,
             )

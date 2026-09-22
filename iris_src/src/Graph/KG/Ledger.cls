@@ -208,28 +208,20 @@ ClassMethod RecordVerify(pResult As %String) As %Status
 
 /// Admin utility: rebuild indices of the structural tables so phantom rows (left by
 /// %NOINDEX loads) become visible to DELETE, COUNT and ORDER BY scans.
-/// rdf_edges is handled through %BuildIndices on the named B-tree indices ONLY when the
-/// Graph.KG.Edge class is compiled: BUILD INDEX FOR TABLE would invoke the functional
-/// index's PurgeIndex, which kills ^KG and ^NKG (the spec 206 class of data loss).
+/// rdf_edges is rebuilt by BUILD INDEX FOR TABLE like the rest. That was once unsafe:
+/// the functional index Graph.KG.Edge declared would have run PurgeIndex, which killed
+/// ^KG and ^NKG (the spec 206 class of data loss). Both the index and the class are
+/// gone — rdf_edges is declared by the DDL alone (spec 227), which gives it plain
+/// B-tree indices and no purge hook.
 ClassMethod RebuildEdgeIndices(pSchema As %String = "Graph_KG") As %Integer [ SqlName = rebuild_edge_indices, SqlProc ]
 {
     Set tN = 0
-    For tTable = "nodes", "rdf_labels", "rdf_props" {
+    For tTable = "nodes", "rdf_labels", "rdf_props", "rdf_edges" {
         Try {
             Set tRS = ##class(%SQL.Statement).%ExecDirect(, "BUILD INDEX FOR TABLE " _ pSchema _ "." _ tTable)
             If tRS.%SQLCODE >= 0 Set tN = tN + 1
         } Catch {
         }
-    }
-    Try {
-        If ##class(%Dictionary.CompiledClass).%ExistsId("Graph.KG.Edge") {
-            Set tSC = ##class(Graph.KG.Edge).%BuildIndices($ListBuild("uspo", "idxS", "idxP", "idxSP", "idxPOid"), 1, 0)
-            If $$$ISOK(tSC) Set tN = tN + 1
-        } ElseIf pSchema = "Graph_KG" {
-            Set tRS = ##class(%SQL.Statement).%ExecDirect(, "BUILD INDEX FOR TABLE " _ pSchema _ ".rdf_edges")
-            If tRS.%SQLCODE >= 0 Set tN = tN + 1
-        }
-    } Catch {
     }
     Return tN
 }

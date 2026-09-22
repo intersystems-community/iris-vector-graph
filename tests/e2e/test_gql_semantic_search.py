@@ -62,7 +62,9 @@ def test_gql_semantic_search(iris_connection, iris_master_cleanup):
     finally:
         # Cleanup
         cursor = iris_connection.cursor()
-        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?", [node_id])
+        # `node_id`, not `id`: `id` is the implicit RowID, so the old spelling left the
+        # vector behind and `fk_emb_node` then refused the node delete.
+        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", [node_id])
         cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s = ?", [node_id])
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", [node_id])
         iris_connection.commit()

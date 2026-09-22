@@ -36,7 +36,10 @@ class TestCreateProteinMutation:
         def _delete(ids):
             for tid in ids:
                 for table in ["kg_NodeEmbeddings", "rdf_edges", "rdf_props", "rdf_labels", "nodes"]:
-                    col = "id" if table == "kg_NodeEmbeddings" else "node_id" if table == "nodes" else "s"
+                    # `node_id`, not `id`: 4.0.0 re-keyed the embedding table. `id` is
+                    # the implicit RowID there, so this cleanup deleted nothing and the
+                    # `except Exception: pass` below meant nobody found out.
+                    col = "node_id" if table in ("kg_NodeEmbeddings", "nodes") else "s"
                     try:
                         cursor.execute(f"DELETE FROM Graph_KG.{table} WHERE {col} = ?", (tid,))
                     except Exception:
@@ -107,7 +110,7 @@ class TestCreateProteinMutation:
         # Cleanup any existing test data first
         cursor = iris_connection.cursor()
         try:
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", ("PROTEIN:TEST_WITH_EMB",))
+            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", ("PROTEIN:TEST_WITH_EMB",))
             cursor.execute("DELETE FROM rdf_props WHERE s = ?", ("PROTEIN:TEST_WITH_EMB",))
             cursor.execute("DELETE FROM rdf_labels WHERE s = ?", ("PROTEIN:TEST_WITH_EMB",))
             cursor.execute("DELETE FROM nodes WHERE node_id = ?", ("PROTEIN:TEST_WITH_EMB",))
@@ -158,7 +161,7 @@ class TestCreateProteinMutation:
 
         # Verify embedding in database
         cursor = iris_connection.cursor()
-        cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings WHERE id = ?",
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?",
                       ("PROTEIN:TEST_WITH_EMB",))
         assert cursor.fetchone()[0] == 1
 
@@ -450,7 +453,7 @@ class TestDeleteProteinMutation:
             emb = np.random.randn(768)
             emb = emb / np.linalg.norm(emb)
             emb_str = "[" + ",".join([str(x) for x in emb.tolist()]) + "]"
-            cursor.execute("INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+            cursor.execute("INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                           ("PROTEIN:DELETE_WITH_EMB", emb_str))
             iris_connection.commit()
         except Exception as e:
@@ -479,7 +482,7 @@ class TestDeleteProteinMutation:
         assert result.data["deleteProtein"] is True
 
         # Verify embedding deleted (FK cascade)
-        cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings WHERE id = ?",
+        cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?",
                       ("PROTEIN:DELETE_WITH_EMB",))
         assert cursor.fetchone()[0] == 0
 
@@ -532,7 +535,7 @@ def mutation_test_cleanup(iris_connection):
 
     for node_id in test_nodes:
         try:
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", (node_id,))
+            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", (node_id,))
             cursor.execute("DELETE FROM rdf_props WHERE s = ?", (node_id,))
             cursor.execute("DELETE FROM rdf_labels WHERE s = ?", (node_id,))
             cursor.execute("DELETE FROM nodes WHERE node_id = ?", (node_id,))

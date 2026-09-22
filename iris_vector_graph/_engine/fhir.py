@@ -247,7 +247,22 @@ class FhirMixin:
         batch_size: int = 1000,
         force: bool = False,
         progress_callback=None,
+        *,
+        graph: Optional[str] = None,
+        model_key: Optional[str] = None,
     ) -> dict:
+        """Embed a mapped SQL table's rows as nodes in one graph (spec 227).
+
+        Writes go through `store_embedding`, which routes the pair, enforces spec 226
+        identity and binds the graph. The three statements this replaced all keyed on
+        `id`: the "already embedded?" check matched nothing (so `force=False` skipped
+        nothing and every run re-embedded the table), and the INSERT was refused with
+        SQLCODE -108 inside a `logger.warning` (T071).
+
+        A graph ID is collision avoidance, not an authorisation boundary: it is
+        supplied by the caller, so it cannot decide what that caller may read
+        (FR-032).
+        """
         mapping = self.get_table_mapping(label)
         if not mapping:
             raise self.TableNotMappedError(
@@ -267,11 +282,7 @@ class FhirMixin:
                 row_id = row[0]
                 node_id = f"{label}:{row_id}"
                 if not force:
-                    cur.execute(
-                        "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id=?",
-                        [node_id],
-                    )
-                    if int(cur.fetchone()[0]) > 0:
+                    if self.get_embedding(node_id, graph=graph, model_key=model_key):
                         skipped += 1
                         continue
                 text = " ".join(
@@ -281,13 +292,8 @@ class FhirMixin:
                 )
                 try:
                     emb = self.embed_text(text)
-                    emb_str = ",".join(str(x) for x in emb)
-                    cur.execute(
-                        "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [node_id]
-                    )
-                    cur.execute(
-                        f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}))",
-                        [node_id],
+                    self.store_embedding(
+                        node_id, emb, graph=graph, model_key=model_key
                     )
                     embedded += 1
                 except Exception as ex:

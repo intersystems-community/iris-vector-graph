@@ -142,7 +142,347 @@ def _table(name: str, prefix: Optional[str] = None) -> str:
     return name
 
 
+# Tables whose rows belong to exactly one graph. Spec 227 re-keyed `nodes` to
+# UNIQUE (graph_id, node_id) and gave `rdf_labels` / `rdf_props` their own
+# `graph_id`, so a row is no longer identified by `node_id` / `s` alone and an
+# unscoped join returns the union of every graph that happens to share the ID.
+_GRAPH_SCOPED_TABLES = ("nodes", "rdf_labels", "rdf_props", "rdf_edges")
+
+
+def _child_graph_sql(context) -> tuple:
+    """How a child row (`rdf_labels`, `rdf_props`) names the statement's graph.
+
+    Returns `(column, value, guard)` as SQL text, with the graph inlined as an
+    escaped literal rather than bound as a parameter. Every one of these
+    statements is assembled by concatenation with its parameter list built
+    separately, and the graph is the same value for every row in the statement,
+    so a literal keeps the change in the SQL and out of the parameter order —
+    where an off-by-one is silent and lands the graph in the wrong column.
+    """
+    graph = getattr(context, "graph_context", None)
+    if not graph:
+        # `graph_id` is NOT NULL DEFAULT '' (spec 227 T016), so leaving the
+        # column unnamed *is* the default graph. The guard still needs
+        # qualifying: unqualified it finds another graph's row, reports "already
+        # there", and the default graph never gets its label. COALESCE because a
+        # row predating the backfill spells "no graph" as NULL (ADR-0003).
+        return "", "", " AND COALESCE(graph_id, '') = ''"
+    safe = graph.replace("'", "''")
+    return ", graph_id", f", '{safe}'", f" AND graph_id = '{safe}'"
+
+
+def _graph_of(context) -> str:
+    """The statement's graph, as a value to bind into a writer's parameter list.
+
+    `''` for the default graph rather than `None`: the column is `NOT NULL
+    DEFAULT ''` since spec 227, so a bound NULL is rejected outright and an
+    omitted column is the other spelling of the default graph that spec 230
+    FR-003 exists to stop. Every `rdf_edges` writer names `graph_id` and passes
+    this, so there is one spelling and one branch instead of two of each.
+    """
+    return getattr(context, "graph_context", None) or ""
+
+
+def _graph_scope_fragment(fragment: str, safe_graph: str) -> str:
+    """Scope the graph-owned tables read inside a single SQL fragment.
+
+    Handles the sub-SELECT shapes the translator emits into SELECT items and
+    WHERE conditions — `FROM rdf_labels WHERE ...` for `labels(n)` and
+    `properties(n)`, and `FROM rdf_props _sgn0 WHERE ...` for a property
+    existence guard. A fragment already naming the graph is left alone so the
+    pass is idempotent.
+    """
+    import re as _re_gs
+
+    for name in _GRAPH_SCOPED_TABLES:
+        tbl = _table(name)
+        # Unaliased first: `FROM rdf_labels WHERE` would otherwise let the
+        # aliased pattern read "WHERE" as the alias.
+        fragment = _re_gs.sub(
+            rf"FROM\s+{_re_gs.escape(tbl)}\s+WHERE\s+(?!COALESCE\(graph_id)",
+            f"FROM {tbl} WHERE COALESCE(graph_id, '') = COALESCE('{safe_graph}', '') AND ",
+            fragment,
+        )
+
+        def _aliased(m):
+            alias = m.group(1)
+            if f"{alias}.graph_id" in fragment:
+                return m.group(0)
+            return (
+                f"FROM {tbl} {alias} WHERE COALESCE({alias}.graph_id, '') = "
+                f"COALESCE('{safe_graph}', '') AND "
+            )
+
+        fragment = _re_gs.sub(
+            rf"FROM\s+{_re_gs.escape(tbl)}\s+(?!WHERE\b)(\w+)\s+WHERE\s+",
+            _aliased,
+            fragment,
+        )
+    return fragment
+
+
+def _defined_stage_names(context) -> set:
+    """Names of the CTEs this statement defines, plus its result stage.
+
+    A `USE GRAPH` predicate belongs on a graph-owned *table*. These are derived
+    relations — a procedure's fused result, a `WITH` pipeline's stage — and they
+    project only the columns their body selects, so a predicate on one is a
+    Prepare-time error rather than a narrower answer.
+    """
+    import re as _re_dsn
+
+    names = set()
+    for stage in getattr(context, "stages", None) or ():
+        match = _re_dsn.match(r"\s*([\w.]+)\s+AS\s*\(", str(stage), _re_dsn.IGNORECASE)
+        if match:
+            names.add(match.group(1))
+    result_stage = getattr(context, "result_stage", None)
+    if result_stage:
+        names.add(result_stage)
+    return names
+
+
+def _apply_graph_scope_to_reads(context, safe_graph: str) -> None:
+    """Put the statement's graph on every graph-owned table the read touches.
+
+    `USE GRAPH` reached the `nodes` and `rdf_edges` inserts and a *named*
+    relationship variable's alias, and nothing else: the anchor `nodes` table,
+    the `rdf_labels` and `rdf_props` joins, and the `labels()` / `properties()`
+    subqueries all carried no predicate. While `node_id` was unique
+    namespace-wide that could not produce a wrong answer, because a child row
+    keyed on `s` alone belonged to exactly one node. After the spec 227 re-key it
+    can, and does.
+
+    For a join the predicate goes in the `ON` clause, not in `WHERE`: in `WHERE`
+    it is false for the null row a LEFT JOIN exists to produce, which turns
+    `OPTIONAL MATCH` into an inner join and shows up as missing data rather than
+    as a wrong predicate.
+
+    Not covered, deliberately: a Stage/CTE pipeline (`WITH`, or `UNWIND` then
+    `MATCH`) does not project `graph_id` through its CTE columns, so there is
+    nothing here to compare against. Recorded in reader-inventory.md §10.
+    """
+    import re as _re_gsr
+
+    def _pred(prefix: str) -> str:
+        return f"COALESCE({prefix}graph_id, '') = COALESCE('{safe_graph}', '')"
+
+    tables = [_table(name) for name in _GRAPH_SCOPED_TABLES]
+
+    for i, clause in enumerate(context.join_clauses):
+        for tbl in tables:
+            m = _re_gsr.search(rf"JOIN\s+{_re_gsr.escape(tbl)}\s+(\w+)\s+ON\b", clause)
+            if m and f"{m.group(1)}.graph_id" not in clause:
+                clause = clause + f" AND {_pred(m.group(1) + '.')}"
+        context.join_clauses[i] = _graph_scope_fragment(clause, safe_graph)
+
+    for clause in context.from_clauses:
+        for tbl in tables:
+            m = _re_gsr.fullmatch(rf"{_re_gsr.escape(tbl)}\s+(\w+)", clause.strip())
+            if m:
+                cond = _pred(m.group(1) + ".")
+                if cond not in context.where_conditions:
+                    context.where_conditions.append(cond)
+
+    context.select_items = [_graph_scope_fragment(s, safe_graph) for s in context.select_items]
+    context.where_conditions = [
+        _graph_scope_fragment(c, safe_graph) for c in context.where_conditions
+    ]
+
+
+# Tables a DML statement can target whose rows belong to exactly one graph. The two
+# embedding tables are the default route under 4.0.0 and are keyed the same way a
+# generated route is, so they scope the same way (contracts/sql-schema.md §2).
+_GRAPH_SCOPED_DML_TABLES = _GRAPH_SCOPED_TABLES + (
+    "kg_NodeEmbeddings",
+    "kg_NodeEmbeddings_optimized",
+)
+
+
+def _dml_target(sql: str) -> tuple:
+    """`(table, verb)` for the table a DML statement writes to, else `("", "")`.
+
+    Only the verb's own table counts. A subquery's `FROM nodes` is a read and is
+    scoped by the read pass; scoping it again as if it were the target would put
+    the predicate on the wrong table. The verb does not always start the
+    statement — a Stage pipeline puts a `WITH` CTE in front of it — so the match
+    is per line.
+    """
+    for line in sql.split("\n"):
+        stripped = line.lstrip()
+        for verb in ("DELETE FROM ", "UPDATE ", "INSERT INTO "):
+            if not stripped.startswith(verb):
+                continue
+            rest = stripped[len(verb) :].lstrip()
+            name = rest.split()[0].split("(")[0] if rest.split() else ""
+            for table in _GRAPH_SCOPED_DML_TABLES:
+                if name == _table(table):
+                    return table, verb
+    return "", ""
+
+
+def _top_level_where(sql: str) -> int:
+    """Index of the statement's own `WHERE`, or -1. Depth-aware: the first
+    `WHERE` in the text usually belongs to a subquery, not to the statement."""
+    depth = 0
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and sql.startswith("WHERE ", i) and (i == 0 or sql[i - 1].isspace()):
+            return i
+        i += 1
+    return -1
+
+
+def _has_top_level_or(condition: str) -> bool:
+    depth = 0
+    i = 0
+    upper = condition.upper()
+    while i < len(condition):
+        ch = condition[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and upper.startswith(" OR ", i):
+            return True
+        i += 1
+    return False
+
+
+def _scope_not_exists_guard(sql: str, tbl: str, safe_graph: str) -> str:
+    """Add the graph to an idempotency guard on `tbl` that does not already name one.
+
+    Whole-guard, not just the text right after `WHERE`: `_create_node_literal`
+    scopes its own guards at the call site, and a second predicate bolted on in
+    front of them is true but reads as if nobody checked.
+    """
+    needle = f"NOT EXISTS (SELECT 1 FROM {tbl} WHERE "
+    out = sql
+    search_from = 0
+    while True:
+        start = out.find(needle, search_from)
+        if start == -1:
+            return out
+        # Walk to the guard's own closing paren so the check sees the whole guard
+        # and not whatever follows it.
+        depth = 0
+        end = start
+        for i in range(start + len("NOT EXISTS "), len(out)):
+            if out[i] == "(":
+                depth += 1
+            elif out[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        body = out[start:end]
+        if "graph_id" in body:
+            search_from = start + len(needle)
+            continue
+        insert_at = start + len(needle)
+        out = out[:insert_at] + f"graph_id = '{safe_graph}' AND " + out[insert_at:]
+        search_from = insert_at
+
+
+def _scope_dml_statement(sql: str, safe_graph: str) -> str:
+    """Confine one DML statement to `safe_graph` (spec 227, FR-034 / FR-009).
+
+    `USE GRAPH` used to reach only the `nodes` and `rdf_edges` inserts, which
+    meant `USE GRAPH 'A' MATCH (n {node_id: 'x'}) DETACH DELETE n` deleted the
+    node row, the labels, the properties, the vector and the edges of *every*
+    graph holding node `x`. Correct while `node_id` was namespace-unique, and a
+    cross-graph delete after the re-key.
+
+    Three shapes, three treatments:
+
+    - `DELETE` / `UPDATE`: the predicate is appended to the statement's own
+      `WHERE`, parenthesising it first when it has a top-level `OR` — a bare
+      `AND` binds tighter, so `s IN (…) OR o_id IN (…) AND graph_id = 'A'` would
+      leave the first half unscoped.
+    - `INSERT`: the row has to *carry* the graph, so `graph_id` joins the column
+      list and the literal joins the projection. Appending a predicate instead
+      would scope the guard and still write the default graph.
+    - The `NOT EXISTS` guard inside an `INSERT` is scoped separately. Unscoped it
+      reports "already there" for another graph's row and the insert is skipped
+      with nothing written and no error.
+
+    A statement already naming `graph_id` is left alone: `_create_node_literal`
+    and the edge inserts scope themselves at the call site, where they also know
+    the parameter order.
+    """
+    table, verb = _dml_target(sql)
+    if not table:
+        return sql
+    is_insert = verb == "INSERT INTO "
+
+    # The guard is scoped even when the row itself already names the graph, so
+    # run it before the early return below.
+    for name in _GRAPH_SCOPED_DML_TABLES:
+        sql = _scope_not_exists_guard(sql, _table(name), safe_graph)
+
+    # An unaliased `FROM nodes WHERE` is the row source of an INSERT...SELECT
+    # (`SET n.side` on a node with no such property yet). Unscoped it reads every
+    # graph's row for the ID and inserts one property row per graph — the same
+    # (graph_id, s, key) twice, which is a primary key violation, so the SET fails
+    # rather than leaking. The lookbehind leaves the `NOT EXISTS` guards to the
+    # pass above; without it they would be scoped twice.
+    import re as _re_dml
+
+    nodes_tbl = _table("nodes")
+    sql = _re_dml.sub(
+        rf"(?<!NOT EXISTS \(SELECT 1 )FROM {_re_dml.escape(nodes_tbl)} WHERE (?!graph_id)",
+        f"FROM {nodes_tbl} WHERE graph_id = '{safe_graph}' AND ",
+        sql,
+    )
+
+    if is_insert:
+        open_paren = sql.find("(", sql.find("INSERT INTO "))
+        select_at = sql.find(" SELECT ", open_paren if open_paren != -1 else 0)
+        if open_paren == -1 or select_at == -1:
+            return sql
+        close_paren = sql.find(")", open_paren)
+        if close_paren == -1 or close_paren > select_at:
+            return sql
+        if "graph_id" in sql[open_paren:close_paren]:
+            return sql
+        # Both additions go first, in their own list: the column and its value have
+        # to occupy the same position, and prepending is the one edit that needs no
+        # count of what is already there.
+        return (
+            sql[: open_paren + 1]
+            + "graph_id, "
+            + sql[open_paren + 1 : select_at + len(" SELECT ")]
+            + f"'{safe_graph}', "
+            + sql[select_at + len(" SELECT ") :]
+        )
+
+    where_at = _top_level_where(sql)
+    if where_at == -1:
+        return sql + f" WHERE graph_id = '{safe_graph}'"
+    condition = sql[where_at + len("WHERE ") :]
+    if "graph_id" in condition.split("(")[0]:
+        return sql
+    if _has_top_level_or(condition):
+        condition = f"({condition})"
+    return sql[:where_at] + f"WHERE {condition} AND graph_id = '{safe_graph}'"
+
+
 _JSONPATH_RESERVED = frozenset({"null", "true", "false"})
+
+
+def _sql_literal(value: str) -> str:
+    """The body of a single-quoted SQL literal, with quotes doubled.
+
+    For fragments that cannot spend a parameter on a value — anything a caller may
+    render into the statement more than once, where one `?` becomes two markers and
+    stays one parameter. The same escaping `_structural_guard_sql` uses for a key.
+    """
+    return str(value).replace("'", "''")
 
 
 def _jsonpath_key(prop: str) -> str:
@@ -209,6 +549,11 @@ class SQLQuery(BaseModel):
     # Parallel list to the result columns: each entry is "scalar", "node", or "relationship".
     # Consumed by the Bolt server to emit correct PackStream struct tags (TAG_NODE / TAG_RELATIONSHIP).
     bolt_column_types: List[str] = Field(default_factory=list)
+    # The `USE GRAPH <name>` prefix, carried on the query object rather than only
+    # inside the generated predicates. A variable-length path never runs this SQL —
+    # _route_var_length intercepts it and calls BFS instead — so the engine needs the
+    # graph somewhere it can still read it (spec 227).
+    graph_context: Optional[str] = None
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -525,6 +870,17 @@ class TranslationContext:
         return sql, params
 
     def add_dml(self, sql: str, params: List[Any]):
+        # One place, so a DML statement added later cannot forget the graph (spec
+        # 227). Scoping happens here rather than at ~20 call sites because those
+        # sites also build the parameter list, and the graph is inlined as an
+        # escaped literal precisely to stay out of it.
+        #
+        # `is not None`, not truth: the default graph's name is `''` (ADR-0003), so
+        # testing for truth sent the one graph whose name is falsy down the same
+        # path as a query that named no graph — `USE GRAPH ''` scoped nothing
+        # (spec 230, FR-001).
+        if self.graph_context is not None:
+            sql = _scope_dml_statement(sql, self.graph_context.replace("'", "''"))
         self.dml_statements.append((sql, params))
 
     def build_dml_subquery(self, select_override: str) -> tuple[str, str, List[Any]]:
@@ -536,6 +892,14 @@ class TranslationContext:
         For DELETE WHERE IN, use: f"{cte_prefix}DELETE FROM t WHERE c IN ({select_sql})"
         When no stages exist, cte_prefix is empty string.
         """
+        # The subquery decides *which node IDs* the DML touches, so it needs the
+        # graph as much as the outer statement does (spec 227): resolved across
+        # graphs, `MATCH (n:Patient)` returns a node only another graph calls a
+        # Patient, and the outer statement then correctly scopes a delete of the
+        # wrong row. The read pass is idempotent, so running it here as well as in
+        # the finalize block is safe.
+        if self.graph_context is not None:
+            _apply_graph_scope_to_reads(self, self.graph_context.replace("'", "''"))
         sql, params = self.build_stage_sql(select_override=select_override)
         all_ctes = [
             c
@@ -990,7 +1354,14 @@ def _vs_resolve_limit(limit_arg, context):
     return limit_int
 
 
-def _vs_build_similarity(query_input, vector_fn, label, options, emb_table):
+def _vs_build_similarity(query_input, vector_fn, label, options, emb_table, graph_scope=""):
+    """The similarity expression, its ordered params, and whether to exclude the seed.
+
+    `graph_scope` is an already-quoted `AND COALESCE(...)` fragment rather than a
+    graph ID because this builder contributes no `?` of its own for the graph: the
+    params list below is positional, and threading one more placeholder through it
+    would reorder the caller's binds.
+    """
     if isinstance(query_input, list):
         vec_json = json.dumps(query_input)
         return f"{vector_fn}(e.emb, TO_VECTOR(?, DOUBLE))", [vec_json, label], False
@@ -1002,8 +1373,11 @@ def _vs_build_similarity(query_input, vector_fn, label, options, emb_table):
                 [query_input, embedding_config, label],
                 False,
             )
+        # The seed vector is read by node ID. `e2.id` was the table's RowID, so this
+        # subquery returned NULL and every row scored NULL (spec 227 re-key, T071).
         return (
-            f"{vector_fn}(e.emb, (SELECT e2.emb FROM {emb_table} e2 WHERE e2.id = ?))",
+            f"{vector_fn}(e.emb, (SELECT e2.emb FROM {emb_table} e2"
+            f" WHERE e2.node_id = ?{graph_scope}))",
             [query_input, label],
             True,
         )
@@ -1048,18 +1422,43 @@ def _translate_vector_search(proc: ast.CypherProcedureCall, context: Translation
     emb_table = _table("kg_NodeEmbeddings")
     labels_tbl = _table("rdf_labels")
 
+    # Inline, not a `?`: this CTE is inserted at stage 0 while its params are appended
+    # to a positional list, so an extra placeholder would shift every later bind.
+    # `is not None`: the default graph is spelled `''` (ADR-0003), so `if _gc` left
+    # `USE GRAPH ''` unscoped — the one graph whose name is falsy read every graph's
+    # vectors (spec 230, FR-001).
+    _gc = getattr(context, "graph_context", None)
+    _safe_graph = _gc.replace("'", "''") if _gc is not None else None
+
+    def _scope(prefix: str) -> str:
+        if _safe_graph is None:
+            return ""
+        return f" AND COALESCE({prefix}graph_id, '') = COALESCE('{_safe_graph}', '')"
+
     similarity_expr, ordered_params, exclude_self = _vs_build_similarity(
-        query_input, vector_fn, label, options, emb_table
+        query_input, vector_fn, label, options, emb_table, _scope("e2.")
     )
 
+    # `e.id` was the embedding table's RowID, so `node` came back as an integer that
+    # matched no node and the label JOIN matched nothing at all — the search returned
+    # an empty result on any 4.0.0 install (spec 227 re-key, T071).
+    # `CAST(... AS DOUBLE)`, and the cast is load-bearing: IRIS 2026.3 cannot generate
+    # code for a CTE that combines `TOP` with `ORDER BY` over an *uncast* vector-function
+    # alias, and answers the whole statement with `SQLCODE -400 ... <UNDEFINED>%C0o+NN^
+    # %sqlcq...` at `<ServerLoop - Query Open()>`. Casting the score is the one-line fix
+    # that keeps `TOP n` inside the CTE, so the limit still applies before anything
+    # downstream joins to `VecSearch`. See tests/unit/test_227_cte_vector_order_by.py.
     cte_sql = (
-        f"SELECT TOP {limit_int} e.id AS node, {similarity_expr} AS score\n"
+        f"SELECT TOP {limit_int} e.node_id AS node, CAST({similarity_expr} AS DOUBLE) AS score\n"
         f"FROM {emb_table} e\n"
-        f"JOIN {labels_tbl} lbl ON lbl.s = e.id AND lbl.label = ?\n"
+        f"JOIN {labels_tbl} lbl ON lbl.s = e.node_id AND lbl.label = ?"
+        f"{_scope('lbl.')}\n"
     )
     if exclude_self:
-        cte_sql += f"WHERE e.id != ?\n"
+        cte_sql += f"WHERE e.node_id != ?{_scope('e.')}\n"
         ordered_params.append(query_input)
+    elif _safe_graph is not None:
+        cte_sql += f"WHERE 1=1{_scope('e.')}\n"
     cte_sql += f"ORDER BY score DESC"
 
     context.all_stage_params.extend(ordered_params)
@@ -1153,17 +1552,20 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     seed_json = json.dumps(seeds)
     ppr_fn = f"{_schema_prefix}.kg_PPR" if _schema_prefix else "kg_PPR"
 
+    # Inline, for the reason given in `_translate_bm25_search`: a `?` inside
+    # `JSON_TABLE`'s source argument is not a parameter marker to IRIS, so the driver
+    # rejected every `ivg.ppr` call before running it. The seed list is JSON built from
+    # node IDs, so it goes through `_sql_arg` too rather than being pasted in raw.
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {ppr_fn}(?, ?, ?, 0, 1.0),\n"
+        f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
         f"  )\n"
         f") j"
     )
-    context.all_stage_params.extend([seed_json, alpha, max_iter])
     context.stages.insert(0, f"PPR AS (\n{cte_sql}\n)")
 
     for item in proc.yield_items:
@@ -1189,13 +1591,14 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
         raise ValueError(f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}")
 
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "kg_BM25"
-    # Bind idx_name and query as parameters (? placeholders) rather than
-    # interpolating them inline.  k_int is an integer cast — safe as inline literal.
-    context.all_stage_params.extend([str(idx_name), str(query)])
+    # Inline as escaped literals, not `?`: IRIS does not recognise a parameter marker
+    # inside `JSON_TABLE`'s source argument, so binding these made the driver reject
+    # the whole statement with "Incorrect number of parameters" before it ran. Same
+    # reason and same treatment as `ivg.ivf.search`. `_sql_arg` doubles quotes.
     cte_sql = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {bm25_fn}(?, ?, {k_int}),\n"
+        f"  {bm25_fn}({_sql_arg(str(idx_name))}, {_sql_arg(str(query))}, {k_int}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -1208,6 +1611,48 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
         context.variable_aliases[item] = "BM25"
     if "score" in proc.yield_items:
         context.scalar_variables.add("score")
+
+
+def _retrieve_query_vector(query: str, embedding_config: str, context: TranslationContext):
+    """The vector arm's query-vector expression and the params it binds, in order.
+
+    `ivg.retrieve` used to hardcode IRIS's native `EMBEDDING(?, ?)` with the config
+    name taken from the call's 6th argument, which defaults to blank — so the ordinary
+    two-argument call asked the server to embed with a config named `' '`, and IRIS
+    refused the whole statement at Query Open:
+
+        SQLCODE -280 <Embedding configuration error> %Embedding.Config ' ' does not exist.
+
+    A namespace without an `%Embedding.Config` cannot answer that call at all, and on
+    the enterprise test build it cannot be given one (`sentence_transformers` is not
+    importable inside the instance). But the engine already knows how to embed text,
+    and documents the order it tries — `IRISGraphEngine.embed_text`. Deferring to it
+    keeps that decision in one place instead of two.
+
+    Resolution order:
+
+    1. a config named by the caller, or failing that by the engine → native
+       `EMBEDDING(?, ?)`, binding the text and the config name
+    2. an engine with no config → `engine.embed_text(query)` and a single
+       `TO_VECTOR(?, DOUBLE)` bind, the same shape `ivg.vector.search` emits for a
+       list argument
+    3. no engine → the native call, unchanged. `translate_to_sql()` without an engine
+       produces text and nothing executes it, so there is nothing to ask and no reason
+       to guess.
+    """
+    engine = getattr(context, "_engine", None)
+    config = (embedding_config or "").strip()
+    if not config:
+        config = str(getattr(engine, "embedding_config", "") or "").strip()
+
+    if config:
+        return "EMBEDDING(?, ?)", [query, config]
+
+    if engine is not None:
+        vector = [float(x) for x in engine.embed_text(query)]
+        return "TO_VECTOR(?, DOUBLE)", [json.dumps(vector)]
+
+    return "EMBEDDING(?, ?)", [query, ""]
 
 
 def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
@@ -1234,15 +1679,18 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
     )
     bm25_fn = f"{_schema_prefix}.kg_BM25" if _schema_prefix else "Graph_KG.kg_BM25"
 
-    # Bind all string user inputs as ? parameters; integer args stay inline (safe).
-    # Order: bm25_name, query (for BM25 CTE), then query again (for Vec EMBEDDING()),
-    # then embedding_config, then vec_label filter (if not wildcard).
-    context.all_stage_params.extend([str(bm25_name), str(query)])
-
+    # The two arms bind differently, and the difference is not a style choice. The BM25
+    # arm's arguments sit inside `JSON_TABLE`, where IRIS does not recognise a `?` as a
+    # parameter marker — binding them made the driver refuse the statement with
+    # "Incorrect number of parameters", so they are inlined through `_sql_arg` (same as
+    # `ivg.bm25.search` and `ivg.ivf.search`). The vector arm is a plain CTE expression
+    # and keeps its binds.
+    # Param order: the vector arm's binds (see `_retrieve_query_vector`), then the
+    # vec_label filter if it is not a wildcard. Integer args stay inline throughout.
     bm25_cte = (
         f"SELECT j.node_id AS node, j.score\n"
         f"FROM JSON_TABLE(\n"
-        f"  {bm25_fn}(?, ?, {bm25_limit}),\n"
+        f"  {bm25_fn}({_sql_arg(str(bm25_name))}, {_sql_arg(str(query))}, {bm25_limit}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -1250,23 +1698,51 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
         f") j"
     )
 
-    context.all_stage_params.append(str(query))  # for EMBEDDING(?, ...)
-    context.all_stage_params.append(str(embedding_config))
+    query_vector_sql, vector_params = _retrieve_query_vector(str(query), embedding_config, context)
+    context.all_stage_params.extend(vector_params)
 
+    # Inline, for the reason given in `_translate_vector_search`: the params of this
+    # CTE are appended positionally, so a graph placeholder would shift later binds.
+    # `is not None`: the default graph is spelled `''` (ADR-0003), so `if _gc` left
+    # `USE GRAPH ''` unscoped — the one graph whose name is falsy read every graph's
+    # vectors (spec 230, FR-001).
+    _gc = getattr(context, "graph_context", None)
+    _safe_graph = _gc.replace("'", "''") if _gc is not None else None
+
+    def _scope(prefix: str) -> str:
+        if _safe_graph is None:
+            return ""
+        return f" AND COALESCE({prefix}graph_id, '') = COALESCE('{_safe_graph}', '')"
+
+    # The label filter named `n.label` with no `n` in the FROM clause, so any
+    # non-wildcard label raised an SQL error rather than filtering. The join it
+    # needed is written out here.
+    labels_tbl = _table("rdf_labels")
     if vec_label == "*":
-        vec_where = ""
+        vec_from = f"{emb_table} e"
+        vec_where = f" WHERE 1=1{_scope('e.')}" if _safe_graph is not None else ""
     else:
-        vec_where = " WHERE n.label = ?"
+        vec_from = f"{emb_table} e" f" JOIN {labels_tbl} n ON n.s = e.node_id{_scope('n.')}"
+        vec_where = f" WHERE n.label = ?{_scope('e.')}"
         context.all_stage_params.append(str(vec_label))
 
+    # `e.id` was the RowID, so `node` never joined to anything downstream (T071).
+    # The cast is the same fix as `VecSearch`'s (see `_translate_vector_search`): this
+    # CTE has the `TOP` + `ORDER BY <vector alias>` shape that IRIS 2026.3 refuses to
+    # generate code for, and one unusable arm fails the whole hybrid statement.
     vec_cte = (
-        f"SELECT TOP {vec_limit} e.id AS node, VECTOR_COSINE(e.emb, EMBEDDING(?, ?)) AS score\n"
-        f"FROM {emb_table} e{vec_where}\n"
+        f"SELECT TOP {vec_limit} e.node_id AS node,"
+        f" CAST(VECTOR_COSINE(e.emb, {query_vector_sql}) AS DOUBLE) AS score\n"
+        f"FROM {vec_from}{vec_where}\n"
         f"ORDER BY score DESC"
     )
 
+    # `TOP {limit}`, not `ORDER BY ... FETCH FIRST {limit} ROWS ONLY`: IRIS accepts an
+    # `ORDER BY` inside a CTE or derived table only when `TOP` accompanies it, and
+    # rejected this one at Prepare with `SQLCODE -1  ) expected, IDENTIFIER (ORDER)
+    # found`. Same limit, same place — this is the fusion's own k, not outer paging.
     rrf_cte = (
-        f"SELECT node, SUM(rrf_score) AS rrf_score\n"
+        f"SELECT TOP {limit} node, SUM(rrf_score) AS rrf_score\n"
         f"FROM (\n"
         f"  SELECT node, 1.0 / ({rrf_k} + ROW_NUMBER() OVER (ORDER BY score DESC)) AS rrf_score\n"
         f"  FROM BM25_Retrieve\n"
@@ -1275,18 +1751,28 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
         f"  FROM Vec_Retrieve\n"
         f") ranked\n"
         f"GROUP BY node\n"
-        f"ORDER BY rrf_score DESC\n"
-        f"FETCH FIRST {limit} ROWS ONLY"
+        f"ORDER BY rrf_score DESC"
     )
 
     context.stages.insert(0, f"Retrieve AS (\n{rrf_cte}\n)")
     context.stages.insert(0, f"Vec_Retrieve AS (\n{vec_cte}\n)")
     context.stages.insert(0, f"BM25_Retrieve AS (\n{bm25_cte}\n)")
 
+    # The outer `FROM` is taken from `stages[0]`, which the three inserts above leave as
+    # `BM25_Retrieve` — so the statement selected the fusion's columns out of one arm and
+    # IRIS rejected it at Prepare with `SQLCODE -29 Field 'RRF_SCORE' not found`. The CTE
+    # order has to stay as it is (the fusion's body reads the other two), so name the
+    # result stage instead of inferring it from position.
+    context.result_stage = "Retrieve"
+
     for item in proc.yield_items:
         context.variable_aliases[item] = "Retrieve"
-    if "score" in proc.yield_items:
-        context.scalar_variables.add("score")
+    # `rrf_score`, not `score`: this procedure yields the fused score under its own
+    # name, and an unmarked yield item is projected as a *node* — `rrf_score AS
+    # rrf_score_id` plus label and property subqueries keyed on a float.
+    for item in ("score", "rrf_score"):
+        if item in proc.yield_items:
+            context.scalar_variables.add(item)
 
 
 def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
@@ -1647,6 +2133,10 @@ def _to_sql_init_part_from(
         if context.temporal_derived:
             for td_name in context.temporal_derived:
                 context.from_clauses.append(td_name)
+        elif getattr(context, "result_stage", None):
+            # A procedure that builds several CTEs says which one holds its result;
+            # `stages[0]` is only the right guess for the single-CTE procedures.
+            context.from_clauses.append(context.result_stage)
         elif context.stages:
             cte_name = context.stages[0].split(" AS ")[0].strip()
             context.from_clauses.append(cte_name)
@@ -2045,7 +2535,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     context.variable_aliases = new_aliases
 
 
-def _tts_union_branches(cypher_query, params):
+def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
     """Handle UNION/UNION ALL. Returns SQLQuery or None."""
     if not getattr(cypher_query, "union_queries", None):
         return None
@@ -2097,7 +2587,11 @@ def _tts_union_branches(cypher_query, params):
             procedure_call=branch.procedure_call,
         )
         branch_copy.union_queries = []
-        r = translate_to_sql(branch_copy, params)
+        # `engine=` is load-bearing, not cosmetic: it is what turns a branch's `LIMIT`
+        # into `TOP n` on the IRIS builds where `FETCH FIRST` over a multi-table JOIN
+        # SIGSEGVs in %qaqpre. Dropping it here re-armed that crash for every UNION
+        # whose branch joined tables under a LIMIT, however the caller was holding it.
+        r = translate_to_sql(branch_copy, params, engine=engine, procedures=procedures)
         sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
         all_params.extend(r.parameters)
     sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
@@ -2132,7 +2626,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                     if td_name not in context.from_clauses:
                         context.from_clauses.append(td_name)
             else:
-                cte_name = (
+                cte_name = getattr(context, "result_stage", None) or (
                     context.stages[0].split(" AS ")[0].strip() if context.stages else "VecSearch"
                 )
                 context.from_clauses.append(cte_name)
@@ -2247,6 +2741,10 @@ def _tts_process_parts(cypher_query, context, metadata):
                 if isinstance(clause, ast.MatchClause):
                     aliases_before_match = set(context.variable_aliases.values())
                     _opt_join_start = len(context.join_clauses)
+                    # A CREATE later in this query part may only write what these rows
+                    # license: openCypher runs it once per incoming row, so a MATCH that
+                    # binds nothing must create nothing. See `_create_match_gate`.
+                    context.match_preceded_create = True
                     translate_match_clause(clause, context, metadata)
                     if clause.optional:
                         context.optional_match_new_aliases = (
@@ -2539,12 +3037,26 @@ def _tts_finalize_context(cypher_query, context):
 
     order_by_items = preprocess_order_by(cypher_query, context)
 
-    if cypher_query.graph_context:
+    # `is not None`: `USE GRAPH ''` is the default graph, and testing for truth made
+    # it the one spelling that scoped nothing at all (spec 230, FR-001).
+    if cypher_query.graph_context is not None:
         safe_graph = cypher_query.graph_context.replace("'", "''")
+        # Every graph-owned table this statement reads, not just the aliases the
+        # loops below happen to find: an anonymous relationship never reaches
+        # `variable_aliases`, so before this call `USE GRAPH` scoped nothing at
+        # all in `MATCH (a)-[:R]->(b)`.
+        _apply_graph_scope_to_reads(context, safe_graph)
+        # A CTE this statement defines is not a graph-owned table. `ivg.retrieve`
+        # fuses its arms into a `Retrieve` stage that projects a node ID and a score
+        # and no `graph_id` — the arms inside it are scoped already — so naming it
+        # out here made IRIS refuse the statement at Prepare with SQLCODE -29 Field
+        # 'RETRIEVE.GRAPH_ID' not found, which the driver's error path turns into
+        # zero rows: a scoped retrieval that reads as an empty graph.
+        stage_names = _defined_stage_names(context)
         edge_aliases = [
             v
             for v in context.variable_aliases.values()
-            if v and v.startswith("e") and not v.startswith("ES_")
+            if v and v.startswith("e") and not v.startswith("ES_") and v not in stage_names
         ]
         for ea in edge_aliases:
             context.where_conditions.append(f"{ea}.graph_id = '{safe_graph}'")
@@ -2556,6 +3068,7 @@ def _tts_finalize_context(cypher_query, context):
                 and not ea.startswith("n")
                 and not ea.startswith("l")
                 and not ea.startswith("Stage")
+                and ea not in stage_names
             ):
                 context.where_conditions.append(f"{ea}.graph_id = {graph_filter}")
                 break
@@ -2915,22 +3428,32 @@ def translate_to_sql(
     engine=None,
     procedures: Optional[Dict[str, Any]] = None,
 ) -> SQLQuery:
-    result = _tts_union_branches(cypher_query, params)
+    # The graph is stamped on whichever SQLQuery we return, so a caller that never
+    # runs the SQL (the variable-length path) can still see it. Set once here rather
+    # than at each of the five SQLQuery construction sites, where it would be
+    # forgotten by the sixth (spec 227).
+    graph_context = getattr(cypher_query, "graph_context", None)
+
+    result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
+        result.graph_context = graph_context
         return result
 
     context = TranslationContext()
     context.input_params = params or {}
     context._engine = engine
     context._tck_procedures = procedures or {}  # TCK test procedures
-    context.graph_context = getattr(cypher_query, "graph_context", None)
+    context.graph_context = graph_context
     metadata = QueryMetadata()
     context._metadata = metadata
     is_transactional = _tts_process_parts(cypher_query, context, metadata)
     order_by_items = _tts_finalize_context(cypher_query, context)
     if is_transactional:
-        return _tts_transactional_result(cypher_query, context, metadata, order_by_items)
-    return _tts_select_result(cypher_query, context, metadata, order_by_items)
+        sql_query = _tts_transactional_result(cypher_query, context, metadata, order_by_items)
+    else:
+        sql_query = _tts_select_result(cypher_query, context, metadata, order_by_items)
+    sql_query.graph_context = graph_context
+    return sql_query
 
 
 def _collect_var_names(expr) -> set:
@@ -3557,23 +4080,48 @@ def _create_resolve_prop_value(v, context):
     return v
 
 
+def _create_match_gate(context):
+    """`(cte, from_clause, params, distinct)` correlating a CREATE with a preceding MATCH.
+
+    openCypher runs a CREATE once per incoming row, so `MATCH (a {id:'missing'})
+    CREATE (a)-[:R]->(b {id:'new'})` must create nothing. The edge insert always
+    selected from the matched rows and so wrote nothing, but the inline nodes were
+    emitted as unconditional `SELECT <literal> WHERE NOT EXISTS (...)` statements and
+    landed anyway — a node, its label, and its properties with no edge and no error.
+
+    Selecting `FROM (<the matched rows>)` puts those writes under the same condition.
+    `DISTINCT` is what keeps one matched row from becoming two identical inserts; it
+    also means N matched rows still create one node rather than N, which is a separate
+    deviation this does not claim to fix.
+
+    Parameters bind in text order — projection first, then this derived table, then the
+    NOT EXISTS guard — measured against the enterprise container, not assumed.
+    """
+    if not getattr(context, "_correlate_create_dml", False):
+        return "", "", [], ""
+    cte, sub, params = context.build_dml_subquery(select_override="SELECT 1 AS _one")
+    return cte, f" FROM ({sub}) AS _cg", params, " DISTINCT"
+
+
 def _create_node_literal(node, node_id_expr, context):
     node_id = node_id_expr.value if isinstance(node_id_expr, ast.Literal) else node_id_expr
+    _cte, _from, _gate_params, _d = _create_match_gate(context)
     if getattr(context, "graph_context", None):
         _gc = context.graph_context.replace("'", "''")
         context.add_dml(
-            f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND graph_id = ?)",
-            [node_id, context.graph_context, node_id, context.graph_context],
+            f"{_cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT{_d} ?, ?{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND graph_id = ?)",
+            [node_id, context.graph_context] + _gate_params + [node_id, context.graph_context],
         )
     else:
         context.add_dml(
-            f"INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
-            [node_id, node_id],
+            f"{_cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT{_d} ?, ''{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+            [node_id] + _gate_params + [node_id],
         )
+    _gcol, _gval, _gguard = _child_graph_sql(context)
     for label in node.labels:
         context.add_dml(
-            f"INSERT INTO {_table('rdf_labels')} (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?)",
-            [node_id, label, node_id, label],
+            f"{_cte}INSERT INTO {_table('rdf_labels')} (s, label{_gcol}) SELECT{_d} ?, ?{_gval}{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?{_gguard})",
+            [node_id, label] + _gate_params + [node_id, label],
         )
     if node.variable and node.properties:
         if not hasattr(context, "_create_node_props"):
@@ -3595,16 +4143,16 @@ def _create_node_literal(node, node_id_expr, context):
             var_alias = context.variable_aliases[val.name]
             col_expr = f"{var_alias}.{val.name}"
             cte, sql, p = context.build_dml_subquery(
-                select_override=f"SELECT ?, ?, CAST({col_expr} AS VARCHAR)"
+                select_override=f"SELECT ?, ?, CAST({col_expr} AS VARCHAR){_gval}"
             )
             context.add_dml(
-                f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) {sql} WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
+                f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) {sql} WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?{_gguard})',
                 [node_id, k] + p + [node_id, k],
             )
         else:
             context.add_dml(
-                f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?)',
-                [node_id, k, val, node_id, k],
+                f'{_cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) SELECT{_d} ?, ?, ?{_gval}{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?{_gguard})',
+                [node_id, k, val] + _gate_params + [node_id, k],
             )
 
 
@@ -3732,6 +4280,59 @@ def _create_clause_resolve_node_id(id_expr, node, context):
     return None
 
 
+def _has_outer_where(sql: str) -> bool:
+    """Does ``sql``'s outermost statement carry a WHERE clause of its own?
+
+    A substring search cannot answer this: a CTE definition and a derived table both
+    put a WHERE inside parentheses, and a guard appended with `AND` on the strength of
+    one of those lands after the end of a finished statement (SQLCODE -25). So the scan
+    tracks parenthesis depth and only counts a WHERE it finds at depth zero, starting
+    from the `INSERT INTO` so a leading `WITH … AS (…)` is skipped outright.
+    """
+    upper = sql.upper()
+    start = upper.find("INSERT INTO")
+    if start < 0:
+        start = 0
+    depth = 0
+    i = start
+    while i < len(upper):
+        char = upper[i]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and char.isspace() and upper.startswith("WHERE", i + 1):
+            after = i + 6
+            if after >= len(upper) or not (upper[after].isalnum() or upper[after] == "_"):
+                return True
+        i += 1
+    return False
+
+
+def _merge_literal_node_id(node, context):
+    """The node ID a MERGE pattern states inline, as in `MERGE (a:P {id:'x'})-[:R]->…`.
+
+    The relationship-MERGE idempotency guard comes in two forms: one referencing the
+    SQL aliases of MATCH-bound variables, and one binding the UUIDs of nodes the same
+    query generates. A node written `{id: 'x'}` is neither, so the UUID form fell back
+    to the alias form and `n0.node_id` got spliced into an `INSERT ... SELECT ?, ?, ?`
+    that has no FROM — which IRIS rejects outright with `SQLCODE -23 ... Label 'N0' is
+    not listed among the applicable tables`. Resolving the literal gives that guard
+    values to bind instead.
+
+    Returns None when the pattern states no ID, rather than falling through to a query
+    parameter that happens to share the variable's name. A non-string `id` is a user
+    property and not an identifier, the same rule `_create_clause_relationship_entry`
+    applies.
+    """
+    id_expr = node.properties.get("id") or node.properties.get("node_id")
+    if id_expr is None:
+        return None
+    if isinstance(id_expr, ast.Literal) and not isinstance(id_expr.value, str):
+        return None
+    return _create_clause_resolve_node_id(id_expr, node, context)
+
+
 def _create_clause_relationship_entry(rel, i, pat, context):
     left_node, right_node = pat.nodes[i], pat.nodes[i + 1]
     # For INCOMING direction ((:A)<-[:R]-(:B)), the right node is the edge source.
@@ -3779,27 +4380,15 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                 # Store all values as strings — JSON_VALUE returns VARCHAR; ints stored
                 # as JSON numbers are returned as NULL by IRIS SQLUser.JSON_VALUE.
                 qualifiers_json = _json.dumps({k: str(v) for k, v in rel_props.items()})
-                if getattr(context, "graph_context", None):
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
-                        [s_id, rt, t_id, qualifiers_json, context.graph_context],
-                    )
-                else:
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers) VALUES (?, ?, ?, ?)",
-                        [s_id, rt, t_id, qualifiers_json],
-                    )
+                context.add_dml(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+                    [s_id, rt, t_id, qualifiers_json, _graph_of(context)],
+                )
             else:
-                if getattr(context, "graph_context", None):
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)",
-                        [s_id, rt, t_id, context.graph_context],
-                    )
-                else:
-                    context.add_dml(
-                        f"INSERT INTO {_table('rdf_edges')} (s, p, o_id) VALUES (?, ?, ?)",
-                        [s_id, rt, t_id],
-                    )
+                context.add_dml(
+                    f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)",
+                    [s_id, rt, t_id, _graph_of(context)],
+                )
     else:
         s_alias = (
             context.variable_aliases.get(source_node.variable) if source_node.variable else None
@@ -3832,27 +4421,32 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             )
         )
         for rt in rel.types:
-            cte, sql, p = context.build_dml_subquery(
-                select_override=f"SELECT {s_expr}, ?, {t_expr}"
+            # IRIS binds outer ? before inner subquery ? — pass graph_id first
+            cte2, sql2, p2 = context.build_dml_subquery(
+                select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3"
             )
-            if getattr(context, "graph_context", None):
-                # IRIS binds outer ? before inner subquery ? — pass graph_id first
-                cte2, sql2, p2 = context.build_dml_subquery(
-                    select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3"
-                )
-                context.add_dml(
-                    f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
-                    f"SELECT _ge.c1, _ge.c2, _ge.c3, ? FROM ({sql2}) AS _ge",
-                    [context.graph_context] + s_p + [rt] + t_p + p2,
-                )
-            else:
-                context.add_dml(
-                    f"{cte}INSERT INTO {_table('rdf_edges')} (s, p, o_id) {sql}",
-                    s_p + [rt] + t_p + p,
-                )
+            context.add_dml(
+                f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
+                f"SELECT _ge.c1, _ge.c2, _ge.c3, ? FROM ({sql2}) AS _ge",
+                [_graph_of(context)] + s_p + [rt] + t_p + p2,
+            )
 
 
 def translate_create_clause(create, context, metadata):
+    # Correlate this clause's writes with the rows a preceding MATCH bound. Only when
+    # that MATCH actually contributed a FROM clause — a MERGE reuses this function after
+    # registering its own node, and gating that on itself would be circular.
+    _prev_correlate = getattr(context, "_correlate_create_dml", False)
+    context._correlate_create_dml = bool(getattr(context, "match_preceded_create", False)) and bool(
+        context.from_clauses
+    )
+    try:
+        _translate_create_patterns(create, context, metadata)
+    finally:
+        context._correlate_create_dml = _prev_correlate
+
+
+def _translate_create_patterns(create, context, metadata):
     for pat in create.patterns:
         # Validate before any DML: VariableAlreadyBound, syntax errors
         is_relationship_pattern = bool(pat.relationships)
@@ -3996,7 +4590,10 @@ def translate_delete_clause(delete, context, metadata):
                 f"{cte}DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})", subparams
             )
             context.add_dml(
-                f"{cte}DELETE FROM {_table('kg_NodeEmbeddings')} WHERE id IN ({subquery})",
+                # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
+                # (graph_id, node_id) with emb_rowid as the identity, so the old
+                # column name is SQLCODE -29 on every DETACH DELETE.
+                f"{cte}DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id IN ({subquery})",
                 subparams,
             )
             context.add_dml(
@@ -4366,6 +4963,13 @@ def translate_merge_clause(merge, context, metadata):
                 not_exists_alias_sql = None
                 not_exists_alias_params = []
 
+            # A VALUES-shaped INSERT joins nothing, so its guard has to bind values.
+            # Inline `{id: ...}` nodes carry no generated UUID, and without this the
+            # guard below fell back to the alias form and named tables the statement
+            # does not select from.
+            src_uuid = src_uuid or _merge_literal_node_id(source_node, context)
+            tgt_uuid = tgt_uuid or _merge_literal_node_id(target_node, context)
+
             if src_uuid and tgt_uuid:
                 if not is_undirected:
                     not_exists_uuid_sql = (
@@ -4418,18 +5022,41 @@ def translate_merge_clause(merge, context, metadata):
                         )
                         new_dmls.append((new_sql, params + not_exists_uuid_params))
                         edge_inserted = True
+                    elif sql.rstrip().endswith("AS _ge"):
+                        # The derived-table INSERT: `SELECT _ge.c1, … FROM (…) AS _ge`.
+                        # Its outer SELECT carries no WHERE — every predicate is inside
+                        # the derived table — and the aliases in there (n0, n2, l1 …) are
+                        # scoped to it, so the guard can only read the columns _ge
+                        # projects: c1 is the source node_id and c3 the target's.
+                        if not is_undirected:
+                            _ge_guard = (
+                                f"SELECT 1 FROM {_table('rdf_edges')} WHERE "
+                                "s = _ge.c1 AND p = ? AND o_id = _ge.c3"
+                            )
+                            _ge_params = [rel_type]
+                        else:
+                            _ge_guard = (
+                                f"SELECT 1 FROM {_table('rdf_edges')} WHERE "
+                                "(s = _ge.c1 AND p = ? AND o_id = _ge.c3) OR "
+                                "(s = _ge.c3 AND p = ? AND o_id = _ge.c1)"
+                            )
+                            _ge_params = [rel_type, rel_type]
+                        new_dmls.append(
+                            (
+                                f"{sql.rstrip()} WHERE NOT EXISTS ({_ge_guard})",
+                                params + _ge_params,
+                            )
+                        )
+                        edge_inserted = True
                     elif not_exists_alias_sql is not None:
-                        # Append NOT EXISTS guard. Use WHERE if no WHERE clause exists yet,
-                        # AND if there already is one.
-                        # Search only in the INSERT/SELECT body (after any CTE definition)
-                        # to avoid false-positive WHERE matches inside CTE WHERE clauses.
+                        # Append NOT EXISTS guard. Use WHERE if the outer SELECT has no
+                        # WHERE clause yet, AND if there already is one. The test has to
+                        # be depth-aware: a WHERE inside a CTE or a derived table is not
+                        # one this guard can be conjoined to, and treating it as one
+                        # appended a bare `AND` to the end of a finished statement
+                        # (SQLCODE -25, "Input encountered after end of query").
                         sql_stripped = sql.rstrip()
-                        _upper = sql_stripped.upper()
-                        _insert_pos = _upper.find("INSERT INTO")
-                        if _insert_pos < 0:
-                            _insert_pos = 0
-                        _body_upper = _upper[_insert_pos:]
-                        if " WHERE " in _body_upper or "\nWHERE " in _body_upper:
+                        if _has_outer_where(sql_stripped):
                             new_sql = f"{sql_stripped} AND NOT EXISTS ({not_exists_alias_sql})"
                         else:
                             new_sql = f"{sql_stripped} WHERE NOT EXISTS ({not_exists_alias_sql})"
@@ -5670,9 +6297,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
             # For mapped SQL table nodes, skip label isolation JOINs — the node_id
             # column doesn't exist in external SQL tables, and the label is enforced
             # by the SQL mapping itself.
-            effective_labels = (
-                [] if alias in context.mapped_node_aliases else list(node.labels)
-            )
+            effective_labels = [] if alias in context.mapped_node_aliases else list(node.labels)
             if effective_labels or node.properties:
                 # For CTE stage aliases (Stage1, Stage2…), the node_id column is stored
                 # under the variable name (e.g. Stage1.a1), not Stage1.node_id.
@@ -6272,11 +6897,28 @@ def _trp_directed_edge_join(
         pred_sql = f"'{rel.types[0]}'" if len(rel.types) == 1 else "NULL"
         src_id_sql = _trp_resolve_src_id_sql(source_node, context)
         if src_id_sql is not None and not context.graph_context:
+            # Which method, not which argument. `MatchEdges`' graph argument
+            # defaults to 0, the default graph's own key (ADR-0001); every graph
+            # at once is a separate method since spec 230, because one value
+            # cannot mean both. Before that, `MatchEdges` read 0 as "every
+            # graph", so a Cypher MATCH taking this ^KG fast path answered with
+            # every graph's edges while the same query on the SQL path answered
+            # with one graph's.
+            #
+            # `USE GRAPH ''` is the default graph and gets `MatchEdges`; no
+            # `USE GRAPH` clause at all is `None`, means the whole namespace on
+            # the SQL path, and has to mean the same here or the fast path is a
+            # narrower answer to the same query. A named graph never reaches this
+            # branch — it goes down the rdf_edges path above.
+            if context.graph_context is None:
+                scan_sql = f"Graph_KG.MatchEdgesAllGraphs({src_id_sql}, {pred_sql}, 0)"
+            else:
+                scan_sql = f"Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0)"
             derived = (
                 f"(\n"
                 f"SELECT j.s, j.p, j.o_id, j.w\n"
                 f"FROM JSON_TABLE(\n"
-                f"  Graph_KG.MatchEdges({src_id_sql}, {pred_sql}, 0),\n"
+                f"  {scan_sql},\n"
                 f"  '$[*]' COLUMNS(\n"
                 f"    s VARCHAR(256) PATH '$.s',\n"
                 f"    p VARCHAR(256) PATH '$.p',\n"
@@ -9390,8 +10032,14 @@ def _expr_property_reference(expr, context, segment):
         stage_col = _safe_alias(expr.variable)
         prop_key = expr.property_name
         if segment == "inline":
-            context.select_params.append(prop_key)
-            return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {stage_col} AND \"key\" = ?)"
+            # The key is a literal, not a parameter: a caller like toBoolean renders this
+            # fragment into both arms of a CASE, which duplicates the marker and not the
+            # parameter, and a parameter appended here lands ahead of the join's although
+            # its marker sits last. Escaped inline, exactly as _structural_guard_sql does.
+            return (
+                f"(SELECT val FROM {_table('rdf_props')} WHERE s = {stage_col} "
+                f"AND \"key\" = '{_sql_literal(prop_key)}')"
+            )
         p_alias = context.next_alias("p")
         context.join_clauses.append(
             f'LEFT JOIN {_table("rdf_props")} {p_alias} ON {p_alias}.s = {stage_col} AND {p_alias}."key" = {context.add_join_param(prop_key)}'
@@ -9427,11 +10075,16 @@ def _expr_property_reference(expr, context, segment):
     # %qaqpre SIGSEGV in IRIS 2026.3.0AI on multi-JOIN+FETCH FIRST queries.
     # Use the variable name as the node_id column (it's projected as the variable alias in WITH).
     if segment == "inline":
-        context.select_params.append(expr.property_name)
         # Use the table alias (n0.node_id) not the SELECT alias (n) — SELECT aliases are
         # not referenceable within the same SELECT's correlated subexpressions in IRIS SQL.
         var_col = f"{alias}.node_id"
-        return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {var_col} AND \"key\" = ?)"
+        # The key is inlined rather than bound: this fragment gets rendered twice by
+        # callers such as toBoolean's CASE, and a parameter appended here would be one
+        # short of the markers and ordered ahead of the join parameters besides.
+        return (
+            f"(SELECT val FROM {_table('rdf_props')} WHERE s = {var_col} "
+            f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
+        )
     if segment == "where":
         opt_new = getattr(context, "optional_match_new_aliases", set())
         if alias in opt_new:
@@ -9633,16 +10286,23 @@ def _expr_slice(expr, context, segment):
     #   - negative index n → length + n  (e.g. -1 on [1,2,3] → index 2)
     #
     # String detection: if the base is a string literal, use SUBSTRING semantics.
-    base_is_string_literal = (
-        isinstance(expr.expression, ast.Literal)
-        and isinstance(expr.expression.value, str)
+    base_is_string_literal = isinstance(expr.expression, ast.Literal) and isinstance(
+        expr.expression.value, str
     )
     base_sql = translate_expression(expr.expression, context, segment=segment)
 
     if base_is_string_literal:
         # String slice: 'hello'[1..4] → SUBSTRING('hello', 2, 3) (1-based, length)
-        start_val = int(expr.start.value) if isinstance(expr.start, ast.Literal) and expr.start.value is not None else 0
-        end_val = int(expr.end.value) if isinstance(expr.end, ast.Literal) and expr.end.value is not None else None
+        start_val = (
+            int(expr.start.value)
+            if isinstance(expr.start, ast.Literal) and expr.start.value is not None
+            else 0
+        )
+        end_val = (
+            int(expr.end.value)
+            if isinstance(expr.end, ast.Literal) and expr.end.value is not None
+            else None
+        )
         # SUBSTRING is 1-indexed; Cypher slice is 0-indexed
         sql_start = start_val + 1
         if end_val is not None:
@@ -13987,10 +14647,25 @@ def _expr_fn_vector_ops(fn, args_exprs, args, context):
         placeholder = f"TO_VECTOR('{vec_str}', DOUBLE)"
     else:
         placeholder = args[1]
+    # `WHERE id = {alias}.node_id` compared a node ID against the embedding table's
+    # RowID, so the scalar subquery returned NULL and both functions scored NULL for
+    # every node — a silent wrong answer, since VECTOR_COSINE(NULL, v) is not an error
+    # (spec 227 re-keyed these tables to (graph_id, node_id)). The vector is read from
+    # the same graph the node came from, otherwise `USE GRAPH A` would score node
+    # `x` in A against graph B's vector for `x`.
+    scope = ""
+    # `is not None`: the default graph is `''`, and testing for truth scored a
+    # `USE GRAPH ''` node against whichever graph's vector for it the subquery
+    # happened to reach (spec 230, FR-001).
+    _gc = getattr(context, "graph_context", None)
+    if _gc is not None:
+        _safe = _gc.replace("'", "''")
+        scope = f" AND COALESCE(graph_id, '') = COALESCE('{_safe}', '')"
+    subselect = f"(SELECT emb FROM {emb_table} WHERE node_id = {alias}.node_id{scope})"
     if fn in ("vector_distance", "ivg.vector_distance"):
-        return f"(1 - VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder}))"
+        return f"(1 - VECTOR_COSINE({subselect}, {placeholder}))"
     else:
-        return f"VECTOR_COSINE((SELECT emb FROM {emb_table} WHERE id = {alias}.node_id), {placeholder})"
+        return f"VECTOR_COSINE({subselect}, {placeholder})"
 
 
 def _expr_fn_node_funcs(fn, args_exprs, args, context):

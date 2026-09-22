@@ -319,20 +319,28 @@ class TestSqlParameterization:
             params.extend(p if isinstance(p, list) else [p])
         return sql, params
 
-    def test_bm25_query_text_is_param(self):
+    def test_bm25_query_text_is_an_escaped_literal(self):
+        """`JSON_TABLE`'s source argument takes no parameter markers.
+
+        These two values were bound until the spec 227 sweep, and IRIS 2026.3 answered
+        the whole statement with "Incorrect number of parameters" — `ivg.bm25.search`
+        could not run at all (tests/unit/test_227_json_table_literal_args.py records the
+        measurements; tests/integration/test_227_procedure_statements_execute.py is the
+        live gate). Binding is therefore not available here, and the injection defence is
+        escaping instead: see test_single_quote_injection_stays_inside_the_literal.
+        """
         sql, params = self._translate(
             "CALL ivg.bm25.search('myidx', 'heart failure', 5) YIELD node RETURN node"
         )
-        # query text should be a ? placeholder bound as a param, not inline
-        assert "heart failure" not in sql
-        assert any("heart failure" in str(p) for p in params)
+        assert "'heart failure'" in sql
+        assert not any("heart failure" in str(p) for p in params)
 
-    def test_bm25_idx_name_is_param(self):
+    def test_bm25_idx_name_is_an_escaped_literal(self):
         sql, params = self._translate(
             "CALL ivg.bm25.search('myidx', 'query', 5) YIELD node RETURN node"
         )
-        assert "myidx" not in sql
-        assert any("myidx" in str(p) for p in params)
+        assert "'myidx'" in sql
+        assert not any("myidx" in str(p) for p in params)
 
     def test_bm25_k_is_inline_int(self):
         sql, params = self._translate(
@@ -340,31 +348,40 @@ class TestSqlParameterization:
         )
         assert "10" in sql
 
-    def test_retrieve_query_text_is_param(self):
+    def test_retrieve_query_text_is_bound_for_the_vector_arm(self):
+        """`ivg.retrieve` uses the same text twice, and only one of the two can be bound.
+
+        The BM25 arm's copy sits inside `JSON_TABLE` and is inlined; the vector arm's
+        `EMBEDDING(?, ?)` is a plain CTE expression and keeps its bind.
+        """
         sql, params = self._translate(
             "CALL ivg.retrieve('test query', 5) YIELD node RETURN node"
         )
-        assert "test query" not in sql
         assert any("test query" in str(p) for p in params)
+        assert "EMBEDDING(?, ?)" in sql
+        assert "'test query'" in sql
 
-    def test_single_quote_injection_produces_valid_sql(self):
-        """Injection attempt via single-quote in query text must be bound as param."""
-        # Build the AST manually with an injected query value
+    def test_single_quote_injection_stays_inside_the_literal(self):
+        """The escaping is the defence at the sites IRIS will not let us bind.
+
+        A quote in the query text must be doubled — once, not twice — so the value stays
+        one literal and cannot close it early and append SQL of its own.
+        """
         from iris_vector_graph.cypher.parser import parse_query
         from iris_vector_graph.cypher.translator import translate_to_sql
 
-        # Use a query that won't trip the lexer (no semicolons in Cypher string literals)
         ast = parse_query(
-            "CALL ivg.bm25.search('idx', 'it\\'s a test', 5) YIELD node RETURN node"
+            "CALL ivg.bm25.search('idx', 'it\\'s a test\\', 1) OR 1=1 --', 5) "
+            "YIELD node RETURN node"
         )
         result = translate_to_sql(ast, {})
         sql = result.sql if isinstance(result.sql, str) else "\n".join(result.sql)
-        params = []
-        for p in (result.parameters or []):
-            params.extend(p if isinstance(p, list) else [p])
-        # After fix: single-quoted value is a param, not inline
-        assert "it" not in sql.split("?")[0].replace("BM25", "").replace("bm25", "") \
-            or any("it" in str(p) for p in params)
+
+        assert "'it''s a test'', 1) OR 1=1 --'" in sql
+        # No un-doubled quote survives, so the literal cannot be closed early, and the
+        # quotes in the generated statement stay balanced.
+        assert "it's" not in sql
+        assert sql.count("'") % 2 == 0
 
     def test_retrieve_integer_args_inline(self):
         sql, params = self._translate(

@@ -405,12 +405,14 @@ class TestBulkDeleteNodes:
             eng.create_node(f"bdn_{i}", labels=["BDN"])
         eng.sync()
         deleted = eng.bulk_delete_nodes([f"bdn_{i}" for i in range(5)])
-        assert isinstance(deleted, int)
-        assert deleted >= 0
+        # A DeleteResult, not a count: the old `deleted >= 0` could not have
+        # failed, and read nothing about the nodes that did not go.
+        assert (deleted.deleted, deleted.failed) == (5, 0)
 
     def test_bulk_delete_nodes_empty(self, ne_graph):
         deleted = ne_graph.bulk_delete_nodes([])
-        assert deleted == 0
+        assert (deleted.deleted, deleted.failed) == (0, 0)
+        assert not deleted
 
     def test_bulk_delete_nodes_with_edges(self, iris_connection, iris_master_cleanup):
         eng = IRISGraphEngine(iris_connection, embedding_dimension=4)
@@ -419,7 +421,9 @@ class TestBulkDeleteNodes:
         eng.create_edge("bdnedge_hub", "BDNE_REL", "bdnedge_spoke")
         eng.sync()
         deleted = eng.bulk_delete_nodes(["bdnedge_hub"])
-        assert deleted >= 0
+        # The hub's edge does not hold it back: bulk_delete_nodes clears the
+        # node's edges with it, so nothing is left referencing it.
+        assert (deleted.deleted, deleted.failed) == (1, 0)
 
 
 # ---------------------------------------------------------------------------

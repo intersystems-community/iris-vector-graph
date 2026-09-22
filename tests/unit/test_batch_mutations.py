@@ -35,13 +35,14 @@ def test_create_node_transactional(engine, mock_conn):
     # Labels and props batch inserts
     assert cursor.executemany.call_count == 2
     
-    # Labels verify
+    # Labels verify — graph first since spec 227 re-keyed rdf_labels on
+    # (graph_id, s, label); an omitted graph is the default graph, not NULL
     label_call = next(c for c in cursor.executemany.call_args_list if "rdf_labels" in c[0][0])
-    assert label_call[0][1] == [["test-node", "L1"], ["test-node", "L2"]]
-    
+    assert label_call[0][1] == [["", "test-node", "L1"], ["", "test-node", "L2"]]
+
     # Props verify — 3 rows: 'name', 'val', plus auto-injected 'id'
     prop_call = next(c for c in cursor.executemany.call_args_list if "rdf_props" in c[0][0])
-    prop_keys = [row[1] for row in prop_call[0][1]]
+    prop_keys = [row[2] for row in prop_call[0][1]]
     assert len(prop_call[0][1]) == 3
     assert "id" in prop_keys, "create_node must store 'id' in rdf_props for Cypher queryability"
     assert "name" in prop_keys

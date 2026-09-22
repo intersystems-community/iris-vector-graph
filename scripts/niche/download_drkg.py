@@ -138,7 +138,7 @@ def ingest_into_iris(conn, emb, entity_map, engine):
     iris_obj = _iris.createIRIS(conn)
     print(f"Inserting {len(entity_map)} embeddings (dim={emb.shape[1]})...")
     t1 = time.perf_counter()
-    cursor.execute(f"SELECT TOP 1 id FROM Graph_KG.kg_NodeEmbeddings")
+    cursor.execute("SELECT TOP 1 node_id FROM Graph_KG.kg_NodeEmbeddings")
     has_emb_table = True
     try:
         cursor.fetchone()
@@ -152,14 +152,14 @@ def ingest_into_iris(conn, emb, entity_map, engine):
         vec_str = ",".join(f"{v:.8f}" for v in vec)
         try:
             cursor.execute(
-                "INSERT OR UPDATE INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                "INSERT OR UPDATE INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                 [nid, vec_str]
             )
             emb_written += 1
         except Exception:
             try:
                 cursor.execute(
-                    "UPDATE Graph_KG.kg_NodeEmbeddings SET emb = TO_VECTOR(?) WHERE id = ?",
+                    "UPDATE Graph_KG.kg_NodeEmbeddings SET emb = TO_VECTOR(?) WHERE node_id = ?",
                     [vec_str, nid]
                 )
             except Exception:
@@ -178,7 +178,7 @@ def verify_cosine_diversity(conn, n_sample=200):
     import numpy as np
     print("\nVerifying embedding diversity (pairwise cosine on sample)...")
     cursor = conn.cursor()
-    cursor.execute(f"SELECT TOP {n_sample} id, emb FROM Graph_KG.kg_NodeEmbeddings")
+    cursor.execute(f"SELECT TOP {n_sample} node_id, emb FROM Graph_KG.kg_NodeEmbeddings")
     rows = cursor.fetchall()
     vecs = []
     for row in rows:

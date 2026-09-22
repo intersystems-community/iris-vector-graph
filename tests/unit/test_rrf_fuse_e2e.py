@@ -30,23 +30,15 @@ def _insert_nodes_with_embeddings(conn, nodes, dim=4):
         except Exception:
             pass
         vec_str = ",".join(str(v) for v in vec)
-        try:
-            cursor.execute(
-                "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
-                [nid, vec_str],
-            )
-        except Exception:
-            try:
-                cursor.execute(
-                    "UPDATE Graph_KG.kg_NodeEmbeddings SET emb = TO_VECTOR(?, DOUBLE) WHERE id = ?",
-                    [vec_str, nid],
-                )
-            except Exception:
-                pass
-    try:
-        conn.commit()
-    except Exception:
-        pass
+        # 4.0.0 keys the embedding tables (graph_id, node_id); the 3.2.0 `id` column
+        # is gone. Not swallowed: a swallowed INSERT here left the table empty and the
+        # assertions blamed the search path (spec 227).
+        cursor.execute(
+            "INSERT INTO Graph_KG.kg_NodeEmbeddings (graph_id, node_id, emb) "
+            "VALUES ('', ?, TO_VECTOR(?, DOUBLE))",
+            [nid, vec_str],
+        )
+    conn.commit()
 
 
 def _cleanup_nodes(conn, node_ids):

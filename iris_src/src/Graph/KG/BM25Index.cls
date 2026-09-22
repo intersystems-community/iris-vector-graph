@@ -78,7 +78,11 @@ ClassMethod Tokenize(text As %String) As %List [ Private ]
 // Build — index all nodes over specified text properties
 // ================================================================
 
-ClassMethod Build(name As %String, propsCSV As %String, k1 As %Double = 1.5, b As %Double = 0.75) As %String
+/// pGraph is the graph whose nodes this index covers. "" is the default graph,
+/// never "every graph": an index built over two graphs merged the same node_id
+/// from both into one document and answered a scoped search with the other
+/// graph's nodes (spec 230 FR-009).
+ClassMethod Build(name As %String, propsCSV As %String, k1 As %Double = 1.5, b As %Double = 0.75, pGraph As %String = "") As %String
 {
     Kill ^BM25Idx(name)
 
@@ -96,12 +100,23 @@ ClassMethod Build(name As %String, propsCSV As %String, k1 As %Double = 1.5, b A
 
     // One query fetches all (node_id, val) pairs for the requested properties.
     // Ordered by node_id so we can accumulate per-doc by scanning in sequence.
+    //
+    // Both sides of the join carry the graph. Restricting only the driving table
+    // would still pull the other graph's property rows onto this graph's node,
+    // because a node_id is unique per graph and not per namespace since 227.
+    //
+    // COALESCE on both sides of each comparison: graph_id is nullable on an
+    // installation upgraded by ADD COLUMN, and an empty parameter reaches IRIS as
+    // SQL NULL, so a bare `= ?` for the default graph matches nothing.
     Set sql = "SELECT n.node_id, p.val FROM Graph_KG.nodes n "
-            _ "LEFT JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.key IN ("_inList_") "
+            _ "LEFT JOIN Graph_KG.rdf_props p ON p.s = n.node_id "
+            _ "AND COALESCE(p.graph_id, '') = COALESCE(n.graph_id, '') "
+            _ "AND p.key IN ("_inList_") "
+            _ "WHERE COALESCE(n.graph_id, '') = COALESCE(?, '') "
             _ "ORDER BY n.node_id"
     Set stmt = ##class(%SQL.Statement).%New()
     Do stmt.%Prepare(sql)
-    Set rs = stmt.%Execute()
+    Set rs = stmt.%Execute(pGraph)
 
     Set N = 0
     Set totalLen = 0
@@ -152,8 +167,13 @@ ClassMethod Build(name As %String, propsCSV As %String, k1 As %Double = 1.5, b A
     Set ^BM25Idx(name, "cfg", "k1") = k1
     Set ^BM25Idx(name, "cfg", "b") = b
     Set ^BM25Idx(name, "cfg", "vocab_size") = vocabSize
+    // The global is keyed by index name alone, so the graph an index covers is
+    // recoverable only from here — Info reports it, and a caller comparing two
+    // indexes has no other way to tell which graph each one answers for.
+    Set ^BM25Idx(name, "cfg", "graph") = pGraph
 
-    Return "{""indexed"":"_N_",""avgdl"":"_avgdl_",""vocab_size"":"_vocabSize_"}"
+    Set graphJSON = $Replace($Replace(pGraph, "\", "\\"), """", "\""")
+    Return "{""indexed"":"_N_",""avgdl"":"_avgdl_",""vocab_size"":"_vocabSize_",""graph"":"""_graphJSON_"""}"
 }
 
 // Accumulate tf and length for one document — shared by Build batch loop.
@@ -412,7 +432,13 @@ ClassMethod Info(name As %String) As %String
     If N = "" Return "{}"
     Set avgdl = +$Get(^BM25Idx(name, "cfg", "avgdl"), 0)
     Set vocabSize = +$Get(^BM25Idx(name, "cfg", "vocab_size"), 0)
-    Return "{""N"":"_N_",""avgdl"":"_avgdl_",""vocab_size"":"_vocabSize_"}"
+    // An index left over from a pre-230 build has no graph subscript and covered
+    // every graph in the namespace. It reports "" — the same value the default
+    // graph reports — so a stale index is indistinguishable here; rebuild it
+    // rather than reading a graph off it.
+    Set graph = $Get(^BM25Idx(name, "cfg", "graph"), "")
+    Set graphJSON = $Replace($Replace(graph, "\", "\\"), """", "\""")
+    Return "{""N"":"_N_",""avgdl"":"_avgdl_",""vocab_size"":"_vocabSize_",""graph"":"""_graphJSON_"""}"
 }
 
 // ================================================================

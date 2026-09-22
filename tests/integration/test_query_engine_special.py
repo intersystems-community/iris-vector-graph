@@ -53,7 +53,7 @@ class TestExplainCommand:
     def test_explain_returns_plan_placeholder(self, qeng):
         result = qeng.execute_cypher("EXPLAIN MATCH (n) RETURN n.node_id")
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         assert len(rows) >= 1
         assert "No execution plan" in str(rows[0])
 
@@ -92,7 +92,9 @@ class TestConstraintIndexNoOps:
     def test_create_constraint(self, qeng):
         result = qeng.execute_cypher("CREATE CONSTRAINT ON (n:Person) ASSERT n.id IS UNIQUE")
         assert result is not None
-        assert result.get("rows") == [] or result.get("rows") is None or isinstance(result.get("rows"), list)
+        # A no-op still answers with a row list, empty — `IVGResult.rows` is
+        # never None, so the three-way test only ever exercised the first arm.
+        assert result.rows == []
 
     def test_drop_constraint(self, qeng):
         result = qeng.execute_cypher("DROP CONSTRAINT my_constraint IF EXISTS")
@@ -281,7 +283,7 @@ class TestVarLengthPathRouting:
             "MATCH (n {node_id: 'qn_0'})-[:QR*1..3]->(m) RETURN m.node_id"
         )
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         assert len(rows) >= 1
 
     def test_var_length_any_type(self, qeng):
@@ -375,7 +377,7 @@ class TestOptionalMatchQuery:
             "RETURN n.node_id, m.node_id"
         )
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         assert len(rows) >= 1
 
     def test_optional_match_isolated_node(self, qeng):
@@ -425,7 +427,7 @@ class TestBFSMinHops:
         )
         assert result is not None
         # Should not include qn_1 (1 hop away)
-        rows = result.get("rows", [])
+        rows = result.rows
         node_ids = [r[0] for r in rows if r]
         assert "qn_1" not in node_ids or len(rows) >= 0  # relaxed check
 
@@ -439,7 +441,7 @@ class TestSystemProcedureDispatch:
     def test_db_labels(self, qeng):
         result = qeng.execute_cypher("CALL db.labels() YIELD label RETURN label")
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         labels = [r[0] for r in rows]
         assert "QNode" in labels
 
@@ -448,7 +450,7 @@ class TestSystemProcedureDispatch:
             "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType"
         )
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         rels = [r[0] for r in rows]
         assert "QR" in rels
 
@@ -499,7 +501,7 @@ class TestNormalMatchQueries:
     def test_count_all_nodes(self, qeng):
         result = qeng.execute_cypher("MATCH (n) RETURN COUNT(n) AS cnt")
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         assert rows[0][0] >= 10  # at least our 11 nodes
 
     def test_aggregate_with_groupby(self, qeng):
@@ -513,7 +515,7 @@ class TestNormalMatchQueries:
             "MATCH (n:QNode) RETURN n.node_id ORDER BY n.node_id LIMIT 3"
         )
         assert result is not None
-        rows = result.get("rows", [])
+        rows = result.rows
         assert len(rows) <= 3
 
     def test_skip_and_limit(self, qeng):

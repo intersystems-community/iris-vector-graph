@@ -9,15 +9,21 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-# TDD Gate: Tests require biomedical schema with createProtein/deleteProtein mutations
+# TDD Gate: Tests require biomedical schema with createProtein/deleteProtein mutations.
+#
+# The names live in the `fields` mapping's keys. `fields.values()` are
+# `graphql.GraphQLField` objects and those have no `.name`, so the earlier
+# `f.name.lower()` raised `AttributeError` into the bare `except` below and left
+# this gate shut for an endpoint that ships. Never widen the except clause back
+# to `Exception`: it makes any future typo here read as "not implemented yet".
 try:
     from api.main import app
     from api.gql.schema import schema as _bio_schema
     _mutation_type = _bio_schema.graphql_schema.mutation_type
     APP_EXISTS = _mutation_type is not None and any(
-        "protein" in f.name.lower() for f in (_mutation_type.fields.values() if _mutation_type else [])
+        "protein" in name.lower() for name in _mutation_type.fields
     )
-except (ImportError, AttributeError, Exception):
+except ImportError:
     APP_EXISTS = False
     app = None
 

@@ -26,27 +26,17 @@ import uuid
 
 import pytest
 
+from tests.conftest import requires_running_container
+
 ENTERPRISE_CONTAINER = os.environ.get("IVG_ENTERPRISE_CONTAINER", "iris-vector-graph-enterprise")
 COMMUNITY_CONTAINER = os.environ.get("IVG_COMMUNITY_CONTAINER", "ivg-iris")
 
-_enterprise_running = subprocess.run(
-    ["docker", "inspect", ENTERPRISE_CONTAINER],
-    capture_output=True,
-).returncode == 0
-
-_community_running = subprocess.run(
-    ["docker", "inspect", COMMUNITY_CONTAINER],
-    capture_output=True,
-).returncode == 0
-
-requires_enterprise = pytest.mark.skipif(
-    not _enterprise_running,
-    reason=f"{ENTERPRISE_CONTAINER} container not running"
-)
-requires_community = pytest.mark.skipif(
-    not _community_running,
-    reason=f"{COMMUNITY_CONTAINER} container not running"
-)
+# `docker inspect` exits 0 for a container in any state, so the guards these replaced ran
+# their bodies against a stopped container and failed with Docker's own
+# `container ... is not running`. `ivg-iris` is exactly that case: it exists here and is
+# deliberately left down, because its MaxServerConn=1 makes it unusable for the suite.
+requires_enterprise = requires_running_container(ENTERPRISE_CONTAINER)
+requires_community = requires_running_container(COMMUNITY_CONTAINER)
 
 
 def _docker_irispython(container: str, code: str, timeout: int = 30) -> str:
@@ -117,7 +107,7 @@ from iris_vector_graph.engine import IRISGraphEngine
 conn = EmbeddedConnection()
 engine = IRISGraphEngine(conn, embedding_dimension=4)
 result = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
-rows = result.get("rows", [])
+rows = result.rows
 return f"OK rows={len(rows)} cnt={rows[0][0] if rows else -1}"
 """)
         assert "OK" in out, f"Basic embedded query failed: {out}"
@@ -228,7 +218,7 @@ result = engine.execute_cypher(
     "MATCH (a {{node_id: $id}})-[:KNOWS]->(b) RETURN b.name AS name",
     {{"id": n1}}
 )
-rows = result.get("rows", [])
+rows = result.rows
 
 engine.delete_node(n1)
 engine.delete_node(n2)
@@ -269,8 +259,8 @@ r_ext = eng_ext.execute_cypher(
 
 eng_emb.delete_node("{pfx}:X")
 
-emb_val = r_emb.get("rows", [[]])[0][0] if r_emb.get("rows") else None
-ext_val = r_ext.get("rows", [[]])[0][0] if r_ext.get("rows") else None
+emb_val = r_emb.rows[0][0] if r_emb.rows else None
+ext_val = r_ext.rows[0][0] if r_ext.rows else None
 
 return f"OK emb={{emb_val}} ext={{ext_val}} match={{emb_val == ext_val}}"
 """)
@@ -425,7 +415,7 @@ result = engine.execute_cypher(
 )
 engine.delete_node(nid)
 
-rows = result.get("rows", [])
+rows = result.rows
 return f"OK rows={{rows}}"
 """)
         assert "OK" in out, f"Parameterized create_node failed: {out}"
@@ -460,7 +450,7 @@ result = engine.execute_cypher(
 for n in nodes:
     engine.delete_node(n)
 
-rows = result.get("rows", [])
+rows = result.rows
 cnt = rows[0][0] if rows else 0
 return f"OK bulk_count={{count}} cypher_reachable={{cnt}}"
 """)
@@ -489,7 +479,7 @@ else:
     conn = EmbeddedConnection()
     engine = IRISGraphEngine(conn, embedding_dimension=4)
     result = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
-    rows = result.get("rows", [])
+    rows = result.rows
     print(f"OK rows={len(rows)} cnt={rows[0][0] if rows else -1}")
 """)
         if "SKIP" in out:
@@ -570,8 +560,8 @@ r_ext = eng_ext.execute_cypher(
 for n in nodes:
     eng_emb.delete_node(n)
 
-c_emb = r_emb.get("rows", [[0]])[0][0]
-c_ext = r_ext.get("rows", [[0]])[0][0]
+c_emb = r_emb.rows[0][0] if r_emb.rows else 0
+c_ext = r_ext.rows[0][0] if r_ext.rows else 0
 return f"OK emb={{c_emb}} ext={{c_ext}} match={{c_emb == c_ext}}"
 """, timeout=60)
         assert "OK" in out, f"Concurrent engines failed: {out}"
@@ -642,7 +632,7 @@ result = engine.execute_cypher(
 for n in [a, b_k, c_r]:
     engine.delete_node(n)
 
-ids = {{r[0] for r in result.get("rows", [])}}
+ids = {{r[0] for r in result.rows}}
 return f"OK knows={{'{pfx}:BK' in ids}} regulates_excluded={{'{pfx}:CR' not in ids}}"
 """, timeout=60)
         assert "OK" in out, f"Embedded BFS predicate filter failed: {out}"
@@ -682,7 +672,7 @@ result = engine.execute_cypher(
     {{"id": nid}}
 )
 engine.delete_node(nid)
-name = result.get("rows", [[None]])[0][0]
+name = result.rows[0][0] if result.rows else None
 return f"OK name={{name}}"
 """)
         assert "OK" in out, f"Unicode params failed: {out}"
@@ -861,6 +851,6 @@ conn = EmbeddedConnection()
 engine = IRISGraphEngine(conn, embedding_dimension=4)
 r1 = engine.execute_cypher("MATCH (n) RETURN count(n) AS c")
 r2 = engine.execute_cypher("MATCH ()-[r]->() RETURN count(r) AS c")
-return f"OK nodes={r1.get('rows',[])} edges={r2.get('rows',[])}"
+return f"OK nodes={r1.rows} edges={r2.rows}"
 """)
         assert "OK" in out, f"execute_cypher with all fallbacks failed: {out}"

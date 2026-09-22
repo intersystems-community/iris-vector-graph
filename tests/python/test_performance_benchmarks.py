@@ -125,7 +125,7 @@ class TestPerformanceBenchmarks:
             cursor.execute("DELETE FROM Graph_KG.rdf_labels WHERE s LIKE 'PERF_%'")
             cursor.execute("DELETE FROM Graph_KG.rdf_props WHERE s LIKE 'PERF_%'")
             cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'PERF_%'")
-            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'PERF_%'")
+            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'PERF_%'")
             cursor.close()
             cls.conn.close()
 

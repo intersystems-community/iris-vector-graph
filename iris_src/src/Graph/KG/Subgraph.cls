@@ -6,6 +6,9 @@ Class Graph.KG.Subgraph Extends %RegisteredObject
 ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypesJson As %String = "", maxNodes As %Integer = 10000) As %String
 {
 	Set pGraph = 0
+	// The SQL spelling of the same graph, for the label cursor further down. Derived by
+	// Graph.KG.GraphKey rather than written as '' here (ADR-0003: one derivation).
+	Set tGraphName = ##class(Graph.KG.GraphKey).ForName("")
 	If seedJson = "" Return "{""nodes"":[],""edges"":[],""properties"":{},""labels"":{}}"
 	
 	Try {
@@ -109,23 +112,26 @@ ClassMethod SubgraphJson(seedJson As %String, maxHops As %Integer = 2, edgeTypes
 		Quit:n=""
 		Do nodesArr.%Push(n)
 		
-		// Properties: ^KG("prop", node, key) = val
+		// Properties: ^KG("prop", graph, node, key) = val
 		Set propObj = ##class(%DynamicObject).%New()
 		Set hasProp = 0
 		Set k = ""
 		For {
-			Set k = $Order(^KG("prop", n, k), 1, val)
+			Set k = $Order(^KG("prop", pGraph, n, k), 1, val)
 			Quit:k=""
 			Do propObj.%Set(k, val)
 			Set hasProp = 1
 		}
 		If hasProp Do propsObj.%Set(n, propObj)
 		
-		// Labels: scan all known labels for this node
-		// ^KG("label", labelName, nodeId) = ""
+		// Labels for this node in this graph: ^KG("label", graph, labelName, nodeId).
+		// The predicate on graph_id below is not decoration — after spec 227 broke
+		// UNIQUE (node_id) the same ID lives in two graphs, so a cursor on s alone
+		// returns another graph's labels for a subgraph walked entirely inside the
+		// default graph. COALESCE on both sides: an empty host variable binds as NULL.
 		Set labelArr = ##class(%DynamicArray).%New()
 		Set hasLabel = 0
-		&sql(DECLARE lblCursor CURSOR FOR SELECT label FROM Graph_KG.rdf_labels WHERE s = :n)
+		&sql(DECLARE lblCursor CURSOR FOR SELECT label FROM Graph_KG.rdf_labels WHERE s = :n AND COALESCE(graph_id, '') = COALESCE(:tGraphName, ''))
 		&sql(OPEN lblCursor)
 		For {
 			&sql(FETCH lblCursor INTO :lbl)

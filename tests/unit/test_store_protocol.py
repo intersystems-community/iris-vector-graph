@@ -66,9 +66,10 @@ class MockGraphStore:
     def execute_transaction(self, stmts, params_list):
         return self._record("execute_transaction", stmts=stmts, params_list=params_list)
 
-    def execute_bfs(self, source_id, predicates, max_hops, direction, max_results):
+    def execute_bfs(self, source_id, predicates, max_hops, direction, max_results, *, graph=None):
         return self._record("execute_bfs", source_id=source_id, predicates=predicates,
-                            max_hops=max_hops, direction=direction, max_results=max_results)
+                            max_hops=max_hops, direction=direction, max_results=max_results,
+                            graph=graph)
 
     def execute_shortest_path(self, source_id, target_id, predicates, max_hops, direction, find_all):
         return self._record("execute_shortest_path", source_id=source_id, target_id=target_id,
@@ -78,8 +79,11 @@ class MockGraphStore:
         return self._record("execute_weighted_shortest_path", source_id=source_id,
                             target_id=target_id, weight_property=weight_property, max_hops=max_hops)
 
-    def execute_ppr(self, seed_ids, damping, max_iterations):
-        return self._record("execute_ppr", seed_ids=seed_ids, damping=damping, max_iterations=max_iterations)
+    def execute_ppr(self, seed_ids, damping, max_iterations,
+                    bidirectional=False, reverse_edge_weight=1.0):
+        return self._record("execute_ppr", seed_ids=seed_ids, damping=damping,
+                            max_iterations=max_iterations, bidirectional=bidirectional,
+                            reverse_edge_weight=reverse_edge_weight)
 
     def execute_pagerank(self, damping, max_iterations):
         return self._record("execute_pagerank", damping=damping, max_iterations=max_iterations)
@@ -94,8 +98,11 @@ class MockGraphStore:
         return self._record("execute_subgraph", seed_ids=seed_ids, k_hops=k_hops,
                             edge_types=edge_types, max_nodes=max_nodes)
 
-    def execute_knn_vec(self, query_vector, k, label_filter):
-        return self._record("execute_knn_vec", query_vector=query_vector, k=k, label_filter=label_filter)
+    def execute_knn_vec(self, query_vector, k, label_filter, *, graph=None, model_key=None):
+        # Spec 227: recorded, not swallowed. A mock that accepts `graph` and drops it
+        # hides the drift Gate 4 exists to catch.
+        return self._record("execute_knn_vec", query_vector=query_vector, k=k,
+                            label_filter=label_filter, graph=graph, model_key=model_key)
 
     def write_temporal_edge(self, source_id, predicate, target_id, timestamp, weight=1.0, attrs=None, upsert=False, suppress_reverse_index=False, mode="", graph=None):
         return self._record("write_temporal_edge", source_id=source_id, predicate=predicate,
@@ -616,7 +623,9 @@ class TestIRISGraphStoreExtraCoverage:
         store._arno_available = False
         with patch.object(store, "_call_classmethod", return_value='{"nodes":["n1"],"edges":[]}'):
             result = store.execute_subgraph(["n1"], 2, [], 100)
-        assert result.columns == ["nodes", "edges"]
+        # Properties and labels ride along too — `SubgraphJson` returns them and
+        # dropping them here made `include_properties=True` answer an empty map.
+        assert result.columns == ["nodes", "edges", "properties", "labels"]
 
     def test_execute_knn_vec_sql_fallback(self):
         store, conn, cursor = self._make_store()
@@ -641,8 +650,12 @@ class TestIRISGraphStoreExtraCoverage:
 
     def test_execute_temporal_cypher_returns_results(self):
         store, conn, cursor = self._make_store()
+        # The reader is `TemporalIndex.QueryWindow`, which answers with edge rows
+        # (`s`/`p`/`o`/`ts`/`w`) — hops are counted by the caller. This test used to
+        # feed back `{"id","hops","pred"}`, the shape of the `QueryWindowBFS` that
+        # never existed, so it passed against a method IRIS could not resolve.
         with patch.object(store, "_call_classmethod",
-                          return_value='[{"id":"n2","hops":1,"pred":"CITED","ts":1500}]'):
+                          return_value='[{"s":"n1","p":"CITED","o":"n2","ts":1500,"w":1.0}]'):
             result = store.execute_temporal_cypher("n1", ["CITED"], 1000, 2000, "out", 3)
         assert result.rows[0] == ["n2", 1, "CITED", 1500]
 

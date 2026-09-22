@@ -95,11 +95,17 @@ class TestEmbedQueueE2E:
             guard += 1
         assert total_processed >= len(ids)
 
-        # embeddings landed in kg_NodeEmbeddings
+        # The vectors landed in the default pair's table. Keyed on `node_id`: 4.0.0
+        # replaced the old `id VARCHAR(256)` primary key with `emb_rowid BIGINT IDENTITY`
+        # plus `UNIQUE (graph_id, node_id)`, and `WHERE id IN (...)` does not fail against
+        # that shape — IRIS exposes every table's RowID as `id`, so the predicate compares
+        # integers against strings, matches nothing, and reports no vectors for writes that
+        # succeeded.
         cur = engine.conn.cursor()
         placeholders = ",".join(["?"] * len(ids))
         cur.execute(
-            f"SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id IN ({placeholders})",
+            f"SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings "
+            f"WHERE node_id IN ({placeholders})",
             ids,
         )
         assert int(cur.fetchone()[0]) == len(ids)

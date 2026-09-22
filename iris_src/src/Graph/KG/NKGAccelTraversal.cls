@@ -364,12 +364,22 @@ ClassMethod BFSJson(seed As %String, predicatesJson As %String = "[]", maxHops A
     If raw = "" || $Extract(raw, 1, 6) = "DEBUG:" {
         Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
-    If $Extract(raw, 1, 10) = "CHUNKED:BFS" {
+    // spec 230: "CHUNKED:BFS" is 11 characters, so the old $Extract(raw, 1, 10)
+    // test could never match its own literal and a chunked reply reached %FromJSON
+    // as the marker text. Match the prefix the producer actually writes.
+    If $Extract(raw, 1, 8) = "CHUNKED:" {
         Set n = +$Piece(raw, ":", 3)
         Set json = ""
         For i = 1:1:n { Set json = json _ $Get(^ArnoKG("bfs_result", i), "") }
         Kill ^ArnoKG("bfs_result")
         Set raw = json
+    }
+    // spec 230: the callout answers with an error string for a seed it cannot find,
+    // and %FromJSON turns that into <THROW> *%Exception.General Parsing error 3.
+    // BFSFastJsonSorted returns "SORTED:0" for the same seed, so answer through it
+    // rather than raising out of an accelerated path that has a working fallback.
+    If $Extract(raw, 1) '= "[" {
+        Return ##class(Graph.KG.Traversal).BFSFastJsonSorted(seed, predicatesJson, maxHops, "", "out", maxResults)
     }
     Set tag = $Job _ "_bfs"
     Kill ^ArnoKG("bfs_r", tag)
@@ -616,6 +626,10 @@ ClassMethod Build2HopExact() As %Boolean
         Set data = data _ $Get(^ArnoKG("2hs", i), "")
     }
     Kill ^ArnoKG("2hs")
+    // Killed here rather than on entry: a callout that never produced a stream leaves
+    // the previous sketch in place instead of an empty one, which no reader can tell
+    // from "nothing has two-hop reach".
+    Kill ^KG("deg2p_exact_merged")
     For pos = 1:1:$Length(data, $Char(10)) {
         Set line = $Piece(data, $Char(10), pos)
         If line = "" Continue
@@ -623,7 +637,12 @@ ClassMethod Build2HopExact() As %Boolean
         Set p    = $Piece(line, $Char(31), 2)
         Set cnt  = +$Piece(line, $Char(31), 3)
         If (s '= "") && (p '= "") && (cnt > 0) {
-            Set ^KG("deg2p_exact", s, p) = cnt
+            // ^KG("deg2p_exact_merged"), not ^KG("deg2p_exact"): this count is computed
+            // over ^NKG, whose node interning has no graph dimension, so it belongs to
+            // no single graph and may not fill a graph-scoped store (spec 230 FR-011).
+            // Graph.KG.TraversalBuild builds the scoped store per graph from
+            // ^KG("out", graph, ...) instead.
+            Set ^KG("deg2p_exact_merged", s, p) = cnt
         }
      }
      Return 1

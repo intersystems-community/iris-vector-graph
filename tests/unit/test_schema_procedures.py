@@ -55,19 +55,15 @@ def test_get_procedures_sql_list_contains_all_required_procedures():
 # US2 — Procedure dimension matches configured embedding dimension
 # ---------------------------------------------------------------------------
 
-def test_get_procedures_sql_list_uses_dimension():
-    """FR-002 / SC-005: embedding_dimension param accepted; kg_KNN_VEC uses TO_VECTOR for IRIS compat.
+def test_get_procedures_sql_list_converts_inline():
+    """FR-002 / SC-005: `kg_KNN_VEC` uses `TO_VECTOR` inline for IRIS compatibility.
 
-    Still accepted, and since spec 226 also deprecated — passing it warns and changes
-    nothing. The warning is suppressed here because this test is about acceptance; the
-    deprecation itself is asserted in `TestEmbeddingDimensionParameterIsDeprecated`.
+    Spec 227 removed the `embedding_dimension` argument this test used to pass; the
+    removal itself is asserted in `TestEmbeddingDimensionParameterIsRemoved`.
     """
     from iris_vector_graph.schema import GraphSchema
 
-    # embedding_dimension is accepted (no TypeError) and the procedure uses TO_VECTOR inline
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        stmts = GraphSchema.get_procedures_sql_list("Graph_KG", embedding_dimension=384)
+    stmts = GraphSchema.get_procedures_sql_list("Graph_KG")
     combined = "\n".join(stmts)
     assert "kg_KNN_VEC" in combined, "kg_KNN_VEC must be present"
     # IRIS SQL procedures cannot DECLARE typed VECTOR variables; TO_VECTOR is used inline instead
@@ -176,44 +172,35 @@ def _knn_vec_statement() -> str:
     raise AssertionError("kg_KNN_VEC is not in the generated procedure list")
 
 
-class TestEmbeddingDimensionParameterIsDeprecated:
-    """T035 / FR-016: the parameter is accepted, warns, and does nothing.
+class TestEmbeddingDimensionParameterIsRemoved:
+    """Spec 227 FR-024: the parameter is gone in 4.0.0, as the 3.2.0 warning said.
 
-    Deprecating rather than deleting is deliberate (ADR-0005): a caller who passes it
-    today already gets the behaviour they get after the change, so removing it in a minor
-    release would break callers for no behavioural gain. Removal is 4.0.0.
+    Deprecating first rather than deleting was deliberate (ADR-0005): a caller who
+    passed it already got the behaviour they would get after removal, so breaking
+    them in a minor release bought nothing. 4.0.0 is where that debt is settled.
+
+    Removed rather than kept-and-ignored because an accepted width parameter reads
+    like it controls the vector width. It never did, and it must not — a declared
+    length inside `TO_VECTOR` reshapes the query vector and returns a plausible
+    wrong score instead of `SQLCODE -257`.
     """
 
-    def test_passing_it_warns(self):
-        with pytest.warns(DeprecationWarning, match="embedding_dimension"):
+    def test_passing_it_raises(self):
+        with pytest.raises(TypeError, match="embedding_dimension"):
             _procedures(table_schema="Graph_KG", embedding_dimension=768)
-
-    def test_the_warning_says_where_the_width_does_belong(self):
-        """A bare "deprecated" invites someone to wire it in properly instead. The
-        warning has to say the width is not wanted here, not merely not wanted yet."""
-        with pytest.warns(DeprecationWarning) as caught:
-            _procedures(table_schema="Graph_KG", embedding_dimension=768)
-        message = str(caught[0].message)
-        assert "ADR-0005" in message
-        assert "4.0.0" in message
 
     def test_omitting_it_does_not_warn(self):
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
             _procedures(table_schema="Graph_KG")
 
-    def test_the_generated_sql_is_byte_identical_whatever_is_passed(self):
-        """The point of the deprecation: the value has never reached SQL. Comparing
-        against a nonsense width as well as the real default makes that concrete —
-        if anyone wires the parameter in, this fails rather than shipping quietly."""
-        omitted = _procedures(table_schema="Graph_KG")
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            at_default = _procedures(table_schema="Graph_KG", embedding_dimension=768)
-            at_nonsense = _procedures(table_schema="Graph_KG", embedding_dimension=17)
-
-        assert at_default == omitted
-        assert at_nonsense == omitted
+    def test_no_width_reaches_the_generated_sql(self):
+        """The reason the parameter could be removed rather than wired in: the width
+        was never in the SQL to begin with. If anyone declares one inside
+        `TO_VECTOR`, this fails rather than shipping a reshaped-vector score."""
+        combined = "\n".join(_procedures(table_schema="Graph_KG"))
+        assert "TO_VECTOR(:queryInput, DOUBLE)" in combined
+        assert not re.findall(r"TO_VECTOR\s*\([^()]*,[^(),]*,[^()]*\)", combined)
 
     def test_the_engine_does_not_pass_it(self):
         """`initialize_schema` passed the configured width on every run. Left alone, the
@@ -245,18 +232,25 @@ class TestKnnVecLeavesTheQueryVectorUnlengthed:
         three_arg = re.findall(r"TO_VECTOR\s*\([^()]*,[^(),]*,[^()]*\)", combined)
         assert not three_arg, f"a width was declared inside TO_VECTOR: {three_arg}"
 
-    def test_still_declares_four_parameters(self):
-        """The signature is load-bearing even though one parameter is ignored:
-        `kg_RRF_FUSE` calls `kg_KNN_VEC` with four arguments, so dropping
-        `embeddingConfig` breaks the caller. It goes in 4.0.0, with that call site."""
+    def test_the_fourth_parameter_is_now_the_graph(self):
+        """Still four parameters, but the last one does something (spec 227 FR-022).
+
+        The slot changed meaning in place: same position, same VARCHAR type, so a
+        3.2.0 four-argument call still compiles and now searches a graph named after
+        the caller's model. That cannot be warned about from SQL, which is why it is
+        a changelog entry and why this assertion is on the name, not the count."""
         stmt = _knn_vec_statement()
         signature = stmt[stmt.index("kg_KNN_VEC(") : stmt.index("LANGUAGE SQL")]
-        params = re.findall(r"\bIN\s+(\w+)", signature)
-        assert params == ["queryInput", "k", "labelFilter", "embeddingConfig"]
+        params = re.findall(r"^\s*IN\s+(\w+)", signature, re.MULTILINE)
+        assert params == ["queryInput", "k", "labelFilter", "graphId"]
 
-    def test_rrf_fuse_still_calls_it_with_four_arguments(self):
+    def test_rrf_fuse_passes_a_real_graph_not_null(self):
+        """`NULL` satisfied the old arity. It would now mean "the default graph" by
+        accident, and a fusion ranking every graph's vectors together re-widens what
+        `kg_KNN_VEC` was just narrowed to fix (FR-023)."""
         combined = "\n".join(_procedures(table_schema="Graph_KG"))
-        assert "kg_KNN_VEC(:queryVector, :k1, NULL, NULL)" in combined
+        assert "kg_KNN_VEC(:queryVector, :k1, NULL, NULL)" not in combined
+        assert "kg_KNN_VEC(:queryVector, :k1, NULL, :graphId)" in combined
 
 
 # ---------------------------------------------------------------------------
@@ -315,3 +309,59 @@ class TestUnreadableRegistryRow:
         assert identity is not None
         assert identity.model_key == "my-model"
         assert identity.dimension == 384
+
+
+# ---------------------------------------------------------------------------
+# A multi-clause $SELECT in an OBJECTSCRIPT body is DDL the parser rejects
+# ---------------------------------------------------------------------------
+
+
+class TestObjectScriptBodiesTheDdlParserAccepts:
+    """`LANGUAGE OBJECTSCRIPT` bodies cannot use a comma-separated colon list.
+
+    Measured on `ivg-iris-enterprise`: `CREATE OR REPLACE FUNCTION ... LANGUAGE
+    OBJECTSCRIPT { quit $SELECT(x>0:x, 1:200) }` fails with
+    `<PARAMETER ERROR>; Details: Parameter Name error, First value cannot be a
+    digit: 2` — the DDL parser reads `, 1:200` as a parameter assignment. A
+    single-clause `$SELECT(x>0:x)` installs, and so does a postconditional
+    (`quit:x>0 x`), so it is the comma inside the clause list that breaks it, not
+    the colon. `$S(...)` and `$CASE(...)` fail identically.
+
+    `kg_Betweenness` shipped with one, so it was the only algorithm function that
+    did not exist after `initialize_schema`: the DDL failed, the error landed in
+    `_install_procedures`'s non-core branch as a `logger.debug`, and calling it
+    returned `SQLCODE -359 ... 'GRAPH_KG.KG_BETWEENNESS' does not exist`.
+    """
+
+    _CLAUSE_LIST = re.compile(r"\$(?:SELECT|S|CASE)\s*\([^()]*,[^()]*\)", re.IGNORECASE)
+
+    def _objectscript_bodies(self):
+        from iris_vector_graph.schema import GraphSchema
+
+        for stmt in GraphSchema.get_procedures_sql_list("Graph_KG"):
+            if "LANGUAGE OBJECTSCRIPT" not in stmt.upper():
+                continue
+            name = re.search(r"CREATE OR REPLACE (?:FUNCTION|PROCEDURE)\s+([\w.]+)", stmt)
+            yield (name.group(1) if name else stmt[:40]), stmt
+
+    def test_no_shipped_body_uses_a_comma_separated_colon_list(self):
+        offenders = [
+            (name, self._CLAUSE_LIST.findall(stmt))
+            for name, stmt in self._objectscript_bodies()
+            if self._CLAUSE_LIST.search(stmt)
+        ]
+        assert offenders == [], (
+            "these bodies will not install: the DDL parser rejects a comma inside a "
+            f"$SELECT/$S/$CASE clause list — {offenders}"
+        )
+
+    def test_betweenness_still_defaults_its_sample_size(self):
+        """Rewriting the clause list must not drop what it computed.
+
+        `BetweennessGlobal`'s third argument is the sample size to use, and the
+        original expression meant "`sampleSize` when the caller gave one, else 200".
+        """
+        bodies = dict(self._objectscript_bodies())
+        betweenness = bodies["Graph_KG.kg_Betweenness"]
+        assert "200" in betweenness
+        assert "sampleSize" in betweenness

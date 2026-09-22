@@ -5,12 +5,44 @@ import time
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IVG_TEST_PORT", "2972"))
+IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
 IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
 IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
 ARNO_LIB = os.environ.get("ARNO_LIB", "/usr/irissys/mgr/libarno_callout.so")
 SKIP = os.environ.get("SKIP_ARNO_TESTS", "false").lower() == "true"
+
+
+#: The node-id prefix of the load these tests are written against. The assertions
+#: read it directly (`o.startswith("node_")`) to tell a resolved name from the
+#: `format!("{idx}")` fallback, so a namespace holding some other dataset cannot
+#: satisfy them however healthy it is.
+BENCHMARK_ID_PREFIX = "node_"
+
+
+def why_the_benchmark_dataset_is_missing(seed: str, edge_count: int):
+    """Why the lazy-resolution load is not in this namespace, or None if it is.
+
+    `^NKG` outlives the rows it indexes, so a seed on its own proves nothing: the
+    gate found `GetFirstNKGNode` answering `'SGS_eefd73_A'` in a namespace with
+    zero `Graph_KG.rdf_edges`. Every assertion in this file then failed on data
+    that was never loaded, and none of those failures was about lazy resolution.
+    """
+    if not seed or seed == "0":
+        return "no NKG data loaded — run BulkIngestEdges + BuildNKG first"
+    if not edge_count:
+        return (
+            f"^NKG still answers with the seed {seed!r} but Graph_KG.rdf_edges is "
+            "empty: the index is stale, left behind by a load that has since been "
+            "erased. Run BulkIngestEdges + BuildNKG to measure lazy resolution."
+        )
+    if not seed.startswith(BENCHMARK_ID_PREFIX):
+        return (
+            f"^NKG's first node is {seed!r}, not a {BENCHMARK_ID_PREFIX!r} id, so "
+            f"this namespace holds another suite's {edge_count} edges. These "
+            "assertions read node names from the benchmark load."
+        )
+    return None
 
 
 @pytest.fixture(scope="module")
@@ -47,8 +79,18 @@ def xl_seed(iris_conn):
 def m_seed(iris_conn):
     c, o = iris_conn
     seed = str(o.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode"))
-    if not seed or seed == "0" or seed == "":
-        pytest.skip("no NKG data loaded — run BulkIngestEdges + BuildNKG first")
+    cur = c.cursor()
+    try:
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+        edge_count = cur.fetchone()[0]
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+    missing = why_the_benchmark_dataset_is_missing(seed, edge_count)
+    if missing:
+        pytest.skip(missing)
     return seed
 
 

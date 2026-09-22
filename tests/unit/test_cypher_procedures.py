@@ -22,8 +22,11 @@ class TestVectorSearchNodeId:
         result = translate_to_sql(q, params={"query": "PMID:630"})
         sql = result.sql
         assert "SELECT e2.emb FROM" in sql
-        assert "e2.id = ?" in sql
-        assert "e.id != ?" in sql
+        # `node_id`, not `id`: 4.0.0 re-keyed the embedding tables on
+        # (graph_id, node_id), and `id` now resolves to the RowID, so the seed
+        # subselect returned NULL and every candidate scored NULL (spec 227).
+        assert "e2.node_id = ?" in sql
+        assert "e.node_id != ?" in sql
 
     def test_string_with_embedding_config_is_mode2(self):
         _set_prefix()
@@ -34,7 +37,7 @@ class TestVectorSearchNodeId:
         result = translate_to_sql(q, params={"query": "cancer immunotherapy"})
         sql = result.sql
         assert "EMBEDDING(?, ?)" in sql
-        assert "e.id != ?" not in sql
+        assert "e.node_id != ?" not in sql
 
     def test_list_is_still_mode1(self):
         _set_prefix()
@@ -139,9 +142,12 @@ class TestPPRProcedure:
         assert "kg_PPR" in sql
         assert "$.id" in sql
         assert "$.score" in sql
-        params = result.parameters[0]
+        # Inlined, not bound: IRIS does not recognise a `?` inside JSON_TABLE's source
+        # argument and refuses the whole statement (see
+        # tests/unit/test_227_json_table_literal_args.py).
         seed_json = json.dumps(["ENT:A", "ENT:B"])
-        assert seed_json in params
+        assert f"'{seed_json}'" in sql
+        assert seed_json not in (result.parameters[0] if result.parameters else [])
 
     def test_defaults_alpha_and_maxiter(self):
         _set_prefix()
@@ -149,9 +155,8 @@ class TestPPRProcedure:
             "CALL ivg.ppr($seeds) YIELD node, score RETURN node, score"
         )
         result = translate_to_sql(q, params={"seeds": ["A"]})
-        params = result.parameters[0]
-        assert 0.85 in params
-        assert 20 in params
+        assert "0.85" in result.sql
+        assert ", 20," in result.sql
 
     def test_score_marked_scalar(self):
         _set_prefix()

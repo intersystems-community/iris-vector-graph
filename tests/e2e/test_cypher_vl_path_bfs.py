@@ -46,14 +46,14 @@ class TestCypherVLPathBFS:
         )
         ms = (time.perf_counter() - t0) * 1000
         assert ms < 500, f"SC-001: [*1..2] took {ms:.0f}ms"
-        assert len(r.get("rows", [])) > 0, "SC-001: must return results"
+        assert len(r.rows) > 0, "SC-001: must return results"
 
     def test_sc002_vl_path_depth3_no_crash(self, engine, knows_data):
         r = engine.execute_cypher(
             f"MATCH (a {{node_id:$src}})-[:{PRED}*1..3]-(b) RETURN count(DISTINCT b) AS c",
             {"src": knows_data}
         )
-        rows = r.get("rows", [])
+        rows = r.rows
         assert rows and rows[0][0] > 0, "SC-002: [*1..3] must return count > 0"
 
     def test_sc003_results_match_bfs(self, engine, knows_data):
@@ -61,19 +61,19 @@ class TestCypherVLPathBFS:
             f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
             {"src": knows_data}
         )
-        assert len(r1.get("rows", [])) > 0, "SC-003: VL path must return results"
+        assert len(r1.rows) > 0, "SC-003: VL path must return results"
         r2 = engine.execute_cypher(
             f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 200",
             {"src": knows_data}
         )
-        assert r1.get("rows") == r2.get("rows"), "SC-003: identical queries must be deterministic"
+        assert r1.rows == r2.rows, "SC-003: identical queries must be deterministic"
 
     def test_sc004_distinct_works(self, engine, knows_data):
         r = engine.execute_cypher(
             f"MATCH (a {{node_id:$src}})-[:{PRED}*1..2]-(b) RETURN DISTINCT b.node_id LIMIT 20",
             {"src": knows_data}
         )
-        node_ids = [row[0] for row in r.get("rows", [])]
+        node_ids = [row[0] for row in r.rows]
         assert len(node_ids) == len(set(node_ids)), "SC-004: DISTINCT returned duplicates"
         assert len(node_ids) <= 20, f"SC-004: LIMIT 20 not respected, got {len(node_ids)}"
 
@@ -82,25 +82,25 @@ class TestCypherVLPathBFS:
             f"MATCH (a {{node_id:$src}})-[:{PRED}*1..4]-(b) RETURN count(DISTINCT b) AS c",
             {"src": knows_data}
         )
-        assert r.get("rows"), "SC-005: [*1..4] must not crash"
+        assert r.rows, "SC-005: [*1..4] must not crash"
 
     def test_no_regression_single_hop(self, engine, knows_data):
         r = engine.execute_cypher(
             f"MATCH (a {{node_id:$src}})-[:{PRED}]->(b) RETURN b.node_id LIMIT 10",
             {"src": knows_data}
         )
-        assert r.get("rows"), "Single-hop must return results"
+        assert r.rows, "Single-hop must return results"
 
     def test_vl_path_exact_hops(self, engine, knows_data):
         r = engine.execute_cypher(
             f"MATCH (a {{node_id:$src}})-[:{PRED}*2]-(b) RETURN count(b) AS c",
             {"src": knows_data}
         )
-        assert r.get("rows"), "Exact hop [*2] must work"
+        assert r.rows, "Exact hop [*2] must work"
 
     def test_vl_path_no_upper_bound(self, engine, knows_data):
         r = engine.execute_cypher(
             f"MATCH (a {{node_id:$src}})-[:{PRED}*]-(b) RETURN count(DISTINCT b) AS c",
             {"src": knows_data}
         )
-        assert r.get("rows"), "Unbounded [*] must work"
+        assert r.rows, "Unbounded [*] must work"

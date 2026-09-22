@@ -137,7 +137,7 @@ class TestArnoCallMocked:
         mock_cur.close = MagicMock()
         with patch.object(iris_connection, "cursor", return_value=mock_cur):
             with pytest.raises(ArnoError, match="failed"):
-                arno_call(iris_connection, "kg_triangle_count_global")
+                arno_call(iris_connection, "kg_triangle_count_global", "^KG", 10)
 
     def test_null_row_raises_arno_error(self, iris_connection):
         self._prime_cache(iris_connection)
@@ -146,7 +146,7 @@ class TestArnoCallMocked:
         mock_cur.close = MagicMock()
         with patch.object(iris_connection, "cursor", return_value=mock_cur):
             with pytest.raises(ArnoError, match="NULL"):
-                arno_call(iris_connection, "kg_triangle_count_global")
+                arno_call(iris_connection, "kg_triangle_count_global", "^KG", 10)
 
     def test_error_result_raises_arno_error(self, iris_connection):
         self._prime_cache(iris_connection)
@@ -155,7 +155,7 @@ class TestArnoCallMocked:
         mock_cur.close = MagicMock()
         with patch.object(iris_connection, "cursor", return_value=mock_cur):
             with pytest.raises(ArnoError, match="returned"):
-                arno_call(iris_connection, "kg_triangle_count_global")
+                arno_call(iris_connection, "kg_triangle_count_global", "^KG", 10)
 
     def test_run_suffix_ok_chunk_fetch(self, iris_connection):
         """OK:<n> response triggers chunk fetch loop (lines 362-386)."""
@@ -518,9 +518,18 @@ class TestBuildKgAdjacencyJson:
 
 class TestBuildKgAdjacencyChunkedRaises:
 
-    def test_chunked_raises_when_arno_unavailable_after_walk(self, iris_connection, iris_master_cleanup):
-        """After building the adj_str, if arno_available returns False, ArnoError raised (L585)."""
-        # Keep arno_available returning False (no mock needed — real container has no libarno)
+    def test_chunked_raises_when_arno_unavailable_after_walk(
+        self, iris_connection, iris_master_cleanup, monkeypatch
+    ):
+        """After building the adj_str, if arno_available returns False, ArnoError raised (L585).
+
+        The precondition is stated here rather than inherited from the container:
+        `test_arno_adjacency_helpers.py` used to leave `IVG_ARNO_LIB` pointing at a
+        libarno that really is deployed at `/tmp/`, and with the probe then
+        succeeding this test took the server-side path and raised nothing.
+        """
+        monkeypatch.setenv("IVG_ARNO_LIB", "/nonexistent/libarno_not_deployed.so")
+        clear_probe_cache()
         with pytest.raises(ArnoError, match="libarno_callout not available"):
             build_kg_adjacency_chunked(iris_connection)
 

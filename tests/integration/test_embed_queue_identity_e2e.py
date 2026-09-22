@@ -18,7 +18,8 @@ import uuid
 
 import pytest
 
-from iris_vector_graph.embedding_identity import identity_from_config
+from iris_vector_graph.embedding_identity import identity_from_config, normalize_model_key
+from iris_vector_graph.routing import route_table_name
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 from iris_vector_graph.schema import _call_classmethod
@@ -103,11 +104,51 @@ def clean(iris_connection):
     _clear_registry(iris_connection)
 
 
-def _embedding_exists(conn, node_id: str) -> bool:
+def _route_table(engine, model, graph: str = "") -> str:
+    """The table a model's vectors live in, asked of the registry and not of the hash.
+
+    `route_table_name` is only the name a *new* route gets. An existing row can point a
+    pair somewhere else — notably at `kg_NodeEmbeddings` itself, which is what spec 226's
+    adoption leaves behind when a 3.2.0 install declared a model: that install keeps
+    writing where it wrote, and recomputing the hash here would look for its vectors in a
+    table that does not exist.
+    """
+    route = engine.resolve_route(graph, model, create=False)
+    return route.table_name if route is not None else route_table_name(
+        graph, normalize_model_key(model)
+    )
+
+
+def _embedding_exists(
+    conn, node_id: str, *, model=None, graph: str = "", engine=None
+) -> bool:
+    """Whether a vector for ``node_id`` exists in the table its model routes to.
+
+    Two things moved under 227. The row is keyed ``node_id``, not ``id`` — and ``id`` is
+    the table's RowID alias, so the old predicate compared an integer against a string,
+    matched nothing, and reported "no vector" for every write. And a declared model does
+    not live in ``kg_NodeEmbeddings`` at all unless the registry says so: only the default
+    pair does by default (FR-015), so a queue entry naming a model has to be looked for
+    where routing put it.
+    """
+    if model is None:
+        table = _NODE_TABLE
+    elif engine is not None:
+        table = _route_table(engine, model, graph)
+    else:
+        table = route_table_name(graph, normalize_model_key(model))
     cur = conn.cursor()
     try:
-        cur.execute(f"SELECT COUNT(*) FROM Graph_KG.{_NODE_TABLE} WHERE id = ?", [node_id])
+        cur.execute(
+            f"SELECT COUNT(*) FROM Graph_KG.{table} "
+            f"WHERE node_id = ? AND COALESCE(graph_id, '') = COALESCE(?, '')",
+            [node_id, graph],
+        )
         return int(cur.fetchone()[0]) > 0
+    except Exception:
+        # No routed table means no vector, which is an answer and not an error: the
+        # refusal path under test is meant to leave nothing behind, table included.
+        return False
     finally:
         with contextlib.suppress(Exception):
             cur.close()
@@ -223,13 +264,20 @@ class TestWorkerFailsOnlyTheConflictingEntry:
         assert bad_entry["status"] == "ERROR"
         assert "model-beta" in bad_entry["error"]
         assert "model-alpha" in bad_entry["error"]
+        # Nowhere: not in the table its own model would route to, and not in the default
+        # pair's table either.
+        assert not _embedding_exists(
+            iris_connection, bad, model="model-beta", engine=engine
+        ), "the conflicting entry still wrote a vector to its own route"
         assert not _embedding_exists(
             iris_connection, bad
-        ), "the conflicting entry still wrote a vector"
+        ), "the conflicting entry wrote a vector to the default table"
 
         good_entry = _entry(iris_connection, good)
         assert good_entry["status"] == "DONE"
-        assert _embedding_exists(iris_connection, good)
+        assert _embedding_exists(
+            iris_connection, good, model="model-alpha", engine=engine
+        )
 
         _forget(iris_connection, good)
 
@@ -237,23 +285,52 @@ class TestWorkerFailsOnlyTheConflictingEntry:
         """An empty `config` is not an unknown model — it is whatever the worker is.
 
         Reading it as unknown would let every legacy entry through untouched, which is
-        exactly the hole this feature closes.
+        exactly the hole this feature closes. Under 227 "whatever the worker is" is also a
+        *route*: the entry's vector goes where the worker's own model routes, not into the
+        default pair's table. `kg_NodeEmbeddings` here holds a row for a third model, and
+        it is no longer the authority over a `model-alpha` worker's writes — the test that
+        pinned the old behaviour asserted a refusal on the strength of exactly that row.
         """
         node = f"ivg226-qempty-{uuid.uuid4().hex[:8]}"
         engine = _engine(iris_connection, dim=width, model="model-alpha")
         engine.create_node(node)
         engine.embedder = _deterministic_embedder(width)
 
-        # The registry names a different model than the worker declares, and the entry
-        # itself names nothing: the worker's own identity is what gets compared.
         engine.set_embedding_identity(
             identity_from_config("model-gamma", dimension=width), _NODE_TABLE
         )
         _queue_call(iris_connection, "Enqueue", node, "", node)
 
         report = engine.process_embed_queue(batch_size=10)
-        assert report["errors"] >= 1
-        entry = _entry(iris_connection, node)
-        assert entry["status"] == "ERROR"
-        assert "model-gamma" in entry["error"] and "model-alpha" in entry["error"]
-        assert not _embedding_exists(iris_connection, node)
+        assert report["errors"] == 0, "an entry naming nothing was refused"
+        assert _entry(iris_connection, node)["status"] == "DONE"
+        assert _embedding_exists(
+            iris_connection, node, model="model-alpha", engine=engine
+        )
+        assert not _embedding_exists(iris_connection, node), (
+            "the worker wrote into the default pair's table, which records another model"
+        )
+        _forget(iris_connection, node)
+
+    def test_an_entry_naming_the_workers_own_model_is_honoured(
+        self, iris_connection, width, clean
+    ):
+        """The agreeing case, so the refusal above is about the disagreement.
+
+        And the vector is where a routed search will look for it: the same table an entry
+        that named nothing lands in, because both resolve to the worker's own identity.
+        """
+        node = f"ivg227-qsame-{uuid.uuid4().hex[:8]}"
+        engine = _engine(iris_connection, dim=width, model="model-alpha")
+        engine.create_node(node)
+        engine.embedder = _deterministic_embedder(width)
+
+        _queue_call(iris_connection, "Enqueue", node, "model-alpha", node)
+
+        report = engine.process_embed_queue(batch_size=10)
+        assert report["errors"] == 0
+        assert _entry(iris_connection, node)["status"] == "DONE"
+        assert _embedding_exists(
+            iris_connection, node, model="model-alpha", engine=engine
+        )
+        _forget(iris_connection, node)

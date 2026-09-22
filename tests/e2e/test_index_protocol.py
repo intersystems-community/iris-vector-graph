@@ -77,7 +77,10 @@ def hnsw_data(engine_with_embeddings):
     if not eng._probe_native_vec():
         pytest.skip("Native HNSW (kg_KNN_VEC) not available on this IRIS tier")
     yield nodes
-    cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'hnsw_e2e_%'")
+    # `node_id`, not `id`: the table is keyed `(graph_id, node_id)` and its `id` is
+    # the implicit RowID, so the old spelling matched nothing and left the vectors
+    # behind for `fk_emb_node` to refuse the node delete on.
+    cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'hnsw_e2e_%'")
     for nid in nodes:
         cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [nid])
     eng.conn.commit()
@@ -168,9 +171,9 @@ class TestEngineIndexHNSW:
             cur.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [new_id])
             eng.conn.commit()
         eng.index("hnsw").insert(new_id, vec)
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [new_id])
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id=?", [new_id])
         assert cur.fetchone()[0] == 1
-        cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id=?", [new_id])
+        cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id=?", [new_id])
         cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id=?", [new_id])
         eng.conn.commit()
 

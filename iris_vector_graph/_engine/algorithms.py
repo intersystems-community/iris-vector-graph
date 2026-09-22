@@ -55,8 +55,31 @@ class AlgorithmsMixin:
             raise ValueError("seed_entities must contain at least one entity")
 
         if self._store_capabilities.get("ppr", True):
-            result = self._store.execute_ppr(seed_entities, damping_factor, max_iterations)
-            if not result.error:
+            # `bidirectional` and `reverse_edge_weight` go to the store, not just to the
+            # fallback below. Without them this call answered every bidirectional request
+            # with forward-only scores: the store returned no error, so the two paths that
+            # do honour reverse edges — `Graph.KG.PageRank.RunJson`'s `bidir`/`revWeight`
+            # arguments and `_kg_PERSONALIZED_PAGERANK_python_fallback` — were unreachable.
+            #
+            # A store predating these keywords raises `TypeError`; that is the correct
+            # outcome, because dropping to the fallback computes the reverse half rather
+            # than quietly omitting it.
+            try:
+                result = self._store.execute_ppr(
+                    seed_entities,
+                    damping_factor,
+                    max_iterations,
+                    bidirectional=bidirectional,
+                    reverse_edge_weight=reverse_edge_weight,
+                )
+            except TypeError as exc:
+                logger.warning(
+                    "store.execute_ppr does not accept bidirectional/reverse_edge_weight "
+                    "(%s); computing in Python so reverse edges are not dropped",
+                    exc,
+                )
+                result = None
+            if result is not None and not result.error:
                 top_k = return_top_k
                 rows = result.rows
                 if top_k:
@@ -362,6 +385,35 @@ class AlgorithmsMixin:
         from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(self.conn, "Graph.KG.Algorithms", "CDLPJson", max_iterations))
         return json.loads(raw) if raw else {}
+    def _subgraph_embeddings(self, nodes: List[str]) -> Dict[str, Any]:
+        """The vectors of the nodes a subgraph traversal returned.
+
+        `WHERE id IN (...)` compared node IDs against the table's RowID and matched
+        nothing, so `include_embeddings=True` returned an empty map and looked like
+        "no node is embedded". Reach stays namespace-wide because the traversal that
+        produced `nodes` is namespace-wide too (`Graph.KG.Subgraph` takes no graph) —
+        scoping only the vector read would answer a narrower question than the node
+        list it decorates.
+        """
+        node_embeddings: Dict[str, Any] = {}
+        if not nodes:
+            return node_embeddings
+        emb_table = self._t("kg_NodeEmbeddings")
+        cursor = self.conn.cursor()
+        phs = ",".join(["?"] * len(nodes))
+        cursor.execute(
+            f"SELECT node_id, emb FROM {emb_table} WHERE node_id IN ({phs})",
+            nodes,
+        )
+        for row in cursor.fetchall():
+            nid, emb_csv = row[0], str(row[1])
+            try:
+                node_embeddings[nid] = [float(x) for x in emb_csv.split(",")]
+            except Exception:
+                pass
+        cursor.close()
+        return node_embeddings
+
     def kg_SUBGRAPH(self, seed_ids: List[str], k_hops: int = 2,
                     edge_types: Optional[List[str]] = None,
                     include_properties: bool = True,
@@ -374,12 +426,35 @@ class AlgorithmsMixin:
             result = self._store.execute_subgraph(seed_ids, k_hops, edge_types or [], max_nodes)
             if result.error is None:
                 import json as _j
-                if result.rows:
-                    nodes = _j.loads(result.rows[0][0]) if result.rows[0][0] else []
-                    edges = _j.loads(result.rows[0][1]) if result.rows[0][1] else []
-                else:
-                    nodes, edges = [], []
-                return SubgraphData(nodes=nodes, edges=edges, seed_ids=list(seed_ids))
+
+                def _col(index, empty):
+                    row = result.rows[0] if result.rows else []
+                    if len(row) <= index or not row[index]:
+                        return empty
+                    return _j.loads(row[index])
+
+                nodes = _col(0, [])
+                # The envelope's edges are `{"s","p","o"}` objects; `SubgraphData.edges`
+                # is `List[Tuple[str, str, str]]`, and the ObjectScript path below has
+                # always converted them. Leaving dicts here meant
+                # `for s, p, o in sg.edges` unpacked the *keys*.
+                edges = [
+                    (e["s"], e["p"], e["o"]) if isinstance(e, dict) else tuple(e)
+                    for e in _col(1, [])
+                ]
+                node_properties = _col(2, {}) if include_properties else {}
+                node_labels = _col(3, {}) if include_properties else {}
+                node_embeddings = (
+                    self._subgraph_embeddings(nodes) if include_embeddings else {}
+                )
+                return SubgraphData(
+                    nodes=nodes,
+                    edges=edges,
+                    node_properties=node_properties,
+                    node_labels=node_labels,
+                    node_embeddings=node_embeddings,
+                    seed_ids=list(seed_ids),
+                )
         from iris_vector_graph.schema import _call_classmethod
         seed_json = json.dumps(seed_ids)
         edge_types_json = json.dumps(edge_types) if edge_types else ""
@@ -391,22 +466,7 @@ class AlgorithmsMixin:
             edges = [(e["s"], e["p"], e["o"]) for e in parsed.get("edges", [])]
             node_properties = parsed.get("properties", {})
             node_labels = parsed.get("labels", {})
-            node_embeddings: Dict[str, Any] = {}
-            if include_embeddings and nodes:
-                emb_table = self._t("kg_NodeEmbeddings")
-                cursor = self.conn.cursor()
-                phs = ",".join(["?"] * len(nodes))
-                cursor.execute(
-                    f"SELECT id, emb FROM {emb_table} WHERE id IN ({phs})", nodes
-                )
-                for row in cursor.fetchall():
-                    nid, emb_csv = row[0], str(row[1])
-                    try:
-                        import numpy as _np
-                        node_embeddings[nid] = [float(x) for x in emb_csv.split(",")]
-                    except Exception:
-                        pass
-                cursor.close()
+            node_embeddings = self._subgraph_embeddings(nodes) if include_embeddings else {}
             return SubgraphData(
                 seed_ids=seed_ids, nodes=nodes, edges=edges,
                 node_properties=node_properties, node_labels=node_labels,

@@ -21,9 +21,17 @@ class TestPythonGraphOperators:
 
     @pytest.fixture(autouse=True)
     def setup_operators(self, engine):
-        """Initialize operators with managed connection"""
-        self.operators = IRISGraphOperators(iris_connection)
-        self.conn = iris_connection
+        """Initialize operators with the managed connection.
+
+        `engine` used to come from `tests/integration/conftest.py`, which this directory
+        cannot see, so every test here ended in `fixture 'engine' not found` — and the
+        body referenced a bare `iris_connection` that was never a parameter, so even with
+        the fixture present it would have raised NameError. Both go through `engine.conn`
+        now, and the fixture lives in `tests/python/conftest.py`.
+        """
+        self.engine = engine
+        self.operators = IRISGraphOperators(engine.conn)
+        self.conn = engine.conn
 
     def test_kg_knn_vec_function(self):
         """Test kg_KNN_VEC Python function"""
@@ -58,13 +66,25 @@ class TestPythonGraphOperators:
         cursor = self.conn.cursor()
         
         # Create test data
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", (f"{prefix}A",))
-        cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", (f"{prefix}B",))
-        cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)", (f"{prefix}A", "interacts_with", f"{prefix}B"))
-        self.conn.commit()
+        # Unqualified `nodes` / `rdf_edges` resolve to SQLUser, not Graph_KG, and 4.0.0's
+        # edge FKs are composite — (graph_id, s) and (graph_id, o_id) against nodes — so
+        # a raw edge INSERT needs both endpoints registered in the same graph. The engine
+        # does all of that, and writes the ^KG adjacency the operators read besides.
+        # `kg_GRAPH_PATH` matches two hops, A-[pred1]->B-[pred2]->C, so one edge could
+        # never satisfy it: the old data made the result empty by construction and
+        # `isinstance(results, list)` passed on that empty list.
+        self.engine.create_node(f"{prefix}A")
+        self.engine.create_node(f"{prefix}B")
+        self.engine.create_node(f"{prefix}C")
+        self.engine.create_edge(f"{prefix}A", "interacts_with", f"{prefix}B")
+        self.engine.create_edge(f"{prefix}B", "associated_with", f"{prefix}C")
+        self.engine.sync()
 
         results = self.operators.kg_GRAPH_PATH(f"{prefix}A", "interacts_with", "associated_with")
         assert isinstance(results, list)
+        steps = {(row[1], row[2], row[3], row[4]) for row in results}
+        assert (1, f"{prefix}A", "interacts_with", f"{prefix}B") in steps, results
+        assert (2, f"{prefix}B", "associated_with", f"{prefix}C") in steps, results
 
     def test_performance_benchmarks(self):
         """Test performance of Python operators"""
@@ -75,6 +95,6 @@ class TestPythonGraphOperators:
     def test_data_integrity(self):
         """Test data integrity check"""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM nodes")
+        cursor.execute(f"SELECT COUNT(*) FROM {self.engine._t('nodes')}")
         count = cursor.fetchone()[0]
         assert count >= 0

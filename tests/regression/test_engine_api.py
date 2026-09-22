@@ -2,9 +2,19 @@
 
 Captures the exact public method set and signatures of IRISGraphEngine. The
 engine.py god-class split (mixin decomposition) MUST NOT change the public
-surface or the import path. This guard fails if any public method is removed,
-added, or has its signature changed — catching accidental API breaks during
-the refactor.
+surface or the import path. This guard fails if any public method is removed
+or has its signature changed — catching accidental API breaks during the
+refactor. Additions are deliberately not failures; new methods are how the
+library grows.
+
+The baseline is a snapshot, so it has to be re-captured whenever a signature
+changes on purpose. It was last captured at spec 186 and went stale across
+214, 223, 226 and 227: 44 methods had appeared (silently tolerated) and 29
+signatures had gained a `graph` or `model_key` parameter, so the changed-
+signature leg had been failing for several releases and guarded nothing. It is
+re-captured here for 4.0.0. Every one of those 29 changes is additive — a new
+trailing or keyword-only parameter with a default — and nothing was removed;
+re-baselining a *removal* would need a deprecation, not a snapshot refresh.
 """
 from __future__ import annotations
 

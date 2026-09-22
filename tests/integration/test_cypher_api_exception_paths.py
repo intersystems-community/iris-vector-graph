@@ -1,8 +1,10 @@
 """
 Integration tests for uncovered cypher_api.py paths.
 
-Uses FastAPI TestClient against the real IRIS container (ivg-iris, port 21972).
-Patches _get_engine / _run_cypher to force exception branches in route handlers.
+Uses FastAPI TestClient against the real IRIS container — ivg-iris-enterprise on
+the host-mapped port in `IVG_PORT` (31972), the same target `tests/conftest.py`
+uses. Patches _get_engine / _run_cypher to force exception branches in route
+handlers.
 
 Targets:
   - /schema exception path (L366-367)
@@ -30,25 +32,32 @@ from iris_vector_graph.engine import IRISGraphEngine
 
 
 def _fresh_connection():
-    """Open a fresh IRIS connection for use in this test module."""
+    """Open a second IRIS connection, so this module's engine is its own.
+
+    Via `localhost:$IVG_PORT`, which is how `tests/conftest.py` reaches the
+    container and the only route that works from the host: the previous version of
+    this helper read the container's own IP out of `docker inspect` and dialled
+    port 1972 on it, which is the port *inside* the container. Under OrbStack that
+    address is not routable from here, so every test in this file errored in setup
+    with `<COMMUNICATION LINK ERROR> Failed to connect to server` — 22 of them —
+    and the file has been dark rather than failing.
+    """
     import os
-    import subprocess as _sp
-    container_name = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
-    cip = _sp.run(
-        ["docker", "inspect", container_name,
-         "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"],
-        capture_output=True, text=True,
-    ).stdout.strip()
-    if cip:
+
+    container_name = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+    port = int(os.environ.get("IVG_PORT", "31972"))
+    try:
         import iris.dbapi as _dbapi
+
         return _dbapi.connect(
-            hostname=cip, port=1972, namespace="USER",
+            hostname="localhost", port=port, namespace="USER",
             username="_SYSTEM", password="SYS",
         )
-    # fallback: use iris_devtester
-    from iris_devtester import IRISContainer
-    c = IRISContainer.attach(container_name)
-    return c.get_connection()
+    except Exception:
+        # fallback: use iris_devtester
+        from iris_devtester import IRISContainer
+        c = IRISContainer.attach(container_name)
+        return c.get_connection()
 
 
 @pytest.fixture

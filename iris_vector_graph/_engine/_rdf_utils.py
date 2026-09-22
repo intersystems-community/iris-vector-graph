@@ -127,9 +127,38 @@ def _build_rdflib_graph(
     def _node_filter_params() -> list:
         return list(node_ids) if node_ids else []
 
+    # Build SQL WHERE fragment for graph scoping.
+    #
+    # One fragment for all three tables, because they were not all scoped: only
+    # rdf_edges carried a graph predicate, so exporting one named graph wrote that
+    # graph's edges beside *every* graph's rdf:type and literal triples. Both
+    # rdf_labels and rdf_props have a graph_id column — it is the leading column of
+    # each of their primary keys — and both were read with a bare WHERE 1=1
+    # (spec 230, FR-001c).
+    #
+    # Three meanings, kept distinct:
+    #   None -> every graph, which is what export_rdf documents and an export tool
+    #           should default to;
+    #   ""   -> the default graph, as it means everywhere else in IVG. `if graph_id:`
+    #           could not tell this from None, so asking for the default graph
+    #           returned the whole namespace;
+    #   name -> that graph. COALESCE is not used here: a named graph must not also
+    #           match rows that predate the backfill and spell "no graph" as NULL.
+    def _graph_filter_clause() -> str:
+        if graph_id is None:
+            return ""
+        if graph_id == "":
+            return " AND COALESCE(graph_id, '') = ''"
+        return " AND graph_id = ?"
+
+    def _graph_filter_params() -> list:
+        return [graph_id] if graph_id else []
+
     # -- rdf_labels → rdf:type triples --
     label_sql = "SELECT s, label FROM Graph_KG.rdf_labels WHERE 1=1"
     label_params: list = []
+    label_sql += _graph_filter_clause()
+    label_params.extend(_graph_filter_params())
     if label_filter:
         label_sql += " AND label IN (" + ",".join(["?" for _ in label_filter]) + ")"
         label_params.extend(label_filter)
@@ -149,6 +178,8 @@ def _build_rdflib_graph(
     # -- rdf_props → literal triples --
     props_sql = 'SELECT s, "key", val FROM Graph_KG.rdf_props WHERE 1=1'
     props_params: list = []
+    props_sql += _graph_filter_clause()
+    props_params.extend(_graph_filter_params())
     props_sql += _node_filter_clause("s")
     props_params.extend(_node_filter_params())
 
@@ -167,9 +198,8 @@ def _build_rdflib_graph(
     # -- rdf_edges → SPO triples (with optional named graph and qualifiers) --
     edges_sql = "SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges WHERE 1=1"
     edges_params: list = []
-    if graph_id:
-        edges_sql += " AND graph_id = ?"
-        edges_params.append(graph_id)
+    edges_sql += _graph_filter_clause()
+    edges_params.extend(_graph_filter_params())
     if label_filter:
         # Scope to nodes that have those labels
         edges_sql += " AND s IN (SELECT s FROM Graph_KG.rdf_labels WHERE label IN (" + ",".join(["?" for _ in label_filter]) + "))"

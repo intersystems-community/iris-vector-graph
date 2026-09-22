@@ -112,7 +112,8 @@ class HybridSearchFusion:
                          entity_types: Optional[List[str]] = None,
                          k: int = 15,
                          fusion_method: str = "rrf",
-                         weights: Optional[List[float]] = None) -> List[Dict[str, Any]]:
+                         weights: Optional[List[float]] = None,
+                         graph: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Multi-modal search combining vector, text, and graph signals
 
@@ -123,6 +124,12 @@ class HybridSearchFusion:
             k: Number of final results
             fusion_method: "rrf" or "weighted"
             weights: Weights for weighted fusion [vector, text, graph]
+            graph: Named graph for every leg (spec 227 FR-023, spec 230 FR-009).
+                ``None`` means the default graph, never every graph. ``docs`` is
+                keyed ``(graph_id, id)`` since 4.0.0 and the expansion reads
+                ``rdf_edges``, so all three legs answer from the one graph —
+                previously the text and graph legs answered from all of them, and
+                the fused ranking mixed the results without saying so.
 
         Returns:
             List of ranked entities with detailed scores
@@ -137,7 +144,7 @@ class HybridSearchFusion:
         if query_vector:
             try:
                 k_vector = min(k * 3, 100)  # Get more candidates for fusion
-                vector_results = self.graph_engine.kg_KNN_VEC(query_vector, k=k_vector)
+                vector_results = self.graph_engine.kg_KNN_VEC(query_vector, k=k_vector, graph=graph)
                 result_lists.append(vector_results)
                 search_modes.append("vector")
                 logger.info(f"Vector search returned {len(vector_results)} results")
@@ -148,7 +155,9 @@ class HybridSearchFusion:
         if query_text:
             try:
                 k_text = min(k * 3, 100)
-                text_results = self.graph_engine.kg_TXT(query_text, k=k_text)
+                text_results = self.graph_engine.kg_TXT(
+                    query_text, k=k_text, graph=graph
+                )
                 result_lists.append(text_results)
                 search_modes.append("text")
                 logger.info(f"Text search returned {len(text_results)} results")
@@ -172,7 +181,8 @@ class HybridSearchFusion:
                     graph_expansion = self.graph_engine.kg_NEIGHBORHOOD_EXPANSION(
                         list(initial_entities)[:20],  # Limit seed entities
                         expansion_depth=1,
-                        confidence_threshold=600
+                        confidence_threshold=600,
+                        graph=graph,
                     )
 
                     # Convert graph results to scored list
@@ -241,13 +251,18 @@ class HybridSearchFusion:
 
         return detailed_results
 
-    def adaptive_search(self, query: str, k: int = 15) -> List[Dict[str, Any]]:
+    def adaptive_search(
+        self, query: str, k: int = 15, graph: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Adaptive search that automatically determines the best search strategy
 
         Args:
             query: Natural language query
             k: Number of results
+            graph: Named graph to answer from. ``None`` is the default graph, never
+                every graph — including on the text fallback below, which is the
+                path a caller lands on precisely when something has already failed.
 
         Returns:
             Adaptive search results
@@ -279,14 +294,15 @@ class HybridSearchFusion:
                 query_vector=None,  # Would need to generate embedding
                 query_text=query if use_text else None,
                 k=k,
-                fusion_method="rrf"
+                fusion_method="rrf",
+                graph=graph,
             )
             return results
         except Exception as e:
             logger.error(f"Adaptive search failed: {e}")
             # Fallback to simple text search
             try:
-                text_results = self.graph_engine.kg_TXT(query, k=k)
+                text_results = self.graph_engine.kg_TXT(query, k=k, graph=graph)
                 return [{'entity_id': eid, 'fusion_score': score, 'rank': i+1, 'search_modes': [{'mode': 'text_fallback', 'score': score, 'rank': i+1}]}
                        for i, (eid, score) in enumerate(text_results)]
             except Exception as fallback_error:

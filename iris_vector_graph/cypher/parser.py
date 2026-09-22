@@ -228,6 +228,11 @@ class Parser:
                     skip=skip,
                     limit=limit,
                     procedure_call=proc,
+                    # This branch dropped `graph_context`, so `USE GRAPH 'A' CALL
+                    # ivg.vector.search(...)` parsed the graph and then discarded it.
+                    # An unscoped search returns more rows, never an error, so nothing
+                    # downstream could notice (spec 227 T071).
+                    graph_context=graph_context,
                 )
 
         # Parse first QueryPart (MATCH ...)

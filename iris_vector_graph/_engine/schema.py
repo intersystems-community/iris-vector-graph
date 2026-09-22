@@ -1,10 +1,23 @@
 import json
 import logging
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
-from iris_vector_graph.schema import GraphSchema, _call_classmethod
+from iris_vector_graph.schema import (
+    GraphSchema,
+    RdfEdgesRescueError,
+    _call_classmethod,
+    repair_ifind_helpers,
+)
 from iris_vector_graph.capabilities import IRISCapabilities
-from iris_vector_graph.constants import VECTOR_TABLE_NAMES
+from iris_vector_graph.constants import DEFAULT_GRAPH, VECTOR_TABLE_NAMES
+from iris_vector_graph.routing import graph_scope_predicate, route_table_name
+from iris_vector_graph.security import (
+    is_routed_edge_embedding_table,
+    is_routed_embedding_table,
+    sanitize_identifier,
+)
 from iris_vector_graph.embedding_identity import (
     MECHANISMS,
     EmbeddingIdentity,
@@ -21,6 +34,20 @@ logger = logging.getLogger(__name__)
 #: 3.1.0 the untyped-column branch altered only the two node tables, and the
 #: mismatch branch altered the edge table under a bare ``except: pass``.
 VECTOR_TABLES = VECTOR_TABLE_NAMES
+
+#: The qualifier ``materialize_inference`` stamps on every edge it derives.
+INFERRED_QUALIFIER_JSON = '{"inferred":true}'
+
+#: The LIKE pattern that recognises that stamp — declared beside it so the writer and
+#: its readers cannot drift apart again. They had: the writer stored the bare boolean
+#: above while ``retract_inference`` looked for ``"inferred":"true"``, a quoted string,
+#: so retraction matched nothing the inference pass had written and reported a row count
+#: of 0 as though there had been nothing to retract (spec 230, FR-001b).
+#: ``create_edge(qualifiers={"inferred": "true"})`` is a third spelling again, because
+#: ``json.dumps`` puts a space after the colon. Matching the key and its colon is the
+#: only predicate all three satisfy, and it still spares ``{"inferredBy": ...}``.
+INFERRED_QUALIFIER_LIKE = '%"inferred":%'
+
 
 def _alter_tolerated_errors() -> tuple:
     """Exception types ``initialize_schema`` tolerates from the dimension migration.
@@ -58,6 +85,7 @@ EMBEDDING_REGISTRY_TABLE = "embedding_registry"
 _EMBEDDING_REGISTRY_DDL = """CREATE TABLE {table} (
     table_name      VARCHAR(128)  NOT NULL,
     graph_id        VARCHAR(256)  NOT NULL DEFAULT '',
+    kind            VARCHAR(16)   DEFAULT 'node',
     mechanism       VARCHAR(32),
     model_key       VARCHAR(256),
     declared_config VARCHAR(512),
@@ -65,8 +93,228 @@ _EMBEDDING_REGISTRY_DDL = """CREATE TABLE {table} (
     dtype           VARCHAR(16)   NOT NULL DEFAULT 'DOUBLE',
     set_at          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     set_by          VARCHAR(128),
+    index_state     VARCHAR(16),
+    index_error     VARCHAR(4000),
+    recall_measured DOUBLE,
+    recall_measured_at TIMESTAMP,
     CONSTRAINT pk_embedding_registry PRIMARY KEY (table_name, graph_id)
 )"""
+
+#: Spec 230 (FR-006): what kind of vector a route holds.
+#:
+#: The route lookup keys on ``(graph_id, model_key)``, which a node route and an
+#: edge route for the same pair now share. Without this discriminator an edge route
+#: is a candidate answer for a node read, and the reader would be handed a table of
+#: ``(s, p, o_id)`` triples where it expects ``node_id``.
+#:
+#: Nullable with a default rather than ``NOT NULL``: every row written before 4.0.0
+#: names a node route and has no value here, and an ``ADD COLUMN ... NOT NULL`` over
+#: a populated table is refused. Readers ``COALESCE(kind, 'node')`` for that reason —
+#: absent means node, which is what every pre-230 row is.
+ROUTE_KINDS = ("node", "edge")
+
+#: The default a missing ``kind`` means, and the value a node route records.
+ROUTE_KIND_NODE = "node"
+
+#: The value an edge route records.
+ROUTE_KIND_EDGE = "edge"
+
+#: Spec 227 (FR-019, FR-021) and spec 230 (FR-006): the columns an existing registry
+#: gains on upgrade. The first four let a route describe its own index and recall;
+#: ``kind`` says which kind of vector it holds.
+#:
+#: The four are declared nullable with no default on purpose — a row written before
+#: the upgrade has no measurement, and a default would claim an index state nobody
+#: looked at. ``kind`` does carry a default, because an existing row's kind is not
+#: unknown: everything written before 4.0.0 is a node route.
+#:
+#: ``ADD COLUMN`` needs the type; ``ALTER COLUMN`` must not restate one
+#: (SQLCODE -25), which is why these are only ever added.
+_REGISTRY_ROUTE_COLUMNS = (
+    ("index_state", "VARCHAR(16)"),
+    ("index_error", "VARCHAR(4000)"),
+    ("recall_measured", "DOUBLE"),
+    ("recall_measured_at", "TIMESTAMP"),
+    ("kind", "VARCHAR(16) DEFAULT 'node'"),
+)
+
+#: The reverse lookup routing needs: ``(graph, model) → table_name`` (FR-011).
+_REGISTRY_ROUTE_INDEX = "idx_registry_route"
+
+#: Spec 227 (FR-039): where a row goes when its graph cannot be recovered.
+#:
+#: No ``graph_id`` — the absence is the point. ``emb`` declares a type and no
+#: length so rows of different widths coexist in one table (ADR-0005); the width
+#: each row actually has is recorded in ``dimension``, because the column no longer
+#: states it. No index of any kind: nothing searches this table, and a vector index
+#: over mixed widths is not a meaningful object (FR-040).
+_EMBEDDING_QUARANTINE_DDL = """CREATE TABLE {table} (
+    q_rowid      BIGINT IDENTITY PRIMARY KEY,
+    node_id      VARCHAR(256) %EXACT NOT NULL,
+    source_table VARCHAR(256) NOT NULL,
+    emb          VECTOR(DOUBLE),
+    dimension    INTEGER NOT NULL,
+    dtype        VARCHAR(16) NOT NULL,
+    metadata     VARCHAR(4000),
+    reason       VARCHAR(256) NOT NULL, -- ambiguous_graph | no_node | resolver_declined
+    quarantined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)"""
+
+#: The closed set ``reason`` may hold, so a migration report can group by it (FR-030).
+QUARANTINE_REASONS = ("ambiguous_graph", "no_node", "resolver_declined")
+
+EMBEDDING_QUARANTINE_TABLE = "embedding_quarantine"
+
+#: Spec 227 (FR-012, FR-017, FR-018): one routed embedding table per ``(graph, model)``.
+#:
+#: ``emb_rowid`` exists so the HNSW index is legal: IRIS refuses a vector index on a
+#: table whose row identity is a composite or a VARCHAR (research R2), and the natural
+#: key here is ``(graph_id, node_id)``. The natural key is therefore enforced by a
+#: separate UNIQUE constraint rather than by the primary key — one vector per node per
+#: route, which is what makes a routed read need no DISTINCT.
+#:
+#: ``graph_id`` is carried even though a routed table holds exactly one graph's rows
+#: (FR-037): the FK to ``nodes`` is composite now, so the column has to be there to
+#: point at it, and a row that names its own graph survives being copied out of the
+#: table by a migration or an export.
+_ROUTED_EMBEDDING_DDL = """CREATE TABLE {table} (
+    emb_rowid BIGINT IDENTITY PRIMARY KEY,
+    graph_id  VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+    node_id   VARCHAR(256) %EXACT NOT NULL,
+    emb       VECTOR({dtype}, {dimension}),
+    metadata  VARCHAR(4000),
+    CONSTRAINT uq_{short} UNIQUE (graph_id, node_id),
+    CONSTRAINT fk_{short} FOREIGN KEY (graph_id, node_id) REFERENCES {nodes} (graph_id, node_id)
+)"""
+
+#: Spec 230 (FR-006): one routed *edge* embedding table per ``(graph, model)``.
+#:
+#: Same shape as the node route for the same reasons — ``emb_rowid`` so the HNSW index
+#: is legal, the natural key enforced by a UNIQUE constraint, ``graph_id`` carried on
+#: every row so a row copied out of the table still names its graph. The natural key is
+#: the triple, so one vector per edge per route.
+#:
+#: Two deliberate differences from ``_ROUTED_EMBEDDING_DDL``:
+#:
+#: * ``p VARCHAR(512)``, matching the pre-230 ``kg_EdgeEmbeddings`` rather than
+#:   ``rdf_edges.p`` (128). Narrowing it here would refuse a predicate the old table
+#:   accepted, which the 4.0.0 migration then could not copy forward.
+#: * No foreign key. A node route points one FK at ``nodes (graph_id, node_id)``; an
+#:   edge has *two* endpoints and its own row in ``rdf_edges``, whose primary key is an
+#:   IDENTITY ``edge_id`` — not the triple — so there is nothing composite to point at.
+#:   Pointing at ``rdf_edges``'s UNIQUE ``(s, p, o_id, graph_id)`` instead would order
+#:   the columns differently from the key here and would make an edge vector
+#:   unwritable until its edge row exists, which reverses the order ``embed_edges``
+#:   works in.
+_ROUTED_EDGE_EMBEDDING_DDL = """CREATE TABLE {table} (
+    emb_rowid BIGINT IDENTITY PRIMARY KEY,
+    graph_id  VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+    s         VARCHAR(256) %EXACT NOT NULL,
+    p         VARCHAR(512) %EXACT NOT NULL,
+    o_id      VARCHAR(256) %EXACT NOT NULL,
+    emb       VECTOR({dtype}, {dimension}),
+    metadata  VARCHAR(4000),
+    CONSTRAINT uq_{short} UNIQUE (graph_id, s, p, o_id)
+)"""
+
+#: The ANN index over a routed table. Attempted, never required (FR-019): a build that
+#: refuses it leaves a route that scans, and the refusal is recorded verbatim.
+_ROUTED_INDEX_DDL = (
+    "CREATE INDEX idx_{short}_ann ON {table} (emb) AS HNSW(Distance='Cosine')"
+)
+
+#: What ``embedding_registry.index_state`` may hold for a routed table.
+#: ``present`` — the index exists. ``refused`` — the build would not create it, and
+#: ``index_error`` says what it said. Nothing means "never attempted", which is what a
+#: row adopted from 3.2.0 has.
+ROUTE_INDEX_STATES = ("present", "refused")
+
+#: Column order of the inventory's registry read, and of the tuple
+#: :meth:`SchemaMixin._registry_inventory_rows` unpacks. One tuple rather than a
+#: literal in the SELECT because the registry carries ``dimension`` and
+#: ``index_state`` a few columns apart: a list that drifts from the unpacking reads
+#: a width out of an index state, and both are the kind of value that looks plausible.
+_INVENTORY_REGISTRY_COLUMNS = (
+    "table_name",
+    "graph_id",
+    "model_key",
+    "dimension",
+    "dtype",
+    "index_state",
+    "index_error",
+    "recall_measured",
+    "recall_measured_at",
+)
+
+
+@dataclass(frozen=True)
+class EmbeddingInventoryRow:
+    """One line of the embedding inventory (spec 227, FR-020, contract §4).
+
+    ``table_name=None`` is a graph that has nodes and no route — reported rather than
+    omitted, because "the vectors are in another route" and "there are no vectors" call
+    for opposite actions (US4-3).
+
+    ``index_state`` is ``present`` only when ``%Dictionary.CompiledIndex`` holds an
+    HNSW index on ``table_name``. ``refused`` means a build was attempted and IRIS said
+    no, with its wording in ``index_error``. ``absent`` covers both "nobody tried" and
+    "the route has no table", which are indistinguishable from the index's point of
+    view and equally mean searches over this route scan.
+
+    Frozen: a report an operator can edit is a report that can be made to agree with
+    whatever they expected.
+    """
+
+    graph_id: str
+    model_key: Optional[str]
+    table_name: Optional[str]
+    dimension: Optional[int]
+    dtype: Optional[str]
+    row_count: int
+    index_name: Optional[str]
+    index_state: str
+    index_error: Optional[str]
+    recall_measured: Optional[float]
+    recall_measured_at: Optional[str]
+
+
+#: Column order of the quarantine read, and of the tuple :class:`QuarantinedVector`
+#: is built from. The table has no ``graph_id`` — that absence is why its rows are
+#: here — so nothing in this list is a scope.
+_QUARANTINE_COLUMNS = (
+    "q_rowid",
+    "node_id",
+    "source_table",
+    "dimension",
+    "dtype",
+    "metadata",
+    "reason",
+    "quarantined_at",
+)
+
+
+@dataclass(frozen=True)
+class QuarantinedVector:
+    """One vector the migration could not place in a graph (spec 227, FR-039, §5).
+
+    Deliberately without the vector itself. A placement copies it inside IRIS with an
+    ``INSERT ... SELECT``, so the floats never become text and back; and a listing that
+    carried every vector would hand an operator a few thousand 768-wide arrays to page
+    through the reasons in.
+
+    ``dimension`` is the width this row's vector actually has, read from the column that
+    records it rather than from the quarantine table's own ``emb``, which declares a type
+    and no length precisely so rows of different widths can sit next to each other.
+    """
+
+    q_rowid: int
+    node_id: str
+    source_table: str
+    dimension: Optional[int]
+    dtype: Optional[str]
+    metadata: Optional[str]
+    reason: str
+    quarantined_at: Optional[str]
 
 
 def _embedder_model_name(embedder) -> Optional[str]:
@@ -158,11 +406,20 @@ class SchemaMixin:
         return [r[0] for r in cur.fetchall()]
 
 
-    def node_exists(self, node_id: str) -> bool:
+    def node_exists(self, node_id: str, *, graph: Optional[str] = None) -> bool:
+        """Does this node exist in this graph? (spec 227)
+
+        `graph=None` asks about the default graph, not about every graph. "Does it
+        exist anywhere" is a different question with a different answer now that a
+        node ID can exist in two graphs, and a caller asking this one almost always
+        wants to know whether they can write next to it.
+        """
+        graph_id = DEFAULT_GRAPH if graph is None else graph
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ?",
-            [node_id],
+            "SELECT COUNT(*) FROM Graph_KG.nodes"
+            f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
+            [node_id, graph_id],
         )
         row = cur.fetchone()
         return row is not None and int(row[0]) > 0
@@ -172,10 +429,80 @@ class SchemaMixin:
     def _registry_table(self) -> str:
         return self._t(EMBEDDING_REGISTRY_TABLE)
 
+    def _quarantine_table(self) -> str:
+        return self._t(EMBEDDING_QUARANTINE_TABLE)
+
     def _ensure_embedding_registry(self, cursor) -> bool:
-        """Create ``embedding_registry`` if absent. True when it exists afterwards."""
+        """Create ``embedding_registry`` if absent. True when it exists afterwards.
+
+        A registry that already exists is brought up to the 4.0.0 shape in place:
+        the four route columns and the reverse route index are added if missing, so
+        a 3.2.0 install and a fresh one end up describing a route the same way.
+        """
+        created = True
         try:
             cursor.execute(_EMBEDDING_REGISTRY_DDL.format(table=self._registry_table()))
+            self.conn.commit()
+        except Exception as e:
+            err = str(e).lower()
+            if "already exists" in err or "already has a" in err:
+                created = True
+            else:
+                logger.warning(
+                    "Could not create %s: %s — embedding identity will not be enforced",
+                    self._registry_table(),
+                    e,
+                )
+                return False
+        self._ensure_registry_route_columns(cursor)
+        return created
+
+    def _ensure_registry_route_columns(self, cursor) -> Dict[str, bool]:
+        """Add spec 227's route columns and the ``(graph_id, model_key)`` index.
+
+        Each statement is attempted independently and an "already exists" is a
+        success: this runs on every ``initialize_schema``, against registries at
+        three different ages. A genuine failure is logged and reported ``False``
+        rather than raised — the registry keeps working without recall numbers,
+        and an installation that cannot add a column should not lose its schema
+        initialisation over it.
+        """
+        table = self._registry_table()
+        outcomes: Dict[str, bool] = {}
+        for name, decl in _REGISTRY_ROUTE_COLUMNS:
+            outcomes[name] = self._try_registry_ddl(
+                cursor, f"ALTER TABLE {table} ADD COLUMN {name} {decl}", name
+            )
+        outcomes[_REGISTRY_ROUTE_INDEX] = self._try_registry_ddl(
+            cursor,
+            f"CREATE INDEX {_REGISTRY_ROUTE_INDEX} ON {table} (graph_id, model_key)",
+            _REGISTRY_ROUTE_INDEX,
+        )
+        return outcomes
+
+    def _try_registry_ddl(self, cursor, sql: str, what: str) -> bool:
+        try:
+            cursor.execute(sql)
+            self.conn.commit()
+            return True
+        except Exception as e:
+            err = str(e).lower()
+            if "already" in err or "duplicate" in err:
+                return True
+            logger.debug("Registry migration step %s skipped: %s", what, e)
+            return False
+
+    def _ensure_embedding_quarantine(self, cursor) -> bool:
+        """Create ``embedding_quarantine`` if absent. True when it exists afterwards.
+
+        Created unconditionally at schema initialisation rather than lazily by the
+        migration: a row with no recoverable graph has to have somewhere to go at the
+        moment it is found, and discovering the table is missing halfway through a
+        placement pass would leave the caller choosing between losing the row and
+        defaulting it (FR-039).
+        """
+        try:
+            cursor.execute(_EMBEDDING_QUARANTINE_DDL.format(table=self._quarantine_table()))
             self.conn.commit()
             return True
         except Exception as e:
@@ -183,11 +510,270 @@ class SchemaMixin:
             if "already exists" in err or "already has a" in err:
                 return True
             logger.warning(
-                "Could not create %s: %s — embedding identity will not be enforced",
-                self._registry_table(),
+                "Could not create %s: %s — rows with no recoverable graph have nowhere to go",
+                self._quarantine_table(),
                 e,
             )
             return False
+
+    # ------------------------------------------------------- stored procedures
+
+    def _embeddings_await_migration(self, cursor) -> bool:
+        """True when ``kg_NodeEmbeddings`` is still in 3.2.0's shape (spec 227).
+
+        Asked by shape, not by error text: the 4.0.0 ``kg_KNN_VEC`` body reads
+        ``n.node_id`` and ``n.graph_id``, and a table whose key column is still ``id``
+        has neither, so the procedure cannot compile there no matter what IRIS calls
+        the failure.
+
+        A table declaring *neither* column is not reported as pre-migration. Absence
+        means the earlier DDL did not land, which is a different problem, and blaming
+        it on a pending migration would send an operator to a call that cannot help.
+        """
+        legacy = self._probe_column("kg_NodeEmbeddings", "id", cursor=cursor)
+        routed = self._probe_column("kg_NodeEmbeddings", "node_id", cursor=cursor)
+        return bool(legacy and not routed)
+
+    def _docs_awaits_graph_column(self, cursor) -> bool:
+        """True when ``Graph_KG.docs`` exists but has no ``graph_id`` yet (spec 230).
+
+        The column is the 4.0.0 upgrade's ``docs`` step, not ``initialize_schema``'s, so
+        an upgraded package meets a 3.2.0 install with a table it cannot index yet.
+
+        A table that is *absent* is not reported as pre-migration: the same DDL script
+        creates it, with the column, a few statements earlier, so treating absence as
+        "awaiting" would skip the index on exactly the install that can have it.
+        """
+        if not self._probe_column("docs", "id", cursor=cursor):
+            return False
+        return not self._probe_column("docs", "graph_id", cursor=cursor)
+
+    def _install_procedures(self, cursor) -> None:
+        """Declare the stored procedures, raising if a required one will not compile.
+
+        Called by ``initialize_schema``, and again by the 4.0.0 migration once it has
+        reshaped the embedding tables. The two callers exist because of an ordering
+        trap: an upgraded package meets a 3.2.0 table, ``kg_KNN_VEC`` cannot compile
+        against it, and the migration that fixes the table needs
+        ``embedding_quarantine`` — which only ``initialize_schema`` creates. Failing
+        here would make each call a prerequisite of the other.
+
+        So a pre-migration install defers the core procedure instead, and the message
+        names the call that finishes the job. Only ``kg_KNN_VEC`` is required;
+        ``kg_TXT`` and ``kg_RRF_FUSE`` depend on the full-text feature being present.
+        """
+        deferred = self._embeddings_await_migration(cursor)
+        procedure_errors: List[Any] = []
+        # No width is passed: `get_procedures_sql_list` ignores it and, since 3.2.0,
+        # deprecates it (ADR-0005 — the query vector is converted unlengthed on purpose).
+        # Passing a width here would fire that warning on every initialize_schema, on a
+        # path no caller can fix, which teaches people to filter the warning out.
+        for stmt in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"):
+            if not stmt.strip():
+                continue
+            is_core = "procedure graph_kg.kg_knn_vec" in stmt.lower()
+            if is_core and deferred:
+                logger.warning(
+                    "kg_KNN_VEC deferred: Graph_KG.kg_NodeEmbeddings is still keyed "
+                    "`id`, so the 4.0.0 procedure body has no columns to read. Run "
+                    "iris_vector_graph.migrations.migrate_to_graph_scoped_embeddings"
+                    "(conn) to move the vectors into graph-scoped tables; it installs "
+                    "the procedure when it is done. Server-side vector search is "
+                    "unavailable until then."
+                )
+                continue
+            try:
+                cursor.execute(stmt)
+            except Exception as e:
+                err = str(e).lower()
+                if "already exists" in err or "already has" in err:
+                    continue  # idempotent re-run — schema or procedure already installed
+                if is_core:
+                    _sqlcode = ""
+                    import re as _re_proc
+
+                    m = _re_proc.search(r"sqlcode.*?<(-?\d+)>", err)
+                    if m:
+                        _sqlcode = m.group(1)
+                    if _sqlcode == "-260":
+                        logger.debug(
+                            "kg_KNN_VEC skipped: vector dimension mismatch in "
+                            "kg_NodeEmbeddings (table has mixed-dim vectors from "
+                            "tests). Non-fatal. | Error: %s",
+                            e,
+                        )
+                    else:
+                        procedure_errors.append((stmt[:80], e))
+                        logger.error("Procedure DDL failed: %s | Error: %s", stmt[:80], e)
+                else:
+                    logger.debug(
+                        "Optional procedure DDL skipped (non-fatal): %s | Error: %s",
+                        stmt[:80],
+                        e,
+                    )
+
+        if procedure_errors:
+            raise RuntimeError(
+                f"initialize_schema() failed to install {len(procedure_errors)} "
+                f"stored procedure(s). Server-side vector search will be unavailable. "
+                f"First error: {procedure_errors[0][1]}"
+            )
+
+    # -------------------------------------------------------------------- routes
+
+    def routed_table_ddl(
+        self,
+        table_name: str,
+        *,
+        dimension: int,
+        dtype: str = "DOUBLE",
+        kind: str = ROUTE_KIND_NODE,
+    ) -> str:
+        """The ``CREATE TABLE`` for a routed embedding table (spec 227 FR-017, spec 230 FR-006).
+
+        ``dimension`` and ``dtype`` are interpolated, not bound — a column declaration
+        cannot take a parameter — so both are checked here rather than trusted. The
+        table name is checked too: it reaches the allowlist as a *shape*
+        (``kg_emb_<16 hex>``, or ``kg_eemb_<16 hex>`` for an edge route), and this is
+        the one place that shape becomes an identifier inside DDL.
+
+        ``kind`` decides which shape is built *and* which name is accepted, together:
+        a ``kg_emb_`` name can only ever get node columns and a ``kg_eemb_`` name can
+        only ever get edge columns. Checking them independently would let a caller
+        create a table whose name says node and whose columns say edge, and every later
+        reader classifies by the name.
+        """
+        if kind not in ROUTE_KINDS:
+            raise ValueError(f"kind must be one of {ROUTE_KINDS}, got {kind!r}")
+        is_edge = kind == ROUTE_KIND_EDGE
+        if is_edge:
+            if not is_routed_edge_embedding_table(table_name):
+                raise ValueError(
+                    f"{table_name!r} is not a routed edge embedding table name "
+                    "(kg_eemb_<16 hex>); routing derives it from "
+                    "routing.edge_route_table_name"
+                )
+        elif not is_routed_embedding_table(table_name):
+            raise ValueError(
+                f"{table_name!r} is not a routed embedding table name "
+                "(kg_emb_<16 hex>); routing derives it from routing.route_table_name"
+            )
+        width = int(dimension)
+        if width <= 0:
+            raise ValueError(f"dimension must be a positive integer, got {dimension!r}")
+        element = str(dtype or "DOUBLE").upper()
+        if not element.isalpha():
+            raise ValueError(f"dtype {dtype!r} is not a vector element type")
+        template = _ROUTED_EDGE_EMBEDDING_DDL if is_edge else _ROUTED_EMBEDDING_DDL
+        return template.format(
+            table=self._t(table_name),
+            short=table_name,
+            dimension=width,
+            dtype=element,
+            nodes=self._t("nodes"),
+        )
+
+    def _create_routed_table(
+        self,
+        cursor,
+        table_name: str,
+        *,
+        dimension: int,
+        dtype: str = "DOUBLE",
+        kind: str = ROUTE_KIND_NODE,
+    ) -> bool:
+        """Create a routed table. True when this call created it, False when it was there.
+
+        "It was there" is the expected outcome of losing a race, not a failure: the
+        winner's ``CREATE TABLE`` and its registry row are two statements, and a second
+        creator that arrives between them has to carry on to the row.
+        """
+        ddl = self.routed_table_ddl(table_name, dimension=dimension, dtype=dtype, kind=kind)
+        try:
+            cursor.execute(ddl)
+            self.conn.commit()
+            return True
+        except Exception as e:
+            err = str(e).lower()
+            if "already exists" in err or "not unique" in err or "already has a" in err:
+                logger.debug("Routed table %s already existed: %s", table_name, e)
+                return False
+            raise
+
+    def _attempt_route_index(self, cursor, table_name: str):
+        """Try to build the ANN index over a routed table. Returns ``(state, error)``.
+
+        A refusal is recorded, never raised (FR-019). The alternative is worse in both
+        directions: a caller whose first write fails because the build has no HNSW
+        support, or a route that silently scans while ``SHOW INDEXES`` claims an index
+        — which is exactly what spec 226 removed.
+        """
+        sql = _ROUTED_INDEX_DDL.format(short=table_name, table=self._t(table_name))
+        try:
+            cursor.execute(sql)
+            self.conn.commit()
+            return "present", None
+        except Exception as e:
+            message = str(e)
+            if "already" in message.lower():
+                return "present", None
+            logger.info(
+                "No ANN index on %s; searches over it will scan. IRIS said: %s",
+                table_name,
+                message,
+            )
+            return "refused", message[:4000]
+
+    def _record_route_index_state(self, cursor, table_name: str, graph_id: str, state, error):
+        """Write a route's index state onto its registry row.
+
+        Separate from the insert because the index attempt happens between the table and
+        the row, and because a later rebuild has to be able to correct the state without
+        touching the identity the row also carries.
+        """
+        try:
+            cursor.execute(
+                f"UPDATE {self._registry_table()} SET index_state = ?, index_error = ? "
+                "WHERE table_name = ? AND graph_id = ?",
+                [state, error, table_name, graph_id],
+            )
+            self.conn.commit()
+        except Exception as e:
+            logger.debug("Could not record index state for %s: %s", table_name, e)
+        finally:
+            # The row this engine may already be serving from cache just changed its
+            # index state, and `is_indexed` is read off the cached route. Dropped in a
+            # `finally` because a failed UPDATE can still have altered the row.
+            self.invalidate_route_cache(graph_id)
+
+    def _record_route_recall(
+        self, cursor, table_name: str, graph_id: str, recall: float, measured_at: str
+    ) -> bool:
+        """Write a measured recall and its timestamp onto a route's registry row (FR-021).
+
+        The timestamp travels with the number because a recall is a statement about the
+        rows that were there when it was taken. Without it, a number measured on three
+        vectors keeps reading as current after a million more arrive.
+
+        Returns whether the row was written, so a harness can report an unrecorded
+        measurement rather than publishing it as recorded.
+        """
+        try:
+            cursor.execute(
+                f"UPDATE {self._registry_table()} SET recall_measured = ?, "
+                "recall_measured_at = ? WHERE table_name = ? AND graph_id = ?",
+                [float(recall), measured_at, table_name, graph_id],
+            )
+            self.conn.commit()
+            return True
+        except Exception as e:
+            logger.warning(
+                "Could not record recall %.4f for %s in graph %r: %s",
+                recall, table_name, graph_id, e,
+            )
+            return False
+        finally:
+            self.invalidate_route_cache(graph_id)
 
     def _offered_embedding_identity(
         self,
@@ -311,17 +897,14 @@ class SchemaMixin:
         invalidates every vector already in the table, so it is an operator action and is
         logged at WARNING saying so.
         """
-        if table_name not in VECTOR_TABLE_NAMES:
+        if table_name not in VECTOR_TABLE_NAMES and not is_routed_embedding_table(table_name):
             raise ValueError(
                 f"table_name {table_name!r} is not an embedding table. Expected one of "
-                f"{VECTOR_TABLE_NAMES}."
+                f"{VECTOR_TABLE_NAMES} or a routed table (kg_emb_<16 hex>)."
             )
-        if graph_id != "":
-            raise ValueError(
-                f"graph_id must be '' in 3.2.0, got {graph_id!r}. The column exists so "
-                f"per-graph identity can be added without a migration; nothing reads it "
-                f"as anything other than 'all graphs' yet (FR-003)."
-            )
+        # Spec 227: `graph_id` is real now. 3.2.0 refused anything but '' because
+        # nothing read the column; the table-name check above stays, because a typo
+        # would otherwise record an identity against a table nothing ever resolves.
         if identity is None or identity.is_unknown:
             raise ValueError(
                 "set_embedding_identity requires a declared model. Only "
@@ -415,11 +998,14 @@ class SchemaMixin:
                         EmbeddingIdentity(mechanism=None, model_key=None),
                         offered,
                         "the registry row disappeared while it was being claimed",
+                        graph_id=graph_id,
                     )
 
             reason = conflicts(recorded, offered)
             if reason:
-                raise EmbeddingIdentityConflict(table_name, recorded, offered, reason)
+                raise EmbeddingIdentityConflict(
+                    table_name, recorded, offered, reason, graph_id=graph_id
+                )
             return recorded
         finally:
             try:
@@ -576,7 +1162,11 @@ class SchemaMixin:
         )
         reason = conflicts(recorded, offered)
         if reason:
-            raise EmbeddingIdentityConflict(table_name, recorded, offered, reason)
+            # The graph goes in the message (spec 227): a routed table is named
+            # after a hash, so the table name alone does not say what refused.
+            raise EmbeddingIdentityConflict(
+                table_name, recorded, offered, reason, graph_id=graph_id
+            )
         return recorded
 
     def _sync_recorded_dimension(self, table_name: str, dimension: int) -> None:
@@ -613,21 +1203,48 @@ class SchemaMixin:
         graph_id: str,
         identity: EmbeddingIdentity,
         set_by: str,
+        kind: str = ROUTE_KIND_NODE,
     ) -> None:
+        """Write one registry row.
+
+        ``kind`` is named in the INSERT only for an edge route (spec 230 FR-006). A node
+        route leaves the column out and takes its ``DEFAULT 'node'``, which keeps this
+        statement writable against a registry whose ``ADD COLUMN kind`` did not take —
+        the same registry every pre-230 row lives in, where absent already means node.
+        An *edge* route names it and fails loudly if the column is missing: a registry
+        that cannot tell the two kinds apart must not be handed an edge route, because
+        every reader would then answer a node lookup with a table of ``(s, p, o_id)``.
+        """
+        if kind not in ROUTE_KINDS:
+            raise ValueError(f"kind must be one of {ROUTE_KINDS}, got {kind!r}")
+        columns = [
+            "table_name",
+            "graph_id",
+            "mechanism",
+            "model_key",
+            "declared_config",
+            "dimension",
+            "dtype",
+            "set_by",
+        ]
+        values = [
+            table_name,
+            graph_id,
+            identity.mechanism,
+            identity.model_key,
+            identity.declared_config,
+            identity.dimension,
+            identity.dtype,
+            set_by,
+        ]
+        if kind != ROUTE_KIND_NODE:
+            columns.append("kind")
+            values.append(kind)
+        placeholders = ", ".join(["?"] * len(values))
         cursor.execute(
-            f"INSERT INTO {self._registry_table()} (table_name, graph_id, mechanism, "
-            "model_key, declared_config, dimension, dtype, set_by) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                table_name,
-                graph_id,
-                identity.mechanism,
-                identity.model_key,
-                identity.declared_config,
-                identity.dimension,
-                identity.dtype,
-                set_by,
-            ],
+            f"INSERT INTO {self._registry_table()} ({', '.join(columns)}) "
+            f"VALUES ({placeholders})",
+            values,
         )
         self.conn.commit()
 
@@ -745,13 +1362,428 @@ class SchemaMixin:
                 self.conn.commit()
             except Exception as e:
                 logger.warning("Could not commit vector dimension migration: %s", e)
-            # The registry's width follows the column it describes (spec 226). Without
-            # this, the engine that just altered the column would be refused by its own
-            # recorded width on the very next write.
-            for name in altered_names:
-                self._sync_recorded_dimension(name, dim)
+
+        # The registry's width follows the column it describes (spec 226), for every
+        # table and not only the ones this call altered. `altered_names` is empty
+        # whenever the columns already hold the configured width — which is exactly
+        # the state a second writer finds after the first one migrated, and exactly
+        # when its own stale row needs carrying forward (FR-031).
+        self.reconcile_recorded_dimensions(cursor)
 
         return report
+
+    def reconcile_recorded_dimensions(self, cursor) -> Dict[str, int]:
+        """Make every embedding table's recorded width match its column declaration.
+
+        The column is the truth about width (FR-006): it is what the next INSERT is
+        checked against, and a registry row that disagrees refuses writes naming a
+        width no column has. So this reads each column and writes the registry,
+        unconditionally, rather than as a side effect of having altered something.
+
+        A column with no declared width is left alone. ``None`` means the catalog has
+        nothing to copy, and inventing a width would be worse than the ``SQLCODE -260``
+        that already tells the caller the column is undeclared.
+
+        Returns:
+            ``{table_name: dimension}`` for the tables reconciled — short names, as
+            the registry stores them.
+        """
+        reconciled: Dict[str, int] = {}
+        for name in VECTOR_TABLES:
+            declared = GraphSchema.get_embedding_dimension(cursor, self._t(name))
+            if declared is None:
+                continue
+            self._sync_recorded_dimension(name, declared)
+            reconciled[name] = declared
+        return reconciled
+
+    # ----------------------------------------------------------------- inventory
+
+    def embedding_inventory(self) -> List["EmbeddingInventoryRow"]:
+        """One row per embedding route, plus one per graph that has none (FR-020).
+
+        The report an operator reads instead of writing SQL against the registry
+        (FR-038). Three of its columns come from three different authorities, and
+        keeping them apart is the point:
+
+        * **the registry** — which model a route declares, and at what width. It is the
+          authority on identity because it is what a write is checked against.
+        * **the table** — how many rows the route actually holds, counted inside the
+          route's graph. A legacy table holds every graph's rows, so an unscoped count
+          would report the namespace's total against each graph, in the report about
+          having stopped doing that.
+        * **the class dictionary** — whether an ANN index exists, through
+          :meth:`GraphSchema.hnsw_indexes`, the single owner of that read. Never from
+          the registry's ``index_state``, which records what one ``CREATE INDEX``
+          replied and not what the namespace holds now, and never from a row count,
+          which is the synthesized index row spec 226 removed (SC-009).
+
+        A graph with nodes and no route appears with ``table_name=None`` rather than
+        being omitted (US4-3): "the vectors are in another route" and "there are no
+        vectors" need opposite actions, and an absent row makes them the same answer.
+
+        An unreadable registry yields ``[]``. That is a 3.2.0-or-earlier database,
+        which has no routes to report, and a status command must not raise on one.
+        """
+        cursor = self.conn.cursor()
+        try:
+            registry_rows = self._registry_inventory_rows(cursor)
+            if registry_rows is None:
+                return []
+            known_tables = self._graph_kg_tables(cursor)
+            out: List[EmbeddingInventoryRow] = []
+            routed_graphs = set()
+            for row in registry_rows:
+                (
+                    table_name,
+                    graph_id,
+                    model_key,
+                    dimension,
+                    dtype,
+                    recorded_state,
+                    recorded_error,
+                    recall,
+                    recall_at,
+                ) = row
+                graph_id = graph_id or DEFAULT_GRAPH
+                routed_graphs.add(graph_id)
+                index_name, index_state, index_error = self._route_index_report(
+                    cursor, table_name, recorded_state, recorded_error
+                )
+                out.append(
+                    EmbeddingInventoryRow(
+                        graph_id=graph_id,
+                        model_key=model_key or None,
+                        table_name=table_name,
+                        dimension=int(dimension) if dimension is not None else None,
+                        dtype=dtype or None,
+                        row_count=self._route_row_count(
+                            cursor, table_name, graph_id, known_tables
+                        ),
+                        index_name=index_name,
+                        index_state=index_state,
+                        index_error=index_error,
+                        recall_measured=float(recall) if recall is not None else None,
+                        recall_measured_at=str(recall_at) if recall_at else None,
+                    )
+                )
+            for graph_id in self._graphs_with_nodes(cursor):
+                if graph_id in routed_graphs:
+                    continue
+                out.append(
+                    EmbeddingInventoryRow(
+                        graph_id=graph_id,
+                        model_key=None,
+                        table_name=None,
+                        dimension=None,
+                        dtype=None,
+                        row_count=0,
+                        index_name=None,
+                        index_state="absent",
+                        index_error=None,
+                        recall_measured=None,
+                        recall_measured_at=None,
+                    )
+                )
+            out.sort(
+                key=lambda r: (r.graph_id or "", r.model_key or "", r.table_name or "")
+            )
+            return out
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+
+    def _registry_inventory_rows(self, cursor) -> Optional[List[tuple]]:
+        """Every registry row, or ``None`` when the registry cannot be read.
+
+        ``None`` and ``[]`` are different databases: an empty registry is a routed
+        install with no routes yet, while an unreadable one does not route at all, and
+        only the second means "report nothing".
+        """
+        columns = ", ".join(_INVENTORY_REGISTRY_COLUMNS)
+        try:
+            cursor.execute(
+                f"SELECT {columns} FROM {self._registry_table()} "
+                "ORDER BY graph_id, table_name"
+            )
+            rows = [tuple(r) for r in cursor.fetchall()]
+        except Exception as e:
+            logger.debug("Embedding registry not readable for the inventory: %s", e)
+            return None
+        # Nine columns were asked for. Fewer means the answer came from something other
+        # than a 227 registry, and reading a width out of column four of it would report
+        # a number with no relationship to any column declaration.
+        return [r for r in rows if len(r) >= len(_INVENTORY_REGISTRY_COLUMNS)]
+
+    def _graph_kg_tables(self, cursor) -> Optional[set]:
+        """Bare table names the catalog holds in this engine's schema, or ``None``.
+
+        Filtered on ``TABLE_SCHEMA``: IRIS projects an auto-generated view per class
+        into ``SQLUser``, so a namespace-wide probe answers with the table and its view
+        and anything counting the result doubles.
+
+        ``None`` means the catalog could not be read, which is not the same as "the
+        table is gone" — the row count then falls back to asking the table directly.
+        """
+        try:
+            cursor.execute(
+                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ?",
+                [self._schema_prefix],
+            )
+            return {str(r[0]) for r in cursor.fetchall()}
+        except Exception as e:
+            logger.debug("Could not list tables in %s: %s", self._schema_prefix, e)
+            return None
+
+    def _graphs_with_nodes(self, cursor) -> List[str]:
+        """Every graph that has at least one node. Empty when ``nodes`` cannot be read.
+
+        ``nodes`` and not ``rdf_labels``: a node is what an embedding can be written
+        for, and the FK on every routed table points here.
+        """
+        try:
+            cursor.execute(f"SELECT DISTINCT graph_id FROM {self._t('nodes')}")
+            return sorted({(r[0] or DEFAULT_GRAPH) for r in cursor.fetchall()})
+        except Exception as e:
+            logger.debug("Could not list graphs for the inventory: %s", e)
+            return []
+
+    def _route_index_report(self, cursor, table_name: str, recorded_state, recorded_error):
+        """``(index_name, index_state, index_error)`` for one route's table.
+
+        ``present`` comes from the class dictionary and nowhere else. A recorded
+        ``refused`` still supplies the reason, because IRIS's own wording is the only
+        thing that tells an operator why the build would not happen.
+        """
+        held = []
+        try:
+            held = GraphSchema.hnsw_indexes(cursor, self._t(table_name))
+        except Exception as e:  # pragma: no cover - hnsw_indexes swallows its own
+            logger.debug("Could not read the index state of %s: %s", table_name, e)
+        if held:
+            return held[0][0], "present", None
+        if recorded_state == "refused" or recorded_error:
+            return None, "refused", recorded_error or None
+        return None, "absent", None
+
+    def _route_row_count(
+        self, cursor, table_name: str, graph_id: str, known_tables: Optional[set]
+    ) -> int:
+        """How many vectors this route holds *in this graph*.
+
+        Zero for a registry row whose table is gone — the state a failed post-commit
+        drop during an erase leaves behind. The row still has to appear in the report,
+        because the operator who has to remove it cannot see it anywhere else.
+        """
+        if known_tables is not None and table_name not in known_tables:
+            return 0
+        try:
+            table = self._t(sanitize_identifier(table_name))
+        except ValueError:
+            logger.warning("Registry names a table that is not an identifier: %r", table_name)
+            return 0
+        try:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {graph_scope_predicate('graph_id')}",
+                [graph_id],
+            )
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            logger.debug("Could not count rows in %s: %s", table_name, e)
+            return 0
+
+    # --------------------------------------------------------------- quarantine
+
+    def list_quarantine(self, *, reason: Optional[str] = None) -> List["QuarantinedVector"]:
+        """Every vector the migration could not place, oldest first (FR-040, §5).
+
+        The only read of ``embedding_quarantine`` in the package. No search path reaches
+        it: a quarantined row has no graph, so a KNN that scored it would return a
+        neighbour from an unknown space — spec 227's own leak, at the bottom of a table
+        named for having caught it.
+
+        ``reason`` must be one of :data:`QUARANTINE_REASONS`. A misspelled reason raises
+        rather than answering ``[]``, because ``[]`` reads as "nothing is quarantined"
+        and that is the answer an operator acts on by moving on.
+
+        A database with no quarantine table yields ``[]`` — it is a 3.2.0 install, which
+        has never quarantined anything, and a status command must not raise on one.
+        """
+        if reason is not None and reason not in QUARANTINE_REASONS:
+            raise ValueError(
+                f"{reason!r} is not a quarantine reason; expected one of "
+                f"{', '.join(QUARANTINE_REASONS)}"
+            )
+        columns = ", ".join(_QUARANTINE_COLUMNS)
+        sql = f"SELECT {columns} FROM {self._quarantine_table()}"
+        params: List[Any] = []
+        if reason is not None:
+            sql += " WHERE reason = ?"
+            params.append(reason)
+        sql += " ORDER BY q_rowid"
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(sql, params)
+            rows = [tuple(r) for r in cursor.fetchall()]
+        except Exception as e:
+            logger.debug("Quarantine not readable: %s", e)
+            return []
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        out: List[QuarantinedVector] = []
+        for row in rows:
+            if len(row) < len(_QUARANTINE_COLUMNS):
+                continue
+            q_rowid, node_id, source_table, dimension, dtype, metadata, why, at = row[:8]
+            out.append(
+                QuarantinedVector(
+                    q_rowid=int(q_rowid),
+                    node_id=str(node_id),
+                    source_table=str(source_table),
+                    dimension=int(dimension) if dimension is not None else None,
+                    dtype=str(dtype) if dtype else None,
+                    metadata=metadata,
+                    reason=str(why),
+                    quarantined_at=str(at) if at else None,
+                )
+            )
+        return out
+
+    def place_quarantined(
+        self, q_rowid: int, *, graph: str, model_key: Optional[str] = None
+    ) -> bool:
+        """Move one quarantined vector into ``(graph, model_key)``'s route (FR-040, §5).
+
+        One row, named explicitly. There is no bulk drain and no ``force``: the operator
+        who knows where a row belongs knows it one row at a time, and placing a whole
+        table at once is the silent default-graph assignment FR-028 forbids under another
+        name.
+
+        Refuses — raising, leaving the row where it is — when the pair has no route, when
+        the route's declared width or dtype disagrees with the row's, or when the node
+        does not exist *in that graph*. The route is never created here: creating one
+        would declare a width taken from a row whose provenance is the thing in doubt.
+
+        The vector moves with an ``INSERT ... SELECT`` and the quarantine row is deleted
+        after, in that order. A refused INSERT therefore leaves the only surviving copy
+        where it was; a DELETE that went first would destroy it to satisfy a write IRIS
+        had already rejected.
+        """
+        graph_id = DEFAULT_GRAPH if graph is None else graph
+        row = self._quarantined_row(q_rowid)
+        if row is None:
+            raise ValueError(
+                f"no quarantined vector with q_rowid {q_rowid!r}; "
+                "list_quarantine() reports the rows that exist"
+            )
+        node_id, row_dimension, row_dtype = row
+
+        route = self.resolve_route(graph_id, model_key, create=False)
+        if route is None:
+            raise ValueError(
+                f"({graph_id!r}, {model_key!r}) has no embedding route, so there is "
+                "nowhere to place this vector. Store a vector for that pair first, or "
+                "place the row in a graph that is already routed."
+            )
+        # The comparison a write would make, raised the way a write raises it: the route
+        # is what is recorded, the quarantined row is what is being offered. Only the
+        # width and dtype are compared — the row declares no model, which is why it is
+        # in quarantine at all.
+        recorded = EmbeddingIdentity(
+            mechanism=None,
+            model_key=route.model_key,
+            dimension=route.dimension,
+            dtype=route.dtype or "DOUBLE",
+        )
+        offered = EmbeddingIdentity(
+            mechanism=None,
+            model_key=route.model_key,
+            dimension=int(row_dimension) if row_dimension is not None else None,
+            dtype=str(row_dtype or "DOUBLE"),
+        )
+        if route.dimension is None or int(route.dimension) != int(row_dimension or 0):
+            raise EmbeddingIdentityConflict(
+                route.table_name,
+                recorded,
+                offered,
+                f"quarantined vector {q_rowid} is {row_dimension}-wide and the route "
+                f"declares {route.dimension}; IRIS refuses the INSERT with SQLCODE -104 "
+                "rather than reshaping it (ADR-0005)",
+                graph_id=graph_id,
+            )
+        if str(row_dtype or "").upper() != str(route.dtype or "").upper():
+            raise EmbeddingIdentityConflict(
+                route.table_name,
+                recorded,
+                offered,
+                f"quarantined vector {q_rowid} is {row_dtype} and the route holds "
+                f"{route.dtype}",
+                graph_id=graph_id,
+            )
+        if not self.node_exists(node_id, graph=graph_id):
+            raise ValueError(
+                f"node {node_id!r} does not exist in graph {graph_id!r}; a routed table's "
+                "foreign key points at (graph_id, node_id), so this placement names a "
+                "node that is not there"
+            )
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"INSERT INTO {self._t(route.table_name)}"
+                " (graph_id, node_id, emb, metadata)"
+                " SELECT ?, node_id, emb, metadata"
+                f" FROM {self._quarantine_table()} WHERE q_rowid = ?",
+                [graph_id, q_rowid],
+            )
+            cursor.execute(
+                f"DELETE FROM {self._quarantine_table()} WHERE q_rowid = ?", [q_rowid]
+            )
+            self.conn.commit()
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        return True
+
+    def _quarantined_row(self, q_rowid) -> Optional[tuple]:
+        """``(node_id, dimension, dtype)`` for one quarantined row, or ``None``.
+
+        ``emb`` is not selected: the vector is copied by IRIS and never needs to be here.
+        """
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT node_id, dimension, dtype FROM "
+                f"{self._quarantine_table()} WHERE q_rowid = ?",
+                [q_rowid],
+            )
+            row = cursor.fetchone()
+        except Exception as e:
+            logger.debug("Quarantine row %r not readable: %s", q_rowid, e)
+            return None
+        finally:
+            try:
+                cursor.close()
+            except Exception:
+                pass
+        if row is None:
+            return None
+        return (str(row[0]), row[1], row[2])
 
     def initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
         """
@@ -791,8 +1823,22 @@ class SchemaMixin:
             pass  # already exists
 
         sql = GraphSchema.get_base_schema_sql(embedding_dimension=dim)
+        # Asked once, before the script runs: `docs` gains `graph_id` in the 4.0.0
+        # upgrade's `docs` step, so on a 3.2.0 install the index below cannot be created
+        # yet. Probing after the failure would be probing a table this script may have
+        # created in the meantime.
+        docs_awaits_graph = self._docs_awaits_graph_column(cursor)
         for stmt in _split_sql_statements(sql):
             if not stmt.strip():
+                continue
+            if docs_awaits_graph and "idx_docs_graph" in stmt.lower():
+                logger.warning(
+                    "idx_docs_graph deferred: Graph_KG.docs has no graph_id column on "
+                    "this install, so there is nothing to index yet. Run "
+                    "iris_vector_graph.migrations.upgrade_to_4_0_0(conn) — its `docs` "
+                    "step places every document in a graph and creates this index when "
+                    "it is done. Nothing else is affected."
+                )
                 continue
             try:
                 cursor.execute(stmt)
@@ -845,10 +1891,19 @@ class SchemaMixin:
         # Update the engine flag after migration — ensure_indexes runs
         # add_graph_id_to_nodes which adds the column if absent.
         self._nodes_has_graph_id = self._probe_nodes_graph_id()
+        # Same round-trip for the child tables (spec 227 FR-034): a 3.2.0 install that
+        # has not run the re-key has no graph_id on rdf_labels / rdf_props, and naming
+        # it there would fail every create_node with SQLCODE -29.
+        self._children_have_graph_id = self._probe_children_graph_id()
 
         # 3b. Embedding identity registry (spec 226). Created before anything alters a
         # vector column, so the recorded expectation exists before the width can move.
         self._ensure_embedding_registry(cursor)
+
+        # 3b-ii. Quarantine (spec 227, FR-039). Created alongside the registry, not
+        # lazily by the migration: a row whose graph cannot be recovered needs a
+        # destination at the moment it is found.
+        self._ensure_embedding_quarantine(cursor)
 
         # 3c. Adopt whatever the columns already declare (spec 226, FR-006). Runs before
         # the migration below so the recorded expectation exists before a width can move,
@@ -863,62 +1918,24 @@ class SchemaMixin:
         # `embedding_dimension=0` both became warnings. Only the DB-API errors an ALTER
         # legitimately raises are tolerated here; ValueError and
         # EmbeddingIdentityConflict propagate.
+        # The report is kept, not discarded. `needs_manual_migration` names tables the
+        # engine deliberately refuses to fix — a populated column at another width,
+        # which it cannot widen without inventing dimensions — and every write of the
+        # configured width to one of them is rejected with SQLCODE -104. Reporting that
+        # only through `logger.error` left the returned status reading as a clean setup.
+        vector_migration: Dict[str, Any] = {}
         try:
-            self._migrate_vector_dimensions(cursor, dim)
+            vector_migration = self._migrate_vector_dimensions(cursor, dim) or {}
         except _ALTER_TOLERATED_ERRORS as e:
             logger.warning("Could not verify embedding dimension: %s", e)
+        needs_manual_migration = list(vector_migration.get("needs_manual_migration") or [])
 
         # 4b. Record what this engine says produces the vectors. An engine that declares
         # no model records nothing.
         self._record_configured_embedding_identity(cursor)
 
         # 5. Install stored procedures
-        procedure_errors = []
-        # No width is passed: `get_procedures_sql_list` ignores it and, since 3.2.0,
-        # deprecates it (ADR-0005 — the query vector is converted unlengthed on purpose).
-        # Passing `dim` here would fire that warning on every initialize_schema, on a path
-        # no caller can fix, which teaches people to filter the warning out.
-        for stmt in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"):
-            if not stmt.strip():
-                continue
-            try:
-                cursor.execute(stmt)
-            except Exception as e:
-                err = str(e).lower()
-                if "already exists" in err or "already has" in err:
-                    continue  # idempotent re-run — schema or procedure already installed
-                # Only kg_KNN_VEC is required for server-side vector search;
-                # kg_TXT and kg_RRF_FUSE are optional (depend on full-text search feature)
-                is_core = "procedure graph_kg.kg_knn_vec" in stmt.lower()
-                if is_core:
-                    _sqlcode = ""
-                    import re as _re_proc
-                    m = _re_proc.search(r"sqlcode.*?<(-?\d+)>", err)
-                    if m:
-                        _sqlcode = m.group(1)
-                    if _sqlcode == "-260":
-                        logger.debug(
-                            "kg_KNN_VEC skipped: vector dimension mismatch in kg_NodeEmbeddings "
-                            "(table has mixed-dim vectors from tests). Non-fatal. | Error: %s", e
-                        )
-                    else:
-                        procedure_errors.append((stmt[:80], e))
-                        logger.error(
-                            "Procedure DDL failed: %s | Error: %s", stmt[:80], e
-                        )
-                else:
-                    logger.debug(
-                        "Optional procedure DDL skipped (non-fatal): %s | Error: %s",
-                        stmt[:80],
-                        e,
-                    )
-
-        if procedure_errors:
-            raise RuntimeError(
-                f"initialize_schema() failed to install {len(procedure_errors)} "
-                f"stored procedure(s). Server-side vector search will be unavailable. "
-                f"First error: {procedure_errors[0][1]}"
-            )
+        self._install_procedures(cursor)
 
         self.conn.commit()
 
@@ -943,6 +1960,11 @@ class SchemaMixin:
                 self.capabilities = GraphSchema.deploy_objectscript_classes(
                     cursor, pkg_dir.resolve(), conn=self.conn
                 )
+            except RdfEdgesRescueError:
+                # Deploying is best-effort; rescuing a class-owned `rdf_edges` is not.
+                # Swallowing this one leaves the namespace with no edge table while
+                # `initialize_schema` reports success.
+                raise
             except Exception as exc:
                 logger.debug(
                     "ObjectScript auto-deploy skipped (expected in Docker — use docker cp + LoadDir): %s",
@@ -999,13 +2021,44 @@ class SchemaMixin:
             except Exception as exc:
                 logger.warning("^KG bootstrap failed: %s", exc)
 
+        # 6c. The deploy above compiles `Graph.KG`, and a package compile deletes the
+        # generated class an iFind index is searched through without writing a new one
+        # (spec 230, FR-030). The index definition survives, so only a query notices —
+        # `kg_TXT` fails at Open with <CLASS DOES NOT EXIST>. Repair it here, where a
+        # compile has just run, rather than leaving the text leg dead until someone
+        # recompiles the owning class by hand.
+        ifind = repair_ifind_helpers(cursor, conn=self.conn)
+
+        # 6d. Tell the optimizer the shape of the tables just created. IVG tuned
+        # nothing anywhere, and a `(node_id, graph_id)` equality — every graph-scoped
+        # read, and both of `rdf_edges`' composite foreign keys on every edge insert —
+        # planned as "Read master map Graph_KG.nodes.IDKEY, looping on ID", a scan of
+        # the extent (spec 230, FR-033). Measured live: 5.3ms per lookup over 46,343
+        # rows and 10.2ms per edge insert, against 0.23ms once tuned.
+        tuned = GraphSchema.tune_tables(cursor)
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+
         status = {
             "tables_created": True,
+            "ifind_indexes": ifind,
+            "tuned": tuned,
             "objectscript_deployed": self.capabilities.objectscript_deployed,
             "kg_built": self.capabilities.kg_built,
             "embedding_dimension": dim,
+            "needs_manual_migration": needs_manual_migration,
             "warnings": [],
         }
+        for table in needs_manual_migration:
+            status["warnings"].append(
+                f"{table} holds rows at a vector width other than the configured "
+                f"{dim}, and a populated column cannot be widened — every write of "
+                "the configured width will be rejected (SQLCODE -104). Re-embed the "
+                "table at the configured width, or clear it and re-run "
+                "initialize_schema()."
+            )
         if not self.capabilities.objectscript_deployed:
             status["warnings"].append(
                 "ObjectScript classes not deployed — BFS, Subgraph, PageRank using Python fallbacks. "
@@ -1017,6 +2070,13 @@ class SchemaMixin:
                 "^KG adjacency index not built — multi-hop BFS unavailable. "
                 "Call BuildKG() after loading data: from iris_vector_graph.schema import _call_classmethod; "
                 "_call_classmethod(conn, 'Graph.KG.Traversal', 'BuildKG')"
+            )
+        unsearchable = sorted(name for name, ok in ifind.items() if not ok)
+        if unsearchable:
+            status["warnings"].append(
+                f"iFind index not searchable: {', '.join(unsearchable)} — text search "
+                "through it fails with <CLASS DOES NOT EXIST>. Recompile the owning "
+                "class: Do $SYSTEM.OBJ.Compile(\"<owner>\",\"ck\")"
             )
 
         if status["warnings"]:
@@ -1072,8 +2132,13 @@ class SchemaMixin:
 
         rels = []
         for i, rel_type in enumerate(rel_types):
+            # TOP 1 because one row is what fetchone() takes and this cursor is
+            # reused immediately below. Left uncapped, the rows still pending after
+            # fetchone() put the next execute() out of sequence and IRIS closed the
+            # connection under the caller — <COMMUNICATION ERROR> Message out of
+            # order, then <COMMUNICATION LINK ERROR> on everything after it.
             cursor.execute(
-                "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ?", [rel_type]
+                "SELECT TOP 1 s, o_id FROM Graph_KG.rdf_edges WHERE p = ?", [rel_type]
             )
             row = cursor.fetchone()
             start_label_id = 0
@@ -1220,7 +2285,7 @@ class SchemaMixin:
         OWL_SAME_AS = "http://www.w3.org/2002/07/owl#sameAs"
         OWL_TRANS_PROP = "http://www.w3.org/2002/07/owl#TransitiveProperty"
         OWL_SYM_PROP = "http://www.w3.org/2002/07/owl#SymmetricProperty"
-        INFERRED_JSON = '{"inferred":true}'
+        INFERRED_JSON = INFERRED_QUALIFIER_JSON
 
         cursor = self.conn.cursor()
         inferred_count = 0
@@ -1235,7 +2300,7 @@ class SchemaMixin:
         def _fetch_edges(predicate):
             cursor.execute(
                 "SELECT s, o_id FROM Graph_KG.rdf_edges WHERE p = ? "
-                "AND (qualifiers IS NULL OR qualifiers NOT LIKE '%\"inferred\"%')"
+                f"AND (qualifiers IS NULL OR qualifiers NOT LIKE '{INFERRED_QUALIFIER_LIKE}')"
                 + graph_filter_sql,
                 [predicate] + graph_filter_params,
             )
@@ -1376,14 +2441,21 @@ class SchemaMixin:
     def retract_inference(self, graph: Optional[str] = None) -> int:
         _ledger_check(self, "retract_inference")
         cursor = self.conn.cursor()
-        if graph:
+        # `graph is None` and `graph == ""` both mean the default graph, never "every
+        # graph" — the meaning spec 214 and 223 established and `cypher/translator.py`
+        # already implements. Testing `if graph:` sent both forms down an unscoped
+        # DELETE that removed every graph's inferred edges (spec 230, FR-001).
+        # A cross-graph retraction is a different operation and has no spelling here.
+        if graph is None or graph == "":
             cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%' AND graph_id = ?",
-                [graph],
+                f"DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+                "AND COALESCE(graph_id, '') = ''"
             )
         else:
             cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '%\"inferred\":\"true\"%'"
+                f"DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+                "AND graph_id = ?",
+                [graph],
             )
         deleted = cursor.rowcount or 0
         try:

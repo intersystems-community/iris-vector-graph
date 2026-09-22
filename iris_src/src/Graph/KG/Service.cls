@@ -34,7 +34,11 @@ ClassMethod VectorSearch() As %Status
 		Set k = $Get(in.k, 50)
 		Set label = $Get(in.label, "")
 		Set vec = in.vector
-		Set res = ##class(Graph.KG.PyOps).VectorSearch(vec, k, label)
+		// Spec 230 FR-014: the request names its graph, or gets the default graph.
+		// %Get rather than $Get — a missing key answers "", and $Get does not read
+		// dynamic-object keys.
+		Set graph = in.%Get("graph")
+		Set res = ##class(Graph.KG.PyOps).VectorSearch(vec, k, label, graph)
 		Return ..WriteJSON(res)
 	} Catch ex {
 		Return ..WriteError(ex.AsStatus())
@@ -49,7 +53,8 @@ ClassMethod HybridSearch() As %Status
 		Set c = $Get(in.c, 60)
 		Set text = $Get(in.text, "")
 		Set vec = in.vector
-		Set res = ##class(Graph.KG.PyOps).HybridSearch(vec, text, k, c)
+		Set graph = in.%Get("graph")
+		Set res = ##class(Graph.KG.PyOps).HybridSearch(vec, text, k, c, graph)
 		Return ..WriteJSON(res)
 	} Catch ex {
 		Return ..WriteError(ex.AsStatus())

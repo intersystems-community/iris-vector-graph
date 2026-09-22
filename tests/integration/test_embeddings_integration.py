@@ -6,6 +6,12 @@ get_unembedded_nodes, _probe_native_vec, _get_embedding_dimension.
 
 No mocking — all paths hit real IRIS SQL (TO_VECTOR, kg_NodeEmbeddings INSERT/SELECT).
 SentenceTransformer is used where available; tests skip gracefully if not installed.
+
+The row counts below key on ``node_id``. 4.0.0 replaced the old ``id VARCHAR(256)``
+primary key with ``emb_rowid BIGINT IDENTITY`` plus ``UNIQUE (graph_id, node_id)``, and
+``WHERE id = 'emb_0'`` does **not** fail against that shape — IRIS exposes every table's
+RowID as ``id``, so the predicate compares an integer against a string, matches nothing,
+and reports zero stored embeddings for a write that succeeded.
 """
 import pytest
 import numpy as np
@@ -119,7 +125,7 @@ class TestStoreEmbedding:
         eng.store_embedding("emb_0", vec)
         cur = iris_connection.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id = 'emb_0'"
+            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = 'emb_0'"
         )
         assert int(cur.fetchone()[0]) == 1
 
@@ -131,7 +137,7 @@ class TestStoreEmbedding:
         eng.store_embedding("emb_1", vec)  # second write should not error
         cur = iris_connection.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id = 'emb_1'"
+            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = 'emb_1'"
         )
         assert int(cur.fetchone()[0]) >= 1
 
@@ -146,7 +152,8 @@ class TestStoreEmbedding:
         eng.store_embeddings(items)
         cur = iris_connection.cursor()
         cur.execute(
-            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'emb_%'"
+            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings "
+            "WHERE node_id %STARTSWITH 'emb_'"
         )
         assert int(cur.fetchone()[0]) >= 3
 

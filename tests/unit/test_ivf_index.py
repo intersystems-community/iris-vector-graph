@@ -210,12 +210,14 @@ class TestIVFIndexUnit:
 
         assert captured_sqls, "ivf_build must execute a SELECT"
         for sql in captured_sqls:
-            assert "Graph_KG.kg_NodeEmbeddings" not in sql, (
+            assert "Graph_KG." not in sql, (
                 f"ivf_build hardcoded Graph_KG schema prefix; got: {sql}"
             )
-            assert "MySchema.kg_NodeEmbeddings" in sql, (
-                f"ivf_build must use schema prefix; got: {sql}"
-            )
+        # 4.0.0 resolves the route first, so the registry lookup is captured too;
+        # the vector read is the statement that has to carry the prefixed table.
+        assert any("MySchema.kg_NodeEmbeddings" in sql for sql in captured_sqls), (
+            f"ivf_build must use schema prefix; got: {captured_sqls}"
+        )
 
 
 @pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
@@ -266,13 +268,14 @@ class TestIVFIndexE2E:
                 cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
             except Exception:
                 pass
-            try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
-                    [nid, vec_str]
-                )
-            except Exception:
-                pass
+            # 4.0.0 keys the embedding tables (graph_id, node_id) — the 3.2.0 `id`
+            # column is gone. Not swallowed: swallowing it left the table empty and
+            # ivf_build reported "no vectors found" (spec 227).
+            cursor.execute(
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (graph_id, node_id, emb) "
+                "VALUES ('', ?, TO_VECTOR(?, DOUBLE))",
+                [nid, vec_str]
+            )
             nodes.append((nid, vec))
         try:
             self.engine.conn.commit()
@@ -290,19 +293,11 @@ class TestIVFIndexE2E:
                 )
             except Exception:
                 pass
-            try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
-                    [nid, vec_str]
-                )
-            except Exception:
-                try:
-                    cursor.execute(
-                        "UPDATE Graph_KG.kg_NodeEmbeddings SET emb = TO_VECTOR(?, DOUBLE) WHERE id = ?",
-                        [vec_str, nid]
-                    )
-                except Exception:
-                    pass
+            cursor.execute(
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (graph_id, node_id, emb) "
+                "VALUES ('', ?, TO_VECTOR(?, DOUBLE))",
+                [nid, vec_str]
+            )
         try:
             self.engine.conn.commit()
         except Exception:
@@ -312,7 +307,7 @@ class TestIVFIndexE2E:
         cursor = self.engine.conn.cursor()
         for nid in node_ids:
             try:
-                cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?", [nid])
+                cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", [nid])
             except Exception:
                 pass
         try:
@@ -505,13 +500,11 @@ class TestRRFFuseCommunityE2E:
                 cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
             except Exception:
                 pass
-            try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
-                    [nid, ",".join(str(v) for v in vec)],
-                )
-            except Exception:
-                pass
+            cursor.execute(
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (graph_id, node_id, emb) "
+                "VALUES ('', ?, TO_VECTOR(?, DOUBLE))",
+                [nid, ",".join(str(v) for v in vec)],
+            )
             self._nodes.append((nid, vec))
         try:
             iris_connection.commit()
@@ -521,7 +514,7 @@ class TestRRFFuseCommunityE2E:
         cursor2 = iris_connection.cursor()
         for nid, _ in self._nodes:
             try:
-                cursor2.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?", [nid])
+                cursor2.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", [nid])
             except Exception:
                 pass
         try:
@@ -555,21 +548,17 @@ class TestRRFFuseCommunityE2E:
         # Build a BM25 index over node text
         idx_bm25 = f"rrf_bm25_{self._run}"
         cursor = self.conn.cursor()
-        # Insert docs into Graph_KG.docs for BM25 build
+        # Graph.KG.BM25Index.Build reads node properties out of Graph_KG.rdf_props,
+        # never Graph_KG.docs. This fixture used to INSERT into Graph_KG.docs under a
+        # column (node_id) that table has never had, inside a bare except — so the
+        # BM25 leg of the fusion below was always fed an empty index and the test
+        # passed on the vector leg alone.
         for nid, _ in self._nodes:
-            try:
-                cursor.execute(
-                    "INSERT INTO Graph_KG.docs (node_id, text) VALUES (?, ?)",
-                    [nid, f"medical term cancer biology {nid}"],
-                )
-            except Exception:
-                try:
-                    cursor.execute(
-                        "UPDATE Graph_KG.docs SET text = ? WHERE node_id = ?",
-                        [f"medical term cancer biology {nid}", nid],
-                    )
-                except Exception:
-                    pass
+            cursor.execute(
+                'INSERT INTO Graph_KG.rdf_props (graph_id, s, "key", val) '
+                "VALUES ('', ?, 'text', ?)",
+                [nid, f"medical term cancer biology {nid}"],
+            )
         try:
             self.conn.commit()
         except Exception:
@@ -577,7 +566,7 @@ class TestRRFFuseCommunityE2E:
 
         # Check if BM25 ObjectScript class is available
         try:
-            self.engine.bm25_build(idx_bm25, ["node_id", "text"])
+            self.engine.bm25_build(idx_bm25, ["text"])
         except Exception as e:
             if "CLASS DOES NOT EXIST" in str(e).upper() or "not exist" in str(e).lower():
                 pytest.skip("Graph.KG.BM25Index not available on this container")
@@ -600,5 +589,18 @@ class TestRRFFuseCommunityE2E:
         finally:
             try:
                 self.engine.bm25_drop(idx_bm25)
+            except Exception:
+                pass
+            cleanup = self.conn.cursor()
+            for nid, _ in self._nodes:
+                try:
+                    cleanup.execute(
+                        "DELETE FROM Graph_KG.rdf_props WHERE s = ? AND \"key\" = 'text'",
+                        [nid],
+                    )
+                except Exception:
+                    pass
+            try:
+                self.conn.commit()
             except Exception:
                 pass

@@ -10,13 +10,22 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @param seedJson   JSON array of seed node IDs, e.g. '["A","B"]'
 /// @param alpha      Damping factor (default 0.85)
 /// @param maxIter    Max iterations (default 20)
-/// @param bidir      Reserved (unused, kept for API compat)
-/// @param revWeight  Reserved (unused, kept for API compat)
+/// @param bidir      1 = also traverse edges backwards via ^KG("in")
+/// @param revWeight  Multiplier on a reverse hop's contribution (bidir only)
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
+///
+/// Both bidir and revWeight were declared and ignored until 4.0.0. Callers asking for
+/// reverse traversal got forward-only scores back with no error, so a seed with no
+/// outgoing edges scored itself and nothing else. The semantics here match the Python
+/// fallback in _engine/algorithms.py: a node's divisor counts its forward AND reverse
+/// edges, and revWeight scales the contribution carried over a reverse hop, never the
+/// divisor.
 ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String
 {
 	Set pGraph = 0
 	If seedJson = "" Return "[]"
+	Set revWeight = +revWeight
+	Set wantRev = ((+bidir) '= 0) && (revWeight > 0)
 	
 	Try {
 		Set seedArr = ##class(%DynamicArray).%FromJSON(seedJson)
@@ -45,21 +54,60 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			Quit:node=""
 			
 			Set deg = +$Get(^KG("deg", pGraph, node))
-			If deg = 0 {
+			Set degTot = deg
+			If wantRev {
+				// No ^KG counter holds in-degree — ^KG("degp") is per-predicate *out*-degree
+				// — so count the reverse edges. The adjacency cannot change underneath us
+				// here, so cache the count and pay for it once rather than once per iteration.
+				If $Data(revDeg(node)) {
+					Set degTot = deg + revDeg(node)
+				} Else {
+					Set rDeg = 0
+					Set rp = ""
+					For {
+						Set rp = $Order(^KG("in", pGraph, node, rp))
+						Quit:rp=""
+						Set rs = ""
+						For {
+							Set rs = $Order(^KG("in", pGraph, node, rp, rs))
+							Quit:rs=""
+							Set rDeg = rDeg + 1
+						}
+					}
+					Set revDeg(node) = rDeg
+					Set degTot = deg + rDeg
+				}
+			}
+			If degTot = 0 {
 				Set newRanks(node) = $Get(newRanks(node), 0) + (rank * (1 - alpha))
 				Continue
 			}
-			
+
 			Set p = ""
 			For {
 				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
-				Set share = (alpha * rank) / deg
+				Set share = (alpha * rank) / degTot
 				Set o = ""
 				For {
 					Set o = $Order(^KG("out", pGraph, node, p, o))
 					Quit:o=""
 					Set newRanks(o) = $Get(newRanks(o), 0) + share
+				}
+			}
+
+			If wantRev {
+				Set revShare = ((alpha * revWeight) * rank) / degTot
+				Set rp = ""
+				For {
+					Set rp = $Order(^KG("in", pGraph, node, rp))
+					Quit:rp=""
+					Set rs = ""
+					For {
+						Set rs = $Order(^KG("in", pGraph, node, rp, rs))
+						Quit:rs=""
+						Set newRanks(rs) = $Get(newRanks(rs), 0) + revShare
+					}
 				}
 			}
 		}

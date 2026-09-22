@@ -137,14 +137,25 @@ class TestIndexConsistencyInvariant:
         assert post.global_edges >= post.sql_edges
         assert post.in_sync is True
 
-    def test_drop_graph_flags_dirty(self):
-        """drop_graph is a BYPASS — it must mark the index stale."""
+    def test_drop_graph_leaves_no_deferred_staleness(self):
+        """drop_graph is no longer a BYPASS, so it leaves nothing to rebuild.
+
+        This used to assert `_nkg_dirty is True`: the old `drop_graph` deleted SQL
+        rows, left `^KG`/`^NKG` answering for a graph with no rows, and set the flag
+        so the inconsistency waited on a rebuild that might never run. `drop_graph`
+        now calls `erase_graph`, and the Eraser drops the adjacency inside its own
+        transaction (ADR-0004) — a set flag here would mean the graph's adjacency
+        outlived it.
+        """
         g = f"urn:graph:{self.prefix}"
-        self.engine.create_node(self._n(0), labels=["Node"])
-        self.engine.create_node(self._n(1), labels=["Node"])
+        self.engine.create_node(self._n(0), labels=["Node"], graph=g)
+        self.engine.create_node(self._n(1), labels=["Node"], graph=g)
         self.engine.create_edge(self._n(0), "LINK", self._n(1), graph=g)
         self.engine.sync()
+        obj = self.engine._iris_obj()
+        assert obj.get("KG", "out", g, self._n(0), "LINK", self._n(1)) is not None
 
         self.engine.drop_graph(g)
-        # The in-process dirty flag must now be set even before a count check.
-        assert self.engine._nkg_dirty is True
+
+        assert self.engine._nkg_dirty is False
+        assert obj.get("KG", "out", g, self._n(0), "LINK", self._n(1)) is None

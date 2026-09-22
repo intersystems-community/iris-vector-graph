@@ -140,20 +140,20 @@ class TestCypherTraversal:
         result = engine.execute_cypher(
             "MATCH (a:HLA_Allele)-[r]->(d:Disease) RETURN a.id, type(r), d.id LIMIT 10"
         )
-        assert len(result.get("rows", [])) >= 1
+        assert len(result.rows) >= 1
 
     def test_two_hop_hla_disease_pathway(self, engine):
         result = engine.execute_cypher(
             "MATCH (a:HLA_Allele)-[]->(d:Disease)-[]->(p:Pathway) "
             "RETURN a.id, d.id, p.id LIMIT 5"
         )
-        assert len(result.get("rows", [])) >= 1
+        assert len(result.rows) >= 1
 
     def test_aggregation_degree(self, engine):
         result = engine.execute_cypher(
             "MATCH (n:HLA_Allele)-[r]->() RETURN count(r) AS total_edges"
         )
-        assert len(result.get("rows", [])) >= 1
+        assert len(result.rows) >= 1
         total = result["rows"][0][0]
         assert total >= 1000, f"Expected ≥1000 outbound edges from HLA_Allele, got {total}"
 
@@ -161,28 +161,28 @@ class TestCypherTraversal:
         result = engine.execute_cypher(
             "MATCH (n) WHERE n.id CONTAINS 'hla-a' RETURN n.id LIMIT 10"
         )
-        assert len(result.get("rows", [])) >= 1
+        assert len(result.rows) >= 1
         assert all("hla-a" in row[0].lower() for row in result["rows"])
 
     def test_named_path(self, engine):
         result = engine.execute_cypher(
             "MATCH (a:HLA_Allele)-[r]->(b) RETURN a.id, type(r), b.id LIMIT 3"
         )
-        assert len(result.get("rows", [])) >= 1
+        assert len(result.rows) >= 1
 
     def test_cypher_with_parameters(self, engine):
         result = engine.execute_cypher(
             "MATCH (n:HLA_Allele) WHERE n.id = $id RETURN n.id",
             parameters={"id": "hla-a*02:01"},
         )
-        assert len(result.get("rows", [])) == 1
+        assert len(result.rows) == 1
         assert result["rows"][0][0] == "hla-a*02:01"
 
     def test_multi_label_query(self, engine):
         result = engine.execute_cypher(
             "MATCH (n:HLA_Allele) RETURN count(n) AS c"
         )
-        assert len(result.get("rows", [])) >= 1
+        assert len(result.rows) >= 1
 
 
 class TestBM25:
@@ -228,7 +228,7 @@ class TestBM25:
                 "MATCH (n {id: $id})-[r]->(neighbor) RETURN n.id, neighbor.id LIMIT 10",
                 parameters={"id": top_node},
             )
-            assert len(result.get("rows", [])) >= 0
+            assert len(result.rows) >= 0
 
 
 class TestVectorSearch:
@@ -321,7 +321,7 @@ class TestHybrid:
             "MATCH (n {id: $id})-[r]->(neighbor) RETURN neighbor.id, type(r) LIMIT 10",
             parameters={"id": top_id},
         )
-        assert len(result.get("rows", [])) >= 0
+        assert len(result.rows) >= 0
 
     def test_bm25_vector_rrf_fusion(self, engine, vectors):
         vecs, ids = vectors
@@ -353,4 +353,4 @@ class TestHybrid:
                 "RETURN h.id, d.id, type(r1) LIMIT 10",
                 parameters={"id": top_node},
             )
-            assert len(result.get("rows", [])) >= 0
+            assert len(result.rows) >= 0

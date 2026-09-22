@@ -31,6 +31,21 @@ def _kg(engine, *subs):
     return "" if v is None else str(v)
 
 
+def _tkg(engine, kind, graph, *subs):
+    """Read a temporal entry, which is keyed by graph ahead of the timestamp.
+
+    Spec 223 made the graph a first-class subscript of every temporal store:
+    ^KG("tout"/"tin", graphKey, ts, …) and ^KG("tagg"/"bucket", graphKey, bucket, …).
+    The graph key is the derived index key, 0 for the default graph and the name
+    otherwise (ADR-0003) — not the graph name, and not "".
+
+    This file was written against the pre-223 layout and read one subscript short,
+    so ^KG("tout", 1700000000, "a", …) — the timestamp in the graph-key position —
+    was always empty and every temporal assertion here read as "nothing written".
+    """
+    return _kg(engine, kind, graph, *subs)
+
+
 def _rev_count(conn):
     cur = conn.cursor()
     try:
@@ -46,19 +61,19 @@ class TestUS11TemporalCoexistence:
         n = _rev_count(engine.conn)
         for i in range(5):
             assert engine.create_edge_temporal("a", "CALLS", "b", timestamp=TS + i, weight=1.0)
-        assert _kg(engine, "tout", TS, "a", "CALLS", "b") != ""
+        assert _tkg(engine, "tout", 0, TS, "a", "CALLS", "b") != ""
         bucket = TS // 300
-        assert _kg(engine, "tagg", bucket, "a", "CALLS", "count") == "5"
+        assert _tkg(engine, "tagg", 0, bucket, "a", "CALLS", "count") == "5"
         engine.purge_raw_before(TS + 3)
         assert (
-            _kg(engine, "tout", TS, "a", "CALLS", "b") == ""
-            and _kg(engine, "tout", TS + 3, "a", "CALLS", "b") != ""
+            _tkg(engine, "tout", 0, TS, "a", "CALLS", "b") == ""
+            and _tkg(engine, "tout", 0, TS + 3, "a", "CALLS", "b") != ""
         )
         assert (
-            _kg(engine, "tagg", bucket, "a", "CALLS", "count") == "5"
+            _tkg(engine, "tagg", 0, bucket, "a", "CALLS", "count") == "5"
         )  # aggregates untouched by raw purge
         engine.purge_bucket_range(bucket, bucket)
-        assert _kg(engine, "tagg", bucket, "a", "CALLS", "count") == ""
+        assert _tkg(engine, "tagg", 0, bucket, "a", "CALLS", "count") == ""
         assert engine.ledger.head().revision_id == head and _rev_count(engine.conn) == n
         assert engine.ledger.verify().result == "equal"
 
@@ -99,6 +114,6 @@ class TestUS11TemporalCoexistence:
         engine.ledger.set_strict(True)
         before = canonical_tables(engine.conn)
         assert engine.create_edge_temporal("a", "T3", "b", timestamp=TS + 2, graph="g")
-        assert _kg(engine, "tout", TS + 2, "a", "T3", "b") != ""
+        assert _tkg(engine, "tout", "g", TS + 2, "a", "T3", "b") != ""
         assert canonical_tables(engine.conn) == before
         assert engine.ledger.verify().result == "equal"

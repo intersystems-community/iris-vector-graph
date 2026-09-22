@@ -33,6 +33,12 @@ from .dbapi_utils import (
 )
 from .embed_selector import EmbedSelector
 from .engine import IRISGraphEngine
+
+# Spec 227's two route-shaped results. Re-exported from `_engine` — where the mixins
+# that produce them live — so a caller can annotate what `resolve_route` and
+# `embedding_inventory` return without importing a private module.
+from ._engine.embeddings import EmbeddingRoute
+from ._engine.schema import EmbeddingInventoryRow, QuarantinedVector
 from .errors import (
     EmbeddingsMissingError,
     IndexNotBuiltError,
@@ -95,6 +101,9 @@ __all__ = [
     "IRISGraphEngine",
     "EmbeddingIdentity",
     "EmbeddingIdentityConflict",
+    "EmbeddingInventoryRow",
+    "EmbeddingRoute",
+    "QuarantinedVector",
     "MECHANISMS",
     "identity_from_config",
     "normalize_model_key",

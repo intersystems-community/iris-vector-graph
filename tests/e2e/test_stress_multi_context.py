@@ -113,7 +113,7 @@ class TestMultiContext:
         r = engine.execute_cypher(
             f"MATCH (a {{node_id: '{pfx}:n0'}})-[:BIT_EDGE*1..3]->(b) RETURN DISTINCT b.node_id LIMIT 10"
         )
-        assert len(r.get("rows", [])) >= 3
+        assert len(r.rows) >= 3
 
 
 class TestSnapshotPersistence:

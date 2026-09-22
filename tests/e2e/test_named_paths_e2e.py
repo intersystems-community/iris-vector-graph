@@ -15,6 +15,15 @@ def _setup_chain(cursor, conn, n=4):
     preds = ["KNOWS", "LIKES", "WORKS_AT"]
     for nid in nodes:
         cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [nid])
+        # `a.id` is a property lookup, not the internal node_id: openCypher `id` is a
+        # user property, and the engine's own create_node writes this row. A fixture
+        # that inserts rows straight into the tables has to write it too, or every
+        # `WHERE a.id = ...` below matches nothing and the assertions read as a
+        # traversal bug instead of missing fixture data.
+        cursor.execute(
+            "INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES (?, 'id', ?)",
+            [nid, nid],
+        )
     for i in range(n - 1):
         p = preds[i % len(preds)]
         cursor.execute(

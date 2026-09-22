@@ -41,8 +41,8 @@ def hub_graph(engine):
 def test_unbounded_bfs_large_result_set_completes(engine, hub_graph):
     query = f"MATCH (s {{node_id:$id}})-[:{PRED}*1..2]->(n) RETURN n.node_id AS id"
     result = engine.execute_cypher(query, {"id": HUB})
-    assert "error" not in result or not result.get("error"), f"Query error: {result.get('error')}"
-    rows = result.get("rows", [])
+    assert "error" not in result or not result.error, f"Query error: {result.error}"
+    rows = result.rows
     assert len(rows) == hub_graph["expected_2hop"], (
         f"Expected {hub_graph['expected_2hop']} results, got {len(rows)}"
     )
@@ -57,6 +57,6 @@ def test_unbounded_bfs_empty_result_completes(engine):
         f"MATCH (s {{node_id:$id}})-[:{PRED}*1..2]->(n) RETURN n.node_id",
         {"id": nid}
     )
-    assert "error" not in result or not result.get("error")
-    assert len(result.get("rows", [])) == 0
+    assert "error" not in result or not result.error
+    assert len(result.rows) == 0
     engine.delete_node(nid)

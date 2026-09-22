@@ -229,30 +229,42 @@ class TestGraphOperatorsClass:
 
     @pytest.fixture
     def setup_embeddings(self, iris_connection):
-        """Setup test embeddings for vector search"""
+        """Setup test embeddings for vector search.
+
+        Yields the width it wrote at, because two things are no longer constants.
+        The row is keyed `(graph_id, node_id)` — `id` is the table's RowID alias
+        under 4.0.0, so naming it in the INSERT hands the driver an IDENTITY
+        column and naming it in the DELETE compares an integer to a string. And
+        the declared VECTOR width is whatever this container currently declares;
+        a 128 written into a narrower column is SQLCODE -104.
+        """
+        from iris_vector_graph.schema import GraphSchema
+
         cursor = iris_connection.cursor()
 
-        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'VEC_TEST:%'")
+        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'VEC_TEST:%'")
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'VEC_TEST:%'")
 
         for i in range(5):
             node_id = f'VEC_TEST:{i}'
             cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", [node_id])
 
+        dim = GraphSchema.get_embedding_dimension(cursor, "Graph_KG.kg_NodeEmbeddings")
+        assert dim, "Graph_KG.kg_NodeEmbeddings.emb has no declared width"
         # Use comma-separated values (not JSON array) for TO_VECTOR
-        dim = 128
         test_embedding = ','.join(['0.1'] * dim)
         for i in range(5):
             node_id = f'VEC_TEST:{i}'
             cursor.execute(
-                "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (graph_id, node_id, emb) "
+                "VALUES ('', ?, TO_VECTOR(?, DOUBLE))",
                 [node_id, test_embedding]
             )
 
         iris_connection.commit()
-        yield
+        yield dim
 
-        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'VEC_TEST:%'")
+        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'VEC_TEST:%'")
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'VEC_TEST:%'")
         iris_connection.commit()
         cursor.close()
@@ -260,7 +272,7 @@ class TestGraphOperatorsClass:
     def test_kg_knn_vec_returns_dynamic_array(self, iris_connection, setup_embeddings):
         """Test kgKNNVEC returns %DynamicArray with correct structure"""
         try:
-            query_vector = json.dumps([0.1] * 128)
+            query_vector = json.dumps([0.1] * setup_embeddings)
             irispy = _createIRIS(iris_connection)
             result = irispy.classMethodValue(
                 'iris.vector.graph.GraphOperators', 'kgKNNVEC', query_vector, 5, ''
@@ -286,7 +298,7 @@ class TestGraphOperatorsClass:
     def test_kg_rrf_fuse_hybrid_search(self, iris_connection, setup_embeddings):
         """Test kgRRFFUSE combines vector and text results"""
         try:
-            query_vector = json.dumps([0.1] * 128)
+            query_vector = json.dumps([0.1] * setup_embeddings)
             irispy = _createIRIS(iris_connection)
             result = irispy.classMethodValue(
                 'iris.vector.graph.GraphOperators',

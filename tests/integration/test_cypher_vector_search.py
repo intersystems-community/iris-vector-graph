@@ -83,7 +83,7 @@ def vec_search_data(iris_connection):
             emb_str = ",".join(str(x) for x in vec)
             try:
                 cursor.execute(
-                    f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR('{emb_str}', DOUBLE))",
+                    f"INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR('{emb_str}', DOUBLE))",
                     [node_id],
                 )
             except Exception:
@@ -114,7 +114,7 @@ def vec_search_data(iris_connection):
     try:
         for node_id in node_ids:
             cursor.execute(
-                "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?", [node_id]
+                "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", [node_id]
             )
             cursor.execute(
                 "DELETE FROM Graph_KG.rdf_labels WHERE s = ?", [node_id]

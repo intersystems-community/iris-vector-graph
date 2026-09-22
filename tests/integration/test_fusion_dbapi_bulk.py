@@ -118,11 +118,18 @@ class TestHybridSearchFusion:
             with pytest.raises(ValueError, match="Unknown fusion method"):
                 fusion.multi_modal_search(query_text="test", fusion_method="bad_method")
 
-    def test_multi_modal_search_text_fails(self, base_eng):
+    def test_multi_modal_search_text_leg_failure_reaches_the_caller(self, base_eng):
+        """A lost text leg is raised, not swallowed into an empty list.
+
+        This used to assert `result == []`, i.e. the silent-warning behaviour that
+        `fusion.multi_modal_search` deliberately stopped doing: a swallowed kg_TXT
+        made "hybrid" results that were pure vector — or empty — indistinguishable
+        from a real answer, and hid kg_TXT's SQLCODE -51 for several releases.
+        """
         fusion = HybridSearchFusion(base_eng)
         with patch.object(base_eng, "kg_TXT", side_effect=Exception("kg_TXT unavail")):
-            result = fusion.multi_modal_search(query_text="test")
-        assert result == []
+            with pytest.raises(Exception, match="kg_TXT unavail"):
+                fusion.multi_modal_search(query_text="test")
 
     def test_multi_modal_search_with_graph_expansion(self, base_eng):
         fusion = HybridSearchFusion(base_eng)
@@ -201,11 +208,22 @@ class TestRemapKernelIds:
 # ---------------------------------------------------------------------------
 
 class TestArnoAvailable:
+    """The probe, and the branch a missing library takes.
 
-    def test_arno_unavailable_without_library(self, iris_connection):
+    These two used to assert `arno_available(...) is False` and "not available" against
+    the live container, which only held while no `libarno_callout.so` was deployed. On a
+    container that has one the probe answers True, the second test reached the kernel and
+    came back with `<ARGUMENT ERROR> Incorrect number of parameters` — so the tests were
+    reporting the machine, not the code. The unavailable branch is pinned through the
+    cache instead, which is the same seam `arno_available` writes to.
+    """
+
+    def test_arno_probe_answers_a_bool_and_caches_it(self, iris_connection):
+        from iris_vector_graph.stores.arno_bridge import _probe_cache, _conn_key
         clear_probe_cache()
         result = arno_available(iris_connection)
-        assert result is False
+        assert isinstance(result, bool)
+        assert _probe_cache[_conn_key(iris_connection)]["available"] is result
 
     def test_arno_available_cached_false(self, iris_connection):
         from iris_vector_graph.stores.arno_bridge import _probe_cache, _conn_key
@@ -215,9 +233,13 @@ class TestArnoAvailable:
         assert result is False
 
     def test_arno_call_raises_when_unavailable(self, iris_connection):
-        clear_probe_cache()
-        with pytest.raises(ArnoError, match="libarno_callout not available"):
-            arno_call(iris_connection, "kg_triangle_count_global")
+        from iris_vector_graph.stores.arno_bridge import _probe_cache, _conn_key
+        _probe_cache[_conn_key(iris_connection)] = {"available": False}
+        try:
+            with pytest.raises(ArnoError, match="libarno_callout not available"):
+                arno_call(iris_connection, "kg_triangle_count_global", "^KG", 10)
+        finally:
+            clear_probe_cache()
 
     def test_arno_call_raises_unknown_fn(self, iris_connection):
         from iris_vector_graph.stores.arno_bridge import _probe_cache, _conn_key

@@ -99,8 +99,13 @@ def _build_kg(conn):
 
 
 def _cleanup(cursor, conn, prefix):
+    # `kg_NodeEmbeddings` is keyed `(graph_id, node_id)` since 4.0.0 and has no `id`
+    # column; `WHERE id LIKE '<prefix>%'` matched the implicit RowID (an integer), so
+    # it deleted nothing and left every test's vectors behind. Failures are raised
+    # rather than swallowed — a cleanup that cannot delete is a defect, not noise.
+    errors = []
     for table, col in [
-        ("Graph_KG.kg_NodeEmbeddings", "id"),
+        ("Graph_KG.kg_NodeEmbeddings", "node_id"),
         ("Graph_KG.rdf_props", "s"),
         ("Graph_KG.rdf_edges", "s"),
         ("Graph_KG.rdf_labels", "s"),
@@ -108,9 +113,10 @@ def _cleanup(cursor, conn, prefix):
     ]:
         try:
             cursor.execute(f"DELETE FROM {table} WHERE {col} LIKE ?", [f"{prefix}%"])
-        except Exception:
-            pass
+        except Exception as e:  # pragma: no cover - surfaced as a teardown failure
+            errors.append(f"{table}: {e}")
     conn.commit()
+    assert not errors, "cleanup failed:\n" + "\n".join(errors)
 
 
 class TestSubgraphChainGraph:
@@ -298,12 +304,12 @@ class TestSubgraphEmbeddings:
             nid = f"{self.prefix}{n}"
             vec = rng.normal(0, 1, 768).tolist()
             vec_str = ",".join(f"{v:.6f}" for v in vec)
-            try:
-                self.cursor.execute(
-                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
-                    [nid, vec_str])
-            except Exception:
-                pass
+            # Not swallowed, and keyed on `node_id`: `(id, emb)` is `SQLCODE -108`
+            # against the implicit RowID, which left this fixture asserting that
+            # embeddings it never stored came back.
+            self.cursor.execute(
+                "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
+                [nid, vec_str])
         self.conn.commit()
 
     def test_embeddings_included(self):

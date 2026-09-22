@@ -56,6 +56,16 @@ def test_a_seed_the_next_test_must_not_see(arno_iris_connection, arno_master_cle
     cursor = arno_iris_connection.cursor()
     iris_obj, native = _native(arno_iris_connection)
     try:
+        # The endpoints are registered first because spec 227 put a composite
+        # foreign key on `rdf_edges` — `(graph_id, s)` and `(graph_id, o_id)` both
+        # reference `nodes (graph_id, node_id)` — so an edge naming nodes that are
+        # not in its own graph is refused with SQLCODE -121. The seed is about the
+        # cleanup, not about dangling edges.
+        for node_id in ("arnoprobe_s", "arnoprobe_o"):
+            cursor.execute(
+                "INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, ?)",
+                [node_id, PROBE],
+            )
         cursor.execute(
             "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) "
             "VALUES ('arnoprobe_s', 'PROBES', 'arnoprobe_o', ?)",

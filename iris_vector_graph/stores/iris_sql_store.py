@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
+from iris_vector_graph.routing import graph_scope_predicate
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ try:
             max_hops: int,
             direction: str,
             max_results: int,
+            graph: Optional[str] = None,
         ) -> "IVGResult": ...
 
 except Exception:
@@ -66,12 +68,19 @@ except Exception:
 
 
 class _ArnoBfsAdapter:
-    """Arno/NKG Rust-accelerated BFS adapter."""
+    """Arno/NKG Rust-accelerated BFS adapter.
+
+    Reads ^NKG, whose entry point (Graph.KG.NKGAccel.BFSJson) takes neither a graph
+    nor a direction, so _select_bfs_strategy only ever hands this adapter the default
+    graph and an outbound traversal. Both arguments exist to satisfy the strategy
+    protocol, and `direction` is accepted only so the ObjectScript fallback inside
+    _run_arno_bfs can pass it on (spec 230, FR-031).
+    """
     __slots__ = ("_s",)
 
     def __init__(self, store): self._s = store
 
-    def run(self, source_id, predicates, max_hops, direction, max_results):
+    def run(self, source_id, predicates, max_hops, direction, max_results, graph=None):
         return self._s._run_arno_bfs(source_id, predicates, max_hops, direction, max_results)
 
 
@@ -81,8 +90,151 @@ class _ObjectScriptBfsAdapter:
 
     def __init__(self, store): self._s = store
 
-    def run(self, source_id, predicates, max_hops, direction, max_results):
-        return self._s._run_objectscript_bfs(source_id, predicates, max_hops, direction, max_results)
+    def run(self, source_id, predicates, max_hops, direction, max_results, graph=None):
+        return self._s._run_objectscript_bfs(
+            source_id, predicates, max_hops, direction, max_results, graph=graph
+        )
+
+
+#: What the two producers of a scored-node list call the node. `Graph.KG.PageRank`
+#: says `id`; the Rust callout behind `Graph.KG.ArnoAccel` says `node`. Reading only
+#: `id` gave every Arno row a blank id and a correct score, which no caller can use
+#: and nothing reported as an error.
+_NODE_KEYS = ("id", "node")
+
+
+class UnreadableResultShape(Exception):
+    """An accelerated or ObjectScript answer whose keys this reader does not know.
+
+    Raised rather than worked around (spec 230, FR-017). The three readers below each
+    used to coerce whatever they were handed into their declared columns, so a shape
+    they did not recognise became rows nobody could question: a blank node ID with a
+    real score, a summary's own keys as node IDs, an edge with no predicate. An
+    exception is the only outcome a caller can act on, and the message names the keys
+    that were actually present so the next shape can be added deliberately.
+    """
+
+
+class AcceleratedSummaryShape(UnreadableResultShape):
+    """The accelerator answered a different question than the columns promise.
+
+    `ArnoAccel.WCCJson` returns `{"components": 1, "largest": [...]}` — a count and
+    the biggest few — where `Graph.KG.Algorithms.WCCJson` returns the node→component
+    map the `id, component_id` columns describe. Same for CDLP, and `SubgraphJson`
+    returns edges as `{"src", "dst", "type": "REL"}`, which has lost the predicate.
+
+    A subclass, because this one is recoverable: the ObjectScript owner answers the
+    promised question, so the reader falls back to it. Callers that only care that a
+    shape could not be read catch `UnreadableResultShape` and get both.
+    """
+
+
+#: The keys that identify an accelerated summary rather than a per-node answer.
+_SUMMARY_KEYS = ("components", "communities", "largest")
+
+
+def _scored_node_rows(results) -> list:
+    """`[{"id"|"node": ..., "score": ...}, ...]` → `[[node_id, score], ...]`.
+
+    A row naming neither key raises: dropping it lost a score silently, and the only
+    symptom was a result set shorter than the graph — which is indistinguishable
+    from a graph with fewer scored nodes.
+    """
+    rows = []
+    for r in results:
+        if not isinstance(r, dict):
+            raise UnreadableResultShape(
+                f"a scored row is not a mapping: {r!r}"
+            )
+        node_id = next((r[k] for k in _NODE_KEYS if r.get(k)), None)
+        if node_id is None:
+            raise UnreadableResultShape(
+                "a scored row names no node under "
+                f"{' or '.join(_NODE_KEYS)}; its keys are {sorted(r)}"
+            )
+        rows.append([node_id, float(r.get("score", 0))])
+    return rows
+
+
+def _membership_rows(results, value_key: str) -> list:
+    """A node→group answer → `[[node_id, group], ...]`.
+
+    Two readable shapes, because the two producers disagree: `Graph.KG.Algorithms`
+    answers with a map, and a row list naming the node under either spelling is
+    equally readable. Anything else raises — including the accelerated summary,
+    whose own keys (`components`, `largest`) would otherwise be emitted as node IDs.
+    """
+    if isinstance(results, dict):
+        present = [k for k in _SUMMARY_KEYS if k in results]
+        if present:
+            raise AcceleratedSummaryShape(
+                f"a summary, not a node→{value_key} map: it carries {present}"
+            )
+        return [[k, v] for k, v in results.items()]
+    if isinstance(results, list):
+        rows = []
+        for r in results:
+            if not isinstance(r, dict):
+                raise UnreadableResultShape(
+                    f"a membership row is not a mapping: {r!r}"
+                )
+            node_id = next((r[k] for k in _NODE_KEYS if r.get(k)), None)
+            if node_id is None:
+                raise UnreadableResultShape(
+                    "a membership row names no node under "
+                    f"{' or '.join(_NODE_KEYS)}; its keys are {sorted(r)}"
+                )
+            rows.append([node_id, r.get(value_key, 0)])
+        return rows
+    raise UnreadableResultShape(
+        f"a node→{value_key} answer is neither a map nor a row list: {results!r}"
+    )
+
+
+def _subgraph_payload(result) -> tuple:
+    """A subgraph answer → `(nodes, edges, properties, labels)`.
+
+    The edges decide it. `Graph.KG.Subgraph` returns `{"s", "p", "o"}` triples, which
+    is what a caller needs to know how two nodes are related; `ArnoAccel` returns
+    `{"src", "dst", "type": "REL"}`, where `"REL"` is a placeholder and not a
+    predicate. Reading the accelerated shape as the promised one would have had to
+    invent `p`, so it raises and the caller falls back to the owner.
+    """
+    if not isinstance(result, dict):
+        raise UnreadableResultShape(f"a subgraph answer is not a mapping: {result!r}")
+
+    edges = result.get("edges") or []
+    if not isinstance(edges, list):
+        raise UnreadableResultShape(f"a subgraph's edges are not a list: {edges!r}")
+    for edge in edges:
+        if not isinstance(edge, dict):
+            raise UnreadableResultShape(f"a subgraph edge is not a mapping: {edge!r}")
+        if "s" in edge and "p" in edge and ("o" in edge or "o_id" in edge):
+            continue
+        if "src" in edge and "dst" in edge:
+            raise AcceleratedSummaryShape(
+                "a subgraph edge carries no predicate: its keys are "
+                f"{sorted(edge)}, and 'type' holds a placeholder"
+            )
+        raise UnreadableResultShape(
+            f"a subgraph edge names no (s, p, o) triple; its keys are {sorted(edge)}"
+        )
+
+    if "properties" not in result and "labels" not in result:
+        # An edgeless accelerated answer looks readable above, and this is the other
+        # thing it is missing. The owner's answer always carries both keys, even when
+        # they are empty.
+        raise AcceleratedSummaryShape(
+            "a subgraph answer carries neither properties nor labels; its keys are "
+            f"{sorted(result)}"
+        )
+
+    return (
+        result.get("nodes", []),
+        edges,
+        result.get("properties", {}),
+        result.get("labels", {}),
+    )
 
 
 class _SqlBfsFallbackAdapter:
@@ -91,8 +243,10 @@ class _SqlBfsFallbackAdapter:
 
     def __init__(self, store): self._s = store
 
-    def run(self, source_id, predicates, max_hops, direction, max_results):
-        return self._s._sql_bfs_fallback(source_id, predicates, max_hops, direction, max_results)
+    def run(self, source_id, predicates, max_hops, direction, max_results, graph=None):
+        return self._s._sql_bfs_fallback(
+            source_id, predicates, max_hops, direction, max_results, graph=graph
+        )
 
 
 class IRISGraphStore:
@@ -208,13 +362,30 @@ class IRISGraphStore:
             # rust_callout=true while the .so is not loadable from this server process
             # (<DYNAMIC LIBRARY LOAD>). Smoke the callout once; if it cannot run, leave
             # Arno disabled so sync()/BFS use the ObjectScript path instead of half-failing.
-            try:
-                iris_obj.classMethodValue("Graph.KG.NKGAccel", "BFSJson", "__ivg_arno_probe__", "[]", 1, 1)
-            except Exception as probe_err:
-                logger.warning("Arno callout not runnable in this process (%s) — Arno disabled", probe_err)
-                self._arno_available = False
-                self._arno_capabilities = {}
-                return False
+            #
+            # The seed has to be a node ^NKG actually holds. BFSJson answers an absent
+            # seed with a value %DynamicArray.%FromJSON cannot parse — "<THROW>
+            # *%Exception.General Parsing error 3 Line 1 Offset 1" — so probing with a
+            # made-up ID threw on every install and disabled a working library.
+            # GetFirstNKGNode is the seed the benchmark harness already uses; when it
+            # comes back empty there is no node to ask about, and an unpopulated ^NKG
+            # is reported on its own terms by nkg_data below rather than as a broken
+            # callout. Capabilities has already reached the library by then in any
+            # case: rust_callout comes from ArnoAccel.IsAvailable, which calls the
+            # .so's version function through $ZF(-5).
+            probe_seed = str(
+                iris_obj.classMethodValue("Graph.KG.NKGAccel", "GetFirstNKGNode") or ""
+            )
+            if probe_seed:
+                try:
+                    iris_obj.classMethodValue(
+                        "Graph.KG.NKGAccel", "BFSJson", probe_seed, "[]", 1, 1
+                    )
+                except Exception as probe_err:
+                    logger.warning("Arno callout not runnable in this process (%s) — Arno disabled", probe_err)
+                    self._arno_available = False
+                    self._arno_capabilities = {}
+                    return False
             self._arno_available = True
             if not self._arno_capabilities.get("nkg_data", False):
                 logger.warning(
@@ -249,10 +420,18 @@ class IRISGraphStore:
     def _kg_PERSONALIZED_PAGERANK_python_fallback(self, seed_ids, damping=0.85, max_iterations=20):
         return []
 
-    def _kg_KNN_VEC_python_optimized(self, query_vector, k, label_filter=None):
+    # `graph` is accepted and ignored here on purpose: these are the stub overrides
+    # for a store that answers KNN through ObjectScript, and they return nothing at
+    # all. Rejecting the keyword would turn a scoped call into a TypeError only on
+    # the fallback path — the path nobody exercises until something else broke.
+    def _kg_KNN_VEC_python_optimized(
+        self, query_vector, k, label_filter=None, *, graph=None, model_key=None
+    ):
         return IVGResult(columns=["id", "score"], rows=[])
 
-    def _kg_KNN_VEC_client_side(self, query_vector, k, label_filter=None):
+    def _kg_KNN_VEC_client_side(
+        self, query_vector, k, label_filter=None, *, graph=None
+    ):
         return IVGResult(columns=["id", "score"], rows=[])
 
     def _khop_fallback(self, seed, hops, max_nodes):
@@ -408,6 +587,22 @@ class IRISGraphStore:
             qualifiers = edge.get("qualifiers") or {}
             if not (s and p and o):
                 continue
+            # rdf_edges' foreign keys are composite since spec 227 — (graph_id, s)
+            # and (graph_id, o_id) against nodes (graph_id, node_id) — so the
+            # endpoints have to exist in this edge's graph, which on this path is
+            # always the default one. Without them the insert is SQLCODE -121, logged
+            # as a warning and counted as written.
+            for endpoint in (s, o):
+                try:
+                    cursor.execute(
+                        "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, '' "
+                        "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes "
+                        "WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+                        [endpoint, endpoint],
+                    )
+                except Exception as e:
+                    if not err_lower_check(e):
+                        logger.warning("write_edges endpoint insert failed: %s", e)
             try:
                 cursor.execute(
                     "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, '')",
@@ -604,18 +799,43 @@ class IRISGraphStore:
 
     # ── Traversal ─────────────────────────────────────────────────────────────
 
-    def _select_bfs_strategy(self) -> "_BfsStrategy":
-        """Choose the BFS adapter based on available capabilities (internal seam)."""
-        if self._detect_arno() and self._arno_capabilities.get("bfs"):
+    def _select_bfs_strategy(
+        self, graph: Optional[str] = None, direction: str = "out"
+    ) -> "_BfsStrategy":
+        """Choose the BFS adapter based on available capabilities (internal seam).
+
+        Two questions the Rust accelerator cannot be asked, so two reasons to decline it:
+
+        A named graph never takes the Arno path: Graph.KG.NKGAccel.BFSJson has no
+        graph argument, so the Rust accelerator would walk ^NKG across every graph.
+        The default graph keeps it, which is where its published numbers were
+        measured (spec 227).
+
+        An inbound or undirected traversal never takes it either: BFSJson has no
+        direction argument and walks ^NKG outbound only, so `MATCH (x)<-[r*1..1]-(y)`
+        came back with x's *successors* — real edges, pointing the wrong way, with
+        nothing reported. The ObjectScript adapter answers all three directions
+        (spec 230, FR-031).
+        """
+        if direction and str(direction).lower() not in ("out", "outbound"):
+            return _ObjectScriptBfsAdapter(self)
+        if not graph and self._detect_arno() and self._arno_capabilities.get("bfs"):
             return _ArnoBfsAdapter(self)
         return _ObjectScriptBfsAdapter(self)
 
     def execute_bfs(
-        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
+        self,
+        source_id: str,
+        predicates: list,
+        max_hops: int,
+        direction: str,
+        max_results: int,
+        *,
+        graph: Optional[str] = None,
     ) -> IVGResult:
-        """Execute BFS via the selected strategy adapter."""
-        strategy = self._select_bfs_strategy()
-        return strategy.run(source_id, predicates, max_hops, direction, max_results)
+        """Execute BFS via the selected strategy adapter, scoped to one graph."""
+        strategy = self._select_bfs_strategy(graph, direction=direction)
+        return strategy.run(source_id, predicates, max_hops, direction, max_results, graph)
 
     def _run_arno_bfs(
         self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
@@ -635,23 +855,27 @@ class IRISGraphStore:
             raw_val = raw if isinstance(raw, str) else str(raw)
             if raw_val.startswith("SORTED:"):
                 tag = raw_val.split(":", 2)[1]
-                iris_obj = self._iris_obj()
-                pages = []
-                i = 1
-                while True:
-                    chunk = str(
-                        iris_obj.classMethodValue("Graph.KG.NKGAccel", "ReadBFSPage", tag, i)
-                    )
-                    if not chunk or chunk == "":
-                        break
-                    pages.append(chunk)
-                    i += 1
-                raw_val = "".join(pages)
-            results = _json.loads(raw_val) if raw_val else []
-            if not isinstance(results, list):
-                results = []
+                if tag == "0":
+                    return IVGResult(columns=["id", "hops", "pred"], rows=[])
+                # `SORTED:` stages the hits in ^ArnoKG("bfs_r") and only the cursor
+                # API reads them back. The old loop asked NKGAccel (which does not
+                # own ReadBFSPage) for page *numbers* and concatenated the replies,
+                # but ReadBFSPage takes (tag, cursorStep, cursorO, pageSize) and
+                # returns an {"items", "done"} envelope — the concatenation was
+                # never valid JSON, so this path returned nothing at all.
+                from iris_vector_graph.engine import _bfs_stream_pages
+
+                results = list(_bfs_stream_pages(self.conn, tag))
+            else:
+                results = _json.loads(raw_val) if raw_val else []
+                if not isinstance(results, list):
+                    results = []
             rows = [
-                [r.get("id", r.get("node_id", "")), r.get("hops", 0), r.get("pred", "")]
+                [
+                    r.get("o", r.get("id", r.get("node_id", ""))),
+                    r.get("step", r.get("hops", 0)),
+                    r.get("pred", r.get("p", "")),
+                ]
                 for r in results
             ]
             return IVGResult(columns=["id", "hops", "pred"], rows=rows)
@@ -662,9 +886,20 @@ class IRISGraphStore:
             )
 
     def _run_objectscript_bfs(
-        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
+        self,
+        source_id: str,
+        predicates: list,
+        max_hops: int,
+        direction: str,
+        max_results: int,
+        graph: Optional[str] = None,
     ) -> IVGResult:
-        """ObjectScript BFSFastJsonSorted path with SQL fallback."""
+        """ObjectScript BFSFastJsonSorted path with SQL fallback.
+
+        The graph goes over the wire as a *name* — `""` for the default graph —
+        because Graph.KG.GraphKey.ForIndex() owns the ^KG subscript derivation
+        (ADR-0003). Passing 0 from here would be a second implementation of it.
+        """
         import json as _json
         predicates_json = _json.dumps(predicates) if predicates else ""
         try:
@@ -678,18 +913,21 @@ class IRISGraphStore:
                     "",
                     direction,
                     str(max_results),
+                    graph or "",
                 )
             )
         except Exception as e:
             logger.warning("BFS ObjectScript failed: %s", e)
-            return self._sql_bfs_fallback(source_id, predicates, max_hops, direction, max_results)
+            return self._sql_bfs_fallback(
+                source_id, predicates, max_hops, direction, max_results, graph=graph
+            )
 
         val = bfs_json if isinstance(bfs_json, str) else str(bfs_json)
         if val.startswith("SORTED:"):
             tag = val.split(":", 2)[1]
             if tag == "0":
                 return self._sql_bfs_fallback(
-                    source_id, predicates, max_hops, direction, max_results
+                    source_id, predicates, max_hops, direction, max_results, graph=graph
                 )
             from iris_vector_graph.engine import _bfs_stream_pages
             results = list(_bfs_stream_pages(self.conn, tag))
@@ -717,12 +955,31 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "hops", "pred"], rows=rows)
 
     def _sql_bfs_fallback(
-        self, source_id: str, predicates: list, max_hops: int, direction: str, max_results: int
+        self,
+        source_id: str,
+        predicates: list,
+        max_hops: int,
+        direction: str,
+        max_results: int,
+        graph: Optional[str] = None,
     ) -> "IVGResult":
+        """Walk Graph_KG.rdf_edges hop by hop, scoped to one graph.
+
+        Every hop carries a graph predicate. Before spec 227 none of them did, and
+        because _run_objectscript_bfs falls through to here whenever the adjacency
+        walk returns nothing, a named-graph traversal quietly became a scan of every
+        graph's edges — the leak the two-graph Gate 3 probe caught.
+
+        COALESCE on both sides: `graph_id` is NOT NULL DEFAULT '' on a fresh install,
+        but a row written before the column existed can still read as NULL, and an
+        IRIS SQL empty VARCHAR comes back as $Char(0).
+        """
         cursor = self.conn.cursor()
+        graph_id = graph or ""
         visited: dict[str, int] = {source_id: 0}
         frontier: list[str] = [source_id]
         result_rows: list[list] = []
+        graph_clause = " AND COALESCE(graph_id, '') = COALESCE(?, '')"
         for hop in range(1, max_hops + 1):
             if not frontier:
                 break
@@ -732,17 +989,18 @@ class IRISGraphStore:
                 placeholders = ",".join("?" * len(predicates))
                 preds_clause = f" AND p IN ({placeholders})"
                 params += predicates
+            params.append(graph_id)
             placeholders_f = ",".join("?" * len(frontier))
             if direction in ("out", "outbound"):
-                sql = f"SELECT DISTINCT o_id, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}"
+                sql = f"SELECT DISTINCT o_id, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
             elif direction in ("in", "inbound"):
-                sql = f"SELECT DISTINCT s, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
+                sql = f"SELECT DISTINCT s, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
             else:
-                sql_out = f"SELECT DISTINCT o_id AS nbr, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}"
-                sql_in = f"SELECT DISTINCT s AS nbr, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}"
+                sql_out = f"SELECT DISTINCT o_id AS nbr, p FROM Graph_KG.rdf_edges WHERE s IN ({placeholders_f}){preds_clause}{graph_clause}"
+                sql_in = f"SELECT DISTINCT s AS nbr, p FROM Graph_KG.rdf_edges WHERE o_id IN ({placeholders_f}){preds_clause}{graph_clause}"
                 cursor.execute(sql_out, params)
                 nbrs_out = cursor.fetchall()
-                cursor.execute(sql_in, list(frontier) + (predicates if predicates else []))
+                cursor.execute(sql_in, params)
                 nbrs_in = cursor.fetchall()
                 nbrs = [(r[0], r[1]) for r in nbrs_out + nbrs_in]
                 new_frontier = []
@@ -834,29 +1092,55 @@ class IRISGraphStore:
 
     # ── Analytics ─────────────────────────────────────────────────────────────
 
-    def execute_ppr(self, seed_ids: list, damping: float, max_iterations: int) -> IVGResult:
+    def execute_ppr(
+        self,
+        seed_ids: list,
+        damping: float,
+        max_iterations: int,
+        bidirectional: bool = False,
+        reverse_edge_weight: float = 1.0,
+    ) -> IVGResult:
         import json as _json
 
         if not seed_ids:
             raise ValueError("seed_ids must not be empty")
         seeds_json = _json.dumps(seed_ids)
+        wants_reverse = bool(bidirectional) and reverse_edge_weight > 0
         try:
-            if self._detect_arno() and "ppr" in self._arno_capabilities.get("algorithms", []):
+            # Arno only when the request fits what it can answer. `ArnoAccel.PPRJson`
+            # takes seeds, damping and iterations and has no reverse-edge parameters, so
+            # routing a bidirectional request there returns forward-only scores with no
+            # error — which is how `bidirectional=True` came to be silently ignored.
+            if (
+                not wants_reverse
+                and self._detect_arno()
+                and "ppr" in self._arno_capabilities.get("algorithms", [])
+            ):
                 raw = self._arno_call(
                     "Graph.KG.ArnoAccel", "PPRJson", seeds_json, str(damping), str(max_iterations)
                 )
             else:
+                # `RunJson`, not `PPRJson`: personalized PageRank is what
+                # Graph.KG.PageRank calls it (PageRank.cls:16). `PPRJson` is the
+                # Arno spelling and exists only on the accelerator classes, so this
+                # branch used to raise <METHOD DOES NOT EXIST> and return no scores.
+                #
+                # All five arguments: `RunJson(seedJson, alpha, maxIter, bidir, revWeight)`.
+                # Passing the first three left the ObjectScript defaults (`bidir = 0`) in
+                # place, so reverse traversal never happened however the caller asked.
                 raw = str(
                     self._call_classmethod(
                         "Graph.KG.PageRank",
-                        "PPRJson",
+                        "RunJson",
                         seeds_json,
                         str(damping),
                         str(max_iterations),
+                        "1" if wants_reverse else "0",
+                        str(float(reverse_edge_weight)),
                     )
                 )
             results = _json.loads(raw) if raw else []
-            rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
+            rows = _scored_node_rows(results)
             return IVGResult(columns=["id", "score"], rows=rows)
         except Exception as e:
             logger.warning("PPR failed: %s", e)
@@ -867,8 +1151,11 @@ class IRISGraphStore:
 
         try:
             if self._detect_arno() and "pagerank" in self._arno_capabilities.get("algorithms", []):
+                # ArnoAccel owns the four accelerated algorithm entry points
+                # (ArnoAccel.cls:129-173). NKGAccel does not, and the native API
+                # does not resolve inherited ClassMethods either.
                 raw = self._arno_call(
-                    "Graph.KG.NKGAccel", "PageRankJson", str(damping), str(max_iterations)
+                    "Graph.KG.ArnoAccel", "PageRankGlobalJson", str(damping), str(max_iterations)
                 )
             else:
                 raw = str(
@@ -877,45 +1164,78 @@ class IRISGraphStore:
                     )
                 )
             results = _json.loads(raw) if raw else []
-            rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
+            rows = _scored_node_rows(results)
             return IVGResult(columns=["id", "score"], rows=rows)
         except Exception as e:
             logger.warning("PageRank failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     def execute_wcc(self) -> IVGResult:
+        """Connected components as `id, component_id`, one row per node.
+
+        `ArnoAccel.WCCJson` answers with a summary — a component count and the largest
+        few — so the accelerated path falls back to `Graph.KG.Algorithms.WCCJson`,
+        which answers the question these columns describe (spec 230, FR-017). Read as
+        a map, the summary produced the rows `[["components", 1], ["largest", [...]]]`:
+        a plausible-looking answer to a question nobody asked.
+        """
         import json as _json
 
         try:
-            if self._detect_arno() and "wcc" in self._arno_capabilities.get("algorithms", []):
-                raw = self._arno_call("Graph.KG.NKGAccel", "WCCJson")
+            accelerated = self._detect_arno() and "wcc" in self._arno_capabilities.get(
+                "algorithms", []
+            )
+            if accelerated:
+                raw = self._arno_call("Graph.KG.ArnoAccel", "WCCJson")
             else:
                 raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson"))
             results = _json.loads(raw) if raw else {}
-            if isinstance(results, dict):
-                rows = [[k, v] for k, v in results.items()]
-            else:
-                rows = [[r.get("id", ""), r.get("component_id", 0)] for r in results]
+            try:
+                rows = _membership_rows(results, "component_id")
+            except AcceleratedSummaryShape:
+                if not accelerated:
+                    raise
+                logger.info("WCC: Arno answered with a summary; reading the owner instead")
+                raw = str(self._call_classmethod("Graph.KG.Algorithms", "WCCJson"))
+                results = _json.loads(raw) if raw else {}
+                # One fallback, not a loop: a second summary is an error. Retrying the
+                # same class would ask the same question again.
+                rows = _membership_rows(results, "component_id")
             return IVGResult(columns=["id", "component_id"], rows=rows)
         except Exception as e:
             logger.warning("WCC failed: %s", e)
             return IVGResult(columns=["id", "component_id"], rows=[], error=str(e)[:200])
 
     def execute_cdlp(self, max_iterations: int) -> IVGResult:
+        """Community labels as `id, community_id`, one row per node.
+
+        Same shape mismatch as :meth:`execute_wcc`: `ArnoAccel.CDLPJson` answers
+        `{"communities": 2, "largest": [...]}` (spec 230, FR-017).
+        """
         import json as _json
 
         try:
-            if self._detect_arno() and "cdlp" in self._arno_capabilities.get("algorithms", []):
-                raw = self._arno_call("Graph.KG.NKGAccel", "CDLPJson", str(max_iterations))
+            accelerated = self._detect_arno() and "cdlp" in self._arno_capabilities.get(
+                "algorithms", []
+            )
+            if accelerated:
+                raw = self._arno_call("Graph.KG.ArnoAccel", "CDLPJson", str(max_iterations))
             else:
                 raw = str(
                     self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations))
                 )
             results = _json.loads(raw) if raw else {}
-            if isinstance(results, dict):
-                rows = [[k, v] for k, v in results.items()]
-            else:
-                rows = [[r.get("id", ""), r.get("community_id", 0)] for r in results]
+            try:
+                rows = _membership_rows(results, "community_id")
+            except AcceleratedSummaryShape:
+                if not accelerated:
+                    raise
+                logger.info("CDLP: Arno answered with a summary; reading the owner instead")
+                raw = str(
+                    self._call_classmethod("Graph.KG.Algorithms", "CDLPJson", str(max_iterations))
+                )
+                results = _json.loads(raw) if raw else {}
+                rows = _membership_rows(results, "community_id")
             return IVGResult(columns=["id", "community_id"], rows=rows)
         except Exception as e:
             logger.warning("CDLP failed: %s", e)
@@ -928,10 +1248,30 @@ class IRISGraphStore:
 
         seeds_json = _json.dumps(seed_ids)
         edge_json = _json.dumps(edge_types) if edge_types else ""
+
+        def _owner() -> str:
+            # `Graph.KG.Subgraph` owns SubgraphJson (Subgraph.cls:6). Naming
+            # PageRank here made every kg_SUBGRAPH call raise <METHOD DOES NOT
+            # EXIST> and, with no `error` on the way out, report an empty
+            # subgraph as a successful answer.
+            return str(
+                self._call_classmethod(
+                    "Graph.KG.Subgraph",
+                    "SubgraphJson",
+                    seeds_json,
+                    str(k_hops),
+                    edge_json,
+                    str(max_nodes),
+                )
+            )
+
         try:
-            if self._detect_arno() and "subgraph" in self._arno_capabilities.get("algorithms", []):
+            accelerated = self._detect_arno() and "subgraph" in self._arno_capabilities.get(
+                "algorithms", []
+            )
+            if accelerated:
                 raw = self._arno_call(
-                    "Graph.KG.NKGAccel",
+                    "Graph.KG.ArnoAccel",
                     "SubgraphJson",
                     seeds_json,
                     str(k_hops),
@@ -939,58 +1279,111 @@ class IRISGraphStore:
                     str(max_nodes),
                 )
             else:
-                raw = str(
-                    self._call_classmethod(
-                        "Graph.KG.PageRank",
-                        "SubgraphJson",
-                        seeds_json,
-                        str(k_hops),
-                        edge_json,
-                        str(max_nodes),
-                    )
-                )
+                raw = _owner()
             result = _json.loads(raw) if raw else {"nodes": [], "edges": []}
-            nodes = result.get("nodes", [])
-            edges = result.get("edges", [])
+            # `SubgraphJson` answers with properties and labels too (Subgraph.cls:
+            # 153-156). Dropping them here made `include_properties=True` return an
+            # empty map on the store path, which reads as "these nodes have no
+            # properties" rather than as a discarded answer.
+            try:
+                nodes, edges, properties, labels = _subgraph_payload(result)
+            except AcceleratedSummaryShape:
+                if not accelerated:
+                    raise
+                logger.info(
+                    "Subgraph: Arno's edges carry no predicate; reading the owner instead"
+                )
+                raw = _owner()
+                result = _json.loads(raw) if raw else {"nodes": [], "edges": []}
+                nodes, edges, properties, labels = _subgraph_payload(result)
             return IVGResult(
-                columns=["nodes", "edges"], rows=[[_json.dumps(nodes), _json.dumps(edges)]]
+                columns=["nodes", "edges", "properties", "labels"],
+                rows=[
+                    [
+                        _json.dumps(nodes),
+                        _json.dumps(edges),
+                        _json.dumps(properties),
+                        _json.dumps(labels),
+                    ]
+                ],
             )
         except Exception as e:
             logger.warning("Subgraph failed: %s", e)
-            return IVGResult(columns=["nodes", "edges"], rows=[["[]", "[]"]])
-
-    def execute_knn_vec(self, query_vector: list, k: int, label_filter: Optional[str]) -> IVGResult:
-        try:
-            vec_str = ",".join(str(x) for x in query_vector)
-            result_json = str(
-                self._call_classmethod(
-                    "Graph.KG.TemporalIndex",
-                    "kg_KNN_VEC",
-                    vec_str,
-                    str(k),
-                    label_filter or "",
-                )
+            return IVGResult(
+                columns=["nodes", "edges", "properties", "labels"],
+                rows=[["[]", "[]", "{}", "{}"]],
+                error=str(e)[:200],
             )
-            import json as _json
 
-            results = _json.loads(result_json) if result_json else []
-            rows = [[r.get("id", ""), float(r.get("score", 0))] for r in results]
+    def execute_knn_vec(
+        self,
+        query_vector: list,
+        k: int,
+        label_filter: Optional[str],
+        *,
+        graph: Optional[str] = None,
+        model_key: Optional[str] = None,
+    ) -> IVGResult:
+        """Nearest neighbours inside one graph (spec 227).
+
+        ``graph`` and ``model_key`` are keyword-only and both default to ``None``,
+        which means the default graph ``''`` — never every graph (FR-004).
+
+        Scoped SQL is the only path. There is no ``kg_KNN_VEC`` ClassMethod in the
+        tree: the SQL procedure ``Graph_KG.kg_KNN_VEC`` is generated DDL, and the
+        ObjectScript neighbour search lives on
+        ``iris.vector.graph.GraphOperators.kgKNNVEC`` over the legacy
+        ``kg_NodeEmbeddings_optimized`` copy. The call this method used to attempt
+        first — ``Graph.KG.TemporalIndex.kg_KNN_VEC`` — never existed in any
+        release, so it only ever logged a warning before the SQL below answered.
+        """
+        graph_id = graph or ""
+        # `str()` on a non-number produces text IRIS parses as a vector of zeros, so
+        # a caller that handed over AST nodes (or strings) got a plausible-looking
+        # empty answer instead of a complaint. Refuse it here.
+        try:
+            query_vector = [float(x) for x in query_vector]
+        except (TypeError, ValueError) as e:
+            msg = f"query_vector must be numeric: {e}"
+            logger.warning("KNN_VEC rejected: %s", msg)
+            return IVGResult(columns=["id", "score"], rows=[], error=msg[:200])
+        cursor = self.conn.cursor()
+        vec_str = ",".join(str(x) for x in query_vector)
+        # `label_filter` used to be handed to the (nonexistent) ObjectScript call and
+        # dropped by the SQL that actually answered, so a labelled search scored every
+        # node in the graph. Join rdf_labels instead.
+        join = ""
+        params: list = [f"[{vec_str}]"]
+        if label_filter:
+            join = "JOIN Graph_KG.rdf_labels l ON l.s = e.node_id AND l.label = ? "
+            params.append(label_filter)
+        params.append(graph_id)
+        try:
+            cursor.execute(
+                # `TO_VECTOR(?)` with no dtype is `SQLCODE -259` ("vectors of
+                # different datatypes") against a VECTOR(DOUBLE, n) column — at query
+                # open, so it fails even on an empty table. Declaring the width from
+                # the query vector also makes a wrong-width vector error (ADR-0005)
+                # rather than score a reshaped value.
+                f"SELECT TOP {k} e.node_id, "
+                f"VECTOR_COSINE(e.emb, TO_VECTOR(?, DOUBLE, {len(query_vector)})) AS score "
+                f"FROM Graph_KG.kg_NodeEmbeddings e "
+                f"{join}"
+                # A node can be registered before it is embedded, and
+                # `VECTOR_COSINE` of a NULL vector is NULL, which `TOP k … ORDER BY
+                # score DESC` returns like any other row — `float(None)` then raised
+                # and the whole search reported zero neighbours.
+                f"WHERE e.emb IS NOT NULL AND {graph_scope_predicate('e.graph_id')} "
+                f"ORDER BY score DESC",
+                params,
+            )
+            rows = [
+                [r[0], float(r[1])] for r in cursor.fetchall() if r[1] is not None
+            ]
             return IVGResult(columns=["id", "score"], rows=rows)
         except Exception as e:
-            logger.warning("KNN_VEC failed: %s", e)
-            cursor = self.conn.cursor()
-            vec_str = ",".join(str(x) for x in query_vector)
-            try:
-                cursor.execute(
-                    f"SELECT TOP {k} id, VECTOR_COSINE(emb, TO_VECTOR(?)) AS score "
-                    f"FROM Graph_KG.kg_NodeEmbeddings ORDER BY score DESC",
-                    [f"[{vec_str}]"],
-                )
-                rows = [[r[0], float(r[1])] for r in cursor.fetchall()]
-                return IVGResult(columns=["id", "score"], rows=rows)
-            except Exception as e2:
-                logger.warning("KNN_VEC client-side fallback failed: %s", e2)
-                return IVGResult(columns=["id", "score"], rows=[])
+            logger.warning("KNN_VEC scoped SQL failed: %s", e)
+            return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
     # ── Temporal Edges ────────────────────────────────────────────────────────
 
@@ -1209,32 +1602,68 @@ class IRISGraphStore:
         ts_end: int,
         direction: str,
         max_hops: int,
+        graph: Optional[str] = None,
     ) -> IVGResult:
+        """Hop-by-hop walk of the temporal window, scoped to one graph.
+
+        There is no `QueryWindowBFS` ClassMethod — not in this release and not in
+        any earlier one — so this method used to raise on every call and answer
+        every temporal Cypher window query with zero rows. The window readers that
+        do exist are single-hop and graph-scoped (`TemporalIndex.QueryWindow` and
+        `QueryWindowInbound`, both taking `graphId` first per spec 223), so the hop
+        loop lives here.
+
+        ``graph`` defaults to the default graph ``''`` — never every graph.
+        """
         import json as _json
 
-        predicates_json = _json.dumps(predicates) if predicates else ""
+        graph_id = validate_graph_name(graph)
+        preds = list(predicates) if predicates else [""]  # "" means any predicate
+        dirs = ["out", "in"] if direction in ("both", "any") else [direction or "out"]
+        readers = {"out": "QueryWindow", "in": "QueryWindowInbound"}
+
+        visited = {source_id}
+        frontier = [source_id]
+        rows: list[list] = []
         try:
-            result_json = str(
-                self._call_classmethod(
-                    "Graph.KG.TemporalIndex",
-                    "QueryWindowBFS",
-                    source_id,
-                    predicates_json,
-                    str(ts_start),
-                    str(ts_end),
-                    direction,
-                    str(max_hops),
-                )
-            )
-            results = _json.loads(result_json) if result_json else []
-            rows = [
-                [r.get("id", ""), r.get("hops", 0), r.get("pred", ""), r.get("ts", 0)]
-                for r in results
-            ]
+            for hop in range(1, max(int(max_hops), 0) + 1):
+                next_frontier: list[str] = []
+                for node in frontier:
+                    for d in dirs:
+                        reader = readers.get(d, "QueryWindow")
+                        for pred in preds:
+                            raw = str(
+                                self._call_classmethod(
+                                    "Graph.KG.TemporalIndex",
+                                    reader,
+                                    graph_id,
+                                    node,
+                                    pred,
+                                    str(ts_start),
+                                    str(ts_end),
+                                )
+                            )
+                            edges = _json.loads(raw) if raw else []
+                            for edge in edges:
+                                # QueryWindow yields the edge as (s, p, o); the
+                                # neighbour is the far end for the direction read.
+                                nbr = edge.get("o") if d == "out" else edge.get("s")
+                                if not nbr or nbr in visited:
+                                    continue
+                                visited.add(nbr)
+                                next_frontier.append(nbr)
+                                rows.append(
+                                    [nbr, hop, edge.get("p", ""), edge.get("ts", 0)]
+                                )
+                frontier = next_frontier
+                if not frontier:
+                    break
             return IVGResult(columns=["id", "hops", "pred", "ts"], rows=rows)
         except Exception as e:
             logger.warning("execute_temporal_cypher failed: %s", e)
-            return IVGResult(columns=["id", "hops", "pred", "ts"], rows=[])
+            return IVGResult(
+                columns=["id", "hops", "pred", "ts"], rows=[], error=str(e)[:200]
+            )
 
     def get_temporal_aggregate(
         self, source_id: str, predicate: str, metric: str, ts_start: int, ts_end: int,

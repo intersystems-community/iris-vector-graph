@@ -13,10 +13,15 @@ tag's compiled ObjectScript (see `tests/e2e/fixtures/old_releases.py`). The
 archive cannot stand in for it, because `restore_snapshot` imports globals at
 today's coordinates and neither release exported its temporal index at all.
 
-Both frozen releases predate spec-223, so both hold the flat temporal layout:
-`^KG("tout", ts, s, p, o)` with no graph key. `MigrateToGraphScoped` is what moves
-it, and the assertions below are about the layout *and* about the interface,
-because the layout is only interesting insofar as a reader can then see it.
+The pre-223 fixtures hold the flat temporal layout: `^KG("tout", ts, s, p, o)`
+with no graph key. `MigrateToGraphScoped` is what moves it, and the assertions
+below are about the layout *and* about the interface, because the layout is only
+interesting insofar as a reader can then see it.
+
+A release frozen after spec 223 arrives already scoped, so it needs no migration
+— and the last section says so directly rather than running the flat-layout
+assertions against it, which is what they did until they were split: every one of
+them passed vacuously or failed on a premise the fixture never had.
 
 Requires ivg-iris-enterprise:
     IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 \
@@ -30,7 +35,12 @@ import os
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
-from tests.e2e.fixtures.old_releases import OLD_RELEASES, RELEASE_IDS
+from tests.e2e.fixtures.old_releases import (
+    GRAPH_SCOPED_IDS,
+    GRAPH_SCOPED_RELEASES,
+    PRE_223_IDS,
+    PRE_223_RELEASES,
+)
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
@@ -43,15 +53,24 @@ pytestmark = [
 BUCKET_WIDTH = 300
 
 
-@pytest.fixture(params=OLD_RELEASES, ids=RELEASE_IDS)
+@pytest.fixture(params=PRE_223_RELEASES, ids=PRE_223_IDS)
 def old_database(request, iris_connection, iris_master_cleanup):
-    """A current install sitting on one old release's untouched globals.
+    """A current install sitting on one pre-223 release's untouched globals.
 
     `^KG` is emptied first so the tree under test is the old release's and nothing
     else: a leftover scoped entry from another test would be indistinguishable
     from work the migration did.
     """
-    release = request.param
+    return _sitting_on(request.param, iris_connection)
+
+
+@pytest.fixture(params=GRAPH_SCOPED_RELEASES, ids=GRAPH_SCOPED_IDS)
+def scoped_database(request, iris_connection, iris_master_cleanup):
+    """The same starting condition for a release that was already graph-scoped."""
+    return _sitting_on(request.param, iris_connection)
+
+
+def _sitting_on(release, iris_connection):
     engine = IRISGraphEngine(
         iris_connection, embedding_dimension=release.embedding_dimension
     )
@@ -244,6 +263,75 @@ def test_a_second_migration_reports_zero_and_changes_nothing(old_database):
     assert _migrate(engine) == 0
     assert first == len(release.seeded["temporal"])
     assert engine.get_edges_in_window("", "", start, end) == after_first
+
+
+# ── a release that was already scoped needs no migration ───────────────────
+#
+# These are the same claims as above, stated for the other side of spec 223.
+# Until the parametrization was split, the flat-layout tests ran against this
+# fixture too: `test_the_old_layout_arrives_flat` failed on a premise v3.2.0 never
+# had, and the ones that still passed passed vacuously — "the flat coordinates are
+# empty" is trivially true of a tree that was never written flat.
+
+
+def test_an_already_scoped_database_is_readable_before_any_migration(scoped_database):
+    """The upgrade a 3.2.0 consumer actually performs: install, and read on.
+
+    Every reader takes a graph key first, and this tree already has one, so there
+    is nothing to move and nothing invisible while it is unmoved.
+    """
+    release, engine, _iris_obj = scoped_database
+    start, end = _window(release)
+
+    found = engine.get_edges_in_window("", "", start, end)
+
+    assert {(e["s"], e["p"], e["o"], int(e["ts"])) for e in found} == {
+        (e["source"], e["predicate"], e["target"], e["timestamp"])
+        for e in release.seeded["temporal"]
+    }
+
+
+def test_an_already_scoped_databases_aggregates_answer_before_any_migration(
+    scoped_database,
+):
+    """`bucket` and `tagg` arrive scoped by the same rule the raw trees do."""
+    release, engine, _iris_obj = scoped_database
+    start, end = _window(release)
+
+    n1_edges = [e for e in release.seeded["temporal"] if e["source"] == "n1"]
+    assert engine.get_temporal_aggregate("n1", "calls", "count", start, end) == len(
+        n1_edges
+    )
+
+
+def test_the_migration_reports_zero_on_an_already_scoped_database(scoped_database):
+    """Zero means "nothing to move", and here that is the truthful answer.
+
+    Worth pinning separately from the idempotency test above: that one reaches zero
+    by migrating first, this one starts there. A migration that counted scoped
+    entries as work would report three and rewrite a tree that is already right.
+    """
+    _release, engine, _iris_obj = scoped_database
+
+    assert _migrate(engine) == 0
+
+
+def test_the_migration_leaves_an_already_scoped_tree_byte_for_byte(scoped_database):
+    """Including the HLL sketch, which no pass here could recompute."""
+    release, engine, iris_obj = scoped_database
+    before = {
+        tuple(entry["k"]): entry["v"] for entry in release.globals_under("^KG", "tout")
+    }
+    bucket = 1700000000 // BUCKET_WIDTH
+    sketch = iris_obj.get("^KG", "tagg", 0, bucket, "n1", "calls", "hll")
+    assert before and sketch, "the fixture carries no scoped temporal tree to leave alone"
+
+    _migrate(engine)
+
+    for key, value in before.items():
+        subs = [int(s) if str(s).lstrip("-").isdigit() else s for s in key]
+        assert iris_obj.get("^KG", *subs) == value, key
+    assert iris_obj.get("^KG", "tagg", 0, bucket, "n1", "calls", "hll") == sketch
 
 
 # ── what this migration deliberately does not touch ────────────────────────

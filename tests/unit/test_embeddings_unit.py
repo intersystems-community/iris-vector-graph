@@ -21,6 +21,7 @@ No IRIS connection needed — mocks conn and cursor.
 import pytest
 from unittest.mock import MagicMock, patch, call
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.unit.route_fakes_227 import answer_by_statement
 
 
 def _make_eng(dim=4):
@@ -307,8 +308,10 @@ class TestEmbedNodes:
     def test_basic_path_returns_stats(self):
         eng, conn, cursor = _make_eng(dim=4)
         call_seq = iter([
+            [],         # route lookup (unrouted → legacy table)
             [("n1",)],  # SELECT node_id FROM nodes
-            [],         # SELECT id FROM kg_NodeEmbeddings (already embedded)
+            [],         # route lookup again
+            [],         # SELECT node_id FROM kg_NodeEmbeddings (already embedded)
             [],         # SELECT rdf_props
         ])
         cursor.fetchall.side_effect = lambda: next(call_seq)
@@ -326,7 +329,8 @@ class TestEmbedNodes:
 
     def test_force_flag_re_embeds_already_embedded(self):
         eng, conn, cursor = _make_eng(dim=4)
-        call_seq = iter([[("n1",)], []])  # nodes, rdf_props
+        # force=True skips the already-embedded read, so one route lookup.
+        call_seq = iter([[], [("n1",)], []])  # route, nodes, rdf_props
         cursor.fetchall.side_effect = lambda: next(call_seq)
         with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
             with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
@@ -335,7 +339,8 @@ class TestEmbedNodes:
 
     def test_text_fn_error_increments_errors(self):
         eng, conn, cursor = _make_eng(dim=4)
-        call_seq = iter([[("n1",)], [], []])
+        # route, nodes, route, already-embedded, rdf_props (spec 227 routing).
+        call_seq = iter([[], [("n1",)], [], [], []])
         cursor.fetchall.side_effect = lambda: next(call_seq)
         def bad_text_fn(node_id, props):
             raise ValueError("text_fn exploded")
@@ -345,7 +350,7 @@ class TestEmbedNodes:
 
     def test_progress_callback_is_called(self):
         eng, conn, cursor = _make_eng(dim=4)
-        call_seq = iter([[("n1",)], [], []])
+        call_seq = iter([[], [("n1",)], [], [], []])
         cursor.fetchall.side_effect = lambda: next(call_seq)
         callback_calls = []
         def cb(done, total):
@@ -364,8 +369,7 @@ class TestEmbedEdges:
 
     def test_basic_path_returns_stats(self):
         eng, conn, cursor = _make_eng(dim=4)
-        call_seq = iter([[("n1", "TREATS", "n2")], []])
-        cursor.fetchall.side_effect = lambda: next(call_seq)
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
         with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
             with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
                 result = eng.embed_edges()
@@ -380,8 +384,7 @@ class TestEmbedEdges:
 
     def test_text_fn_error_increments_errors(self):
         eng, conn, cursor = _make_eng(dim=4)
-        call_seq = iter([[("n1", "TREATS", "n2")], []])
-        cursor.fetchall.side_effect = lambda: next(call_seq)
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
         def bad_text_fn(s, p, o):
             raise RuntimeError("text_fn failed")
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
@@ -390,8 +393,7 @@ class TestEmbedEdges:
 
     def test_executemany_failure_falls_back_per_row(self):
         eng, conn, cursor = _make_eng(dim=4)
-        call_seq = iter([[("n1", "TREATS", "n2")], []])
-        cursor.fetchall.side_effect = lambda: next(call_seq)
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
         cursor.executemany.side_effect = RuntimeError("executemany not supported")
         with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
             with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
@@ -687,7 +689,9 @@ class TestEmbedNodesBatchPath:
         eng.embedding_config = None
 
         cursor.fetchall.side_effect = [
+            [],                  # route lookup (unrouted)
             [("n1",), ("n2",)],  # node_ids
+            [],                  # route lookup again
             [],                  # already_embedded
             [("n1", "a", "text"), ("n2", "b", "text")],  # props
         ]
@@ -699,31 +703,45 @@ class TestEmbedNodesBatchPath:
         mock_embedder.encode.assert_called()
         assert result["embedded"] >= 0
 
-    def test_executemany_fallback_per_row_on_nodes(self):
-        """Lines 400-411: executemany fails → per-row fallback."""
+    def test_writes_go_through_the_routed_insert(self):
+        """The batch is written by `store_embeddings`, one INSERT per node.
+
+        This used to assert an `executemany` failure falling back to per-row INSERTs.
+        `embed_nodes` no longer writes its own statement at all: it hand-rolled
+        `INSERT ... (id, emb)`, which 4.0.0 refuses with SQLCODE -108, so the write
+        was moved to `store_embeddings` — which routes, checks the node exists in the
+        graph, and binds `graph_id` (spec 227, T071). There is no executemany left to
+        fall back from.
+        """
         eng, conn, cursor = _make_eng()
         eng.embedding_config = None
 
         cursor.fetchall.side_effect = [
-            [("n1",)],  # node_ids
+            [],          # route lookup (unrouted)
+            [("n1",)],   # node_ids
+            [],          # route lookup again
             [],          # already_embedded
             [],          # props
         ]
-        cursor.fetchone.return_value = (0,)
-        cursor.executemany.side_effect = Exception("executemany failed")
+        # The node exists in the graph: `store_embeddings` refuses to write a vector
+        # for a node that does not, so a 0 here would make this test assert nothing.
+        cursor.fetchone.return_value = (1,)
 
         insert_sqls = []
         def exec_side(sql, *args, **kwargs):
             if "INSERT" in (sql or ""):
-                insert_sqls.append(sql)
+                insert_sqls.append(" ".join(str(sql).split()))
         cursor.execute.side_effect = exec_side
 
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
                 result = eng.embed_nodes()
 
-        assert isinstance(result, dict)
-        assert len(insert_sqls) >= 1  # per-row INSERT called
+        assert result["errors"] == 0, result
+        vector_inserts = [s for s in insert_sqls if "TO_VECTOR" in s]
+        assert len(vector_inserts) == 1, insert_sqls
+        assert "(graph_id, node_id, emb, metadata)" in vector_inserts[0]
+        cursor.executemany.assert_not_called()
 
     def test_no_texts_empty_batch_callback(self):
         """Lines 346-350: empty texts → commit called + progress_callback invoked."""
@@ -731,7 +749,9 @@ class TestEmbedNodesBatchPath:
         eng.embedding_config = None
 
         cursor.fetchall.side_effect = [
-            [("n1",)],  # node_ids
+            [],          # route lookup (unrouted)
+            [("n1",)],   # node_ids
+            [],          # route lookup again
             [],          # already_embedded
             [],          # props
         ]
@@ -764,10 +784,7 @@ class TestEmbedEdgesBatchPath:
         eng.embedder = mock_embedder
         eng.embedding_config = None
 
-        cursor.fetchall.side_effect = [
-            [("n1", "TREATS", "n2")],  # edges
-            [],                          # already_embedded
-        ]
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
 
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=True):
             result = eng.embed_edges()
@@ -780,10 +797,6 @@ class TestEmbedEdgesBatchPath:
         eng, conn, cursor = _make_eng()
         eng.embedding_config = None
 
-        cursor.fetchall.side_effect = [
-            [("n1", "TREATS", "n2")],  # edges
-            [],                          # already_embedded
-        ]
         cursor.executemany.side_effect = Exception("executemany failed")
 
         insert_sqls = []
@@ -791,6 +804,9 @@ class TestEmbedEdgesBatchPath:
             if "INSERT" in (sql or ""):
                 insert_sqls.append(sql)
         cursor.execute.side_effect = exec_side
+        # After the test's own side effect: `answer_by_statement` wraps whatever is
+        # installed, so installing one afterwards would drop the wrapper.
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
 
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):
@@ -803,10 +819,7 @@ class TestEmbedEdgesBatchPath:
         eng, conn, cursor = _make_eng()
         eng.embedding_config = None
 
-        cursor.fetchall.side_effect = [
-            [("n1", "TREATS", "n2")],  # edges
-            [],                          # already_embedded
-        ]
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
 
         progress_calls = []
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
@@ -822,17 +835,14 @@ class TestEmbedEdgesBatchPath:
         eng, conn, cursor = _make_eng()
         eng.embedding_config = None
 
-        cursor.fetchall.side_effect = [
-            [("n1", "TREATS", "n2")],  # edges
-            [],                          # already_embedded
-        ]
-
         delete_calls = [0]
         def exec_side(sql, *args, **kwargs):
             if "DELETE" in (sql or ""):
                 delete_calls[0] += 1
                 raise Exception("delete failed")
         cursor.execute.side_effect = exec_side
+        # After the test's own side effect, for the same reason as above.
+        answer_by_statement(cursor, {"rdf_edges": [("n1", "TREATS", "n2")]})
 
         with patch("iris_vector_graph.engine._is_sentence_transformer", return_value=False):
             with patch.object(eng, "embed_text", return_value=[0.1, 0.2, 0.3, 0.4]):

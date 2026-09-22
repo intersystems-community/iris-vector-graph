@@ -24,6 +24,10 @@ class TestSQLTableBridgeUnit:
         e._arno_available = None
         e._arno_capabilities = {}
         e.vector_dtype = "DOUBLE"
+        # `__new__` skips `__init__`, so every attribute the methods under test read
+        # has to be set here. Route resolution qualifies table names through
+        # `_t()`, which reads this (spec 227).
+        e._schema_prefix = "Graph_KG"
         return e
 
     def test_get_table_mapping_returns_none_for_unmapped(self):
@@ -158,7 +162,9 @@ class TestSQLTableBridgeUnit:
         }
         mock_cur = MagicMock()
         mock_cur.fetchall.return_value = [("P001", "Jane Doe"), ("P002", "John Smith")]
-        mock_cur.fetchone.side_effect = [(1,), (0,)]
+        # The already-embedded check reads `node_id, emb, metadata` through
+        # `get_embedding` now: a row means embedded, None means not (spec 227 re-key).
+        mock_cur.fetchone.side_effect = [("Patient:P001", "0.1,0.2", None), None]
         e.conn.cursor.return_value = mock_cur
         e.embed_text = MagicMock(return_value=[0.1] * 768)
         result = e.attach_embeddings_to_table("Patient", ["Name"], force=False)

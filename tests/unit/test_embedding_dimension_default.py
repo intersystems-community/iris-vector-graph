@@ -19,7 +19,10 @@ who took the default got procedures declared at 1000 against tables created at
 stayed quiet.
 """
 
+import ast
 import inspect
+import pathlib
+import re
 
 from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION
 from iris_vector_graph.schema import GraphSchema
@@ -42,16 +45,19 @@ def test_get_base_schema_sql_uses_the_constant():
     )
 
 
-def test_get_procedures_sql_list_no_longer_carries_a_width_at_all():
-    """The one site that disagreed — now it has no opinion.
+def test_get_procedures_sql_list_no_longer_takes_a_width_at_all():
+    """The one site that disagreed — now the parameter is gone.
 
     3.1.0 collapsed this default from 1000 to 768, on the theory that the parameter would
     one day be wired in. Spec 226 measured what wiring it in would do (ADR-0005: IRIS
     reshapes the query vector and returns a plausible wrong score instead of raising) and
-    deprecated the parameter instead. A default of `None` is how "supplied" is told from
-    "omitted" so the deprecation can fire only on the former.
+    deprecated the parameter. Spec 227 removed it in 4.0.0: a parameter that is accepted,
+    warned about and then ignored is a worse contract than one that does not exist, because
+    passing it reads as having configured something.
     """
-    assert _default_of(GraphSchema.get_procedures_sql_list, "embedding_dimension") is None
+    assert "embedding_dimension" not in inspect.signature(
+        GraphSchema.get_procedures_sql_list
+    ).parameters
 
 
 def test_the_ddl_declares_the_constant():
@@ -61,26 +67,20 @@ def test_the_ddl_declares_the_constant():
     assert "VECTOR(DOUBLE, 1000)" not in ddl
 
 
-def test_get_procedures_sql_list_does_not_actually_use_its_dimension():
-    """Pins what the parameter really does, which is nothing.
+def test_the_procedure_leaves_to_vector_unlengthened():
+    """Why the parameter could never have been wired in.
 
-    The docstring used to claim it fed a DECLARE clause in `kg_KNN_VEC`; the
-    generated procedure says `TO_VECTOR(:queryInput, DOUBLE)` with no length.
-    That is why the 1000/768 disagreement never reached SQL. If someone wires
-    the width in, this test fails and the docstring has to be corrected with it.
+    `TO_VECTOR(:queryInput, DOUBLE)` carries no length on purpose (ADR-0005): with one,
+    IRIS reshapes a mismatched query vector and returns a plausible wrong score instead
+    of raising. Passing a width was never going to make the procedure stricter, which is
+    why spec 227 removed the parameter instead of implementing it. If someone adds a
+    length here, this fails and ADR-0005 has to be reopened with it.
     """
-    import warnings
+    sql = "\n".join(GraphSchema.get_procedures_sql_list())
 
-    at_default = "\n".join(GraphSchema.get_procedures_sql_list())
-    with warnings.catch_warnings():
-        # Deprecated since spec 226, and deliberately still passed here: the value being
-        # ignored is the thing under test.
-        warnings.simplefilter("ignore", DeprecationWarning)
-        at_384 = "\n".join(GraphSchema.get_procedures_sql_list(embedding_dimension=384))
-
-    assert at_default == at_384
-    assert "TO_VECTOR(:queryInput, DOUBLE)" in at_default
-    assert "VECTOR(DOUBLE, 1000)" not in at_default
+    assert "TO_VECTOR(:queryInput, DOUBLE)" in sql
+    assert "VECTOR(DOUBLE, 1000)" not in sql
+    assert "TO_VECTOR(:queryInput, DOUBLE," not in sql
 
 
 def test_engine_status_dataclass_uses_the_constant():
@@ -106,24 +106,87 @@ def test_admin_schema_request_uses_the_constant():
     )
 
 
+_DIMENSION_LITERAL = re.compile(r"embedding[-_]dim(?:ension)?[^=\n]*[=:]\s*(\d+)")
+
+
+def _docstring_lines(source: str) -> set[int]:
+    """Every line number occupied by a docstring in ``source``.
+
+    A docstring is a bare string expression, so this finds `ast.Expr` nodes wrapping a
+    string constant — a module, class or function docstring — and nothing else. A string
+    that is part of an expression (a dict key, an argument, an f-string in a call) is not
+    matched, because those sit next to code that genuinely could declare a default.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # pragma: no cover - the package has to parse for anything to run
+        return set()
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            lines.update(range(node.lineno, (node.end_lineno or node.lineno) + 1))
+    return lines
+
+
+def _dimension_literal_offenders(source: str) -> list[tuple[int, str]]:
+    """Lines of ``source`` that declare a dimension default other than the constant.
+
+    Prose is not a default. A comment cannot carry one, and neither can a docstring: the
+    `_diagnose_vector_write` docstring explains the mismatch it diagnoses by naming an
+    engine "built with ``embedding_dimension=128``", which is a description of a caller's
+    mistake, not a fifth default. Only code lines are scanned.
+    """
+    skip = _docstring_lines(source)
+    offenders = []
+    for lineno, line in enumerate(source.splitlines(), start=1):
+        if lineno in skip or line.lstrip().startswith("#"):
+            continue
+        match = _DIMENSION_LITERAL.search(line)
+        if match and int(match.group(1)) != DEFAULT_EMBEDDING_DIMENSION:
+            offenders.append((lineno, line.strip()))
+    return offenders
+
+
+def test_the_scan_still_catches_a_real_fifth_default():
+    source = "def f(embedding_dimension: int = 123):\n    return embedding_dimension\n"
+    assert [lineno for lineno, _ in _dimension_literal_offenders(source)] == [1]
+
+
+def test_the_scan_ignores_prose_in_a_docstring():
+    """A docstring explaining a width mismatch is not a declaration of one."""
+    source = (
+        "def f():\n"
+        '    """An engine built with ``embedding_dimension=128``\n'
+        '    against a 768-wide column is refused.\n'
+        '    """\n'
+        "    return None\n"
+    )
+    assert _dimension_literal_offenders(source) == []
+
+
+def test_the_scan_ignores_a_comment():
+    source = "# embedding_dimension=0 now warns\nx = 1\n"
+    assert _dimension_literal_offenders(source) == []
+
+
+def test_the_scan_still_reads_a_dict_entry_beside_a_string_key():
+    """A string key is not a docstring, so the code around it stays in scope."""
+    source = 'DEFAULTS = {"embedding_dimension": 512}\n'
+    assert [lineno for lineno, _ in _dimension_literal_offenders(source)] == [1]
+
+
 def test_no_module_carries_its_own_dimension_literal():
     """A scan, so a fifth default cannot be added without this failing."""
-    import pathlib
-    import re
-
     pkg = pathlib.Path(__file__).resolve().parents[2] / "iris_vector_graph"
     assert pkg.is_dir(), f"package not found next to tests (looked for {pkg})"
 
-    pattern = re.compile(r"embedding[-_]dim(?:ension)?[^=\n]*[=:]\s*(\d+)")
     offenders = []
     for path in sorted(pkg.rglob("*.py")):
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
-            # A comment cannot carry a default, and prose about a rejected width (e.g. a
-            # note that `embedding_dimension=0` now warns) is not a fifth default.
-            if line.lstrip().startswith("#"):
-                continue
-            match = pattern.search(line)
-            if match and int(match.group(1)) != DEFAULT_EMBEDDING_DIMENSION:
-                offenders.append(f"{path.relative_to(pkg)}:{lineno}: {line.strip()}")
+        for lineno, line in _dimension_literal_offenders(path.read_text()):
+            offenders.append(f"{path.relative_to(pkg)}:{lineno}: {line}")
 
     assert not offenders, "hardcoded embedding dimension defaults:\n" + "\n".join(offenders)

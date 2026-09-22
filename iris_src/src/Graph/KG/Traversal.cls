@@ -63,44 +63,47 @@ ClassMethod NKGPopulated() As %Integer
 	Quit ##class(Graph.KG.TraversalBuild).NKGPopulated()
 }
 
-ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "") As %DynamicArray
+/// Every BFS entry point takes a trailing `graph` name (spec 227). It is a name and
+/// not a subscript: Graph.KG.GraphKey.ForIndex() derives the ^KG key inside
+/// TraversalBFS, so the default graph is "" here and 0 there (ADR-0003).
+ClassMethod BFS(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", graph As %String = "") As %DynamicArray
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFS(srcId, preds, maxHops, dstLabel)
+	Quit ##class(Graph.KG.TraversalBFS).BFS(srcId, preds, maxHops, dstLabel, graph)
 }
 
-ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %Integer
+ClassMethod BFSFast(srcId As %String, preds As %DynamicArray = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %Integer
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFast(srcId, preds, maxHops, dstLabel, direction, maxResults, graph)
 }
 
-ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Integer = 2, dstLabel As %String = "") As %DynamicArray
+ClassMethod BFSJSON(srcId As %String, preds As %DynamicArray, maxHops As %Integer = 2, dstLabel As %String = "", graph As %String = "") As %DynamicArray
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSJSON(srcId, preds, maxHops, dstLabel)
+	Quit ##class(Graph.KG.TraversalBFS).BFSJSON(srcId, preds, maxHops, dstLabel, graph)
 }
 
-ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
+ClassMethod BFSFastJson(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %String
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFastJson(srcId, predsJson, maxHops, dstLabel, direction)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastJson(srcId, predsJson, maxHops, dstLabel, direction, graph)
 }
 
-ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %String
+ClassMethod BFSFastJsonDirect(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %String
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonDirect(srcId, predsJson, maxHops, dstLabel, direction)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonDirect(srcId, predsJson, maxHops, dstLabel, direction, graph)
 }
 
-ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
+ClassMethod BFSFastJsonChunked(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonChunked(srcId, predsJson, maxHops, dstLabel, direction, maxResults)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonChunked(srcId, predsJson, maxHops, dstLabel, direction, maxResults, graph)
 }
 
-ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0) As %String
+ClassMethod BFSFastJsonSorted(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", maxResults As %Integer = 0, graph As %String = "") As %String
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonSorted(srcId, predsJson, maxHops, dstLabel, direction, maxResults)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastJsonSorted(srcId, predsJson, maxHops, dstLabel, direction, maxResults, graph)
 }
 
-ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out") As %Integer
+ClassMethod BFSFastCountDistinct(srcId As %String, predsJson As %String = "", maxHops As %Integer = 2, dstLabel As %String = "", direction As %String = "out", graph As %String = "") As %Integer
 {
-	Quit ##class(Graph.KG.TraversalBFS).BFSFastCountDistinct(srcId, predsJson, maxHops, dstLabel, direction)
+	Quit ##class(Graph.KG.TraversalBFS).BFSFastCountDistinct(srcId, predsJson, maxHops, dstLabel, direction, graph)
 }
 
 ClassMethod ReadBFSChunk(tag As %String, chunkNum As %Integer) As %String

@@ -15,94 +15,118 @@
 /// it is not, and never was in this global — WriteAdjacency has always defaulted
 /// the parameter to 0.
 ///
-/// Merged-view traversal iterates the full ^KG("out") tree (all graph subscripts).
-/// Graph-filtered traversal uses a fixed graph subscript. KNOWN AMBIGUITY:
-/// MatchEdges reads 0 as "every graph", while WriteAdjacency and DeleteAdjacency
-/// read 0 as "the default graph". MatchEdges therefore cannot ask for the default
-/// graph alone and answers across graphs when asked for it.
+/// Merged-view traversal iterates the full ^KG("out") tree (all graph subscripts)
+/// and is spelled MatchEdgesAllGraphs. Graph-filtered traversal uses a fixed graph
+/// subscript and is spelled MatchEdges. Both read 0 as "the default graph", the
+/// same as WriteAdjacency and DeleteAdjacency, so one graph key means one thing
+/// everywhere in this class.
+///
+/// It did not. MatchEdges alone read 0 as "every graph" — the value every caller
+/// passes for the default graph, and the parameter's own default — so asking for
+/// the default graph returned every graph's edges, and there was no way to ask for
+/// the default graph alone. A cross-graph read now requires naming the method that
+/// does it, which makes every one of them greppable (spec 230, FR-002).
 ///
 /// ^NKG is per-identifier (no graph dimension); InternNode unchanged.
 /// ============================================================================
 Class Graph.KG.EdgeScan Extends %RegisteredObject
 {
 
-/// Scan adjacency globals. graph="" returns merged view across all graphs.
+/// Scan one graph's adjacency. graph is a derived index key: 0 for the default
+/// graph, the graph name otherwise — WriteAdjacency's convention (ADR-0003).
+///
+/// For every graph at once, call MatchEdgesAllGraphs. There is deliberately no
+/// value of this parameter that means "all of them".
 ClassMethod MatchEdges(sourceId As %String, predicate As %String, shard As %Integer = 0, graph = 0) As %String [ SqlProc, SqlName = MatchEdges ]
+{
+	Set results = ##class(%DynamicArray).%New()
+	// "" is the default graph here as it is everywhere else in IVG, and the
+	// subscript that holds it is 0 — WriteAdjacency has never written under "".
+	If graph = "" {
+		Set graph = 0
+	}
+	Do ..ScanOneGraph(graph, $Get(sourceId, ""), $Get(predicate, ""), results)
+	Return results.%ToJSON()
+}
+
+/// Scan every graph's adjacency and merge the results.
+///
+/// The cross-graph read, named. "Every graph" is not a key value, so it cannot be
+/// expressed by handing MatchEdges a particular graph — the walk over the graph
+/// subscripts has to live somewhere, and putting it behind its own name is what
+/// makes a cross-graph read visible at the call site.
+ClassMethod MatchEdgesAllGraphs(sourceId As %String, predicate As %String, shard As %Integer = 0) As %String [ SqlProc, SqlName = MatchEdgesAllGraphs ]
 {
 	Set results = ##class(%DynamicArray).%New()
 	Set sourceId = $Get(sourceId, "")
 	Set predicate = $Get(predicate, "")
-
-	// Build the list of graph subscripts to iterate
-	Kill tGraphs
-	// graph=0 means merged view (all graphs); non-0 = specific named graph
-	If (graph '= 0) && (graph '= "") {
-		Set tGraphs(graph) = ""
-	} Else {
-		Set g = ""
-		For {
-			Set g = $Order(^KG("out", g))
-			Quit:g=""
-			Set tGraphs(g) = ""
-		}
-	}
-
 	Set g = ""
 	For {
-		Set g = $Order(tGraphs(g))
+		Set g = $Order(^KG("out", g))
 		Quit:g=""
-		If sourceId '= "" {
-			If $Length(predicate) > 0 {
-				Set o = ""
-				For {
-					Set o = $Order(^KG("out", g, sourceId, predicate, o))
-					Quit:o=""
-					Set w = $Get(^KG("out", g, sourceId, predicate, o), 1.0)
-					Set entry = ##class(%DynamicObject).%New()
-					Do entry.%Set("s", sourceId) Do entry.%Set("p", predicate) Do entry.%Set("o", o) Do entry.%Set("w", +w)
-					Do results.%Push(entry)
-				}
-			} Else {
-				Set p = ""
-				For {
-					Set p = $Order(^KG("out", g, sourceId, p))
-					Quit:p=""
-					Set o = ""
-					For {
-						Set o = $Order(^KG("out", g, sourceId, p, o))
-						Quit:o=""
-						Set w = $Get(^KG("out", g, sourceId, p, o), 1.0)
-						Set entry = ##class(%DynamicObject).%New()
-						Do entry.%Set("s", sourceId) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w)
-						Do results.%Push(entry)
-					}
-				}
+		Do ..ScanOneGraph(g, sourceId, predicate, results)
+	}
+	Return results.%ToJSON()
+}
+
+/// Push one graph subscript's matching edges onto results.
+///
+/// The shared walk behind both scans, so the scoped read and the merged read cannot
+/// come to disagree about what an edge is or how it is shaped.
+///
+/// results is a %DynamicArray, passed by reference as every object is; it is
+/// appended to, never replaced.
+ClassMethod ScanOneGraph(graph, sourceId As %String, predicate As %String, results As %DynamicArray) [ Internal, Private ]
+{
+	If sourceId '= "" {
+		If $Length(predicate) > 0 {
+			Set o = ""
+			For {
+				Set o = $Order(^KG("out", graph, sourceId, predicate, o))
+				Quit:o=""
+				Set w = $Get(^KG("out", graph, sourceId, predicate, o), 1.0)
+				Set entry = ##class(%DynamicObject).%New()
+				Do entry.%Set("s", sourceId) Do entry.%Set("p", predicate) Do entry.%Set("o", o) Do entry.%Set("w", +w)
+				Do results.%Push(entry)
 			}
 		} Else {
-			Set s = ""
+			Set p = ""
 			For {
-				Set s = $Order(^KG("out", g, s))
-				Quit:s=""
-				Set p = ""
+				Set p = $Order(^KG("out", graph, sourceId, p))
+				Quit:p=""
+				Set o = ""
 				For {
-					Set p = $Order(^KG("out", g, s, p))
-					Quit:p=""
-					If ($Length(predicate) > 0) && (p '= predicate) Continue
-					Set o = ""
-					For {
-						Set o = $Order(^KG("out", g, s, p, o))
-						Quit:o=""
-						Set w = $Get(^KG("out", g, s, p, o), 1.0)
-						Set entry = ##class(%DynamicObject).%New()
-						Do entry.%Set("s", s) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w)
-						Do results.%Push(entry)
-					}
+					Set o = $Order(^KG("out", graph, sourceId, p, o))
+					Quit:o=""
+					Set w = $Get(^KG("out", graph, sourceId, p, o), 1.0)
+					Set entry = ##class(%DynamicObject).%New()
+					Do entry.%Set("s", sourceId) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w)
+					Do results.%Push(entry)
+				}
+			}
+		}
+	} Else {
+		Set s = ""
+		For {
+			Set s = $Order(^KG("out", graph, s))
+			Quit:s=""
+			Set p = ""
+			For {
+				Set p = $Order(^KG("out", graph, s, p))
+				Quit:p=""
+				If ($Length(predicate) > 0) && (p '= predicate) Continue
+				Set o = ""
+				For {
+					Set o = $Order(^KG("out", graph, s, p, o))
+					Quit:o=""
+					Set w = $Get(^KG("out", graph, s, p, o), 1.0)
+					Set entry = ##class(%DynamicObject).%New()
+					Do entry.%Set("s", s) Do entry.%Set("p", p) Do entry.%Set("o", o) Do entry.%Set("w", +w)
+					Do results.%Push(entry)
 				}
 			}
 		}
 	}
-
-	Return results.%ToJSON()
 }
 
 /// Write adjacency entries for one edge. graph="" = default graph (spec 214).
@@ -230,6 +254,39 @@ ClassMethod DeleteAdjacencyAllGraphs(s As %String, p As %String, o As %String)
 	}
 }
 
+/// Register one node in the default graph, without a failed INSERT (spec 230 FR-034).
+///
+/// The bulk paths used to insert every endpoint and tolerate SQLCODE -119, the
+/// duplicate. Inside the transaction they wrap a whole batch in, that is the most
+/// expensive thing they do: IRIS rolls a failed statement back to its own implicit
+/// savepoint, measured at ~40ms. Edges arrive chained — an edge's target is the next
+/// edge's source — so about half of every batch's node inserts were duplicates, which
+/// paced ingest at 25 edges/s regardless of batch size or caller. Measured live on
+/// 200 chained edges in one transaction: the -119 idiom 39.53 ms per edge, a seen-set
+/// plus an existence check 0.16, an existence check alone 0.03.
+///
+/// So ask first. pSeen remembers what this batch already registered, so a repeated
+/// endpoint costs nothing at all; -119 is still tolerated below, for the row another
+/// process inserts between the check and the write.
+///
+/// Returns 0 when the node is registered, otherwise the SQLCODE that stopped it —
+/// which the caller has to treat as "this edge did not land", because rdf_edges'
+/// foreign keys are composite since spec 227 ((graph_id, s) and (graph_id, o_id)
+/// against nodes (graph_id, node_id)) and an unregistered endpoint makes the edge
+/// INSERT SQLCODE -121.
+ClassMethod RegisterDefaultNode(pNodeId As %String, ByRef pSeen) As %Integer
+{
+	If pNodeId = "" { Return -1 }
+	If $Data(pSeen(pNodeId)) { Return 0 }
+	Set pSeen(pNodeId) = ""
+	Set tFound = 0
+	&sql(SELECT 1 INTO :tFound FROM Graph_KG.nodes WHERE node_id = :pNodeId AND graph_id = '')
+	If SQLCODE = 0 { Return 0 }
+	&sql(INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (:pNodeId, ''))
+	If (SQLCODE '= 0) && (SQLCODE '= -119) { Return SQLCODE }
+	Return 0
+}
+
 /// Bulk ingest edges via SQL INSERT + persistent ^KG global writes.
 ///
 /// graph_id is named explicitly and written as '', the same spelling create_edge
@@ -241,6 +298,7 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 {
 	Set data = {}.%FromJSON(edgesJson)
 	Set n = 0
+	Kill tSeen
 	TSTART
 	Set iter = data.%GetIterator()
 	While iter.%GetNext(.idx, .edge) {
@@ -249,8 +307,23 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 		Set o = edge.o
 		If (s = "") || (o = "") { Continue }
 		If s = o { Continue }
-		&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (:s, :p, :o, ''))
-		If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
+		// The endpoints first, through RegisterDefaultNode: an edge needs both of them
+		// registered in its own graph — always the default one on this path — or the
+		// INSERT below is SQLCODE -121 and the Continue that follows skips the row
+		// without counting it, so the caller is told how many edges landed and it is
+		// wrong.
+		If ..RegisterDefaultNode(s, .tSeen) '= 0 { Continue }
+		If ..RegisterDefaultNode(o, .tSeen) '= 0 { Continue }
+		// The edge itself is asked for before it is written, for the same reason: on a
+		// re-ingest every one of these INSERTs is the duplicate u_spo_graph refuses,
+		// and a refused statement inside this transaction costs ~40ms. -119 is still
+		// tolerated, for the row a concurrent writer lands in between.
+		Set tEdge = 0
+		&sql(SELECT 1 INTO :tEdge FROM Graph_KG.rdf_edges WHERE graph_id = '' AND s = :s AND p = :p AND o_id = :o)
+		If SQLCODE '= 0 {
+			&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (:s, :p, :o, ''))
+			If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
+		}
 		Do ..WriteAdjacency(s, p, o, "1.0", 0)
 		Set n = n + 1
 	}
@@ -269,22 +342,37 @@ ClassMethod BulkIngestEdgesFile(filePath As %String, predicate As %String = "KNO
 	Quit ..BulkIngestEdgesSQL(json, predicate)
 }
 
+/// Bulk ingest nodes, their labels and their properties, in the default graph.
+///
+/// Every write here names graph_id and writes '', the spelling create_node uses.
+/// The label and property inserts used to omit the column, which left NULL: the
+/// default graph then had two spellings in one table and a reader matching one
+/// silently missed the rows written the other way (spec 230, FR-035).
+///
+/// Nothing is written by a failed statement either — see RegisterDefaultNode for what
+/// that costs inside this transaction. A label is asked for before it is inserted, and
+/// a property is written with INSERT OR UPDATE, which also means a re-ingest carrying
+/// a changed value now updates it instead of silently failing on pk_props.
 ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 {
 	Set data = {}.%FromJSON(nodesJson)
 	Set n = 0
+	Kill tSeen
 	TSTART
 	Set iter = data.%GetIterator()
 	While iter.%GetNext(.idx, .node) {
 		Set id = node.id
 		If id = "" { Continue }
-		&sql(INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (:id, ''))
-		If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
+		If ..RegisterDefaultNode(id, .tSeen) '= 0 { Continue }
 		If $IsObject(node.labels) {
 			Set liter = node.labels.%GetIterator()
 			While liter.%GetNext(.li, .label) {
 				If label = "" { Continue }
-				&sql(INSERT INTO Graph_KG.rdf_labels (s, label) VALUES (:id, :label))
+				Set tHasLabel = 0
+				&sql(SELECT 1 INTO :tHasLabel FROM Graph_KG.rdf_labels WHERE graph_id = '' AND s = :id AND label = :label)
+				If SQLCODE '= 0 {
+					&sql(INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) VALUES ('', :id, :label))
+				}
 			}
 		}
 		If $IsObject(node.props) {
@@ -293,7 +381,7 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 				If key = "" { Continue }
 				Try {
 					Set valStr = $Select($IsObject(val):val.%ToJSON(), $IsValidNum(val):val, 1:""""_$Replace($ZConvert(val,"O","UTF8"),"""","""""")_"""")
-					&sql(INSERT INTO Graph_KG.rdf_props (s, "key", val) VALUES (:id, :key, :valStr))
+					&sql(INSERT OR UPDATE INTO Graph_KG.rdf_props (graph_id, s, "key", val) VALUES ('', :id, :key, :valStr))
 				} Catch ex { }
 			}
 		}

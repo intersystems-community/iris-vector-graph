@@ -1,6 +1,25 @@
 /// Graph.KG.TraversalBuild — (re)build ^KG and ^NKG adjacency indexes.
-/// Spec 214: ^KG layout is now graph-aware: ^KG("out", graph, 0, s, p, o).
-/// BuildKG reads graph_id from rdf_edges; BuildNKG iterates the merged view.
+///
+/// Every node store is graph-keyed, and the graph key is the first subscript after
+/// the store name:
+///
+///   ^KG("out",   graph, s, p, o)      ^KG("in",    graph, o, p, s)
+///   ^KG("deg",   graph, s)            ^KG("degp",  graph, s, p)
+///   ^KG("label", graph, label, s)     ^KG("prop",  graph, s, key)
+///   ^KG("deg2p", graph, s, p)         ^KG("deg2p_exact", graph, s, p)
+///
+/// Spec 214 keyed the first four; spec 230 keyed the last four, which had been keyed
+/// by node, label and predicate alone — so a per-graph erase could only reach them
+/// through the node IDs it was deleting, and after spec 227 broke UNIQUE (node_id)
+/// the same ID lives in two graphs (FR-010).
+///
+/// Every graph is read off the row that produced the entry — rdf_edges, rdf_labels
+/// and rdf_props each carry graph_id — and a row with none is a default-graph row.
+/// No entry's graph is inferred from anywhere else (FR-011).
+///
+/// BuildNKG iterates the merged view: ^NKG interns identifiers with no graph
+/// dimension, so it is graph-blind by construction and declared that way in
+/// Graph.KG.GraphStores.
 Class Graph.KG.TraversalBuild Extends %RegisteredObject
 {
 
@@ -28,27 +47,34 @@ ClassMethod BuildKG() As %Status
 		// adjacency intact.
 		Kill ^KG("label"), ^KG("prop"), ^KG("out"), ^KG("in"), ^KG("deg"), ^KG("degp")
 
-		// 1. Labels
-		&sql(DECLARE c1 CURSOR FOR SELECT s, label FROM Graph_KG.rdf_labels)
+		// 1. Labels — spec 230: the graph key leads, read off the row's own graph_id.
+		&sql(DECLARE c1 CURSOR FOR SELECT s, label, graph_id FROM Graph_KG.rdf_labels)
 		&sql(OPEN c1)
 		For {
-			&sql(FETCH c1 INTO :s, :label)
+			&sql(FETCH c1 INTO :s, :label, :rowGraph)
 			Quit:SQLCODE'=0
-			Set ^KG("label", label, s) = ""
+			Set g = ##class(Graph.KG.GraphKey).ForIndex(rowGraph)
+			Set ^KG("label", g, label, s) = ""
 		}
 		&sql(CLOSE c1)
 
-		// 2. Props
-		&sql(DECLARE c2 CURSOR FOR SELECT s, key, val FROM Graph_KG.rdf_props)
+		// 2. Props — spec 230, same rule. A row with no graph_id is a default-graph
+		// row (ForIndex -> 0); its graph is never looked up in Graph_KG.nodes, which
+		// after spec 227 can answer two graphs for one node ID (FR-011).
+		&sql(DECLARE c2 CURSOR FOR SELECT s, key, val, graph_id FROM Graph_KG.rdf_props)
 		&sql(OPEN c2)
 		For {
-			&sql(FETCH c2 INTO :s, :key, :val)
+			&sql(FETCH c2 INTO :s, :key, :val, :rowGraph)
 			Quit:SQLCODE'=0
-			Set ^KG("prop", s, key) = val
+			Set g = ##class(Graph.KG.GraphKey).ForIndex(rowGraph)
+			Set ^KG("prop", g, s, key) = val
 		}
 		&sql(CLOSE c2)
 
-		// 3. Edges — spec 214: read graph_id from rdf_edges; write to ^KG("out", graph, 0, ...)
+		// 3. Edges — spec 214: read graph_id from rdf_edges; write to
+		// ^KG("out", graph, s, p, o). The layout 214 first shipped carried a 0 between
+		// the graph and the subject; it does not any more, and a reader still passing
+		// that 0 finds nothing and reports zero rather than erroring (FR-015).
 		Set count = 0
 		&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges)
 		&sql(OPEN c3)
@@ -197,10 +223,17 @@ ClassMethod BackfillDegp() As %Integer
 	Return cnt
 }
 
+/// Build2HopStats — per graph, an upper bound on two-hop reach: for each
+/// (graph, src, pred) the sum of the middle nodes' out-degree on that predicate.
+///
+/// Spec 230: the sum used to run over every graph's "degp" and the entry was keyed by
+/// node and predicate alone, so a graph holding one edge could report a neighbour
+/// count borrowed from another graph's copy of the same node ID — and a per-graph
+/// erase could not reach the entry to correct it (FR-010).
 ClassMethod Build2HopStats() As %Integer
 {
 	Kill ^KG("deg2p")
-	// Merged-view 2-hop (spec 214: iterate all graph subscripts)
+	Set cnt = 0
 	Set g = ""
 	For {
 		Set g = $Order(^KG("out", g))
@@ -218,44 +251,35 @@ ClassMethod Build2HopStats() As %Integer
 				For {
 					Set mid = $Order(^KG("out", g, src, pred, mid))
 					Quit:mid=""
-					// Sum degp across all graphs for mid
-					Set gg = ""
-					For {
-						Set gg = $Order(^KG("degp", gg))
-						Quit:gg=""
-						Set sum = sum + $Get(^KG("degp", gg, mid, pred), 0)
-					}
+					// This graph's degp only: the count belongs to the graph whose
+					// edges produced it.
+					Set sum = sum + $Get(^KG("degp", g, mid, pred), 0)
 				}
-				If sum > 0 Set ^KG("deg2p", src, pred) = sum
+				If sum > 0 {
+					Set ^KG("deg2p", g, src, pred) = sum
+					Set cnt = cnt + 1
+				}
 			}
 		}
-	}
-	Set n = ""
-	Set cnt = 0
-	For {
-		Set n = $Order(^KG("deg2p", n))
-		Quit:n=""
-		Set cnt = cnt + 1
 	}
 	Return cnt
 }
 
+/// Build2HopExactStats — per graph, the exact number of distinct nodes reachable in two
+/// hops on a predicate, counting each node once however many paths lead to it.
+///
+/// Spec 230: this is computed here for every graph rather than taken from the Arno
+/// sketch. Arno counts over ^NKG, whose node interning has no graph dimension, so its
+/// numbers cannot be attributed to a graph at all (FR-011) — it writes
+/// ^KG("deg2p_exact_merged") and a caller that wants the merged number reads it there.
+/// The acceleration is lost for the scoped store; the alternative was a scoped reader
+/// answering from a merged count, which is the leak this story closes.
 ClassMethod Build2HopExactStats() As %Integer
 {
 	Kill ^KG("deg2p_exact")
-	Set arnoOk = 0
-	Try { Set arnoOk = ##class(Graph.KG.NKGAccel).Build2HopExact() } Catch { Set arnoOk = 0 }
-	If arnoOk {
-		Set n = ""
-		Set cnt = 0
-		For {
-			Set n = $Order(^KG("deg2p_exact", n))
-			Quit:n=""
-			Set cnt = cnt + 1
-		}
-		Return cnt
-	}
-	// Fallback: merged-view calculation
+	// Best effort, and its result is not consulted: the merged sketch is kept current
+	// for the callers that read it, but it cannot fill the scoped store.
+	Try { Do ##class(Graph.KG.NKGAccel).Build2HopExact() } Catch {}
 	Set cnt = 0
 	Set g = ""
 	For {
@@ -282,23 +306,22 @@ ClassMethod Build2HopExactStats() As %Integer
 				For {
 					Set mid = $Order(^KG("out", g, src, pred, mid))
 					Quit:mid=""
-					Set gg = ""
+					// The second hop stays inside graph g. The walk it replaces read
+					// ^KG("out", gg, 0, mid, ...) — one subscript more than the writer
+					// sets, so it found nothing in every graph and every exact count
+					// came back 0 (FR-015).
+					Set o2 = ""
 					For {
-						Set gg = $Order(^KG("out", gg))
-						Quit:gg=""
-						Set o2 = ""
-						For {
-							Set o2 = $Order(^KG("out", gg, 0, mid, pred, o2))
-							Quit:o2=""
-							If '$Data(^||h2s(o2)) {
-								Set ^||h2s(o2) = "" Set exact = exact + 1
-							}
+						Set o2 = $Order(^KG("out", g, mid, pred, o2))
+						Quit:o2=""
+						If '$Data(^||h2s(o2)) {
+							Set ^||h2s(o2) = "" Set exact = exact + 1
 						}
 					}
 				}
 				Kill ^||h2s
 				If exact > 0 {
-					Set ^KG("deg2p_exact", src, pred) = exact
+					Set ^KG("deg2p_exact", g, src, pred) = exact
 					Set cnt = cnt + 1
 				}
 			}

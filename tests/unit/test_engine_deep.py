@@ -7,6 +7,7 @@ import os
 import tempfile
 import pytest
 from unittest.mock import MagicMock, patch, call
+from tests.unit.route_fakes_227 import answer_by_statement
 
 
 def _make_engine(rows=None, fetchone_val=None):
@@ -307,9 +308,14 @@ class TestEmbedNodesMethod:
         assert result.get("embedded", 0) == 0
 
     def test_embed_nodes_label_filter(self):
+        # `embed_nodes` resolves the graph's route before it selects nodes and again
+        # before the already-embedded read (spec 227): an empty answer means this
+        # database does not route, so both reads fall back to `kg_NodeEmbeddings`.
         self.cursor.fetchall.side_effect = [
-            [("n1",), ("n2",)],
-            [],
+            [],                                 # route lookup (unrouted)
+            [("n1",), ("n2",)],                 # SELECT node_id FROM nodes
+            [],                                 # route lookup again
+            [],                                 # already embedded on that table
             [("n1", "name", '"TP53"')],
             [("n2", "name", '"BRCA1"')],
         ]
@@ -323,8 +329,10 @@ class TestEmbedNodesMethod:
 
     def test_embed_nodes_node_ids_specified(self):
         self.cursor.fetchall.side_effect = [
-            [("n1",)],
-            [],
+            [],                                 # route lookup (unrouted)
+            [("n1",)],                          # SELECT node_id FROM nodes
+            [],                                 # route lookup again
+            [],                                 # already embedded
             [("n1", "name", '"TP53"')],
         ]
         self.cursor.fetchone.return_value = (0,)
@@ -332,8 +340,10 @@ class TestEmbedNodesMethod:
         assert isinstance(result, dict)
 
     def test_embed_nodes_force_flag(self):
+        # `force=True` skips the already-embedded read, so there is one route lookup.
         self.cursor.fetchall.side_effect = [
-            [("n1",)],
+            [],                                 # route lookup (unrouted)
+            [("n1",)],                          # SELECT node_id FROM nodes
             [("n1", "name", '"TP53"')],
         ]
         result = self.engine.embed_nodes(force=True)
@@ -403,10 +413,7 @@ class TestEmbedEdgesMethod:
         assert result.get("embedded", 0) == 0
 
     def test_embed_edges_with_data(self):
-        self.cursor.fetchall.side_effect = [
-            [("n1", "CAUSES", "n2")],
-            [],
-        ]
+        answer_by_statement(self.cursor, {"rdf_edges": [("n1", "CAUSES", "n2")]})
         self.cursor.fetchone.return_value = (0,)
         result = self.engine.embed_edges()
         assert isinstance(result, dict)
@@ -415,27 +422,18 @@ class TestEmbedEdgesMethod:
             self.engine.embed_edges(where="s = 'x'; EXEC cmd --")
 
     def test_embed_edges_predicate_filter(self):
-        self.cursor.fetchall.side_effect = [
-            [("n1", "CAUSES", "n2")],
-            [],
-        ]
+        answer_by_statement(self.cursor, {"rdf_edges": [("n1", "CAUSES", "n2")]})
         result = self.engine.embed_edges(predicate="CAUSES")
         assert isinstance(result, dict)
 
     def test_embed_edges_custom_text_fn(self):
-        self.cursor.fetchall.side_effect = [
-            [("n1", "CAUSES", "n2")],
-            [],
-        ]
+        answer_by_statement(self.cursor, {"rdf_edges": [("n1", "CAUSES", "n2")]})
         text_fn = lambda s, p, o: f"{s} interacts with {o}"
         result = self.engine.embed_edges(text_fn=text_fn)
         assert isinstance(result, dict)
 
     def test_embed_edges_text_fn_raises(self):
-        self.cursor.fetchall.side_effect = [
-            [("n1", "CAUSES", "n2")],
-            [],
-        ]
+        answer_by_statement(self.cursor, {"rdf_edges": [("n1", "CAUSES", "n2")]})
         def bad_text_fn(s, p, o):
             raise RuntimeError("text fn error")
         result = self.engine.embed_edges(text_fn=bad_text_fn)
@@ -443,9 +441,7 @@ class TestEmbedEdgesMethod:
         assert result.get("errors", 0) >= 1
 
     def test_embed_edges_force_skips_existing_check(self):
-        self.cursor.fetchall.side_effect = [
-            [("n1", "CAUSES", "n2")],
-        ]
+        answer_by_statement(self.cursor, {"rdf_edges": [("n1", "CAUSES", "n2")]})
         result = self.engine.embed_edges(force=True)
         assert isinstance(result, dict)
 
@@ -467,7 +463,10 @@ class TestAttachEmbeddingsToTable:
             "Protein": {"sql_table": "bio.Protein", "id_column": "id"}
         }
         self.cursor.fetchall.return_value = [("prot1", "Insulin", "Homo sapiens")]
-        self.cursor.fetchone.return_value = (0,)
+        # "No embedding yet" is now the absence of a row, not a count of 0: the
+        # already-embedded check goes through `get_embedding`, which reads
+        # `node_id, emb, metadata` on the routed table (spec 227 re-key, T071).
+        self.cursor.fetchone.return_value = None
         result = self.engine.attach_embeddings_to_table("Protein", ["name", "organism"])
         assert isinstance(result, dict)
         assert result.get("total", 0) >= 1
@@ -477,7 +476,8 @@ class TestAttachEmbeddingsToTable:
             "Protein": {"sql_table": "bio.Protein", "id_column": "id"}
         }
         self.cursor.fetchall.return_value = [("prot1", "Insulin")]
-        self.cursor.fetchone.return_value = (1,)
+        # An existing vector, in the shape `get_embedding` reads it.
+        self.cursor.fetchone.return_value = ("prot1", "0.1,0.2,0.3", None)
         result = self.engine.attach_embeddings_to_table("Protein", ["name"])
         assert result.get("skipped", 0) >= 0
 
@@ -495,7 +495,7 @@ class TestAttachEmbeddingsToTable:
         }
         self.engine.embedder.encode.side_effect = Exception("model unavailable")
         self.cursor.fetchall.return_value = [("g1", "TP53")]
-        self.cursor.fetchone.return_value = (0,)
+        self.cursor.fetchone.return_value = None
         result = self.engine.attach_embeddings_to_table("Gene", ["name"])
         assert isinstance(result, dict)
 
@@ -505,7 +505,7 @@ class TestAttachEmbeddingsToTable:
         }
         calls = []
         self.cursor.fetchall.return_value = [("g1", "TP53"), ("g2", "BRCA1")]
-        self.cursor.fetchone.return_value = (0,)
+        self.cursor.fetchone.return_value = None
         self.engine.attach_embeddings_to_table(
             "Gene", ["name"],
             progress_callback=lambda done, total: calls.append((done, total))

@@ -105,8 +105,12 @@ class TestNamedGraphsE2E:
         c = self._n("C")
         g1 = self._g("g1")
         g2 = self._g("g2")
-        for nid in [a, b, c]:
-            self.engine.create_node(nid)
+        # 4.0.0: `fk_edges_src`/`fk_edges_dest` reference `(graph_id, node_id)`, so an
+        # edge in g1 needs its endpoints in g1. The shared source lives in both.
+        for nid in [a, b]:
+            self.engine.create_node(nid, graph=g1)
+        for nid in [a, c]:
+            self.engine.create_node(nid, graph=g2)
         self.engine.create_edge(a, "R", b, graph=g1)
         self.engine.create_edge(a, "R", c, graph=g2)
         targets_g1 = self._use_graph_targets(a, g1)
@@ -120,8 +124,11 @@ class TestNamedGraphsE2E:
         z = self._n("Z")
         g_bulk = self._g("bulk")
         g_override = self._g("override")
-        for nid in [x, y, z]:
-            self.engine.create_node(nid)
+        # Each edge's endpoints have to exist in that edge's graph (4.0.0, FR-008).
+        for nid in [x, y]:
+            self.engine.create_node(nid, graph=g_bulk)
+        for nid in [x, z]:
+            self.engine.create_node(nid, graph=g_override)
         self.engine.bulk_create_edges(
             [
                 {"source_id": x, "predicate": "P", "target_id": y},
@@ -178,7 +185,7 @@ class TestNamedGraphsE2E:
         g = self._g("all")
         a, b = self._n("la"), self._n("lb")
         for nid in [a, b]:
-            self.engine.create_node(nid)
+            self.engine.create_node(nid, graph=g)
         with tempfile.NamedTemporaryFile(mode="w", suffix=".ttl", delete=False) as f:
             f.write(_MINI_TTL)
             path = f.name
@@ -195,7 +202,7 @@ class TestNamedGraphsE2E:
         g = self._g("drop")
         a, b = self._n("da"), self._n("db")
         for nid in [a, b]:
-            self.engine.create_node(nid)
+            self.engine.create_node(nid, graph=g)
         self.engine.create_edge(a, "R", b, graph=g)
         self.engine.create_edge_temporal(a, "T", b, timestamp=1000, graph=g)
         assert self._use_graph_count(g) > 0

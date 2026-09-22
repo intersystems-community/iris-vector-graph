@@ -269,11 +269,16 @@ class TestCreateIndexAlterTable:
         assert result is None
 
     def test_ifind_sql_returns_none(self):
-        sql = "CREATE INDEX idx_val ON Graph_KG.rdf_props(val) INDEXTYPE = %iFind.Index.Basic"
-        # iFind has INDEXTYPE after columns — regex won't match full form
-        result = GraphSchema._create_index_alter_table("idx_val", sql)
-        # May or may not match — just verify it returns string or None
-        assert result is None or isinstance(result, str)
+        """An iFind index has no `ALTER TABLE ADD INDEX` equivalent, so there is no fallback.
+
+        This used to pass the rejected `... (val) INDEXTYPE = %iFind.Index.Basic` spelling
+        and then assert `result is None or isinstance(result, str)` — true of every possible
+        return value. It mattered: the old form *did* match the regex, so the fallback would
+        have created a plain index under the iFind index's name, and `%FIND.Rank` would
+        still not exist while `SHOW INDEXES` reported the index as present.
+        """
+        sql = "CREATE INDEX idx_val ON TABLE Graph_KG.rdf_props (val) AS %iFind.Index.Basic"
+        assert GraphSchema._create_index_alter_table("idx_val", sql) is None
 
 
 # ---------------------------------------------------------------------------
@@ -507,14 +512,20 @@ class TestGetProceduresSqlList:
         combined = " ".join(procs)
         assert "MySchema" in combined
 
-    def test_custom_dimension(self):
-        # The procedure list uses embedding_dimension only in kg_KNN_VEC DECLARE
-        # sections, but the static list doesn't embed the dimension directly in
-        # the returned SQL strings. Verify the list is non-empty and contains
-        # VECTOR-related content.
-        procs = GraphSchema.get_procedures_sql_list(embedding_dimension=512)
-        combined = " ".join(procs)
-        assert "kg_KNN_VEC" in combined or "PROCEDURE" in combined
+    def test_no_dimension_parameter(self):
+        # Was test_custom_dimension, which passed embedding_dimension=512 and then
+        # asserted only that the list was non-empty — the parameter never reached
+        # the SQL. Spec 227 removed it in 4.0.0 (ADR-0005: a length on TO_VECTOR
+        # makes IRIS reshape a mismatched query vector and return a plausible
+        # wrong score, so wiring it in was never an option). The assertion is now
+        # that passing it fails loudly instead of reading as configuration.
+        import pytest
+
+        with pytest.raises(TypeError):
+            GraphSchema.get_procedures_sql_list(embedding_dimension=512)
+
+        combined = " ".join(GraphSchema.get_procedures_sql_list())
+        assert "kg_KNN_VEC" in combined
 
 
 # ---------------------------------------------------------------------------

@@ -210,7 +210,8 @@ class TestTranslator:
         translate_procedure_call(proc, ctx)
         cte = ctx.stages[0]
         assert "SELECT e2.emb FROM" in cte
-        assert "e.id != ?" in cte
+        # 4.0.0 key: `e.id` is the RowID after the spec 227 re-key.
+        assert "e.node_id != ?" in cte
 
     def test_mode2_sql_uses_embedding_function(self):
         from iris_vector_graph.cypher.ast import CypherProcedureCall, Literal

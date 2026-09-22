@@ -596,8 +596,10 @@ class TestEmbedNodesEdges:
         eng, conn, cursor = _make_engine()
         # Return node ids from SELECT
         cursor.fetchall.side_effect = [
+            [],                        # route lookup (unrouted, spec 227)
             [(n,) for n in node_ids],  # SELECT node_id FROM nodes
-            [(n,) for n in node_ids],  # SELECT id FROM kg_NodeEmbeddings (already embedded)
+            [],                        # route lookup again
+            [(n,) for n in node_ids],  # already embedded on the routed table
             # rdf_props
             [],
         ]
@@ -607,8 +609,8 @@ class TestEmbedNodesEdges:
         """Lines 363-364: text_fn raises → errors += 1."""
         eng, conn, cursor = _make_engine()
         cursor.fetchall.side_effect = [
+            [],                   # route lookup (unrouted → legacy table, spec 227)
             [("n1",), ("n2",)],  # node ids
-            [],                   # already embedded (empty → embed all)
             [],                   # rdf_props
         ]
 
@@ -626,8 +628,8 @@ class TestEmbedNodesEdges:
         """Line 346: empty text → skipped."""
         eng, conn, cursor = _make_engine()
         cursor.fetchall.side_effect = [
-            [("n1",)],  # node ids
-            [],          # already embedded
+            [],          # route lookup (unrouted → legacy table, spec 227)
+            [("n1",)],   # node ids
             [],          # rdf_props
         ]
 
@@ -679,8 +681,8 @@ class TestEmbedNodesEdges:
         """Lines 407-409: INSERT fails → errors += 1."""
         eng, conn, cursor = _make_engine()
         cursor.fetchall.side_effect = [
+            [],          # route lookup (unrouted → legacy table, spec 227)
             [("n1",)],
-            [],
             [],  # rdf_props empty
         ]
         # Make execute raise on INSERT
@@ -891,7 +893,11 @@ class TestEnqueueAndProcessQueue:
         """Lines 801-802: _upsert_node_embedding runs DELETE + INSERT."""
         eng, conn, cursor = _make_engine()
         cursor.execute.return_value = None
-        eng._upsert_node_embedding("n1", [0.1, 0.2, 0.3])
+        # Since spec 227 this goes through `store_embedding`, which counts the node in
+        # its graph first — an absent node is an orphan row on the legacy tables, which
+        # declare no FK — and holds the vector to the engine's declared width.
+        cursor.fetchone.return_value = (1,)
+        eng._upsert_node_embedding("n1", [0.1, 0.2, 0.3, 0.4])
         # Verify DELETE and INSERT were called
         calls = [str(c) for c in cursor.execute.call_args_list]
         assert any("DELETE" in c for c in calls)

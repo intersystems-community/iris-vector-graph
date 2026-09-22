@@ -75,7 +75,11 @@ def enterprise_conn_user():
 def enterprise_conn_ivgtest():
     if not _enterprise_running():
         pytest.skip(f"{_ENTERPRISE_CONTAINER} not running")
-    # Verify IVGTEST namespace exists
+    # Verify IVGTEST namespace exists. The probe prints a sentinel because the
+    # session banner carries the container's hex node name ("d16bb70c311d"), so a
+    # bare `"1" not in stdout` check answered "the namespace exists" on every
+    # container whose ID happens to contain a 1 — and the connection below then
+    # failed with `Access Denied` as an *error* rather than skipping.
     check = subprocess.run(
         [
             "docker",
@@ -83,14 +87,15 @@ def enterprise_conn_ivgtest():
             _ENTERPRISE_CONTAINER,
             "bash",
             "-c",
-            'echo "Write ##class(Config.Namespaces).Exists(\\"IVGTEST\\"),!\nHalt" '
+            'echo "Write \\"IVGTEST_EXISTS=\\",'
+            '##class(Config.Namespaces).Exists(\\"IVGTEST\\"),!\nHalt" '
             "| iris session IRIS -U %SYS 2>&1",
         ],
         capture_output=True,
         text=True,
     )
-    if "1" not in check.stdout:
-        pytest.skip("IVGTEST namespace not found — run T026 setup step first")
+    if "IVGTEST_EXISTS=1" not in check.stdout:
+        pytest.skip("IVGTEST namespace not found — run the setup step in this module's docstring")
     conn = _connect("IVGTEST")
     yield conn
     conn.close()

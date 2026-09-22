@@ -179,7 +179,11 @@ class TestBM25IndexUnit:
         ops._engine = MagicMock(spec=IRISGraphEngine)
         ops._engine.kg_TXT.return_value = [("NCIT:C001", 3.5)]
         result = ops.kg_TXT("diabetes", k=5)
-        ops._engine.kg_TXT.assert_called_once_with("diabetes", k=5, min_confidence=0)
+        # graph=None reaches the engine explicitly: the shim must not let the
+        # default graph be decided by whichever engine version it forwards to.
+        ops._engine.kg_TXT.assert_called_once_with(
+            "diabetes", k=5, min_confidence=0, graph=None
+        )
         assert result == [("NCIT:C001", 3.5)]
 
     # T033 ─────────────────────────────────────────────────────────

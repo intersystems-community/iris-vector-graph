@@ -20,6 +20,10 @@ class TestCastCoercionE2E:
         self.cursor.execute(f"INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('{PREFIX}:G1', 'chromosome', '7')")
         self.cursor.execute(f"INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('{PREFIX}:G1', 'confidence', '0.92')")
         self.cursor.execute(f"INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('{PREFIX}:G1', 'active', 'True')")
+        # `n.id` is a property, not the internal node_id — the engine's create_node writes
+        # this row, and a fixture inserting straight into the tables has to as well, or
+        # every `n.id STARTS WITH` below matches nothing.
+        self.cursor.execute(f"INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('{PREFIX}:G1', 'id', '{PREFIX}:G1')")
         iris_connection.commit()
         yield
         p = f"{PREFIX}%"
@@ -61,6 +65,7 @@ class TestCastCoercionE2E:
         self.cursor.execute(f"INSERT INTO Graph_KG.nodes (node_id) VALUES ('{PREFIX}:G2')")
         self.cursor.execute(f"INSERT INTO Graph_KG.rdf_labels (s, label) VALUES ('{PREFIX}:G2', 'Gene')")
         self.cursor.execute(f"INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('{PREFIX}:G2', 'chromosome', '7')")
+        self.cursor.execute(f"INSERT INTO Graph_KG.rdf_props (s, \"key\", val) VALUES ('{PREFIX}:G2', 'id', '{PREFIX}:G2')")
         self.conn.commit()
         engine = self._engine()
         result = engine.execute_cypher(

@@ -10,19 +10,96 @@ import importlib
 import numpy as np
 from typing import Any
 
-# NOTE: Use importlib to avoid conflict with iris/ directory in project
+# The driver's distribution is `intersystems-irispython`; the module it installs is
+# `iris`. Probing for `intersystems_irispython.iris` — a module that has never
+# existed — skipped this whole file on every machine, so the vector-function
+# assertions below have not run since the guard was written. importlib is kept
+# because the probe must not bind the name at import time.
 try:
-    iris_module = importlib.import_module('intersystems_irispython.iris')
+    importlib.import_module('iris')
     IRIS_AVAILABLE = True
 except ImportError:
     IRIS_AVAILABLE = False
     pytest.skip("IRIS Python driver not available", allow_module_level=True)
 
 
+_GRAPH = "vecfn-probe"
+_NODES = ["VECFN_0", "VECFN_1", "VECFN_2"]
+
+# A result-set procedure is read as a table here, not invoked with `CALL`: the DBAPI
+# driver rejects `CALL <proc>(...)` at Prepare with SQLCODE -51 ("An SQL statement
+# expected, IDENTIFIER found"), which is what the old `CALL kg_KNN_VEC(...)` tests
+# were reporting as "the procedure failed". `kg_RRF_FUSE`'s own body reads
+# `kg_KNN_VEC` the same way (schema.py).
+_KNN_SQL = "SELECT * FROM Graph_KG.kg_KNN_VEC(?, ?, ?, ?)"
+_RRF_SQL = "SELECT * FROM Graph_KG.kg_RRF_FUSE(?, ?, ?, ?, ?, ?, ?)"
+
+
+def _declared_dimension(conn) -> int:
+    """The width `Graph_KG.kg_NodeEmbeddings.emb` is declared at, in this namespace.
+
+    The old tests hardcoded 768 and the container declares whatever the engine that
+    built it was configured for, so every insert and every query vector was the wrong
+    width (SQLCODE -104 on write, a reshaped score or -257 on read).
+    """
+    from iris_vector_graph.schema import GraphSchema
+
+    cursor = conn.cursor()
+    try:
+        dim = GraphSchema.get_embedding_dimension(cursor, "Graph_KG.kg_NodeEmbeddings")
+    finally:
+        cursor.close()
+    if not dim:
+        pytest.skip("Graph_KG.kg_NodeEmbeddings.emb has no declared width in this namespace")
+    return int(dim)
+
+
+def _basis(index: int, dim: int) -> list:
+    """A unit vector along one axis — so cosine of a vector with itself is exactly 1.0."""
+    vec = [0.0] * dim
+    vec[index % dim] = 1.0
+    return vec
+
+
 @pytest.fixture(scope="module", autouse=True)
 def inject_iris_connection(iris_connection):
-    """Inject the shared iris_connection into vector function tests."""
+    """Inject the connection and seed the rows these tests read.
+
+    The embedding tests used to read whatever rows happened to be in the namespace
+    and asserted `count > 0`, so they passed on a machine someone had loaded by hand
+    and failed on a clean container. A test owns its premise: three nodes in one probe
+    graph, each with a unit vector at the column's declared width.
+    """
     TestVectorFunctions.conn = iris_connection
+    dim = _declared_dimension(iris_connection)
+    TestVectorFunctions.dim = dim
+    TestVectorFunctions.graph = _GRAPH
+
+    cursor = iris_connection.cursor()
+    for i, node in enumerate(_NODES):
+        cursor.execute(
+            "INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, ?)", [node, _GRAPH]
+        )
+        cursor.execute(
+            "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, graph_id, emb) "
+            "VALUES (?, ?, TO_VECTOR(?, DOUBLE, ?))",
+            [node, _GRAPH, json.dumps(_basis(i, dim)), dim],
+        )
+    iris_connection.commit()
+    try:
+        yield
+    finally:
+        for node in _NODES:
+            cursor.execute(
+                "DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ? AND graph_id = ?",
+                [node, _GRAPH],
+            )
+            cursor.execute(
+                "DELETE FROM Graph_KG.nodes WHERE node_id = ? AND graph_id = ?",
+                [node, _GRAPH],
+            )
+        iris_connection.commit()
+        cursor.close()
 
 
 class TestVectorFunctions:
@@ -103,126 +180,110 @@ class TestVectorFunctions:
 
         cursor.close()
 
-    def test_kg_node_embeddings_table_exists(self):
-        """Test that kg_NodeEmbeddings table exists and has data"""
+    def test_kg_node_embeddings_holds_the_seeded_rows(self):
+        """The three seeded embeddings are in the probe graph, and only there."""
         cursor = self.conn.cursor()
 
-        # Check table exists and has sample data
-        cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
-        count = cursor.fetchone()[0]
-
-        assert count > 0, "kg_NodeEmbeddings table should have sample data"
-        print(f"✓ kg_NodeEmbeddings table has {count} embeddings")
+        cursor.execute(
+            "SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE graph_id = ?", [self.graph]
+        )
+        assert int(cursor.fetchone()[0]) == len(_NODES)
 
         cursor.close()
 
     def test_kg_knn_vec_procedure_exists(self):
-        """Test that kg_KNN_VEC procedure exists and works"""
+        """`Graph_KG.kg_KNN_VEC` answers a scoped search.
+
+        The call used to be `CALL kg_KNN_VEC(?, ?, ?)`: unqualified (the procedure is
+        owned by the `Graph_KG` schema, so the bare name does not resolve) and three
+        arguments (227 added the graph as a fourth). Both failed at Prepare with
+        SQLCODE -51, which the test then reported as "the procedure failed".
+        """
         cursor = self.conn.cursor()
 
-        try:
-            # Test with a simple vector search
-            test_vector = [0.1] * 768  # 768-dimensional vector
-            cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
-                json.dumps(test_vector),
-                3,  # top 3 results
-                None  # no label filter
-            ])
+        cursor.execute(
+            _KNN_SQL,
+            [json.dumps(_basis(0, self.dim)), 3, None, self.graph],
+        )
+        results = cursor.fetchall()
 
-            results = cursor.fetchall()
-            assert len(results) >= 0  # Should not error, may have 0 results if no data
+        assert len(results) == len(_NODES), "the seeded graph holds three embeddings"
+        assert results[0][0] == _NODES[0], "the nearest neighbour of a vector is itself"
+        assert abs(float(results[0][1]) - 1.0) < 0.001
 
-            print(f"✓ kg_KNN_VEC procedure works: returned {len(results)} results")
+        cursor.close()
 
-            # Print sample results
-            for i, (entity_id, score) in enumerate(results[:3]):
-                print(f"  {i+1}. {entity_id}: similarity = {score:.3f}")
+    def test_kg_knn_vec_does_not_reach_another_graph(self):
+        """A search in a graph with no embeddings answers nothing, not everything.
 
-        except Exception as e:
-            pytest.fail(f"kg_KNN_VEC procedure failed: {e}")
+        This is the guarantee 227 exists for: the predicate is in the procedure body,
+        so an empty graph cannot fall back to a namespace-wide scan.
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            _KNN_SQL,
+            [json.dumps(_basis(0, self.dim)), 10, None, "vecfn-probe-empty"],
+        )
+        # `fetchall()` answers a tuple here, so `== []` was never true of any result —
+        # the assertion would have failed on an empty answer as readily as a leaking one.
+        assert list(cursor.fetchall()) == []
 
         cursor.close()
 
     def test_kg_rrf_fuse_procedure_exists(self):
-        """Test that kg_RRF_FUSE procedure exists and works"""
+        """`Graph_KG.kg_RRF_FUSE` takes the graph too, and it is not optional.
+
+        Same two staleness bugs as the KNN call above, plus the seventh argument 227
+        added: passing NULL there would have meant "the default graph" by accident.
+        """
         cursor = self.conn.cursor()
 
-        try:
-            # Test with hybrid search
-            test_vector = [0.1] * 768
-            cursor.execute("CALL kg_RRF_FUSE(?, ?, ?, ?, ?, ?)", [
-                5,  # k results
-                10,  # k1 vector results
-                10,  # k2 text results
-                60,  # c parameter
-                json.dumps(test_vector),
-                'gene'  # text query
-            ])
+        cursor.execute(
+            _RRF_SQL,
+            [5, 10, 10, 60, json.dumps(_basis(0, self.dim)), "gene", self.graph],
+        )
+        results = cursor.fetchall()
 
-            results = cursor.fetchall()
-            assert len(results) >= 0  # Should not error
-
-            print(f"✓ kg_RRF_FUSE procedure works: returned {len(results)} results")
-
-            # Print sample results
-            for i, (entity_id, rrf_score, vs_score, bm25_score) in enumerate(results[:3]):
-                print(f"  {i+1}. {entity_id}: RRF={rrf_score:.3f}, Vector={vs_score:.3f}, Text={bm25_score:.3f}")
-
-        except Exception as e:
-            pytest.fail(f"kg_RRF_FUSE procedure failed: {e}")
+        # The text leg reads `docs`, which this test does not seed, so the fused answer
+        # is the vector leg's. What matters here is that the procedure runs and stays
+        # inside the graph.
+        assert [row[0] for row in results] == _NODES[:1] or all(
+            row[0] in _NODES for row in results
+        ), f"fusion returned rows from outside {self.graph!r}: {results}"
 
         cursor.close()
 
-    def test_vector_search_with_sample_data(self):
-        """Test vector search against sample embeddings"""
+    def test_vector_search_finds_the_seeded_row_itself(self):
+        """Searching with a stored vector returns that row first, at similarity 1.0."""
         cursor = self.conn.cursor()
 
-        # First check if we have sample data
-        cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings LIMIT 1")
-        sample = cursor.fetchone()
-
-        if sample is None:
-            pytest.skip("No sample data in kg_NodeEmbeddings table")
-
-        sample_id, sample_embedding = sample
-        print(f"✓ Found sample embedding for: {sample_id}")
-
-        # Test similarity search using the sample embedding
-        cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
-            json.dumps(sample_embedding),  # Use actual sample embedding
-            5,  # top 5 results
-            None
-        ])
-
+        target = _NODES[1]
+        cursor.execute(
+            _KNN_SQL,
+            [json.dumps(_basis(1, self.dim)), 5, None, self.graph],
+        )
         results = cursor.fetchall()
-        assert len(results) > 0, "Should find at least the sample itself"
 
-        # First result should be the sample itself with perfect similarity
-        top_result = results[0]
-        assert top_result[0] == sample_id, "Top result should be the sample itself"
-        assert abs(top_result[1] - 1.0) < 0.001, "Self-similarity should be ~1.0"
-
-        print(f"✓ Vector search with sample data works: {len(results)} results")
-        print(f"  Top result: {top_result[0]} (similarity: {top_result[1]:.6f})")
+        assert results, "the seeded graph is not empty"
+        assert results[0][0] == target
+        assert abs(float(results[0][1]) - 1.0) < 0.001
 
         cursor.close()
 
     def test_performance_vector_search(self):
-        """Test vector search performance"""
+        """Ten scoped searches run, and the average is reported."""
         import time
         cursor = self.conn.cursor()
 
-        # Test performance with multiple searches
-        test_vector = [0.1] * 768
+        query = json.dumps(_basis(0, self.dim))
 
         start_time = time.time()
-        for _ in range(10):  # 10 searches
-            cursor.execute("CALL kg_KNN_VEC(?, ?, ?)", [
-                json.dumps(test_vector),
-                10,
-                None
-            ])
-            cursor.fetchall()
+        for _ in range(10):
+            cursor.execute(
+                _KNN_SQL, [query, 10, None, self.graph]
+            )
+            assert cursor.fetchall(), "a scoped search over seeded rows returned nothing"
         elapsed = time.time() - start_time
 
         avg_time = elapsed / 10 * 1000  # Convert to ms per query

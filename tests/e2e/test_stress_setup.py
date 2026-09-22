@@ -6,10 +6,10 @@ import contextlib
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IRIS_PORT", "1972"))
+IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
-IRIS_USER = os.environ.get("IRIS_USERNAME", "test")
-IRIS_PASS = os.environ.get("IRIS_PASSWORD", "test")
+IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
+IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")
 
 
 @pytest.fixture(scope="module")
@@ -87,13 +87,10 @@ class TestConnectionModes:
             pytest.skip(f"from_connect not available or IRIS unavailable: {exc}")
 
     def test_is_ready_returns_bool(self, fresh_engine):
-        try:
-            ready = fresh_engine.is_ready
-            if callable(ready):
-                ready = ready()
-            assert isinstance(ready, bool)
-        except AttributeError:
-            pytest.skip("is_ready not implemented")
+        # `is_ready` is a method and has been for as long as it has existed, so the
+        # callable-or-property hedge and the `AttributeError` skip both described a
+        # shape the engine never had — and the skip would have hidden its removal.
+        assert isinstance(fresh_engine.is_ready(), bool)
 
     def test_multiple_connections_same_db(self, raw_conn):
         import iris
@@ -117,7 +114,7 @@ class TestConnectionModes:
         r = fresh_engine.execute_cypher(
             f"MATCH (a:ConnTest)-[:CONN_EDGE]->(b:ConnTest) WHERE a.node_id STARTS WITH '{pfx}' RETURN a.node_id, b.node_id"
         )
-        assert len(r.get("rows", [])) >= 1
+        assert len(r.rows) >= 1
 
 
 class TestSchemaMigration:

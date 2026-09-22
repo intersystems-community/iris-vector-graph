@@ -18,7 +18,7 @@ INSERT INTO rdf_edges(s,p,o_id,qualifiers) VALUES
  ('CHEMBL:123','targets','HGNC:11998', NULL),
  ('HGNC:11998','ASSOCIATED_WITH','DOID:162', NULL);
 
-INSERT INTO kg_NodeEmbeddings(id, emb) VALUES
+INSERT INTO kg_NodeEmbeddings(node_id, emb) VALUES
  ('HGNC:11998', VECTOR_CONSTRUCT(0.1, 0.2, 0.9)),
  ('DOID:162',   VECTOR_CONSTRUCT(0.2, 0.1, 0.8)),
  ('CHEMBL:123', VECTOR_CONSTRUCT(0.9, 0.1, 0.2));

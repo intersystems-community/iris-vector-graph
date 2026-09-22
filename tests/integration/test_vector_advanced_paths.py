@@ -126,7 +126,7 @@ class TestMultiVectorSearchWithData:
     def test_multi_vector_search_non_rrf_fusion(self, vec_graph_eng):
         """multi_vector_search with non-RRF fusion (linear merge path)."""
         query_vec = _make_vec("vg_0", dim=vec_graph_eng.embedding_dimension)
-        sources = [{"table": "Graph_KG.kg_NodeEmbeddings", "id_col": "id", "vec_col": "emb"}]
+        sources = [{"table": "Graph_KG.kg_NodeEmbeddings", "id_col": "node_id", "vec_col": "emb"}]
         try:
             result = vec_graph_eng.multi_vector_search(
                 sources=sources,

@@ -45,7 +45,7 @@ def load_embeddings(conn, port):
     print("Loading embeddings from Graph_KG.kg_NodeEmbeddings...", flush=True)
     t0 = time.perf_counter()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, emb FROM Graph_KG.kg_NodeEmbeddings ORDER BY id")
+    cursor.execute("SELECT node_id, emb FROM Graph_KG.kg_NodeEmbeddings ORDER BY node_id")
     rows = cursor.fetchall()
     elapsed = time.perf_counter() - t0
     print(f"  Fetched {len(rows)} rows in {elapsed:.1f}s", flush=True)

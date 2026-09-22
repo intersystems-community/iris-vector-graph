@@ -21,13 +21,36 @@ class TestIRISGraphOperatorsShim:
     def test_kg_knn_vec_delegates(self):
         self.eng.kg_KNN_VEC.return_value = [("n1", 0.9)]
         r = self.ops.kg_KNN_VEC([0.1, 0.2], k=5, label_filter="Gene")
-        self.eng.kg_KNN_VEC.assert_called_once_with([0.1, 0.2], k=5, label_filter="Gene")
+        # `graph` and `model_key` are named even when the caller omitted them: spec
+        # 227 routes a search on `(graph_id, model_key)`, and a shim that dropped
+        # either would silently search the default route.
+        self.eng.kg_KNN_VEC.assert_called_once_with(
+            [0.1, 0.2], k=5, label_filter="Gene", graph=None, model_key=None
+        )
         assert r == [("n1", 0.9)]
+
+    def test_kg_knn_vec_forwards_the_graph_and_the_model(self):
+        """The two arguments that choose the routed table (FR-009)."""
+        self.eng.kg_KNN_VEC.return_value = []
+        self.ops.kg_KNN_VEC([0.1, 0.2], graph="g:a", model_key="m:1")
+        self.eng.kg_KNN_VEC.assert_called_once_with(
+            [0.1, 0.2], k=50, label_filter=None, graph="g:a", model_key="m:1"
+        )
 
     def test_kg_txt_delegates(self):
         self.eng.kg_TXT.return_value = []
         self.ops.kg_TXT("insulin", k=10, min_confidence=0.5)
-        self.eng.kg_TXT.assert_called_once_with("insulin", k=10, min_confidence=0.5)
+        self.eng.kg_TXT.assert_called_once_with(
+            "insulin", k=10, min_confidence=0.5, graph=None
+        )
+
+    def test_kg_txt_forwards_graph(self):
+        """The shim must carry a caller's graph through, not drop it (FR-009)."""
+        self.eng.kg_TXT.return_value = []
+        self.ops.kg_TXT("insulin", graph="g:a")
+        self.eng.kg_TXT.assert_called_once_with(
+            "insulin", k=50, min_confidence=0, graph="g:a"
+        )
 
     def test_kg_rrf_fuse_delegates(self):
         self.eng.kg_RRF_FUSE.return_value = []

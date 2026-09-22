@@ -1,4 +1,7 @@
+import json
+
 import pytest
+
 
 def test_integration_basic_node_match(execute_cypher):
     """Test MATCH (a:Account) RETURN a.node_id"""
@@ -47,9 +50,9 @@ def test_integration_untyped_relationship(execute_cypher):
     
     assert len(result["rows"]) > 0
     assert "r" in result["columns"]
-    # Relationship variable should return the predicate name
+    # `r` is a relationship value carrying its type and properties, not a bare predicate.
     for row in result["rows"]:
-        assert row[1] in ["FROM_ACCOUNT", "TO_ACCOUNT"]
+        assert json.loads(row[1])["type"] in ["FROM_ACCOUNT", "TO_ACCOUNT"]
 
 def test_integration_with_clause(execute_cypher):
     query = """
@@ -70,7 +73,13 @@ def test_integration_aggregations(execute_cypher):
     result = execute_cypher(query)
     
     assert len(result["rows"]) == 1
-    assert "count_res" in result["columns"]
+    # An un-aliased projection gets a SQL-safe alias built from its expression with the
+    # punctuation flattened: `count(t)` becomes `count_t_`. The translator also records
+    # `count_t_` → `count(t)` in `column_name_map`, and `_engine/query.py:473-476`
+    # applies that map, so `engine.execute_cypher` answers the Cypher text. This fixture
+    # runs the statement itself and does not, which is why the raw alias shows here. The
+    # `count_res` this line used to expect was never a name either layer produced.
+    assert result["columns"] == ["count_t_", "sum_t_amount_", "avg_t_amount_"]
     # Check that we got numeric results
     assert result["rows"][0][0] > 0
     assert result["rows"][0][1] > 0
@@ -82,10 +91,11 @@ def test_integration_built_in_functions(execute_cypher):
     result = execute_cypher(query)
     
     assert len(result["rows"]) > 0
-    assert "id_res" in result["columns"]
-    assert "type_res" in result["columns"]
+    # Raw SQL aliases again — see the note in test_integration_aggregations.
+    assert result["columns"] == ["id_t_", "type_r_"]
     for row in result["rows"]:
         assert "TXN:" in row[0]
+        # `type(r)` answers the predicate itself, unlike a bare `r`.
         assert row[1] in ["FROM_ACCOUNT", "TO_ACCOUNT"]
 
 

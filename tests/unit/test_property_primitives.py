@@ -276,6 +276,10 @@ class TestKgKnnVecFallbackSignalUnit:
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = conn
         engine.schema_prefix = "Graph_KG"
+        # `_schema_prefix` is the one the engine actually reads (`_t()`); spec 227's
+        # registry lookup made every table-qualifying path go through it, so a stub
+        # that sets only the public name now trips on the route read.
+        engine._schema_prefix = "Graph_KG"
         engine.embedding_dimension = 4
         engine.vector_dtype = "DOUBLE"
 
@@ -309,6 +313,10 @@ class TestKgKnnVecFallbackSignalUnit:
         engine = IRISGraphEngine.__new__(IRISGraphEngine)
         engine.conn = conn
         engine.schema_prefix = "Graph_KG"
+        # `_schema_prefix` is the one the engine actually reads (`_t()`); spec 227's
+        # registry lookup made every table-qualifying path go through it, so a stub
+        # that sets only the public name now trips on the route read.
+        engine._schema_prefix = "Graph_KG"
         engine.embedding_dimension = 4
         engine.vector_dtype = "DOUBLE"
 

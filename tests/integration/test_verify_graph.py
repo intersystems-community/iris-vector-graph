@@ -41,10 +41,13 @@ pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 
 GRAPH = "verifygraph_acme"
 
-# The stores that hold graph content but carry no graph column, confirmed against
-# INFORMATION_SCHEMA in this container. A node's labels and properties are keyed
-# by node id alone, so they are shared by every graph that names that node.
-UNSCOPED = ["Graph_KG.rdf_labels", "Graph_KG.rdf_props", "Graph_KG.rdf_reifications"]
+# The SQL stores that hold graph content but carry no graph column. `rdf_labels`
+# and `rdf_props` were here until spec 227 gave each of them a `graph_id`, and
+# `kg_EdgeEmbeddings` until spec 230 gave it the same `(graph_id, model_key)`
+# routing the node table already had; a hardcoded list is what let this one go
+# stale, so `test_the_inventorys_sql_claims_match_the_columns` checks the whole
+# inventory against INFORMATION_SCHEMA rather than restating it.
+UNSCOPED = ["Graph_KG.rdf_reifications"]
 
 
 @pytest.fixture()
@@ -202,6 +205,11 @@ def test_verify_sync_cannot_see_orphaned_adjacency(seeded):
 
 def test_a_raw_sql_insert_is_reported_as_missing_adjacency(seeded):
     """No functional index maintains ^KG any more, so raw SQL drifts the other way."""
+    # The endpoints have to exist in *this* graph before the row can: spec 227
+    # put `fk_edges_dest` on `(graph_id, o_id)`, so an edge into an unregistered
+    # destination is SQLCODE -121 rather than the drift this test is after.
+    seeded.create_node("x", graph=GRAPH)
+    seeded.create_node("y", graph=GRAPH)
     cursor = seeded.conn.cursor()
     try:
         cursor.execute(
@@ -230,6 +238,12 @@ def test_a_row_with_a_null_graph_id_counts_as_the_default_graph(engine):
     and most raw inserts in this suite — leaves NULL. An oracle matching only
     `''` reports those rows as absent, which is the one thing it must never do.
     """
+    # Registered in the default graph first — `fk_edges_dest` covers
+    # `(graph_id, o_id)` and IRIS checks it even when the referencing row leaves
+    # `graph_id` NULL, so the omitted column this test is about only survives if
+    # the destination is already a default-graph node.
+    engine.create_node("n1")
+    engine.create_node("n2")
     cursor = engine.conn.cursor()
     try:
         cursor.execute(
@@ -269,6 +283,60 @@ def test_the_report_names_the_stores_that_carry_no_graph_column(seeded, store):
     """Silently skipping these would hide the gap the inventory exists to state."""
     unscoped = {u["store"] for u in _report(seeded).get("unscoped", [])}
     assert store in unscoped, f"{store} not reported as unscoped; got {unscoped}"
+
+
+def test_the_inventorys_sql_claims_match_the_columns(engine):
+    """Every `kind == "sql"` entry's scope claim is checked against the column.
+
+    `UNSCOPED` above is a hardcoded list, and a hardcoded list is exactly what
+    went stale when spec 227 gave `rdf_labels` and `rdf_props` a `graph_id`: the
+    inventory was already right and the test was wrong. This derives the claim
+    from INFORMATION_SCHEMA in both directions, so a table that gains or loses
+    its graph column fails here rather than passing a list nobody updated.
+    """
+    import json as _json
+
+    inventory = _json.loads(
+        engine._iris_obj().classMethodValue("Graph.KG.GraphStores", "InventoryJSON")
+    )
+    cursor = engine.conn.cursor()
+    try:
+        mismatches = []
+        for entry in inventory:
+            if entry["kind"] != "sql":
+                continue
+            schema, _, table = entry["name"].partition(".")
+            cursor.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND UPPER(COLUMN_NAME) = 'GRAPH_ID'",
+                [schema, table],
+            )
+            has_column = bool(cursor.fetchone()[0])
+            if has_column != bool(entry["graphScoped"]):
+                mismatches.append(
+                    f"{entry['name']}: graphScoped={entry['graphScoped']} "
+                    f"but graph_id column present={has_column}"
+                )
+        assert not mismatches, "the inventory's scope claims disagree with the schema: " + (
+            "; ".join(mismatches)
+        )
+    finally:
+        cursor.close()
+
+
+def test_the_unscoped_constant_still_names_every_unscoped_sql_store(engine):
+    """`UNSCOPED` is the parametrize source, so it has to stay in step too."""
+    import json as _json
+
+    inventory = _json.loads(
+        engine._iris_obj().classMethodValue("Graph.KG.GraphStores", "InventoryJSON")
+    )
+    declared = {
+        e["name"] for e in inventory if e["kind"] == "sql" and not e["graphScoped"]
+    }
+    assert declared == set(UNSCOPED), (
+        f"UNSCOPED is stale: inventory says {sorted(declared)}"
+    )
 
 
 def test_each_unscoped_entry_explains_itself(seeded):

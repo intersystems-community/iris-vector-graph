@@ -22,6 +22,29 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _mirror_node(engine, cursor, node_id: str, graph: Optional[str]) -> None:
+    """Create an endpoint node for a mirrored temporal edge, in the edge's graph.
+
+    4.0.0 keys `nodes` on `(graph_id, node_id)` and points `fk_edges_src` /
+    `fk_edges_dest` at that composite key (FR-008), so an endpoint created in the
+    default graph does not satisfy an edge in a named one — the mirror wrote the
+    node, the edge insert failed its foreign key, and the caller was told True.
+    """
+    graph_id = graph or ""
+    try:
+        cursor.execute(
+            f"INSERT INTO {engine._t('nodes')} (node_id, graph_id) SELECT ?, ? "
+            f"WHERE NOT EXISTS (SELECT 1 FROM {engine._t('nodes')} "
+            f"WHERE node_id=? AND COALESCE(graph_id, '') = COALESCE(?, ''))",
+            [node_id, graph_id, node_id, graph_id],
+        )
+    except Exception as e:
+        logger.warning(
+            "temporal mirror: endpoint %r not created in graph %r: %s",
+            node_id, graph_id, e,
+        )
+
+
 class TemporalMixin:
     """Temporal property graph domain mixin for IRISGraphEngine.
     
@@ -84,14 +107,7 @@ class TemporalMixin:
         elif result.error is None and graph is not None:
             cursor = self.conn.cursor()
             for nid in (source, target):
-                try:
-                    cursor.execute(
-                        f"INSERT INTO {self._t('nodes')} (node_id) SELECT ? "
-                        f"WHERE NOT EXISTS (SELECT 1 FROM {self._t('nodes')} WHERE node_id=?)",
-                        [nid, nid],
-                    )
-                except Exception:
-                    pass
+                _mirror_node(self, cursor, nid, graph)
             try:
                 cursor.execute(
                     f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, graph_id) "
@@ -101,8 +117,14 @@ class TemporalMixin:
                     [source, predicate, target, graph, source, predicate, target, graph],
                 )
                 self.conn.commit()
-            except Exception:
-                pass
+            except Exception as e:
+                # Silence here is what made a missing endpoint look like success: the
+                # temporal globals held the edge, rdf_edges held nothing, and the
+                # return value said True.
+                logger.warning(
+                    "temporal mirror: %s -[%s]-> %s not written to rdf_edges in graph %r: %s",
+                    source, predicate, target, graph, e,
+                )
         return result.error is None
 
     def delete_edge_temporal(
@@ -192,14 +214,7 @@ class TemporalMixin:
             cursor = self.conn.cursor()
             for e in normalized:
                 for nid in (e["source"], e["target"]):
-                    try:
-                        cursor.execute(
-                            f"INSERT INTO {self._t('nodes')} (node_id) SELECT ? "
-                            f"WHERE NOT EXISTS (SELECT 1 FROM {self._t('nodes')} WHERE node_id=?)",
-                            [nid, nid],
-                        )
-                    except Exception:
-                        pass
+                    _mirror_node(self, cursor, nid, graph)
                 try:
                     cursor.execute(
                         f"INSERT INTO {self._t('rdf_edges')} (s, p, o_id, graph_id) "
@@ -209,8 +224,11 @@ class TemporalMixin:
                         [e["source"], e["predicate"], e["target"], graph,
                          e["source"], e["predicate"], e["target"], graph],
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning(
+                        "temporal mirror: %s -[%s]-> %s not written to rdf_edges in graph %r: %s",
+                        e["source"], e["predicate"], e["target"], graph, exc,
+                    )
             try:
                 self.conn.commit()
             except Exception:

@@ -37,6 +37,7 @@ Targets:
 import pytest
 from unittest.mock import patch, MagicMock
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.integration.conftest import _clear_embedding_tables
 
 
 EMB_DIM = 128
@@ -47,6 +48,14 @@ _ONES_VEC = [1.0 / EMB_DIM] * EMB_DIM
 @pytest.fixture
 def emb_eng(iris_connection, iris_master_cleanup):
     eng = IRISGraphEngine(iris_connection, embedding_dimension=EMB_DIM)
+    # Declaring `embedding_dimension` does not make the column that width: the engine
+    # keeps its own number and `initialize_schema` is what carries it to the DDL. Without
+    # this the fixture inherited whatever width the last test to run `initialize_schema`
+    # left behind — 768 from the `engine` fixture — and every write here was refused with
+    # SQLCODE -104 depending on test order. The tables are cleared first because IRIS can
+    # only ALTER a VECTOR column's width while it holds no rows.
+    _clear_embedding_tables(iris_connection)
+    eng.initialize_schema(auto_deploy_objectscript=False)
     for i in range(5):
         eng.create_node(f"emb_{i}", labels=["EmbNode"], properties={"name": f"node_{i}"})
     for i in range(4):

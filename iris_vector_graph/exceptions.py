@@ -6,6 +6,7 @@ __all__ = [
     "NamespaceMismatchWarning",
     "NamespaceConsistencyError",
     "EmbeddingIdentityConflict",
+    "BulkLoadError",
 ]
 
 
@@ -70,15 +71,52 @@ class EmbeddingIdentityConflict(ValueError):
 
     The decisive case is same width, different model: IRIS accepts the INSERT, distances
     compute, and the rankings are meaningless. Nothing below the registry can detect it.
+
+    Spec 227 adds ``graph_id``. A routed table is named after a hash of
+    ``(graph, model)``, so "conflict on kg_emb_3f2a1c…" tells an operator nothing
+    about which graph refused the write. ``graph_id=None`` means the caller did not
+    say, and the message omits the graph rather than claiming the default one.
     """
 
-    def __init__(self, table_name: str, recorded, offered, reason: str):
+    def __init__(self, table_name: str, recorded, offered, reason: str, graph_id=None):
         self.table_name = table_name
         self.recorded = recorded
         self.offered = offered
         self.reason = reason
+        self.graph_id = graph_id
+        where = table_name
+        if graph_id is not None:
+            # An empty graph ID spliced into a sentence reads as a missing word.
+            named = "the default graph" if graph_id == "" else f"graph {graph_id!r}"
+            where = f"{table_name} ({named})"
         super().__init__(
-            f"Embedding identity conflict on {table_name}: {reason}\n"
+            f"Embedding identity conflict on {where}: {reason}\n"
             f"  recorded: {recorded.describe()}\n"
             f"  offered:  {offered.describe()}"
+        )
+
+
+class BulkLoadError(RuntimeError):
+    """Raised when a bulk-load batch is rejected for anything but a duplicate row.
+
+    `BulkLoader._executemany_batched` used to log the rejection at ERROR level and
+    return only the number of rows that did go in, so `load_edges` reported
+    ``{'edges': 0, ...}`` and no exception when every row was refused — measured on
+    the enterprise container as ``SQLCODE -121 ... Foreign Key Constraint
+    'fk_edges_dest'``. A caller cannot tell that from "nothing new to load".
+
+    The failed batch is rolled back before this is raised, so the database keeps no
+    trace of it: `inserted` and `failed` are the only record of how far the load got.
+    Duplicates stay tolerated — a re-load of the same rows is idempotent by design —
+    and are reported as `skipped` on the successful return instead.
+    """
+
+    def __init__(self, phase: str, inserted: int, failed: int, cause: str):
+        self.phase = phase
+        self.inserted = inserted
+        self.failed = failed
+        self.cause = cause
+        super().__init__(
+            f"{phase}: {failed} row(s) rejected after {inserted} inserted, "
+            f"and the batch was rolled back: {cause}"
         )

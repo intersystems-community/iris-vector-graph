@@ -48,6 +48,13 @@ def probe_edge(iris_connection):
     suffix = uuid.uuid4().hex[:8]
     s, p, o = f"FNIDX_S_{suffix}", f"FNIDX_P_{suffix}", f"FNIDX_O_{suffix}"
     cur = iris_connection.cursor()
+    # `fk_edges_source`/`fk_edges_dest` are `(graph_id, s)` and `(graph_id, o_id)`
+    # since 227, so both endpoints must be registered *in this graph* before the
+    # edge — an unscoped node row no longer satisfies them (`SQLCODE -121`).
+    for node in (s, o):
+        cur.execute(
+            "INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, ?)", [node, _GRAPH]
+        )
     cur.execute(
         "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)",
         [s, p, o, _GRAPH],
@@ -57,6 +64,11 @@ def probe_edge(iris_connection):
         yield s, p, o
     finally:
         cur.execute("DELETE FROM Graph_KG.rdf_edges WHERE s = ?", [s])
+        for node in (s, o):
+            cur.execute(
+                "DELETE FROM Graph_KG.nodes WHERE node_id = ? AND graph_id = ?",
+                [node, _GRAPH],
+            )
         iris_connection.commit()
         obj = _iris_obj(iris_connection)
         for subs in (
@@ -103,7 +115,12 @@ def test_named_graph_insert_does_not_write_ungraphed_degree_counters(
 
 
 def test_graphidx_is_not_a_compiled_index_on_edge(iris_connection):
-    """The index is gone from the compiled class, not just from the source."""
+    """The index is gone from the compiled class, not just from the source.
+
+    Spec 227 deleted `Graph.KG.Edge` outright, so the index cannot exist — but a
+    namespace that was never recompiled still carries the old compiled class, and
+    that is the state this asserts against.
+    """
     assert not bool(
         int(
             _iris_obj(iris_connection).classMethodValue(
@@ -116,9 +133,20 @@ def test_graphidx_is_not_a_compiled_index_on_edge(iris_connection):
     )
 
 
-def test_edge_class_is_compiled(iris_connection):
-    """Graph.KG.Edge still compiles and still owns its table."""
-    assert _compiled(iris_connection, "Graph.KG.Edge")
+def test_the_ddl_owns_the_edge_table(iris_connection):
+    """`Graph_KG.rdf_edges` is declared by the DDL alone, and carries `edge_id`.
+
+    Spec 227 deleted `Graph.KG.Edge`. A namespace where it is still compiled is one
+    where it won the race for the table name, and there `edge_id` does not exist —
+    the reification cascade in `_engine/nodes_edges.py` and every read in
+    `_engine/prov.py` answer SQLCODE -29. Asserting on the column rather than on the
+    class is the assertion that matters: it is the same check whichever way the
+    namespace was built.
+    """
+    assert not _compiled(iris_connection, "Graph.KG.Edge"), (
+        "Graph.KG.Edge is still compiled in this namespace and owns Graph_KG.rdf_edges. "
+        "Delete the class and re-run initialize_schema() so the DDL declares the table."
+    )
     cur = iris_connection.cursor()
-    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE edge_id > 0")
     assert cur.fetchone()[0] >= 0

@@ -21,11 +21,17 @@ Test namespaces:
 
     The secondary namespace must be a real IVG namespace: reachable *and*
     carrying the compiled `Graph.KG.*` classes. A namespace whose schema was
-    built by DDL alone is a shell — `graph_id` nullable instead of required, PK
-    `edge_id` instead of `ID`, no `Graph.KG.Edge`/`Eraser`/`TemporalIndex`, and
-    no schema migration ever reaches it. Proving isolation against a shell
-    proves it for a deployment no consumer should be running, which is why this
-    suite refuses to build one and skips instead.
+    built by DDL alone is a shell — `graph_id` nullable instead of required, no
+    `Graph.KG.Eraser`/`TemporalIndex`, and no schema migration ever reaches it.
+    Proving isolation against a shell proves it for a deployment no consumer
+    should be running, which is why this suite refuses to build one and skips
+    instead.
+
+    The marker used to be `Graph.KG.Edge`, whose absence really did mean "DDL
+    only" — until spec 227 deleted that class, because a class-owned
+    `Graph_KG.rdf_edges` has no `edge_id` and the engine reads `edge_id` in 46
+    places. `Graph.KG.Eraser` replaces it: it is pure behaviour, declares no
+    table, and a DDL run cannot produce it.
 
     When the env var is unset the suite falls back to architecture-documentation
     tests that verify the _check_namespace probe and explain why namespace
@@ -56,7 +62,7 @@ _SECONDARY_NAMESPACE = os.environ.get("IVG_SECONDARY_NAMESPACE", "").strip()
 _DEPLOY_HINT = (
     "the secondary namespace must carry the compiled Graph.KG.* classes "
     "(check: SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE "
-    "Name='Graph.KG.Edge'). Deploy with $SYSTEM.OBJ.LoadDir on iris_src/src "
+    "Name='Graph.KG.Eraser'). Deploy with $SYSTEM.OBJ.LoadDir on iris_src/src "
     "from a session in that namespace, or initialize_schema() with auto-deploy. "
     "See README.md §Non-USER Namespace Deployment."
 )
@@ -123,16 +129,17 @@ def engines(iris_connection, secondary_conn):
     warnings.filterwarnings("ignore")
 
     # Refuse to build the secondary schema by DDL. initialize_schema() with
-    # auto-deploy off would happily create a shell — nullable graph_id, PK
-    # edge_id, no Edge/Eraser/TemporalIndex, and no migration ever applied —
-    # and every assertion below would then be about that shell.
+    # auto-deploy off would happily create a shell — nullable graph_id, no
+    # Eraser/TemporalIndex, and no migration ever applied — and every assertion
+    # below would then be about that shell. `Graph.KG.Eraser` is the marker: it
+    # declares no table, so only a real deploy puts it here.
     cur = secondary_conn.cursor()
     cur.execute(
-        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Edge'"
+        "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Eraser'"
     )
     if not (cur.fetchone() or [0])[0]:
         pytest.skip(
-            f"{_SECONDARY_NAMESPACE} has no Graph.KG.Edge, so it is not an IVG "
+            f"{_SECONDARY_NAMESPACE} has no Graph.KG.Eraser, so it is not an IVG "
             f"namespace — only a DDL shell could be built there. Isolation is "
             f"still storage-layer guaranteed (see "
             f"TestNamespaceIsolationArchitecture); to run the live proof, "
@@ -305,7 +312,7 @@ class TestTemporalIsolation:
     def _check_secondary_has_classes(self, e2):
         """Skip temporal tests when TemporalIndex isn't in the secondary namespace.
 
-        The `engines` fixture already proved `Graph.KG.Edge` is there; this
+        The `engines` fixture already proved `Graph.KG.Eraser` is there; this
         catches a partial deployment where the temporal class specifically is
         missing. IVG classes have to be compiled into every namespace that hosts
         a graph. Global isolation holds regardless — ^KG globals are

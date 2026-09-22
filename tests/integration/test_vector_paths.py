@@ -257,6 +257,11 @@ class TestKGRRFFuse:
 
     def test_rrf_fuse_no_indexes(self, vec_eng):
         # With no IVF/BM25 indexes, both lists are empty → returns []
+        # The registry is built from the live namespace, which carries an HNSW index
+        # on the embedding table, so the vector leg *does* run there — this test used
+        # to pass only because the KNN leg was broken and returned nothing. Its
+        # siblings below clear the registry for the same reason.
+        vec_eng._index_registry.clear()
         result = vec_eng.kg_RRF_FUSE(
             k=5, k1=3, k2=3, c=60,
             query_vector=_ONES_JSON,

@@ -57,7 +57,7 @@ def biomedical_test_data(iris_connection) -> dict:
         biomedical_count = cursor.fetchone()[0]
 
     # Check for embeddings
-    cursor.execute("SELECT COUNT(*) FROM kg_NodeEmbeddings")
+    cursor.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings")
     embedding_count = cursor.fetchone()[0]
 
     # Check for relationships
@@ -167,7 +167,7 @@ def test_cleanup(iris_connection):
         cursor = iris_connection.cursor()
         for test_id in cleanup_ids:
             try:
-                cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", (test_id,))
+                cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id = ?", (test_id,))
                 cursor.execute("DELETE FROM rdf_edges WHERE s = ? OR o_id = ?", (test_id, test_id))
                 cursor.execute("DELETE FROM rdf_props WHERE s = ?", (test_id,))
                 cursor.execute("DELETE FROM rdf_labels WHERE s = ?", (test_id,))
@@ -175,6 +175,180 @@ def test_cleanup(iris_connection):
             except Exception:
                 pass
         iris_connection.commit()
+
+
+# ---------------------------------------------------------------------------
+# Spec 227 — the decisive fixture: two graphs, two models, two widths
+#
+# Lives in conftest.py rather than in a test_227_*.py module on purpose. A
+# fixture defined inside a test module is invisible to every other test file,
+# and four separate phase gates need this one.
+# ---------------------------------------------------------------------------
+
+#: One entity ID that exists in both graphs. Impossible before 4.0.0, because
+#: `uq_nodes_nodeid UNIQUE (node_id)` allowed a node ID exactly one graph.
+IVG227_NODE_ID = "ivg227:node:1"
+
+IVG227_GRAPH_A = "ivg227-A"
+IVG227_GRAPH_B = "ivg227-B"
+
+IVG227_MODEL_A = "ivg227-model-a"
+IVG227_MODEL_B = "ivg227-model-b"
+
+#: Two widths, so the fixture proves a column declaration cannot hold both.
+IVG227_DIM_A = 384
+IVG227_DIM_B = 768
+
+
+class Ivg227Env:
+    """The two-graph scenario, plus the vectors and cleanup that go with it."""
+
+    node_id = IVG227_NODE_ID
+    graph_a = IVG227_GRAPH_A
+    graph_b = IVG227_GRAPH_B
+    model_a = IVG227_MODEL_A
+    model_b = IVG227_MODEL_B
+    dim_a = IVG227_DIM_A
+    dim_b = IVG227_DIM_B
+
+    def __init__(self, conn, engine):
+        self.conn = conn
+        self.engine = engine
+
+    # -- vectors -----------------------------------------------------------
+    def vec_a(self, fill: float = 0.1) -> list:
+        return [fill] * self.dim_a
+
+    def vec_b(self, fill: float = 0.2) -> list:
+        return [fill] * self.dim_b
+
+    @staticmethod
+    def as_query(vector) -> str:
+        """The `[0.1,0.1,...]` string form kg_KNN_VEC takes for a query vector."""
+        return "[" + ",".join(str(float(v)) for v in vector) + "]"
+
+    # -- population --------------------------------------------------------
+    def create_nodes(self):
+        """The same node ID in both graphs, with a label only one of them holds."""
+        self.engine.create_node(
+            self.node_id, labels=["Patient"], graph=self.graph_a
+        )
+        self.engine.create_node(
+            self.node_id, labels=["Member"], graph=self.graph_b
+        )
+
+    def store_vectors(self):
+        """One vector per graph, each from its own model at its own width."""
+        self.engine.store_embedding(
+            self.node_id, self.vec_a(), graph=self.graph_a, model_key=self.model_a
+        )
+        self.engine.store_embedding(
+            self.node_id, self.vec_b(), graph=self.graph_b, model_key=self.model_b
+        )
+
+    def populate(self):
+        self.create_nodes()
+        self.store_vectors()
+
+    # -- cleanup -----------------------------------------------------------
+    def wipe(self):
+        """Remove both graphs, including any routed table created for them.
+
+        Routed tables are dropped rather than emptied: a route is created on
+        demand, so a leftover one from a previous run would answer a later
+        test's route lookup with a stale width.
+        """
+        import contextlib
+
+        cursor = self.conn.cursor()
+        try:
+            for graph in (self.graph_a, self.graph_b):
+                routes = []
+                with contextlib.suppress(Exception):
+                    cursor.execute(
+                        "SELECT table_name FROM Graph_KG.embedding_registry "
+                        "WHERE COALESCE(graph_id, '') = ?",
+                        (graph,),
+                    )
+                    routes = [r[0] for r in cursor.fetchall()]
+                for table in routes:
+                    with contextlib.suppress(Exception):
+                        cursor.execute(f"DROP TABLE Graph_KG.{table}")
+                with contextlib.suppress(Exception):
+                    cursor.execute(
+                        "DELETE FROM Graph_KG.embedding_registry "
+                        "WHERE COALESCE(graph_id, '') = ?",
+                        (graph,),
+                    )
+                # The unscoped 3.2.0 tables may still hold rows for this node.
+                for table in ("kg_NodeEmbeddings", "kg_NodeEmbeddings_optimized"):
+                    with contextlib.suppress(Exception):
+                        cursor.execute(
+                            f"DELETE FROM Graph_KG.{table} WHERE node_id = ?",
+                            (self.node_id,),
+                        )
+                    with contextlib.suppress(Exception):
+                        cursor.execute(
+                            f"DELETE FROM Graph_KG.{table} WHERE id = ?",
+                            (self.node_id,),
+                        )
+                with contextlib.suppress(Exception):
+                    cursor.execute(
+                        "DELETE FROM Graph_KG.rdf_edges "
+                        "WHERE COALESCE(graph_id, '') = ?",
+                        (graph,),
+                    )
+                for table in ("rdf_labels", "rdf_props"):
+                    with contextlib.suppress(Exception):
+                        cursor.execute(
+                            f"DELETE FROM Graph_KG.{table} "
+                            "WHERE COALESCE(graph_id, '') = ?",
+                            (graph,),
+                        )
+                    with contextlib.suppress(Exception):
+                        cursor.execute(
+                            f"DELETE FROM Graph_KG.{table} WHERE s = ?",
+                            (self.node_id,),
+                        )
+                with contextlib.suppress(Exception):
+                    cursor.execute(
+                        "DELETE FROM Graph_KG.nodes WHERE COALESCE(graph_id, '') = ?",
+                        (graph,),
+                    )
+            with contextlib.suppress(Exception):
+                self.conn.commit()
+        finally:
+            with contextlib.suppress(Exception):
+                cursor.close()
+
+
+@pytest.fixture(scope="function")
+def ivg227_env(iris_connection):
+    """Spec 227's two-graph / two-model / two-width environment.
+
+    A missing container is a FAILURE, never a skip (constitution VIII gate 1):
+    a skipped storage-layout test is indistinguishable from a passing one, and
+    that is exactly how 27 tests stayed fake-green through Sept 2026.
+    """
+    if os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true":
+        pytest.fail(
+            "spec 227 asserts a storage layout, so it cannot run without IRIS. "
+            "SKIP_IRIS_TESTS=true is not an acceptable outcome here — start "
+            "ivg-iris-enterprise with scripts/enterprise-container.sh up."
+        )
+    if iris_connection is None:
+        pytest.fail(
+            "no live IRIS connection: spec 227's guarantees are in column "
+            "declarations and constraints, which mocks cannot observe."
+        )
+
+    from iris_vector_graph import IRISGraphEngine
+
+    engine = IRISGraphEngine(iris_connection)
+    env = Ivg227Env(iris_connection, engine)
+    env.wipe()
+    yield env
+    env.wipe()
 
 
 def pytest_collection_modifyitems(config, items):

@@ -55,7 +55,7 @@ def run_q1(engine, seed):
         "MATCH (s)-[:R]->(n) WHERE s.node_id = $id RETURN count(n) AS cnt",
         {"id": seed}
     )
-    rows = result.get("rows", ())
+    rows = result.rows
     count = rows[0][0] if rows else 0
     return result, count
 
@@ -65,7 +65,7 @@ def run_shortest_path(engine, src, dst):
         "MATCH p = shortestPath((a {node_id: $a})-[*..8]-(b {node_id: $b})) RETURN length(p) AS hops",
         {"a": src, "b": dst}
     )
-    rows = result.get("rows", ())
+    rows = result.rows
     hops = rows[0][0] if rows else None
     return result, 1 if hops is not None else 0
 
@@ -75,7 +75,7 @@ def run_weighted_sp(engine, src, dst):
         "CALL ivg.shortestPath.weighted($a, $b, 'weight', 9999, 10) YIELD totalCost RETURN totalCost",
         {"a": src, "b": dst}
     )
-    rows = result.get("rows", ())
+    rows = result.rows
     cost = rows[0][0] if rows else None
     return result, 1 if cost is not None else 0
 

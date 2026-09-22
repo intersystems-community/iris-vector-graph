@@ -2,7 +2,7 @@ Class PageRankEmbedded Extends %RegisteredObject
 {
 
 /// Internal helper for PageRank computation to avoid code duplication
-ClassMethod _computePagerankCore(nodeFilter As %String, maxIterations As %Integer, dampingFactor As %Numeric, seedEntities As %String, bidirectional As %Boolean, reverseEdgeWeight As %Numeric, convergenceThreshold As %Numeric = 0) As %List [ Internal, Language = python ]
+ClassMethod ComputePageRankCore(nodeFilter As %String, maxIterations As %Integer, dampingFactor As %Numeric, seedEntities As %String, bidirectional As %Boolean, reverseEdgeWeight As %Numeric, convergenceThreshold As %Numeric = 0) As %List [ Internal, Language = python ]
 {
     import iris
     import json
@@ -111,7 +111,7 @@ ClassMethod ComputePageRank(nodeFilter As %String = "%", maxIterations As %Integ
     logger = logging.getLogger("PageRankEmbedded")
 
     # Call shared core logic
-    res = iris.cls('PageRankEmbedded')._computePagerankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight)
+    res = iris.cls('PageRankEmbedded').ComputePageRankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight)
     ranks = res[0]
 
     # Create result array sorted by rank
@@ -139,7 +139,7 @@ ClassMethod ComputePageRankWithMetrics(nodeFilter As %String = "%", maxIteration
     start_time = time.time()
 
     # Call shared core logic
-    res = iris.cls('PageRankEmbedded')._computePagerankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight, convergenceThreshold)
+    res = iris.cls('PageRankEmbedded').ComputePageRankCore(nodeFilter, maxIterations, dampingFactor, seedEntities, bidirectional, reverseEdgeWeight, convergenceThreshold)
     ranks, iterations_performed, converged, metadata = res[0], res[1], res[2], res[3]
 
     elapsed_ms = (time.time() - start_time) * 1000

@@ -7,11 +7,13 @@ starts agreeing with the new fixture instead of testing anything.
 
 So this pins the properties the upgrade tests lean on, without a container:
 
-  * both releases are present, and each has all three files;
+  * every frozen release is present, with its archive and its globals;
   * the archives carry the old *column* shapes, including v2.16's missing
     `nodes.graph_id` and its NULL default-graph `rdf_edges.graph_id`;
   * the captured globals carry the old *subscript* shapes, including v2.16's
-    unscoped `^KG("deg", node)` and both releases' flat `^KG("tout", ts, ...)`.
+    unscoped `^KG("deg", node)` and the pre-223 flat `^KG("tout", ts, ...)`;
+  * v3.2.0 additionally freezes the *statements* that declared its tables, which
+    is the shape spec 227's migration starts from.
 
 Regenerate with `scripts/fixtures/generate_old_snapshot.py`; see
 `tests/e2e/fixtures/old_releases.py` for how the pieces fit together.
@@ -21,12 +23,21 @@ from __future__ import annotations
 
 import pytest
 
-from tests.e2e.fixtures.old_releases import OLD_RELEASES, RELEASE_IDS
+from tests.e2e.fixtures.old_releases import (
+    GRAPH_SCOPED_IDS,
+    GRAPH_SCOPED_RELEASES,
+    OLD_RELEASES,
+    PRE_223_IDS,
+    PRE_223_RELEASES,
+    RELEASE_IDS,
+)
 
 # Both halves of the upgrade story need a release from either side of spec-214
 # (graph-scoped structural globals): v2.16 predates it, v2.20 follows it and
-# predates spec-223 (graph-scoped temporal globals).
-EXPECTED_TAGS = {"v2.16.0", "v2.20.0"}
+# predates spec-223 (graph-scoped temporal globals). v3.2.0 follows both, and is
+# the release spec 227's migration starts from — the last one with unscoped
+# embedding tables.
+EXPECTED_TAGS = {"v2.16.0", "v2.20.0", "v3.2.0"}
 
 
 def test_both_frozen_releases_are_present():
@@ -59,8 +70,8 @@ def test_the_seed_is_the_same_across_releases(release):
     assert release.named_graph == "acme"
 
 
-@pytest.mark.parametrize("release", OLD_RELEASES, ids=RELEASE_IDS)
-def test_no_release_declares_a_storage_layout(release):
+@pytest.mark.parametrize("release", PRE_223_RELEASES, ids=PRE_223_IDS)
+def test_no_pre_223_release_declares_a_storage_layout(release):
     """`restore_snapshot` treats a missing `layout` key as restorable.
 
     That allowance is what lets these archives through at all, and it is reasoned
@@ -68,6 +79,15 @@ def test_no_release_declares_a_storage_layout(release):
     that reasoning is narrower than the archives are.
     """
     assert "layout" not in release.archive_metadata()
+
+
+def test_v320_declares_the_graph_scoped_layout():
+    """The key the older archives omit, which is why the omission is an allowance.
+
+    Spec 223 started writing it, so a 3.2.0 archive says outright which temporal
+    layout it holds rather than leaving the restore to assume one.
+    """
+    assert _by_tag("v3.2.0").archive_metadata()["layout"] == "graph-scoped"
 
 
 @pytest.mark.parametrize("release", OLD_RELEASES, ids=RELEASE_IDS)
@@ -123,7 +143,7 @@ def test_v220_nodes_carry_a_graph_id_column():
     assert all("graph_id" in row for row in rows)
 
 
-@pytest.mark.parametrize("release", OLD_RELEASES, ids=RELEASE_IDS)
+@pytest.mark.parametrize("release", PRE_223_RELEASES, ids=PRE_223_IDS)
 def test_the_captured_temporal_index_is_flat(release):
     """Both releases predate spec-223: `tout` is keyed by timestamp, not by graph.
 
@@ -136,6 +156,40 @@ def test_the_captured_temporal_index_is_flat(release):
     for entry in tout:
         assert len(entry["k"]) == 5, entry
         assert entry["k"][1].isdigit() and int(entry["k"][1]) > 1_000_000, entry
+
+
+@pytest.mark.parametrize("release", GRAPH_SCOPED_RELEASES, ids=GRAPH_SCOPED_IDS)
+def test_a_post_223_captured_temporal_index_is_graph_scoped(release):
+    """The other side of spec-223, by the same depth tell: six subscripts, and the
+    second one is the default graph key rather than a timestamp.
+
+    Parametrized rather than pinned to v3.2.0 because `PRE_223_TAGS` is what the
+    upgrade suites branch on, and this is the evidence for the side of the
+    partition each release is listed under. A new fixture put in the wrong camp
+    fails here instead of turning a migration test vacuous.
+    """
+    tout = release.globals_under("^KG", "tout")
+
+    assert len(tout) == 3
+    for entry in tout:
+        assert len(entry["k"]) == 6, entry
+        assert entry["k"][1] == "0", entry
+        assert int(entry["k"][2]) > 1_000_000, entry
+
+
+def test_the_pre_223_partition_covers_every_frozen_release():
+    """Every fixture is on one side of spec-223, and neither side is empty.
+
+    The two upgrade suites and this file all branch on `PRE_223_TAGS`. An
+    unlisted fixture would silently land in the graph-scoped half; an empty half
+    collects zero parametrized cases and passes.
+    """
+    pre = {r.tag for r in PRE_223_RELEASES}
+    scoped = {r.tag for r in GRAPH_SCOPED_RELEASES}
+
+    assert pre and scoped
+    assert not (pre & scoped)
+    assert pre | scoped == {r.tag for r in OLD_RELEASES}
 
 
 def test_v216_degree_caches_have_no_graph_key():
@@ -152,6 +206,39 @@ def test_v220_degree_caches_carry_a_graph_key():
 
     assert all(len(entry["k"]) == 3 for entry in deg), deg
     assert {entry["k"][1] for entry in deg} == {"0", "acme"}
+
+
+# --- the frozen 3.2.0 shape, which is spec 227's starting condition ----------------
+
+
+def test_v320_freezes_the_statements_that_declared_its_tables():
+    """Spec 227's migration is a *shape* change, so its fixture has to be a shape.
+
+    Rebuilding the 3.2.0 tables from a hand-written CREATE TABLE would test the
+    migration against my recollection of 3.2.0. These statements are the ones 3.2.0's
+    own `initialize_schema` issued.
+    """
+    statements = _by_tag("v3.2.0").ddl_statements()
+
+    assert statements, "the 3.2.0 fixture was frozen without --ddl"
+    flat = [" ".join(s.split()) for s in statements]
+    nodes = next(s for s in flat if s.startswith("CREATE TABLE Graph_KG.nodes"))
+    legacy = next(s for s in flat if "CREATE TABLE Graph_KG.kg_NodeEmbeddings (" in s)
+
+    # The two declarations spec 227 breaks.
+    assert "CONSTRAINT uq_nodes_nodeid UNIQUE (node_id)" in nodes
+    assert "id VARCHAR(256) %EXACT PRIMARY KEY" in legacy
+    assert "graph_id" not in legacy, "3.2.0's embedding table had no graph column"
+    assert any("CREATE TABLE Graph_KG.embedding_registry" in s for s in flat), (
+        "spec 226's registry is part of the 3.2.0 shape; the migration rewrites its rows"
+    )
+
+
+@pytest.mark.parametrize("release", PRE_223_RELEASES, ids=PRE_223_IDS)
+def test_an_older_release_reports_no_frozen_ddl_rather_than_guessing(release):
+    """`--ddl` arrived with the 3.2.0 fixture. An empty list is the honest answer for
+    a release frozen before it, not an error — nothing needs their shapes."""
+    assert release.ddl_statements() == []
 
 
 def test_a_captured_numeric_subscript_goes_back_as_a_number():

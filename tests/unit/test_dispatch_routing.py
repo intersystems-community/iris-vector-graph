@@ -59,13 +59,21 @@ class TestPPRRouting:
         mock_cls.assert_not_called()
 
     def test_ppr_fallback_calls_pagerank(self):
-        """execute_ppr non-Arno path calls Graph.KG.PageRank.PPRJson (unchanged)."""
+        """execute_ppr non-Arno path calls `Graph.KG.PageRank.RunJson`.
+
+        This test used to demand `PPRJson`, which `Graph.KG.PageRank` does not define:
+        `PageRank.cls` has `RunJson` (`:16`) and `PageRankGlobalJson` (`:134`) and nothing
+        else. `PPRJson` is the accelerator spelling — `ArnoAccel.cls:140`,
+        `NKGAccel.cls:174`, `NKGAccelTraversal.cls:300` — so the fallback the test asked
+        for would raise `<METHOD DOES NOT EXIST>` and `execute_ppr` would swallow it into
+        an empty result with an `error` field, i.e. no scores on every non-Arno install.
+        """
         store = _make_store(False)
         with patch.object(store, "_call_classmethod", return_value="[]") as mock_cls:
             store.execute_ppr(["node_a"], 0.85, 20)
         mock_cls.assert_called_once()
         assert mock_cls.call_args[0][0] == "Graph.KG.PageRank"
-        assert mock_cls.call_args[0][1] == "PPRJson"
+        assert mock_cls.call_args[0][1] == "RunJson"
 
 
 class TestWCCCDLPRouting:

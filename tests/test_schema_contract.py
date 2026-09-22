@@ -14,14 +14,29 @@ import pytest
 # via INFORMATION_SCHEMA.COLUMNS (note: a BIGINT IDENTITY PRIMARY KEY projects
 # as "ID", not its DDL name — see rdf_edges).
 EXPECTED_COLUMNS = {
-    "nodes": {"node_id", "created_at"},
-    "rdf_labels": {"s", "label"},
-    "rdf_props": {"s", "key", "val"},
-    "rdf_edges": {"ID", "s", "p", "o_id", "qualifiers"},
-    "kg_NodeEmbeddings": {"id", "emb", "metadata"},
-    "kg_NodeEmbeddings_optimized": {"id", "emb", "metadata"},
+    # 4.0.0 (spec 227) carries `graph_id` on every node-scoped table, keys the
+    # embedding tables on `(graph_id, node_id)` — the old `id` column is gone —
+    # and names `rdf_edges`' key `edge_id`, since the class that projected it as
+    # `ID` was deleted and the DDL declares that table in every namespace now.
+    "nodes": {"node_id", "graph_id", "created_at"},
+    "rdf_labels": {"graph_id", "s", "label"},
+    "rdf_props": {"graph_id", "s", "key", "val"},
+    "rdf_edges": {"edge_id", "graph_id", "s", "p", "o_id", "qualifiers"},
+    "kg_NodeEmbeddings": {"emb_rowid", "graph_id", "node_id", "emb", "metadata"},
+    "kg_NodeEmbeddings_optimized": {
+        "emb_rowid", "graph_id", "node_id", "emb", "metadata",
+    },
     "kg_EdgeEmbeddings": {"s", "p", "o_id", "emb"},
     "docs": {"id", "text"},
+    "embedding_registry": {
+        "table_name", "graph_id", "mechanism", "model_key", "declared_config",
+        "dimension", "dtype", "set_at", "set_by", "index_state", "index_error",
+        "recall_measured", "recall_measured_at",
+    },
+    "embedding_quarantine": {
+        "q_rowid", "node_id", "source_table", "emb", "dimension", "dtype",
+        "metadata", "reason", "quarantined_at",
+    },
     "fhir_bridges": {
         "fhir_code", "kg_node_id", "fhir_code_system",
         "bridge_type", "confidence", "source_cui",

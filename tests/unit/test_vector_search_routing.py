@@ -68,7 +68,16 @@ class TestVectorSearchRouting:
         query = [0.1, 0.2, 0.3, 0.4]
         with patch.object(eng, "kg_KNN_VEC", return_value=[("n1", 0.9)]) as mock_knn:
             result = eng.search_nodes_by_vector(query, k=5)
-        mock_knn.assert_called_once_with(json.dumps([float(v) for v in query]), k=5, label_filter=None)
+        # The (graph, model_key) pair reaches kg_KNN_VEC even when the caller named
+        # neither: `None`/`None` is the default pair, and passing it explicitly is how
+        # the native path stays route-aware (spec 230, FR-013).
+        mock_knn.assert_called_once_with(
+            json.dumps([float(v) for v in query]),
+            k=5,
+            label_filter=None,
+            graph=None,
+            model_key=None,
+        )
         assert result == [("n1", 0.9)]
 
     def test_routes_to_ivf_when_native_unavailable(self):
@@ -84,7 +93,9 @@ class TestVectorSearchRouting:
         query_str = "[0.1, 0.2, 0.3, 0.4]"
         with patch.object(eng, "kg_KNN_VEC", return_value=[]) as mock_knn:
             eng.search_nodes_by_vector(query_str, k=5)
-        mock_knn.assert_called_once_with(query_str, k=5, label_filter=None)
+        mock_knn.assert_called_once_with(
+            query_str, k=5, label_filter=None, graph=None, model_key=None
+        )
 
     def test_label_filter_forwarded_to_native(self):
         eng = self._make_engine(native=True)
@@ -92,8 +103,37 @@ class TestVectorSearchRouting:
         with patch.object(eng, "kg_KNN_VEC", return_value=[]) as mock_knn:
             eng.search_nodes_by_vector(query, k=5, label_filter="Person")
         mock_knn.assert_called_once_with(
-            json.dumps([float(v) for v in query]), k=5, label_filter="Person"
+            json.dumps([float(v) for v in query]),
+            k=5,
+            label_filter="Person",
+            graph=None,
+            model_key=None,
         )
+
+    def test_scoped_lookup_refuses_the_ivf_fallback(self):
+        """`Graph.KG.IVFIndex` holds no graph, so an IVF answer spans every graph.
+
+        FR-013 says a scoped lookup never falls back to an unscoped scan, and this is
+        the one place the fallback was silent: without native VECTOR_COSINE the graph
+        and model_key arguments simply went nowhere and the index answered from the
+        whole namespace.
+        """
+        eng = self._make_engine(native=False)
+        query = [0.1, 0.2, 0.3, 0.4]
+        with patch.object(eng, "ivf_search", return_value=[("n2", 0.8)]) as mock_ivf:
+            for kwargs in ({"graph": "tenant:a"}, {"model_key": "minilm"}):
+                with pytest.raises(ValueError, match="IVF"):
+                    eng.search_nodes_by_vector(query, k=5, **kwargs)
+        mock_ivf.assert_not_called()
+
+    def test_the_default_graph_still_reaches_ivf(self):
+        """An explicit default graph is the same question the unscoped call asks."""
+        eng = self._make_engine(native=False)
+        query = [0.1, 0.2, 0.3, 0.4]
+        with patch.object(eng, "ivf_search", return_value=[("n2", 0.8)]) as mock_ivf:
+            result = eng.search_nodes_by_vector(query, k=3, ivf_name="my_idx", graph="")
+        mock_ivf.assert_called_once_with("my_idx", query, k=3, nprobe=8)
+        assert result == [("n2", 0.8)]
 
     def test_nprobe_forwarded_to_ivf(self):
         eng = self._make_engine(native=False)

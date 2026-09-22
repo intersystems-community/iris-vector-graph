@@ -78,6 +78,32 @@ ClassMethod NodeExists(pSchema As %String, pId As %String) As %Boolean
     Return tRS.%Next()
 }
 
+/// Register a relationship's endpoint in the relationship's own graph.
+///
+/// Spec 227 re-keyed nodes on (graph_id, node_id), so rdf_edges' foreign keys are
+/// composite — (graph_id, s) and (graph_id, o_id). A changeset upserts its nodes
+/// without a graph, which lands them in the default graph, and then creates the
+/// relationship in a named one: the insert below is SQLCODE -121 and the whole
+/// commit is refused with "insert relationship failed". NodeExists stays graph-blind
+/// on purpose — the ledger's node_not_found means the node is unknown, not that it
+/// is unknown *here* — so the row the constraint wants is written here instead.
+///
+/// -119 (already registered) is the state this wants, so it is not an error.
+ClassMethod EnsureEndpoint(pSchema As %String, pId As %String, pGraph As %String) As %String
+{
+    If pId = "" Return ""
+    // The default graph is spelled with a literal, never a parameter: an empty
+    // string bound to a parameter arrives as SQL NULL, and graph_id is NOT NULL, so
+    // the default-graph endpoint came back as "'graph_id' is a required field".
+    If pGraph = "" {
+        Set tRS = ..Run("INSERT INTO " _ pSchema _ ".nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM " _ pSchema _ ".nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')", pId, pId)
+    } Else {
+        Set tRS = ..Run("INSERT INTO " _ pSchema _ ".nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM " _ pSchema _ ".nodes WHERE node_id = ? AND COALESCE(graph_id, '') = ?)", pId, pGraph, pId, pGraph)
+    }
+    If (tRS.%SQLCODE < 0) && (tRS.%SQLCODE '= -119) Return "register endpoint '" _ pId _ "' failed: " _ tRS.%Message
+    Return ""
+}
+
 ClassMethod TupleJson(pS As %String, pP As %String, pO As %String, pGraph As %String) As %String
 {
     Set tObj = {}
@@ -323,8 +349,12 @@ ClassMethod NodeSnapshotJson(pSchema As %String, pId As %String) As %String
 ClassMethod DeleteNodeRows(pSchema As %String, pId As %String, ByRef pRecords, pFlags As %String = "") As %String
 {
     Set tPrior = ..NodeSnapshotJson(pSchema, pId)
-    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings WHERE id = ?", pId)
-    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings_optimized WHERE id = ?", pId)
+    // `node_id`, not `id`: spec 227 re-keyed both tables, and this DELETE's status
+    // is not checked, so naming the old column left a deleted node's vectors behind
+    // with nothing said about it. Still by node id across graphs, like the label and
+    // property deletes below: DeleteNodeRows has no graph of its own to scope by.
+    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings WHERE node_id = ?", pId)
+    Do ..Run("DELETE FROM " _ pSchema _ ".kg_NodeEmbeddings_optimized WHERE node_id = ?", pId)
     Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_labels WHERE s = ?", pId)
     If tRS.%SQLCODE < 0 Return "delete labels failed: " _ tRS.%Message
     Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_props WHERE s = ?", pId)
@@ -440,6 +470,10 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     }
     // create
     Set tQJson = ..QualsJson(tQuals)
+    Set tReason = ..EnsureEndpoint(tSchema, tS, tG)
+    If tReason '= "" Return tReason
+    Set tReason = ..EnsureEndpoint(tSchema, tO, tG)
+    If tReason '= "" Return tReason
     If tG = "" {
         Set tRS = ..Run("INSERT INTO " _ tSchema _ ".rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, '')", tS, tP, tO, tQJson)
     } Else {

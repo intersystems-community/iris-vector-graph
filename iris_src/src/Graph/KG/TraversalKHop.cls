@@ -218,16 +218,20 @@ ClassMethod KHop2NeighborIds(srcId As %String, pred As %String = "", maxResults 
 }
 ClassMethod KHop2CountFast(srcId As %String, pred As %String = "") As %Integer
 {
+	// Default graph, like every other method in this class: the two-hop readers take
+	// no graph, so the entry they read is the default graph's (spec 230 FR-010).
+	Set pGraph = 0
     If pred '= "" {
-        Set cnt = $Get(^KG("deg2p", srcId, pred), -1)
+        Set cnt = $Get(^KG("deg2p", pGraph, srcId, pred), -1)
         If cnt >= 0 Return +cnt
     }
     Return ..KHop2Count(srcId, pred)
 }
 ClassMethod KHop2CountExact(srcId As %String, pred As %String = "") As %Integer
 {
+	Set pGraph = 0
     If pred '= "" {
-        Set cnt = $Get(^KG("deg2p_exact", srcId, pred), -1)
+        Set cnt = $Get(^KG("deg2p_exact", pGraph, srcId, pred), -1)
         If cnt >= 0 Return +cnt
     }
     Return ..KHop2Count(srcId, pred)

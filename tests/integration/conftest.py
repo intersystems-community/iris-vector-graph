@@ -1,6 +1,7 @@
 import pytest
 import os
 import uuid
+from iris_vector_graph.constants import VECTOR_TABLE_NAMES
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.engine import IRISGraphEngine
@@ -30,24 +31,44 @@ def _cleanup_prefix(engine, prefix: str) -> None:
     cursor.close()
 
 
+def _clear_embedding_tables(conn) -> None:
+    """Empty every embedding table, legacy and routed.
+
+    `initialize_schema` can only ALTER a VECTOR column's width while the table is
+    empty, so rows a previous test left behind make the next fixture's ALTER fail
+    silently and the column keeps the old width. The failure then lands on whichever
+    test writes a vector next — never on the one that polluted. Clearing on the way
+    in as well as on the way out means one test's leftovers cannot choose the next
+    test's width.
+    """
+    cursor = conn.cursor()
+    tables = [f"Graph_KG.{name}" for name in VECTOR_TABLE_NAMES]
+    try:
+        cursor.execute("SELECT table_name FROM Graph_KG.embedding_registry")
+        tables += [f"Graph_KG.{row[0]}" for row in cursor.fetchall() if row and row[0]]
+    except Exception:
+        pass  # no registry: a 3.2.0-or-earlier database, or nothing initialized yet
+    for table in dict.fromkeys(tables):
+        try:
+            cursor.execute(f"DELETE FROM {table}")
+        except Exception:
+            pass
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    cursor.close()
+
+
 @pytest.fixture
 def engine(iris_connection):
     """Create and initialize an IRISGraphEngine for testing."""
+    _clear_embedding_tables(iris_connection)
     engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
     engine.initialize_schema(auto_deploy_objectscript=True)
     yield engine
     # Restore dimension to 128 (session default) so subsequent fixtures aren't confused.
-    # Must clear embedding tables first so ALTER TABLE (dim 384→128) can proceed on empty tables.
-    cursor = iris_connection.cursor()
-    for emb_table in ("Graph_KG.kg_NodeEmbeddings", "Graph_KG.kg_EdgeEmbeddings"):
-        try:
-            cursor.execute(f"DELETE FROM {emb_table}")
-        except Exception:
-            pass
-    try:
-        iris_connection.commit()
-    except Exception:
-        pass
+    _clear_embedding_tables(iris_connection)
     try:
         IRISGraphEngine(iris_connection, embedding_dimension=128).initialize_schema(
             auto_deploy_objectscript=False
@@ -102,16 +123,29 @@ def fraud_test_data(iris_connection):
         iris_connection.rollback()
 
 
+#: Prefix the translator puts on the pre-DELETE edge count (translator.py:4367),
+#: stripped and interpreted by the executor rather than sent to IRIS.
+_DELETE_GUARD = "__constraint_check_delete_connected__"
+
+
 @pytest.fixture
 def execute_cypher(fraud_test_data):
     conn = fraud_test_data["conn"]
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    # An engine, even though this fixture runs the SQL itself. `translate_to_sql` reads
+    # `engine._fetch_first_unsafe` to decide between `TOP n` and `FETCH FIRST n ROWS ONLY`,
+    # and on the IRIS AI builds this suite targets the second form SIGSEGVs in %qaqpre over
+    # a multi-table JOIN on VARCHAR keys. That is a native fault, so translating without an
+    # engine did not fail a test — it killed the pytest process and every test after it.
+    engine = IRISGraphEngine(conn)
 
     def _execute(query, params=None):
         from iris_vector_graph.cypher.parser import parse_query
         from iris_vector_graph.cypher.translator import translate_to_sql
 
         ast = parse_query(query)
-        sql_query = translate_to_sql(ast, params=params)
+        sql_query = translate_to_sql(ast, params=params, engine=engine)
 
         cursor = conn.cursor()
 
@@ -123,6 +157,21 @@ def execute_cypher(fraud_test_data):
                 rows = []
                 for i, stmt in enumerate(stmts):
                     p = all_params[i] if i < len(all_params) else []
+                    if stmt.startswith(_DELETE_GUARD):
+                        # A non-DETACH DELETE emits this sentinel first: a COUNT of
+                        # the edges still attached to the nodes about to go, which
+                        # the executor runs and turns into
+                        # ConstraintVerificationFailed. It is not SQL, so handing
+                        # it to IRIS answers `SQLCODE -51 SQL statement expected`.
+                        # `IRISSQLStore.execute_transaction` strips it the same way.
+                        cursor.execute(stmt[len(_DELETE_GUARD) + 1 :], p)
+                        count_row = cursor.fetchone()
+                        if count_row and count_row[0] > 0:
+                            raise RuntimeError(
+                                "ConstraintVerificationFailed: Cannot delete node "
+                                "with existing relationships. Use DETACH DELETE."
+                            )
+                        continue
                     cursor.execute(stmt, p)
                     if cursor.description:
                         rows = cursor.fetchall()

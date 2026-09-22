@@ -3,7 +3,17 @@ Contract tests for kg_PERSONALIZED_PAGERANK API.
 
 Tests the API contract defined in specs/005-bidirectional-ppr/contracts/kg_personalized_pagerank.md
 
-TDD: These tests should FAIL until implementation is complete.
+Written TDD-first for spec 005; `kg_PERSONALIZED_PAGERANK` has since shipped
+(`_engine/algorithms.py:10`), so these run for real. Four harness faults had kept all
+13 erroring rather than failing, which is why nobody noticed: five class-level
+`def engine(self, engine)` fixtures each requested themselves, every setup fixture
+referenced a bare `iris_connection` it had not asked for, the cleanup Cypher matched on a
+property the fixtures never write (see `_purge`), and every fixture built its edge with a
+raw `INSERT INTO rdf_edges`, which writes the row and no adjacency — so PPR, which walks
+`^KG("out"/"in")`, saw an empty graph and scored the seed against nothing in either
+direction. The `engine` fixture now comes from `tests/contract/conftest.py`, the
+connection is a declared parameter, edges go through `create_edge`, and `_purge` takes the
+adjacency back down with `delete_edge`.
 """
 
 import pytest
@@ -14,14 +24,37 @@ from typing import Dict
 pytestmark = pytest.mark.requires_database
 
 
+def _purge(engine, prefix: str) -> None:
+    """Remove every node and edge whose ID starts with `prefix`, adjacency included.
+
+    The fixtures below used to clean up with
+    `MATCH (n) WHERE n.id STARTS WITH 'CONTRACT_XX:' DELETE n`, which cannot work
+    here: `n.id` translates to a `rdf_props` row with `"key" = 'id'`, and
+    `engine.create_node('CONTRACT_XX:A')` writes no properties at all — so the
+    predicate matched nothing and the delete silently removed nothing. The first test
+    in each class therefore passed and the second one failed to insert its edge
+    (`SQLCODE -119`, `u_spo_graph`) against the row the teardown had left behind.
+
+    Edges go through `delete_edge` rather than a `DELETE FROM rdf_edges`, because the
+    fixtures now create them through `create_edge` and a row-only delete would leave
+    `^KG("out"/"in"/"deg"/"degp")` behind. Stale adjacency does not fail loudly — it
+    inflates the next run's out-degree and quietly changes every score.
+    """
+    connection = engine.conn
+    cursor = connection.cursor()
+    like = f"{prefix}%"
+    cursor.execute("SELECT s, p, o_id FROM rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [like, like])
+    for s, p, o_id in cursor.fetchall():
+        engine.delete_edge(s, p, o_id)
+    cursor.execute("DELETE FROM rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [like, like])
+    cursor.execute("DELETE FROM rdf_props WHERE s LIKE ?", [like])
+    cursor.execute("DELETE FROM rdf_labels WHERE s LIKE ?", [like])
+    cursor.execute("DELETE FROM nodes WHERE node_id LIKE ?", [like])
+    connection.commit()
+
+
 class TestPPRContractSignature:
     """Test API contract signature compliance."""
-
-    @pytest.fixture
-    def engine(self, engine):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
 
     def test_method_exists(self, engine):
         """Contract: kg_PERSONALIZED_PAGERANK method exists on IRISGraphEngine."""
@@ -59,12 +92,6 @@ class TestPPRContractSignature:
 
 class TestPPRContractParameters:
     """Test API contract parameter handling."""
-
-    @pytest.fixture
-    def engine(self, engine):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
 
     def test_seed_entities_required(self, engine):
         """Contract: seed_entities parameter is required."""
@@ -117,26 +144,20 @@ class TestPPRContractBidirectional:
     """Test bidirectional parameter contract."""
 
     @pytest.fixture
-    def engine(self, engine):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
-    @pytest.fixture
-    def setup_directional_graph(self, engine):
+    def setup_directional_graph(self, engine, iris_connection):
         """Create graph: A -> B (unidirectional)."""
         cursor = iris_connection.cursor()
 
-        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_DIR:%\' DELETE n")
+        _purge(engine, 'CONTRACT_DIR:')
 
         engine.create_node('CONTRACT_DIR:A')
         engine.create_node('CONTRACT_DIR:B')
-        cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                      ['CONTRACT_DIR:A', 'connects', 'CONTRACT_DIR:B'])
+        engine.create_edge('CONTRACT_DIR:A', 'connects', 'CONTRACT_DIR:B')
+        iris_connection.commit()
 
         yield
 
-        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_DIR:%\' DELETE n")
+        _purge(engine, 'CONTRACT_DIR:')
 
     def test_bidirectional_false_is_default(self, engine, setup_directional_graph):
         """Contract: bidirectional=False is the default (backward compatible)."""
@@ -165,26 +186,20 @@ class TestPPRContractReverseWeight:
     """Test reverse_edge_weight parameter contract."""
 
     @pytest.fixture
-    def engine(self, engine):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
-    @pytest.fixture
-    def setup_weighted_graph(self, engine):
+    def setup_weighted_graph(self, engine, iris_connection):
         """Create simple A -> B graph for weight testing."""
         cursor = iris_connection.cursor()
 
-        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_WT:%\' DELETE n")
+        _purge(engine, 'CONTRACT_WT:')
 
         engine.create_node('CONTRACT_WT:A')
         engine.create_node('CONTRACT_WT:B')
-        cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                      ['CONTRACT_WT:A', 'connects', 'CONTRACT_WT:B'])
+        engine.create_edge('CONTRACT_WT:A', 'connects', 'CONTRACT_WT:B')
+        iris_connection.commit()
 
         yield
 
-        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_WT:%\' DELETE n")
+        _purge(engine, 'CONTRACT_WT:')
 
     def test_weight_1_0_full_contribution(self, engine, setup_weighted_graph):
         """Contract: reverse_edge_weight=1.0 gives full reverse edge contribution."""
@@ -235,26 +250,20 @@ class TestPPRContractBackwardCompatibility:
     """Test backward compatibility with existing code."""
 
     @pytest.fixture
-    def engine(self, engine):
-        """Get IRISGraphEngine instance."""
-        from iris_vector_graph import IRISGraphEngine
-        return IRISGraphEngine(iris_connection)
-
-    @pytest.fixture
-    def setup_simple_graph(self, engine):
+    def setup_simple_graph(self, engine, iris_connection):
         """Create simple graph for backward compatibility testing."""
         cursor = iris_connection.cursor()
 
-        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_BC:%\' DELETE n")
+        _purge(engine, 'CONTRACT_BC:')
 
         engine.create_node('CONTRACT_BC:A')
         engine.create_node('CONTRACT_BC:B')
-        cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
-                      ['CONTRACT_BC:A', 'connects', 'CONTRACT_BC:B'])
+        engine.create_edge('CONTRACT_BC:A', 'connects', 'CONTRACT_BC:B')
+        iris_connection.commit()
 
         yield
 
-        engine.execute_cypher("MATCH (n) WHERE n.id STARTS WITH \'CONTRACT_BC:%\' DELETE n")
+        _purge(engine, 'CONTRACT_BC:')
 
     def test_works_without_new_parameters(self, engine, setup_simple_graph):
         """Contract: Existing code without bidirectional/reverse_edge_weight still works."""

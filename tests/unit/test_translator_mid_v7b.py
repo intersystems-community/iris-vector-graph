@@ -812,7 +812,8 @@ class TestTranslateVectorSearch:
         )
         _translate_vector_search(proc, ctx)
         cte = ctx.stages[0]
-        assert "WHERE e.id !=" in cte
+        # 4.0.0 key: `e.id` is the RowID after the spec 227 re-key.
+        assert "WHERE e.node_id !=" in cte
 
     def test_params_added_to_all_stage_params(self):
         ctx = make_context()
@@ -968,9 +969,11 @@ class TestTranslatePpr:
             yield_items=["node", "score"]
         )
         _translate_ppr(proc, ctx)
-        # alpha and max_iter should be in params
-        assert 0.9 in ctx.all_stage_params
-        assert 30 in ctx.all_stage_params
+        # Inline, not bound: a `?` inside JSON_TABLE's source argument makes IRIS reject
+        # the statement (tests/unit/test_227_json_table_literal_args.py).
+        assert "0.9" in ctx.stages[0]
+        assert "30" in ctx.stages[0]
+        assert ctx.all_stage_params == []
 
     def test_ppr_defaults_alpha_and_iter(self):
         ctx = make_context()
@@ -980,9 +983,9 @@ class TestTranslatePpr:
             yield_items=["node", "score"]
         )
         _translate_ppr(proc, ctx)
-        # Default alpha 0.85 and max_iter 20
-        assert 0.85 in ctx.all_stage_params
-        assert 20 in ctx.all_stage_params
+        # Default alpha 0.85 and max_iter 20, inline for the reason above
+        assert "0.85" in ctx.stages[0]
+        assert ", 20," in ctx.stages[0]
 
     def test_ppr_string_seed_wrapped_in_list(self):
         ctx = make_context()
@@ -993,7 +996,8 @@ class TestTranslatePpr:
         )
         _translate_ppr(proc, ctx)
         import json
-        seed_json = ctx.all_stage_params[0]
+        # The seed JSON is inlined as a quoted literal, so read it back out of the CTE.
+        seed_json = ctx.stages[0].split("kg_PPR('", 1)[1].split("',", 1)[0]
         assert json.loads(seed_json) == ["single_seed"]
 
     def test_ppr_invalid_seed_type_raises(self):
@@ -1088,9 +1092,11 @@ class TestTranslateBm25Search:
             yield_items=["node", "score"]
         )
         _translate_bm25_search(proc, ctx)
-        # idx_name and query should be bound as params
-        assert "idx" in ctx.all_stage_params
-        assert "myquery" in ctx.all_stage_params
+        # idx_name and query are inlined as escaped literals, not bound: JSON_TABLE's
+        # source argument takes no parameter markers on IRIS 2026.3.
+        assert "'idx'" in ctx.stages[0]
+        assert "'myquery'" in ctx.stages[0]
+        assert ctx.all_stage_params == []
 
     def test_k_is_inline_not_param(self):
         ctx = make_context()

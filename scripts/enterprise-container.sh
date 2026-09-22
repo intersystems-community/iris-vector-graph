@@ -81,18 +81,20 @@ print('✓ schema initialized')
     # dispatch table for new methods on existing classes.
     "$0" deploy 2>&1 | grep -iE 'ERROR|deployed|failed'
     "$0" compile-all || { echo "✗ First compile-all failed — aborting startup"; exit 1; }
-    # Remove USER-namespace SQL projection clones created by DDL init.
-    # IRIS auto-generates User.* classes when DDL runs in USER namespace; they conflict
-    # with the canonical Graph.KG.Edge (rdf_edges) class and cause compile failures.
-    # Do NOT delete Graph.KG.* projection classes — they own the tables.
+    # Remove the USER-namespace SQL projection clones DDL init leaves behind.
+    # An unqualified CREATE TABLE in USER produces User.nodes, User.rdfedges and
+    # friends alongside the Graph.KG.* classes that own the real tables, and two
+    # classes claiming one SqlTableName is ERROR #5523 for whichever compiles second.
+    # Do NOT delete the Graph.KG.* projection classes — they own the tables. Since
+    # spec 227 that includes rdf_edges: Graph.KG.Edge is gone, because its shape had
+    # no edge_id and a graph-blind unique index (see
+    # tests/unit/test_227_objectscript_surface.py).
     docker exec "$CONTAINER" /usr/irissys/bin/irispython -c "
 import iris
 stale = ['User.nodes','User.rdflabels','User.rdfprops','User.rdfedges']
 for cls in stale:
     try: iris.cls('%SYSTEM.OBJ').Delete(cls,'ef')
     except Exception: pass
-# Recompile Graph.KG.Edge after removing USER duplicates
-iris.cls('%SYSTEM.OBJ').Compile('Graph.KG.Edge','ck')
 " 2>/dev/null || true
     "$0" compile-all || { echo "✗ Second compile-all failed — aborting startup"; exit 1; }
     echo "Loading libarno_callout.so via TCP..."
@@ -100,6 +102,12 @@ iris.cls('%SYSTEM.OBJ').Compile('Graph.KG.Edge','ck')
     "$(dirname "$0")/install-embedded-deps.sh" "$CONTAINER" || true
     # Gate 3 — adjacency smoke test: create_edge + BuildKG + BFS must return a result.
     # Catches BuildKG bugs (e.g. $C(0) sentinel), WriteAdjacency failures, ^KG layout breaks.
+    #
+    # Since spec 227 the probe writes the *same* node ID into two named graphs, which
+    # `UNIQUE (graph_id, node_id)` on `nodes` newly permits, and reads each graph on its
+    # own with `USE GRAPH`. A single-graph probe is satisfied by an adjacency index that
+    # has dropped the graph key and put every edge in the default graph — the exact
+    # regression the re-key can cause — so it asserts the neighbour, not just a row.
     echo "Running adjacency smoke test..."
     python3 -c "
 import iris, socket, sys
@@ -115,23 +123,37 @@ except Exception:
 import warnings; warnings.filterwarnings('ignore')
 from iris_vector_graph.engine import IRISGraphEngine
 e = IRISGraphEngine(conn, embedding_dimension=768)
-try:
-    e.create_node('__smoke_a'); e.create_node('__smoke_b')
-    e.create_edge('__smoke_a', 'SMOKE', '__smoke_b')
-    e.sync()
-    r = e.execute_cypher(\"MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.id = '__smoke_a' RETURN b.id\")
-    rows = r.rows if hasattr(r, 'rows') else r.get('rows', [])
-    # Cleanup
+def _cleanup():
     cur = conn.cursor()
     for t in ('rdf_edges', 'rdf_labels', 'rdf_props', 'nodes'):
         try: cur.execute(f\"DELETE FROM Graph_KG.{t} WHERE s LIKE '__smoke%' OR node_id LIKE '__smoke%' OR o_id LIKE '__smoke%'\")
         except Exception: pass
     conn.commit()
-    if not rows:
-        print('✗ adjacency smoke FAILED — create_edge+BFS returned 0 rows; check BuildKG/WriteAdjacency')
+try:
+    # One shared source ID, one distinct target per graph. If the graph key is
+    # missing from ^KG both targets answer every query.
+    e.create_node('__smoke_a', graph='__smoke_g1'); e.create_node('__smoke_b1', graph='__smoke_g1')
+    e.create_edge('__smoke_a', 'SMOKE', '__smoke_b1', graph='__smoke_g1')
+    e.create_node('__smoke_a', graph='__smoke_g2'); e.create_node('__smoke_b2', graph='__smoke_g2')
+    e.create_edge('__smoke_a', 'SMOKE', '__smoke_b2', graph='__smoke_g2')
+    e.sync()
+    failures = []
+    for graph, expected in (('__smoke_g1', '__smoke_b1'), ('__smoke_g2', '__smoke_b2')):
+        r = e.execute_cypher(\"USE GRAPH '\" + graph + \"' MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.id = '__smoke_a' RETURN b.id\")
+        rows = r.rows if hasattr(r, 'rows') else r.get('rows', [])
+        got = [str(row[0]) for row in rows]
+        if len(rows) != 1:
+            failures.append(f'{graph}: expected exactly 1 neighbour, got {len(rows)}: {got}')
+        elif got[0] != expected:
+            failures.append(f'{graph}: expected {expected}, got {got[0]} — ^KG is not graph-scoped')
+    _cleanup()
+    if failures:
+        print('✗ adjacency smoke FAILED — check BuildKG/WriteAdjacency and the ^KG graph key:')
+        for f in failures: print('   ' + f)
         sys.exit(1)
-    print('✓ adjacency smoke passed')
+    print('✓ adjacency smoke passed (2 graphs, shared node ID)')
 except Exception as ex:
+    _cleanup()
     print(f'✗ adjacency smoke error: {ex}')
     sys.exit(1)
 " || { echo "✗ Adjacency smoke test failed — container is not fit for testing"; exit 1; }

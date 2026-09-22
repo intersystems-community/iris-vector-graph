@@ -33,7 +33,7 @@ class TestSystemProcedures:
     def test_db_labels(self, sproc_eng):
         result = sproc_eng.execute_cypher("CALL db.labels() YIELD label RETURN label")
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert isinstance(rows, list)
 
     def test_db_relationship_types(self, sproc_eng):
@@ -71,7 +71,7 @@ class TestSystemProcedures:
             "CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert len(rows) > 0
 
     def test_dbms_procedures(self, sproc_eng):
@@ -79,7 +79,7 @@ class TestSystemProcedures:
             "CALL dbms.procedures() YIELD name, signature RETURN name, signature"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert isinstance(rows, list)
         assert len(rows) > 0
 
@@ -94,7 +94,7 @@ class TestSystemProcedures:
             "CALL dbms.clientConfig() YIELD key, value RETURN key, value"
         )
         assert result is not None
-        rows = result.get("rows") if hasattr(result, "get") else result.rows
+        rows = result.rows
         assert len(rows) > 0
 
     def test_dbms_security_showcurrentuser(self, sproc_eng):

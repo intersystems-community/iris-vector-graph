@@ -289,7 +289,7 @@ class TestEmbeddingsPipeline:
         vec = [float(i) / 128 for i in range(128)]
         eng.store_embedding("cp_0", vec)
         cur = iris_connection.cursor()
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id='cp_0'")
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id='cp_0'")
         assert int(cur.fetchone()[0]) >= 1
 
     def test_get_embedding_after_store(self, eng):
@@ -305,7 +305,7 @@ class TestEmbeddingsPipeline:
         ]
         eng.store_embeddings(items)
         cur = iris_connection.cursor()
-        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE id IN ('cp_2','cp_3')")
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id IN ('cp_2','cp_3')")
         assert int(cur.fetchone()[0]) >= 2
 
     def test_get_embeddings_batch_after_store(self, eng):

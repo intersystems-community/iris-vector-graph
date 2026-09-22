@@ -155,16 +155,18 @@ class TestBulkDeleteNodes:
             ne_eng.create_node(f"bd_{i}", labels=["BD"])
         ne_eng.sync()
         result = ne_eng.bulk_delete_nodes(["bd_0", "bd_1", "bd_2"])
-        assert isinstance(result, int)
-        assert result >= 0
+        # DeleteResult, not a count — `result >= 0` now raises, and never could
+        # have failed anyway.
+        assert (result.deleted, result.failed) == (3, 0)
 
     def test_bulk_delete_nodes_empty(self, ne_eng):
         result = ne_eng.bulk_delete_nodes([])
-        assert result == 0
+        assert (result.deleted, result.failed) == (0, 0)
 
     def test_bulk_delete_nonexistent(self, ne_eng):
+        """A node that was never there is not a failure — there is nothing to fail on."""
         result = ne_eng.bulk_delete_nodes(["__gone__1", "__gone__2"])
-        assert isinstance(result, int)
+        assert result.failed == 0
 
 
 # ---------------------------------------------------------------------------

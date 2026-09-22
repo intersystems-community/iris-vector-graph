@@ -49,7 +49,7 @@ class TestApproxCountDistinct:
         times.sort()
         p50 = times[len(times) // 2]
         assert p50 < 500, f"SC-001: approx_count_distinct p50={p50:.1f}ms — target <500ms"
-        assert r.get("rows") and len(r["rows"]) == 1
+        assert r.rows and len(r["rows"]) == 1
         assert r["rows"][0][0] >= 0
 
     def test_sc002_accuracy_within_6_5_percent(self, engine, graph_data):
@@ -63,8 +63,8 @@ class TestApproxCountDistinct:
                 f"MATCH (a {{node_id:$s}})-[:{PRED}*1..2]-(b) RETURN count(DISTINCT b) AS c",
                 {"s": src},
             )
-            approx_val = approx_r["rows"][0][0] if approx_r.get("rows") else 0
-            exact_val = exact_r["rows"][0][0] if exact_r.get("rows") else 0
+            approx_val = approx_r["rows"][0][0] if approx_r.rows else 0
+            exact_val = exact_r["rows"][0][0] if exact_r.rows else 0
             if exact_val == 0:
                 continue
             rel_error = abs(approx_val - exact_val) / exact_val
@@ -80,7 +80,7 @@ class TestApproxCountDistinct:
             f"MATCH (a {{node_id:$s}})-[:{PRED}*1..2]-(b) RETURN approx_count_distinct(b) AS c",
             {"s": src},
         )
-        meta = r.get("metadata")
+        meta = r.metadata
         assert meta is not None, "SC-003: no metadata returned"
         warnings = getattr(meta, "warnings", []) or []
         assert any("std_error" in w for w in warnings), (
@@ -93,7 +93,7 @@ class TestApproxCountDistinct:
             f"MATCH (a {{node_id:$s}})-[:{PRED}*1..2]-(b) RETURN count(DISTINCT b) AS c",
             {"s": src},
         )
-        assert r.get("rows") and len(r["rows"]) == 1, "SC-004: exact COUNT(DISTINCT) returned no rows"
+        assert r.rows and len(r["rows"]) == 1, "SC-004: exact COUNT(DISTINCT) returned no rows"
         exact_val = r["rows"][0][0]
         assert isinstance(exact_val, int) and exact_val >= 0
 
@@ -103,13 +103,13 @@ class TestApproxCountDistinct:
             f"MATCH (a {{node_id:$s}})-[:{PRED}*1..3]-(b) RETURN approx_count_distinct(b) AS c",
             {"s": src},
         )
-        assert r.get("rows") and r["rows"][0][0] >= 0, "SC-005: 3-hop approx crashed or returned negative"
+        assert r.rows and r["rows"][0][0] >= 0, "SC-005: 3-hop approx crashed or returned negative"
 
     def test_sc006_no_hll_sketches_returns_graceful(self, engine):
         r = engine.execute_cypher(
             f"MATCH (a {{node_id:$s}})-[:{PRED}*1..2]-(b) RETURN approx_count_distinct(b) AS c",
             {"s": "nonexistent_node_xyz"},
         )
-        assert r.get("rows") is not None, "SC-006: should return rows even for unknown node"
+        assert r.rows is not None, "SC-006: should return rows even for unknown node"
         val = r["rows"][0][0] if r["rows"] else 0
         assert val == 0, f"SC-006: unknown node should return 0, got {val}"

@@ -5,7 +5,7 @@ import time
 import pytest
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
-IRIS_PORT = int(os.environ.get("IVG_TEST_PORT", "2972"))
+IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 IRIS_NS = os.environ.get("IRIS_NAMESPACE", "USER")
 IRIS_USER = os.environ.get("IRIS_USERNAME", "_SYSTEM")
 IRIS_PASS = os.environ.get("IRIS_PASSWORD", "SYS")

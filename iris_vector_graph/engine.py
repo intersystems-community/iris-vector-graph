@@ -39,6 +39,7 @@ from iris_vector_graph._validate import (
     VectorSearchInput,
 )
 from iris_vector_graph.capabilities import IRISCapabilities
+from iris_vector_graph.constants import BULK_CHUNK_SIZE
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import (
     _table,
@@ -61,7 +62,9 @@ logger = logging.getLogger(__name__)
 
 _sentence_transformers = None
 _torch = None
-_BULK_CHUNK_SIZE = 1000
+#: Kept as an alias for anything that imported it from here; the readers are in
+#: ``_engine/nodes_edges.py`` and take it from ``constants``.
+_BULK_CHUNK_SIZE = BULK_CHUNK_SIZE
 
 
 def _get_sentence_transformers():
@@ -231,7 +234,7 @@ class IRISGraphEngine(
         embedding_config: Optional[str] = None,
         embed_fn=None,
         use_iris_embedding: bool = False,
-        vector_dtype: str = "DOUBLE",
+        vector_dtype: Optional[str] = None,
         store=None,
         schema_prefix: str = "Graph_KG",
         namespace: str = "USER",
@@ -247,7 +250,7 @@ class IRISGraphEngine(
         self.embedding_config = embedding_config
         self._embed_fn = embed_fn
         self._use_iris_embedding = use_iris_embedding
-        self.vector_dtype = vector_dtype.upper()
+        self.vector_dtype = (vector_dtype or "DOUBLE").upper()
         self._schema_prefix = schema_prefix
         # Keep the module global in sync for code that still uses the free
         # _table() / get_schema_prefix() directly (e.g. the Cypher translator).
@@ -268,7 +271,10 @@ class IRISGraphEngine(
         )
         self._index_registry: Dict[str, str] = self._build_index_registry()
         self._pending_index_config: Dict[str, Any] = {}
-        if vector_dtype == "DOUBLE":
+        if vector_dtype is None:
+            # Nobody declared a dtype, so read one off a stored vector.  A caller who
+            # names a dtype is believed: the 4.0.0 migration knows it from the registry
+            # row, and ADR-0005 forbids reading a stored vector into Python to guess.
             self.vector_dtype = self._detect_stored_vector_dtype()
         if store is None:
             from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
@@ -287,6 +293,12 @@ class IRISGraphEngine(
         # allowing create_node to emit a compatible INSERT on pre-214 schemas.
         # Defaulting True avoids an eager SQL round-trip on every engine construction.
         self._nodes_has_graph_id: bool = True
+        # Spec 227 (FR-034): `rdf_labels` and `rdf_props` gained their own graph_id in
+        # the same re-key that made a node ID unique per graph, so a child row is no
+        # longer identified by `s` alone.  Tracked separately from the flag above: a
+        # 214-era schema has graph_id on `nodes` and not on the child tables, and
+        # naming the column there would fail the whole create_node with SQLCODE -29.
+        self._children_have_graph_id: bool = True
         # Sub-engine namespaces (additive — top-level methods unchanged)
         self.graph = _GraphSubEngine(self)
         self.cypher = _CypherSubEngine(self)
@@ -309,23 +321,49 @@ class IRISGraphEngine(
         """Per-instance table qualifier — use this instead of the free _table() in all mixin code."""
         return _table(name, prefix=self._schema_prefix)
 
+    def _probe_graph_id_column(self, table: str) -> bool:
+        """Return True if Graph_KG.<table> already has a graph_id column."""
+        return self._probe_column(table, "graph_id")
+
+    def _probe_column(self, table: str, column: str, cursor=None) -> bool:
+        """Return True if Graph_KG.<table> declares <column>.
+
+        ``cursor`` is taken when the caller already holds one mid-transaction; a
+        second cursor would be a second statement in the same unit of work for no
+        reason. An unreadable catalog answers False, because every caller is asking
+        "may I name this column", and the safe answer to a question the catalog
+        will not answer is no.
+        """
+        try:
+            cur = cursor if cursor is not None else self.conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                [getattr(self, "_schema_prefix", "Graph_KG"), table, column],
+            )
+            row = cur.fetchone()
+            return bool(row and int(row[0]) > 0)
+        except Exception:
+            return False
+
     def _probe_nodes_graph_id(self) -> bool:
         """Return True if Graph_KG.nodes already has a graph_id column.
 
         Called once at engine init.  Allows create_node to emit a compatible
         INSERT on pre-214 schemas (no graph_id column) without failing.
         """
-        try:
-            cur = self.conn.cursor()
-            cur.execute(
-                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
-                "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'nodes' "
-                "AND COLUMN_NAME = 'graph_id'"
-            )
-            row = cur.fetchone()
-            return bool(row and int(row[0]) > 0)
-        except Exception:
-            return False
+        return self._probe_graph_id_column("nodes")
+
+    def _probe_children_graph_id(self) -> bool:
+        """Return True if the label and property tables both carry graph_id (spec 227).
+
+        Both, not either: create_node writes them in one transaction, so a schema
+        that re-keyed one and not the other has to be treated as not re-keyed at
+        all rather than half-scoped.
+        """
+        return self._probe_graph_id_column("rdf_labels") and self._probe_graph_id_column(
+            "rdf_props"
+        )
 
     @classmethod
     def from_connect(
@@ -542,7 +580,9 @@ class IRISGraphEngine(
         "apoc.meta.schema": "_proc_apoc_meta_schema",
     }
 
-    def _proc_ivg_vector_search(self, proc) -> Optional[Dict[str, Any]]:
+    def _proc_ivg_vector_search(
+        self, proc, parameters=None, graph=None
+    ) -> Optional[Dict[str, Any]]:
         from iris_vector_graph.cypher.ast import Literal as CypherLiteral
         from iris_vector_graph.cypher.ast import Variable as CypherVariable
 
@@ -550,10 +590,35 @@ class IRISGraphEngine(
         label_filter = str(args[0].value) if args and isinstance(args[0], CypherLiteral) else None
         k = int(args[3].value) if len(args) > 3 and isinstance(args[3], CypherLiteral) else 10
         vec_arg = args[2] if len(args) > 2 else None
-        query_vector = None
-        if isinstance(vec_arg, CypherLiteral) and isinstance(vec_arg.value, list):
-            query_vector = vec_arg.value
-        return self._store.execute_knn_vec(query_vector or [], k, label_filter)
+        raw = None
+        if isinstance(vec_arg, CypherLiteral):
+            raw = vec_arg.value
+        elif isinstance(vec_arg, CypherVariable) and parameters:
+            # `CALL ivg.vector.search('Gene', 'emb', $vec, 5)` is the documented
+            # shape; `$vec` is a Variable, and ignoring it searched with an empty
+            # vector and answered "no neighbours".
+            raw = parameters.get(vec_arg.name)
+
+        if not isinstance(raw, list):
+            # A text query or a seed node ID. This handler can only send a vector,
+            # and the translated SQL knows how to embed text and read a seed row —
+            # so hand it back rather than answer an empty result.
+            return None
+
+        # The parser leaves the elements of a list literal as `Literal` nodes.
+        # Passing them through gave the store a list of AST objects, which it
+        # formatted with `str()` into `[Literal(value=1.0),…]`: IRIS accepted the
+        # text, matched nothing, and the CALL answered zero rows with no error.
+        query_vector = [
+            float(v.value) if isinstance(v, CypherLiteral) else float(v) for v in raw
+        ]
+        result = self._store.execute_knn_vec(query_vector, k, label_filter, graph=graph)
+        # The store names its columns `id`/`score`; the caller named them in its
+        # YIELD clause and reads the result by those names.
+        yielded = list(getattr(proc, "yield_items", None) or []) or ["node", "score"]
+        if result is not None and result.columns and len(yielded) == len(result.columns):
+            result.columns = yielded
+        return result
 
     def _proc_ivg_shortestpath_weighted(self, proc) -> Optional[Dict[str, Any]]:
         args = proc.arguments
@@ -954,7 +1019,9 @@ class IRISGraphEngine(
         result = self._try_system_procedure(type("P", (), {"procedure_name": "apoc.meta.data"})())
         return IVGResult(columns=["value"], rows=[[result or {}]])
 
-    def _try_system_procedure(self, proc) -> Optional[Dict[str, Any]]:
+    def _try_system_procedure(
+        self, proc, parameters=None, graph=None
+    ) -> Optional[Dict[str, Any]]:
         name = proc.procedure_name.lower()
 
         # GDS → ivg shim: intercept gds.* calls before normal dispatch.
@@ -972,7 +1039,17 @@ class IRISGraphEngine(
         handler_method_name = self._SYSTEM_PROCEDURES.get(name)
         if handler_method_name is not None:
             handler = getattr(self, handler_method_name)
-            return handler(proc)
+            # Most handlers read nothing but the call itself; the ones that need the
+            # query's parameters or its `USE GRAPH` scope declare them.
+            import inspect as _inspect
+
+            accepted = _inspect.signature(handler).parameters
+            extra = {
+                key: value
+                for key, value in (("parameters", parameters), ("graph", graph))
+                if key in accepted
+            }
+            return handler(proc, **extra)
 
         if name.startswith("apoc."):
             return IVGResult(columns=["value"], rows=[])

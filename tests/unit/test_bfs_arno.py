@@ -123,7 +123,7 @@ class TestBFSArnoE2E:
         from iris_vector_graph.engine import IRISGraphEngine
         self.conn = arno_iris_connection
         self.engine = IRISGraphEngine(arno_iris_connection, embedding_dimension=4)
-        _primary = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris")
+        _primary = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
         _arno = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
         if _primary != _arno:
             self.engine.initialize_schema()

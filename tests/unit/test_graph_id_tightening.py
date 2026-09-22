@@ -142,16 +142,83 @@ def test_the_migration_runs_as_part_of_ensure_indexes():
 # ---------------------------------------------------------------------------
 
 
-_INSERT = re.compile(r"INSERT INTO Graph_KG\.rdf_edges\s*\(([^)]*)\)")
+#: Every way a statement in this repository can name the edge table. `Graph_KG` is
+#: the declared schema; `SQLUser` is the compatibility view IRIS generates over it;
+#: the bare name resolves against whatever schema the session's search path names.
+#: A guard that matches one of the three reports success having read a third of the
+#: writers — which is the same failure mode the module docstring describes for
+#: `Graph.KG.LedgerApply`, one spelling further out (spec 230, FR-004).
+TABLE_SPELLINGS = ("Graph_KG.rdf_edges", "SQLUser.rdf_edges", "rdf_edges")
+
+#: `INSERT` and `INTO` are not always adjacent: the bulk loader interpolates its
+#: `%NOINDEX %NOCHECK` hint between them, so a pattern demanding the two words side
+#: by side reads past the one writer that moves millions of rows. Nor is the column
+#: list always in the same string literal as the table name — the same writer breaks
+#: the statement across two adjacent literals, putting a quote and a newline where a
+#: space would be. Both gaps are spelled out rather than papered over with `.*`: the
+#: hint may not contain a paren, and the run up to the column list may hold only
+#: quotes and whitespace, so neither can swallow a second statement.
+_INSERT = re.compile(
+    r"INSERT[^()]{0,40}?INTO\s+(?:Graph_KG\.|SQLUser\.)?rdf_edges[\s\"']*\(([^)]*)\)",
+    re.IGNORECASE,
+)
+
+
+def _python_text(path: pathlib.Path) -> str:
+    """One .py, with its runtime-built table names resolved to the real one.
+
+    Three accessors, because three modules named them differently: the engine mixins
+    use `self._t()`, `bulk_loader.py` uses `self._table()`, and `cypher/translator.py`
+    calls a module-level `_table()` with no `self`. The scan resolved the first only,
+    so every INSERT in the other two was invisible to it — and that is where the
+    omission survived: `INSERT ... INTO rdf_edges (s, p, o_id, qualifiers)`, no
+    `graph_id`, on the bulk path that writes millions of rows at a time and on the
+    Cypher `CREATE` path (spec 230, FR-004).
+    """
+    text = path.read_text()
+    for accessor in ("{self._t(", "{self._table(", "{_table("):
+        text = text.replace("%s'rdf_edges')}" % accessor, "Graph_KG.rdf_edges")
+    return text
+
+
+#: Modules whose edge writers the scan has been blind to at least once. Named rather
+#: than counted: a scan that silently stops covering one of them looks identical to a
+#: module that stopped writing edges, and the two are not the same news.
+MUST_BE_SCANNED = ("bulk_loader.py", "translator.py")
+
+
+def test_the_scan_reaches_every_module_that_writes_an_edge():
+    """The guard's own coverage, asserted rather than assumed (spec 230, FR-004).
+
+    Both of these wrote `rdf_edges` under a table-name spelling `_python_text` did not
+    resolve, so `test_every_writer_names_the_graph_column` passed over them: it read
+    thirteen INSERTs in the engine mixins, found `graph_id` in all thirteen, and
+    reported that every writer names the column.
+    """
+    scanned = {path.name for path, _cols in _edge_inserts()}
+    missing = [name for name in MUST_BE_SCANNED if name not in scanned]
+    assert not missing, (
+        f"the scan sees no rdf_edges INSERT in {missing}, so whatever those modules "
+        "write is unchecked. Either the table name is spelled a way _python_text "
+        "does not resolve, or the writer moved and this list is stale"
+    )
+
+
+#: A column list that is nothing but one `{…}` interpolation names no column of its
+#: own — it re-emits whatever list the statement it is rewriting carried. `MERGE`
+#: does exactly that: it finds the `rdf_edges` INSERT this translation already
+#: added and re-issues it as `SELECT ... WHERE NOT EXISTS`, copying the column list
+#: across verbatim. Reading it as an omission flags the rewrite for a column the
+#: original is asserted, three tests above, to name.
+_REEMITTED = re.compile(r"^\s*\{[^{}]*\}\s*$")
 
 
 def _edge_inserts() -> list[tuple[pathlib.Path, str]]:
     found = []
     for path in sorted(PACKAGE.rglob("*.py")):
-        # The engine mixins address the table through self._t(), which resolves
-        # the schema prefix at runtime; for this purpose it is the same table.
-        text = path.read_text().replace("{self._t('rdf_edges')}", "Graph_KG.rdf_edges")
-        for columns in _INSERT.findall(text):
+        for columns in _INSERT.findall(_python_text(path)):
+            if _REEMITTED.match(columns):
+                continue
             found.append((path, columns))
     return found
 
@@ -223,6 +290,118 @@ def test_no_objectscript_reader_matches_the_null_spelling_alone():
         "these predicates see only the NULL-spelled half of the default graph: "
         f"{offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# The table's name (spec 230, FR-004)
+# ---------------------------------------------------------------------------
+
+
+def _cursor_resolving_only(spelling: str):
+    """A cursor that answers for one table name and raises `-30` for the others.
+
+    `SQLCODE -30` is what IRIS returns for a table it cannot resolve, and it is
+    indistinguishable — to a caller that catches everything — from a migration that
+    had nothing to do.
+    """
+    cursor = MagicMock()
+    cursor.rowcount = 5
+
+    named = re.compile(r"(?:UPDATE|ALTER TABLE)\s+(\S+)", re.IGNORECASE)
+
+    def execute(sql, *args, **kwargs):
+        # The table the statement names, not a substring of it: `rdf_edges` occurs
+        # inside `Graph_KG.rdf_edges`, so a substring test would let the declared
+        # name pass on a namespace that only presents the bare one.
+        match = named.search(sql)
+        if not match or match.group(1) != spelling:
+            raise RuntimeError("[SQLCODE: <-30>:<Table or view not found>]")
+        return None
+
+    cursor.execute.side_effect = execute
+    return cursor
+
+
+def test_the_repair_finds_the_table_under_every_spelling():
+    """The migration hardcoded `Graph_KG.rdf_edges` and no other name.
+
+    A namespace that presents the table under a different schema — the generated
+    `SQLUser` view, or a bare name resolved through the session's search path — got a
+    migration that raised on its first statement and a result that reported no rows
+    repaired, which reads exactly like a database that needed no repair.
+    """
+    for spelling in TABLE_SPELLINGS:
+        cursor = _cursor_resolving_only(spelling)
+
+        result = GraphSchema.tighten_graph_id_column(cursor)
+
+        assert result["resolved_table"] == spelling, (
+            f"the namespace presents the table as {spelling} and the migration "
+            f"resolved {result['resolved_table']!r}, so nothing was repaired"
+        )
+        assert result["rows_repaired"] == 5, (
+            f"the repair did not run against {spelling}: {result}"
+        )
+
+
+def test_the_declared_name_is_tried_first():
+    """`Graph_KG.rdf_edges` is the base table; `SQLUser.rdf_edges` is a view over it.
+
+    Order is not cosmetic. DDL against the view fails, so resolving the view first on
+    a database where both exist would repair the rows and then silently skip the
+    `NOT NULL` half.
+    """
+    cursor = MagicMock()
+    cursor.rowcount = 0
+
+    GraphSchema.tighten_graph_id_column(cursor)
+
+    first = _sql_calls(cursor)[0]
+    assert "Graph_KG.rdf_edges" in first, (
+        f"the first statement names something other than the base table: {first}"
+    )
+
+
+def test_an_unresolvable_table_is_reported_and_not_claimed():
+    cursor = _cursor_resolving_only("some.table.that.is.not.rdf_edges")
+
+    result = GraphSchema.tighten_graph_id_column(cursor)
+
+    assert result["resolved_table"] is None
+    assert result["rows_repaired"] == 0
+    assert result["not_null"] is False
+    assert list(result["spellings_tried"]) == list(TABLE_SPELLINGS), (
+        "the result does not say which names were probed, so an operator cannot tell "
+        f"a missing table from a differently-named one: {result}"
+    )
+
+
+def test_the_writer_scan_reads_every_spelling():
+    """The guard has to see a writer whatever name it uses for the table.
+
+    Synthetic, because the repository currently spells every INSERT `Graph_KG.` — and
+    a guard that only works because nothing has drifted yet is not a guard.
+    """
+    for spelling in TABLE_SPELLINGS:
+        sql = f"INSERT INTO {spelling} (s, p, o_id) VALUES (?, ?, ?)"
+        assert _INSERT.findall(sql) == ["s, p, o_id"], (
+            f"a writer spelling the table {spelling} is invisible to the scan, so it "
+            "can omit graph_id and no test will say so"
+        )
+
+
+def test_the_writer_scan_reports_what_it_found():
+    """A count, so a scan that silently stops matching cannot pass as a clean repo."""
+    inserts = _edge_inserts() + _objectscript_edge_inserts()
+
+    spellings = {
+        spelling
+        for path, _ in inserts
+        for spelling in TABLE_SPELLINGS
+        if f"INSERT INTO {spelling}" in _objectscript_text(path)
+        or f"INSERT INTO {spelling}" in _python_text(path)
+    }
+    assert spellings, f"the scan found {len(inserts)} writers and no spelling for any"
 
 
 def test_the_ledger_key_never_reaches_the_index_globals():

@@ -144,6 +144,71 @@ class TestDeployObjectscriptClasses:
         mock_check.assert_called_once_with(cursor, conn=None)
 
 
+class TestDeployRemovesTheStaleEdgeClasses:
+    """`/tmp/src` is never pruned, so a deleted `.cls` keeps compiling.
+
+    `Graph.KG.Edge` (deleted by spec 227) and `Graph.KG.TestEdge` (deleted
+    earlier) both declared `SqlTableName = rdf_edges`. Whichever compiles last
+    owns the table, and class-owned it has no `edge_id` — the reification cascade
+    and every read in `_engine/prov.py` answer SQLCODE -29. Deleting the source
+    file from the server's directory is only half the job: the compiled class
+    survives in the namespace and keeps the table. Deploy has to delete both.
+    """
+
+    STALE = ("Graph.KG.Edge", "Graph.KG.TestEdge")
+
+    def _deploy_calls(self):
+        cursor = MagicMock()
+        with patch("iris_vector_graph.schema._call_classmethod") as mock_cm:
+            with patch.object(
+                GraphSchema, "check_objectscript_classes", return_value=IRISCapabilities()
+            ):
+                GraphSchema.deploy_objectscript_classes(cursor, Path("/tmp/iris_src"))
+        return mock_cm.call_args_list
+
+    @pytest.mark.parametrize("cls_name", STALE)
+    def test_the_source_file_is_deleted_before_loaddir(self, cls_name):
+        calls = self._deploy_calls()
+        path = f"/{cls_name.replace('.', '/')}.cls"
+        deleted = [
+            i
+            for i, c in enumerate(calls)
+            if c.args[1:3] == ("%Library.File", "Delete") and str(c.args[3]).endswith(path)
+        ]
+        loaddir = [i for i, c in enumerate(calls) if c.args[2] == "LoadDir"]
+        assert deleted, f"{cls_name}.cls is not removed from the server's source directory"
+        assert loaddir, "deploy no longer calls LoadDir"
+        assert min(deleted) < min(loaddir), (
+            f"{cls_name}.cls must be deleted before LoadDir, or LoadDir compiles it again"
+        )
+
+    @pytest.mark.parametrize("cls_name", STALE)
+    def test_the_compiled_class_is_deleted_after_loaddir(self, cls_name):
+        calls = self._deploy_calls()
+        deletes = [
+            c
+            for c in calls
+            if c.args[1:3] == ("%SYSTEM.OBJ", "Delete") and c.args[3] == cls_name
+        ]
+        assert deletes, (
+            f"{cls_name} is never deleted from the namespace. A container that once "
+            "held the file still has the class compiled, and it owns Graph_KG.rdf_edges."
+        )
+
+    @pytest.mark.parametrize("cls_name", STALE)
+    def test_deploy_never_compiles_them(self, cls_name):
+        calls = self._deploy_calls()
+        compiles = [
+            c
+            for c in calls
+            if c.args[1:3] == ("%SYSTEM.OBJ", "Compile") and c.args[3] == cls_name
+        ]
+        assert compiles == [], (
+            f"deploy still compiles {cls_name}, which no longer exists in iris_src/src "
+            "and would take Graph_KG.rdf_edges away from the DDL if it did."
+        )
+
+
 class TestBootstrapKgGlobal:
     def test_returns_false_if_already_done(self):
         cursor = MagicMock()

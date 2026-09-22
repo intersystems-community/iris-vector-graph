@@ -13,26 +13,31 @@ ClassMethod ValidateK(k As %RawString) As %Integer [ SqlProc ]
 	Return k
 }
 
-/// Enhanced text search using JSON_TABLE for structured qualifier filtering
-ClassMethod kgTXT(queryText As %String, k As %Integer = 50, minConfidence As %Integer = 0) As %DynamicArray [ SqlName = kg_TXT, SqlProc ]
+/// Enhanced text search using JSON_TABLE for structured qualifier filtering.
+///
+/// Scoped to one graph, pGraph, defaulting to the default graph "" (spec 227).
+/// The confidence and the LIKE are OR'd, so without the graph predicate around
+/// them a high-confidence edge in any graph outranked this graph's own matches.
+ClassMethod kgTXT(queryText As %String, k As %Integer = 50, minConfidence As %Integer = 0, pGraph As %String = "") As %DynamicArray [ SqlName = kg_TXT, SqlProc ]
 {
 	Set k = ..ValidateK(k)
 	Set pattern = "%"_queryText_"%"
-	
+
 	Set sql = "SELECT TOP ? "
 	Set sql = sql_" e.s AS entity_id, "
 	Set sql = sql_" (CAST(jt.confidence AS FLOAT) / 1000.0 + CASE WHEN e.o_id LIKE ? THEN 0.5 ELSE 0.0 END) AS relevance_score "
 	Set sql = sql_" FROM Graph_KG.rdf_edges e, "
 	Set sql = sql_" JSON_TABLE(e.qualifiers, '$' COLUMNS(confidence INTEGER PATH '$.confidence')) jt "
-	Set sql = sql_" WHERE jt.confidence >= ? OR e.o_id LIKE ? "
+	Set sql = sql_" WHERE COALESCE(e.graph_id, '') = COALESCE(?, '') "
+	Set sql = sql_"   AND (jt.confidence >= ? OR e.o_id LIKE ?) "
 	Set sql = sql_" ORDER BY relevance_score DESC"
-	
+
 	Set stmt = ##class(%SQL.Statement).%New()
 	Set sc = stmt.%Prepare(sql)
 	If $$$ISERR(sc) Return ##class(%DynamicArray).%New()
-	
-	Set rs = stmt.%Execute(k, pattern, minConfidence, pattern)
-	
+
+	Set rs = stmt.%Execute(k, pattern, pGraph, minConfidence, pattern)
+
 	Set results = ##class(%DynamicArray).%New()
 	While rs.%Next() {
 		Set obj = ##class(%DynamicObject).%New()
@@ -43,31 +48,53 @@ ClassMethod kgTXT(queryText As %String, k As %Integer = 50, minConfidence As %In
 	Return results
 }
 
-/// HNSW-optimized vector search using native IRIS VECTOR functions
-ClassMethod kgKNNVEC(queryVector As %String, k As %Integer = 50, labelFilter As %String = "") As %DynamicArray [ SqlName = kg_KNN_VEC, SqlProc ]
+/// HNSW-optimized vector search using native IRIS VECTOR functions.
+///
+/// This is the legacy copy of kg_KNN_VEC, older than the generated procedure
+/// Graph.KG.prockgKNNVEC and still deployed because
+/// GraphSchema.check_objectscript_classes reports this class as a capability. It
+/// reads the legacy table only — it knows nothing about routed kg_emb_ tables, so
+/// a caller wanting another model's vectors wants the generated procedure or
+/// engine.kg_KNN_VEC.
+///
+/// Spec 227: it answers about ONE graph, pGraph, defaulting to the default graph
+/// "". Before that it scanned every graph's vectors and returned whichever
+/// neighbours scored best, whoever they belonged to. It also selected n.id, a
+/// column the 4.0.0 re-key renamed to node_id, so on a current schema it failed to
+/// prepare and returned an empty array rather than saying so.
+ClassMethod kgKNNVEC(queryVector As %String, k As %Integer = 50, labelFilter As %String = "", pGraph As %String = "") As %DynamicArray [ SqlName = kg_KNN_VEC, SqlProc ]
 {
 	Set k = ..ValidateK(k)
-	
-	Set sql = "SELECT TOP ? n.id, VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity "
+
+	Set sql = "SELECT TOP ? n.node_id AS id, VECTOR_COSINE(n.emb, TO_VECTOR(?)) as similarity "
 	Set sql = sql_" FROM Graph_KG.kg_NodeEmbeddings_optimized n "
-	
+
+	// A label filter joins the labels of the SAME graph. Joining on node id alone
+	// would let another graph's label decide which of this graph's vectors answer.
 	If labelFilter '= "" {
-		Set sql = sql_" LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.id "
-		Set sql = sql_" WHERE L.label = ? "
+		Set sql = sql_" LEFT JOIN Graph_KG.rdf_labels L ON L.s = n.node_id "
+		Set sql = sql_"   AND COALESCE(L.graph_id, '') = COALESCE(n.graph_id, '') "
 	}
-	
+
+	// COALESCE on both sides: graph_id is nullable, and the default graph is
+	// written as '' by one path and left NULL by an INSERT that omits the column.
+	Set sql = sql_" WHERE COALESCE(n.graph_id, '') = COALESCE(?, '') "
+	If labelFilter '= "" {
+		Set sql = sql_"   AND L.label = ? "
+	}
+
 	Set sql = sql_" ORDER BY similarity DESC"
-	
+
 	Set stmt = ##class(%SQL.Statement).%New()
 	Set sc = stmt.%Prepare(sql)
 	If $$$ISERR(sc) Return ##class(%DynamicArray).%New()
-	
+
 	If labelFilter '= "" {
-		Set rs = stmt.%Execute(k, queryVector, labelFilter)
+		Set rs = stmt.%Execute(k, queryVector, pGraph, labelFilter)
 	} Else {
-		Set rs = stmt.%Execute(k, queryVector)
+		Set rs = stmt.%Execute(k, queryVector, pGraph)
 	}
-	
+
 	Set results = ##class(%DynamicArray).%New()
 	While rs.%Next() {
 		Set obj = ##class(%DynamicObject).%New()
@@ -78,24 +105,31 @@ ClassMethod kgKNNVEC(queryVector As %String, k As %Integer = 50, labelFilter As 
 	Return results
 }
 
-/// Core graph path implementation
-ClassMethod kgGRAPHPATH(srcId As %String, pred1 As %String, pred2 As %String, maxHops As %Integer = 2) As %DynamicArray [ SqlName = kg_GRAPH_PATH, SqlProc ]
+/// Core graph path implementation.
+///
+/// Scoped to one graph, pGraph, defaulting to the default graph "" (spec 227).
+/// Both hops and the EXISTS that joins them carry the predicate: a second hop
+/// taken in another graph is a path that does not exist in the graph asked about.
+ClassMethod kgGRAPHPATH(srcId As %String, pred1 As %String, pred2 As %String, maxHops As %Integer = 2, pGraph As %String = "") As %DynamicArray [ SqlName = kg_GRAPH_PATH, SqlProc ]
 {
 	Set results = ##class(%DynamicArray).%New()
-	
+
 	Set sql = "SELECT 1 AS path_id, 1 AS step, e1.s, e1.p, e1.o_id "
 	Set sql = sql_"FROM Graph_KG.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? "
+	Set sql = sql_"AND COALESCE(e1.graph_id, '') = COALESCE(?, '') "
 	Set sql = sql_"UNION ALL "
 	Set sql = sql_"SELECT 1 AS path_id, 2 AS step, e2.s, e2.p, e2.o_id "
 	Set sql = sql_"FROM Graph_KG.rdf_edges e2 WHERE e2.p = ? "
-	Set sql = sql_"AND EXISTS (SELECT 1 FROM Graph_KG.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? AND e1.o_id = e2.s) "
+	Set sql = sql_"AND COALESCE(e2.graph_id, '') = COALESCE(?, '') "
+	Set sql = sql_"AND EXISTS (SELECT 1 FROM Graph_KG.rdf_edges e1 WHERE e1.s = ? AND e1.p = ? AND e1.o_id = e2.s "
+	Set sql = sql_"  AND COALESCE(e1.graph_id, '') = COALESCE(e2.graph_id, '')) "
 	Set sql = sql_"ORDER BY step"
-	
+
 	Set stmt = ##class(%SQL.Statement).%New()
 	Set sc = stmt.%Prepare(sql)
 	If $$$ISERR(sc) Return results
-	
-	Set rs = stmt.%Execute(srcId, pred1, pred2, srcId, pred1)
+
+	Set rs = stmt.%Execute(srcId, pred1, pGraph, pred2, pGraph, srcId, pred1)
 	While rs.%Next() {
 		Set obj = ##class(%DynamicObject).%New()
 		Do obj.%Set("id", rs.%Get("path_id"))
@@ -108,16 +142,20 @@ ClassMethod kgGRAPHPATH(srcId As %String, pred1 As %String, pred2 As %String, ma
 	Return results
 }
 
-/// Reciprocal Rank Fusion combining vector and text search results
-ClassMethod kgRRFFUSE(k As %Integer, k1 As %Integer, k2 As %Integer, c As %Integer, queryVector As %String, queryText As %String) As %DynamicArray [ SqlName = kg_RRF_FUSE, SqlProc ]
+/// Reciprocal Rank Fusion combining vector and text search results.
+///
+/// Both halves are fused within one graph, pGraph, defaulting to the default graph
+/// "" (spec 227). Fusing a vector rank from one graph with a text rank from
+/// another would rank an id that exists in neither.
+ClassMethod kgRRFFUSE(k As %Integer, k1 As %Integer, k2 As %Integer, c As %Integer, queryVector As %String, queryText As %String, pGraph As %String = "") As %DynamicArray [ SqlName = kg_RRF_FUSE, SqlProc ]
 {
 	Set k = ..ValidateK(k)
 	Set k1 = ..ValidateK(k1)
 	Set k2 = ..ValidateK(k2)
-	
+
 	// Get results from existing methods
-	Set vectorResults = ..kgKNNVEC(queryVector, k1, "")
-	Set textResults = ..kgTXT(queryText, k2, 0)
+	Set vectorResults = ..kgKNNVEC(queryVector, k1, "", pGraph)
+	Set textResults = ..kgTXT(queryText, k2, 0, pGraph)
 	
 	Kill data
 	Set iter = vectorResults.%GetIterator()
