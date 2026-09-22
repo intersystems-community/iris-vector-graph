@@ -184,7 +184,7 @@ def discover_nodes(connection) -> List[str]:
         - rdf_props.s
         - rdf_edges.s (source nodes)
         - rdf_edges.o_id (destination nodes)
-        - kg_NodeEmbeddings.id (if table exists)
+        - kg_NodeEmbeddings.node_id (if table exists)
     """
     logger = logging.getLogger(__name__)
     cursor = connection.cursor()
@@ -205,11 +205,16 @@ def discover_nodes(connection) -> List[str]:
     nodes = [row[0] for row in cursor.fetchall()]
 
     # Try to add kg_NodeEmbeddings if it exists (try Graph_KG schema first, then unqualified)
+    #
+    # `node_id`, not `id`: 4.0.0 re-keyed the embedding tables to `(graph_id, node_id)`.
+    # A DDL-created table still has an implicit RowID called `ID`, so `SELECT id` kept
+    # parsing and kept returning rows — integers, folded straight into this list of
+    # node IDs, where the next caller string-compares them against `nodes.node_id`.
     try:
         try:
-            cursor.execute("SELECT DISTINCT id FROM Graph_KG.kg_NodeEmbeddings")
+            cursor.execute("SELECT DISTINCT node_id FROM Graph_KG.kg_NodeEmbeddings")
         except Exception:
-            cursor.execute("SELECT DISTINCT id FROM kg_NodeEmbeddings")
+            cursor.execute("SELECT DISTINCT node_id FROM kg_NodeEmbeddings")
         embedding_nodes = [row[0] for row in cursor.fetchall()]
         # Add any new nodes from embeddings
         nodes_set = set(nodes)
@@ -345,7 +350,7 @@ def detect_orphans(connection) -> Dict[str, List[str]]:
         - rdf_edges.o_id (destination nodes)
         - rdf_labels.s
         - rdf_props.s
-        - kg_NodeEmbeddings.id (if table exists)
+        - kg_NodeEmbeddings.node_id (if table exists)
     """
     logger = logging.getLogger(__name__)
     cursor = connection.cursor()
@@ -409,9 +414,12 @@ def detect_orphans(connection) -> Dict[str, List[str]]:
 
     # Check kg_NodeEmbeddings (if exists)
     try:
+        # `node_id` on both sides. Read as `id` this compared the implicit RowID
+        # against `nodes.node_id`, so every row looked orphaned and the migration
+        # refused to proceed over a database that was in fact sound.
         query = """
-        SELECT DISTINCT id FROM kg_NodeEmbeddings
-        WHERE id NOT IN (SELECT node_id FROM nodes)
+        SELECT DISTINCT node_id FROM kg_NodeEmbeddings
+        WHERE node_id NOT IN (SELECT node_id FROM nodes)
         """
         cursor.execute(query)
         orphaned_embeddings = [row[0] for row in cursor.fetchall()]
@@ -499,7 +507,7 @@ def validate_migration(connection) -> Dict:
         report['table_breakdown']['rdf_edges_dest'] = cursor.fetchone()[0]
 
         try:
-            cursor.execute("SELECT COUNT(DISTINCT id) FROM kg_NodeEmbeddings")
+            cursor.execute("SELECT COUNT(DISTINCT node_id) FROM kg_NodeEmbeddings")
             report['table_breakdown']['kg_NodeEmbeddings'] = cursor.fetchone()[0]
         except:
             report['table_breakdown']['kg_NodeEmbeddings'] = 0

@@ -52,22 +52,37 @@ STORE_PLAN = {
     "Graph_KG.rdf_reifications": "sql",
     "Graph_KG.kg_NodeEmbeddings": "sql",
     "Graph_KG.kg_EdgeEmbeddings": "sql",
+    # The BM25 corpus. It was in no plan and in no inventory, so `kg_TXT` came back
+    # empty after a restore that reported every table it knew about as complete.
+    "Graph_KG.docs": "sql",
+    # Spec 227's routes live here and nowhere else: the registry row is the only
+    # record of a routed table's name, graph, model and declared width (FR-011).
+    # Without it a restored install has the vectors' tables standing and unclaimed,
+    # every `resolve_route` reports a miss, and the restore reports success.
+    "Graph_KG.embedding_registry": "sql",
     "Graph_KG.kg_NodeEmbeddings_optimized": "derived",
     # ^KG — structural adjacency and its counters
     '^KG("out")': "global",
     '^KG("in")': "global",
     '^KG("deg")': "global",
     '^KG("degp")': "global",
+    # The two-hop counts. Exported rather than rebuilt: they are cheap to carry and
+    # consistent with the adjacency in the same archive, whereas a rebuild on
+    # restore would need Arno loaded on the machine doing the restoring.
+    '^KG("deg2p")': "global",
+    '^KG("deg2p_exact")': "global",
     # ^KG — the temporal index, all five subtrees
     '^KG("tout")': "global",
     '^KG("tin")': "global",
     '^KG("bucket")': "global",
     '^KG("tagg")': "global",
     '^KG("edgeprop")': "global",
-    # ^KG — the subtrees with no graph dimension, exported whole
+    # ^KG — the node stores (graph-scoped as of spec 230) and the one interning
+    # subtree that still carries no graph, exported whole
     '^KG("label")': "global",
     '^KG("prop")': "global",
     '^KG("labelset")': "global",
+    '^KG("deg2p_exact_merged")': "derived",
     # Other globals
     "^NKG": "global",
     '^IVG.Ledger("tuple")': "global",
@@ -85,7 +100,87 @@ DERIVED_REASONS = {
         "invalidated by ^KG(\"__version\"); exporting it would restore a second, "
         "independently stale copy of everything already in the archive"
     ),
+    '^KG("deg2p_exact_merged")': (
+        "Arno's two-hop counts over ^NKG, rebuilt by "
+        "Graph.KG.NKGAccelTraversal:Build2HopExact from the ^NKG this snapshot does "
+        "carry; since ^NKG's interning has no graph dimension the numbers cannot be "
+        "attributed to a graph, so restoring them would put one graph's counts in "
+        "front of another's"
+    ),
 }
+
+
+#: Where the routed-embedding section of a snapshot's metadata lives. Routed tables
+#: are not in the inventory one by one on purpose — which of them exists is a fact
+#: about the registry, not about the schema — so the archive records the ones it
+#: found rather than a plan that could name a table nobody created.
+ROUTED_TABLES_KEY = "routed_embedding_tables"
+
+#: The order `restore_snapshot` loads the plain SQL tables in, foreign keys first.
+#: Module-level rather than local to the method because a table can otherwise sit in
+#: the export and be missing from the import with nothing able to compare the two —
+#: which is how the registry was exported and never read back.
+RESTORE_TABLE_ORDER = [
+    "Graph_KG_nodes.ndjson",
+    "Graph_KG_rdf_edges.ndjson",
+    "Graph_KG_rdf_labels.ndjson",
+    "Graph_KG_rdf_props.ndjson",
+    "Graph_KG_rdf_reifications.ndjson",
+    # `docs` deliberately carries no FK onto `nodes` (a caller may write a document
+    # before the node exists), so its position here is for readability only.
+    "Graph_KG_docs.ndjson",
+    # After the nodes: the routed tables rebuilt from these rows carry an FK onto
+    # `nodes (graph_id, node_id)`.
+    "Graph_KG_embedding_registry.ndjson",
+]
+
+
+def routed_export_plan(registry_rows) -> Dict[str, Dict[str, Any]]:
+    """Which routed tables a snapshot exports, read off the registry rows.
+
+    ``registry_rows`` are ``(table_name, graph_id, model_key, dimension, dtype)``
+    tuples straight out of ``Graph_KG.embedding_registry``. The answer is keyed by
+    qualified table name, which is what the export and the restore both use.
+
+    Two kinds of row are dropped rather than planned:
+
+    * a legacy table the registry claims (``kg_NodeEmbeddings`` and its optimized
+      twin). Those are exported by name already, and a restore that ran
+      ``CREATE TABLE`` for one would be creating a table the schema owns.
+    * anything whose name is not the routed shape ``kg_emb_<16 hex>``. That name
+      becomes an identifier inside DDL on restore, and the only names routing
+      produces come from ``routing.route_table_name``; anything else in that column
+      is damage or somebody else's table.
+
+    A row with no declared width is dropped too: the width is what makes the
+    ``CREATE TABLE`` on restore possible at all, and guessing one produces a table
+    whose first insert is SQLCODE -104.
+    """
+    from iris_vector_graph.security import is_routed_embedding_table
+
+    plan: Dict[str, Dict[str, Any]] = {}
+    for row in registry_rows:
+        table_name, graph_id, model_key, dimension, dtype = (list(row) + [None] * 5)[:5]
+        if not is_routed_embedding_table(str(table_name or "")):
+            continue
+        try:
+            width = int(dimension)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Snapshot: route %s has no declared width in the registry and cannot "
+                "be restored; its vectors are not exported",
+                table_name,
+            )
+            continue
+        if width <= 0:
+            continue
+        plan[f"Graph_KG.{table_name}"] = {
+            "graph_id": graph_id or "",
+            "model_key": model_key,
+            "dimension": width,
+            "dtype": str(dtype or "DOUBLE").upper(),
+        }
+    return plan
 
 
 def kg_export_subscripts() -> List[List[str]]:
@@ -251,24 +346,38 @@ class SnapshotMixin:
                 return f"{blank_prefix}{term}"
             return str(term)
 
-        def _ensure_node(nid):
+        def _ensure_node(nid, node_graph):
+            """Create the node in the graph its edges are going into (FR-008).
+
+            `fk_edges_src` / `fk_edges_dest` reference `(graph_id, node_id)` in
+            4.0.0. Creating these nodes in the default graph left every edge of a
+            named-graph import failing its foreign key, swallowed below, and
+            `import_rdf` returned `edges: 0` for a file it had just parsed.
+            """
             try:
                 cursor.execute(
-                    f"INSERT INTO {self._t('nodes')} (node_id) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM {self._t('nodes')} WHERE node_id = ?)",
-                    [nid, nid],
+                    f"INSERT INTO {self._t('nodes')} (node_id, graph_id) SELECT ?, ? "
+                    f"WHERE NOT EXISTS (SELECT 1 FROM {self._t('nodes')} "
+                    f"WHERE node_id = ? AND COALESCE(graph_id, '') = COALESCE(?, ''))",
+                    [nid, node_graph or "", nid, node_graph or ""],
                 )
                 return True
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "import_rdf: node %r not created in graph %r: %s", nid, node_graph, e
+                )
                 return False
 
+        # A node ID can appear in more than one graph within one file (nquads/trig),
+        # so the batch is keyed on the pair, not the ID.
         batch_nodes: set = set()
         batch_edges: List = []
         batch_props: List = []
 
         def _flush():
             nonlocal nodes_inserted, edges_inserted, props_inserted
-            for nid in batch_nodes:
-                if _ensure_node(nid):
+            for nid, node_graph in batch_nodes:
+                if _ensure_node(nid, node_graph):
                     nodes_inserted += 1
             for s, p, o, edge_graph in batch_edges:
                 try:
@@ -283,17 +392,27 @@ class SnapshotMixin:
                             [s, p, o, s, p, o],
                         )
                     edges_inserted += 1
-                except Exception:
-                    pass
-            for s, k, v in batch_props:
+                except Exception as e:
+                    logger.warning(
+                        "import_rdf: edge %r -[%r]-> %r not written in graph %r: %s",
+                        s, p, o, edge_graph, e,
+                    )
+            for s, k, v, prop_graph in batch_props:
                 try:
+                    # FR-034: a property belongs to a node *in a graph*. Written
+                    # unscoped, an import into one graph set the property of a node
+                    # of the same ID in another.
                     cursor.execute(
-                        f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
-                        [s, k, v[:64000]],
+                        f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
+                        f"VALUES (?, ?, ?, ?)",
+                        [prop_graph or "", s, k, v[:64000]],
                     )
                     props_inserted += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "import_rdf: property %r of %r not written in graph %r: %s",
+                        k, s, prop_graph, e,
+                    )
             try:
                 self.conn.commit()
             except Exception:
@@ -308,7 +427,6 @@ class SnapshotMixin:
             triple_count += 1
             s_id = _node_id(s)
             p_str = _node_id(p)
-            batch_nodes.add(s_id)
 
             effective_graph = graph
             if graph_ctx is not None:
@@ -316,21 +434,25 @@ class SnapshotMixin:
                 if ctx_str and ctx_str not in ("", "DEFAULT", "urn:x-rdflib:default"):
                     effective_graph = ctx_str
 
+            batch_nodes.add((s_id, effective_graph))
+
             if isinstance(o, RDFLiteral):
                 key = p_str.rsplit("/", 1)[-1].rsplit("#", 1)[-1][:128]
                 val = str(o)
                 lang = getattr(o, "language", None)
                 if lang:
-                    batch_props.append((s_id, key, val))
-                    batch_props.append((s_id, f"{key}_lang", lang))
+                    batch_props.append((s_id, key, val, effective_graph))
+                    batch_props.append((s_id, f"{key}_lang", lang, effective_graph))
                 else:
-                    batch_props.append((s_id, key, val))
+                    batch_props.append((s_id, key, val, effective_graph))
             elif isinstance(o, (URIRef, BNode)):
                 o_id = _node_id(o)
-                batch_nodes.add(o_id)
+                batch_nodes.add((o_id, effective_graph))
                 batch_edges.append((s_id, p_str, o_id, effective_graph))
             else:
-                batch_props.append((s_id, p_str[:128], str(o)[:64000]))
+                batch_props.append(
+                    (s_id, p_str[:128], str(o)[:64000], effective_graph)
+                )
 
             if triple_count % batch_size == 0:
                 _flush()
@@ -398,6 +520,12 @@ class SnapshotMixin:
             "layers": layers,
             "tables": {},
             "globals": {},
+            # Spec 227: the routed embedding tables this archive holds, with the
+            # widths the restore has to recreate them at. Empty on an install with
+            # no routes, which is a different fact from absent (an archive written
+            # before routes existed), and restore treats them the same only because
+            # both mean "no routed tables here".
+            ROUTED_TABLES_KEY: {},
         }
 
         sql_data: Dict[str, str] = {}
@@ -409,6 +537,13 @@ class SnapshotMixin:
             ("Graph_KG.rdf_labels", "s"),
             ("Graph_KG.rdf_props", "s"),
             ("Graph_KG.rdf_reifications", "subject_s"),
+            # The BM25 corpus, which no archive carried until 4.0.0: `kg_TXT` came
+            # back empty after a restore that reported success, and nothing compared
+            # the two because `docs` was in no inventory either.
+            ("Graph_KG.docs", "id"),
+            # The registry names every route; without it the restored tables are
+            # orphans and every scoped search reports a miss (spec 227, FR-011).
+            ("Graph_KG.embedding_registry", "table_name"),
         ]
         VECTOR_TABLE = "Graph_KG.kg_NodeEmbeddings"
 
@@ -455,14 +590,29 @@ class SnapshotMixin:
                     metadata["tables"][table] = 0
 
             try:
-                cursor.execute(f"SELECT id, emb, metadata FROM {VECTOR_TABLE}")
-                cols = ["id", "emb", "metadata"]
+                # `SELECT id` here read the table's RowID, so a snapshot recorded
+                # integers where node IDs belong and restored vectors attached to
+                # nothing — with every INSERT succeeding, so the restore reported the
+                # full count. `graph_id` is exported because a vector belongs to a
+                # graph now; a snapshot without it cannot be put back (spec 227).
+                cursor.execute(
+                    f"SELECT graph_id, node_id, emb, metadata FROM {VECTOR_TABLE}"
+                )
                 rows = cursor.fetchall()
                 lines = []
                 for row in rows:
-                    nid, emb_val, meta_val = row[0], row[1], row[2]
+                    gid, nid, emb_val, meta_val = row[0], row[1], row[2], row[3]
                     emb_str = str(emb_val) if emb_val is not None else None
-                    lines.append(_json.dumps({"id": nid, "emb": emb_str, "metadata": meta_val}))
+                    lines.append(
+                        _json.dumps(
+                            {
+                                "graph_id": gid or "",
+                                "node_id": nid,
+                                "emb": emb_str,
+                                "metadata": meta_val,
+                            }
+                        )
+                    )
                 sql_data[VECTOR_TABLE] = "\n".join(lines)
                 metadata["tables"][VECTOR_TABLE] = len(rows)
                 metadata["has_vector_sql"] = True
@@ -485,6 +635,54 @@ class SnapshotMixin:
                 metadata["tables"][EDGE_VECTOR_TABLE] = len(rows)
             except Exception as e:
                 logger.debug("Snapshot: kg_EdgeEmbeddings not available: %s", e)
+
+            # Spec 227's routed tables. Discovered from the registry rather than
+            # listed: the inventory names the registry, and which `kg_emb_<hash>`
+            # tables exist is a fact that registry holds. A fixed list here could
+            # only ever name tables nobody created or miss the ones somebody did.
+            routed_plan: Dict[str, Dict[str, Any]] = {}
+            try:
+                cursor.execute(
+                    "SELECT table_name, graph_id, model_key, dimension, dtype "
+                    f"FROM {self._registry_table()}"
+                )
+                routed_plan = routed_export_plan(cursor.fetchall())
+            except Exception as e:
+                logger.debug("Snapshot: embedding registry not readable: %s", e)
+
+            for routed_table, route in routed_plan.items():
+                try:
+                    cursor.execute(
+                        f"SELECT graph_id, node_id, emb, metadata FROM {routed_table}"
+                    )
+                    rows = cursor.fetchall()
+                except Exception as e:
+                    # A registry row naming a table that is not there: reported, not
+                    # skipped quietly. The route is in the archive either way, so a
+                    # restore recreates it empty rather than losing the identity.
+                    logger.warning(
+                        "Snapshot: route %s is named by the registry but not readable: %s",
+                        routed_table,
+                        e,
+                    )
+                    metadata[ROUTED_TABLES_KEY][routed_table] = dict(route, rows=0)
+                    continue
+                lines = []
+                for row in rows:
+                    gid, nid, emb_val, meta_val = row[0], row[1], row[2], row[3]
+                    lines.append(
+                        _json.dumps(
+                            {
+                                "graph_id": gid or "",
+                                "node_id": nid,
+                                "emb": str(emb_val) if emb_val is not None else None,
+                                "metadata": meta_val,
+                            }
+                        )
+                    )
+                sql_data[routed_table] = "\n".join(lines)
+                metadata["tables"][routed_table] = len(rows)
+                metadata[ROUTED_TABLES_KEY][routed_table] = dict(route, rows=len(rows))
 
         if "globals" in layers:
             GLOBALS_EXPORT = [
@@ -604,13 +802,7 @@ class SnapshotMixin:
         restored_globals: List[str] = []
         cursor = self.conn.cursor()
 
-        TABLE_ORDER = [
-            "Graph_KG_nodes.ndjson",
-            "Graph_KG_rdf_edges.ndjson",
-            "Graph_KG_rdf_labels.ndjson",
-            "Graph_KG_rdf_props.ndjson",
-            "Graph_KG_rdf_reifications.ndjson",
-        ]
+        TABLE_ORDER = RESTORE_TABLE_ORDER
         VECTOR_FILE = "Graph_KG_kg_NodeEmbeddings.ndjson"
 
         if not merge:
@@ -649,6 +841,36 @@ class SnapshotMixin:
             except Exception:
                 return False
 
+        def _register_endpoints(graph_id: str, *node_ids) -> None:
+            """Make sure an edge's endpoints exist in the edge's own graph.
+
+            Spec 227 put `fk_edges_dest` on `(graph_id, o_id)` and `fk_edges_src` on
+            `(graph_id, s)`, and IRIS checks both on every insert. An archive written
+            before 4.0.0 carries a graph on the *edge* and nothing on the node, so its
+            nodes all land in the default graph and every named-graph edge fails
+            `SQLCODE -121` — silently, because one unrestorable row is only counted.
+            A v2.16 archive with one `acme` edge restored a database with none.
+
+            Registering the endpoint is a recovery, not an invention: the archive says
+            the edge was in that graph, which means its endpoints were too — the old
+            layout simply had nowhere to write that down.
+            """
+            for nid in node_ids:
+                if not nid:
+                    continue
+                try:
+                    cursor.execute(
+                        f"INSERT INTO {self._t('nodes')} (graph_id, node_id) "
+                        "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM "
+                        f"{self._t('nodes')} WHERE COALESCE(graph_id, '') = "
+                        "COALESCE(?, '') AND node_id = ?)",
+                        [graph_id, nid, graph_id, nid],
+                    )
+                except Exception as e:
+                    logger.debug(
+                        "restore: could not register %s in graph %r: %s", nid, graph_id, e
+                    )
+
         for fname_short in TABLE_ORDER:
             fname = f"sql/{fname_short}"
             if fname not in sql_files:
@@ -672,6 +894,10 @@ class SnapshotMixin:
                     # this, and the row loss it used to cause was silent.
                     if "graph_id" in row and row["graph_id"] is None:
                         row["graph_id"] = ""
+                    if table_name == "Graph_KG.rdf_edges":
+                        _register_endpoints(
+                            row.get("graph_id") or "", row.get("s"), row.get("o_id")
+                        )
                     cols = list(row.keys())
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
@@ -717,7 +943,12 @@ class SnapshotMixin:
                     continue
                 try:
                     row = _json.loads(line)
-                    nid = row.get("id")
+                    # Both keys are accepted: `node_id` is the 4.0.0 export, `id` is
+                    # what a 3.x archive holds. A pre-4.0.0 archive carries no graph,
+                    # so its rows land in the default graph — the only graph that
+                    # existed when it was written.
+                    nid = row.get("node_id") or row.get("id")
+                    gid = row.get("graph_id") or ""
                     emb_str = row.get("emb")
                     meta_val = row.get("metadata")
                     if nid and emb_str:
@@ -729,16 +960,20 @@ class SnapshotMixin:
                             # nothing looked wrong.
                             if merge:
                                 cursor.execute(
-                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) "
-                                    f"SELECT ?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ? "
-                                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings WHERE id = ?)",
-                                    [nid, meta_val, nid],
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings"
+                                    " (graph_id, node_id, emb, metadata) "
+                                    f"SELECT ?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ? "
+                                    "WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.kg_NodeEmbeddings"
+                                    " WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
+                                    " AND node_id = ?)",
+                                    [gid, nid, meta_val, gid, nid],
                                 )
                             else:
                                 cursor.execute(
-                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb, metadata) "
-                                    f"VALUES (?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ?)",
-                                    [nid, meta_val],
+                                    "INSERT INTO Graph_KG.kg_NodeEmbeddings"
+                                    " (graph_id, node_id, emb, metadata) "
+                                    f"VALUES (?, ?, TO_VECTOR('{emb_str}', {self.vector_dtype}), ?)",
+                                    [gid, nid, meta_val],
                                 )
                             count += 1
                         except Exception as e:
@@ -756,6 +991,143 @@ class SnapshotMixin:
             except Exception:
                 pass
             restored_tables["Graph_KG.kg_NodeEmbeddings"] = count
+
+        # --- spec 227's routed tables -------------------------------------------
+        #
+        # These are physical tables that did not exist before the archive named them,
+        # so the restore creates each one at the width the archive recorded and then
+        # loads it. The width has to come from the archive: a routed column's
+        # declaration is what makes its first insert legal (SQLCODE -104 otherwise),
+        # and this engine's own `embedding_dimension` says nothing about a graph
+        # somebody else configured.
+        #
+        # The registry rows have already landed above, which is what makes the routes
+        # *claimed* again — without them the tables would stand unreferenced and every
+        # `resolve_route` would report a miss over live vectors.
+        from iris_vector_graph.security import is_routed_embedding_table
+
+        archived_routes = dict(metadata.get(ROUTED_TABLES_KEY) or {})
+        routed_files = {
+            name[len("sql/") : -len(".ndjson")].replace("Graph_KG_", "Graph_KG.")
+            for name in sql_files
+            if name.startswith("sql/Graph_KG_kg_emb_") and name.endswith(".ndjson")
+        }
+        # A routed file with no metadata entry is an archive whose section was lost or
+        # predates it. Its width is still recoverable from the registry row that came
+        # back a moment ago, so it is rebuilt rather than dropped.
+        for orphan in sorted(routed_files - set(archived_routes)):
+            archived_routes.setdefault(orphan, {})
+
+        for routed_table in sorted(archived_routes):
+            route = archived_routes[routed_table] or {}
+            short = routed_table.split(".", 1)[-1]
+            if not is_routed_embedding_table(short):
+                logger.warning(
+                    "restore: %s is not a routed embedding table name; skipped", routed_table
+                )
+                continue
+            graph_id = route.get("graph_id") or ""
+            width = route.get("dimension")
+            dtype = route.get("dtype") or "DOUBLE"
+            if not width:
+                # Fall back to the restored registry row — the same declaration the
+                # export read, just reached from the other side.
+                try:
+                    cursor.execute(
+                        f"SELECT graph_id, dimension, dtype FROM {self._registry_table()} "
+                        "WHERE table_name = ?",
+                        [short],
+                    )
+                    row = cursor.fetchone()
+                except Exception:
+                    row = None
+                if row:
+                    graph_id = row[0] or graph_id
+                    width = row[1]
+                    dtype = row[2] or dtype
+            try:
+                width = int(width)
+            except (TypeError, ValueError):
+                width = 0
+            if width <= 0:
+                failed_rows[routed_table] = len(
+                    [
+                        ln
+                        for ln in sql_files.get(
+                            f"sql/{routed_table.replace('Graph_KG.', 'Graph_KG_')}.ndjson", ""
+                        ).splitlines()
+                        if ln.strip()
+                    ]
+                )
+                logger.warning(
+                    "restore: %s has no declared width in the archive or the restored "
+                    "registry, so it cannot be recreated; its vectors are reported in "
+                    "failed_rows",
+                    routed_table,
+                )
+                continue
+
+            try:
+                self._create_routed_table(cursor, short, dimension=width, dtype=dtype)
+            except Exception as e:
+                failed_rows[routed_table] = failed_rows.get(routed_table, 0) + 1
+                logger.warning("restore: could not create %s: %s", routed_table, e)
+                continue
+
+            fname = f"sql/{routed_table.replace('Graph_KG.', 'Graph_KG_')}.ndjson"
+            count = 0
+            for line in sql_files.get(fname, "").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                nid = None
+                try:
+                    row = _json.loads(line)
+                    nid = row.get("node_id") or row.get("id")
+                    gid = row.get("graph_id") or ""
+                    emb_str = row.get("emb")
+                    meta_val = row.get("metadata")
+                    if not (nid and emb_str):
+                        continue
+                    if merge:
+                        cursor.execute(
+                            f"INSERT INTO {routed_table} (graph_id, node_id, emb, metadata) "
+                            f"SELECT ?, ?, TO_VECTOR('{emb_str}', {dtype}), ? "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {routed_table} "
+                            "WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND node_id = ?)",
+                            [gid, nid, meta_val, gid, nid],
+                        )
+                    else:
+                        cursor.execute(
+                            f"INSERT INTO {routed_table} (graph_id, node_id, emb, metadata) "
+                            f"VALUES (?, ?, TO_VECTOR('{emb_str}', {dtype}), ?)",
+                            [gid, nid, meta_val],
+                        )
+                    count += 1
+                except Exception as e:
+                    failed_rows[routed_table] = failed_rows.get(routed_table, 0) + 1
+                    logger.debug("restore: routed embedding insert failed for %s: %s", nid, e)
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            restored_tables[routed_table] = count
+
+            # The archived `index_state` is a statement about the database the archive
+            # came from, and this is a table created seconds ago with no index on it.
+            # Recording what the archive said would reproduce exactly the claim spec
+            # 226 removed — an HNSW row for an index that is not there. So the build is
+            # re-attempted here and whatever this database answers is what gets written.
+            state, err = self._attempt_route_index(cursor, short)
+            self._record_route_index_state(cursor, short, graph_id, state, err)
+
+        # Routes appeared, their tables were created and their index states rewritten;
+        # anything this engine cached about them is now a claim about a table from
+        # before the restore.
+        try:
+            self.invalidate_route_cache()
+        except Exception as e:
+            logger.debug("restore: route cache not invalidated: %s", e)
 
         EDGE_VECTOR_FILE = "Graph_KG_kg_EdgeEmbeddings.ndjson"
         if f"sql/{EDGE_VECTOR_FILE}" in sql_files:

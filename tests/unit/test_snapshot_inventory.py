@@ -47,6 +47,104 @@ def test_the_edge_embeddings_table_is_in_the_plan():
     assert snapshot_mod.STORE_PLAN["Graph_KG.kg_EdgeEmbeddings"] == "sql"
 
 
+def test_the_embedding_registry_is_in_the_plan():
+    """The registry is the only record of what a routed table holds (spec 227).
+
+    Without it a snapshot of an install with routed embeddings comes back with the
+    vectors' physical tables unnamed and unclaimed: `resolve_route` finds no row,
+    every scoped search reports a miss, and the restore reports success.
+    """
+    assert snapshot_mod.STORE_PLAN["Graph_KG.embedding_registry"] == "sql"
+
+
+def test_a_routed_table_is_planned_from_its_registry_row():
+    plan = snapshot_mod.routed_export_plan(
+        [("kg_emb_0123456789abcdef", "acme", "m1", 8, "DOUBLE")]
+    )
+
+    assert plan == {
+        "Graph_KG.kg_emb_0123456789abcdef": {
+            "graph_id": "acme",
+            "model_key": "m1",
+            "dimension": 8,
+            "dtype": "DOUBLE",
+        }
+    }
+
+
+def test_a_legacy_table_the_registry_claims_is_not_planned_as_a_route():
+    """`kg_NodeEmbeddings` has a registry row of its own and is exported by name.
+
+    Planning it here too would export the same rows twice and, worse, hand the
+    restore a `CREATE TABLE` for a table the schema owns.
+    """
+    plan = snapshot_mod.routed_export_plan(
+        [("kg_NodeEmbeddings", "", "m1", 8, "DOUBLE")]
+    )
+
+    assert plan == {}
+
+
+def test_a_name_that_is_not_the_routed_shape_is_refused():
+    """A registry row's table name becomes DDL on restore, so the shape is checked.
+
+    `routing.route_table_name` produces `kg_emb_<16 hex>` and nothing else; anything
+    else in that column is either damage or someone else's table.
+    """
+    plan = snapshot_mod.routed_export_plan(
+        [
+            ("kg_emb_nothex", "acme", "m", 8, "DOUBLE"),
+            ("kg_emb_0123456789abcdef; DROP TABLE Graph_KG.nodes", "acme", "m", 8, "DOUBLE"),
+        ]
+    )
+
+    assert plan == {}
+
+
+def test_a_route_with_no_declared_width_is_refused():
+    """A width is what makes the `CREATE TABLE` on restore possible at all."""
+    plan = snapshot_mod.routed_export_plan(
+        [("kg_emb_0123456789abcdef", "acme", "m", None, "DOUBLE")]
+    )
+
+    assert plan == {}
+
+
+def test_the_restore_reads_the_registry_back():
+    """Exporting the registry without restoring it loses the routes just as completely.
+
+    The restore's table order is a module constant precisely so this can be asserted:
+    it was a local list inside `restore_snapshot`, which is how a table can be in the
+    export and absent from the import with nothing to compare the two against.
+    """
+    assert "Graph_KG_embedding_registry.ndjson" in snapshot_mod.RESTORE_TABLE_ORDER
+
+
+def test_the_registry_is_restored_after_the_nodes_it_describes():
+    """Order matters for the FK: a routed table references `nodes (graph_id, node_id)`.
+
+    The registry row itself has no FK, but the routed tables built from it do, so the
+    nodes have to be in before the rebuild reads the registry.
+    """
+    order = snapshot_mod.RESTORE_TABLE_ORDER
+    assert order.index("Graph_KG_nodes.ndjson") < order.index(
+        "Graph_KG_embedding_registry.ndjson"
+    )
+
+
+def test_every_restored_table_is_a_planned_sql_store():
+    """A file the restore loads that the export never writes is a dead branch."""
+    unplanned = [
+        fname
+        for fname in snapshot_mod.RESTORE_TABLE_ORDER
+        if snapshot_mod.STORE_PLAN.get(
+            fname.replace("Graph_KG_", "Graph_KG.").replace(".ndjson", "")
+        )
+        != "sql"
+    ]
+    assert not unplanned, f"the restore loads tables the plan does not name: {unplanned}"
+
+
 def test_the_plan_accounts_for_every_entry_it_holds():
     """No entry sits in the plan without a decision attached to it."""
     unknown = {

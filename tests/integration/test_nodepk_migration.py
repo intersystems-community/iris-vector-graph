@@ -46,7 +46,7 @@ def iris_connection_with_sample_data(iris_connection):
             cursor.execute("DELETE FROM nodes WHERE node_id LIKE ?", [f"{prefix}%"])
             # Try kg_NodeEmbeddings if it exists
             try:
-                cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE ?", [f"{prefix}%"])
+                cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE ?", [f"{prefix}%"])
             except:
                 pass
             iris_connection.commit()
@@ -78,13 +78,22 @@ def iris_connection_with_sample_data(iris_connection):
     cursor.execute("INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
                    ['SAMPLE:node2', 'rel3', 'SAMPLE:node3'])
 
-    # Embeddings - skip if kg_NodeEmbeddings doesn't exist
-    try:
-        dummy_vector = '[' + ','.join(['0.1'] * 768) + ']'
-        cursor.execute("INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))", ['SAMPLE:node1', dummy_vector])
-        cursor.execute("INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))", ['SAMPLE:node7', dummy_vector])
-    except:
-        pass  # kg_NodeEmbeddings may not exist
+    # Embeddings. Two things here used to hide each other: the width was hardcoded at
+    # 768 while the column is declared VECTOR(DOUBLE, n) and IRIS rejects any other
+    # width at INSERT (SQLCODE -104), and the failure was swallowed by a bare
+    # `except: pass`. The fixture then seeded nothing and the discovery tests treated
+    # the missing node as "kg_NodeEmbeddings may not exist". The width now comes from
+    # the live column and a failed insert fails the test.
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    dim = IRISGraphEngine(iris_connection)._get_embedding_dimension()
+    dummy_vector = ','.join(['0.1'] * dim)
+    for node_id in ['SAMPLE:node1', 'SAMPLE:node7']:
+        cursor.execute(
+            "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) "
+            f"VALUES (?, TO_VECTOR('{dummy_vector}', DOUBLE))",
+            [node_id],
+        )
 
     iris_connection.commit()
     yield iris_connection
@@ -92,7 +101,7 @@ def iris_connection_with_sample_data(iris_connection):
     # Cleanup after test
     for prefix in test_prefixes:
         try:
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id LIKE ?", [f"{prefix}%"])
+            cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE ?", [f"{prefix}%"])
             cursor.execute("DELETE FROM rdf_edges WHERE s LIKE ? OR o_id LIKE ?", [f"{prefix}%", f"{prefix}%"])
             cursor.execute("DELETE FROM rdf_props WHERE s LIKE ?", [f"{prefix}%"])
             cursor.execute("DELETE FROM rdf_labels WHERE s LIKE ?", [f"{prefix}%"])
@@ -126,26 +135,27 @@ class TestBulkNodeInsertion:
         # From embeddings: node1, node7 (if kg_NodeEmbeddings exists)
         # Unique total: node1, node2, node3, node4, node5, node6 (+ node7 if embeddings table exists)
 
-        # %EXACT collation preserves case as inserted; compare case-insensitively
+        # Discovery feeds `bulk_insert_nodes`, which writes these values into
+        # `nodes.node_id`. A non-string here is the `id`-as-RowID trap: the embedding
+        # table's key is `node_id` since 4.0.0, and `SELECT id` still resolved — to the
+        # implicit RowID — so integers arrived in this list without any error.
+        assert all(isinstance(n, str) for n in discovered_nodes), \
+            f"discovery returned non-node-IDs: {[n for n in discovered_nodes if not isinstance(n, str)]}"
+
+        # %EXACT collation preserves case as inserted; compare case-insensitively.
+        # node7 exists only in kg_NodeEmbeddings, so it is the one that proves the
+        # embedding table was read at all.
         expected_lower = {
             'sample:node1', 'sample:node2', 'sample:node3', 'sample:node4',
-            'sample:node5', 'sample:node6'
+            'sample:node5', 'sample:node6', 'sample:node7'
         }
 
         # Filter discovered nodes to only SAMPLE: prefix (any case)
         discovered_set = {n for n in discovered_nodes if n.lower().startswith('sample:')}
         discovered_lower = {n.lower() for n in discovered_set}
 
-        # Check base nodes are all present
-        assert expected_lower.issubset(discovered_lower), \
-            f"Missing expected nodes. Expected {expected_lower}, got {discovered_lower}"
-
-        # node7 is optional (depends on kg_NodeEmbeddings table)
-        if 'sample:node7' in discovered_lower:
-            expected_lower.add('sample:node7')
-
         assert discovered_lower == expected_lower, \
-            f"Unexpected SAMPLE nodes found. Expected {expected_lower}, got {discovered_lower}"
+            f"Expected {expected_lower}, got {discovered_lower}"
 
     def test_bulk_insert_handles_duplicates(self, iris_connection_with_sample_data):
         """
@@ -324,7 +334,7 @@ class TestNodeDiscovery:
         cursor.execute("INSERT INTO Graph_KG.nodes (node_id) VALUES (?)", ['TEST:emb_node1'])
         # Store embedding using fully-qualified table and inline vector (avoids driver bug)
         cursor.execute(
-            f"INSERT INTO Graph_KG.kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR('{emb_str}', DOUBLE))",
+            f"INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR('{emb_str}', DOUBLE))",
             ['TEST:emb_node1'],
         )
         iris_connection.commit()
@@ -333,7 +343,7 @@ class TestNodeDiscovery:
         nodes = discover_nodes(iris_connection)
 
         # Cleanup
-        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE id LIKE 'TEST:emb_node%'")
+        cursor.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings WHERE node_id LIKE 'TEST:emb_node%'")
         cursor.execute("DELETE FROM Graph_KG.nodes WHERE node_id LIKE 'TEST:emb_node%'")
         iris_connection.commit()
 
@@ -356,8 +366,8 @@ class TestMigrationValidation:
         # (GraphQL tests may leave orphaned PROTEIN:* embeddings)
         try:
             cursor.execute("""
-                DELETE FROM kg_NodeEmbeddings
-                WHERE id NOT IN (SELECT node_id FROM nodes)
+                DELETE FROM Graph_KG.kg_NodeEmbeddings
+                WHERE node_id NOT IN (SELECT node_id FROM Graph_KG.nodes)
             """)
             cursor.execute("""
                 DELETE FROM rdf_props
@@ -447,8 +457,8 @@ class TestOrphanDetection:
         # (GraphQL tests may leave orphaned PROTEIN:* embeddings)
         try:
             cursor.execute("""
-                DELETE FROM kg_NodeEmbeddings
-                WHERE id NOT IN (SELECT node_id FROM nodes)
+                DELETE FROM Graph_KG.kg_NodeEmbeddings
+                WHERE node_id NOT IN (SELECT node_id FROM Graph_KG.nodes)
             """)
             iris_connection.commit()
         except:
@@ -536,8 +546,9 @@ class TestMigrationWorkflow:
         sample_nodes = [n for n in report['discovered_nodes'] if n.lower().startswith('sample:')]
 
         # Verify SAMPLE node count matches what was created by fixture (7 nodes).
-        # node7 is only discoverable via kg_NodeEmbeddings; if that table is empty this is 6.
-        assert len(sample_nodes) >= 6, f"Expected at least 6 SAMPLE:* nodes, got {len(sample_nodes)}"
+        # node7 is discoverable only via kg_NodeEmbeddings, so the exact count is what
+        # says the embedding table was read: `>= 6` passed while that read was broken.
+        assert len(sample_nodes) == 7, f"Expected 7 SAMPLE:* nodes, got {sorted(sample_nodes)}"
 
         # Verify no changes were made (count should be the same)
         cursor.execute("SELECT COUNT(*) FROM nodes WHERE node_id LIKE 'SAMPLE:%'")

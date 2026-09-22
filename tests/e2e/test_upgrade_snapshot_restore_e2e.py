@@ -15,9 +15,11 @@ Three consumer-visible losses are asserted here rather than fixed, because they
 are properties of archives already in the field and no future code can put the
 data back:
 
-  1. Neither release's `save_snapshot` exports the temporal globals at all, so a
-     snapshot-upgrade-restore runbook silently discards the entire temporal
-     index.
+  1. A pre-spec-223 `save_snapshot` does not export the temporal globals at all,
+     so a snapshot-upgrade-restore runbook from one of those releases silently
+     discards the entire temporal index. Spec 223 fixed the exporter, and the
+     v3.2.0 archive proves it: the same two tests assert the loss for the old
+     tags and the recovery for the new one (`PRE_223_TAGS`).
   2. Both releases' global walkers seed `$Order` with `0`, and `0` collates after
      `""` — so v2.20, which keys the default graph with the integer `0`, cannot
      export its own default-graph adjacency.
@@ -36,7 +38,11 @@ import os
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
-from tests.e2e.fixtures.old_releases import OLD_RELEASES, RELEASE_IDS
+from tests.e2e.fixtures.old_releases import (
+    OLD_RELEASES,
+    PRE_223_TAGS,
+    RELEASE_IDS,
+)
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
 
@@ -110,14 +116,49 @@ def test_restored_nodes_carry_the_current_graph_id_spelling(restored):
     `Graph_KG.nodes.graph_id` is NOT NULL DEFAULT '' on every current code path,
     so an archive that never mentions the column still lands with ADR-0003's
     `ForName()` spelling — not NULL, and not absent.
-    """
-    _release, engine, _result = restored
 
+    Scoped to the node rows the archive itself carried. The restore also registers
+    each named-graph edge's endpoints in that edge's graph, which is a second row
+    for the same node ID under a different graph — see
+    `test_a_named_graph_edges_endpoints_are_registered_in_that_graph`.
+    """
+    release, engine, _result = restored
+
+    archived = {node["node_id"] for node in release.seeded["nodes"]}
     rows = _fetchall(engine, "SELECT node_id, graph_id FROM Graph_KG.nodes")
 
     assert rows
     for node_id, graph_id in rows:
-        assert graph_id == "", f"{node_id} restored with graph_id {graph_id!r}"
+        assert graph_id is not None, f"{node_id} restored with a NULL graph_id"
+    default_graph = {node_id for node_id, graph_id in rows if graph_id == ""}
+    assert archived <= default_graph, (
+        "these archived nodes did not land in the default graph: "
+        f"{sorted(archived - default_graph)}"
+    )
+
+
+def test_a_named_graph_edges_endpoints_are_registered_in_that_graph(restored):
+    """The endpoints have to be in the edge's graph, or the edge cannot be.
+
+    Spec 227 put `fk_edges_src`/`fk_edges_dest` on `(graph_id, s)` and
+    `(graph_id, o_id)`. An archive from before 4.0.0 carries a graph on the edge and
+    nothing on the node, so restoring it used to fail `SQLCODE -121` on every
+    named-graph edge and count it as one unrestorable row — a v2.16 archive holding
+    one `acme` edge restored a database with none.
+    """
+    release, engine, _result = restored
+
+    for edge in release.seeded["named_edges"]:
+        for endpoint in (edge["s"], edge["o_id"]):
+            rows = _fetchall(
+                engine,
+                "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ? AND graph_id = ?",
+                [endpoint, release.named_graph],
+            )
+            assert rows[0][0] == 1, (
+                f"{endpoint} is not registered in {release.named_graph!r}, so the edge "
+                "that needs it cannot have been restored"
+            )
 
 
 def test_the_named_graph_survives_on_its_edge(restored):
@@ -167,33 +208,59 @@ def test_the_embedding_metadata_comes_back(restored):
 # ── the losses, asserted so they are documented rather than discovered ─────
 
 
-def test_the_archive_carries_no_temporal_index(restored):
-    """Neither release lists the temporal globals in its own export.
+def test_the_archive_carries_the_temporal_index_only_if_its_exporter_did(restored):
+    """A pre-223 release does not list the temporal globals in its own export.
 
-    `GLOBALS_EXPORT` names `^KG("out")` and `^KG("in")` and stops. Every
-    `^KG("tout")`, `("tin")`, `("bucket")` and `("tagg")` node is therefore
-    absent from the archive, and `metadata["globals"]` simply does not mention
-    them — so nothing warns the consumer.
+    Its `GLOBALS_EXPORT` names `^KG("out")` and `^KG("in")` and stops, so every
+    `^KG("tout")`, `("tin")`, `("bucket")` and `("tagg")` node is absent from the
+    archive and `metadata["globals"]` does not mention them — nothing warns the
+    consumer. Spec 223 added those subtrees to the export, so the v3.2.0 archive
+    has to carry them; asserting the old loss for every release would let that fix
+    regress unnoticed on the only archive written after it.
     """
     release, _engine, _result = restored
 
     assert release.seeded["temporal"], "the fixture seeded no temporal edges"
-    exported = {entry["k"][0] for entry in release.archive_global_nodes("^KG")}
+    exported = {str(entry["k"][0]) for entry in release.archive_global_nodes("^KG")}
 
-    assert exported <= {"out", "in"}, exported
-    assert "tout" not in exported
+    if release.tag in PRE_223_TAGS:
+        assert exported <= {"out", "in"}, exported
+        assert "tout" not in exported
+    else:
+        assert "tout" in exported, (
+            f"{release.tag} post-dates spec 223, so its archive must carry the "
+            f"temporal subtrees; it exported {sorted(exported)}"
+        )
 
 
-def test_a_restored_database_has_lost_its_temporal_edges(restored):
-    """The consequence of the above, at the interface a consumer would use."""
+def test_a_restored_database_keeps_only_the_temporal_edges_its_archive_held(restored):
+    """The consequence of the above, at the interface a consumer would use.
+
+    Pre-223 the window query comes back empty over an archive that never held the
+    index. From v3.2.0 on, every seeded temporal edge is readable again — which is
+    the claim that matters to a consumer following the upgrade runbook, and the one
+    that would go untested if this only ever asserted the loss.
+    """
     release, engine, _result = restored
 
     stamps = [e["timestamp"] for e in release.seeded["temporal"]]
     found = engine.get_edges_in_window("", "", min(stamps) - 1, max(stamps) + 1)
 
-    assert found == [], (
-        "the temporal index is expected to be empty after restoring one of these "
-        f"archives, because neither exports it — got {found}"
+    if release.tag in PRE_223_TAGS:
+        assert found == [], (
+            "the temporal index is expected to be empty after restoring one of "
+            f"these archives, because they do not export it — got {found}"
+        )
+        return
+
+    got = {(e["s"], e["p"], e["o"], int(e["ts"])) for e in found}
+    expected = {
+        (e["source"], e["predicate"], e["target"], int(e["timestamp"]))
+        for e in release.seeded["temporal"]
+    }
+    assert expected <= got, (
+        f"{release.tag} exports the temporal index, so restoring it must put these "
+        f"edges back: missing {sorted(expected - got)}"
     )
 
 
@@ -255,8 +322,8 @@ def restored_v216(iris_connection, iris_master_cleanup):
 def test_v216_default_graph_edges_restore_at_all(restored_v216):
     """v2.16 wrote NULL for the default graph; the live column forbids NULL.
 
-    `Graph.KG.Edge` declares `graph_id` Required, so inserting an archive row
-    verbatim raises SQLCODE -108 — and the restore's per-row `except` logged it
+    `rdf_edges` declares `graph_id ... NOT NULL DEFAULT ''`, so inserting an archive
+    row verbatim raises SQLCODE -108 — and the restore's per-row `except` logged it
     at debug level and moved on. The observable result was a database holding the
     one named-graph edge and none of the three default-graph edges, with no error
     raised and nothing above debug in the log.

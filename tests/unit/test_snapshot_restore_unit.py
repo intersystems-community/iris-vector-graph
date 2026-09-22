@@ -441,8 +441,8 @@ class TestRestoreNormalisesTheDefaultGraphSpelling:
 
     v2.16 wrote NULL into `rdf_edges.graph_id` for every default-graph edge (see
     tests/unit/test_old_release_fixtures.py, which reads the real archive). The
-    live `Graph.KG.Edge` marks the column Required, so inserting that row verbatim
-    raises SQLCODE -108. ADR-0003 fixes the default graph's SQL spelling as `''`,
+    live table declares `graph_id ... NOT NULL DEFAULT ''`, so inserting that row
+    verbatim raises SQLCODE -108. ADR-0003 fixes the default graph's SQL spelling as `''`,
     and NULL from an older release means the same graph — so the restore
     normalises rather than losing the row.
     """

@@ -217,6 +217,43 @@ def _capture_globals(engine, path: str) -> dict:
     return counts
 
 
+def _record_statements(conn, log: list) -> None:
+    """Make every cursor this connection hands out append its SQL to ``log``.
+
+    Patched onto the connection rather than wrapped around it: the old engine also
+    hands the same connection to the Native API (`iris.createIRIS`), which wants the
+    real driver object, not a proxy of it.
+
+    Used to freeze an old release's *shape* as well as its content. A migration test
+    has to start from the tables the old release declared, and the only unarguable
+    source for those is the statements the old release itself executed — reading the
+    catalog back and re-rendering CREATE TABLE from what I find there would encode my
+    reading of the catalog, which is the thing under test.
+    """
+    original = conn.cursor
+
+    def cursor(*args, **kwargs):
+        return _RecordingCursor(original(*args, **kwargs), log)
+
+    conn.cursor = cursor
+
+
+class _RecordingCursor:
+    def __init__(self, cursor, log: list):
+        self._cursor = cursor
+        self._log = log
+
+    def execute(self, sql, *args, **kwargs):
+        self._log.append(sql)
+        return self._cursor.execute(sql, *args, **kwargs)
+
+    def __iter__(self):
+        return iter(self._cursor)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", required=True, help="the release that wrote this archive")
@@ -230,6 +267,12 @@ def main() -> int:
         "--reset",
         action="store_true",
         help="empty the seed stores first, so a re-run reproduces the archive",
+    )
+    ap.add_argument(
+        "--ddl",
+        action="store_true",
+        help="also freeze the CREATE/ALTER statements this release's initialize_schema "
+        "issues, so a test can rebuild its table shapes (writes .ddl.json)",
     )
     args = ap.parse_args()
 
@@ -249,10 +292,35 @@ def main() -> int:
         return 2
 
     conn = iris.connect(args.host, args.port, args.namespace, args.user, args.password)
+    issued: list = []
+    if args.ddl:
+        _record_statements(conn, issued)
     engine = IRISGraphEngine(
         conn, embedding_dimension=EMBEDDING_DIM, namespace=args.namespace
     )
     engine.initialize_schema()
+    ddl = None
+    if args.ddl:
+        # Only the shape-declaring statements. The rest of what initialize_schema runs
+        # is probes and procedure bodies, which a shape fixture has no use for — and a
+        # statement is kept even when this run's namespace already had the table, since
+        # what is being frozen is what the old release *declares*, not what it managed
+        # to create against a database that already existed.
+        ddl = [
+            sql
+            for sql in issued
+            if sql.lstrip().upper().startswith(("CREATE TABLE", "ALTER TABLE"))
+        ]
+        ddl_path = f"{args.out}.ddl.json"
+        os.makedirs(os.path.dirname(ddl_path) or ".", exist_ok=True)
+        with open(ddl_path, "w") as fh:
+            json.dump(
+                {"tag": args.tag, "embedding_dimension": EMBEDDING_DIM, "statements": ddl},
+                fh,
+                indent=2,
+            )
+            fh.write("\n")
+        print(f"wrote {ddl_path}: {len(ddl)} statement(s)")
 
     if args.reset:
         _reset(engine)
@@ -282,6 +350,8 @@ def main() -> int:
         "captured_globals": captured,
         "seeded": written,
     }
+    if ddl is not None:
+        manifest["ddl_statements"] = len(ddl)
     manifest_path = f"{args.out}.expected.json"
     with open(manifest_path, "w") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)

@@ -149,6 +149,72 @@ def test_a_named_graph_survives_with_its_scope_intact(engine, tmp_path):
     )
 
 
+def test_the_bm25_corpus_survives_a_round_trip(engine, tmp_path):
+    """`Graph_KG.docs` was in no plan, so `kg_TXT` came back empty after a restore.
+
+    Nothing caught it because `docs` was in no inventory either: the two lists
+    agreed with each other and both left the corpus out. There is no engine write
+    path for a document — callers INSERT — so this test writes one the same way.
+    """
+    cursor = engine.conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO Graph_KG.docs (graph_id, id, text) VALUES (?, ?, ?)",
+            [GRAPH, "snapdoc_1", "the corpus a restore used to drop"],
+        )
+        engine.conn.commit()
+    finally:
+        cursor.close()
+
+    path = str(tmp_path / "snap.zip")
+    engine.save_snapshot(path)
+    engine.erase_all()
+    engine.restore_snapshot(path)
+
+    cursor = engine.conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT text FROM Graph_KG.docs WHERE graph_id = ? AND id = ?",
+            [GRAPH, "snapdoc_1"],
+        )
+        row = cursor.fetchone()
+        # Read the column here: the driver's DataRow is only valid while its cursor
+        # is open, and touching row[0] after the close raises COMMUNICATION LINK
+        # ERROR rather than reporting the value.
+        text = None if row is None else row[0]
+    finally:
+        cursor.close()
+
+    assert text is not None, "the document did not survive the round trip"
+    assert text == "the corpus a restore used to drop"
+
+
+def test_the_two_hop_counts_survive_a_round_trip(engine, tmp_path):
+    """`^KG("deg2p")` is graph-scoped as of spec 230, and exported rather than rebuilt.
+
+    Rebuilding it on restore would need Arno loaded on whichever machine is doing
+    the restoring; carrying it keeps the counts consistent with the adjacency in
+    the same archive.
+    """
+    engine.create_edge("a", "KNOWS", "b", graph=GRAPH)
+    engine.create_edge("b", "KNOWS", "c", graph=GRAPH)
+    engine.sync()
+
+    before = _kg(engine, "deg2p", GRAPH, "a")
+    if before == "":
+        pytest.skip("this install does not maintain ^KG(\"deg2p\") on sync")
+
+    path = str(tmp_path / "snap.zip")
+    engine.save_snapshot(path)
+    engine.erase_all()
+    assert _kg(engine, "deg2p", GRAPH, "a") == ""
+    engine.restore_snapshot(path)
+
+    assert _kg(engine, "deg2p", GRAPH, "a") == before, (
+        "the two-hop count did not survive the round trip"
+    )
+
+
 # ---------------------------------------------------------------------------
 # The layout stamp
 # ---------------------------------------------------------------------------

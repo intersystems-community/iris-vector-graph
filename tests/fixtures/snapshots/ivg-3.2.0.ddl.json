@@ -1,0 +1,31 @@
+{
+  "tag": "v3.2.0",
+  "embedding_dimension": 8,
+  "statements": [
+    "CREATE TABLE Graph_KG.nodes(\n  node_id    VARCHAR(256) %EXACT NOT NULL,\n  graph_id   VARCHAR(256) %EXACT NOT NULL DEFAULT '',\n  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT pk_nodes_graph PRIMARY KEY (node_id, graph_id),\n  CONSTRAINT uq_nodes_nodeid UNIQUE (node_id)\n)",
+    "CREATE TABLE Graph_KG.rdf_labels(\n  s          VARCHAR(256) %EXACT NOT NULL,\n  label      VARCHAR(128) %EXACT NOT NULL,\n  CONSTRAINT pk_labels PRIMARY KEY (s, label),\n  CONSTRAINT fk_labels_node FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id)\n)",
+    "CREATE TABLE Graph_KG.rdf_props(\n  s      VARCHAR(256) %EXACT NOT NULL,\n  key    VARCHAR(128) %EXACT NOT NULL,\n  val    VARCHAR(64000) %EXACT,\n  CONSTRAINT pk_props PRIMARY KEY (s, key)\n)",
+    "CREATE TABLE Graph_KG.rdf_edges(\n  edge_id    BIGINT IDENTITY PRIMARY KEY,\n  s          VARCHAR(256) %EXACT NOT NULL,\n  p          VARCHAR(128) %EXACT NOT NULL,\n  o_id       VARCHAR(256) %EXACT NOT NULL,\n  qualifiers %Library.DynamicObject,\n  CONSTRAINT fk_edges_source FOREIGN KEY (s) REFERENCES Graph_KG.nodes(node_id),\n  CONSTRAINT fk_edges_dest FOREIGN KEY (o_id) REFERENCES Graph_KG.nodes(node_id),\n  CONSTRAINT u_spo UNIQUE (s, p, o_id)\n)",
+    "CREATE TABLE Graph_KG.kg_NodeEmbeddings (\n    id VARCHAR(256) %EXACT PRIMARY KEY,\n    emb VECTOR(DOUBLE, 8),\n    metadata %Library.DynamicObject,\n    CONSTRAINT fk_emb_node FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)\n)",
+    "CREATE TABLE Graph_KG.kg_NodeEmbeddings_optimized (\n    id VARCHAR(256) %EXACT PRIMARY KEY,\n    emb VECTOR(DOUBLE, 8),\n    metadata %Library.DynamicObject,\n    CONSTRAINT fk_emb_node_opt FOREIGN KEY (id) REFERENCES Graph_KG.nodes(node_id)\n)",
+    "CREATE TABLE IF NOT EXISTS Graph_KG.kg_EdgeEmbeddings (\n    s    VARCHAR(256) %EXACT NOT NULL,\n    p    VARCHAR(512) %EXACT NOT NULL,\n    o_id VARCHAR(256) %EXACT NOT NULL,\n    emb  VECTOR(DOUBLE, 8),\n    CONSTRAINT pk_edge_emb PRIMARY KEY (s, p, o_id)\n)",
+    "CREATE TABLE Graph_KG.docs(\n  id    VARCHAR(256) %EXACT PRIMARY KEY,\n  text  VARCHAR(4000) %EXACT\n)",
+    "CREATE TABLE IF NOT EXISTS Graph_KG.fhir_bridges (\n    fhir_code        VARCHAR(64) %EXACT NOT NULL,\n    kg_node_id       VARCHAR(256) %EXACT NOT NULL,\n    fhir_code_system VARCHAR(128) NOT NULL DEFAULT 'ICD10CM',\n    bridge_type      VARCHAR(64) NOT NULL DEFAULT 'icd10_to_mesh',\n    confidence       FLOAT DEFAULT 1.0,\n    source_cui       VARCHAR(16),\n    CONSTRAINT pk_bridge PRIMARY KEY (fhir_code, kg_node_id)\n)",
+    "CREATE TABLE IF NOT EXISTS Graph_KG.rdf_reifications (\n    reifier_id VARCHAR(256) %EXACT NOT NULL,\n    edge_id BIGINT NOT NULL,\n    CONSTRAINT pk_reifications PRIMARY KEY (reifier_id)\n)",
+    "CREATE TABLE IF NOT EXISTS Graph_KG.table_mappings (\n    label         VARCHAR(255) NOT NULL PRIMARY KEY,\n    sql_table     VARCHAR(500) NOT NULL,\n    id_column     VARCHAR(255) NOT NULL,\n    prop_columns  VARCHAR(4000),\n    registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n)",
+    "CREATE TABLE IF NOT EXISTS Graph_KG.relationship_mappings (\n    predicate    VARCHAR(255) NOT NULL,\n    source_label VARCHAR(255) NOT NULL,\n    target_label VARCHAR(255) NOT NULL,\n    target_fk    VARCHAR(255),\n    via_table    VARCHAR(500),\n    via_source   VARCHAR(255),\n    via_target   VARCHAR(255),\n    CONSTRAINT pk_rel_mappings PRIMARY KEY (source_label, predicate, target_label)\n)",
+    "CREATE TABLE IF NOT EXISTS Graph_KG.rdf_namespaces (\n    prefix  VARCHAR(64)  NOT NULL,\n    uri     VARCHAR(512) NOT NULL,\n    CONSTRAINT pk_rdf_namespaces PRIMARY KEY (prefix)\n)",
+    "ALTER TABLE Graph_KG.rdf_props ALTER COLUMN val VARCHAR(64000)",
+    "ALTER TABLE Graph_KG.rdf_edges ADD COLUMN graph_id VARCHAR(256) %EXACT NULL",
+    "ALTER TABLE Graph_KG.rdf_edges ALTER COLUMN graph_id NOT NULL",
+    "ALTER TABLE Graph_KG.rdf_edges ALTER COLUMN graph_id SET DEFAULT ''",
+    "ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT u_spo",
+    "ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT uspo",
+    "ALTER TABLE Graph_KG.rdf_edges ADD CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)",
+    "ALTER TABLE Graph_KG.nodes ADD COLUMN graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''",
+    "CREATE TABLE Graph_KG.embedding_registry (\n    table_name      VARCHAR(128)  NOT NULL,\n    graph_id        VARCHAR(256)  NOT NULL DEFAULT '',\n    mechanism       VARCHAR(32),\n    model_key       VARCHAR(256),\n    declared_config VARCHAR(512),\n    dimension       INTEGER,\n    dtype           VARCHAR(16)   NOT NULL DEFAULT 'DOUBLE',\n    set_at          TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,\n    set_by          VARCHAR(128),\n    CONSTRAINT pk_embedding_registry PRIMARY KEY (table_name, graph_id)\n)",
+    "ALTER TABLE Graph_KG.kg_NodeEmbeddings ALTER COLUMN emb VECTOR(DOUBLE, 8)",
+    "ALTER TABLE Graph_KG.kg_NodeEmbeddings_optimized ALTER COLUMN emb VECTOR(DOUBLE, 8)",
+    "ALTER TABLE Graph_KG.kg_EdgeEmbeddings ALTER COLUMN emb VECTOR(DOUBLE, 8)"
+  ]
+}
