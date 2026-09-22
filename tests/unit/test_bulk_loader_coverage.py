@@ -246,5 +246,9 @@ def test_load_networkx_cursor_close_fails():
     loader, conn, cur = _make_loader_with_close_fail()
     G = nx.DiGraph()
     G.add_node("n1", namespace="Person")
-    result = loader.load_networkx(G, build_globals=False)
+    # The default %NOINDEX load now raises when phase 5 could not put the
+    # indices back, and this loader's conn is a MagicMock the native bridge
+    # rejects — the subject here is the cursor-close path, not the rebuild.
+    with patch("iris_vector_graph.bulk_loader._call_classmethod", return_value=1):
+        result = loader.load_networkx(G, build_globals=False)
     assert isinstance(result, dict)

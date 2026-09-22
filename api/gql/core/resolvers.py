@@ -9,7 +9,52 @@ import strawberry
 from typing import Optional, List
 from strawberry.types import Info
 
+from iris_vector_graph.constants import DEFAULT_GRAPH
+
 from .types import Node, GenericNode, Edge, GraphStats, PropertyFilter, EdgeDirection
+
+
+async def _load_node(
+    info: Info, node_id: str, graph: Optional[str] = None
+) -> Optional[Node]:
+    """Load one node, resolving it to a domain type when a resolver claims its labels.
+
+    Shared by `CoreQuery.node` and by `CoreQuery.nodes`. The latter used to call
+    `await self.node(...)`, but `self` is the Strawberry root value, which is None on a
+    query root, so every `nodes` call that matched a row raised
+    `AttributeError: 'NoneType' object has no attribute 'node'`.
+
+    `graph` is threaded through to `engine.get_node`, which reads one graph: since spec
+    227 the same node ID can exist in several, and an unscoped read merged their labels
+    and properties.
+    """
+    engine = info.context.get("engine")
+    if not engine:
+        return None
+
+    node_data = engine.get_node(str(node_id), graph=DEFAULT_GRAPH if graph is None else graph)
+    if not node_data:
+        return None
+
+    labels = node_data.get("labels", [])
+    properties = node_data.get("properties", {})
+    created_at = node_data.get("created_at")
+
+    domain_resolver = info.context.get("domain_resolver")
+    if domain_resolver:
+        domain_node = await domain_resolver.resolve_node(
+            info, str(node_id), labels, properties, created_at
+        )
+        if domain_node:
+            return domain_node
+
+    # Unknown label - return generic node
+    return GenericNode(
+        id=strawberry.ID(str(node_id)),
+        labels=labels,
+        properties=properties,
+        created_at=created_at,
+    )
 
 
 @strawberry.type
@@ -22,7 +67,9 @@ class CoreQuery:
     """
 
     @strawberry.field
-    async def node(self, info: Info, id: strawberry.ID) -> Optional[Node]:
+    async def node(
+        self, info: Info, id: strawberry.ID, graph: Optional[str] = None
+    ) -> Optional[Node]:
         """
         Query any node by ID, regardless of label/type.
 
@@ -47,38 +94,12 @@ class CoreQuery:
 
         Args:
             id: Node ID (any domain)
+            graph: Named graph to read from; omitted means the default graph.
 
         Returns:
             Node object if found, None otherwise
         """
-        engine = info.context.get("engine")
-        if not engine:
-            return None
-
-        node_data = engine.get_node(str(id))
-        if not node_data:
-            return None
-        
-        labels = node_data.get("labels", [])
-        properties = node_data.get("properties", {})
-        created_at = node_data.get("created_at")
-
-        # Try to resolve to domain-specific type using domain resolvers
-        domain_resolver = info.context.get("domain_resolver")
-        if domain_resolver:
-            domain_node = await domain_resolver.resolve_node(
-                info, str(id), labels, properties, created_at
-            )
-            if domain_node:
-                return domain_node
-
-        # Unknown label - return generic node
-        return GenericNode(
-            id=strawberry.ID(str(id)),
-            labels=labels,
-            properties=properties,
-            created_at=created_at,
-        )
+        return await _load_node(info, str(id), graph=graph)
 
     @strawberry.field
     async def nodes(
@@ -90,6 +111,7 @@ class CoreQuery:
         offset: int = 0,
         order_by: Optional[str] = None,
         order_direction: Optional[str] = "DESC",
+        graph: Optional[str] = None,
     ) -> List[Node]:
         """
         Query multiple nodes by label and/or property filter.
@@ -116,6 +138,11 @@ class CoreQuery:
             offset: Offset for pagination
             order_by: Property key to sort by, or "id" / "created_at" (default)
             order_direction: "ASC" or "DESC" (default DESC)
+            graph: Named graph to read from; omitted means the default graph. Every
+                statement is scoped to it, and every join carries `graph_id` — since
+                spec 227 one node ID can live in several graphs, and an unscoped read
+                returned other graphs' nodes and joined their label rows to this
+                graph's nodes.
 
         Returns:
             List of Node objects
@@ -123,7 +150,8 @@ class CoreQuery:
         engine = info.context.get("engine")
         if not engine:
             return []
-        
+
+        graph_id = DEFAULT_GRAPH if graph is None else graph
         db_connection = engine.conn
 
         # Validate and sanitize sort direction
@@ -137,8 +165,14 @@ class CoreQuery:
         elif order_by == "id":
             order_clause = f"ORDER BY n.node_id {direction}"
         else:
-            # Order by a property value — LEFT JOIN so nodes without the property still appear
-            order_join = "LEFT JOIN rdf_props order_p ON order_p.s = n.node_id AND order_p.key = ?"
+            # Order by a property value — LEFT JOIN so nodes without the property still
+            # appear. The schema prefix is not optional: an unqualified `rdf_props`
+            # resolves against the connection's default schema (SQLUser), so
+            # `orderBy: "<property>"` failed at Query Open rather than ordering.
+            order_join = (
+                "LEFT JOIN Graph_KG.rdf_props order_p ON order_p.s = n.node_id "
+                "AND order_p.graph_id = n.graph_id AND order_p.key = ?"
+            )
             order_params_prefix = [order_by]
             order_clause = f"ORDER BY order_p.val {direction}"
 
@@ -164,14 +198,20 @@ class CoreQuery:
         cursor = db_connection.cursor()
 
         # Build query based on filters
+        # Parameters are ordered by where their `?` appears in the SQL text, which is why
+        # the property-order join's parameter sits between the JOIN parameters and the
+        # WHERE ones rather than always leading: with both `where` and `orderBy` set, the
+        # old unconditional `order_params_prefix + [where.key]` bound the two the wrong
+        # way round, filtering on the sort key and sorting on the filter key.
         if labels and where:
             query = """
                 SELECT DISTINCT n.node_id
                 FROM Graph_KG.nodes n
-                JOIN Graph_KG.rdf_labels l ON l.s = n.node_id
-                JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.key = ?
+                JOIN Graph_KG.rdf_labels l ON l.s = n.node_id AND l.graph_id = n.graph_id
+                JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.graph_id = n.graph_id AND p.key = ?
                 {order_join}
-                WHERE l.label IN ({placeholders})
+                WHERE n.graph_id = ?
+                  AND l.label IN ({placeholders})
                   AND {where_cond}
                 {order_clause}
                 LIMIT ? OFFSET ?
@@ -181,14 +221,21 @@ class CoreQuery:
                 where_cond=_where_condition(),
                 order_clause=order_clause,
             )
-            params = order_params_prefix + [where.key] + labels + [where.value, limit, offset]
+            params = (
+                [where.key]
+                + order_params_prefix
+                + [graph_id]
+                + labels
+                + [where.value, limit, offset]
+            )
         elif labels:
             query = """
                 SELECT DISTINCT n.node_id
                 FROM Graph_KG.nodes n
-                JOIN Graph_KG.rdf_labels l ON l.s = n.node_id
+                JOIN Graph_KG.rdf_labels l ON l.s = n.node_id AND l.graph_id = n.graph_id
                 {order_join}
-                WHERE l.label IN ({placeholders})
+                WHERE n.graph_id = ?
+                  AND l.label IN ({placeholders})
                 {order_clause}
                 LIMIT ? OFFSET ?
             """.format(
@@ -196,14 +243,15 @@ class CoreQuery:
                 placeholders=",".join(["?" for _ in labels]),
                 order_clause=order_clause,
             )
-            params = order_params_prefix + labels + [limit, offset]
+            params = order_params_prefix + [graph_id] + labels + [limit, offset]
         elif where:
             query = """
                 SELECT DISTINCT n.node_id
                 FROM Graph_KG.nodes n
-                JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.key = ?
+                JOIN Graph_KG.rdf_props p ON p.s = n.node_id AND p.graph_id = n.graph_id AND p.key = ?
                 {order_join}
-                WHERE {where_cond}
+                WHERE n.graph_id = ?
+                  AND {where_cond}
                 {order_clause}
                 LIMIT ? OFFSET ?
             """.format(
@@ -211,16 +259,19 @@ class CoreQuery:
                 where_cond=_where_condition(),
                 order_clause=order_clause,
             )
-            params = order_params_prefix + [where.key, where.value, limit, offset]
+            params = (
+                [where.key] + order_params_prefix + [graph_id, where.value, limit, offset]
+            )
         else:
             query = """
                 SELECT n.node_id
                 FROM Graph_KG.nodes n
                 {order_join}
+                WHERE n.graph_id = ?
                 {order_clause}
                 LIMIT ? OFFSET ?
             """.format(order_join=order_join, order_clause=order_clause)
-            params = order_params_prefix + [limit, offset]
+            params = order_params_prefix + [graph_id, limit, offset]
 
         cursor.execute(query, params)
         node_ids = [row[0] for row in cursor.fetchall()]
@@ -228,44 +279,13 @@ class CoreQuery:
         if not node_ids:
             return []
 
-        # Load all nodes in batch using node_loader
-        node_loader = info.context.get("node_loader")
-        if node_loader:
-            nodes_data = await node_loader.load_many(node_ids)
-            
-            nodes = []
-            domain_resolver = info.context.get("domain_resolver")
-            
-            for i, data in enumerate(nodes_data):
-                if not data:
-                    continue
-                
-                node_id = node_ids[i]
-                labels = data.get("labels", [])
-                properties = data.get("properties", {})
-                created_at = data.get("created_at")
-                
-                domain_node = None
-                if domain_resolver:
-                    domain_node = await domain_resolver.resolve_node(
-                        info, str(node_id), labels, properties, created_at
-                    )
-                
-                if domain_node:
-                    nodes.append(domain_node)
-                else:
-                    nodes.append(GenericNode(
-                        id=strawberry.ID(str(node_id)),
-                        labels=labels,
-                        properties=properties,
-                        created_at=created_at,
-                    ))
-            return nodes
-
-        # Fallback to individual loading if loader not available
+        # There used to be a batch branch here keyed on `info.context["node_loader"]`, with
+        # this loop as its fallback. No `NodeLoader` class exists in `api/gql/loaders.py`
+        # and no app factory ever put that key in the context, so the branch never ran; it
+        # also read no graph, which would have reintroduced the cross-graph merge below.
         nodes = []
         for node_id in node_ids:
-            node = await self.node(info, strawberry.ID(node_id))
+            node = await _load_node(info, node_id, graph=graph_id)
             if node:
                 nodes.append(node)
 

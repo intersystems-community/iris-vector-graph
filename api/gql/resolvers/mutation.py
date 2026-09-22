@@ -70,8 +70,10 @@ class Mutation:
                 if len(input.embedding) != 768:
                     raise Exception(f"Embedding must be 768-dimensional, got {len(input.embedding)}")
                 emb_str = "[" + ",".join([str(x) for x in input.embedding]) + "]"
+                # `node_id`, not `id`: the table is keyed (graph_id, node_id) and its
+                # `ID` is the implicit RowID, which `INSERT` refuses with SQLCODE -108.
                 cursor.execute(
-                    "INSERT INTO kg_NodeEmbeddings (id, emb) VALUES (?, TO_VECTOR(?))",
+                    "INSERT INTO kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                     (str(input.id), emb_str)
                 )
 
@@ -208,8 +210,10 @@ class Mutation:
         try:
             # Delete in reverse order of FK dependencies
 
-            # 1. Delete embedding (FK to nodes)
-            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE id = ?", (str(id),))
+            # 1. Delete embedding (FK to nodes). Matched on `node_id`: `id` is the
+            # implicit RowID, so the old spelling compared an integer with a node ID,
+            # deleted nothing, and left `fk_emb_node` to refuse the node delete.
+            cursor.execute("DELETE FROM kg_NodeEmbeddings WHERE node_id = ?", (str(id),))
 
             # 2. Delete edges (both source and destination)
             cursor.execute("DELETE FROM rdf_edges WHERE s = ? OR o_id = ?", (str(id), str(id)))

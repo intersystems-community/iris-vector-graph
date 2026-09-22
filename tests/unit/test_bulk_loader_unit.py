@@ -1,6 +1,6 @@
 """
 Unit tests for bulk_loader.py covering:
-- BulkLoader._executemany_batched: unique-error path (individual retry), non-unique error path
+- BulkLoader._executemany_batched: unique-error path (individual retry), non-unique error raises
 - BulkLoader._rebuild_indices: success, SQL fail+TUNE success, total failure
 - BulkLoader.load_nodes: skip_existing=False path, with properties
 - BulkLoader.load_edges: dedup, skip_existing=False, use_noindex=False
@@ -13,6 +13,7 @@ No IRIS connection needed — mocks conn and cursor.
 import pytest
 from unittest.mock import MagicMock, patch, call
 from iris_vector_graph.bulk_loader import BulkLoader
+from iris_vector_graph.exceptions import BulkLoadError
 
 
 def _make_loader():
@@ -59,24 +60,29 @@ class TestExecutemanyBatched:
         result = loader._executemany_batched(cursor, "INSERT INTO t VALUES (?)", rows, "test")
         assert result == 2
 
-    def test_non_unique_error_counts_as_errors(self):
-        """Batch with non-UNIQUE error → all rows in batch counted as errors."""
+    def test_non_unique_error_raises(self):
+        """Batch with a non-UNIQUE error raises instead of returning 0.
+
+        This used to assert `result == 0`, which is what let a wholesale
+        `SQLCODE -121` rejection reach the caller as a stats dict saying zero rows
+        and no exception — see tests/unit/test_bulk_loader_error_propagation.py.
+        """
         loader, conn, cursor = _make_loader()
 
         cursor.executemany = MagicMock(side_effect=Exception("FATAL: table not found"))
         rows = [["r1"], ["r2"]]
-        result = loader._executemany_batched(cursor, "INSERT INTO t VALUES (?)", rows, "test")
-        assert result == 0  # all 2 are errors, 0 inserted
+        with pytest.raises(BulkLoadError):
+            loader._executemany_batched(cursor, "INSERT INTO t VALUES (?)", rows, "test")
 
-    def test_unique_error_individual_failure_increments_errors(self):
-        """Individual row also fails on unique-error retry → error counted."""
+    def test_unique_error_individual_failure_raises_when_not_a_duplicate(self):
+        """A row that fails the retry for some other reason is not a skipped duplicate."""
         loader, conn, cursor = _make_loader()
 
         cursor.executemany = MagicMock(side_effect=Exception("unique constraint -119"))
         cursor.execute = MagicMock(side_effect=Exception("also fails"))
         rows = [["r1"]]
-        result = loader._executemany_batched(cursor, "INSERT INTO t VALUES (?)", rows, "test")
-        assert result == 0
+        with pytest.raises(BulkLoadError):
+            loader._executemany_batched(cursor, "INSERT INTO t VALUES (?)", rows, "test")
 
 
 # ---------------------------------------------------------------------------
@@ -84,24 +90,34 @@ class TestExecutemanyBatched:
 # ---------------------------------------------------------------------------
 
 class TestRebuildIndices:
+    """These mocked `cursor.execute` and asserted True, which is how the SQL
+    they were mocking could be a function IRIS does not have (SQLCODE -359) for
+    as long as it was. The rebuild goes through the native bridge now, so the
+    patch target is `_call_classmethod` — see
+    tests/unit/test_bulk_loader_index_rebuild.py for the behaviour tests.
+    """
 
     def test_success_returns_true(self):
         loader, conn, cursor = _make_loader()
-        cursor.execute.return_value = None
-        result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
+        with patch("iris_vector_graph.bulk_loader._call_classmethod", return_value=1):
+            result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
         assert result is True
 
     def test_execute_exception_returns_false(self):
-        # _rebuild_indices has no fallback: any execute exception → False
+        # _rebuild_indices has no fallback: any exception → False
         loader, conn, cursor = _make_loader()
-        cursor.execute.side_effect = Exception("BuildIndices failed")
-        result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
+        with patch(
+            "iris_vector_graph.bulk_loader._call_classmethod",
+            side_effect=Exception("BuildIndices failed"),
+        ):
+            result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
         assert result is False
 
-    def test_total_failure_returns_false(self):
+    def test_failure_status_returns_false(self):
+        """%BuildIndices answers with a %Status, so a falsy one is a failure."""
         loader, conn, cursor = _make_loader()
-        cursor.execute.side_effect = Exception("both calls fail")
-        result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
+        with patch("iris_vector_graph.bulk_loader._call_classmethod", return_value=0):
+            result = loader._rebuild_indices(cursor, "Graph.KG.nodes")
         assert result is False
 
 
@@ -179,7 +195,9 @@ class TestLoadEdges:
         ]
         with patch.object(loader, "_executemany_batched", return_value=2) as mock_exec:
             stats = loader.load_edges(edges, use_noindex=False, skip_existing=False)
-        call_args = mock_exec.call_args_list[0]
+        # The last call is the edges; the one before it registers their endpoints,
+        # which `load_edges` has to do now that rdf_edges has composite FKs.
+        call_args = mock_exec.call_args_list[-1]
         params = call_args[0][2]  # positional arg 3
         assert len(params) == 2  # deduplicated to 2
 
@@ -201,7 +219,7 @@ class TestLoadEdges:
         edges = [("n1", "TREATS", "n2", None), ("n1", "TARGETS", "n3", None)]
         with patch.object(loader, "_executemany_batched", return_value=1) as mock_exec:
             stats = loader.load_edges(edges, skip_existing=True)
-        params = mock_exec.call_args_list[0][0][2]
+        params = mock_exec.call_args_list[-1][0][2]
         assert len(params) == 1  # n1-TREATS-n2 filtered out
 
 
@@ -213,9 +231,8 @@ class TestRebuildAllIndices:
 
     def test_success_all_true(self):
         loader, conn, cursor = _make_loader()
-        cursor.execute.return_value = None
-        cursor.fetchall.return_value = []
-        result = loader.rebuild_all_indices()
+        with patch("iris_vector_graph.bulk_loader._call_classmethod", return_value=1):
+            result = loader.rebuild_all_indices()
         assert all(v is True for v in result.values())
         assert len(result) == 4
 
@@ -226,9 +243,9 @@ class TestRebuildAllIndices:
             call_count[0] += 1
             if call_count[0] == 2:
                 raise RuntimeError("BuildIndices failed")
-        cursor.execute.side_effect = side
-        cursor.fetchall.return_value = []
-        result = loader.rebuild_all_indices()
+            return 1
+        with patch("iris_vector_graph.bulk_loader._call_classmethod", side_effect=side):
+            result = loader.rebuild_all_indices()
         assert False in result.values()
 
 

@@ -21,8 +21,12 @@ class JSON:
     pass
 
 
+# `name=` is not optional here. Without it Strawberry names the scalar after the Python
+# class it wraps, so the published schema carried a lowercase `datetime` scalar — off
+# contract, and client codegen names its generated types after the SDL.
 DateTime = strawberry.scalar(
     datetime,
+    name="DateTime",
     serialize=lambda v: v.isoformat() if v else None,
     parse_value=lambda v: datetime.fromisoformat(v) if isinstance(v, str) else v,
 )
@@ -152,19 +156,41 @@ class Protein(Node):
         limit: int = 10,
         threshold: float = 0.7
     ) -> List["SimilarProtein"]:
-        """Find similar proteins using vector embeddings with HNSW index"""
+        """Find similar proteins using vector embeddings with HNSW index.
+
+        Two things this used to get wrong, both silently:
+
+        * it read an `engine` context key that nothing sets — every caller supplies
+          `db_connection`, as the `protein`/`gene`/`pathway` queries do — so the
+          field answered `[]` for every protein in every deployment;
+        * it passed `self.id` as the `query` of `search_nodes_by_vector`, whose
+          `query` is a vector (or its JSON), not a node ID. A node's own embedding
+          has to be read first; that is what makes this a similarity search rather
+          than a search for a vector spelled `PROTEIN:TP53`.
+
+        The search runs in the default graph, which is the only graph this GraphQL
+        surface addresses (spec 227 scoped the engine, not this API).
+        """
         engine = info.context.get("engine")
-        if not engine:
+        if engine is None:
+            db_connection = info.context.get("db_connection")
+            if db_connection is None:
+                return []
+            from iris_vector_graph.engine import IRISGraphEngine
+
+            engine = IRISGraphEngine(db_connection)
+
+        own = engine.get_embedding(str(self.id))
+        if not own or not own.get("embedding"):
             return []
 
-        try:
-            results = engine.search_nodes_by_vector(
-                query=self.id,
-                k=limit + 1,
-                label_filter="Protein",
-            )
-        except Exception:
-            return []
+        # Not wrapped in a blanket `except`: a failed KNN must reach the caller as a
+        # GraphQL error rather than as "this protein has no similar proteins".
+        results = engine.search_nodes_by_vector(
+            query=list(own["embedding"]),
+            k=limit + 1,
+            label_filter="Protein",
+        )
 
         if not results:
             return []
@@ -184,28 +210,30 @@ class Protein(Node):
             return []
 
         node_ids = [nid for nid, _ in similar_results]
-        nodes_data = engine.get_nodes(node_ids)
+        # Keyed by ID, not by position: `get_nodes` drops an ID it cannot find, and
+        # indexing by position then pairs a node with another node's similarity.
+        nodes_data = {n["id"]: n for n in engine.get_nodes(node_ids) if n}
 
         results_out = []
-        for i, (node_id, similarity) in enumerate(similar_results):
-            if i < len(nodes_data):
-                node_data = nodes_data[i]
-                if node_data:
-                    protein = Protein(
-                        id=strawberry.ID(node_data["id"]),
-                        labels=node_data.get("labels", []),
-                        properties=node_data.get("properties", {}),
-                        created_at=node_data.get("created_at"),
-                        name=node_data.get("name", ""),
-                        function=node_data.get("function"),
-                        organism=node_data.get("organism"),
-                        confidence=node_data.get("confidence"),
-                    )
-                    results_out.append(SimilarProtein(
-                        protein=protein,
-                        similarity=similarity,
-                        distance=None
-                    ))
+        for node_id, similarity in similar_results:
+            node_data = nodes_data.get(node_id)
+            if not node_data:
+                continue
+            protein = Protein(
+                id=strawberry.ID(node_data["id"]),
+                labels=node_data.get("labels", []),
+                properties=node_data.get("properties", {}),
+                created_at=node_data.get("created_at"),
+                name=node_data.get("name", ""),
+                function=node_data.get("function"),
+                organism=node_data.get("organism"),
+                confidence=node_data.get("confidence"),
+            )
+            results_out.append(SimilarProtein(
+                protein=protein,
+                similarity=similarity,
+                distance=None
+            ))
 
         return results_out
 

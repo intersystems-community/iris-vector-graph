@@ -23,16 +23,14 @@ def create_app(engine: "IRISGraphEngine") -> "GraphQLRouter":
     Returns:
         GraphQLRouter for FastAPI integration
     """
+    from .context import build_graphql_context
     from .schema import schema
-    
+
     async def get_context() -> dict[str, Any]:
         """Build GraphQL context with engine and connection."""
-        return {
-            "engine": engine,
-            "db_connection": engine.conn,
-            "owns_connection": False,  # Engine manages its own connection lifecycle
-        }
-    
+        return build_graphql_context(engine)
+
+
     return GraphQLRouter(
         schema,
         context_getter=get_context,

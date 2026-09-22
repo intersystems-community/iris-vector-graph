@@ -24,8 +24,13 @@ class JSON:
     pass
 
 
+# `name=` is not optional here. Without it Strawberry names the scalar after the Python
+# class it wraps, so the published schema carried a lowercase `datetime` scalar — off
+# contract, and client codegen names its generated types after the SDL. This is the
+# definition the shipped schema uses; `api/gql/types.py` holds an unreachable duplicate.
 DateTime = strawberry.scalar(
     datetime,
+    name="DateTime",
     serialize=lambda v: v.isoformat() if v else None,
     parse_value=lambda v: datetime.fromisoformat(v) if isinstance(v, str) else v,
 )
