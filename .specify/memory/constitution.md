@@ -1,6 +1,37 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.3.0 → 1.4.0 (MINOR — principle VI materially expanded)
+Bump rationale: Principle VI named docker-compose.yml as the single authority for
+  "the container name", but this repository runs two containers with two jobs:
+  - ivg-iris-enterprise (31972), which every test, fixture and spec artifact means,
+    declared in tests/conftest.py:12 and :162
+  - iris_vector_graph (1972, Community Edition), the single-node quickstart that
+    README.md:21, docs/setup/QUICKSTART.md:20 and docs/OPERATIONS.md:26 publish
+  Spec 227's planning surfaced the conflict: following Principle VI literally would
+  have put a Community-Edition container name (MaxServerConn=1) into test code — the
+  los-iris failure mode the principle exists to prevent. VI now splits the authority
+  by purpose instead of naming one file for both.
+
+Modified principles:
+  - VI: authoritative-source list split into test container (tests/conftest.py) and
+        quickstart container (docker-compose.yml), with the reason stated inline.
+
+No other principles changed.  Templates do not require updates.
+
+Follow-on fixes made with this amendment:
+  - tests/conftest.py:384, tests/integration/test_cypher_api_exception_paths.py:36 and
+    tests/unit/test_bfs_arno.py:126 defaulted IVG_TEST_CONTAINER to the stale
+    "ivg-iris" while conftest.py:12 used "ivg-iris-enterprise". The mismatch made the
+    arno fixtures run initialize_schema() concurrently — the SQLCODE -110 their own
+    comment says they avoid — with the failure swallowed by a logger.warning.
+  - New Gate 6 in tests/unit/test_spec_hygiene_gates.py fails when IVG_TEST_CONTAINER
+    has more than one default under tests/.
+  - Still open, outside this amendment: docker-compose.yml claims host port 1972, which
+    the workspace container-exclusivity rule reserves for opsreview-iris.
+
+PREVIOUS REPORT (1.2.0 → 1.3.0)
+-------------------------------
 Version change: 1.2.0 → 1.3.0 (MINOR — new principle VIII added)
 Bump rationale: Added Principle VIII (Spec-Hygiene Gates) after the Sept 2026
   incident where 27 tests were silently fake-green for an extended period:
@@ -17,7 +48,6 @@ Modified principles:
 
 No other principles changed.  Templates do not require updates.
 -->
-
 
 # iris-vector-graph Constitution
 
@@ -84,11 +114,21 @@ first be verified against the authoritative source in this repository before use
 
 **Authoritative sources**:
 
-- Container name → `docker-compose.yml` (`container_name:` field)
-- IRIS port → `docker-compose.yml` (`ports:` field)
+- **Test** container name and port → `tests/conftest.py` (`IVG_TEST_CONTAINER` /
+  `IVG_PORT` defaults) — this is the container every test, fixture and spec artifact
+  means when it says "the container"
+- **Quickstart** container name and port → `docker-compose.yml` (`container_name:` /
+  `ports:`) — the single-node install `README.md` and `docs/setup/QUICKSTART.md`
+  publish to users
 - Package name / version → `pyproject.toml`
 - Schema prefix → `iris_vector_graph/engine.py` (`set_schema_prefix(...)` call)
 - Test infrastructure → `tests/conftest.py`
+
+This repository has **two** containers with two different jobs, and they do not share a
+name. A spec, test, fixture or CI step reads `tests/conftest.py`; user-facing install
+documentation reads `docker-compose.yml`. Reading the compose name into test code is
+itself a Principle VI violation, because the compose container is Community Edition
+(`MaxServerConn=1`) and cannot serve a test run that opens several connections.
 
 **Never assume. Never copy from another project. Always look first.**
 
@@ -203,6 +243,7 @@ had typos (`sqlid_column`, `viavia_source`) that were never caught because the t
 that exercise them were silently skipped (Gate 1 failure).
 
 **Authoritative files**:
+
 - `tests/unit/test_store_protocol.py::TestGraphStoreProtocol::test_mock_has_all_protocol_methods`
 - `tests/unit/test_spec_hygiene_gates.py::test_fhir_sql_columns_match_schema`
 - `scripts/enterprise-container.sh` (Gates 2 and 3)
@@ -232,4 +273,4 @@ amendments MUST be documented and explicitly approved before implementation begi
 Version increments follow semantic versioning: MAJOR for backward-incompatible governance
 changes, MINOR for new or materially expanded principles, PATCH for clarifications.
 
-**Version**: 1.3.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-09-07
+**Version**: 1.4.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-09-19
