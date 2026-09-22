@@ -38,9 +38,9 @@ Class Graph.KG.Eraser Extends %RegisteredObject
 ///
 /// Returns the number of Graph_KG.nodes and Graph_KG.rdf_edges rows removed,
 /// which is what Engine.drop_graph returned. The count deliberately does not
-/// include globals or the stores reached by node id: those are derived from the
-/// rows or shared with other graphs, so adding them would make the number mean
-/// "work done" instead of "content removed", and no caller can act on that.
+/// include the globals: those are derived from the rows, so adding them would make
+/// the number mean "work done" instead of "content removed", and no caller can act
+/// on that.
 ///
 /// Throws when the graph name cannot be represented as a subscript (ADR-0003),
 /// before anything is deleted, and when any step fails, after rolling back.
@@ -54,38 +54,59 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 	Try {
 		TSTART
 
-		// --- what this graph names, before its rows are gone ----------------
+		// --- what this graph names ------------------------------------------
 		//
-		// ^KG("label") and ^KG("prop") carry no graph subscript, so they can only
-		// be reached through the node ids this erase is removing. Collected first
-		// because the rows that name them are about to be deleted.
-		Kill tNode, tLabel
-		Set tS = ""
-		&sql(DECLARE ivgEraseNodes CURSOR FOR
-			SELECT node_id INTO :tS
-			FROM Graph_KG.nodes
-			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
-		&sql(OPEN ivgEraseNodes)
-		For {
-			&sql(FETCH ivgEraseNodes)
-			Quit:SQLCODE'=0
-			Set tNode(tS) = ""
-		}
-		&sql(CLOSE ivgEraseNodes)
+		// Nothing to collect. Spec 230 gave ^KG("prop"), ^KG("label"), ^KG("deg2p")
+		// and ^KG("deg2p_exact") a graph subscript, so this erase no longer reaches
+		// them through the node ids it is deleting — which it could not do correctly:
+		// since the re-key to UNIQUE (graph_id, node_id) a node id lives in two
+		// graphs, and killing ^KG("prop", nodeId) took both graphs' entries. The two
+		// cursors that collected those ids are gone with the walk they fed.
 
-		Set tS = "", tL = ""
-		&sql(DECLARE ivgEraseLabels CURSOR FOR
-			SELECT l.s, l.label INTO :tS, :tL
-			FROM Graph_KG.rdf_labels l, Graph_KG.nodes n
-			WHERE l.s = n.node_id
-			  AND COALESCE(n.graph_id, '') = COALESCE(:tName, ''))
-		&sql(OPEN ivgEraseLabels)
+		// --- which physical tables hold this graph's vectors ------------------
+		//
+		// From the registry, restricted to routed tables. Never recomputed from the
+		// (graph, model) hash: the registry row is the authority (FR-011), and a
+		// recomputed name that finds nothing leaves a table full of this graph's
+		// vectors standing after the erase.
+		//
+		// %STARTSWITH, not LIKE 'kg_emb_%': in LIKE, `_` is a single-character
+		// wildcard, so the pattern would also match a legacy name and turn a
+		// registry row for kg_NodeEmbeddings into a DROP TABLE.
+		//
+		// Both prefixes. A node route is kg_emb_<hash> and an edge route is
+		// kg_eemb_<hash> (FR-006), and 'kg_eemb_x' does not start with 'kg_emb_' — so
+		// an erase matching the node prefix alone left every edge route standing with
+		// this graph's vectors in it.
+		Kill tRoute
+		Set tT = ""
+		&sql(DECLARE ivgEraseRoutes CURSOR FOR
+			SELECT table_name INTO :tT
+			FROM Graph_KG.embedding_registry
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')
+			  AND ((table_name %STARTSWITH 'kg_emb_') OR (table_name %STARTSWITH 'kg_eemb_')))
+		&sql(OPEN ivgEraseRoutes)
 		For {
-			&sql(FETCH ivgEraseLabels)
+			&sql(FETCH ivgEraseRoutes)
 			Quit:SQLCODE'=0
-			Set tLabel(tL, tS) = ""
+			Set tRoute(tT) = "claimed"
 		}
-		&sql(CLOSE ivgEraseLabels)
+		&sql(CLOSE ivgEraseRoutes)
+
+		// ...and then from the catalog, for the tables the registry does not name.
+		//
+		// A routed table outlives its registry row: CREATE TABLE is DDL and is durable
+		// the moment it runs, while the row is an ordinary INSERT, so any rollback after
+		// the create leaves an orphan. The orphan still carries its FK on
+		// (graph_id, node_id), and a foreign key does not consult the registry — so a
+		// route collected only from the registry is never emptied, the DELETE from
+		// Graph_KG.nodes below fails its referential check with SQLCODE -124, and this
+		// whole transaction rolls back. One orphan anywhere in the namespace makes every
+		// erase fail and erase nothing.
+		//
+		// The registry stays the authority for what may be DROPPED (FR-011) — that is
+		// why the two are told apart here, and why only "claimed" reaches the DDL below.
+		Do ..CollectOrphanRoutes(.tRoute)
 
 		// --- the rows, in FK-safe order -------------------------------------
 		//
@@ -96,25 +117,61 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		// empty string, so "graph_id = :tName" for the default graph compiles to
 		// "graph_id = NULL" and matches nothing. Either omission erases half the
 		// default graph and returns a count that looks like success.
+		//
+		// Every child table names its own graph. Reaching them through
+		// "s IN (SELECT node_id FROM nodes WHERE graph_id = ...)" was correct while a
+		// node id belonged to exactly one graph; after the re-key that subquery
+		// returns the shared id and the DELETE takes both graphs' children with it,
+		// then reports a count that reads like success.
 		&sql(DELETE FROM Graph_KG.rdf_labels
-			WHERE s IN (SELECT node_id FROM Graph_KG.nodes
-				WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')))
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_labels", SQLCODE)) }
 
 		&sql(DELETE FROM Graph_KG.rdf_props
-			WHERE s IN (SELECT node_id FROM Graph_KG.nodes
-				WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')))
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_props", SQLCODE)) }
 
+		// The BM25 corpus. No erase path touched it before spec 230, so a graph's
+		// documents outlived the graph itself and the next kg_BM25_SEARCH scored
+		// text belonging to nothing — and once docs.id means a node id
+		// (FR-004), the id it named came back attached to whoever created that
+		// node next. It carries no FK, so its position here is free; it is deleted
+		// with the other content tables rather than after the commit because a
+		// half-erased corpus is worse than none.
+		&sql(DELETE FROM Graph_KG.docs
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
+		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("docs", SQLCODE)) }
+
+		// The legacy tables keep their rows scoped and keep their schema: both are
+		// named statically by kg_KNN_VEC, by the bulk insert templates and by route
+		// adoption, so dropping either would take the schema with the content. Only
+		// the routed kg_emb_ and kg_eemb_ tables are dropped, further down.
 		&sql(DELETE FROM Graph_KG.kg_NodeEmbeddings
-			WHERE id IN (SELECT node_id FROM Graph_KG.nodes
-				WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')))
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("kg_NodeEmbeddings", SQLCODE)) }
 
 		&sql(DELETE FROM Graph_KG.kg_NodeEmbeddings_optimized
-			WHERE id IN (SELECT node_id FROM Graph_KG.nodes
-				WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')))
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("kg_NodeEmbeddings_optimized", SQLCODE)) }
+
+		// Each routed table is emptied inside the transaction and dropped after the
+		// commit. A routed table carries a FK on (graph_id, node_id), so its rows
+		// have to go before the node rows in any case; emptying it first also means
+		// that if the DDL later fails, what survives is an empty route at its
+		// original width rather than an orphan table a later create=True would adopt
+		// at the wrong width and then fail every INSERT with SQLCODE -104.
+		Set tT = ""
+		For {
+			Set tT = $Order(tRoute(tT))
+			Quit:tT=""
+			Set tSql = "DELETE FROM Graph_KG." _ tT _ " WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
+			Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql, tName)
+			// -30 is "table not found": the registry named a route whose table is
+			// already gone, and the row itself is removed after the commit.
+			If (tRs.%SQLCODE < 0) && (tRs.%SQLCODE '= -30) {
+				$$$ThrowStatus(..SqlErr(tT, tRs.%SQLCODE))
+			}
+		}
 
 		// Reifications name an edge id, so they have to go before the edge rows.
 		&sql(DELETE FROM Graph_KG.rdf_reifications
@@ -122,12 +179,15 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 				WHERE COALESCE(graph_id, '') = COALESCE(:tName, '')))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_reifications", SQLCODE)) }
 
-		// Correlated EXISTS rather than a row-value IN: IRIS SQL rejects
-		// "(s, p, o_id) IN (SELECT ...)" at prepare time with SQLCODE -1.
-		&sql(DELETE FROM Graph_KG.kg_EdgeEmbeddings ee
-			WHERE EXISTS (SELECT 1 FROM Graph_KG.rdf_edges e
-				WHERE e.s = ee.s AND e.p = ee.p AND e.o_id = ee.o_id
-				  AND COALESCE(e.graph_id, '') = COALESCE(:tName, '')))
+		// The table names its own graph since spec 230 (FR-006), so this is an
+		// ordinary scoped delete. It used to reach the rows through a correlated
+		// EXISTS against rdf_edges on (s, p, o_id) — which was only ever as correct
+		// as the assumption that a triple belonged to one graph, and stopped being
+		// correct the moment two graphs could hold the same node ids: an edge
+		// embedding written for graph B survived B's erase if A held the same
+		// triple, and vanished during A's.
+		&sql(DELETE FROM Graph_KG.kg_EdgeEmbeddings
+			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("kg_EdgeEmbeddings", SQLCODE)) }
 
 		&sql(DELETE FROM Graph_KG.rdf_edges
@@ -144,7 +204,7 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		//
 		// One Kill per store, because the graph key is the FIRST subscript in every
 		// one of them. That is the whole return on ADR-0001: erasing a graph from
-		// ^KG is nine Kills rather than nine walks.
+		// ^KG is thirteen Kills rather than thirteen walks.
 		Set tHadEdges = $Data(^KG("out", tKey))
 		Kill ^KG("out", tKey)
 		Kill ^KG("in", tKey)
@@ -155,25 +215,10 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		Kill ^KG("bucket", tKey)
 		Kill ^KG("tagg", tKey)
 		Kill ^KG("edgeprop", tKey)
-
-		// --- the globals with no graph subscript, reached by node id ---------
-		Set tS = ""
-		For {
-			Set tS = $Order(tNode(tS))
-			Quit:tS=""
-			Kill ^KG("prop", tS)
-		}
-		Set tL = ""
-		For {
-			Set tL = $Order(tLabel(tL))
-			Quit:tL=""
-			Set tS = ""
-			For {
-				Set tS = $Order(tLabel(tL, tS))
-				Quit:tS=""
-				Kill ^KG("label", tL, tS)
-			}
-		}
+		Kill ^KG("prop", tKey)
+		Kill ^KG("label", tKey)
+		Kill ^KG("deg2p", tKey)
+		Kill ^KG("deg2p_exact", tKey)
 		// ^KG("labelset") is content-addressed interning of temporal label sets and
 		// is deliberately append-only — Graph.KG.TemporalIndex documents that no
 		// purge touches it. A surviving entry is a hash with no referent, not
@@ -187,16 +232,56 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		If $TLevel > 0 { TROLLBACK }
 		Throw tEx
 	}
+
+	// --- after the commit: the routed tables themselves --------------------
+	//
+	// DDL is outside the transaction because a DDL rollback is not dependable in
+	// IRIS: a DROP TABLE that participated in a rolled-back transaction can leave
+	// the class definition and the table disagreeing. The content is already gone by
+	// the time this runs, so the worst outcome here is a route that exists and is
+	// empty — recoverable, and visible in the inventory.
+	//
+	// The drop comes first and the registry row second: dropping its table takes the
+	// route's ANN index with it (research R3), and a registry row removed before a
+	// failed drop would leave an orphan table nothing knows about.
+	//
+	// Only the routes the registry claims. An orphan was emptied of this graph's rows
+	// above because a foreign key forced the issue, but it may still hold another
+	// graph's vectors, and nothing here knows its declared width. Dropping a table on
+	// the strength of its name alone is how a graph loses vectors it never asked to
+	// erase; the orphan is left standing and shows up in the inventory as a route with
+	// no identity.
+	Set tT = ""
+	For {
+		Set tT = $Order(tRoute(tT))
+		Quit:tT=""
+		Continue:tRoute(tT)'="claimed"
+		Try {
+			Set tRs = ##class(%SQL.Statement).%ExecDirect(, "DROP TABLE Graph_KG." _ tT)
+			If (tRs.%SQLCODE < 0) && (tRs.%SQLCODE '= -30) {
+				$$$ThrowStatus(..SqlErr(tT, tRs.%SQLCODE))
+			}
+			&sql(DELETE FROM Graph_KG.embedding_registry
+				WHERE table_name = :tT)
+		} Catch tDrop {
+			// Left deliberately: the route's rows are gone, and keeping its registry
+			// row means the next resolve reuses the route at its recorded width
+			// instead of adopting a table whose width nothing has checked.
+		}
+	}
+	// Graph_KG.embedding_quarantine is not named anywhere above. A quarantined row
+	// is there precisely because nobody could say which graph it belongs to, so no
+	// graph's erase can claim it (FR-039).
+
 	Quit tRemoved
 }
 
 /// Remove every graph's content from every store, including the stores no
 /// per-graph erase can reach.
 ///
-/// The stores keyed by node id or by triple alone cannot be split by graph, which
-/// is why they accumulate: rdf_labels and rdf_props for a node named by two
-/// graphs, ^NKG's graph-blind interning, ^KG("labelset")'s append-only hashes,
-/// ^ArnoKG's whole-database snapshot. "All" has no attribution problem, so one
+/// Some stores cannot be split by graph at all: ^NKG's graph-blind interning,
+/// ^KG("labelset")'s append-only hashes, ^KG("deg2p_exact_merged")'s counts over
+/// ^NKG, ^ArnoKG's whole-database snapshot. "All" has no attribution problem, so one
 /// inventory serves both operations and this is the only place those stores can be
 /// emptied honestly.
 ///
@@ -207,12 +292,57 @@ ClassMethod EraseAll() As %Integer
 	Try {
 		TSTART
 
+		// Every routed table, whichever graph it belongs to, and both prefixes:
+		// kg_emb_ for node routes, kg_eemb_ for edge routes (FR-006). Collected
+		// before the registry is emptied, because the registry row is the only record
+		// of the name (FR-011) — %STARTSWITH for the same reason as in EraseGraph:
+		// `_` is a LIKE wildcard, and kg_NodeEmbeddings must not become a DROP TABLE.
+		Kill tRoute
+		Set tT = ""
+		&sql(DECLARE ivgEraseAllRoutes CURSOR FOR
+			SELECT table_name INTO :tT
+			FROM Graph_KG.embedding_registry
+			WHERE (table_name %STARTSWITH 'kg_emb_') OR (table_name %STARTSWITH 'kg_eemb_'))
+		&sql(OPEN ivgEraseAllRoutes)
+		For {
+			&sql(FETCH ivgEraseAllRoutes)
+			Quit:SQLCODE'=0
+			Set tRoute(tT) = "claimed"
+		}
+		&sql(CLOSE ivgEraseAllRoutes)
+
+		// Plus the orphans, for the reason given in EraseGraph: their FK on
+		// (graph_id, node_id) blocks the DELETE from Graph_KG.nodes below whether or not
+		// a registry row names them.
+		Do ..CollectOrphanRoutes(.tRoute)
+
+		Set tT = ""
+		For {
+			Set tT = $Order(tRoute(tT))
+			Quit:tT=""
+			Set tRs = ##class(%SQL.Statement).%ExecDirect(, "DELETE FROM Graph_KG." _ tT)
+			If (tRs.%SQLCODE < 0) && (tRs.%SQLCODE '= -30) {
+				$$$ThrowStatus(..SqlErr(tT, tRs.%SQLCODE))
+			}
+		}
+
+		// The whole registry, not only the routed rows: a legacy table's identity row
+		// describes vectors that no longer exist once this method has emptied it, and
+		// a surviving row would make the next write conflict with a model nothing in
+		// the namespace was written by. Graph_KG.embedding_quarantine is left alone —
+		// it is the only copy of vectors whose graph could not be recovered, which is
+		// evidence, not content (FR-039, FR-040).
+		&sql(DELETE FROM Graph_KG.embedding_registry)
+		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("embedding_registry", SQLCODE)) }
+
 		&sql(DELETE FROM Graph_KG.rdf_reifications)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_reifications", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.rdf_labels)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_labels", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.rdf_props)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_props", SQLCODE)) }
+		&sql(DELETE FROM Graph_KG.docs)
+		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("docs", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.kg_NodeEmbeddings)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("kg_NodeEmbeddings", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.kg_NodeEmbeddings_optimized)
@@ -241,6 +371,14 @@ ClassMethod EraseAll() As %Integer
 		Kill ^KG("label")
 		Kill ^KG("prop")
 		Kill ^KG("labelset")
+		// The two-hop stores. Absent from this list until spec 230, so EraseAll
+		// reported its row count and left ^KG("deg2p") holding the previous graph's
+		// counts — and the next KHop2CountFast answered from them for a database with
+		// no edges at all. "deg2p_exact_merged" is Arno's graph-blind sketch of the
+		// same statistic and is content like the rest.
+		Kill ^KG("deg2p")
+		Kill ^KG("deg2p_exact")
+		Kill ^KG("deg2p_exact_merged")
 
 		Do ..InvalidateDerived(1)
 		Kill ^ArnoKG
@@ -253,6 +391,31 @@ ClassMethod EraseAll() As %Integer
 		If $TLevel > 0 { TROLLBACK }
 		Throw tEx
 	}
+
+	// After the commit, for the same reason as in EraseGraph: an emptied route that
+	// survives the drop is reported by the inventory and can be reused at its
+	// recorded width, whereas a DDL rollback is not dependable.
+	//
+	// Claimed routes only, as in EraseGraph. An orphan has been emptied by the loop
+	// above and stays standing: this method wipes the whole registry, so after it every
+	// surviving kg_emb_ table is unclaimed by definition, and dropping tables on the
+	// strength of their names is not something an erase should start doing here.
+	Set tT = ""
+	For {
+		Set tT = $Order(tRoute(tT))
+		Quit:tT=""
+		Continue:tRoute(tT)'="claimed"
+		Try {
+			Set tRs = ##class(%SQL.Statement).%ExecDirect(, "DROP TABLE Graph_KG." _ tT)
+			If (tRs.%SQLCODE < 0) && (tRs.%SQLCODE '= -30) {
+				$$$ThrowStatus(..SqlErr(tT, tRs.%SQLCODE))
+			}
+		} Catch tDrop {
+			// An empty table left standing is not content; it is visible in the
+			// inventory as a route with no rows.
+		}
+	}
+
 	Quit tRemoved
 }
 
@@ -277,6 +440,47 @@ ClassMethod InvalidateDerived(pTouchedStructural As %Boolean) [ Private ]
 		Kill ^NKG
 	}
 	Do ##class(Graph.KG.ArnoAccel).BumpVersion()
+}
+
+/// Add every routed table the catalog knows and pRoute does not, marked "orphan".
+///
+/// Both prefixes: kg_emb_ for a node route, kg_eemb_ for an edge route (FR-006).
+/// An edge route carries no foreign key on the nodes table, so an orphaned one does
+/// not block the erase the way a node route does — it just keeps its vectors, which
+/// is the thing this whole class exists to prevent.
+///
+/// A routed table can outlive its registry row. CREATE TABLE is DDL and is durable the
+/// moment it runs; the row that names it is an ordinary INSERT, so a rollback anywhere
+/// after the create — the writer's own, the lost-race handler in
+/// EmbeddingsMixin._create_route, a test fixture's — leaves a table nothing knows
+/// about. The orphan keeps its foreign key on (graph_id, node_id), and a foreign key
+/// does not read the registry: unless its rows go first, DELETE FROM Graph_KG.nodes
+/// fails with SQLCODE -124 and the erase rolls back having removed nothing. One orphan
+/// is enough to break every erase in the namespace.
+///
+/// Callers keep the distinction: "claimed" rows may be dropped, "orphan" rows may only
+/// be emptied. The registry remains the authority for DDL (FR-011).
+///
+/// %STARTSWITH rather than LIKE 'kg_emb_%' for the same reason as the registry cursors:
+/// in LIKE, `_` is a single-character wildcard, and kg_NodeEmbeddings must never be
+/// collected as a route.
+ClassMethod CollectOrphanRoutes(ByRef pRoute) [ Private ]
+{
+	Set tT = ""
+	&sql(DECLARE ivgCatalogRoutes CURSOR FOR
+		SELECT TABLE_NAME INTO :tT
+		FROM INFORMATION_SCHEMA.TABLES
+		WHERE TABLE_SCHEMA = 'Graph_KG'
+		  AND ((TABLE_NAME %STARTSWITH 'kg_emb_') OR (TABLE_NAME %STARTSWITH 'kg_eemb_')))
+	&sql(OPEN ivgCatalogRoutes)
+	For {
+		&sql(FETCH ivgCatalogRoutes)
+		Quit:SQLCODE'=0
+		Continue:tT=""
+		Continue:$Data(pRoute(tT))
+		Set pRoute(tT) = "orphan"
+	}
+	&sql(CLOSE ivgCatalogRoutes)
 }
 
 /// Remove one graph's live statements and their tuple entries.

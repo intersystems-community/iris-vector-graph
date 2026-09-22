@@ -71,8 +71,14 @@ def _seed(engine, graph):
 
     Both are written through the maintained paths, so every store the Eraser has
     to reach is populated the way a real caller would populate it.
+
+    The node is created *in* `graph`. It used to be created unscoped and then
+    re-keyed by a backdoor `UPDATE Graph_KG.nodes SET graph_id`, which since 227
+    `fk_labels_node` refuses outright (`SQLCODE -123`) — a node carrying labels
+    cannot change graph in place. A caller writing a graph's content names the
+    graph on the node too.
     """
-    engine.create_node(f"n_{graph}", labels=["Person"], properties={"k": "v"})
+    engine.create_node(f"n_{graph}", labels=["Person"], properties={"k": "v"}, graph=graph)
     engine.create_edge("a", "KNOWS", "b", graph=graph)
     engine.create_edge_temporal("a", "SAW", "b", timestamp=TS, graph=graph)
 
@@ -145,8 +151,6 @@ def test_erase_removes_the_nodes_and_their_labels_and_props(engine):
     _seed(engine, GRAPH)
     node = f"n_{GRAPH}"
     cursor = engine.conn.cursor()
-    cursor.execute("UPDATE Graph_KG.nodes SET graph_id = ? WHERE node_id = ?", [GRAPH, node])
-    engine.conn.commit()
 
     engine.erase_graph(GRAPH)
 
