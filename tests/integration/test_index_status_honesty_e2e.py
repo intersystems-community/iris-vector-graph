@@ -5,13 +5,19 @@ state from a row count: `ONLINE` when `kg_NodeEmbeddings_optimized` had rows, `B
 when it did not. Neither is an index. `BUILDING` is the worse of the two — it tells an
 operator to wait for something that is not happening.
 
-Measured on `ivg-iris-enterprise` while writing these tests: an HNSW index **cannot** exist
-on `kg_NodeEmbeddings` or `kg_NodeEmbeddings_optimized` at all. Both have a VARCHAR `id` as
-their IDKEY, and IRIS refuses ANN indices there (`ERROR #7222: %SQL.Index ANN indices are
-only supported when the IDKEY is based on a single positive integer attribute`). So the
-fabricated row promised a build that no amount of waiting could finish.
-`TestHnswCannotExistOnTheEmbeddingTables` pins that refusal, because it is the reason the
-documentation corrections in this phase are corrections and not a change of policy.
+In 3.2.0 that row promised a build no amount of waiting could finish: both embedding
+tables had a VARCHAR `id` as their IDKEY, and IRIS refuses ANN indices there (`ERROR
+#7222: %SQL.Index ANN indices are only supported when the IDKEY is based on a single
+positive integer attribute`).
+
+4.0.0 removes that obstacle. The embedding tables are keyed `emb_rowid BIGINT IDENTITY
+PRIMARY KEY` with `UNIQUE (graph_id, node_id)` beside it, so an HNSW index over `emb` is
+now permitted and `TestARealIndexOnTheEmbeddingTableIsReported` builds one. That makes the
+honesty of the report matter more, not less: an index that can exist has to be reported
+when it does and only when it does, from `%Dictionary.CompiledIndex` rather than from a
+row count. Any index these tests build is dropped again — one left behind is reported to
+every later test as a real index, and blocks `ALTER COLUMN emb` besides (`ERROR #5414:
+Vector without a fixed length is not allowed in %SQL.Index functional indices`).
 """
 
 import uuid
@@ -46,10 +52,24 @@ class TestNoIndexIsInvented:
         width = GraphSchema.get_embedding_dimension(cursor, table) or 4
         vector = ",".join(["0.1"] * width)
         ids = [f"IVG226_IDX:{uuid.uuid4().hex[:8]}:{i}" for i in range(3)]
+        nodes_table = engine._t("nodes")
         try:
             for node_id in ids:
+                # 4.0.0's `fk_emb_node_opt` is composite — (graph_id, node_id) against
+                # `nodes` — so an embedding for an unregistered node is refused with
+                # SQLCODE -121 and this test failed before reaching its assertion.
                 cursor.execute(
-                    f"INSERT INTO {table} (id, emb) VALUES (?, TO_VECTOR(?, DOUBLE))",
+                    f"INSERT INTO {nodes_table} (node_id, graph_id) VALUES (?, '')",
+                    [node_id],
+                )
+            engine.conn.commit()
+            for node_id in ids:
+                # 4.0.0 columns: `graph_id` + `node_id`, no `id`. Spelling `graph_id` out
+                # rather than leaning on its DEFAULT '', because the default graph being
+                # '' is the thing under test everywhere else in this suite.
+                cursor.execute(
+                    f"INSERT INTO {table} (graph_id, node_id, emb) "
+                    f"VALUES ('', ?, TO_VECTOR(?, DOUBLE))",
                     [node_id, vector],
                 )
             engine.conn.commit()
@@ -61,7 +81,14 @@ class TestNoIndexIsInvented:
         finally:
             for node_id in ids:
                 try:
-                    cursor.execute(f"DELETE FROM {table} WHERE id = ?", [node_id])
+                    cursor.execute(f"DELETE FROM {table} WHERE node_id = ?", [node_id])
+                except Exception:
+                    pass
+            for node_id in ids:
+                try:
+                    cursor.execute(
+                        f"DELETE FROM {nodes_table} WHERE node_id = ?", [node_id]
+                    )
                 except Exception:
                     pass
             try:
@@ -78,8 +105,11 @@ class TestNoIndexIsInvented:
 
 
 class TestARealHnswIndexIsReported:
-    """The positive half. It cannot be asserted through `_show_indexes` on this schema —
-    see the module docstring — so it is asserted at the seam `_show_indexes` reads."""
+    """The seam `_show_indexes` reads, exercised on a table of this test's own making.
+
+    Kept separate from the embedding table below: a scratch table proves `_hnsw_indexes`
+    reads the dictionary without putting an index on schema every other test shares.
+    """
 
     @pytest.fixture
     def ann_table(self, engine):
@@ -116,22 +146,51 @@ class TestARealHnswIndexIsReported:
         assert engine._hnsw_indexes("Graph_KG.ivg226_no_such_table") == []
 
 
-class TestHnswCannotExistOnTheEmbeddingTables:
-    """Why the removed row could never have become true."""
+class TestARealIndexOnTheEmbeddingTableIsReported:
+    """4.0.0's integer `emb_rowid` IDKEY makes an HNSW index on the embedding table legal.
 
-    def test_creating_one_is_refused_because_the_idkey_is_a_string(self, engine):
-        cursor = engine.conn.cursor()
+    3.2.0's version of this class asserted the opposite, and asserted it by *attempting*
+    the create — so once the create started succeeding, the test both failed and left a
+    live ONLINE index on `kg_NodeEmbeddings_optimized`, which every later reader then
+    truthfully reported. Built and dropped inside one test here for that reason.
+    """
+
+    @pytest.fixture
+    def index_on_optimized(self, engine):
         table = engine._t("kg_NodeEmbeddings_optimized")
-        with pytest.raises(Exception) as caught:
-            cursor.execute(
-                f"CREATE INDEX ivg226_refused ON {table} (emb) AS HNSW(Distance='Cosine')"
-            )
-            engine.conn.commit()
-        message = str(caught.value)
-        assert "7222" in message or "ANN" in message.upper()
+        name = f"ivg227_ann_{uuid.uuid4().hex[:8]}"
+        cursor = engine.conn.cursor()
+        cursor.execute(f"CREATE INDEX {name} ON {table} (emb) AS HNSW(Distance='Cosine')")
+        engine.conn.commit()
+        try:
+            yield table, name
+        finally:
+            try:
+                cursor.execute(f"DROP INDEX {name} ON {table}")
+                engine.conn.commit()
+            except Exception:
+                pass
+            cursor.close()
 
-        # And the refusal leaves nothing behind — no half-built index to report.
+    def test_the_index_is_reported_under_its_real_name(self, engine, index_on_optimized):
+        table, name = index_on_optimized
+        assert [n for n, _ in engine._hnsw_indexes(table)] == [name]
+
+        reported = _hnsw_rows(engine)
+        assert [row[0] for row in reported] == [name]
+        assert _HNSW_ROW_NAME not in _index_rows(engine), (
+            "the report named the real index and invented the old one as well"
+        )
+
+    def test_dropping_it_stops_the_report(self, engine, index_on_optimized):
+        """The other half of honesty: the row goes when the index does."""
+        table, name = index_on_optimized
+        cursor = engine.conn.cursor()
+        try:
+            cursor.execute(f"DROP INDEX {name} ON {table}")
+            engine.conn.commit()
+        finally:
+            cursor.close()
+
         assert engine._hnsw_indexes(table) == []
-        cursor.execute(f"SELECT COUNT(*) FROM {table}")
-        assert cursor.fetchone() is not None
-        cursor.close()
+        assert _hnsw_rows(engine) == []

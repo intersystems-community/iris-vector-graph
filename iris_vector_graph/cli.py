@@ -24,6 +24,89 @@ def _client(url: str, api_key: str | None):
     return IVGClient(url, api_key=api_key)
 
 
+def _engine_from_env(**overrides):
+    """An engine connected straight to IRIS, not through the HTTP server.
+
+    The inventory (spec 227, FR-038) is a question about this namespace's tables and
+    class dictionary, and the operator asking it is usually asking *because* the server
+    is not the thing they are unsure about. Everything else in this CLI goes through
+    `IVGClient`; this one command does not, so it reads the same environment variables
+    `server start` forwards.
+    """
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    host = overrides.get("host") or os.environ.get("IRIS_HOST")
+    if not host:
+        raise RuntimeError(
+            "No IRIS connection: set IRIS_HOST (and IRIS_PORT / IRIS_NAMESPACE / "
+            "IRIS_PASSWORD) or pass --iris-host."
+        )
+    port = int(overrides.get("port") or os.environ.get("IRIS_PORT", "1972"))
+    namespace = overrides.get("namespace") or os.environ.get("IRIS_NAMESPACE", "USER")
+    username = overrides.get("username") or os.environ.get("IRIS_USERNAME", "_SYSTEM")
+    password = overrides.get("password") or os.environ.get("IRIS_PASSWORD", "SYS")
+
+    import iris
+
+    conn = iris.dbapi.connect(
+        hostname=host,
+        port=port,
+        namespace=namespace,
+        username=username,
+        password=password,
+    )
+    return IRISGraphEngine(conn)
+
+
+#: Column order of the printed inventory. `index_error` is not a column — it is too wide
+#: for one — and is printed under the table for the routes that have one.
+_INVENTORY_COLUMNS = (
+    "graph_id",
+    "model_key",
+    "table_name",
+    "dimension",
+    "dtype",
+    "row_count",
+    "index_state",
+    "index_name",
+    "recall_measured",
+)
+
+
+def _inventory_payload(rows: list) -> dict:
+    """The inventory as plain data, with the routed-table count FR-038 asks for.
+
+    `routed_tables` counts rows that name a table, not rows: a graph with nodes and no
+    route is reported (US4-3) and is not a routed table, and conflating the two makes the
+    number an operator watches grow when nothing was created.
+    """
+    from dataclasses import asdict
+
+    inventory = [asdict(row) for row in rows]
+    return {
+        "inventory": inventory,
+        "routed_tables": sum(1 for row in inventory if row.get("table_name")),
+    }
+
+
+def _print_inventory(payload: dict):
+    rows = payload["inventory"]
+    table = [
+        [
+            row.get(column) if row.get(column) is not None else "-"
+            for column in _INVENTORY_COLUMNS
+        ]
+        for row in rows
+    ]
+    if table:
+        _print_table(list(_INVENTORY_COLUMNS), table)
+    count = payload["routed_tables"]
+    print(f"{count} routed table{'s' if count != 1 else ''}")
+    for row in rows:
+        if row.get("index_error"):
+            print(f"  {row.get('table_name')}: {row['index_state']} — {row['index_error']}")
+
+
 def _print_table(columns: list, rows: list):
     if not rows:
         print("(no results)")
@@ -145,6 +228,42 @@ if _HAS_CLICK:
         except Exception as e:
             print(f"Schema status failed: {e}", file=sys.stderr)
             sys.exit(1)
+
+    @cli.group()
+    def embeddings():
+        pass
+
+    @embeddings.command("inventory")
+    @click.option("--json-output", is_flag=True, help="Output JSON instead of a table")
+    @click.option("--iris-host", envvar="IRIS_HOST", default=None)
+    @click.option("--iris-port", envvar="IRIS_PORT", default=None)
+    @click.option("--iris-namespace", envvar="IRIS_NAMESPACE", default=None)
+    @click.option("--iris-username", envvar="IRIS_USERNAME", default=None)
+    @click.option("--iris-password", envvar="IRIS_PASSWORD", default=None)
+    def embeddings_inventory(
+        json_output, iris_host, iris_port, iris_namespace, iris_username, iris_password
+    ):
+        """One line per embedding route, plus one per graph that has none (FR-038).
+
+        Reads only. Never creates a route: a report that routed on being read would
+        answer a question about routes by adding one.
+        """
+        try:
+            engine = _engine_from_env(
+                host=iris_host,
+                port=iris_port,
+                namespace=iris_namespace,
+                username=iris_username,
+                password=iris_password,
+            )
+            payload = _inventory_payload(engine.embedding_inventory())
+        except Exception as e:
+            print(f"Inventory failed: {e}", file=sys.stderr)
+            sys.exit(1)
+        if json_output:
+            print(json.dumps(payload, indent=2, default=str))
+        else:
+            _print_inventory(payload)
 
     @cli.group()
     def server():
