@@ -52,8 +52,15 @@ scripts/test-container.sh down
 ```
 
 **Container name**: `ivg-iris`  
-**Default port**: 1972 (override with `IVG_TEST_PORT`)  
+**Default port**: 31972 (override with `IVG_PORT`)  
 **Namespace**: `USER`
+
+`IVG_PORT` is the only port variable the suite reads, and `31972` is the
+enterprise container's SuperServer. Nothing publishes host `1972`, so a module
+that defaults there fails with `<COMMUNICATION LINK ERROR>` — a refused
+connection, which reads like a driver or licensing fault and is not one.
+`tests/unit/test_230_test_port_defaults.py` fails the build if a collected module
+defaults to a port this repo does not own.
 
 The container persists across machine restarts as long as Docker is running. Data survives container restarts only if IRIS was stopped gracefully before the container stopped (see Backup & Restore).
 
@@ -198,7 +205,8 @@ IVG_DISABLE_ARNO=1 python3 my_script.py
 
 | Variable             | Type      | Default                               | Purpose                                                |
 | -------------------- | --------- | ------------------------------------- | ------------------------------------------------------ |
-| `IVG_TEST_PORT`      | int       | `1972`                                | IRIS superserver port for tests                        |
+| `IVG_PORT`           | int       | `31972`                               | IRIS superserver port for tests                        |
+| `IVG_ARNO_PORT`      | int       | `31971`                               | The same container's second mapping, for Arno fixtures |
 | `IVG_DISABLE_ARNO`   | `1`/unset | unset                                 | Force ObjectScript fallback (no Rust accelerator)      |
 | `IVG_ARNO_LIB`       | path      | `/usr/irissys/mgr/libarno_callout.so` | Path to accelerator library                            |
 | `IVG_SNAPSHOT_DIR`   | path      | `/tmp/ivg_snapshots`                  | Directory for `save_snapshot()` / `restore_snapshot()` |
@@ -283,7 +291,7 @@ Verify: `engine.status().adjacency.bfs_path == "arno"`.
 **3. Embedding insert fails with dimension mismatch** (troubleshooting)
 
 Cause: the `emb` column of `kg_NodeEmbeddings` is declared `VECTOR(DOUBLE, n)` for a different `n` than the vector you are inserting, or the embedding registry records a different width or model for the table than the writer declares. There is no HNSW index involved — none exists on this table (see [OPERATIONS.md](OPERATIONS.md#hnsw-vector-index)).  
-Fix: read `Graph_KG.embedding_registry` to see the recorded width and model, then either write at that width or re-embed. `engine.initialize_schema()` alters the column only when the table is **empty**; on a populated table it logs `needs_manual_migration` and leaves the declaration alone, so you must clear or drop `Graph_KG.kg_NodeEmbeddings` first.
+Fix: read `Graph_KG.embedding_registry` to see the recorded width and model, then either write at that width or re-embed. `engine.initialize_schema()` alters the column only when the table is **empty**; on a populated table it leaves the declaration alone and names the table in `status["needs_manual_migration"]` with a matching entry in `status["warnings"]`, so you must clear or drop `Graph_KG.kg_NodeEmbeddings` first. (Before 4.0.0 that list was computed and discarded — the only report was a log line, and the returned status read as a clean setup while every configured-width write was rejected.)
 
 **4. `BuildNKG` fails silently (no error, but `^NKG` empty)**
 

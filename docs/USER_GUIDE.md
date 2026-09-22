@@ -174,10 +174,17 @@ engine.purge_bucket_range(bucket_start, bucket_end, graph="umls")
 
 ### Named Graphs
 
-Scope nodes and edges to a named graph for multi-tenant data, staging
-snapshots, or materializing a ledger reconstruction into an isolated subgraph.
-The default graph uses `graph=""` (empty-string sentinel); named graphs use any
-non-empty string.
+Scope nodes, edges and embeddings to a named graph for staging snapshots,
+materializing a ledger reconstruction into a separate subgraph, or keeping two
+datasets that share node IDs apart. The default graph uses `graph=""`
+(empty-string sentinel); named graphs use any non-empty string.
+
+> **A graph ID is collision avoidance, not an authorisation boundary.** It keeps
+> two datasets from overwriting each other's rows. It does not stop a caller who
+> can reach the engine from naming another caller's graph — every `graph=`
+> parameter below accepts whatever it is given. For tenant isolation use
+> [a separate namespace per tenant](#per-tenant-namespace-isolation), which is
+> enforced by IRIS.
 
 ```python
 # Nodes
@@ -205,8 +212,10 @@ engine.erase_graph("staging")
 # The default graph, both of its spellings ('' and a legacy NULL)
 engine.erase_graph("")
 
-# Every graph, plus the stores no per-graph erase can reach: rdf_labels and
-# rdf_props are keyed by node id alone, and ^NKG ignores graph_id
+# Every graph, plus the stores no per-graph erase can reach: ^NKG ignores
+# graph_id, and ^KG("prop")/^KG("label") are not partitioned by graph.
+# rdf_labels and rdf_props do carry a graph_id since 4.0.0, so those two are
+# erased per graph.
 engine.erase_all()
 
 # Which graphs currently hold anything
@@ -537,17 +546,26 @@ Dispatch is automatic and transparent. See [performance/GRAPH_ALGORITHMS.md](per
 
 ```python
 # Find 10 nearest neighbors to a gene embedding.
-# The column names are passed through to SQL verbatim: on the shipped schema
-# kg_NodeEmbeddings is keyed `id` and holds the vector in `emb`.
+# The column names are passed through to SQL verbatim: since 4.0.0 the embedding
+# tables are keyed `(graph_id, node_id)` and hold the vector in `emb`.
 results = engine.vector_search(
     table="kg_NodeEmbeddings",
     vector_col="emb",
     query_embedding=my_vector,
     top_k=10,
-    id_col="id"
+    id_col="node_id",
+    graph="umls",          # omitted = the default graph, never every graph
 )
-# [{"id": "gene:BRCA1", "score": 0.95}, ...]
+# [{"node_id": "gene:BRCA1", "score": 0.95}, ...]
 ```
+
+`graph=` here is collision avoidance, not an authorisation boundary — see
+[Named Graphs](#named-graphs).
+
+Aimed at a **routed** embedding table (`kg_emb_<hash>`), `vector_search` refuses
+a call with no `graph` instead of guessing: that table holds one graph's vectors
+for one model, so `""` would ask for the default graph's rows from a table that
+does not hold them. Against any other table it behaves as before.
 
 ### Embedding Identity
 
@@ -586,10 +604,42 @@ engine.get_embedding_identity("kg_NodeEmbeddings").is_unknown   # True right aft
 engine.store_embedding("gene:BRCA1", my_vector)                 # claims the row
 ```
 
-Identity is per table and namespace-wide; named graphs cannot carry different models. To
-re-point a table at a new model, `set_embedding_identity(..., force=True)` overrides the
+To re-point a table at a new model, `set_embedding_identity(..., force=True)` overrides the
 record — which invalidates every vector already stored, so re-embed after using it. See
 [OPERATIONS.md](OPERATIONS.md) for the registry's columns and `set_by` values.
+
+### Per-Graph Embedding Models
+
+Since 4.0.0 identity is per **route** — one `(graph, model_key)` pair — not per
+namespace, so two graphs can hold vectors from different models at different
+widths:
+
+```python
+engine.store_embedding("gene:BRCA1", vec_768, graph="umls",  model_key="biobert")
+engine.store_embedding("gene:BRCA1", vec_384, graph="hpo",   model_key="minilm")
+
+engine.get_embedding("gene:BRCA1", graph="umls", model_key="biobert")
+engine.kg_KNN_VEC(query_768, k=10, graph="umls", model_key="biobert")
+engine.embed_nodes(model=my_model, graph="hpo", model_key="minilm")
+engine.embedding_count(graph="umls", model_key="biobert")
+engine.attach_embeddings_to_table(label="Patient", graph="umls", model_key="biobert")
+engine.kg_RRF_FUSE(k, k1, k2, c, query_vector, query_text, graph="umls")
+```
+
+The same node ID in two graphs is two vectors now — `nodes` is keyed
+`(graph_id, node_id)`, not `node_id` alone. Each pair gets its own physical table
+(`kg_emb_<hash>`), because IRIS enforces a declared `VECTOR` width at INSERT and
+one column cannot hold two widths.
+
+In every call, omitting `graph` means **the default graph**, never every graph: a
+scoped lookup never widens into an unscoped scan. A pair with no route yet reads
+as `None`/`[]`/`0`; the first write creates the route. And as everywhere else,
+`graph=` is collision avoidance, not an authorisation boundary — see
+[Named Graphs](#named-graphs).
+
+Two legs of hybrid search are not scoped by this, because the index structures
+they read carry no graph: BM25 (`kg_TXT`, over `docs`) and IVF. A `graph` narrows
+the HNSW/SQL vector leg only.
 
 ### BM25 Lexical Search
 

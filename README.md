@@ -308,28 +308,29 @@ namespace whose schema was built by DDL alone — plain `CREATE TABLE`, or
 `initialize_schema(auto_deploy_objectscript=False)` — is a shell that looks
 right and behaves differently:
 
-| Property                                                               | Classes deployed                            | DDL only       |
-| ---------------------------------------------------------------------- | ------------------------------------------- | -------------- |
-| `rdf_edges.graph_id`                                                   | required, defaults to the default-graph key | nullable       |
-| `rdf_edges` primary key                                                | `ID`                                        | `edge_id`      |
-| `Graph.KG.Edge` / `Eraser` / `TemporalIndex`                           | present                                     | absent         |
-| Schema migrations (`tighten_graph_id_column`, `add_graph_id_to_nodes`) | applied                                     | never reach it |
-| Traversal, temporal and erasure acceleration                           | native ObjectScript                         | none           |
+| Property                                                               | Classes deployed    | DDL only       |
+| ---------------------------------------------------------------------- | ------------------- | -------------- |
+| `Graph.KG.Eraser` / `TemporalIndex` / `LedgerApply`                    | present             | absent         |
+| Schema migrations (`tighten_graph_id_column`, `add_graph_id_to_nodes`) | applied             | never reach it |
+| Traversal, temporal and erasure acceleration                           | native ObjectScript | none           |
+| Per-graph erase, revision ledger, embedding routing                    | work                | raise          |
 
 Check a namespace before trusting it:
 
 ```sql
-SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Edge'
+SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Eraser'
 ```
+
+`Graph.KG.Eraser` declares no table, so DDL cannot produce it. It replaces the
+old marker `Graph.KG.Edge`, deleted in 4.0.0: a class-declared `rdf_edges` has
+no `edge_id`, so the DDL declares that table in every namespace now.
 
 Zero means DDL-only. Deploy the classes into that namespace — `initialize_schema()`
 with auto-deploy, or `$SYSTEM.OBJ.LoadDir("<path>/iris_src/src", "ck", .err, 1)`
 from a session in that namespace — before writing data.
 
-Also note IRIS auto-generates a compatibility view `SQLUser.rdf_edges` over
-`Graph_KG.rdf_edges`. When you query the catalog, filter
-`TABLE_SCHEMA = 'Graph_KG'`; the view carries no column defaults, so reading
-the wrong row makes a required `graph_id` look nullable.
+IRIS also auto-generates the view `SQLUser.rdf_edges`; filter the catalog on
+`TABLE_SCHEMA = 'Graph_KG'`, since a view carries no defaults and hides `graph_id`'s.
 
 ### CPF global mapping
 

@@ -45,14 +45,20 @@ iris-vector-graph is a knowledge graph engine built on InterSystems IRIS. All da
 ### ^KG — Knowledge Graph
 
 ```
-^KG("out", source, predicate, target) = weight
-^KG("in", target, predicate, source) = weight
-^KG("tout", ts, source, predicate, target) = weight   — temporal outbound
-^KG("tin",  ts, target, predicate, source) = weight   — temporal inbound
-^KG("bucket", bucket_key, source) = count             — pre-aggregated 5-min bucket
-^KG("tagg", bucket, source, predicate, key) = value   — COUNT/SUM/AVG/MIN/MAX/HLL
-^KG("edgeprop", ts, s, p, o, key) = value             — rich edge attributes
+^KG("out", g, source, predicate, target) = weight
+^KG("in",  g, target, predicate, source) = weight
+^KG("tout", g, ts, source, predicate, target) = weight   — temporal outbound
+^KG("tin",  g, ts, target, predicate, source) = weight   — temporal inbound
+^KG("bucket", g, bucket_key, source) = count             — pre-aggregated 5-min bucket
+^KG("tagg", g, bucket, source, predicate, key) = value   — COUNT/SUM/AVG/MIN/MAX/HLL
+^KG("edgeprop", g, ts, s, p, o, key) = value             — rich edge attributes
+^KG("deg", g, s) / ^KG("degp", g, s, p) = count          — degree counters
 ```
+
+`g` is the graph key: the graph's name, or the integer `0` for the default
+graph. It is the subscript immediately after the store name in every `^KG`
+store, so a window scan, a purge or a rebuild is naturally bounded to one
+graph (specs 214 and 223). `Graph.KG.GraphKey` owns the derivation.
 
 Used by: PageRank, WCC, CDLP, PPR, Subgraph, BFS, TemporalIndex.
 
@@ -127,11 +133,11 @@ Methods callable via `classMethodValue()` (native API bridge from Python) MUST b
 ## SQL Schema (Graph_KG)
 
 ```sql
-Graph_KG.nodes          (node_id VARCHAR(256) PK)
+Graph_KG.nodes          (node_id, graph_id — composite PK; UNIQUE (graph_id, node_id))
 Graph_KG.rdf_labels     (s, label — composite PK)
 Graph_KG.rdf_props      (s, "key", val — composite PK)
 Graph_KG.rdf_edges      (edge_id BIGINT IDENTITY PK, s, p, o_id)
-Graph_KG.kg_NodeEmbeddings  (id, emb VECTOR(DOUBLE, 768) — HNSW index)
+Graph_KG.kg_NodeEmbeddings  (graph_id, node_id, emb VECTOR(DOUBLE, n) — HNSW index)
 Graph_KG.fhir_bridges   (fhir_code, kg_node_id — composite PK, bridge_type, confidence)
 ```
 
@@ -159,31 +165,32 @@ The Cypher parser is a hand-written recursive-descent parser that translates ope
 
 ## Global Structure
 
-| Global                              | Purpose                                                             |
-| ----------------------------------- | ------------------------------------------------------------------- |
-| `^KG("out", 0, s, p, o)`            | Knowledge graph — outbound edges                                    |
-| `^KG("in", 0, o, p, s)`             | Knowledge graph — inbound edges                                     |
-| `^KG("tout", ts, s, p, o)`          | Temporal index — outbound, ordered by timestamp                     |
-| `^KG("tin", ts, o, p, s)`           | Temporal index — inbound, ordered by timestamp                      |
-| `^KG("bucket", bucket, s)`          | Pre-aggregated edge count per 5-minute bucket                       |
-| `^KG("tagg", bucket, s, p, key)`    | Pre-aggregated COUNT/SUM/MIN/MAX/HLL per bucket                     |
-| `^KG("edgeprop", ts, s, p, o, key)` | Rich edge attributes                                                |
-| `^NKG`                              | Integer adjacency index — enables Rust-accelerated graph algorithms |
-| `^VecIdx`                           | VecIndex RP-tree ANN                                                |
-| `^PLAID`                            | PLAID multi-vector                                                  |
-| `^BM25Idx`                          | BM25 lexical search index                                           |
+| Global                                      | Purpose                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------- |
+| `^KG("out", g, s, p, o)`                    | Knowledge graph — outbound edges (`g` = graph key, `0` = default)   |
+| `^KG("in", g, o, p, s)`                     | Knowledge graph — inbound edges                                     |
+| `^KG("tout", g, ts, s, p, o)`               | Temporal index — outbound, ordered by timestamp within a graph      |
+| `^KG("tin", g, ts, o, p, s)`                | Temporal index — inbound, ordered by timestamp within a graph       |
+| `^KG("bucket", g, bucket, s)`               | Pre-aggregated edge count per 5-minute bucket                       |
+| `^KG("tagg", g, bucket, s, p, key)`         | Pre-aggregated COUNT/SUM/MIN/MAX/HLL per bucket                     |
+| `^KG("edgeprop", g, ts, s, p, o, key)`      | Rich edge attributes                                                |
+| `^KG("deg", g, s)` / `^KG("degp", g, s, p)` | Degree counters, per graph                                          |
+| `^NKG`                                      | Integer adjacency index — enables Rust-accelerated graph algorithms |
+| `^VecIdx`                                   | VecIndex RP-tree ANN                                                |
+| `^PLAID`                                    | PLAID multi-vector                                                  |
+| `^BM25Idx`                                  | BM25 lexical search index                                           |
 
 ## SQL Schema (Graph_KG)
 
-| Table               | Purpose                                    |
-| ------------------- | ------------------------------------------ |
-| `nodes`             | Node registry (node_id PK)                 |
-| `rdf_edges`         | Edges (s, p, o_id)                         |
-| `rdf_labels`        | Node labels (s, label)                     |
-| `rdf_props`         | Node properties (s, key, val)              |
-| `kg_NodeEmbeddings` | HNSW vector index (id, emb VECTOR)         |
-| `kg_EdgeEmbeddings` | Triple embeddings (s, p, o_id, emb VECTOR) |
-| `fhir_bridges`      | ICD-10→MeSH clinical code mappings         |
+| Table               | Purpose                                                 |
+| ------------------- | ------------------------------------------------------- |
+| `nodes`             | Node registry (node_id + graph_id PK)                   |
+| `rdf_edges`         | Edges (s, p, o_id)                                      |
+| `rdf_labels`        | Node labels (s, label)                                  |
+| `rdf_props`         | Node properties (s, key, val)                           |
+| `kg_NodeEmbeddings` | Default embedding route (graph_id, node_id, emb VECTOR) |
+| `kg_EdgeEmbeddings` | Triple embeddings (s, p, o_id, emb VECTOR)              |
+| `fhir_bridges`      | ICD-10→MeSH clinical code mappings                      |
 
 ## ObjectScript Classes
 
