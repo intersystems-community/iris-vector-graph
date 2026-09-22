@@ -10,12 +10,42 @@ This demonstrates the hybrid architecture: generic core + domain extension.
 
 import strawberry
 from typing import Optional, List, Dict, Any, cast
-from strawberry.extensions import SchemaExtension
+from strawberry.extensions import QueryDepthLimiter, SchemaExtension
 
-from .core.types import JSON, Node, GraphStats, PropertyFilter
+from .core.types import JSON, GenericNode, Node, GraphStats, PropertyFilter
 from .core.resolvers import CoreQuery
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+
+
+def _engine_for(info, db_connection):
+    """The engine the translator may embed a query with (spec 230, FR-016).
+
+    `CALL ivg.retrieve('text', 5)` has a vector arm, and without an engine the
+    translator has no way to obtain a query vector: it falls back to IRIS's native
+    `EMBEDDING(?, ?)` with the call's default config name — a blank — and the whole
+    statement is refused at Query Open with
+
+        SQLCODE -280 <Embedding configuration error> %Embedding.Config ' ' does not
+        exist
+
+    so a bare retrieve through this endpoint could not run at all.
+
+    A caller-supplied engine wins, so a test (or an embedded host) can pass one that
+    is already configured. Otherwise one is built over the request's own connection.
+    Returns None rather than raising if the engine cannot be constructed: the -280 is
+    a worse answer than the translator's own, but a failed import is no reason for a
+    query with no vector arm to fail.
+    """
+    engine = info.context.get("engine")
+    if engine is not None:
+        return engine
+    try:
+        from iris_vector_graph import IRISGraphEngine
+
+        return IRISGraphEngine(db_connection)
+    except Exception:
+        return None
 
 
 class DatabaseConnectionExtension(SchemaExtension):
@@ -134,7 +164,11 @@ class Query(CoreQuery):
             translator_params: Optional[Dict[str, Any]] = None
             if isinstance(params, dict):
                 translator_params = cast(Dict[str, Any], params)
-            sql_query = translate_to_sql(cypher_ast, params=translator_params)
+            sql_query = translate_to_sql(
+                cypher_ast,
+                params=translator_params,
+                engine=_engine_for(info, db_connection),
+            )
 
             rows: List[List[Any]] = []
             columns: List[str] = []
@@ -243,11 +277,47 @@ class Mutation:
             return await biomed_resolver._delete_protein_mutation(info, id)
 
 
-# Create schema with connection management extension
+DEFAULT_MAX_QUERY_DEPTH = 10
+
+
+def _max_query_depth(env: Optional[Dict[str, str]] = None) -> int:
+    """Depth cap for an incoming query, from `IVG_GRAPHQL_MAX_DEPTH`.
+
+    Spec 003 specified a 10-level limit and its quickstart ticked it off as enforced, but
+    nothing implemented it. It matters here because the graph types are recursive:
+    `protein { interactsWith { interactsWith { ... } } }` nests as deep as the client
+    likes, and each level is another round of database work from one unauthenticated
+    request.
+
+    A malformed, zero or negative value falls back to the default rather than raising or
+    disabling the cap — a typo in a deployment's environment must not silently remove a
+    safety limit.
+    """
+    import os
+
+    raw = (env if env is not None else os.environ).get("IVG_GRAPHQL_MAX_DEPTH", "")
+    try:
+        depth = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_QUERY_DEPTH
+    return depth if depth > 0 else DEFAULT_MAX_QUERY_DEPTH
+
+
+# Create schema with connection management and depth limiting
 schema = strawberry.Schema(
     query=Query,
     mutation=Mutation if BIOMEDICAL_AVAILABLE else None,
-    extensions=[DatabaseConnectionExtension],
+    # `GenericNode` is what `node`/`nodes` return for every label no domain resolver
+    # claims, and nothing in the query graph names it — the fields are typed as the
+    # `Node` interface. An unregistered implementer makes GraphQL refuse the result:
+    #   Abstract type 'Node' was resolved to a type 'GenericNode' that does not exist
+    #   inside the schema
+    # so any node outside the biomedical domain came back as an error, not a node.
+    types=[GenericNode],
+    extensions=[
+        DatabaseConnectionExtension,
+        QueryDepthLimiter(max_depth=_max_query_depth()),
+    ],
 )
 
 # Expose graphql_schema as an alias for _schema (graphql-core GraphQLSchema object)

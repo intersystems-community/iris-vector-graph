@@ -11,10 +11,7 @@ from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
 from api.routers.cypher import router as cypher_router
 from api.routers.fhir_event import router as fhir_event_router
 from api.gql.schema import schema as biomedical_schema
-from api.gql.loaders import (
-    ProteinLoader, GeneLoader, PathwayLoader, EdgeLoader,
-    PropertyLoader, LabelLoader,
-)
+from api.gql.context import build_graphql_context
 
 logger = logging.getLogger(__name__)
 
@@ -51,15 +48,10 @@ def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
     conn = engine.conn if engine is not None else None
 
     async def get_context():
-        return {
-            "db_connection": conn,
-            "protein_loader": ProteinLoader(conn),
-            "gene_loader": GeneLoader(conn),
-            "pathway_loader": PathwayLoader(conn),
-            "edge_loader": EdgeLoader(conn),
-            "property_loader": PropertyLoader(conn),
-            "label_loader": LabelLoader(conn),
-        }
+        # Shared with api.gql.create_app: the generic resolvers read `engine` from the
+        # context, and a second hand-rolled dict here is how `/graphql` came to answer
+        # `nodes`/`node`/`stats` empty with no error.
+        return build_graphql_context(engine)
 
     graphql_router = GraphQLRouter(biomedical_schema, context_getter=get_context)
     app.include_router(graphql_router, prefix="/graphql")

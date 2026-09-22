@@ -22,6 +22,19 @@ def _resolve_connection(request: Request) -> Any | None:
     return None
 
 
+def get_engine_optional(request: Request) -> Any | None:
+    """Yield the `IRISGraphEngine` on app state, or `None` when there is none.
+
+    Unlike `get_db_connection` this never raises: an endpoint that has a connection
+    can still answer without an engine. What it loses is the engine's build probes,
+    and one of those is load-bearing — `_fetch_first_unsafe` is what makes the
+    translator emit `TOP` instead of `FETCH FIRST` on the IRIS builds that SIGSEGV
+    on `FETCH FIRST` over a multi-table JOIN.
+    """
+
+    return getattr(request.app.state, "engine", None)
+
+
 def get_db_connection(request: Request) -> Generator[Any, None, None]:
     """FastAPI dependency that yields an IRIS DB-API connection."""
 
