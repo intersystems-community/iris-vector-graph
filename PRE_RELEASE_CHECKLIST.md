@@ -228,11 +228,21 @@ failure lands on another test — `tests/e2e/test_stress_ingest.py` builds an en
 session, and a second fixture inserts nodes with raw SQL and omits the `id` property
 row that `.id` resolves through. The clean re-run above is the number to read.
 
-§9 has not run. Per Tom's release answer this round, 4.0.0 stops at a local, unpushed
-annotated tag plus these notes; push, PyPI upload and the GitHub release need a
-separate explicit instruction. The 3.2.0 §9 grant does not carry over.
+§9 ran on Tom's "ok let's release", scoped to the full path with the fast-forward. `main`
+fast-forwarded from `5edcabc` to `441ed1a` (15 commits, linear) and pushed, annotated tag
+`v4.0.0` pushed, both artifacts rebuilt after the last two doc commits (`twine check`
+PASSED on each) and uploaded to PyPI, GitHub release `v4.0.0` created from
+`docs/releases/v4.0.0.md` with its relative links rewritten to `blob/v4.0.0` URLs and the
+draft preamble stripped. No release assets attached, matching 3.2.0 and 3.1.0.
 
-Date: **2026-09-22** Release: **4.0.0 tagged locally, unpublished**
+Verified after publishing: PyPI JSON reports `latest: 4.0.0` with both filenames present,
+with no index lag this time (3.2.0 lagged a minute or two). A clean venv install of
+`iris-vector-graph==4.0.0` from PyPI reports version `4.0.0` from both
+`importlib.metadata` and `__version__`, and imports
+`migrations.migrate_to_graph_scoped_embeddings`. `gh release view` reports
+`isDraft: false`, `isPrerelease: false`.
+
+Date: **2026-09-22** Release: **4.0.0 published**
 
 ### 3.2.0 — embedding identity contract (2026-09-19)
 
