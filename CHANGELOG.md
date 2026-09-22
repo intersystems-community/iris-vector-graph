@@ -312,11 +312,15 @@ recoverable graph, and `MIN(graph_id)` would be the silent version of this migra
 
 **Known gaps**
 
-`Graph_KG.kg_EdgeEmbeddings` is keyed `(s, p, o_id)` and has **no `graph_id`** — edge
-vectors remain namespace-wide, not routed, not scoped, not touched by the migration. The
-BM25 and IVF legs of hybrid search read index structures that carry no graph, so a `graph`
-narrows the HNSW leg only. `^KG("prop")` and `^KG("label")` are not partitioned by graph, so
-a per-graph erase leaves them alone.
+The IVF leg stays graph-blind, and says so instead of guessing: `Graph.KG.IVFIndex` is keyed
+by index name and holds no graph, so `search_nodes_by_vector` **refuses** a call that names
+both a graph and an `ivf_name` rather than searching every graph's vectors through the index.
+`ivf_build` itself reads the routed table for one `(graph, model_key)` pair.
+
+`^KG("deg2p_exact_merged")` stays derived and graph-blind by definition — it is Arno's
+interned sketch, and `^NKG`'s interning has no graph dimension, so its counts cannot be
+attributed to a graph. A snapshot carries the per-graph `^KG("deg2p")` and
+`^KG("deg2p_exact")` and rebuilds the merged sketch rather than restoring it.
 
 **A graph ID is not an authorisation boundary.** Client-supplied graph IDs are collision
 avoidance: they keep two datasets from overwriting each other's rows. Nothing stops a caller

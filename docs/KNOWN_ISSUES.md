@@ -1109,13 +1109,20 @@ tables are re-keyed on `(graph_id, node_id)` with `emb_rowid` as the identity, a
 The fourth `kg_KNN_VEC` argument is the graph now. See
 [`docs/migration/v4.0.0.md`](migration/v4.0.0.md).
 
-Two parts are **not** lifted, and both are live:
+**Spec 230 lifted the two parts 227 left behind.** Both were live through 3.2.0 and
+neither is now:
 
-- `kg_EdgeEmbeddings` is still keyed `(s, p, o_id)` with no `graph_id`. Edge vectors
-  remain namespace-wide: two graphs holding the same `(s, p, o)` triple share one
-  edge vector.
-- The BM25 and IVF legs of hybrid search read index structures that carry no graph,
-  so a `graph` narrows the HNSW leg only.
+- `kg_EdgeEmbeddings` is keyed `(graph_id, s, p, o_id)` with `emb_rowid` as the
+  identity, and it is the *default edge route* — shaped like a generated edge route so
+  one INSERT serves both. Before 4.0.0 the key was the triple alone, so two graphs
+  asserting the same edge shared one row and the second write replaced the first.
+- The BM25 leg is scoped by the corpus rather than by a procedure argument:
+  `Graph_KG.docs` is keyed `(graph_id, id)` and `kg_TXT` takes the graph, so
+  `kg_RRF_FUSE` narrows both of its legs. `kg_BM25` still takes no `graph_id`, which is
+  correct rather than an omission — see the note under its own heading below.
+
+What remains graph-blind is the IVF leg, and it refuses rather than guessing: see the
+`search_nodes_by_vector` entry immediately below.
 
 ### ~~Callers that still cannot pass a graph~~, and one that read a column that does not exist
 
