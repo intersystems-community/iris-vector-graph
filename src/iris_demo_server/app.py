@@ -5,6 +5,7 @@ import os
 # Import routes
 from .routes.fraud import register_fraud_routes
 from .routes.biomedical import register_biomedical_routes
+from .routes.fhir import register_fhir_routes
 
 # Create FastHTML app
 app = FastHTML(
@@ -18,6 +19,7 @@ app = FastHTML(
 # Register routes
 register_fraud_routes(app)
 register_biomedical_routes(app)
+register_fhir_routes(app)
 
 
 # Homepage
@@ -30,7 +32,7 @@ def homepage():
         ),
         Body(
             H1("IRIS Capabilities Demo"),
-            P("Interactive demonstration server showcasing IRIS for Financial Services and Biomedical Research."),
+            P("Interactive demonstration server showcasing IRIS for Financial Services, Biomedical Research and FHIR repositories."),
             Div(
                 H2("Financial Services - Fraud Detection"),
                 P("Real-time fraud scoring with 130M transactions, bitemporal audit trails."),
@@ -40,6 +42,11 @@ def homepage():
                 H2("Biomedical Research - Protein Networks"),
                 P("Vector similarity search, pathway queries, network visualization."),
                 A("View biomedical demo", href="/bio"),
+            ),
+            Div(
+                H2("Healthcare - FHIR Repository as a Graph"),
+                P("Concept search over a live FHIR repository: expand, resolve codes, rank patients with PageRank."),
+                A("View FHIR graph demo", href="/fhir"),
             ),
         )
     )
@@ -69,6 +76,21 @@ def arch_bio():
             Li("Vector embeddings (768-dim) stored in kg_NodeEmbeddings"),
             Li("HNSW index enables sub-millisecond similarity search"),
             Li("Multi-hop Cypher traversal explores protein interaction networks"),
+        )
+    )
+
+
+@app.get("/arch/fhir")
+def arch_fhir():
+    return Div(
+        H2("FHIR Graph Architecture"),
+        P("FHIR repository (HS.FHIRServer, JsonAdvSQL) → Graph.KG.FHIRGraph → named graph fhir:<NS>:<pkg>"),
+        Ul(
+            Li("IVG runs in the FHIR namespace; one node per live resource, one edge per indexed reference"),
+            Li("SyncOnce follows the Rsrc and RsrcVer watermarks; no copy of codes or properties"),
+            Li("fhir_expand_concepts walks the concept graph's narrower edges"),
+            Li("fhir_resolve_concepts maps concepts to live resources through Graph_KG.code_crosswalk"),
+            Li("kg_PERSONALIZED_PAGERANK ranks patients and clinicians inside the FHIR graph only"),
         )
     )
 

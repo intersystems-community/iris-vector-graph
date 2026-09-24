@@ -12,6 +12,7 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @param maxIter    Max iterations (default 20)
 /// @param bidir      1 = also traverse edges backwards via ^KG("in")
 /// @param revWeight  Multiplier on a reverse hop's contribution (bidir only)
+/// @param pGraph     Graph name; "" is the default graph. Derived through GraphKey.ForIndex.
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
 ///
 /// Both bidir and revWeight were declared and ignored until 4.0.0. Callers asking for
@@ -20,9 +21,11 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// fallback in _engine/algorithms.py: a node's divisor counts its forward AND reverse
 /// edges, and revWeight scales the contribution carried over a reverse hop, never the
 /// divisor.
-ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0) As %String
+ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0, pGraph As %String = "") As %String
 {
-	Set pGraph = 0
+	// Until 4.0.1 pGraph was hardwired to 0: every PPR walked the default graph
+	// whatever graph its seeds lived in (spec 231, FR-016).
+	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
 	If seedJson = "" Return "[]"
 	Set revWeight = +revWeight
 	Set wantRev = ((+bidir) '= 0) && (revWeight > 0)

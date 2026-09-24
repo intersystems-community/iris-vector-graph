@@ -198,8 +198,12 @@ class AdminMixin:
             cursor = self.conn.cursor()
             # Check table existence via %Dictionary before querying it — the IRIS
             # Python driver segfaults on SELECT against a non-existent table.
+            #
+            # `fhir_bridges` is DDL-declared (schema.py); no `Graph.KG.FHIRBridge` class
+            # has ever shipped, so probing for one reported nothing on every install.
             cursor.execute(
-                "SELECT COUNT(*) FROM %Dictionary.CompiledClass " "WHERE Name='Graph.KG.FHIRBridge'"
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'fhir_bridges'"
             )
             if int((cursor.fetchone() or [0])[0]) > 0:
                 rows.append(
@@ -208,8 +212,8 @@ class AdminMixin:
                         "UNIQUENESS",
                         "NODE",
                         ["*"],
-                        ["external_id", "bridge_type", "node_id"],
-                        "pk_fhir_bridges",
+                        ["fhir_code", "kg_node_id"],
+                        "pk_bridge",
                     ]
                 )
         except Exception:

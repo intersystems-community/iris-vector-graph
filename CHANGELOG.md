@@ -2,6 +2,96 @@
 
 # Changelog
 
+### v4.1.0 (unreleased)
+
+An ISC FHIR repository (`HS.FHIRServer`, R4 JsonAdvSQL) can be projected as one named
+graph, and a concept in a UMLS or HPO graph can be walked to the resources that carry its
+codes. Only topology is copied; codes and properties are read live from the repository.
+Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
+
+**The FHIR graph**
+
+- `fhir_graph_register(endpoint="", denylist=None, interval_s=60)` registers the
+  namespace's repository as graph `fhir:<$NAMESPACE>:<package>`, for example
+  `fhir:IVGFHIR:X0001`. A node is a resource key, labelled with its type, with an
+  `rdf_props` `id` row so Cypher's `n.id` works. An edge is one indexed reference; its
+  predicate is the search param code and its qualifier `searchParam` is the
+  SearchParameter URL. `CANONICAL` and `URI` columns are not edges.
+- `fhir_graph_rebuild` reconciles the whole graph by diff, so vectors on surviving nodes
+  are kept, and reports an edge count per param.
+- `fhir_graph_sync` applies changes since two watermarks (`Rsrc.ID` for creates,
+  `RsrcVer.ID` for updates, deletes and re-creates) in batches of 200, one transaction
+  per batch. Sync and rebuild hold `^IVG.FHIRGraph(<graph>)`; a second caller gets
+  `{"status": "busy"}`.
+- `fhir_graph_schedule` / `fhir_graph_unschedule` manage one Task Manager task
+  (`Graph.KG.FHIRGraphSyncTask`) per graph, at `max(1, ceil(interval_s / 60))` minutes.
+  `fhir_graph_status` reports counts, pending changes, last sync, last error and task ID.
+- New tables `Graph_KG.fhir_graphs` (registry and watermarks) and
+  `Graph_KG.fhir_unresolved` (references that are `external`, `missing` or `deleted`;
+  a later sync turns the last two into edges). `Graph.KG.Eraser` erases a graph's
+  unresolved rows and zeroes its watermarks, and keeps the registry row.
+- CLI: `ivg fhir register|rebuild|sync --once|status|schedule [--remove]`, straight to
+  IRIS via `IRIS_HOST`/`IRIS_PORT`/`IRIS_NAMESPACE`/`IRIS_USERNAME`/`IRIS_PASSWORD`.
+  `sync` exits 2 when busy, 1 on error.
+
+**From concepts to ranked resources**
+
+- `Graph_KG.code_crosswalk(code_system_uri, code, target_graph, target_node_id,
+relation, source, source_version, confidence)` maps a `(system, code)` to a concept
+  node; `relation` is `exact`, `broader`, `narrower` or `related`, and
+  `target_graph = ''` is the default graph. `code_crosswalk_add` upserts a row.
+- `fhir_expand_concepts(concept_graph, ids, predicates=None, hops=1)`,
+  `fhir_resolve_concepts(graph, concept_graph, ids, params=["code"], relations=None)`
+  and `fhir_concept_ppr(...)`, which chains expand, resolve and bidirectional PPR on the
+  FHIR graph. On 2,000 resources: resolve 10 concepts 6.6 ms median, full pipeline
+  67 ms.
+- `migrate_fhir_bridges_to_crosswalk()` copies `fhir_bridges` into `code_crosswalk`
+  (`relation = 'related'`, `source = 'fhir_bridges'`, `source_version = bridge_type`,
+  default-graph target), and can be re-run. Until 5.0, `fhir_bridge_add` writes both.
+
+**Demo**
+
+- `/fhir` in `src/iris_demo_server`: concept search over a live FHIR repository,
+  with each stage timed (expand, resolve, PPR). It adds an evidence toggle (diagnoses
+  only, or labs as well), a D3 patient neighbourhood, and a live panel that writes a
+  Condition and syncs it. Seed with
+  `python -m iris_demo_server.services.fhir_demo_data`, which PUTs 200 synthetic
+  patients (885 resources) through the FHIR service.
+
+**Deprecated, removed in 5.0**
+
+- `fhir_bridge.get_kg_anchors` and `unified_clinical_pipeline`: use
+  `fhir_resolve_concepts` and `fhir_concept_ppr`. Each warns once per call.
+- `POST /fhir-event`: answers with a `Deprecation: true` header and a warning. It takes
+  an optional `graph` (1-256 characters, validated) that every node, edge and embedding
+  write goes to; omitted, the calls are exactly the 4.0 ones.
+
+**Security.** The namespace is the boundary, not the graph ID. The FHIR graph holds
+resource keys and references, which identify patients; deploy IVG in the FHIR namespace
+only for users who may already read the repository's tables.
+
+### v4.0.1 (unreleased)
+
+**Fixed**
+
+- `kg_PERSONALIZED_PAGERANK` walked every graph. `Graph.KG.PageRank.RunJson` took no
+  graph and indexed graph 0; it now takes `pGraph` and uses `ForIndex(pGraph)`. The
+  Python fallback's reads of `nodes` and `rdf_edges` now filter `graph_id`, a named
+  graph never routes to Arno's `PPRJson` (`^NKG` has no graph dimension), and
+  `store.execute_ppr` gets `graph` only for a named graph, so older stores keep
+  serving the default graph.
+- `unified_clinical_pipeline` passed `top_k` to PPR, which takes `return_top_k`. The
+  `TypeError` was swallowed as "no connectivity", so the pipeline never ranked anything.
+- SSRF: the FHIR proxy in `cypher_api.py` fetched any base URL a caller supplied. It
+  now accepts only `FHIR_BASE_URL` and the comma-separated `IVG_FHIR_ALLOWED_BASES`,
+  compared exactly after stripping a trailing `/`.
+- `fhir_search_conditions` put `patient_id` into the URL unencoded; it now uses
+  `quote(patient_id, safe='')`.
+- `SHOW CONSTRAINTS` probed a `Graph.KG.FHIRBridge` class that never shipped, so it
+  never listed `fhir_bridges`. It now checks `INFORMATION_SCHEMA.TABLES` and reports the
+  real primary key, `pk_bridge (fhir_code, kg_node_id)`.
+- `docs/SEMANTIC_LAYER.md` documented an `import_fhir_bundle` that does not exist.
+
 ### v4.0.0 (2026-09-22)
 
 An embedding is a graph-scoped, per-model resource now. Through 3.2.0 a vector was
@@ -131,8 +221,8 @@ that names the pair with its width taken from the vector being stored, one HNSW 
 registered in `Graph_KG.embedding_registry` (keyed `(table_name, graph_id)`, indexed
 `(graph_id, model_key)`).
 
-**Never derive a name to find a route.** `route_table_name()` says what a route *would* be
-called; the registry row is the only authority on what it *is* called.
+**Never derive a name to find a route.** `route_table_name()` says what a route _would_ be
+called; the registry row is the only authority on what it _is_ called.
 
 A `(graph, model_key)` pair with no routed table does not fall back to a namespace-wide
 scan. A read returns `None`/`[]`/`0`, and a write creates the route. Tested ceiling is
@@ -152,7 +242,7 @@ lookup never falls back to an unscoped scan.
 One case raises instead of defaulting. `vector_search` aimed at a routed table
 (`kg_emb_<hash>`) with no `graph` refuses (FR-041). That table holds one graph's vectors
 for one model, so `''` would ask for the default graph's rows from a table that does not
-hold them, and dropping the predicate would scan the route. The test is the table *name*
+hold them, and dropping the predicate would scan the route. The test is the table _name_
 rather than a registry lookup, because the refusal must not depend on a database read.
 
 **Added — the quarantine**
@@ -170,8 +260,8 @@ engine.place_quarantined(row.q_rowid, graph="graphA", model_key="bge-small")
 ```
 
 `place_quarantined` raises and leaves the row where it is when the pair has no route, when
-the route's declared width or dtype disagrees, or when the node does not exist *in that
-graph*. It never creates a route: that would declare a width taken from a row whose
+the route's declared width or dtype disagrees, or when the node does not exist _in that
+graph_. It never creates a route: that would declare a width taken from a row whose
 provenance is the thing in doubt. Hand the migration a `resolver=` callback to avoid the
 quarantine entirely.
 
@@ -442,7 +532,7 @@ project had already been voided this way.
 
 - `GraphSchema.get_procedures_sql_list(embedding_dimension=...)`. Accepted, ignored, and
   **not to be wired in**. Measured: the three-argument `TO_VECTOR(:q, DOUBLE, n)` form pads
-  or truncates the *query* vector to `n` and scores the reshaped value — a six-element query
+  or truncates the _query_ vector to `n` and scores the reshaped value — a six-element query
   against a four-wide column returned `1.0` — whereas the unlengthed form makes IRIS compare
   widths and raise `SQLCODE -257`. Declaring the width would replace a loud refusal with a
   plausible wrong answer. Passing the parameter now emits a `DeprecationWarning`. Reasoning
@@ -551,7 +641,7 @@ inventory it walks, and erasure removes content, not ledger history (ADR-0004).
 one-directional by design, because `^NKG` interning is append-only and ignores
 `graph_id` so its counter over-counts. It flags `sql_edges > global_edges` and stays
 quiet on the reverse — which is exactly what every deletion path produced. After the
-old `drop_graph`, `sql_edges` sat *below* `global_edges` and `verify_sync` reported
+old `drop_graph`, `sql_edges` sat _below_ `global_edges` and `verify_sync` reported
 in sync.
 
 `engine.verify_graph(graph=None)` is scoped to one graph, bidirectional, and reads

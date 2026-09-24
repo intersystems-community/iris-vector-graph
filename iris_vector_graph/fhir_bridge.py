@@ -15,7 +15,9 @@ MCP tools:
 
 import json
 import logging
+import warnings
 from typing import Any, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -50,10 +52,23 @@ def get_kg_anchors(engine: Any, icd_codes: list[str], bridge_type: str = "icd10_
     Returns:
         List of KG node IDs that exist in Graph_KG.nodes.
         Empty list if no codes provided, no bridges loaded, or no matches.
+
+    .. deprecated:: 4.1.0
+        Removed in 5.0. Use ``engine.fhir_resolve_concepts`` over a FHIR named graph
+        and ``Graph_KG.code_crosswalk`` (see docs/FHIR_GRAPH.md).
     """
+    warnings.warn(
+        "fhir_bridge.get_kg_anchors is deprecated since 4.1.0 and is removed in 5.0; "
+        "use engine.fhir_resolve_concepts over a FHIR named graph",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if not icd_codes:
         return []
-    result = engine.get_kg_anchors(icd_codes=icd_codes, bridge_type=bridge_type)
+    # This wrapper already warned; the engine method would warn again.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        result = engine.get_kg_anchors(icd_codes=icd_codes, bridge_type=bridge_type)
     if not result:
         logger.warning(
             "get_kg_anchors returned empty for codes=%s — check fhir_bridges table is populated",
@@ -86,7 +101,8 @@ def fhir_search_conditions(
             "conditions": list of condition dicts with "code", "system", "display"
             "error": None on success, error message string on failure
     """
-    url = f"{fhir_base_url}/Condition?patient={patient_id}&_format=json"
+    # `safe=""` so `/`, `&`, `=` and `#` in an ID cannot restructure the search.
+    url = f"{fhir_base_url}/Condition?patient={quote(str(patient_id), safe='')}&_format=json"
     try:
         resp = requests.get(url, auth=auth, timeout=timeout)
         resp.raise_for_status()
@@ -209,7 +225,16 @@ def unified_clinical_pipeline(
             ppr_results: list of PPR-ranked nodes (empty if no connectivity)
             fhir_conditions: list of condition dicts from FHIR
             provenance: dict with pipeline step details
+
+    .. deprecated:: 4.1.0
+        Removed in 5.0. Use ``engine.fhir_concept_ppr`` over a FHIR named graph.
     """
+    warnings.warn(
+        "fhir_bridge.unified_clinical_pipeline is deprecated since 4.1.0 and is removed "
+        "in 5.0; use engine.fhir_concept_ppr over a FHIR named graph",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     result = {
         "status": "ok",
         "anchors": [],
@@ -242,8 +267,10 @@ def unified_clinical_pipeline(
         result["status"] = "no_fhir_conditions"
         return result
 
-    # Step 3: Resolve to KG anchors
-    anchors = get_kg_anchors(engine, icd_codes)
+    # Step 3: Resolve to KG anchors. The pipeline already warned once for itself.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        anchors = get_kg_anchors(engine, icd_codes)
     result["anchors"] = anchors
     result["provenance"]["steps"].append({"step": "get_kg_anchors", "anchors": anchors})
 
@@ -255,7 +282,7 @@ def unified_clinical_pipeline(
     try:
         ppr_results = engine.kg_PERSONALIZED_PAGERANK(
             seed_entities=anchors,
-            top_k=ppr_top_k,
+            return_top_k=ppr_top_k,
         )
         result["ppr_results"] = ppr_results
         result["provenance"]["steps"].append({"step": "ppr", "result_count": len(ppr_results)})

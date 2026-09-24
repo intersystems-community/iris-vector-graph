@@ -52,6 +52,10 @@ ClassMethod Inventory() As %DynamicArray
 	// Eraser reads Graph_KG.embedding_registry for a graph's routes and drops each
 	// after the commit; the registry itself is named below.
 	Do tStores.%Push(..Entry("Graph_KG.embedding_registry", "sql", "graph_id", 1))
+	// A FHIR graph's references to resources it does not hold (spec 231). Its
+	// registry row, Graph_KG.fhir_graphs, is configuration: erasing keeps it and
+	// zeroes its watermarks.
+	Do tStores.%Push(..Entry("Graph_KG.fhir_unresolved", "sql", "graph_id", 1))
 
 	// --- graph-scoped globals: structural adjacency (spec 214) -------------
 	Do tStores.%Push(..Entry("^KG(""out"")", "global", "subscript 2", 1))

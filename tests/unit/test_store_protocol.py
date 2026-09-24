@@ -80,10 +80,10 @@ class MockGraphStore:
                             target_id=target_id, weight_property=weight_property, max_hops=max_hops)
 
     def execute_ppr(self, seed_ids, damping, max_iterations,
-                    bidirectional=False, reverse_edge_weight=1.0):
+                    bidirectional=False, reverse_edge_weight=1.0, *, graph=None):
         return self._record("execute_ppr", seed_ids=seed_ids, damping=damping,
                             max_iterations=max_iterations, bidirectional=bidirectional,
-                            reverse_edge_weight=reverse_edge_weight)
+                            reverse_edge_weight=reverse_edge_weight, graph=graph)
 
     def execute_pagerank(self, damping, max_iterations):
         return self._record("execute_pagerank", damping=damping, max_iterations=max_iterations)

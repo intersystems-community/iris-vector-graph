@@ -28,6 +28,11 @@ VALID_GRAPH_TABLES = {
     # the migration raise a validation error rather than a migration error.
     "kg_NodeEmbeddings_ivg400",
     "kg_NodeEmbeddings_optimized_ivg400",
+    # spec 231: FHIR repository graphs, their unresolved references, and the code
+    # crosswalk that replaces fhir_bridges
+    "fhir_graphs",
+    "fhir_unresolved",
+    "code_crosswalk",
 }
 
 #: Spec 227 (FR-012): a routed embedding table, `kg_emb_` + 16 hex characters.

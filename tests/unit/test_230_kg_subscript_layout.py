@@ -43,6 +43,7 @@ GRAPH_KEY_TOKENS = frozenset(
         "pGraph",  # a method parameter, or a default-graph-only method's constant
         "graphKey",
         "tGraph",
+        "..GKey",  # Graph.KG.FHIRGraph's context property, from GraphKey.ForIndex (spec 231)
     }
 )
 

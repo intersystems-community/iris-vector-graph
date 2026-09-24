@@ -1099,11 +1099,16 @@ class IRISGraphStore:
         max_iterations: int,
         bidirectional: bool = False,
         reverse_edge_weight: float = 1.0,
+        *,
+        graph: Optional[str] = None,
     ) -> IVGResult:
         import json as _json
 
+        from iris_vector_graph._validate import validate_graph_name
+
         if not seed_ids:
             raise ValueError("seed_ids must not be empty")
+        graph_name = validate_graph_name(graph)
         seeds_json = _json.dumps(seed_ids)
         wants_reverse = bool(bidirectional) and reverse_edge_weight > 0
         try:
@@ -1111,8 +1116,12 @@ class IRISGraphStore:
             # takes seeds, damping and iterations and has no reverse-edge parameters, so
             # routing a bidirectional request there returns forward-only scores with no
             # error — which is how `bidirectional=True` came to be silently ignored.
+            #
+            # Nor a named graph: `^NKG` has no graph dimension, so Arno would answer
+            # from the default graph's adjacency (spec 231, FR-016).
             if (
                 not wants_reverse
+                and graph_name == ""
                 and self._detect_arno()
                 and "ppr" in self._arno_capabilities.get("algorithms", [])
             ):
@@ -1125,9 +1134,10 @@ class IRISGraphStore:
                 # Arno spelling and exists only on the accelerator classes, so this
                 # branch used to raise <METHOD DOES NOT EXIST> and return no scores.
                 #
-                # All five arguments: `RunJson(seedJson, alpha, maxIter, bidir, revWeight)`.
-                # Passing the first three left the ObjectScript defaults (`bidir = 0`) in
-                # place, so reverse traversal never happened however the caller asked.
+                # All six arguments: `RunJson(seedJson, alpha, maxIter, bidir, revWeight,
+                # pGraph)`. Passing the first three left the ObjectScript defaults
+                # (`bidir = 0`) in place, so reverse traversal never happened however the
+                # caller asked; omitting `pGraph` walks the default graph.
                 raw = str(
                     self._call_classmethod(
                         "Graph.KG.PageRank",
@@ -1137,6 +1147,7 @@ class IRISGraphStore:
                         str(max_iterations),
                         "1" if wants_reverse else "0",
                         str(float(reverse_edge_weight)),
+                        graph_name,
                     )
                 )
             results = _json.loads(raw) if raw else []

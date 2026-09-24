@@ -284,13 +284,16 @@ fhir:PatientShape a sh:NodeShape ;
 
 ### Ingestion Validation Pattern
 
+IVG has no FHIR bundle importer; the loader below is yours and returns the
+node IDs it wrote. To query a FHIR repository as a graph without copying it,
+see [FHIR_GRAPH.md](FHIR_GRAPH.md).
+
 ```python
-def ingest_fhir_bundle(engine, bundle: dict, shapes_path: str):
-    # 1. Import the bundle
-    stats = engine.import_fhir_bundle(bundle)
+def ingest_fhir_bundle(engine, bundle: dict, shapes_path: str, load_bundle):
+    # 1. Load the bundle with your own loader; it returns the node IDs it wrote
+    new_node_ids = load_bundle(engine, bundle)
 
     # 2. Validate freshly ingested nodes
-    new_node_ids = stats.get("node_ids", [])
     report = engine.validate_shacl(shapes_path, node_ids=new_node_ids)
 
     if not report.conforms:
@@ -301,7 +304,7 @@ def ingest_fhir_bundle(engine, bundle: dict, shapes_path: str):
         raise ValueError("FHIR bundle failed validation:\n" + "\n".join(violations_summary))
 
     # 3b. Accept: proceed
-    return stats
+    return new_node_ids
 ```
 
 ---

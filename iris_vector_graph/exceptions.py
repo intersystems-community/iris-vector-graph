@@ -120,3 +120,16 @@ class BulkLoadError(RuntimeError):
             f"{phase}: {failed} row(s) rejected after {inserted} inserted, "
             f"and the batch was rolled back: {cause}"
         )
+
+
+class FHIRGraphError(RuntimeError):
+    """Raised when `Graph.KG.FHIRGraph` answers `{"status": "error"}` (spec 231).
+
+    A busy graph (another sync holds the lock) is not an error: it comes back as
+    ``{"status": "busy"}`` so a scheduler can skip the tick.
+    """
+
+    def __init__(self, operation: str, message: str):
+        self.operation = operation
+        self.message = message
+        super().__init__(f"{operation}: {message}")

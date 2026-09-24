@@ -1,6 +1,8 @@
 # IRIS Interactive Demo Web Server
 
-Interactive demonstration server showcasing IRIS capabilities for **Financial Services (fraud detection)** and **Biomedical Research (protein networks)**.
+Interactive demonstration server showcasing IRIS capabilities for
+**Financial Services (fraud detection)**, **Biomedical Research (protein
+networks)**, and a **FHIR repository searched as a graph**.
 
 ## Quick Start
 
@@ -35,9 +37,41 @@ open http://localhost:8200
 - **Interactive visualization**: D3.js force-directed graphs
 - **Network expansion**: Click nodes to explore connections
 
+### FHIR Repository Graph Demo (`/fhir`)
+
+A FHIR repository (spec 231) is exposed as the named graph `fhir:<NS>:<package>`.
+Search it by clinical concept:
+
+- **Expand**: `fhir_expand_concepts` walks the `narrower` edges in the concept
+  graph `concepts:demo`. _Diabetes mellitus_ has no codes of its own, so a search
+  with 0 hops finds nobody.
+- **Resolve**: `fhir_resolve_concepts` maps concepts to live Conditions and
+  Observations through `Graph_KG.code_crosswalk`. ICD-10 codes are `exact` and
+  lab LOINC codes are `related`, so the evidence toggle changes the seed set.
+- **Rank**: bidirectional `kg_PERSONALIZED_PAGERANK` on `graph=` returns
+  patients (each with the codes that matched) and practitioners. Patients reached
+  only through a shared clinician are listed separately.
+- **Neighbourhood**: click a patient to draw its encounters, conditions, labs and
+  clinicians (D3).
+- **Live**: write a Condition through the FHIR service. The graph shows it only
+  after **Sync** applies the repository watermark.
+
+Names and codes are read live from the repository's `Rsrc` table. The graph holds
+topology only.
+
+Seed the cohort into the FHIR namespace once. The namespace is the one that
+`tests/e2e/fhir_conftest.py` installs, and the seed is 200 synthetic patients,
+885 resources, PUT with fixed IDs so a rerun converges:
+
+```bash
+# add --deploy-ivg on a fresh namespace
+PYTHONPATH=src:. python -m iris_demo_server.services.fhir_demo_data
+PYTHONPATH=src:. uvicorn iris_demo_server.app:app --port 8200 && open http://localhost:8200/fhir
+```
+
 ## Project Structure
 
-```
+```text
 iris_demo_server/
 ├── models/           # Pydantic models (session, fraud, biomedical, metrics)
 ├── services/         # Backend clients (fraud_client, bio_client, demo_state, demo_data)
@@ -81,6 +115,14 @@ DEMO_MODE=false  # Set to 'true' for external demos
 
 # Fraud API
 FRAUD_API_URL=http://localhost:8100
+
+# FHIR graph demo (defaults: localhost 31972 IVGFHIR _SYSTEM/SYS)
+IVG_FHIR_HOST=localhost IVG_FHIR_PORT=31972 IVG_FHIR_NAMESPACE=IVGFHIR
+IVG_FHIR_USER=_SYSTEM IVG_FHIR_PASSWORD=SYS
+# default derives from the namespace
+IVG_FHIR_ENDPOINT=/csp/healthshare/ivgfhir/fhir/r4
+# only if several FHIR graphs are registered
+IVG_FHIR_GRAPH=fhir:IVGFHIR:X0001
 
 # Biomedical graph
 IRIS_HOST=localhost

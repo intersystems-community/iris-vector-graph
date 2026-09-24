@@ -16,6 +16,7 @@ from iris_vector_graph._engine.admin import AdminMixin
 from iris_vector_graph._engine.algorithms import AlgorithmsMixin
 from iris_vector_graph._engine.embeddings import EmbeddingsMixin
 from iris_vector_graph._engine.fhir import FhirMixin
+from iris_vector_graph._engine.fhir_graph import FhirGraphMixin
 from iris_vector_graph._engine.ledger import LedgerMixin
 from iris_vector_graph._engine.nodes_edges import NodesEdgesMixin, _BulkLoadSession
 from iris_vector_graph._engine.prov import ProvMixin
@@ -208,6 +209,7 @@ class IRISGraphEngine(
     ProvMixin,
     TemporalMixin,
     SnapshotMixin,
+    FhirGraphMixin,
     FhirMixin,
     AdminMixin,
     EmbeddingsMixin,

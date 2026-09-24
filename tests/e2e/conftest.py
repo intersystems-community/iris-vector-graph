@@ -360,3 +360,7 @@ def pytest_collection_modifyitems(config, items):
         if "e2e" in str(item.fspath):
             item.add_marker(pytest.mark.e2e)
             item.add_marker(pytest.mark.requires_database)
+
+
+# Spec 231: the scratch FHIR namespace IVGFHIR (fixtures live beside their helpers).
+from tests.e2e.fhir_conftest import fhir_conn, fhir_engine, fhir_loader  # noqa: E402,F401

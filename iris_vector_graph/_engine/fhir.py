@@ -309,9 +309,74 @@ class FhirMixin:
                 progress_callback(n_done, n_total)
         return {"embedded": embedded, "skipped": skipped, "total": n_total}
 
+    def fhir_bridge_add(
+        self,
+        fhir_code: str,
+        kg_node_id: str,
+        fhir_code_system: str = "ICD10CM",
+        bridge_type: str = "icd10_to_mesh",
+        confidence: float = 1.0,
+        source_cui: Optional[str] = None,
+    ) -> None:
+        """Write one ``fhir_bridges`` row and its ``code_crosswalk`` row.
+
+        .. deprecated:: 4.1.0
+            Removed in 5.0 with ``fhir_bridges``. Use ``code_crosswalk_add``. Until
+            then a bridge is written to both tables (spec 231 FR-015).
+        """
+        import warnings
+
+        from iris_vector_graph._engine.fhir_graph import code_system_uri
+
+        warnings.warn(
+            "fhir_bridge_add is deprecated since 4.1.0 and is removed in 5.0; "
+            "use engine.code_crosswalk_add",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(
+                f"INSERT OR UPDATE INTO {self._t('fhir_bridges')} "
+                "(fhir_code, kg_node_id, fhir_code_system, bridge_type, confidence, source_cui) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [fhir_code, kg_node_id, fhir_code_system, bridge_type, float(confidence), source_cui],
+            )
+            cursor.execute(
+                f"INSERT OR UPDATE INTO {self._t('code_crosswalk')} "
+                "(code_system_uri, code, target_graph, target_node_id, relation, source, "
+                "source_version, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    code_system_uri(fhir_code_system),
+                    fhir_code,
+                    "",
+                    kg_node_id,
+                    "related",
+                    "fhir_bridges",
+                    bridge_type,
+                    float(confidence),
+                ],
+            )
+            self.conn.commit()
+        finally:
+            cursor.close()
+
     def get_kg_anchors(
         self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
     ) -> List[str]:
+        """KG node ids bridged from ICD-10 codes through ``fhir_bridges``.
+
+        .. deprecated:: 4.1.0
+            Removed in 5.0. Use ``fhir_resolve_concepts`` over a FHIR named graph.
+        """
+        import warnings
+
+        warnings.warn(
+            "get_kg_anchors is deprecated since 4.1.0 and is removed in 5.0; "
+            "use engine.fhir_resolve_concepts over a FHIR named graph",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if not icd_codes:
             return []
         _IN_CHUNK = 499

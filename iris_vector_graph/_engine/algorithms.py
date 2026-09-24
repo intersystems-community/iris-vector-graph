@@ -16,6 +16,8 @@ class AlgorithmsMixin:
         return_top_k: Optional[int] = None,
         bidirectional: bool = False,
         reverse_edge_weight: float = 1.0,
+        *,
+        graph: Optional[str] = None,
     ) -> Dict[str, float]:
         """
         Personalized PageRank with optional bidirectional edge traversal.
@@ -34,6 +36,8 @@ class AlgorithmsMixin:
             return_top_k: Limit results to top K entities (None = all)
             bidirectional: Enable reverse edge traversal (default False)
             reverse_edge_weight: Weight multiplier for reverse edges (default 1.0)
+            graph: The one graph to walk. ``None`` or ``""`` is the default graph, never
+                every graph. A seed outside it scores nothing.
 
         Returns:
             Dict mapping entity_id to PageRank score
@@ -53,6 +57,12 @@ class AlgorithmsMixin:
             )
         if not seed_entities:
             raise ValueError("seed_entities must contain at least one entity")
+        from iris_vector_graph._validate import validate_graph_name
+
+        graph_name = validate_graph_name(graph)
+        # Sent only for a named graph, so a store predating `graph` keeps serving the
+        # default graph; for a named graph its `TypeError` drops to the paths below.
+        graph_kw = {"graph": graph_name} if graph_name else {}
 
         if self._store_capabilities.get("ppr", True):
             # `bidirectional` and `reverse_edge_weight` go to the store, not just to the
@@ -71,11 +81,13 @@ class AlgorithmsMixin:
                     max_iterations,
                     bidirectional=bidirectional,
                     reverse_edge_weight=reverse_edge_weight,
+                    **graph_kw,
                 )
             except TypeError as exc:
                 logger.warning(
-                    "store.execute_ppr does not accept bidirectional/reverse_edge_weight "
-                    "(%s); computing in Python so reverse edges are not dropped",
+                    "store.execute_ppr does not accept bidirectional/reverse_edge_weight/"
+                    "graph (%s); computing elsewhere so nothing the caller asked for is "
+                    "dropped",
                     exc,
                 )
                 result = None
@@ -99,6 +111,7 @@ class AlgorithmsMixin:
                     max_iterations,
                     1 if bidirectional else 0,
                     reverse_edge_weight,
+                    graph_name,
                 )
                 if result_json:
                     items = json.loads(str(result_json))
@@ -131,7 +144,9 @@ class AlgorithmsMixin:
             return_top_k,
             bidirectional,
             reverse_edge_weight,
+            graph=graph_name,
         )
+
     def _kg_PERSONALIZED_PAGERANK_python_fallback(
         self,
         seed_entities: List[str],
@@ -141,6 +156,8 @@ class AlgorithmsMixin:
         return_top_k: Optional[int] = None,
         bidirectional: bool = False,
         reverse_edge_weight: float = 1.0,
+        *,
+        graph: Optional[str] = None,
     ) -> Dict[str, float]:
         """
         Pure Python fallback for Personalized PageRank.
@@ -150,10 +167,15 @@ class AlgorithmsMixin:
         """
         from iris_vector_graph.cypher.translator import _table as _t
 
+        from iris_vector_graph._validate import validate_graph_name
+
+        # One graph, always. Until 4.0.1 these reads had no graph predicate, so the
+        # fallback walked every graph's edges at once (spec 231, FR-016).
+        graph_id = validate_graph_name(graph)
         cursor = self.conn.cursor()
         try:
             # Step 1: Get all nodes
-            cursor.execute(f"SELECT node_id FROM {_t('nodes')}")
+            cursor.execute(f"SELECT node_id FROM {_t('nodes')} WHERE graph_id = ?", [graph_id])
             nodes = [row[0] for row in cursor.fetchall()]
             num_nodes = len(nodes)
 
@@ -168,7 +190,7 @@ class AlgorithmsMixin:
                 return {}
 
             # Step 2: Build adjacency lists
-            cursor.execute(f"SELECT s, o_id FROM {_t('rdf_edges')}")
+            cursor.execute(f"SELECT s, o_id FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id])
 
             in_edges = {}  # target -> [(source, weight)]
             out_degree = {}
@@ -182,7 +204,9 @@ class AlgorithmsMixin:
 
             # Step 2b: Build reverse edges if bidirectional mode enabled
             if bidirectional and reverse_edge_weight > 0:
-                cursor.execute(f"SELECT o_id, s FROM {_t('rdf_edges')}")
+                cursor.execute(
+                    f"SELECT o_id, s FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id]
+                )
                 for o_id, s in cursor.fetchall():
                     # Reverse edge: o_id -> s with weighted contribution
                     if s not in in_edges:

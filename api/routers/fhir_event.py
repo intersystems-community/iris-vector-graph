@@ -7,20 +7,32 @@ Also callable directly from the demo seed script.
 Lazy vectorization: if the payload includes `content` (the full FHIR resource)
 and the resource type is in EMBED_ELIGIBLE_TYPES, the node is queued for
 background embedding immediately after the HTTP response is sent.
+
+Deprecated in 4.1.0, removed in 5.0 (spec 231). A FHIR repository registered with
+`ivg fhir register` is projected as a named graph and kept current by polling, so
+nothing has to call in. Until then the optional `graph` field writes into a named graph.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Request, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Response
+from pydantic import BaseModel, Field, field_validator
+
+from iris_vector_graph._validate import validate_graph_name
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+DEPRECATION = (
+    "/fhir-event is deprecated since 4.1.0 and is removed in 5.0: "
+    "project the repository with `ivg fhir register` instead"
+)
 
 # ---------------------------------------------------------------------------
 # Lazy vectorization config
@@ -135,14 +147,19 @@ async def _ensure_embedder():
     return _embedder
 
 
-async def _embed_and_store(engine, node_id: str, text: str) -> None:
+def _graph_kw(graph: Optional[str]) -> dict:
+    """``graph=`` only when one was sent, so a 4.0 caller's writes are unchanged."""
+    return {"graph": graph} if graph else {}
+
+
+async def _embed_and_store(engine, node_id: str, text: str, graph: Optional[str] = None) -> None:
     """Background task: embed text and store in kg_NodeEmbeddings."""
     try:
         model = await _ensure_embedder()
         loop = asyncio.get_event_loop()
         vec = await loop.run_in_executor(None, lambda: model.encode(text).tolist())
         # store_embedding is synchronous IRIS SQL — run in executor
-        await loop.run_in_executor(None, lambda: engine.store_embedding(node_id, vec))
+        await loop.run_in_executor(None, lambda: engine.store_embedding(node_id, vec, **_graph_kw(graph)))
         logger.info("lazy-vec: stored embedding for %s (%.0f-dim)", node_id, len(vec))
     except Exception as exc:
         logger.warning("lazy-vec: embedding failed for %s: %s", node_id, exc)
@@ -161,6 +178,13 @@ class FhirEventPayload(BaseModel):
     # Optional: full FHIR resource body. When present and resource type is
     # embed-eligible, triggers lazy background vectorization.
     content: Optional[dict[str, Any]] = None
+    # Named graph to write into; omitted means the default graph.
+    graph: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+    @field_validator("graph")
+    @classmethod
+    def _graph(cls, v: Optional[str]) -> Optional[str]:
+        return None if v is None else validate_graph_name(v)
 
 
 class FhirEventResponse(BaseModel):
@@ -226,10 +250,10 @@ def is_embed_eligible(resource_type: str, content: Optional[dict]) -> bool:
     return _extract_embed_text(resource_type, content) is not None
 
 
-def already_embedded(engine, node_id: str) -> bool:
+def already_embedded(engine, node_id: str, graph: Optional[str] = None) -> bool:
     """Return True if an embedding already exists for this node (skip re-embed)."""
     try:
-        existing = engine.get_embedding(node_id)
+        existing = engine.get_embedding(node_id, **_graph_kw(graph))
         return existing is not None
     except Exception:
         return False
@@ -261,13 +285,18 @@ async def fhir_event(
     payload: FhirEventPayload,
     request: Request,
     background_tasks: BackgroundTasks,
+    response: Response,
 ):
     """Materialize a pointer node and optional temporal edge from a FHIR write event.
 
     If the payload includes `content` and the resource type is embed-eligible
     (Condition, DiagnosticReport), the node is queued for lazy background
     embedding using all-MiniLM-L6-v2.
+
+    Deprecated: see the module docstring.
     """
+    warnings.warn(DEPRECATION, DeprecationWarning, stacklevel=2)
+    response.headers["Deprecation"] = "true"
     engine = _get_engine(request)
     if engine is None:
         raise HTTPException(
@@ -275,7 +304,8 @@ async def fhir_event(
             detail="IRISGraphEngine not available; check server configuration",
         )
 
-    warnings: list[str] = []
+    notes: list[str] = [DEPRECATION]
+    gkw = _graph_kw(payload.graph)
     fhir_url = payload.fhirUrl
     resource_type = payload.resourceType
     patient_ref = payload.patientRef or ""
@@ -290,6 +320,7 @@ async def fhir_event(
             node_id=fhir_url,
             labels=[resource_type],
             properties=code_props or None,
+            **gkw,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"IRIS write failed: {exc}") from exc
@@ -298,9 +329,9 @@ async def fhir_event(
     temporal_edge_written = False
     if patient_ref:
         ts, date_warnings = unix_from_date(payload.date)
-        warnings.extend(date_warnings)
+        notes.extend(date_warnings)
         try:
-            engine.create_node(node_id=patient_ref, labels=["Patient"])
+            engine.create_node(node_id=patient_ref, labels=["Patient"], **gkw)
             engine.create_edge_temporal(
                 source=patient_ref,
                 predicate=resource_type.upper(),
@@ -308,19 +339,20 @@ async def fhir_event(
                 timestamp=ts,
                 weight=1.0,
                 upsert=True,
+                **gkw,
             )
             temporal_edge_written = True
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"IRIS write failed: {exc}") from exc
     else:
-        warnings.append("patientRef not provided; pointer node written but no temporal edge created")
+        notes.append("patientRef not provided; pointer node written but no temporal edge created")
 
     # 3. Lazy vectorization — queue in background if eligible and not yet embedded
     queued_for_embedding = False
     if is_embed_eligible(resource_type, payload.content):
         embed_text = _extract_embed_text(resource_type, payload.content)
-        if embed_text and not already_embedded(engine, fhir_url):
-            background_tasks.add_task(_embed_and_store, engine, fhir_url, embed_text)
+        if embed_text and not already_embedded(engine, fhir_url, payload.graph):
+            background_tasks.add_task(_embed_and_store, engine, fhir_url, embed_text, payload.graph)
             queued_for_embedding = True
             logger.debug("lazy-vec: queued %s '%s'", fhir_url, embed_text[:60])
 
@@ -329,5 +361,5 @@ async def fhir_event(
         node_id=fhir_url,
         temporal_edge=temporal_edge_written,
         queued_for_embedding=queued_for_embedding,
-        warnings=warnings,
+        warnings=notes,
     )

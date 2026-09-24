@@ -1245,7 +1245,9 @@ class TestCypherApiResolvePatientAnchors:
                 result = _resolve_patient_anchors(req)
         assert result == []
 
-    def test_resolve_fhir_no_conditions(self):
+    def test_resolve_fhir_no_conditions(self, monkeypatch):
+        # spec 231: a request's base URL is fetched only if the operator listed it
+        monkeypatch.setenv("IVG_FHIR_ALLOWED_BASES", "http://fhir.example.com")
         from iris_vector_graph.cypher_api import _resolve_patient_anchors, CypherRequest
         req = CypherRequest(query="MATCH (n) RETURN n", fhir_patient_id="p1",
                             fhir_base_url="http://fhir.example.com")
@@ -1254,7 +1256,9 @@ class TestCypherApiResolvePatientAnchors:
             result = _resolve_patient_anchors(req)
         assert result == []
 
-    def test_resolve_fhir_with_error(self):
+    def test_resolve_fhir_with_error(self, monkeypatch):
+        # spec 231: a request's base URL is fetched only if the operator listed it
+        monkeypatch.setenv("IVG_FHIR_ALLOWED_BASES", "http://fhir.example.com")
         from iris_vector_graph.cypher_api import _resolve_patient_anchors, CypherRequest
         req = CypherRequest(query="MATCH (n) RETURN n", fhir_patient_id="p1",
                             fhir_base_url="http://fhir.example.com")
@@ -1263,7 +1267,9 @@ class TestCypherApiResolvePatientAnchors:
             result = _resolve_patient_anchors(req)
         assert result == []
 
-    def test_resolve_fhir_gets_anchors(self):
+    def test_resolve_fhir_gets_anchors(self, monkeypatch):
+        # spec 231: a request's base URL is fetched only if the operator listed it
+        monkeypatch.setenv("IVG_FHIR_ALLOWED_BASES", "http://fhir.example.com")
         """Lines 236-240: successful FHIR call → get_kg_anchors called."""
         from iris_vector_graph.cypher_api import _resolve_patient_anchors, CypherRequest
         req = CypherRequest(query="MATCH (n) RETURN n", fhir_patient_id="p1",

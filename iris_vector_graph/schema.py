@@ -394,6 +394,57 @@ CREATE INDEX idx_bridges_code_type ON Graph_KG.fhir_bridges (fhir_code, bridge_t
 CREATE INDEX idx_bridges_kg_node ON Graph_KG.fhir_bridges (kg_node_id);
 CREATE INDEX idx_bridges_type ON Graph_KG.fhir_bridges (bridge_type);
 
+-- spec 231: one row per FHIR repository projected as a named graph. The watermarks
+-- are the highest Rsrc.ID and RsrcVer.ID a sync has consumed; they move inside the
+-- same transaction as the edges they account for.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_graphs (
+    graph_id      VARCHAR(256) %EXACT NOT NULL,
+    repo_id       VARCHAR(64) NOT NULL,
+    rsrc_schema   VARCHAR(128) NOT NULL,
+    search_schema VARCHAR(128) NOT NULL,
+    ver_schema    VARCHAR(128) NOT NULL,
+    endpoints     VARCHAR(4000) DEFAULT '[]',
+    denylist      VARCHAR(4000) DEFAULT '[]',
+    interval_s    INTEGER DEFAULT 60,
+    wm_rsrc       BIGINT DEFAULT 0,
+    wm_ver        BIGINT DEFAULT 0,
+    task_id       VARCHAR(64),
+    last_sync     TIMESTAMP,
+    last_rebuild  TIMESTAMP,
+    last_error    VARCHAR(4000),
+    last_counts   VARCHAR(32000),
+    CONSTRAINT pk_fhir_graphs PRIMARY KEY (graph_id)
+);
+
+-- spec 231: a reference that did not become an edge, and why (external, missing,
+-- deleted). Owned by its source key: a resync replaces the source's rows.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_unresolved (
+    graph_id VARCHAR(256) %EXACT NOT NULL,
+    source   VARCHAR(256) %EXACT NOT NULL,
+    param    VARCHAR(128) %EXACT NOT NULL,
+    target   VARCHAR(512) %EXACT NOT NULL,
+    reason   VARCHAR(16) NOT NULL
+);
+
+CREATE INDEX idx_fhir_unres_source ON Graph_KG.fhir_unresolved (graph_id, source);
+CREATE INDEX idx_fhir_unres_target ON Graph_KG.fhir_unresolved (graph_id, target);
+
+-- spec 231: a code in a code system maps to a node in a graph. Supersedes fhir_bridges,
+-- which is migrated in with relation 'related' and source 'fhir_bridges'.
+CREATE TABLE IF NOT EXISTS Graph_KG.code_crosswalk (
+    code_system_uri VARCHAR(256) %EXACT NOT NULL,
+    code            VARCHAR(128) %EXACT NOT NULL,
+    target_graph    VARCHAR(256) %EXACT NOT NULL DEFAULT '',
+    target_node_id  VARCHAR(256) %EXACT NOT NULL,
+    relation        VARCHAR(16) NOT NULL DEFAULT 'exact',
+    source          VARCHAR(128),
+    source_version  VARCHAR(128),
+    confidence      DOUBLE DEFAULT 1.0,
+    CONSTRAINT pk_code_crosswalk PRIMARY KEY (target_graph, target_node_id, code_system_uri, code)
+);
+
+CREATE INDEX idx_crosswalk_code ON Graph_KG.code_crosswalk (code_system_uri, code);
+
 CREATE TABLE IF NOT EXISTS Graph_KG.rdf_reifications (
     reifier_id VARCHAR(256) %EXACT NOT NULL,
     edge_id BIGINT NOT NULL,
@@ -1622,12 +1673,13 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_PPR(
   dampingFactor DOUBLE DEFAULT 0.85,
   maxIterations INT DEFAULT 100,
   bidirectional INT DEFAULT 0,
-  reverseEdgeWeight DOUBLE DEFAULT 1.0
+  reverseEdgeWeight DOUBLE DEFAULT 1.0,
+  graphId VARCHAR(256) DEFAULT ''
 )
 RETURNS VARCHAR(8000)
 LANGUAGE OBJECTSCRIPT
 {{
-    set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight)
+    set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId)
     quit result
 }}
 """,

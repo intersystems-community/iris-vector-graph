@@ -265,6 +265,91 @@ if _HAS_CLICK:
         else:
             _print_inventory(payload)
 
+    def _iris_options(fn):
+        for opt in reversed(
+            (
+                click.option("--iris-host", envvar="IRIS_HOST", default=None),
+                click.option("--iris-port", envvar="IRIS_PORT", default=None),
+                click.option("--iris-namespace", envvar="IRIS_NAMESPACE", default=None),
+                click.option("--iris-username", envvar="IRIS_USERNAME", default=None),
+                click.option("--iris-password", envvar="IRIS_PASSWORD", default=None),
+            )
+        ):
+            fn = opt(fn)
+        return fn
+
+    def _fhir_run(iris, method, *args, **kwargs):
+        """Call one engine method and print its JSON. Exit 1 on failure, 2 on busy.
+
+        Direct to IRIS, like `embeddings inventory`: the graph lives in the FHIR
+        namespace, and registering or repairing it is not a query for the server.
+        """
+        try:
+            engine = _engine_from_env(
+                host=iris["iris_host"],
+                port=iris["iris_port"],
+                namespace=iris["iris_namespace"],
+                username=iris["iris_username"],
+                password=iris["iris_password"],
+            )
+            out = getattr(engine, method)(*args, **kwargs)
+        except Exception as e:
+            print(f"fhir: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(out, indent=2, default=str))
+        if isinstance(out, dict) and out.get("status") == "busy":
+            sys.exit(2)
+
+    @cli.group()
+    def fhir():
+        """The namespace's FHIR repository as a named graph (spec 231)."""
+
+    @fhir.command("register")
+    @click.option("--endpoint", default="", help="Endpoint path, when the namespace has more than one")
+    @click.option("--deny", multiple=True, help="Type.param whose references are not edges")
+    @click.option("--interval", default=60, show_default=True, help="Sync interval, seconds")
+    @_iris_options
+    def fhir_register(endpoint, deny, interval, **iris):
+        _fhir_run(
+            iris, "fhir_graph_register", endpoint=endpoint, denylist=list(deny), interval_s=interval
+        )
+
+    @fhir.command("rebuild")
+    @click.argument("graph")
+    @_iris_options
+    def fhir_rebuild(graph, **iris):
+        _fhir_run(iris, "fhir_graph_rebuild", graph)
+
+    @fhir.command("sync")
+    @click.argument("graph")
+    @click.option("--once", is_flag=True, help="Apply every pending change, then exit")
+    @_iris_options
+    def fhir_sync(graph, once, **iris):
+        """Exit status 2 means another sync or rebuild holds the graph."""
+        if not once:
+            raise click.UsageError(
+                "periodic sync runs as a Task Manager task: use `ivg fhir schedule`, "
+                "or pass --once"
+            )
+        _fhir_run(iris, "fhir_graph_sync", graph)
+
+    @fhir.command("status")
+    @click.argument("graph")
+    @_iris_options
+    def fhir_status(graph, **iris):
+        _fhir_run(iris, "fhir_graph_status", graph)
+
+    @fhir.command("schedule")
+    @click.argument("graph")
+    @click.option("--interval", type=int, default=None, help="Seconds; default keeps the registered one")
+    @click.option("--remove", is_flag=True, help="Delete the graph's Task Manager task")
+    @_iris_options
+    def fhir_schedule(graph, interval, remove, **iris):
+        if remove:
+            _fhir_run(iris, "fhir_graph_unschedule", graph)
+        else:
+            _fhir_run(iris, "fhir_graph_schedule", graph, interval_s=interval)
+
     @cli.group()
     def server():
         pass

@@ -173,6 +173,11 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 			}
 		}
 
+		// A FHIR graph's unresolved references go with it, and its watermarks drop
+		// to zero so the next SyncOnce or Rebuild re-projects the repository rather
+		// than resuming past rows that are no longer in the graph (spec 231).
+		Do ..EraseFHIRGraphRows(tName, 0)
+
 		// Reifications name an edge id, so they have to go before the edge rows.
 		&sql(DELETE FROM Graph_KG.rdf_reifications
 			WHERE edge_id IN (SELECT %ID FROM Graph_KG.rdf_edges
@@ -335,6 +340,7 @@ ClassMethod EraseAll() As %Integer
 		&sql(DELETE FROM Graph_KG.embedding_registry)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("embedding_registry", SQLCODE)) }
 
+		Do ..EraseFHIRGraphRows("", 1)
 		&sql(DELETE FROM Graph_KG.rdf_reifications)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_reifications", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.rdf_labels)
@@ -520,6 +526,31 @@ ClassMethod EraseLedgerFor(pName As %String) As %Integer [ Private ]
 		Set tCount = tCount + 1
 	}
 	Quit tCount
+}
+
+/// Graph_KG.fhir_unresolved rows and the Graph_KG.fhir_graphs watermarks for one
+/// graph, or for all when pAll. Dynamic SQL, and "table not found" (-30) is nothing
+/// to do: a namespace initialised before 4.1.0 has neither table. The registry row
+/// itself survives, like the ledger's history: erasing content does not unregister.
+ClassMethod EraseFHIRGraphRows(pName As %String, pAll As %Boolean) [ Private ]
+{
+	For tStep = 1:1:2 {
+		If tStep = 1 {
+			Set tSql = "DELETE FROM Graph_KG.fhir_unresolved" _ $Select(pAll: "", 1: " WHERE COALESCE(graph_id, '') = COALESCE(?, '')")
+			Set tStore = "fhir_unresolved"
+		} Else {
+			Set tSql = "UPDATE Graph_KG.fhir_graphs SET wm_rsrc = 0, wm_ver = 0" _ $Select(pAll: "", 1: " WHERE COALESCE(graph_id, '') = COALESCE(?, '')")
+			Set tStore = "fhir_graphs"
+		}
+		If pAll {
+			Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql)
+		} Else {
+			Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql, pName)
+		}
+		If (tRs.%SQLCODE < 0) && (tRs.%SQLCODE '= -30) {
+			$$$ThrowStatus(..SqlErr(tStore, tRs.%SQLCODE))
+		}
+	}
 }
 
 /// One error shape for every failed step, so the rollback path has one reason.

@@ -221,7 +221,8 @@ class TestCypherQueryVariants:
             "fhir_patient_id": "Patient/123",
             "fhir_base_url": "https://fhir.example.com",
         })
-        assert resp.status_code in (200, 401, 500)
+        # 400: the base URL is not in IVG_FHIR_ALLOWED_BASES (spec 231)
+        assert resp.status_code in (400, 401)
 
     def test_cypher_error_response(self, client):
         """When execute_cypher returns error, response includes error field."""

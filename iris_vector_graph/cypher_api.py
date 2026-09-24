@@ -220,10 +220,28 @@ def health():
         return {"status": "ok", "engine": False, "error": str(e)}
 
 
+def _allowed_fhir_bases() -> set[str]:
+    raw = os.environ.get("IVG_FHIR_ALLOWED_BASES", "")
+    return {b.strip().rstrip("/") for b in raw.split(",") if b.strip()}
+
+
 def _resolve_patient_anchors(req: CypherRequest) -> list[str]:
     from iris_vector_graph.fhir_bridge import fhir_search_conditions, get_kg_anchors
 
-    fhir_url = req.fhir_base_url or os.environ.get("FHIR_BASE_URL", "")
+    # A caller-supplied base URL is fetched by this server, so an unchecked one is an
+    # SSRF: any client could aim a GET at an internal address. It is honoured only when
+    # the operator listed it, compared exactly (a prefix match would let
+    # `https://fhir.example/r4.evil.example` ride on `https://fhir.example/r4`).
+    # `FHIR_BASE_URL` is the operator's own setting and stays trusted.
+    if req.fhir_base_url:
+        if req.fhir_base_url.rstrip("/") not in _allowed_fhir_bases():
+            raise ValueError(
+                "fhir_base_url is not in IVG_FHIR_ALLOWED_BASES; the server refuses to "
+                "fetch a FHIR base URL it was not configured with"
+            )
+        fhir_url = req.fhir_base_url
+    else:
+        fhir_url = os.environ.get("FHIR_BASE_URL", "")
     if not fhir_url:
         return []
     auth = tuple(req.fhir_auth) if req.fhir_auth else None

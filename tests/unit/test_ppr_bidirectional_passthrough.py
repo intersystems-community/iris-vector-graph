@@ -48,8 +48,8 @@ class TestStorePassesReverseArgsToObjectScript:
         args = mock_cls.call_args[0]
         assert args[0] == "Graph.KG.PageRank"
         assert args[1] == "RunJson"
-        assert len(args) == 7, (
-            "RunJson takes seedJson, alpha, maxIter, bidir, revWeight (PageRank.cls:16); "
+        assert len(args) == 8, (
+            "RunJson takes seedJson, alpha, maxIter, bidir, revWeight, pGraph; "
             f"got {len(args) - 2} value arguments: {args[2:]!r}"
         )
         assert str(args[5]) == "1", f"bidir should be 1 for a bidirectional request, got {args[5]!r}"

@@ -143,7 +143,7 @@ Any earlier test that left rows in `Graph_KG.kg_NodeEmbeddings` sent the ALTER t
 `needs_manual_migration` — logged `CRITICAL: ... is VECTOR(DOUBLE, 128) but the engine
 is configured for 768, and the table is not empty (5 rows)` — and the write was then
 refused by the identity check. The fixture's teardown deleted the rows and restored
-width 128, so the failure only appeared when a *previous* file's rows survived, and it
+width 128, so the failure only appeared when a _previous_ file's rows survived, and it
 landed on the file that read the width rather than the one that set it.
 
 `tests/integration/conftest.py` now calls `_clear_embedding_tables` **before**
@@ -166,7 +166,7 @@ Two notes for anyone reproducing the old failure:
 connection until two separate things are true: `container_state_is_running` (`:15`, read
 from `docker inspect -f {{.State.Status}}`) says the container is `running`, and
 `container_hostname_matches` (`:46`) says the instance on the other end of the connection
-reports the hostname Docker gave *that* container. The second check is the one that
+reports the hostname Docker gave _that_ container. The second check is the one that
 matters — a running container proves nothing about which instance answered on a port.
 Both fail closed: an unreadable state, an unreadable hostname, or a hostname shorter than
 the twelve characters Docker derives from the container ID is a failure, not a pass.
@@ -620,7 +620,7 @@ True` after a default `bulk_ingest_edges`, which cannot hold — the default `au
 ### ~~The default graph is falsy, so `''` reads as "every graph"~~ (fixed in 4.0.0)
 
 **Fixed in 4.0.0** (spec 230, FR-001). ADR-0003 spells the default graph `''`, and the
-translator tested `context.graph_context` for *truth*, so the one graph whose name is
+translator tested `context.graph_context` for _truth_, so the one graph whose name is
 falsy took the same path as a query naming no graph: no predicate on any table. The
 clause a caller writes to narrow a query was the one value that widened it.
 
@@ -629,10 +629,10 @@ All three rows are closed:
 | Location                    | Original effect                                                                | Fix                                                                                                                                                  |
 | --------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cypher/translator.py:2542` | `USE GRAPH ''` appended no `graph_id` predicate — the query spanned all graphs | `is not None` at seven sites: `add_dml`, `build_dml_subquery`, the read-scoping gate, two vector CTEs, the vector-distance site, the EdgeScan branch |
-| `cypher/translator.py:6274` | the same value took the EdgeScan fast path, which merged graphs                | the fast path now picks a *method*: `MatchEdgesAllGraphs` for `None`, `MatchEdges` for `''`                                                          |
+| `cypher/translator.py:6274` | the same value took the EdgeScan fast path, which merged graphs                | the fast path now picks a _method_: `MatchEdgesAllGraphs` for `None`, `MatchEdges` for `''`                                                          |
 | `_engine/schema.py:745`     | `retract_inference(graph="")` deleted inferred edges in every graph            | `if graph is None or graph == "":` → `AND COALESCE(graph_id, '') = ''` (now `_engine/schema.py:2353`)                                                |
 
-`_child_graph_sql` (`translator.py:162`) is deliberately *not* part of this: its falsy
+`_child_graph_sql` (`translator.py:162`) is deliberately _not_ part of this: its falsy
 branch omits the column and guards with `COALESCE(graph_id, '') = ''`, which is already
 correct default-graph behaviour for both `''` and `None`. Switching it to `is not None`
 would emit a bare `graph_id = ''` that misses rows written before the column acquired
@@ -664,7 +664,7 @@ One consequence worth stating, because it was a live divergence for the length o
 single commit: the Cypher translator's `^KG` fast path passes `MatchEdges(src, pred, 0)`,
 where the third argument is `shard` and `graph` defaults to `0`. Once `0` meant the
 default graph only, a query with no `USE GRAPH` clause taking the fast path answered
-*narrower* than the same query on the SQL path. The branch now picks the method from the
+_narrower_ than the same query on the SQL path. The branch now picks the method from the
 graph, not the argument (`translator.py:6816`).
 
 ### A query with no `USE GRAPH` clause fans out across graphs, and the row count is wrong
@@ -673,8 +673,8 @@ New in 4.0.0, and a consequence of spec 227 rather than of spec 230: once
 `Graph_KG.nodes` is keyed `(graph_id, node_id)`, two graphs may hold a row for the same
 node ID — and a query that carries no `graph_id` predicate joins them all against each
 other. `MATCH (n:Thing) RETURN n.node_id` with no `USE GRAPH` clause joins
-`nodes ⋈ rdf_labels ON l.s = n.node_id`, which pairs *every* graph's node row against
-*every* graph's label row for the same ID. Measured on `ivg-iris-enterprise` with one
+`nodes ⋈ rdf_labels ON l.s = n.node_id`, which pairs _every_ graph's node row against
+_every_ graph's label row for the same ID. Measured on `ivg-iris-enterprise` with one
 node held by two graphs: **four rows, not two**
 (`tests/e2e/test_230_scope_isolation.py::test_use_graph_with_the_default_graph_reads_one_graph`).
 
@@ -702,8 +702,8 @@ for the shapes under test and is not derived from the query's own edge set. Wort
 reworking, and worth doing deliberately — it decides which rows a tenant-scoped query
 sees.
 
-Spec 230 FR-001 changed *when* this block runs (`graph_context is not None` rather than
-truthiness, so `USE GRAPH ''` reaches it at all) and left *how* it picks aliases alone.
+Spec 230 FR-001 changed _when_ this block runs (`graph_context is not None` rather than
+truthiness, so `USE GRAPH ''` reaches it at all) and left _how_ it picks aliases alone.
 Two things now constrain any rework, both learned the hard way: the guesses must exclude
 the stage names (`_defined_stage_names`), because a fused `Retrieve` stage projects a
 node ID and a score and no `graph_id` — naming it out here makes IRIS refuse the whole
@@ -842,7 +842,7 @@ layout change, so the four stores are killed and rebuilt from graph-scoped SQL r
 subscripts no 4.0.0 reader walks until that runs — see `docs/migration/v4.0.0.md`.
 
 Three stores are deliberately still flat, because a graph subscript would be wrong for
-them: `^KG("labelset")` is content-addressed interning (the hash *is* the identity, and
+them: `^KG("labelset")` is content-addressed interning (the hash _is_ the identity, and
 two graphs interning the same label set should share the entry),
 `^KG("deg2p_exact_merged")` is Arno's cross-graph sketch by definition, and `^KG("__version")`
 describes the layout itself.
@@ -869,7 +869,7 @@ edge (`lni_a KNOWS lni_b`) alongside 17 ring edges:
 The row is in the database and invisible to every index-driven reader: `COUNT(*)`,
 any `WHERE` on an indexed column, the `DELETE`s `Graph.KG.Eraser` runs, the joins
 `kg_KNN_VEC` and the Cypher translator emit. `Graph.KG.TraversalBuild.BuildKG`
-reads with an embedded cursor and no predicate, so it *does* see the row and
+reads with an embedded cursor and no predicate, so it _does_ see the row and
 writes `^KG("out", 0, "lni_a", …)`, and `BuildNKG` puts both endpoints into
 `^NKG`. That is how a bulk-loaded node nobody could select kept reappearing in
 `^NKG` and made the Arno WCC ring test report two components long after
@@ -1073,14 +1073,14 @@ Four properties make this nastier than a cosmetic message:
 
 Two consequences, both already handled:
 
-*Product.* `iris_vector_graph/_engine/nodes_edges.py:41` `_swallow_duplicate` cannot
+_Product._ `iris_vector_graph/_engine/nodes_edges.py:41` `_swallow_duplicate` cannot
 rely on the text. It returns on the matchable cases (`-119`, "duplicate", "unique"),
 re-raises anything that is not a `<LIST ERROR>`, and for a `<LIST ERROR>` **asks the
 database whether the row is actually there** — if it is not, the error was something
 else and is re-raised. Treating every `<LIST ERROR>` as a duplicate would swallow
 real failures. Pinned by `tests/unit/test_swallow_duplicate.py`.
 
-*Tests.* Any test whose assertion **is** the error text needs its own connection.
+_Tests._ Any test whose assertion **is** the error text needs its own connection.
 `tests/integration/test_nodepk_constraints.py:45` `constraint_conn` opens one per
 test and closes it afterwards; the eight tests that read constraint messages use it
 instead of the shared session connection. A test that asserts on message text
@@ -1113,7 +1113,7 @@ The fourth `kg_KNN_VEC` argument is the graph now. See
 neither is now:
 
 - `kg_EdgeEmbeddings` is keyed `(graph_id, s, p, o_id)` with `emb_rowid` as the
-  identity, and it is the *default edge route* — shaped like a generated edge route so
+  identity, and it is the _default edge route_ — shaped like a generated edge route so
   one INSERT serves both. Before 4.0.0 the key was the triple alone, so two graphs
   asserting the same edge shared one row and the second write replaced the first.
 - The BM25 leg is scoped by the corpus rather than by a procedure argument:
@@ -1178,7 +1178,7 @@ pinned by
 The unlengthened `TO_VECTOR` it generated is deliberate and stays.
 
 **First resolved as a deprecation in 3.2.0.** Live measurement showed the
-three-argument `TO_VECTOR(:q, DOUBLE, n)` form pads or truncates the *query* and then
+three-argument `TO_VECTOR(:q, DOUBLE, n)` form pads or truncates the _query_ and then
 scores the reshaped value — a 6-element query truncated to 4 returned a cosine of `1.0` —
 while the unlengthed form makes IRIS compare widths and raise `SQLCODE -257`. Wiring the
 width in would replace a loud refusal with a silently wrong score, so the parameter is now
@@ -1208,7 +1208,7 @@ by folding a revision log.
 
 The migration hole itself is **unchanged**: a column at the wrong width whose table is
 non-empty still goes to `needs_manual_migration` with the declaration left alone. What
-3.2.0 adds is that the disagreement is now *recorded* and the next write is *refused*
+3.2.0 adds is that the disagreement is now _recorded_ and the next write is _refused_
 (`EmbeddingIdentityConflict`) instead of being attempted at a width the column cannot
 take.
 
@@ -1409,7 +1409,7 @@ and the ID-bound route never runs that statement: it calls BFS and hands the sto
 undirected walk reaches the same node at two hops and by two predicates and the caller sees
 it twice — 16 rows for 11 nodes on a 15-node chain, with `DISTINCT` in the query as written.
 
-The cap compounded it. `max_results` went to BFS, which truncates raw hits *before* anything
+The cap compounded it. `max_results` went to BFS, which truncates raw hits _before_ anything
 deduplicates, so `LIMIT 20` could answer 20 hits holding 11 nodes. Under `DISTINCT` the
 route now sends no cap to BFS, dedupes on the id keeping the first row for each — BFS emits
 in hop order, so the surviving row's `hops` is its shortest — and applies the cap after.
@@ -1487,7 +1487,7 @@ Two facts worth keeping if you probe this yourself:
 
 **Fixed in 4.0.0** (spec 230, FR-034). `Graph.KG.EdgeScan`'s bulk methods registered each
 endpoint by inserting it and tolerating `SQLCODE -119`, the duplicate. Inside the
-transaction they wrap a whole batch in, a *failed* statement is the most expensive thing
+transaction they wrap a whole batch in, a _failed_ statement is the most expensive thing
 they do: IRIS rolls it back to its own implicit savepoint. Measured on
 `ivg-iris-enterprise`, 200 chained edges in one transaction:
 
@@ -1501,7 +1501,7 @@ they do: IRIS rolls it back to its own implicit savepoint. Measured on
 Edges arrive chained — an edge's target is the next edge's source — so about half of every
 batch's registrations were duplicates. `BulkIngestEdgesSQL` ran at 25–26 edges/s whatever
 the batch size, over DBAPI, over the Native API, and from an `iris session` terminal
-alike; re-ingesting a batch that already landed, where *every* insert is a duplicate, ran
+alike; re-ingesting a batch that already landed, where _every_ insert is a duplicate, ran
 at 9.
 
 `RegisterDefaultNode` now checks a seen-set, then asks the table, then inserts, tolerating
@@ -1994,6 +1994,37 @@ procedure comparison for this reason, so the two catalogs are still compared on
 everything else.
 
 ---
+
+## FHIR graph and PageRank (verified 2026-09-23)
+
+### `delete_node` reaches every graph that holds the node ID
+
+`delete_node(node_id)` (`iris_vector_graph/_engine/nodes_edges.py:1443`) deletes by
+`node_id` alone, from `kg_NodeEmbeddings`, `rdf_edges`, `rdf_labels`, `rdf_props` and
+`nodes`. The comment there says so: reach stays namespace-wide. Since 4.1.0 that bites
+harder, because a FHIR graph's node IDs are resource keys (`Patient/p1`) that a
+default-graph caller can plausibly reuse. Deleting `Patient/p1` from the default graph
+also deletes it from `fhir:<NS>:<pkg>`, and the FHIR graph gets it back only at the next
+rebuild, because sync watches the repository, not the graph. Until `delete_node` takes a
+`graph`, remove FHIR-graph content only through sync or rebuild.
+
+### `MCPTools.PPRWalk` passes `topK` as `bidir` and reads an array shape `RunJson` never returns
+
+`Graph.KG.MCPTools.PPRWalk` (`MCPTools.cls:164`) calls
+`RunJson(seedJson, damping, 50, topK)`. The fourth argument of `RunJson` is `bidir`, so
+`topK` switches the walk to bidirectional and no top-k is applied. The loop then reads
+`item.%Get(0)` and `item.%Get(1)`, but `RunJson` returns objects `{"id", "score"}`, so
+every `nodeId` and `score` it emits is empty. It also cannot take a graph, although
+`RunJson` has taken `pGraph` since 4.0.1. Pre-existing; not touched by spec 231.
+
+### `^NKG` has no graph dimension
+
+`Graph.KG.EdgeScan` `WriteAdjacency` and `DeleteAdjacency` (`EdgeScan.cls:139-150`)
+write the integer-indexed `^NKG` with no graph subscript. Every Arno path
+(`NKGAccel.BFSJson`, `PPRJson`) is therefore default-graph only. The Python PPR paths
+never route a named-graph walk to `PPRJson` (spec 231, FR-016), so a FHIR-graph PPR runs
+in ObjectScript `RunJson` or the Python fallback, both graph-scoped, but slower than
+Arno on large graphs.
 
 ## Loose ends
 
