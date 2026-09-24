@@ -79,6 +79,7 @@ def test_register_passes_endpoint_denylist_and_interval(invoke):
                 "endpoint": "/csp/healthshare/ivgfhir/fhir/r4",
                 "denylist": ["Observation.performer", "Encounter.participant"],
                 "interval_s": 120,
+                "json_links": None,
             },
         )
     ]
@@ -88,7 +89,7 @@ def test_register_passes_endpoint_denylist_and_interval(invoke):
 def test_register_defaults(invoke):
     out, engine = invoke(["register"])
     assert out.exit_code == 0, out.output
-    assert engine.calls[0][2] == {"endpoint": "", "denylist": [], "interval_s": 60}
+    assert engine.calls[0][2] == {"endpoint": "", "denylist": [], "interval_s": 60, "json_links": None}
 
 
 def test_rebuild(invoke):

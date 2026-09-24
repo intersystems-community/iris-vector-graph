@@ -1,0 +1,8 @@
+{
+  "resourceType": "CarePlan",
+  "id": "@P@-cp1",
+  "status": "active",
+  "intent": "plan",
+  "subject": { "reference": "Patient/@P@-p1" },
+  "instantiatesCanonical": ["http://ex.org/ivg232/@P@/PlanDefinition/pd1"]
+}

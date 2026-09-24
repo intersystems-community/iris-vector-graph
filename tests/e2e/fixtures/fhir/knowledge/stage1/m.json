@@ -1,0 +1,11 @@
+{
+  "resourceType": "Library",
+  "id": "@P@-m",
+  "url": "http://ex.org/ivg232/@P@/Library/U1",
+  "status": "active",
+  "type": {
+    "coding": [
+      { "system": "http://terminology.hl7.org/CodeSystem/library-type", "code": "logic-library" }
+    ]
+  }
+}

@@ -32,6 +32,10 @@ VALID_GRAPH_TABLES = {
     # crosswalk that replaces fhir_bridges
     "fhir_graphs",
     "fhir_unresolved",
+    # spec 232: what each definitional key declared, and every canonical link a
+    # source carries
+    "fhir_definitions",
+    "fhir_canonical_refs",
     "code_crosswalk",
 }
 

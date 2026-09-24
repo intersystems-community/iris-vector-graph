@@ -1,0 +1,24 @@
+{
+  "resourceType": "PlanDefinition",
+  "id": "@P@-pd1",
+  "url": "http://ex.org/ivg232/@P@/PlanDefinition/pd1",
+  "status": "active",
+  "library": ["http://ex.org/ivg232/@P@/Library/L|1.0.0"],
+  "relatedArtifact": [{ "type": "depends-on", "resource": "http://ex.org/ivg232/@P@/Library/B" }],
+  "action": [
+    {
+      "title": "outer",
+      "action": [
+        {
+          "title": "inner",
+          "extension": [
+            {
+              "url": "http://hl7.org/fhir/StructureDefinition/cqf-library",
+              "valueCanonical": "http://ex.org/ivg232/@P@/Library/U1"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

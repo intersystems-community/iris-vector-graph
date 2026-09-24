@@ -413,21 +413,52 @@ CREATE TABLE IF NOT EXISTS Graph_KG.fhir_graphs (
     last_rebuild  TIMESTAMP,
     last_error    VARCHAR(4000),
     last_counts   VARCHAR(32000),
+    json_links    VARCHAR(8000),
     CONSTRAINT pk_fhir_graphs PRIMARY KEY (graph_id)
 );
 
 -- spec 231: a reference that did not become an edge, and why (external, missing,
--- deleted). Owned by its source key: a resync replaces the source's rows.
+-- deleted; spec 232 adds version-not-found, ambiguous, no-definition). Owned by its
+-- source key: a resync replaces the source's rows.
 CREATE TABLE IF NOT EXISTS Graph_KG.fhir_unresolved (
     graph_id VARCHAR(256) %EXACT NOT NULL,
     source   VARCHAR(256) %EXACT NOT NULL,
     param    VARCHAR(128) %EXACT NOT NULL,
     target   VARCHAR(512) %EXACT NOT NULL,
-    reason   VARCHAR(16) NOT NULL
+    reason   VARCHAR(32) NOT NULL
 );
 
 CREATE INDEX idx_fhir_unres_source ON Graph_KG.fhir_unresolved (graph_id, source);
 CREATE INDEX idx_fhir_unres_target ON Graph_KG.fhir_unresolved (graph_id, target);
+
+-- spec 232: the canonical url and version each definitional key declared at its last
+-- sync, so a url edit can find the referrers of the old url. The repository index
+-- keeps 220 characters of a url or version, so these columns do too.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_definitions (
+    graph_id VARCHAR(256) %EXACT NOT NULL,
+    rsrc_key VARCHAR(256) %EXACT NOT NULL,
+    url      VARCHAR(220) %EXACT NOT NULL,
+    version  VARCHAR(220) %EXACT,
+    CONSTRAINT pk_fhir_definitions PRIMARY KEY (graph_id, rsrc_key)
+);
+
+CREATE INDEX idx_fhir_def_url ON Graph_KG.fhir_definitions (graph_id, url);
+
+-- spec 232: every canonical (and extension Reference) link a source carries, resolved
+-- or not. origin is 'index' or the json link entry; kind is canonical or reference.
+-- Owned by its source key: a resync replaces the source's rows.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_canonical_refs (
+    graph_id VARCHAR(256) %EXACT NOT NULL,
+    source   VARCHAR(256) %EXACT NOT NULL,
+    param    VARCHAR(128) %EXACT NOT NULL,
+    url      VARCHAR(512) %EXACT NOT NULL,
+    version  VARCHAR(220) %EXACT,
+    origin   VARCHAR(1024) %EXACT NOT NULL,
+    kind     VARCHAR(16) NOT NULL
+);
+
+CREATE INDEX idx_fhir_cref_source ON Graph_KG.fhir_canonical_refs (graph_id, source);
+CREATE INDEX idx_fhir_cref_url ON Graph_KG.fhir_canonical_refs (graph_id, url);
 
 -- spec 231: a code in a code system maps to a node in a graph. Supersedes fhir_bridges,
 -- which is migrated in with relation 'related' and source 'fhir_bridges'.

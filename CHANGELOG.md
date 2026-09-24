@@ -16,7 +16,7 @@ Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
   `fhir:IVGFHIR:X0001`. A node is a resource key, labelled with its type, with an
   `rdf_props` `id` row so Cypher's `n.id` works. An edge is one indexed reference; its
   predicate is the search param code and its qualifier `searchParam` is the
-  SearchParameter URL. `CANONICAL` and `URI` columns are not edges.
+  SearchParameter URL. `URI` columns are not edges.
 - `fhir_graph_rebuild` reconciles the whole graph by diff, so vectors on surviving nodes
   are kept, and reports an edge count per param.
 - `fhir_graph_sync` applies changes since two watermarks (`Rsrc.ID` for creates,
@@ -33,6 +33,39 @@ Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
 - CLI: `ivg fhir register|rebuild|sync --once|status|schedule [--remove]`, straight to
   IRIS via `IRIS_HOST`/`IRIS_PORT`/`IRIS_NAMESPACE`/`IRIS_USERNAME`/`IRIS_PASSWORD`.
   `sync` exits 2 when busy, 1 on error.
+
+**Canonical and json-link edges** (spec 232)
+
+- `CANONICAL` search columns are edges now, on by default; the denylist prunes them.
+  A canonical resolves to the one live resource that declares its url: `url|version`
+  needs that exact version, a versionless url needs exactly one declaring resource.
+  Otherwise the ref is an unresolved row with reason `version-not-found`, `ambiguous`
+  or `no-definition`. An edge never re-points; a new version makes versionless refs
+  `ambiguous`, and deleting it restores the edge in the same sync. Urls and versions
+  compare on their first 220 characters, the index's `MAXLEN`.
+- New tables `Graph_KG.fhir_definitions` (the url and version each resource declared
+  at last sync) and `Graph_KG.fhir_canonical_refs` (every canonical and json-link ref
+  a source carries, with its origin). A url edit resyncs every source naming the old
+  or new url in the same transaction. Rebuild and `Graph.KG.Eraser` clear both.
+- `fhir_graph_register(..., json_links=None)` and a `json_links` column on
+  `Graph_KG.fhir_graphs`: links read from the resource body. Two forms,
+  `Type.element` (top-level canonical or array) and `extension:<url>` (any depth,
+  `valueCanonical` or `valueReference`); anything else is rejected before the round
+  trip. The default is `<Type>.library` for every type whose `depends-on` Definition
+  contains `.library`, plus `extension:http://hl7.org/fhir/StructureDefinition/cqf-library`.
+  A changed list rebuilds the graph (`"rebuilt": true`).
+- `library` urls come out of the merged `depends-on` edges and become `library`
+  edges; a url in both `relatedArtifact` and `library` gets both. Json-link edges
+  carry qualifier `{"jsonLink": "<entry>"}`, index edges keep `searchParam`.
+- `fhir_graph_status` adds `json_links`: refs read per entry, 0 included.
+- `fhir_link_report(graph, source=None)`: one row per canonical or json-link ref,
+  `(source, param, url, version, origin, kind, status)`, where `status` is the target
+  key or the reason, plus `totals.by_param` and `totals.by_link`. Read-only.
+- CLI: `ivg fhir register --link ENTRY ... | --no-links`, and
+  `ivg fhir links GRAPH [--source Type/id] [--format table|json]`.
+- Tests: a staged knowledge fixture (`tests/e2e/fixtures/fhir/knowledge`) drives the
+  E2E gate, and a `slow` smoke loads the HL7 CPG 2.0.0 CHF examples (62 resources,
+  CC0, vendored under `tests/e2e/fixtures/fhir/cpg`): 36 link rows, 31 resolved.
 
 **From concepts to ranked resources**
 

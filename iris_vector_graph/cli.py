@@ -278,8 +278,9 @@ if _HAS_CLICK:
             fn = opt(fn)
         return fn
 
-    def _fhir_run(iris, method, *args, **kwargs):
-        """Call one engine method and print its JSON. Exit 1 on failure, 2 on busy.
+    def _fhir_run(iris, method, *args, render=None, **kwargs):
+        """Call one engine method and print its JSON, or ``render(out)``. Exit 1 on
+        failure, 2 on busy.
 
         Direct to IRIS, like `embeddings inventory`: the graph lives in the FHIR
         namespace, and registering or repairing it is not a query for the server.
@@ -296,7 +297,7 @@ if _HAS_CLICK:
         except Exception as e:
             print(f"fhir: {e}", file=sys.stderr)
             sys.exit(1)
-        print(json.dumps(out, indent=2, default=str))
+        print(render(out) if render else json.dumps(out, indent=2, default=str))
         if isinstance(out, dict) and out.get("status") == "busy":
             sys.exit(2)
 
@@ -308,10 +309,21 @@ if _HAS_CLICK:
     @click.option("--endpoint", default="", help="Endpoint path, when the namespace has more than one")
     @click.option("--deny", multiple=True, help="Type.param whose references are not edges")
     @click.option("--interval", default=60, show_default=True, help="Sync interval, seconds")
+    @click.option("--link", multiple=True, help="json link: Type.element or extension:<url> (spec 232)")
+    @click.option("--no-links", is_flag=True, help="No json links; default is the library split plus cqf-library")
     @_iris_options
-    def fhir_register(endpoint, deny, interval, **iris):
+    def fhir_register(endpoint, deny, interval, link, no_links, **iris):
+        """A changed json-links list rebuilds the graph now."""
+        if no_links and link:
+            raise click.UsageError("--no-links and --link cannot be combined")
+        json_links = [] if no_links else (list(link) if link else None)
         _fhir_run(
-            iris, "fhir_graph_register", endpoint=endpoint, denylist=list(deny), interval_s=interval
+            iris,
+            "fhir_graph_register",
+            endpoint=endpoint,
+            denylist=list(deny),
+            interval_s=interval,
+            json_links=json_links,
         )
 
     @fhir.command("rebuild")
@@ -338,6 +350,41 @@ if _HAS_CLICK:
     @_iris_options
     def fhir_status(graph, **iris):
         _fhir_run(iris, "fhir_graph_status", graph)
+
+    def _link_table(report):
+        """The link report as columns, then totals per param and per json link."""
+        head = ("SOURCE", "PARAM", "URL", "VERSION", "ORIGIN", "STATUS")
+        rows = [
+            (r["source"], r["param"], r["url"], r.get("version") or "-", r["origin"], r["status"])
+            for r in report.get("rows", [])
+        ]
+        widths = [max([len(h)] + [len(str(r[i])) for r in rows]) for i, h in enumerate(head)]
+        fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+        lines = [fmt.format(*head).rstrip()] + [fmt.format(*r).rstrip() for r in rows]
+        totals = report.get("totals", {})
+        lines += ["", "by param"]
+        for param, outcomes in sorted(totals.get("by_param", {}).items()):
+            for outcome, n in sorted(outcomes.items()):
+                lines.append(f"  {param}  {outcome}  {n}")
+        lines += ["", "by json link"]
+        for entry, n in totals.get("by_link", {}).items():
+            lines.append(f"  {entry}  {n}")
+        return "\n".join(lines)
+
+    @fhir.command("links")
+    @click.argument("graph")
+    @click.option("--source", default=None, help="One source key, Type/id")
+    @click.option("--format", "fmt", type=click.Choice(["table", "json"]), default="table", show_default=True)
+    @_iris_options
+    def fhir_links(graph, source, fmt, **iris):
+        """Canonical and json-link references and what each resolved to (spec 232)."""
+        _fhir_run(
+            iris,
+            "fhir_link_report",
+            graph,
+            source=source,
+            render=_link_table if fmt == "table" else None,
+        )
 
     @fhir.command("schedule")
     @click.argument("graph")

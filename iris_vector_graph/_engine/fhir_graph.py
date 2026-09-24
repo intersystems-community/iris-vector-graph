@@ -14,12 +14,14 @@ from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.exceptions import FHIRGraphError
+from iris_vector_graph.fhir_links import parse_json_links
 
 _CLS = "Graph.KG.FHIRGraph"
 
 CROSSWALK_RELATIONS = ("exact", "broader", "narrower", "related")
 
 _DENY_ENTRY = re.compile(r"^[A-Za-z]+\.[A-Za-z0-9_-]+$")
+_SOURCE_KEY = re.compile(r"^[A-Za-z]+/[^/\s]+$")
 _PARAM = re.compile(r"^[A-Za-z0-9_-]+$")
 _MAX_HOPS = 10
 
@@ -90,13 +92,17 @@ class FhirGraphMixin:
         endpoint: str = "",
         denylist: Optional[List[str]] = None,
         interval_s: int = 60,
+        json_links: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Register the connected namespace's FHIR repository as a named graph.
 
         ``endpoint`` picks the repository when the namespace has more than one.
         ``denylist`` holds ``Type.param`` entries whose references are not edges.
+        ``json_links`` names links the search index cannot see (``Type.element`` or
+        ``extension:<url>``); ``None`` keeps the default, ``[]`` turns them off.
         Re-registering updates the settings and keeps the watermarks; a changed
-        denylist applies at the next rebuild.
+        denylist applies at the next rebuild, a changed json_links list rebuilds now
+        (``"rebuilt"`` in the reply).
         """
         deny = list(denylist or [])
         for entry in deny:
@@ -106,7 +112,8 @@ class FhirGraphMixin:
             raise ValueError(
                 f"interval_s must be at least 60 (Task Manager counts minutes), got {interval_s!r}"
             )
-        return self._fhir_call("Register", endpoint or "", json.dumps(deny), interval_s)
+        links = "" if json_links is None else json.dumps(parse_json_links(json_links))
+        return self._fhir_call("Register", endpoint or "", json.dumps(deny), interval_s, links)
 
     def fhir_graph_rebuild(self, graph: str) -> Dict[str, Any]:
         """Reconcile the graph to the repository and reset its watermarks."""
@@ -119,6 +126,14 @@ class FhirGraphMixin:
 
     def fhir_graph_status(self, graph: str) -> Dict[str, Any]:
         return self._fhir_call("Status", _fhir_graph(graph))
+
+    def fhir_link_report(self, graph: str, source: Optional[str] = None) -> Dict[str, Any]:
+        """Every canonical and json-link reference in the graph, or one source key's,
+        with its outcome: the edge target key or the unresolved reason."""
+        name = _fhir_graph(graph)
+        if source is not None and not (isinstance(source, str) and _SOURCE_KEY.match(source)):
+            raise ValueError(f"source must be a 'Type/id' key, got {source!r}")
+        return self._fhir_call("LinkReport", name, source or "")
 
     def fhir_graph_schedule(self, graph: str, interval_s: Optional[int] = None) -> Dict[str, Any]:
         """Create or update the graph's Task Manager task; ``None`` keeps the

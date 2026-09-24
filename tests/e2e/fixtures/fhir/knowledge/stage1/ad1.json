@@ -1,0 +1,6 @@
+{
+  "resourceType": "ActivityDefinition",
+  "id": "@P@-ad1",
+  "status": "active",
+  "relatedArtifact": [{ "type": "depends-on", "resource": "http://ex.org/ivg232/@P@/Library/U2" }]
+}

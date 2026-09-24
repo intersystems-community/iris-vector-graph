@@ -528,19 +528,21 @@ ClassMethod EraseLedgerFor(pName As %String) As %Integer [ Private ]
 	Quit tCount
 }
 
-/// Graph_KG.fhir_unresolved rows and the Graph_KG.fhir_graphs watermarks for one
-/// graph, or for all when pAll. Dynamic SQL, and "table not found" (-30) is nothing
-/// to do: a namespace initialised before 4.1.0 has neither table. The registry row
-/// itself survives, like the ledger's history: erasing content does not unregister.
+/// Graph_KG.fhir_unresolved, fhir_definitions and fhir_canonical_refs rows and the
+/// Graph_KG.fhir_graphs watermarks for one graph, or for all when pAll. Dynamic SQL,
+/// and "table not found" (-30) is nothing to do: a namespace initialised before 4.1.0
+/// has none of these tables. The registry row itself survives, like the ledger's
+/// history: erasing content does not unregister.
 ClassMethod EraseFHIRGraphRows(pName As %String, pAll As %Boolean) [ Private ]
 {
-	For tStep = 1:1:2 {
-		If tStep = 1 {
-			Set tSql = "DELETE FROM Graph_KG.fhir_unresolved" _ $Select(pAll: "", 1: " WHERE COALESCE(graph_id, '') = COALESCE(?, '')")
-			Set tStore = "fhir_unresolved"
+	Set tWhere = $Select(pAll: "", 1: " WHERE COALESCE(graph_id, '') = COALESCE(?, '')")
+	Set tStores = $ListBuild("Graph_KG.fhir_unresolved", "Graph_KG.fhir_definitions", "Graph_KG.fhir_canonical_refs", "Graph_KG.fhir_graphs")
+	For tStep = 1:1:$ListLength(tStores) {
+		Set tStore = $List(tStores, tStep)
+		If tStore = "Graph_KG.fhir_graphs" {
+			Set tSql = "UPDATE " _ tStore _ " SET wm_rsrc = 0, wm_ver = 0" _ tWhere
 		} Else {
-			Set tSql = "UPDATE Graph_KG.fhir_graphs SET wm_rsrc = 0, wm_ver = 0" _ $Select(pAll: "", 1: " WHERE COALESCE(graph_id, '') = COALESCE(?, '')")
-			Set tStore = "fhir_graphs"
+			Set tSql = "DELETE FROM " _ tStore _ tWhere
 		}
 		If pAll {
 			Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql)

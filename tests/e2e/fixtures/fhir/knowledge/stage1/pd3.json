@@ -1,0 +1,7 @@
+{
+  "resourceType": "PlanDefinition",
+  "id": "@P@-pd3",
+  "status": "active",
+  "library": ["http://ex.org/ivg232/@P@/Library/B"],
+  "relatedArtifact": [{ "type": "depends-on", "resource": "http://ex.org/ivg232/@P@/Library/B" }]
+}

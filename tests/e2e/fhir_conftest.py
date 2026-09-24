@@ -96,6 +96,29 @@ class FhirLoader:
         assert str(out["status"]).startswith("20"), out
         return out
 
+    def knowledge(self, stage: str) -> list:
+        """Spec 232 knowledge fixture: `stage1`, `stage2`, `stage3` are directories of
+        resources to PUT; `stage4` names keys to delete. `@P@` becomes the prefix, in
+        ids and urls alike. Returns the keys touched."""
+        base = os.path.join(_FIXTURES, "knowledge")
+        if os.path.isdir(os.path.join(base, stage)):
+            keys = []
+            for path in sorted(glob.glob(os.path.join(base, stage, "*.json"))):
+                with open(path) as fh:
+                    resource = json.loads(fh.read().replace("@P@", self.prefix))
+                self.put(resource)
+                keys.append(f"{resource['resourceType']}/{resource['id']}")
+            return keys
+        with open(os.path.join(base, f"{stage}.json")) as fh:
+            spec = json.loads(fh.read().replace("@P@", self.prefix))
+        for key in spec["delete"]:
+            self.delete(*key.split("/", 1))
+        return spec["delete"]
+
+    def url(self, path: str) -> str:
+        """A fixture url, e.g. url('Library/L') -> http://ex.org/ivg232/<prefix>/Library/L."""
+        return f"http://ex.org/ivg232/{self.prefix}/{path}"
+
 
 @pytest.fixture(scope="session")
 def fhir_conn():

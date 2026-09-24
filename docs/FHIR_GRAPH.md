@@ -34,10 +34,12 @@ The same operations from a shell. They connect straight to IRIS through `IRIS_HO
 
 ```bash
 ivg fhir register [--endpoint /csp/healthshare/ns/fhir/r4] [--deny Provenance.target] [--interval 60]
+                  [--link PlanDefinition.library ... | --no-links]
 ivg fhir rebuild fhir:IVGFHIR:X0001
 ivg fhir sync fhir:IVGFHIR:X0001 --once     # exit 2: another sync holds the graph
 ivg fhir status fhir:IVGFHIR:X0001
 ivg fhir schedule fhir:IVGFHIR:X0001 [--interval 120 | --remove]
+ivg fhir links fhir:IVGFHIR:X0001 [--source PlanDefinition/pd1] [--format table|json]
 ```
 
 ## The model
@@ -50,8 +52,10 @@ ivg fhir schedule fhir:IVGFHIR:X0001 [--interval 120 | --remove]
 | node property `id`           | the key again, so Cypher's `n.id` works                       |
 | edge predicate               | the search param code: `subject`, `performer`                 |
 | edge qualifier `searchParam` | the SearchParameter URL (`SearchColumn.Definition`)           |
+| edge qualifier `jsonLink`    | the json link entry, for an edge read from the resource body  |
 
-Only topology is copied: one node per live resource and one edge per indexed reference.
+Only topology is copied: one node per live resource and one edge per indexed reference
+or canonical, plus the links the json links read from the resource body.
 Codes and other properties stay in the repository. `fhir_resolve_concepts` reads the
 token tables live.
 
@@ -61,17 +65,17 @@ one param collapse. A reference from a resource to itself becomes a self-loop.
 
 ### What is an edge
 
-Every search column with `Type = 'reference'` and `DataType = 'REFERENCE'` becomes an
-edge, less the graph's denylist. Two kinds of column are excluded:
+Every search column with `Type = 'reference'` and `DataType` `REFERENCE` or
+`CANONICAL` becomes an edge, less the graph's denylist. A canonical edge points at the
+local resource that declares the url, by the rule under
+[Canonical edges](#canonical-edges). The two `URI` columns are excluded.
 
-- **`CANONICAL`** (73 columns) points at definitions, not resources.
-- **`URI`** (2 columns) is the same case.
-
-A reference only becomes an edge if FHIR indexed it, so the following never do:
+A reference only becomes an edge if FHIR indexed it or a json link reads it, so the
+following never do:
 
 - contained references (`#id`)
 - `urn:uuid` references that were not resolved inside a transaction
-- references inside extensions
+- references inside extensions that no json link names
 
 A reference that points at a live resource is an edge even when the target's type is
 not in the param's `Target` list. Validating that is the FHIR server's job.
@@ -81,11 +85,14 @@ not in the param's `Target` list. Validating that is the FHIR server's job.
 A reference that cannot become an edge goes into `Graph_KG.fhir_unresolved` as a row
 `(graph_id, source, param, target, reason)`:
 
-| reason     | meaning                                                                       |
-| ---------- | ----------------------------------------------------------------------------- |
-| `external` | `_Reference` contains `://` and none of the repository's endpoint paths + `/` |
-| `missing`  | the target key has never existed                                              |
-| `deleted`  | the target key existed and is deleted                                         |
+| reason              | meaning                                                                       |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `external`          | `_Reference` contains `://` and none of the repository's endpoint paths + `/` |
+| `missing`           | the target key has never existed                                              |
+| `deleted`           | the target key existed and is deleted                                         |
+| `no-definition`     | a canonical url that no live resource in the repository declares              |
+| `version-not-found` | a `url\|version` whose url is declared, but not at that version               |
+| `ambiguous`         | a versionless url that more than one live resource declares                   |
 
 When a `missing` or `deleted` target appears, the next sync turns its rows into edges.
 An absolute reference that contains the repository's own endpoint path is local.
@@ -97,6 +104,108 @@ params out of the graph. The first candidates are `Provenance.target` and
 `AuditEvent.entity`, which point at nearly everything and add hubs that dominate PPR.
 The rebuild report lists every param with its edge count, including denylisted params
 at 0, so start from the numbers. A changed denylist takes effect at the next rebuild.
+
+## Canonical edges
+
+A canonical is a `url` or `url|version` naming a definitional resource (a Library,
+PlanDefinition, Measure, Questionnaire and so on). `Graph_KG.fhir_definitions` records
+the `url` and `version` each live resource declared at its last sync, and
+`Graph_KG.fhir_canonical_refs` records every canonical a source carries, resolved or
+not, with its origin: `index` or the json link that read it.
+
+The resolution rule:
+
+- `url|version` is an edge when exactly one live resource declares that url at that
+  version. A declared url with no such version is `version-not-found`.
+- A versionless `url` is an edge when exactly one live resource declares the url, at
+  any version. More than one is `ambiguous`.
+- A url that no live resource declares is `no-definition`. A reference to an HL7 core
+  definition that is not loaded, such as `http://hl7.org/fhir/Library/x`, lands here.
+
+An edge never re-points. A new version of a definition makes versionless references
+to it `ambiguous`: their edges are deleted and unresolved rows written. Deleting the
+extra version brings the edges back in the same sync. When a definition's url
+changes, every source that names the old url or the new one resyncs in the same
+transaction.
+
+The rule is stricter than the FHIR server's own search. The server matches the url
+exactly, matches the version by prefix, and lets a versionless search return every
+version. A search returns a list, but an edge claims one target, so the graph wants
+an exact version, and refuses to pick when there are several.
+
+The repository's index keeps the first 220 characters of a canonical url and of its
+version, and values read from the body are cut the same way so both sides compare
+equal. Two urls that differ only after character 220 are the same url to the graph.
+
+### `library` and `depends-on`
+
+R4 indexes `PlanDefinition.library` (and `library` on ActivityDefinition, Measure and
+the other types whose `depends-on` SearchParameter expression includes `.library`)
+merged into `depends-on`. Where that column's `Definition` contains `.library`, the
+urls from the resource's `library` element are taken out of the `depends-on` edges and
+emitted as `library` edges instead, provided the default json link for that type is
+configured. A url that is in both `relatedArtifact` and `library` gets both edges. The
+split is read from `SearchColumn.Definition`, not from a list of types.
+
+## JSON links
+
+Some links have no search param: `library` on the types above, and every link inside
+an extension. The graph's `json_links` list names what to read from the resource
+body. It is a JSON array of strings, each in one of two forms:
+
+| entry             | reads                                                                                                                                          | predicate                                                   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `Type.element`    | the top-level `element` of `Type`: a canonical string, or each string in an array                                                              | `element`, e.g. `library`                                   |
+| `extension:<url>` | every `extension` or `modifierExtension` with that `url`, at any depth, on every type: its `valueCanonical`, or its `valueReference.reference` | the url's last segment after `/` or `:`, e.g. `cqf-library` |
+
+A `valueCanonical` resolves by the canonical rule. A `valueReference` resolves like an
+indexed reference and can be `external`, `missing` or `deleted`. The body walk stops
+at depth 64 and 10,000 matches per resource; either limit fails the batch with an
+error naming the key.
+
+Anything else is rejected at registration, as is an entry listed twice or two
+entries that give one predicate where one of them is an extension. The denylist
+applies to json-link predicates too, as `Type.predicate`, for example
+`PlanDefinition.cqf-library`.
+
+With no `json_links`, `fhir_graph_register` stores the default list: `<Type>.library`
+for each type with a split column, in sorted order, then
+`extension:http://hl7.org/fhir/StructureDefinition/cqf-library`. An explicit list
+replaces the default, and `[]` (`--no-links`) turns json links off. A changed list
+makes registration rebuild the graph and reply `"rebuilt": true`. If another sync
+holds the graph, the list is stored, `last_error` reads
+`json_links changed; rebuild pending`, and the next rebuild applies it.
+
+`fhir_graph_status` reports `json_links`: how many refs each entry read, 0 included, so
+an entry that matches nothing is visible.
+
+## The link report
+
+`fhir_link_report(graph, source=None)` (`ivg fhir links`) lists every canonical and
+json-link reference, one row per `(source, param, url, version, origin)`:
+
+```json
+{
+  "source": "PlanDefinition/pd1",
+  "param": "library",
+  "url": "http://ex.org/Library/L",
+  "version": "1.0.0",
+  "origin": "PlanDefinition.library",
+  "kind": "canonical",
+  "status": "Library/l1"
+}
+```
+
+`status` is the target key when the reference resolved, and the unresolved reason
+otherwise. `source="Type/id"` limits the report to one resource. `totals.by_param`
+counts each param's outcomes (`resolved` or a reason; only outcomes that occur), and
+`totals.by_link` counts rows per json link, every configured entry included. The
+report is read-only: it recomputes each status from the current definitions.
+
+On the HL7 CPG 2.0.0 CHF examples (62 resources, vendored under
+`tests/e2e/fixtures/fhir/cpg`), the report has 36 rows: 14 `definition`, 8
+`measure`, 6 `instantiates-canonical` and 3 `library` resolve, and 5 `depends-on`
+refs name HL7 definitions that are not loaded (`no-definition`).
 
 ## Sync
 
@@ -197,6 +306,8 @@ caller's own SQL privileges.
 - **`^NKG`.** The integer-indexed adjacency has no graph dimension. The Arno paths
   stay default-graph only, and a named-graph PPR never routes to Arno's `PPRJson`.
 - **History.** FHIR history is not graph history. The graph holds the current state.
+- **Canonicals.** Urls and versions compare on their first 220 characters. The body is
+  read only through json links, not FHIRPath.
 - **Copied content.** None: no properties, no codes, no Arno-backed FHIR storage.
 
 ## Deprecated in 4.1.0, removed in 5.0

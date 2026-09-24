@@ -1,0 +1,11 @@
+{
+  "resourceType": "PlanDefinition",
+  "id": "@P@-pd2",
+  "status": "active",
+  "relatedArtifact": [
+    { "type": "depends-on", "resource": "http://ex.org/ivg232/@P@/Library/L|2.0.0" },
+    { "type": "depends-on", "resource": "http://ex.org/ivg232/@P@/Library/L|3.0.0" },
+    { "type": "depends-on", "resource": "http://ex.org/ivg232/@P@/Library/L" },
+    { "type": "depends-on", "resource": "http://hl7.org/fhir/Library/x" }
+  ]
+}

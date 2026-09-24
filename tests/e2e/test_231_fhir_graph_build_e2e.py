@@ -192,7 +192,15 @@ def test_report_counts_per_param(built):
     counts = built["report"]["counts"]
     assert counts["params"]["Observation.performer"] >= 2
     assert counts["params"]["Observation.subject"] >= 1
-    assert set(counts["unresolved"]) == {"external", "missing", "deleted"}
+    # Spec 232 adds the three canonical reasons; every reason is reported, 0 included.
+    assert set(counts["unresolved"]) == {
+        "external",
+        "missing",
+        "deleted",
+        "version-not-found",
+        "ambiguous",
+        "no-definition",
+    }
 
 
 def test_rebuild_is_idempotent(fhir_conn, fhir_engine, built):

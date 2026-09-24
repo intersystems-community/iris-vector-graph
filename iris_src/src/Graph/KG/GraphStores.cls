@@ -56,6 +56,10 @@ ClassMethod Inventory() As %DynamicArray
 	// registry row, Graph_KG.fhir_graphs, is configuration: erasing keeps it and
 	// zeroes its watermarks.
 	Do tStores.%Push(..Entry("Graph_KG.fhir_unresolved", "sql", "graph_id", 1))
+	// What each definitional key declared, and every canonical link a source carries
+	// (spec 232). Bookkeeping derived from the repository: erasing drops it.
+	Do tStores.%Push(..Entry("Graph_KG.fhir_definitions", "sql", "graph_id", 1))
+	Do tStores.%Push(..Entry("Graph_KG.fhir_canonical_refs", "sql", "graph_id", 1))
 
 	// --- graph-scoped globals: structural adjacency (spec 214) -------------
 	Do tStores.%Push(..Entry("^KG(""out"")", "global", "subscript 2", 1))

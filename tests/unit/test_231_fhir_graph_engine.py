@@ -47,7 +47,7 @@ class TestRegister:
         eng, native = eng_ok
         native.classMethodValue.return_value = json.dumps({"status": "registered", "graph_id": G})
         out = eng.fhir_graph_register()
-        assert _call(native) == ("Graph.KG.FHIRGraph", "Register", "", "[]", 60)
+        assert _call(native) == ("Graph.KG.FHIRGraph", "Register", "", "[]", 60, "")
         assert out["graph_id"] == G
 
     def test_arguments(self, eng_ok):

@@ -90,3 +90,55 @@ def test_code_crosswalk(statements):
 def test_allowlisted(table):
     """`_t()` validates every name; an unlisted table raises, it does not degrade."""
     assert table in VALID_GRAPH_TABLES
+
+
+# Spec 232: canonical links add a column, widen a reason, and add two tables.
+
+
+def _column_def(ddl, name):
+    for line in ddl.split("\n"):
+        parts = line.strip().split()
+        if parts and parts[0] == name:
+            return line.strip()
+    raise AssertionError(f"no column {name}")
+
+
+def test_fhir_graphs_json_links(statements):
+    ddl = _create(statements, "fhir_graphs")
+    assert re.match(r"json_links\s+VARCHAR\(8000\)", _column_def(ddl, "json_links"))
+
+
+def test_fhir_unresolved_reason_fits_new_reasons(statements):
+    """`version-not-found` is 17 characters; 231 declared 16."""
+    ddl = _create(statements, "fhir_unresolved")
+    assert re.match(r"reason\s+VARCHAR\(32\)\s+NOT NULL", _column_def(ddl, "reason"))
+
+
+def test_fhir_definitions(statements):
+    ddl = _create(statements, "fhir_definitions")
+    assert {"graph_id", "rsrc_key", "url", "version"} <= _columns(ddl)
+    # Urls are case-sensitive; the index side keeps 220 characters of each.
+    assert re.match(r"url\s+VARCHAR\(220\)\s+%EXACT\s+NOT NULL", _column_def(ddl, "url"))
+    assert re.match(r"version\s+VARCHAR\(220\)\s+%EXACT,?$", _column_def(ddl, "version"))
+    assert re.search(r"PRIMARY KEY\s*\(graph_id,\s*rsrc_key\)", ddl)
+    joined = "\n".join(statements)
+    assert re.search(r"INDEX idx_fhir_def_url ON Graph_KG\.fhir_definitions\s*\(graph_id,\s*url\)", joined)
+
+
+def test_fhir_canonical_refs(statements):
+    ddl = _create(statements, "fhir_canonical_refs")
+    assert {"graph_id", "source", "param", "url", "version", "origin", "kind"} <= _columns(ddl)
+    assert re.match(r"url\s+VARCHAR\(512\)\s+%EXACT\s+NOT NULL", _column_def(ddl, "url"))
+    assert re.match(r"version\s+VARCHAR\(220\)\s+%EXACT,?$", _column_def(ddl, "version"))
+    for col in ("graph_id", "source", "param", "origin"):
+        assert "%EXACT" in _column_def(ddl, col), col
+    joined = "\n".join(statements)
+    assert re.search(
+        r"INDEX idx_fhir_cref_source ON Graph_KG\.fhir_canonical_refs\s*\(graph_id,\s*source\)", joined
+    )
+    assert re.search(r"INDEX idx_fhir_cref_url ON Graph_KG\.fhir_canonical_refs\s*\(graph_id,\s*url\)", joined)
+
+
+@pytest.mark.parametrize("table", ["fhir_definitions", "fhir_canonical_refs"])
+def test_232_allowlisted(table):
+    assert table in VALID_GRAPH_TABLES

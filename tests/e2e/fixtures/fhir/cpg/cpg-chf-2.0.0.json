@@ -1,0 +1,6227 @@
+{
+ "resourceType": "Bundle",
+ "id": "cpg-chf-2.0.0",
+ "type": "collection",
+ "entry": [
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-bodyweight-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-bodyweight-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-bodyweight-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.22"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFBodyWeight",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure body weight",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "307818003",
+       "display": "Weight monitoring (regime/therapy)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-bodyweight-change-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-bodyweight-change-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-bodyweight-change-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.23"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFBodyWeightChange",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Record body weight change",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "Task",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recordinferencetask",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "record-inference",
+       "display": "Record an inference"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "dynamicValue": [
+     {
+      "path": "input.type",
+      "expression": {
+       "language": "text/cql-expression",
+       "expression": "code"
+      }
+     },
+     {
+      "path": "input.value",
+      "expression": {
+       "language": "text/cql-identifier",
+       "expression": "Body Weight Change",
+       "reference": "http://hl7.org/fhir/uv/cpg/Library/CHF"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-cardiology-consultation",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-cardiology-consultation",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-cardiology-consultation",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.24"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFCardiologyConsultation",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Cardiology consultation as part of a congestive heart failure care pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+       "code": "cardiology-consultation",
+       "display": "Cardiology Consultation"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-creatinine-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-creatinine-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-creatinine-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.25"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFCreatinine",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor Creatinine",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "70901006",
+       "display": "Creatinine measurement (procedure)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-egfr-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-egfr-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-egfr-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.26"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFEGFR",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure eGFR",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "63061008",
+       "display": "Measuring intake and output (procedure)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-jvp-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-jvp-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-jvp-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.27"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFJVP",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure jugular venous pressure",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+       "code": "measure-jvp",
+       "display": "Measure jugular venous pressure"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-lasix-iv",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-lasix-iv",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-lasix-iv",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.28"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFLASIXIV",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Activity definition to administer LASIX IV as part of a congestive heart failure pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "MedicationRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-medicationrequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-medication",
+       "display": "Order a medication"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "priority": "routine",
+    "doNotPerform": false,
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+       "code": "lasix-iv",
+       "display": "LASIX IV"
+      }
+     ]
+    },
+    "dosage": [
+     {
+      "sequence": 1,
+      "text": "40mg",
+      "timing": {
+       "repeat": {
+        "frequency": 1,
+        "period": 1,
+        "periodUnit": "d"
+       }
+      },
+      "route": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "47625008",
+         "display": "Intravenous Route (qualifier value)"
+        }
+       ]
+      },
+      "doseAndRate": [
+       {
+        "type": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/dose-rate-type",
+           "code": "ordered",
+           "display": "Ordered"
+          }
+         ]
+        },
+        "doseQuantity": {
+         "value": 40,
+         "unit": "mg",
+         "system": "http://unitsofmeasure.org",
+         "code": "mg"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-lasix-po",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-lasix-po",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-lasix-po",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.29"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFLASIXPO",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Activity definition to administer LASIX PO as part of a congestive heart failure pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "MedicationRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-medicationrequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-medication",
+       "display": "Order a medication"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "priority": "routine",
+    "doNotPerform": false,
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+       "code": "lasix-po",
+       "display": "LASIX PO"
+      }
+     ]
+    },
+    "dosage": [
+     {
+      "sequence": 1,
+      "text": "40mg",
+      "timing": {
+       "repeat": {
+        "frequency": 1,
+        "period": 1,
+        "periodUnit": "d"
+       }
+      },
+      "route": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "26643006",
+         "display": "Oral Route (qualifier value)"
+        }
+       ]
+      },
+      "doseAndRate": [
+       {
+        "type": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/dose-rate-type",
+           "code": "ordered",
+           "display": "Ordered"
+          }
+         ]
+        },
+        "doseQuantity": {
+         "value": 40,
+         "unit": "mg",
+         "system": "http://unitsofmeasure.org",
+         "code": "mg"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-net-io-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-net-io-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-net-io-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.30"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFNetIO",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure net intake/output",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "63061008",
+       "display": "Measuring intake and output (procedure)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-o2-sat-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-o2-sat-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-o2-sat-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.31"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFO2Sat",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor Oxygen Saturation",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "104847001",
+       "display": "Oxygen saturation measurement (procedure)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-potassium-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-potassium-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-potassium-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.32"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFPotassium",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor Potassium",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "59573005",
+       "display": "Potassium measurement (procedure)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-bodyweight-change",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-report-bodyweight-change",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-reportWith",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-change-measure"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-bodyweight-change",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.33"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFReportBodyWeightChange",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Record body weight change metric",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "Task",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-generatereporttask",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "generate-report",
+       "display": "Generate a metric or case report"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "dynamicValue": [
+     {
+      "path": "input.type",
+      "expression": {
+       "language": "text/cql",
+       "expression": "code"
+      }
+     },
+     {
+      "path": "input.value",
+      "expression": {
+       "language": "text/cql",
+       "expression": "extension('http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-reportWith').value"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-bodyweight",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-report-bodyweight",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-reportWith",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-bodyweight",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.34"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFReportBodyWeight",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Record body weight metric",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "Task",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-generatereporttask",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "generate-report",
+       "display": "Generate a metric or case report"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "dynamicValue": [
+     {
+      "path": "input.type",
+      "expression": {
+       "language": "text/cql",
+       "expression": "code"
+      }
+     },
+     {
+      "path": "input.value",
+      "expression": {
+       "language": "text/cql",
+       "expression": "extension('http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-reportWith').value"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-urine-out",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-report-urine-out",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-reportWith",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/Measure/chf-urine-out-measure"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-urine-out",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.35"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFReportUrineOut",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Record urine output metric",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "Task",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-generatereporttask",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "generate-report",
+       "display": "Generate a metric or case report"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "dynamicValue": [
+     {
+      "path": "input.type",
+      "expression": {
+       "language": "text/cql",
+       "expression": "code"
+      }
+     },
+     {
+      "path": "input.value",
+      "expression": {
+       "language": "text/cql",
+       "expression": "extension('http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-reportWith').value"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-urine-out-ad",
+   "resource": {
+    "resourceType": "ActivityDefinition",
+    "id": "chf-urine-out-ad",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableactivity"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-urine-out-ad",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.11.36"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFUrineOut",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure urine output",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "kind": "ServiceRequest",
+    "profile": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-servicerequest",
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-activity-type-cs",
+       "code": "order-service",
+       "display": "Order a service"
+      }
+     ]
+    },
+    "intent": "proposal",
+    "doNotPerform": false,
+    "location": {
+     "reference": "Location/chf-locationdefinition"
+    },
+    "participant": [
+     {
+      "type": "practitioner",
+      "role": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/practitioner-role",
+         "code": "nurse",
+         "display": "Nurse"
+        }
+       ]
+      }
+     }
+    ],
+    "productCodeableConcept": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "444990003",
+       "display": "Measurement of urine output (procedure)"
+      }
+     ]
+    },
+    "dynamicValue": [
+     {
+      "path": "status",
+      "expression": {
+       "language": "text/cql",
+       "expression": "'draft'"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/CarePlan/chf-scenario1-careplan",
+   "resource": {
+    "resourceType": "CarePlan",
+    "id": "chf-scenario1-careplan",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-careplan"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-planFor",
+      "valueReference": {
+       "reference": "EpisodeOfCare/chf-scenario1-eoc"
+      }
+     }
+    ],
+    "instantiatesCanonical": [
+     "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-pathway"
+    ],
+    "status": "active",
+    "intent": "plan",
+    "category": [
+     {
+      "text": "Heart Failure Care Pathway"
+     }
+    ],
+    "title": "Heart Failure Care Pathway",
+    "description": "Care Pathway for treatment of congestive heart failure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "period": {
+     "start": "2019-01-31T07:00:00Z"
+    },
+    "created": "2019-01-31T07:00:00Z",
+    "careTeam": [
+     {
+      "reference": "CareTeam/chf-scenario1-careteam"
+     }
+    ],
+    "addresses": [
+     {
+      "reference": "Condition/chf-scenario1-condition"
+     }
+    ],
+    "goal": [
+     {
+      "reference": "Goal/chf-scenario1-weight"
+     },
+     {
+      "reference": "Goal/chf-scenario1-weight-change"
+     },
+     {
+      "reference": "Goal/chf-scenario1-urine-out"
+     },
+     {
+      "reference": "Goal/chf-scenario1-net-io-goal"
+     },
+     {
+      "reference": "Goal/chf-scenario1-jvp-goal"
+     },
+     {
+      "reference": "Goal/chf-scenario1-o2-sat-goal"
+     },
+     {
+      "reference": "Goal/chf-scenario1-potassium"
+     },
+     {
+      "reference": "Goal/chf-scenario1-creatinine"
+     },
+     {
+      "reference": "Goal/chf-scenario1-egfr"
+     },
+     {
+      "reference": "Goal/chf-scenario1-lasix-iv-goal"
+     },
+     {
+      "reference": "Goal/chf-scenario1-lasix-po-goal"
+     },
+     {
+      "reference": "Goal/chf-scenario1-cardiology-consultation-goal"
+     }
+    ],
+    "activity": [
+     {
+      "reference": {
+       "reference": "RequestGroup/chf-scenario1-daily-management"
+      }
+     },
+     {
+      "reference": {
+       "reference": "RequestGroup/chf-scenario1-hypervolemia"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Condition/chf-scenario1-condition",
+   "resource": {
+    "resourceType": "Condition",
+    "id": "chf-scenario1-condition",
+    "clinicalStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+       "code": "active"
+      }
+     ]
+    },
+    "verificationStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/condition-ver-status",
+       "code": "confirmed"
+      }
+     ]
+    },
+    "category": [
+     {
+      "coding": [
+       {
+        "system": "http://terminology.hl7.org/CodeSystem/condition-category",
+        "code": "problem-list-item"
+       }
+      ]
+     }
+    ],
+    "code": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "42343007",
+       "display": "Congestive heart failure (disorder)"
+      }
+     ]
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "onsetDateTime": "2019-01-31T05:03:00Z"
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Encounter/chf-scenario1-encounter",
+   "resource": {
+    "resourceType": "Encounter",
+    "id": "chf-scenario1-encounter",
+    "status": "in-progress",
+    "class": {
+     "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+     "code": "IMP",
+     "display": "inpatient encounter"
+    },
+    "type": [
+     {
+      "coding": [
+       {
+        "system": "http://snomed.info/sct",
+        "code": "183807002",
+        "display": "Inpatient stay 9 days"
+       }
+      ]
+     }
+    ],
+    "priority": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "394849002",
+       "display": "High priority"
+      }
+     ]
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "episodeOfCare": [
+     {
+      "reference": "EpisodeOfCare/chf-scenario1-eoc"
+     }
+    ],
+    "participant": [
+     {
+      "type": [
+       {
+        "coding": [
+         {
+          "system": "http://terminology.hl7.org/CodeSystem/v3-ParticipationType",
+          "code": "PPRF",
+          "display": "primary performer"
+         }
+        ]
+       }
+      ],
+      "individual": {
+       "reference": "PractitionerRole/chf-scenario1-practitionerrole"
+      }
+     }
+    ],
+    "period": {
+     "start": "2019-01-31T05:03:00Z"
+    },
+    "diagnosis": [
+     {
+      "condition": {
+       "reference": "Condition/chf-scenario1-condition"
+      },
+      "use": {
+       "coding": [
+        {
+         "system": "http://terminology.hl7.org/CodeSystem/diagnosis-role",
+         "code": "AD",
+         "display": "Admission diagnosis"
+        }
+       ]
+      }
+     }
+    ],
+    "location": [
+     {
+      "location": {
+       "reference": "Location/chf-scenario1-location"
+      },
+      "status": "active",
+      "period": {
+       "start": "2019-01-31T05:03:00Z"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-cardiology-consultation-goal",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-cardiology-consultation-goal",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-cardiology-consultation-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Cardiology Consultation Within 24 Hours"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "cardiology-consultation"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-creatinine",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-creatinine",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-creatinine-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Creatinine < 1.2 mg/dL"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://loinc.org",
+         "code": "39802-4"
+        }
+       ]
+      },
+      "detailQuantity": {
+       "value": 1.2,
+       "comparator": "<",
+       "unit": "mg/dL",
+       "system": "http://unitsofmeasure.org",
+       "code": "mg/dL"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-egfr",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-egfr",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-egfr-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "eGFR > 60 mol/mm/m2"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "egfr"
+        }
+       ]
+      },
+      "detailQuantity": {
+       "value": 60,
+       "comparator": ">",
+       "unit": "mol/mm/m2",
+       "system": "http://unitsofmeasure.org",
+       "code": "mol/mm/m2"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-jvp-goal",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-jvp-goal",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-jvp-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Jugular venous pressure < 8.0 cmH2O"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "jvp"
+        }
+       ]
+      },
+      "detailQuantity": {
+       "value": 8,
+       "comparator": "<",
+       "unit": "cmH2O",
+       "system": "http://unitsofmeasure.org",
+       "code": "cm[H2O]"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-lasix-iv-goal",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-lasix-iv-goal",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-lasix"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Transition to PO"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "lasix-iv"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-lasix-po-goal",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-lasix-po-goal",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-lasix"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "PO 24 hr Prior to Discharge"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "lasix-po"
+        }
+       ]
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-net-io-goal",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-net-io-goal",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-net-io-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Net intake/output -1.5 L/day"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "net-intake-output"
+        }
+       ]
+      },
+      "detailQuantity": {
+       "value": -1.5,
+       "unit": "L/day",
+       "system": "http://unitsofmeasure.org",
+       "code": "L/d"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-o2-sat-goal",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-o2-sat-goal",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-o2-sat-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Oxygen saturation > 94% SaO2"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://loinc.org",
+         "code": "2708-6"
+        }
+       ]
+      },
+      "detailQuantity": {
+       "value": 94,
+       "comparator": ">",
+       "unit": "%",
+       "system": "http://unitsofmeasure.org",
+       "code": "%"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-potassium",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-potassium",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-potassium-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Potassium 3.5-5.0 mEq/L"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://loinc.org",
+         "code": "86919-8"
+        }
+       ]
+      },
+      "detailRange": {
+       "low": {
+        "value": 3,
+        "unit": "mEq/L",
+        "system": "http://unitsofmeasure.org",
+        "code": "meq/L"
+       },
+       "high": {
+        "value": 5,
+        "unit": "mEq/L",
+        "system": "http://unitsofmeasure.org",
+        "code": "meq/L"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-urine-out",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-urine-out",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-urine-out-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Urine output 3-5 L/day"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://loinc.org",
+         "code": "9192-6"
+        }
+       ]
+      },
+      "detailRange": {
+       "low": {
+        "value": 3,
+        "unit": "L/day",
+        "system": "http://unitsofmeasure.org",
+        "code": "L/d"
+       },
+       "high": {
+        "value": 5,
+        "unit": "L/day",
+        "system": "http://unitsofmeasure.org",
+        "code": "L/d"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-weight-change",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-weight-change",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-change-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Body weight change 0.5-1.5 kg/day"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+         "code": "body-weight-change"
+        }
+       ]
+      },
+      "detailRange": {
+       "low": {
+        "value": 0.5,
+        "unit": "kg/d",
+        "system": "http://unitsofmeasure.org",
+        "code": "kg/d"
+       },
+       "high": {
+        "value": 1.5,
+        "unit": "kg/d",
+        "system": "http://unitsofmeasure.org",
+        "code": "kg/d"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Goal/chf-scenario1-weight",
+   "resource": {
+    "resourceType": "Goal",
+    "id": "chf-scenario1-weight",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goal"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-goalFor",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-pd"
+     }
+    ],
+    "lifecycleStatus": "active",
+    "achievementStatus": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/goal-achievement",
+       "code": "improving"
+      }
+     ]
+    },
+    "description": {
+     "text": "Body weight 92kg"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "target": [
+     {
+      "measure": {
+       "coding": [
+        {
+         "system": "http://loinc.org",
+         "code": "29463-7"
+        }
+       ]
+      },
+      "detailQuantity": {
+       "value": 92,
+       "unit": "kg",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Library/CHF",
+   "resource": {
+    "resourceType": "Library",
+    "id": "CHF",
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/Library/CHF",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.28.1"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHF",
+    "status": "active",
+    "experimental": true,
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/library-type",
+       "code": "logic-library"
+      }
+     ]
+    },
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Logic for an example congestive heart failure pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "relatedArtifact": [
+     {
+      "type": "depends-on",
+      "display": "Code System SNOMED-CT",
+      "resource": "http://snomed.info/sct"
+     },
+     {
+      "type": "depends-on",
+      "display": "Code System LOINC",
+      "resource": "http://loinc.org"
+     },
+     {
+      "type": "depends-on",
+      "display": "Code System CHFCodes",
+      "resource": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes"
+     },
+     {
+      "type": "depends-on",
+      "display": "Code System Condition Clinical Status Code",
+      "resource": "http://terminology.hl7.org/CodeSystem/condition-clinical"
+     },
+     {
+      "type": "depends-on",
+      "display": "Code System Condition Verification Status Code",
+      "resource": "http://terminology.hl7.org/CodeSystem/condition-ver-status"
+     }
+    ],
+    "parameter": [
+     {
+      "name": "Encounter",
+      "use": "in",
+      "min": 0,
+      "max": "1",
+      "type": "Encounter"
+     },
+     {
+      "name": "Patient",
+      "use": "out",
+      "min": 0,
+      "max": "1",
+      "type": "Patient"
+     },
+     {
+      "name": "Body Weight",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Body Weight Change Assertion",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Daily Body Weight",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Resource"
+     },
+     {
+      "name": "Daily Body Weight Change",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Resource"
+     },
+     {
+      "name": "Body Weight Change",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Current Body Weight",
+      "use": "out",
+      "min": 0,
+      "max": "1",
+      "type": "Observation"
+     },
+     {
+      "name": "Previous Body Weight",
+      "use": "out",
+      "min": 0,
+      "max": "1",
+      "type": "Observation"
+     },
+     {
+      "name": "Current Body Weight Change",
+      "use": "out",
+      "min": 0,
+      "max": "1",
+      "type": "integer"
+     },
+     {
+      "name": "Urine Output",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Current Urine Output",
+      "use": "out",
+      "min": 0,
+      "max": "1",
+      "type": "Observation"
+     },
+     {
+      "name": "Net Intake/Output",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Current Net Intake/Output",
+      "use": "out",
+      "min": 0,
+      "max": "1",
+      "type": "Observation"
+     },
+     {
+      "name": "Jugular Venous Pressure",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Oxygen Saturation",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Potassium",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Creatinine",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "eGFR",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Observation"
+     },
+     {
+      "name": "Eligibility Criteria",
+      "use": "out",
+      "min": 0,
+      "max": "*",
+      "type": "Condition"
+     }
+    ],
+    "dataRequirement": [
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://loinc.org",
+          "code": "29463-7"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+          "code": "body-weight-change"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://loinc.org",
+          "code": "9192-6"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+          "code": "net-intake-output"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+          "code": "jvp"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://loinc.org",
+          "code": "2708-6"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://loinc.org",
+          "code": "86919-8",
+          "display": "Potassium goal [Moles/volume] Serum or Plasma"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://loinc.org",
+          "code": "39802-4",
+          "display": "Creatinine in dialysis fluid/Creatinine in serum or plasma"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Observation",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Observation"
+      ],
+      "codeFilter": [
+       {
+        "path": "code",
+        "code": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+          "code": "egfr"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "type": "Condition",
+      "profile": [
+       "http://hl7.org/fhir/StructureDefinition/Condition"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-change-measure",
+   "resource": {
+    "resourceType": "Measure",
+    "id": "chf-bodyweight-change-measure",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computablemetric"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-change-measure",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.29.2"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFBodyWeightChange",
+    "title": "CHF Body Weight Change Metric",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Body weight change metric as a feature of a congestive heart failure pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "library": [
+     "http://hl7.org/fhir/uv/cpg/Library/CHF"
+    ],
+    "scoring": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-scoring",
+       "code": "continuous-variable"
+      }
+     ]
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "criteria": {
+         "language": "text/cql-identifier",
+         "expression": "Current Body Weight Change"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure",
+   "resource": {
+    "resourceType": "Measure",
+    "id": "chf-bodyweight-measure",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computablemetric"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.29.3"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFBodyWeight",
+    "title": "CHF Body Weight Metric",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Body weight metric as a feature of a congestive heart failure pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "library": [
+     "http://hl7.org/fhir/uv/cpg/Library/CHF"
+    ],
+    "scoring": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-scoring",
+       "code": "continuous-variable"
+      }
+     ]
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "criteria": {
+         "language": "text/cql-identifier",
+         "expression": "Current Body Weight"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Measure/chf-urine-out-measure",
+   "resource": {
+    "resourceType": "Measure",
+    "id": "chf-urine-out-measure",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computablemetric"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/Measure/chf-urine-out-measure",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.29.4"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFUrineOut",
+    "title": "CHF Urine Out Metric",
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Urine output metric as a feature of a congestive heart failure pathway",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "library": [
+     "http://hl7.org/fhir/uv/cpg/Library/CHF"
+    ],
+    "scoring": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-scoring",
+       "code": "continuous-variable"
+      }
+     ]
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "criteria": {
+         "language": "text/cql-identifier",
+         "expression": "Current Urine Output"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight-change1",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight-change1",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-change-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-01",
+    "period": {
+     "start": "2019-01-31",
+     "end": "2019-02-01"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": -1.4,
+       "unit": "kg/d",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg/d"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight1-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight2-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight-change1-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight-change2",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight-change2",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-change-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-02",
+    "period": {
+     "start": "2019-02-01",
+     "end": "2019-02-02"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": 1.5,
+       "unit": "kg/d",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg/d"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight2-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight3-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight-change2-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight-change3",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight-change3",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-change-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-03",
+    "period": {
+     "start": "2019-02-02",
+     "end": "2019-02-03"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": -1.2,
+       "unit": "kg/d",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg/d"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight3-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight4-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight-change3-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight1",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight1",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-metricreport"
+     ]
+    },
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-01-31",
+    "period": {
+     "start": "2019-01-31",
+     "end": "2019-01-31"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": 96,
+       "unit": "kg",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight1-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight2",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight2",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-01",
+    "period": {
+     "start": "2019-02-01",
+     "end": "2019-02-01"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": 95.4,
+       "unit": "kg",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight2-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight3",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight3",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-02",
+    "period": {
+     "start": "2019-02-02",
+     "end": "2019-02-02"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": 96.9,
+       "unit": "kg",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight3-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-bodyweight4",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-bodyweight4",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-bodyweight-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-03",
+    "period": {
+     "start": "2019-02-03",
+     "end": "2019-02-03"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": 95.7,
+       "unit": "kg",
+       "system": "http://unitsofmeasure.org",
+       "code": "kg"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-bodyweight4-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/MeasureReport/chf-scenario1-urineout3",
+   "resource": {
+    "resourceType": "MeasureReport",
+    "id": "chf-scenario1-urineout3",
+    "status": "complete",
+    "type": "individual",
+    "measure": "http://hl7.org/fhir/uv/cpg/Measure/chf-urine-out-measure",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "date": "2019-02-03",
+    "period": {
+     "start": "2019-02-02",
+     "end": "2019-02-03"
+    },
+    "improvementNotation": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/measure-improvement-notation",
+       "code": "decrease"
+      }
+     ]
+    },
+    "group": [
+     {
+      "population": [
+       {
+        "code": {
+         "coding": [
+          {
+           "system": "http://terminology.hl7.org/CodeSystem/measure-population",
+           "code": "measure-observation"
+          }
+         ]
+        },
+        "count": 1
+       }
+      ],
+      "measureScore": {
+       "value": 3.8,
+       "unit": "L/day",
+       "system": "http://unitsofmeasure.org",
+       "code": "L/d"
+      }
+     }
+    ],
+    "evaluatedResource": [
+     {
+      "reference": "Observation/chf-scenario1-urineout3-observation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/Patient/chf-scenario1-patient",
+   "resource": {
+    "resourceType": "Patient",
+    "id": "chf-scenario1-patient",
+    "active": true,
+    "name": [
+     {
+      "use": "usual",
+      "text": "Patterson, Jeremy",
+      "family": "Patterson",
+      "given": [
+       "Jeremy"
+      ]
+     }
+    ],
+    "gender": "male",
+    "birthDate": "1949-03-17",
+    "deceasedBoolean": false
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-change-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-bodyweight-change-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-change-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.22"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFBodyWeightChange",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure body weight change daily",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Weight change target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "weight-change",
+      "title": "Weight change",
+      "description": "Measure weight change daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-bodyweight-change-ad"
+     },
+     {
+      "title": "Report Weight Change",
+      "description": "Report weight change metric daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "relatedAction": [
+       {
+        "actionId": "weight-change",
+        "relationship": "after-end"
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-bodyweight-change"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-bodyweight-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.23"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFBodyWeight",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure body weight daily",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Weight target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "weight",
+      "title": "Weight",
+      "description": "Measure weight daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-bodyweight-ad"
+     },
+     {
+      "title": "Report Weight",
+      "description": "Report weight metric daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "relatedAction": [
+       {
+        "actionId": "weight",
+        "relationship": "after-end"
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-bodyweight"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-cardiology-consultation-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-cardiology-consultation-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-cardiology-consultation-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.24"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFCardiologyConsultation",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Cardiology consultation within 24 hrs",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Cardiology Consultation within 24 hours"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "cardiology-consultation",
+      "title": "Cardiology Consultation",
+      "description": "Cardiology Consultation",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-cardiology-consultation"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-creatinine-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-creatinine-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-creatinine-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.25"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFCreatininePD",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor creatinine",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Monitor creatnine"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "creatinine",
+      "title": "Creatinine",
+      "description": "Monitor creatinine",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-creatinine-ad"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-daily-management",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-strategydefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-pathway"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.26"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFDailyManagement",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "workflow-definition"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Daily management strategy as part of a care pathway for patients with admitting diagnosis of congestive heart failure",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "action": [
+     {
+      "title": "Weight",
+      "description": "Measure weight daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-pd"
+     },
+     {
+      "title": "Weight Change",
+      "description": "Manage weight change",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-bodyweight-change-pd"
+     },
+     {
+      "title": "Urine Output",
+      "description": "Measure urine output daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-urine-out-pd"
+     },
+     {
+      "title": "Net I/Os",
+      "description": "Measure net intake/output daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-net-io-pd"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-egfr-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-egfr-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-egfr-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.27"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFEGFRPD",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor eGFR",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "eGFR target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "egfr",
+      "title": "eGFR",
+      "description": "Monitor eGFR",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-egfr-ad"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-hypervolemia",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-strategydefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-pathway"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.28"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFHypervolemia",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "workflow-definition"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Hypervolemia strategy as part of a care pathway for patients with admitting diagnosis of congestive heart failure",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "action": [
+     {
+      "title": "JVP",
+      "description": "Measure JVP daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-jvp-pd"
+     },
+     {
+      "title": "O2 Sat",
+      "description": "Monitor O2 Sat",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-o2-sat-pd"
+     },
+     {
+      "title": "Potassium",
+      "description": "Monitor Potassium",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-potassium-pd"
+     },
+     {
+      "title": "Creatinine",
+      "description": "Monitor Creatinine",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-creatinine-pd"
+     },
+     {
+      "title": "eGFR",
+      "description": "Monitor eGFR",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-egfr-pd"
+     },
+     {
+      "title": "LASIX",
+      "description": "LASIX",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-lasix"
+     },
+     {
+      "title": "Cardiology Consultation",
+      "description": "Cardiology Consultation within 24 hours",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-cardiology-consultation-pd"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-jvp-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-jvp-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-jvp-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.29"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFJVPPD",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure jugular venous pressure",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "JVP target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "jvp",
+      "title": "JVP",
+      "description": "Measure JVP daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-jvp-ad"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-lasix",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-lasix",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-lasix",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.30"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFLASIX",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Administer LASIX IV, transition to PO as appropriate",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Transition to LASIX PO"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "lasix-iv",
+      "title": "LASIX IV",
+      "description": "Administer LASIX IV",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "dispense-medications"
+         }
+        ]
+       }
+      ],
+      "condition": [
+       {
+        "kind": "stop",
+        "expression": {
+         "language": "text/cql-identifier",
+         "expression": "Should Stop LASIX IV"
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-lasix-iv"
+     },
+     {
+      "id": "lasix-po",
+      "title": "LASIX PO",
+      "description": "Administer LASIX PO",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "dispense-medications"
+         }
+        ]
+       }
+      ],
+      "condition": [
+       {
+        "kind": "start",
+        "expression": {
+         "language": "text/cql-identifier",
+         "expression": "Should Start LASIX PO"
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-lasix-po"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-net-io-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-net-io-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-net-io-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.31"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFNetIO",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure net intake/output daily",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Net io target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "net-io",
+      "title": "Net IOs",
+      "description": "Measure net intake/output daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-net-io-ad"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-o2-sat-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-o2-sat-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-o2-sat-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.32"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFO2SatPD",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor oxygen saturation",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Oxygen saturation target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "o2-sat",
+      "title": "O2 Sat",
+      "description": "Monitor oxygen saturation",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-o2-sat-ad"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-pathway",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-pathway",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-pathwaydefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-pathway",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.33"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFPathway",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "clinical-protocol"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Treatment and management care pathway for patients with admitting diagnosis of congestive heart failure",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "action": [
+     {
+      "title": "CHF Daily Management",
+      "description": "Daily Management strategy for Congestive Heart Failure",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management"
+     },
+     {
+      "title": "CHF Hypervolemia",
+      "description": "Hypervolemia strategy for Congestive Heart Failure",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-potassium-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-potassium-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-potassium-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.34"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFPotassiumPD",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Monitor potassium",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Potassium goal"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "potassium",
+      "title": "Potassium",
+      "description": "Monitor potassium",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-potassium-ad"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-urine-out-pd",
+   "resource": {
+    "resourceType": "PlanDefinition",
+    "id": "chf-urine-out-pd",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-recommendationdefinition",
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-computableplandefinition"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "shareable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "computable"
+     },
+     {
+      "url": "http://hl7.org/fhir/StructureDefinition/cqf-knowledgeCapability",
+      "valueCode": "publishable"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-partOf",
+      "valueCanonical": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-enabled",
+      "valueBoolean": true
+     }
+    ],
+    "url": "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-urine-out-pd",
+    "identifier": [
+     {
+      "system": "urn:ietf:rfc:3986",
+      "value": "urn:oid:2.16.840.1.113883.4.642.40.48.34.35"
+     }
+    ],
+    "version": "2.0.0",
+    "name": "CHFUrineOut",
+    "type": {
+     "coding": [
+      {
+       "system": "http://terminology.hl7.org/CodeSystem/plan-definition-type",
+       "code": "eca-rule"
+      }
+     ]
+    },
+    "status": "active",
+    "experimental": true,
+    "date": "2024-11-26T16:34:39+00:00",
+    "publisher": "HL7 International / Clinical Decision Support",
+    "contact": [
+     {
+      "name": "HL7 International / Clinical Decision Support",
+      "telecom": [
+       {
+        "system": "url",
+        "value": "http://www.hl7.org/Special/committees/dss"
+       }
+      ]
+     }
+    ],
+    "description": "Measure urine output daily",
+    "jurisdiction": [
+     {
+      "coding": [
+       {
+        "system": "http://unstats.un.org/unsd/methods/m49/m49.htm",
+        "code": "001",
+        "display": "World"
+       }
+      ]
+     }
+    ],
+    "goal": [
+     {
+      "description": {
+       "text": "Urine output target"
+      },
+      "start": {
+       "coding": [
+        {
+         "system": "http://snomed.info/sct",
+         "code": "32485007",
+         "display": "Admission to hospital"
+        }
+       ]
+      }
+     }
+    ],
+    "action": [
+     {
+      "id": "urine-out",
+      "title": "Urine Out",
+      "description": "Measure urine output daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "trigger": [
+       {
+        "type": "periodic",
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-urine-out-ad"
+     },
+     {
+      "title": "Report Urine Out",
+      "description": "Report urine output metric daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "relatedAction": [
+       {
+        "actionId": "urine-out",
+        "relationship": "after-end"
+       }
+      ],
+      "definitionCanonical": "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-report-urine-out"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/RequestGroup/chf-scenario1-daily-management",
+   "resource": {
+    "resourceType": "RequestGroup",
+    "id": "chf-scenario1-daily-management",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-strategy"
+     ]
+    },
+    "instantiatesCanonical": [
+     "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-daily-management"
+    ],
+    "status": "active",
+    "intent": "plan",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "action": [
+     {
+      "title": "Weight",
+      "description": "Measure weight daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "weight",
+        "title": "Weight",
+        "description": "Measure weight daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       },
+       {
+        "title": "Report Weight",
+        "description": "Report weight metric daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "relatedAction": [
+         {
+          "actionId": "weight",
+          "relationship": "after-end"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "title": "Weight Change",
+      "description": "Manage weight change",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "weight-change",
+        "title": "Weight change",
+        "description": "Measure weight change daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       },
+       {
+        "title": "Report Weight Change",
+        "description": "Report weight change metric daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "relatedAction": [
+         {
+          "actionId": "weight-change",
+          "relationship": "after-end"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "title": "Urine Output",
+      "description": "Measure urine output daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "urine-out-action",
+        "title": "Urine Out",
+        "description": "Measure urine output daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       },
+       {
+        "title": "Report Urine Out",
+        "description": "Report urine output metric daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "relatedAction": [
+         {
+          "actionId": "urine-out",
+          "relationship": "after-end"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "title": "Net I/Os",
+      "description": "Measure net intake/output daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "net-io-action",
+        "title": "Net IOs",
+        "description": "Measure net intake/output daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/RequestGroup/chf-scenario1-hypervolemia",
+   "resource": {
+    "resourceType": "RequestGroup",
+    "id": "chf-scenario1-hypervolemia",
+    "instantiatesCanonical": [
+     "http://hl7.org/fhir/uv/cpg/PlanDefinition/chf-hypervolemia"
+    ],
+    "status": "active",
+    "intent": "plan",
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "action": [
+     {
+      "title": "JVP",
+      "description": "Measure JVP daily",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "jvp",
+        "title": "JVP",
+        "description": "Measure JVP daily",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        },
+        "resource": {
+         "reference": "ServiceRequest/chf-scenario1-jvp"
+        }
+       }
+      ]
+     },
+     {
+      "title": "O2 Sat",
+      "description": "Monitor O2 Sat",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "o2-sat",
+        "title": "O2 Sat",
+        "description": "Monitor oxygen saturation",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        },
+        "resource": {
+         "reference": "ServiceRequest/chf-scenario1-o2-sat"
+        }
+       }
+      ]
+     },
+     {
+      "title": "Potassium",
+      "description": "Monitor Potassium",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "potassium",
+        "title": "Potassium",
+        "description": "Monitor potassium",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "title": "Creatinine",
+      "description": "Monitor Creatinine",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "creatinine",
+        "title": "Creatinine",
+        "description": "Monitor creatinine",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "title": "eGFR",
+      "description": "Monitor eGFR",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "diagnostic-testing"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "egfr",
+        "title": "eGFR",
+        "description": "Monitor eGFR",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "diagnostic-testing"
+           }
+          ]
+         }
+        ],
+        "timingTiming": {
+         "repeat": {
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+         }
+        }
+       }
+      ]
+     },
+     {
+      "title": "LASIX",
+      "description": "LASIX",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "lasix-iv",
+        "title": "LASIX IV",
+        "description": "Administer LASIX IV",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "dispense-medications"
+           }
+          ]
+         }
+        ],
+        "condition": [
+         {
+          "kind": "stop",
+          "expression": {
+           "language": "text/cql-identifier",
+           "expression": "Should Stop LASIX IV"
+          }
+         }
+        ],
+        "resource": {
+         "reference": "MedicationRequest/chf-scenario1-stop-lasix-iv"
+        }
+       },
+       {
+        "id": "lasix-po",
+        "title": "LASIX PO",
+        "description": "Administer LASIX PO",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "dispense-medications"
+           }
+          ]
+         }
+        ],
+        "condition": [
+         {
+          "kind": "start",
+          "expression": {
+           "language": "text/cql-identifier",
+           "expression": "Should Start LASIX PO"
+          }
+         }
+        ],
+        "resource": {
+         "reference": "MedicationRequest/chf-scenario1-lasix-po-mr"
+        }
+       }
+      ]
+     },
+     {
+      "title": "Cardiology Consultation",
+      "description": "Cardiology Consultation within 24 hours",
+      "code": [
+       {
+        "coding": [
+         {
+          "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+          "code": "guideline-based-care"
+         }
+        ]
+       }
+      ],
+      "action": [
+       {
+        "id": "cardiology-consultation",
+        "title": "Cardiology Consultation",
+        "description": "Cardiology Consultation",
+        "code": [
+         {
+          "coding": [
+           {
+            "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/cpg-common-process-cs",
+            "code": "guideline-based-care"
+           }
+          ]
+         }
+        ],
+        "resource": {
+         "reference": "ServiceRequest/chf-scenario1-cardiology-consult-request"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ServiceRequest/chf-scenario1-cardiology-consult-request",
+   "resource": {
+    "resourceType": "ServiceRequest",
+    "id": "chf-scenario1-cardiology-consult-request",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/chf-cardiology-consult-request"
+     ]
+    },
+    "instantiatesCanonical": [
+     "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-cardiology-consultation"
+    ],
+    "status": "active",
+    "intent": "plan",
+    "category": [
+     {
+      "coding": [
+       {
+        "system": "http://snomed.info/sct",
+        "code": "386053000",
+        "display": "Evaluation procedure (procedure)"
+       }
+      ],
+      "text": "Evaluation"
+     }
+    ],
+    "doNotPerform": false,
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+       "code": "cardiology-consultation",
+       "display": "Cardiology Consultation"
+      }
+     ],
+     "text": "Cardiology Consultation"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "occurrencePeriod": {
+     "start": "2019-02-03T11:00:00Z",
+     "end": "2019-02-04T11:00:00Z"
+    },
+    "authoredOn": "2019-02-03"
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ServiceRequest/chf-scenario1-jvp",
+   "resource": {
+    "resourceType": "ServiceRequest",
+    "id": "chf-scenario1-jvp",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/chf-jvp-request"
+     ]
+    },
+    "extension": [
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-rationale",
+      "valueMarkdown": "ACC recommends measuring jugular venous pressure as part of management of hypervolemia"
+     },
+     {
+      "url": "http://hl7.org/fhir/uv/cpg/StructureDefinition/cpg-rating",
+      "valueQuantity": {
+       "value": 1,
+       "system": "http://unitsofmeasure.org",
+       "code": "1"
+      }
+     }
+    ],
+    "instantiatesCanonical": [
+     "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-jvp-ad"
+    ],
+    "status": "completed",
+    "intent": "order",
+    "category": [
+     {
+      "coding": [
+       {
+        "system": "http://snomed.info/sct",
+        "code": "386053000",
+        "display": "Evaluation procedure (procedure)"
+       }
+      ],
+      "text": "Evaluation"
+     }
+    ],
+    "doNotPerform": false,
+    "code": {
+     "coding": [
+      {
+       "system": "http://hl7.org/fhir/uv/cpg/CodeSystem/chf-example-codes",
+       "code": "measure-jvp",
+       "display": "Measure jugular venous pressure"
+      }
+     ],
+     "text": "Measure jugular venous pressure"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "occurrenceDateTime": "2019-02-03T09:41:00Z",
+    "authoredOn": "2019-02-03",
+    "supportingInfo": [
+     {
+      "reference": "Observation/chf-scenario1-jvp1"
+     },
+     {
+      "reference": "Observation/chf-scenario1-jvp2"
+     },
+     {
+      "reference": "Observation/chf-scenario1-jvp3"
+     },
+     {
+      "reference": "Observation/chf-scenario1-jvp4"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight1-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight2-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight3-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-bodyweight4-observation"
+     },
+     {
+      "reference": "Observation/chf-scenario1-urineout3-observation"
+     },
+     {
+      "reference": "MedicationAdministration/chf-scenario1-lasix-iv"
+     }
+    ]
+   }
+  },
+  {
+   "fullUrl": "http://hl7.org/fhir/uv/cpg/ServiceRequest/chf-scenario1-o2-sat",
+   "resource": {
+    "resourceType": "ServiceRequest",
+    "id": "chf-scenario1-o2-sat",
+    "meta": {
+     "profile": [
+      "http://hl7.org/fhir/uv/cpg/StructureDefinition/chf-o2-sat-request"
+     ]
+    },
+    "instantiatesCanonical": [
+     "http://hl7.org/fhir/uv/cpg/ActivityDefinition/chf-o2-sat-ad"
+    ],
+    "status": "completed",
+    "intent": "order",
+    "category": [
+     {
+      "coding": [
+       {
+        "system": "http://snomed.info/sct",
+        "code": "386053000",
+        "display": "Evaluation procedure (procedure)"
+       }
+      ],
+      "text": "Evaluation"
+     }
+    ],
+    "doNotPerform": false,
+    "code": {
+     "coding": [
+      {
+       "system": "http://snomed.info/sct",
+       "code": "104847001",
+       "display": "Oxygen saturation measurement (procedure)"
+      }
+     ],
+     "text": "Oxygen saturation measurement"
+    },
+    "subject": {
+     "reference": "Patient/chf-scenario1-patient"
+    },
+    "encounter": {
+     "reference": "Encounter/chf-scenario1-encounter"
+    },
+    "occurrenceDateTime": "2019-02-03T13:00:00Z",
+    "authoredOn": "2019-02-03"
+   }
+  }
+ ]
+}

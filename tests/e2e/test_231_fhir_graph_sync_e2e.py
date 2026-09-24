@@ -302,3 +302,38 @@ def test_erase_keeps_registration_and_resets_watermarks(fhir_conn, fhir_engine, 
     fhir_engine.fhir_graph_rebuild(GRAPH)
     assert _has_node(fhir_conn, f"Observation/{oid}")
     assert all(w > 0 for w in _watermarks(fhir_conn))
+
+
+def test_erase_clears_canonical_bookkeeping(fhir_conn, fhir_engine, synced):
+    """Spec 232 FR-020: erase removes the graph's fhir_definitions and
+    fhir_canonical_refs rows, leaves another graph's rows, and keeps registration."""
+    other = "fhir:IVGFHIR:erase-other"
+    cur = fhir_conn.cursor()
+    try:
+        for g in (GRAPH, other):
+            cur.execute(
+                "INSERT INTO Graph_KG.fhir_definitions (graph_id, rsrc_key, url, version) VALUES (?, ?, ?, ?)",
+                [g, "Library/erase-probe", "http://ex.org/ivg232/erase", "1.0.0"],
+            )
+            cur.execute(
+                "INSERT INTO Graph_KG.fhir_canonical_refs (graph_id, source, param, url, version, origin, kind)"
+                " VALUES (?, ?, ?, ?, NULL, 'index', 'canonical')",
+                [g, "PlanDefinition/erase-probe", "depends-on", "http://ex.org/ivg232/erase"],
+            )
+        fhir_conn.commit()
+    finally:
+        cur.close()
+    count = "SELECT COUNT(*) FROM Graph_KG.{} WHERE graph_id = ?"
+    try:
+        fhir_engine.erase_graph(GRAPH)
+        for table in ("fhir_definitions", "fhir_canonical_refs"):
+            assert _rows(fhir_conn, count.format(table), GRAPH)[0][0] == 0, table
+            assert _rows(fhir_conn, count.format(table), other)[0][0] == 1, table
+        assert _rows(fhir_conn, count.format("fhir_graphs"), GRAPH)[0][0] == 1
+    finally:
+        cur = fhir_conn.cursor()
+        for table in ("fhir_definitions", "fhir_canonical_refs"):
+            cur.execute(f"DELETE FROM Graph_KG.{table} WHERE graph_id IN (?, ?)", [GRAPH, other])
+        fhir_conn.commit()
+        cur.close()
+        fhir_engine.fhir_graph_rebuild(GRAPH)
