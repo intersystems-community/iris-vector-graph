@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import (
+    RDF_EDGES_COMPAT_VIEW_DDL,
     GraphSchema,
     RdfEdgesRescueError,
     _call_classmethod,
@@ -1943,7 +1944,7 @@ class SchemaMixin:
         # 5b. Create SQLUser views so IVG's Python PPR fallback can use unqualified table names
         for view_sql in [
             "CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes",
-            "CREATE VIEW SQLUser.rdf_edges AS SELECT * FROM Graph_KG.rdf_edges",
+            RDF_EDGES_COMPAT_VIEW_DDL,
             "CREATE VIEW SQLUser.rdf_labels AS SELECT * FROM Graph_KG.rdf_labels",
             "CREATE VIEW SQLUser.rdf_props AS SELECT * FROM Graph_KG.rdf_props",
         ]:
@@ -1974,6 +1975,12 @@ class SchemaMixin:
                 self.capabilities = IRISCapabilities()
         else:
             self.capabilities = IRISCapabilities()
+            # The deploy is what normally restores a rescued `rdf_edges`, and with
+            # `staged=None` it resumes one an earlier run left unfinished. Skipping the
+            # deploy must not skip that: a rescue table left behind is the only copy of
+            # the edges, next to an `rdf_edges` the base DDL above just created empty.
+            # Raises RdfEdgesRescueError, like the deploy path.
+            GraphSchema.restore_rescued_rdf_edges(cursor, None)
 
         # 6b. Always detect capabilities from %Dictionary (deployment may have failed
         # but classes could already be compiled from a prior docker cp + LoadDir)

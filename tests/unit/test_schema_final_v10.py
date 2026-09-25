@@ -587,7 +587,11 @@ class TestDeployObjectscriptClasses:
         cur = MagicMock()
         fake_iris = MagicMock()
         fake_iris.createIRIS.side_effect = Exception("no iris")
-        with patch.dict("sys.modules", {"iris": fake_iris}):
+        # A bare MagicMock answers the rdf_edges rescue's probes truthy too; nothing
+        # to rescue here.
+        with patch.dict("sys.modules", {"iris": fake_iris}), patch.object(
+            GraphSchema, "stage_class_owned_rdf_edges", return_value=None
+        ), patch.object(GraphSchema, "pending_rdf_edges_rescue", return_value=None):
             caps = GraphSchema.deploy_objectscript_classes(
                 cur, iris_src_path=None
             )

@@ -148,7 +148,13 @@ def test_initialize_schema_ignores_already_exists():
 
     engine = IRISGraphEngine(conn, embedding_dimension=384)
 
-    with patch.object(engine, "_get_embedding_dimension", return_value=384):
+    from iris_vector_graph.schema import GraphSchema
+
+    # `(384,)` for every query also reads as "a rescue table and a non-empty
+    # rdf_edges both exist", which the rdf_edges rescue rightly refuses to drop.
+    with patch.object(engine, "_get_embedding_dimension", return_value=384), patch.object(
+        GraphSchema, "stage_class_owned_rdf_edges", return_value=None
+    ), patch.object(GraphSchema, "pending_rdf_edges_rescue", return_value=None):
         # Must NOT raise — "already exists" is idempotent
         engine.initialize_schema()
 

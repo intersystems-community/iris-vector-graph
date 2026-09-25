@@ -67,13 +67,20 @@ class FakeCursor:
                 )
         if "%dictionary.compiledclass" in lowered:
             self._answer = [(1 if self._class_present else 0,)]
+        elif "information_schema.tables" in lowered:
+            # No rescue table and no DDL rdf_edges left behind by an earlier run;
+            # `test_ivg400_rescue_resume.py` covers the namespaces that have them.
+            self._answer = [(0,)]
         elif "count(*)" not in lowered:
             self._answer = []
         # The three table names overlap as substrings, so test the longest first.
         elif RESCUE_UNPLACED_TABLE.lower() in lowered:
             self._answer = [(self._unplaced,)]
         elif RESCUE_STAGING_TABLE.lower() in lowered:
-            self._answer = [(self._staged,)]
+            # Unfiltered: the staged count. Filtered: the collapsed-duplicate count,
+            # which is zero here — these rescues carry no duplicates.
+            filtered = " where " in lowered.split(RESCUE_STAGING_TABLE.lower(), 1)[1]
+            self._answer = [(0 if filtered else self._staged,)]
         elif "rdf_edges" in lowered:
             self._answer = [(self._restored,)]
         else:
@@ -174,9 +181,12 @@ class TestRestore:
         )
 
     def test_nothing_staged_means_nothing_restored(self):
+        """Nothing staged and no rescue table left behind: probes only, no writes."""
         cursor = FakeCursor(class_present=False)
-        GraphSchema.restore_rescued_rdf_edges(cursor, None)
-        assert cursor.statements == []
+        assert GraphSchema.restore_rescued_rdf_edges(cursor, None) is None
+        assert all(s.lstrip().upper().startswith("SELECT") for s in cursor.statements), (
+            cursor.statements
+        )
 
 
 class TestRestorePlacesWhatItCanAndQuarantinesTheRest:
@@ -196,8 +206,9 @@ class TestRestorePlacesWhatItCanAndQuarantinesTheRest:
         insert = cursor.matching("INSERT INTO Graph_KG.rdf_edges ")
         assert insert, cursor.statements
         body = insert[0].lower()
-        # Both endpoints, checked against the graph the edge claims.
-        assert body.count("exists") == 2, insert[0]
+        # Both endpoints, checked against the graph the edge claims. (The third
+        # EXISTS is the duplicate filter, `test_ivg400_rescue_resume.py`.)
+        assert body.count("exists (select 1 from graph_kg.nodes") == 2, insert[0]
         assert "graph_kg.nodes" in body
 
     def test_rows_that_do_not_resolve_are_quarantined_not_deleted(self):
