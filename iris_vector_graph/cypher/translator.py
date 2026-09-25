@@ -2106,6 +2106,58 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     return outer_sql
 
 
+def _hoist_repeated_json_table_predicates(sql: str) -> str:
+    """Compute each repeated list-predicate subquery once.
+
+    The 3VL CASE around a condition repeats it, so `all(...) AND any(...)` puts
+    four JSON_TABLE readers in the final SELECT, and IRIS fails at Prepare with
+    -400 <LIST>LoadTableFunction. When the final SELECT reads a single stage,
+    each repeated, parameter-free list-predicate scalar
+    `(SELECT CASE WHEN ... JSON_TABLE(StageN. ...))` becomes a column of a
+    derived table aliased StageN, so other StageN references stand.
+    """
+    import re as _re_hj
+
+    m = None
+    for cand in _re_hj.finditer(r"\nFROM (Stage\d+)(?=\s*$|\s+(?:WHERE|ORDER BY|GROUP BY)\b)", sql):
+        if sql[: cand.start()].count("(") == sql[: cand.start()].count(")"):
+            m = cand
+    if m is None:
+        return sql
+    stage = m.group(1)
+    frags: list = []
+    i = 0
+    while True:
+        j = sql.find("(SELECT ", i)
+        if j < 0:
+            break
+        depth = 0
+        for k in range(j, len(sql)):
+            if sql[k] == "(":
+                depth += 1
+            elif sql[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+        frag = sql[j : k + 1]
+        if frag.startswith("(SELECT CASE WHEN ") and f"JSON_TABLE({stage}." in frag and "?" not in frag:
+            frags.append(frag)
+            i = k + 1
+        else:
+            i = j + 1
+    repeated = [f for f in dict.fromkeys(frags) if frags.count(f) > 1]
+    if not repeated:
+        return sql
+    head, tail = sql[: m.start()], sql[m.end() :]
+    cols = []
+    for n, frag in enumerate(repeated):
+        head = head.replace(frag, f"{stage}.__lp{n}")
+        tail = tail.replace(frag, f"{stage}.__lp{n}")
+        cols.append(f"{frag} AS __lp{n}")
+    derived = f"(SELECT {stage}.*, {', '.join(cols)} FROM {stage}) {stage}"
+    return f"{head}\nFROM {derived}{tail}"
+
+
 def _demote_agg_stages_to_subqueries(sql: str, ctes: list) -> tuple:
     remaining_ctes = []
     for cte in ctes:
@@ -2185,6 +2237,38 @@ def _inject_row_number(sql: str, rn_over: str) -> str:
     return sql[:insert_at] + f"ROW_NUMBER() OVER({rn_over}) AS __rn, " + sql[insert_at:]
 
 
+def _check_with_order_by_aggregation(with_clause, context: TranslationContext) -> None:
+    """Aggregation scope rules for WITH ... ORDER BY (the RETURN rules live in
+    preprocess_order_by). A non-aggregating WITH cannot sort by an aggregate; an
+    aggregating WITH has narrowed scope to its projection, so a sort expression
+    may only reference projected variables outside its aggregate calls."""
+    ob_items = with_clause.order_by_clause.items
+    with_has_agg = any(_contains_aggregation(wi.expression) for wi in with_clause.items)
+    if not with_has_agg:
+        if any(_contains_aggregation(ob.expression) for ob in ob_items):
+            raise SyntaxError(
+                "InvalidAggregation: Cannot use aggregation function in ORDER BY "
+                "unless it is also used in the projection."
+            )
+        return
+    available: set = set()
+    for wi in with_clause.items:
+        if wi.alias:
+            available.add(wi.alias)
+        elif isinstance(wi.expression, ast.Variable):
+            available.add(wi.expression.name)
+    for ob in ob_items:
+        if not _contains_aggregation(ob.expression):
+            continue
+        for part in _collect_non_agg_var_refs(ob.expression):
+            names = _collect_var_names(part) - set(context.input_params)
+            undefined = names - available
+            if undefined:
+                raise SyntaxError(
+                    f"UndefinedVariable: Variable `{sorted(undefined)[0]}` not defined"
+                )
+
+
 def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=None) -> None:
     translate_with_clause(part.with_clause, context)
 
@@ -2225,6 +2309,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     import re as _re_ob
 
     if part.with_clause.order_by_clause:
+        _check_with_order_by_aggregation(part.with_clause, context)
         for item in part.with_clause.order_by_clause.items:
             direction = "ASC" if item.ascending else "DESC"
             # Validate: ORDER BY variables must be in scope (projected by WITH or bound by MATCH).
@@ -3158,6 +3243,7 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     ] + context.stages
     if all_ctes and sql is not None:
         sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
+        sql = _hoist_repeated_json_table_predicates(sql)
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
         if optional_union_sql:
@@ -3395,6 +3481,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     ] + context.stages
     if all_ctes:
         sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
+        sql = _hoist_repeated_json_table_predicates(sql)
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
         if optional_union_sql:
@@ -4202,6 +4289,38 @@ def _create_node_from_alias(node, node_id_expr, var_alias, context):
             f"{cte}INSERT INTO {_table('rdf_labels')} (s, label) SELECT t.node_id, ? FROM ({sql}) AS t WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = t.node_id AND label = ?)",
             [label] + p + [label],
         )
+
+
+def _is_node_id_key(key: str, value) -> bool:
+    """`node_id` always names the node; `id` does unless it is a non-string
+    literal, which CREATE stores as an ordinary property."""
+    if key == "node_id":
+        return True
+    if key != "id":
+        return False
+    return not (
+        isinstance(value, ast.Literal) and value.value is not None and not isinstance(value.value, str)
+    )
+
+
+def _check_labels_argument(arg, context) -> None:
+    """labels() takes a node or null. Reject arguments known at translate time
+    to be something else: a non-null literal, or a literal element of a list
+    bound in WITH (`WITH [a, 1] AS list RETURN labels(list[1])`)."""
+    elem = arg
+    if (
+        isinstance(arg, ast.SubscriptExpression)
+        and isinstance(arg.expression, ast.Variable)
+        and isinstance(arg.index, ast.Literal)
+        and isinstance(arg.index.value, int)
+        and not isinstance(arg.index.value, bool)
+    ):
+        items = context.literal_list_vars.get(arg.expression.name)
+        if items is None or not -len(items) <= arg.index.value < len(items):
+            return
+        elem = items[arg.index.value]
+    if isinstance(elem, ast.Literal) and elem.value is not None:
+        raise TypeError("InvalidArgumentValue: labels() requires a node argument")
 
 
 def _create_clause_node_entry(node, context):
@@ -6351,7 +6470,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                         )
             for k, v in node.properties.items():
                 val_sql = translate_expression(v, context, segment="where")
-                if k in ("node_id", "id"):
+                if _is_node_id_key(k, v):
                     context.where_conditions.append(f"{node_id_col} = {val_sql}")
                 else:
                     if not optional:
@@ -6452,7 +6571,7 @@ def translate_node_pattern(node, context, metadata, optional=False):
                     context.optional_null_row_labels.append(label)
     for k, v in node.properties.items():
         val_sql = translate_expression(v, context, segment="where")
-        if k in ("node_id", "id"):
+        if _is_node_id_key(k, v):
             context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
             if not optional:
@@ -6813,7 +6932,7 @@ def _trp_undirected_edge(
     ):
         if prop_node:
             for k, v in (prop_node.properties or {}).items():
-                if k in ("id", "node_id"):
+                if _is_node_id_key(k, v):
                     id_col = f"{prop_alias}.node_id"
                     context.where_conditions.append(
                         f"{id_col} = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
@@ -9703,10 +9822,10 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
         elif prop_name == "weekYear":
             # ISO week year = year of Thursday in same ISO week.
             # Thursday offset from any date: 4 - iso_dow (where iso_dow 1=Mon..7=Sun)
-            # iso_dow = (IRIS_DAYOFWEEK + 5) % 7 + 1 (IRIS: Sun=1..Sat=7 → ISO: Mon=1..Sun=7)
+            # iso_dow = MOD(IRIS_DAYOFWEEK + 5, 7) + 1 (IRIS: Sun=1..Sat=7 → ISO: Mon=1..Sun=7)
             _date = f"CAST({base_sql} AS DATE)"
             _iris_dow = f"{{fn DAYOFWEEK({_date})}}"
-            _iso_dow = f"(({_iris_dow} + 5) % 7 + 1)"
+            _iso_dow = f"(MOD({_iris_dow} + 5, 7) + 1)"
             _thu = f"DATEADD('day', 4 - {_iso_dow}, {_date})"
             return f"DATEPART('year', {_thu})"
         elif prop_name == "week":
@@ -9748,7 +9867,7 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
             # ISO week year = year of Thursday in same ISO week (see date case above)
             _date = f"CAST(SUBSTRING({base_sql}, 1, 10) AS DATE)"
             _iris_dow = f"{{fn DAYOFWEEK({_date})}}"
-            _iso_dow = f"(({_iris_dow} + 5) % 7 + 1)"
+            _iso_dow = f"(MOD({_iris_dow} + 5, 7) + 1)"
             _thu = f"DATEADD('day', 4 - {_iso_dow}, {_date})"
             return f"DATEPART('year', {_thu})"
         elif prop_name == "week":
@@ -14975,6 +15094,7 @@ def _expr_function_call(expr, context, segment):
         return result
 
     if fn == "labels":
+        _check_labels_argument(expr.arguments[0] if expr.arguments else None, context)
         removed = getattr(context, "_removed_labels", None)
         return labels_subquery(args[0] if args else "NULL", exclude_labels=removed or None)
     if fn == "properties":
