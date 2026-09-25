@@ -168,6 +168,50 @@ only for users who may already read the repository's tables.
   real primary key, `pk_bridge (fhir_code, kg_node_id)`.
 - `docs/SEMANTIC_LAYER.md` documented an `import_fhir_bundle` that does not exist.
 
+**Fixed: 4.0.0 migration of 3.x installs** (found on a 3.2.0-era install with about
+1.6M props and 243k labels)
+
+- The `rdf_edges` rescue could not resume. If the restore failed after `Graph.KG.Edge`
+  was deleted, the rows stayed in `rdf_edges__ivg400rescue`, and the re-run that
+  `RdfEdgesRescueError` advised was a silent no-op that reported success.
+  `initialize_schema` now resumes from a rescue table whenever one exists, on both
+  deploy paths.
+  - Staging never drops an existing rescue table.
+  - The `SQLUser.rdf_edges` view and any leftover `rdf_edges` table are dropped
+    before the rebuild. The table is dropped only if the rescue table holds every one
+    of its rows.
+- Duplicate rows from 3.x failed the restore on `u_spo_graph`. v3.2.0's bulk loader
+  wrote them with `INSERT %NOINDEX %NOCHECK`. The restore now keeps one row per key:
+  - rows that are exact copies (qualifiers compared with `%EXACT`) are collapsed;
+  - rows with the same key but different qualifiers are quarantined;
+  - `restore_rescued_rdf_edges` returns the staged, restored, collapsed and
+    quarantined counts.
+- Duplicate labels and props blocked the composite primary keys. They are now removed
+  first, keeping the lowest `%ID`. Props that share a key but hold different values
+  refuse the re-key and are listed in `MigrationReport.key_conflicts`.
+- `_rekey_children` treated `rdf_labels.graph_id` as proof that the re-key had
+  finished, so a run killed partway through never completed. It now checks the
+  catalog (keys and nullability) and finishes on re-run.
+- A legacy `PRIMARY KEY (node_id)`, such as `NODES_PKEY1`, survived the re-key, so a
+  second graph's copy of a node id failed with `-119`. The re-key now drops every
+  unique key on exactly `(node_id)`, whatever its name, and adds
+  `pk_nodes_graph (node_id, graph_id)`. An IDKEY or an unknown dependent foreign key
+  refuses and is listed in `node_key_blockers`.
+- `delete_nodes` erased an id from every graph. It also built one `IN` list for the
+  whole batch, which failed to prepare past about 2,000 ids (`-202`), returned the
+  number of ids it was given instead of the rows removed, and left `^KG`, `^NKG` and
+  embeddings stale. `delete_edges` had the same problems. Both now chunk at 500 ids,
+  return the rows removed, and clean up through `Graph.KG.Eraser` when it is
+  compiled.
+- New: `Graph.KG.Eraser.EraseNodes(pGraph, pPrefix)` and
+  `engine.delete_nodes_by_prefix(prefix, graph=None)`. An empty prefix is refused;
+  use `EraseGraph` to erase a whole graph.
+
+**Changed**
+
+- `store.delete_nodes` and `store.delete_edges` take a keyword `graph=`. Without it
+  they affect only the default graph. They used to affect every graph.
+
 ### v4.0.0 (2026-09-22)
 
 An embedding is a graph-scoped, per-model resource now. Through 3.2.0 a vector was
