@@ -7,6 +7,7 @@ Extracted from the biomedical-specific implementation for reusability.
 """
 
 import logging
+import re
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -931,7 +932,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return result
 
     @staticmethod
-    def get_graph_scope_migration_sql() -> List[str]:
+    def get_graph_scope_migration_sql(legacy_node_keys: Sequence[str] = ()) -> List[str]:
         """Statements that re-key a 3.2.0 schema so a node ID is unique per graph.
 
         Spec 227, ``contracts/sql-schema.md`` §4.  The order is not interchangeable
@@ -970,6 +971,36 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         running any of these statements and refuses the whole re-key when it finds
         one, reporting the rows rather than repairing them.
 
+        Every statement is safe to repeat, because a killed pass is resumed by running
+        the list again (the migrator tolerates the "already done" answers): the
+        backfill claims only rows still ``NULL``, and the dedupe deletes nothing the
+        second time.
+
+        Two repairs a real 3.x-era install needed, beyond the §4 order:
+
+        * **A key over ``node_id`` alone under another name.** A 2.x-born ``nodes``
+          table declared ``node_id ... PRIMARY KEY`` inline, which IRIS names
+          ``NODES_PKEY1``. Dropping ``uq_nodes_nodeid`` by name left it in place, so
+          the catalog looked 4.0.0 while a node ID still could not be written into a
+          second graph (SQLCODE -119). The migrator finds every such key by its column
+          set and passes the names in as ``legacy_node_keys``; they are dropped after
+          the five dependents are, and ``pk_nodes_graph PRIMARY KEY (node_id,
+          graph_id)`` — what a fresh install declares — takes the primary key's place.
+          On a 3.2.0 table, which already declares it, that ``ADD`` is SQLCODE -307
+          and is tolerated as done.
+        * **Exact duplicate rows.** An install whose child tables were never keyed on
+          ``(s, label)`` / ``(s, key)`` holds full copies, and they make the composite
+          primary key fail with SQLCODE -125. Before the key is added, every copy but
+          the lowest ``%ID`` is deleted. For ``rdf_props`` a copy is only a row whose
+          ``val`` is also equal (``NULL`` equal to ``NULL``): two rows that disagree on
+          the value are a conflict, which the migrator refuses the re-key over and
+          reports, rather than keeping one value at random.
+
+        Args:
+            legacy_node_keys: Names of unique or primary keys on ``nodes`` whose
+                column set is exactly ``(node_id)``, other than ``uq_nodes_nodeid``,
+                which the list always drops.
+
         Returns:
             Statements in execution order, with no trailing semicolons (IRIS
             rejects one on a statement sent through the DB-API).
@@ -983,9 +1014,21 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "ALTER TABLE Graph_KG.kg_NodeEmbeddings_optimized DROP CONSTRAINT fk_emb_node_opt",
             # 2 — the swap that makes a node ID unique per graph
             "ALTER TABLE Graph_KG.nodes DROP CONSTRAINT uq_nodes_nodeid",
-            "ALTER TABLE Graph_KG.nodes ADD CONSTRAINT uq_nodes_graph_node "
-            "UNIQUE (graph_id, node_id)",
         ]
+        for name in legacy_node_keys:
+            if name == "uq_nodes_nodeid":
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"not a constraint name this migration can drop: {name!r}")
+            statements.append(f"ALTER TABLE Graph_KG.nodes DROP CONSTRAINT {name}")
+        statements.extend(
+            [
+                "ALTER TABLE Graph_KG.nodes ADD CONSTRAINT uq_nodes_graph_node "
+                "UNIQUE (graph_id, node_id)",
+                "ALTER TABLE Graph_KG.nodes ADD CONSTRAINT pk_nodes_graph "
+                "PRIMARY KEY (node_id, graph_id)",
+            ]
+        )
 
         # 3 — labels and props gain graph_id, in data-model.md §3's order
         for table, pk_name, tail in (
@@ -993,15 +1036,33 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             ("rdf_props", "pk_props", '"key"'),
         ):
             qualified = f"Graph_KG.{table}"
+            # Keep the lowest %ID of each (graph_id, s, tail). Written without a
+            # correlated subquery: on IRIS 2026.3 `DELETE ... WHERE EXISTS (SELECT ...
+            # k.%ID < d.%ID)` over the same table deleted nothing, silently, while the
+            # same predicate as a SELECT answered correctly. A prop row is deleted only
+            # when a lower %ID holds the same value too, so running this list without
+            # the migrator's conflict check still never discards a distinct value — the
+            # primary key then refuses (-125) instead.
+            dedupe = (
+                f"DELETE FROM {qualified} WHERE %ID NOT IN (SELECT MIN(g.%ID) FROM "
+                f"{qualified} g GROUP BY g.graph_id, g.s, g.{tail})"
+            )
+            if table == "rdf_props":
+                dedupe += (
+                    f" AND %ID IN (SELECT d.%ID FROM {qualified} d, {qualified} k "
+                    f"WHERE k.graph_id = d.graph_id AND k.s = d.s AND k.{tail} = d.{tail} "
+                    "AND k.%ID < d.%ID AND (k.val = d.val OR (k.val IS NULL AND d.val IS NULL)))"
+                )
             statements.extend(
                 [
                     f"ALTER TABLE {qualified} ADD COLUMN graph_id VARCHAR(256) %EXACT NULL",
                     f"UPDATE {qualified} c SET c.graph_id = "
                     f"(SELECT MIN(n.graph_id) FROM Graph_KG.nodes n WHERE n.node_id = c.s) "
-                    f"WHERE (SELECT COUNT(DISTINCT n.graph_id) FROM Graph_KG.nodes n "
-                    f"WHERE n.node_id = c.s) = 1",
+                    f"WHERE c.graph_id IS NULL AND (SELECT COUNT(DISTINCT n.graph_id) "
+                    f"FROM Graph_KG.nodes n WHERE n.node_id = c.s) = 1",
                     f"ALTER TABLE {qualified} ALTER COLUMN graph_id NOT NULL",
                     f"ALTER TABLE {qualified} ALTER COLUMN graph_id SET DEFAULT ''",
+                    dedupe,
                     f"ALTER TABLE {qualified} DROP CONSTRAINT {pk_name}",
                     f"ALTER TABLE {qualified} ADD CONSTRAINT {pk_name} "
                     f"PRIMARY KEY (graph_id, s, {tail})",
