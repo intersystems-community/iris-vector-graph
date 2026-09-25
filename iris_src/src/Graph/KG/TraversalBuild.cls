@@ -102,6 +102,8 @@ ClassMethod BuildKG() As %Status
 		}
 		&sql(CLOSE c3)
 		TCommit
+		// A rebuilt ^KG is new content to ^ArnoKG's cached snapshot (EdgeScan.WriteAdjacency).
+		Set tmp = $Increment(^KG("__version"))
 
 		Try { Do ..BuildNKG() } Catch buildEx {
 			Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: BuildNKG skipped: "_buildEx.DisplayString(), 0, 1)

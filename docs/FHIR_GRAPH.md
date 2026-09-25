@@ -254,8 +254,12 @@ Measured on `ivg-iris-enterprise`: a sync of 500 changed resources takes well un
 
 Each operator runs on one graph. A question that crosses graphs is a pipeline:
 
-1. **Expand.** `fhir_expand_concepts(concept_graph, ids, hops=1, predicates=None)`
-   collects the concepts reachable over the concept graph's out-edges.
+1. **Expand.** `fhir_expand_concepts(concept_graph, ids, hops=1, predicates=None,
+direction="in")` collects the concepts reachable over the concept graph's
+   in-edges, or out-edges with `direction="out"`, or either with `"both"`. In-edges
+   are the default because `rdfs:subClassOf`, `skos:broader` and OBO `is_a` point from
+   child to parent, so walking them backwards reaches the subclasses. A graph that links
+   parent to child, with `narrower` say, needs `direction="out"`.
 2. **Resolve.** `fhir_resolve_concepts(graph, concept_graph, ids)` returns the keys of
    live resources whose token param (`params=`, default `["code"]`) matches a
    `(system, code)` that `Graph_KG.code_crosswalk` maps to one of the concepts,
@@ -288,6 +292,116 @@ default graph.
 - the default graph as target.
 
 Until 5.0, `fhir_bridge_add` writes both tables.
+
+## Genomics
+
+Measured on the HL7 Genomics Reporting IG 3.0.0 examples (spec 233,
+`tests/e2e/fixtures/fhir/genomics/`), loaded through `DispatchRequest` into `IVGFHIR`
+on `ivg-iris-enterprise`. No engine code is genomics-specific.
+
+A genomic fact lands in one of three places:
+
+- **Edge.** A reference the sync indexes: `DiagnosticReport.result`,
+  `Observation.derived-from`, `has-member`, `subject`, `specimen`, and so on.
+- **Token.** A gene, variant, HGVS expression or ClinVar id in
+  `Observation.component.valueCodeableConcept` or `valueCodeableConcept`. It stays in
+  the repository and becomes no edge.
+- **Concept graph.** SO and MONDO classes, HGNC genes and variants, in a separate named
+  graph (`concepts:ivg233` in the tests). `code_crosswalk` maps each token to a concept.
+
+```text
+concept graph   MONDO_0019052 ◀─subClassOf─ MONDO_… ◀─gene_associated_with_condition─ hgnc/2621
+                                                                                          ┆
+                                                                  crosswalk (token → concept)
+                                                                                          ┆
+FHIR graph      Patient ◀─subject─ variant Observation [component: HGNC:2621] ◀─derived-from─ implication
+                                            ▲
+                                            └─result─ DiagnosticReport
+```
+
+Arrows run event → patient: an Observation points at its subject, a report at its
+results, an implication at the variant it derives from. That is why `fhir_concept_ppr`
+walks the FHIR graph bidirectionally.
+
+### Edges
+
+377 resources gave 1,363 edges, 2 contained references and no `fhir_unresolved` rows.
+
+| param                  | edges |
+| ---------------------- | ----- |
+| `based-on`             | 14    |
+| `collector`            | 4     |
+| `derived-from`         | 113   |
+| `focus`                | 3     |
+| `general-practitioner` | 3     |
+| `has-member`           | 41    |
+| `patient`              | 314   |
+| `performer`            | 279   |
+| `requester`            | 4     |
+| `result`               | 203   |
+| `results-interpreter`  | 2     |
+| `specimen`             | 69    |
+| `subject`              | 314   |
+
+62 references make no edge, because no search param indexes their element path:
+`extension.valueReference` (33), `extension.extension.valueReference` (16), Task
+`reasonReference` (9), `asserter` (2), `parent` (1) and `request` (1). Task
+`reasonReference` has no R4 search param, so the IG's recommendation Tasks do not link
+to the Observations they cite.
+
+### Concepts
+
+The concept graph is a slice of SO and MONDO (pinned in `SOURCE.md`) plus the HGNC
+genes and variants the fixture names: 456 nodes, 650 edges and 399 labels.
+
+| predicate                                | edges |
+| ---------------------------------------- | ----- |
+| `rdfs:subClassOf`                        | 523   |
+| `biolink:gene_associated_with_condition` | 72    |
+| `biolink:is_sequence_variant_of`         | 55    |
+
+`gene_associated_with_condition` comes from MONDO's `RO:0004003` restrictions (has
+material basis in germline mutation in), which Biolink does not map. The crosswalk has
+137 rows: 136 clean, 1 normalized (an SO code written `SO_…`), and 3 unmapped codings
+with no code.
+
+Two things are needed for a gene to reach a patient:
+
+- **`params`.** The genes sit in components, so the default `params=["code"]` finds
+  none of the variant Observations. Pass
+  `params=["component-value-concept", "value-concept"]`.
+- **`direction`.** `fhir_expand_concepts` and `fhir_concept_ppr` follow in-edges by
+  default. Here that goes from a disease to its subclasses and to the genes associated
+  with it. `direction="out"` goes from a class to its superclasses; `"both"` follows
+  either.
+
+For `MONDO_0019052` (inborn errors of metabolism) with `direction="in"` and 6 hops,
+20 concepts resolve to 7 Observations of 2 Patients, and both Patients outrank every
+other Patient. Resolve took 4 ms median and the whole pipeline 25 ms, against 6.6 ms
+and 67 ms on the 1,000-Patient fixture above.
+
+`materialize_inference(graph=...)` reads only that graph and writes each inferred edge
+into `^KG`, so the expansion sees it. `retract_inference` takes the edges back out.
+
+### Model results and provenance
+
+A model writes its result back as FHIR: a Device for the model version, an Observation
+for the prediction, and a Provenance with `target` the prediction, `agent.who` the
+Device and `entity.what` the input Observations. After sync the Provenance has one edge
+per reference (`target`, `agent`, `entity`). The prediction's 2-hop neighbourhood
+reaches the Device and the inputs, and two model versions stay separate. Deleting the
+Provenance removes its edges and leaves the prediction and Device.
+
+Every Provenance points its `target` at a result, so a result with many provenance
+records becomes a hub. `Provenance.target` is a denylist candidate for PPR.
+
+### What this is not
+
+The fixture puts the concept graph and the patient graph in one namespace for the test
+only. Co-residence is not a security design: the namespace stays the security boundary
+(see below). Out of scope: patient or phenotype embeddings for FHIR nodes, a literature
+or publication graph, VCF or raw variant storage, `ValidatedBy` Experiment or
+Publication links, and any new operator or cross-graph query.
 
 ## Security model
 

@@ -363,4 +363,11 @@ def pytest_collection_modifyitems(config, items):
 
 
 # Spec 231: the scratch FHIR namespace IVGFHIR (fixtures live beside their helpers).
-from tests.e2e.fhir_conftest import fhir_conn, fhir_engine, fhir_loader  # noqa: E402,F401
+from tests.e2e.fhir_conftest import (  # noqa: E402,F401
+    _fhir_session,
+    fhir_conn,
+    fhir_conn_required,
+    fhir_engine,
+    fhir_loader,
+    genomics_loaded,
+)

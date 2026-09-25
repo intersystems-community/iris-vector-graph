@@ -127,7 +127,8 @@ class FHIRGraphDemoClient:
         page can show what each stage found and what it cost."""
         started = time.perf_counter()
         expanded = (
-            self.engine.fhir_expand_concepts(self.concept_graph, list(concepts), hops=hops)
+            # The demo concept graph links parent to child with `narrower`.
+            self.engine.fhir_expand_concepts(self.concept_graph, list(concepts), hops=hops, direction="out")
             if hops
             else list(concepts)
         )

@@ -91,6 +91,49 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
   `python -m iris_demo_server.services.fhir_demo_data`, which PUTs 200 synthetic
   patients (885 resources) through the FHIR service.
 
+**Genomics on the FHIR graph** (spec 233)
+
+- `fhir_expand_concepts` and `fhir_concept_ppr` take `direction="in"|"out"|"both"`,
+  default `"in"`. Hierarchy edges in OWL, SKOS and OBO (`subClassOf`, `broader`,
+  `is_a`) point from child to parent, so in-edges reach a class's subclasses and a
+  disease's genes. A `narrower` graph such as the demo's passes `"out"`. Any other value
+  raises `ValueError`.
+- Measured on 377 HL7 Genomics Reporting IG examples (pinned, sha256 and license in
+  `tests/e2e/fixtures/fhir/genomics/SOURCE.md`) with no new sync code: 1,363 edges
+  over 13 params, 2 contained references, no unresolved rows. 62 references have no
+  edge because no R4 search param indexes their path (`extension.valueReference`,
+  Task `reasonReference`, ...).
+- Concept graph: a MONDO, HGNC and Sequence Ontology slice, 456 nodes and 650 edges;
+  crosswalk 136 clean rows, 1 normalized, 3 unmapped. Genes sit in Observation
+  components, so the default `params=["code"]` finds none of them; use
+  `component-value-concept`. From `MONDO_0019052` (`direction="in"`, 6 hops): 20
+  concepts, 7 Observations, 2 Patients; resolve 4 ms and concept-PPR 25 ms median.
+- A model result (Device, prediction Observation, Provenance) syncs to `target`,
+  `agent` and `entity` edges; `Provenance.target` is documented as a PPR hub-denylist
+  candidate.
+- Tests: `tests/{unit,integration,e2e}/test_233_*.py`; guide section "Genomics" in
+  `docs/FHIR_GRAPH.md`.
+
+**Fixed** (spec 233)
+
+- `materialize_inference` wrote inferred rows to `rdf_edges` only, after `import_rdf`
+  had run BuildKG, so no `^KG` walker (concept expansion, BFS, PPR) saw them. Each
+  inferred edge now goes through `EdgeScan.WriteAdjacency`, and `retract_inference`
+  removes it from `^KG` unless an asserted row for the same triple remains.
+- `materialize_inference` read its domain/range, TransitiveProperty and
+  SymmetricProperty rules from `rdf_edges` with no graph predicate (domain/range
+  under `LIMIT 50000`), so one graph's rules ran over any graph's edges. Every read is
+  now scoped to the target graph and unbounded.
+- Arno default-graph PPR (`ArnoAccel.PPRJson`) answered from garbage in any process
+  that had loaded the Arno library. `BuildGraphJson` walked the pre-214 layout
+  `^KG("out",s,p,o)` and listed graph keys as nodes; it now walks the default graph
+  `^KG("out",0,...)` only. Its cache stamp `^KG("__version")` was bumped only by
+  `Eraser`; `EdgeScan.WriteAdjacency`, `WriteAdjacencyShadow`, `DeleteAdjacency`,
+  `TraversalBuild.BuildKG` and `LedgerApply` now bump it too.
+- Known, not fixed: `^ArnoKG("KG","nkg_adj")` is an all-graph `^NKG` snapshot, warmed
+  by betweenness and cleared only by BuildKG. While it exists, Arno `*_global` calls
+  answer from it across graphs.
+
 **Deprecated, removed in 5.0**
 
 - `fhir_bridge.get_kg_anchors` and `unified_clinical_pipeline`: use

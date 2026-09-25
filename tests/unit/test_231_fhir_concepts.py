@@ -108,6 +108,7 @@ class TestExpand:
             '["C1"]',
             '["broader"]',
             2,
+            "in",
         )
 
     def test_all_predicates_by_default(self, eng):
@@ -121,6 +122,25 @@ class TestExpand:
         engine, _ = eng
         with pytest.raises(ValueError):
             engine.fhir_expand_concepts(CG, ["C1"], hops=bad)
+
+    @pytest.mark.parametrize("direction", ["out", "in", "both"])
+    def test_direction_is_the_fifth_argument(self, eng, direction):
+        engine, native = eng
+        engine.fhir_expand_concepts(CG, ["C1"], direction=direction)
+        assert _args(native)[6] == direction
+
+    def test_direction_defaults_to_in(self, eng):
+        """Descendants under the child-to-parent edges OWL, SKOS broader and OBO is_a use."""
+        engine, native = eng
+        engine.fhir_expand_concepts(CG, ["C1"])
+        assert _args(native)[6] == "in"
+
+    @pytest.mark.parametrize("bad", ["", "OUT", "up", None, 1])
+    def test_direction_checked_before_iris(self, eng, bad):
+        engine, native = eng
+        with pytest.raises(ValueError):
+            engine.fhir_expand_concepts(CG, ["C1"], direction=bad)
+        native.classMethodValue.assert_not_called()
 
 
 class TestPipeline:
@@ -155,6 +175,24 @@ class TestPipeline:
         assert ppr[2]["bidirectional"] is True
         assert ppr[2]["return_top_k"] == 10
         assert ppr[2]["max_iterations"] == 20
+
+    def test_direction_passed_to_expansion(self, eng):
+        engine, _ = eng
+        with (
+            patch.object(engine, "fhir_expand_concepts", return_value=["C1"]) as expand,
+            patch.object(engine, "fhir_resolve_concepts", return_value=[]),
+        ):
+            engine.fhir_concept_ppr(G, CG, ["C1"], hops=2, direction="in")
+        assert expand.call_args.kwargs["direction"] == "in"
+
+    def test_direction_defaults_to_in_in_the_pipeline(self, eng):
+        engine, _ = eng
+        with (
+            patch.object(engine, "fhir_expand_concepts", return_value=["C1"]) as expand,
+            patch.object(engine, "fhir_resolve_concepts", return_value=[]),
+        ):
+            engine.fhir_concept_ppr(G, CG, ["C1"], hops=2)
+        assert expand.call_args.kwargs["direction"] == "in"
 
     def test_zero_hops_skips_expansion(self, eng):
         engine, _ = eng

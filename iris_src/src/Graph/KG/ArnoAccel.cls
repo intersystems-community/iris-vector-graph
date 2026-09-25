@@ -77,21 +77,24 @@ ClassMethod CacheGraphJson(gname As %String = "KG") As %String [ Private ]
 	Return json
 }
 
+/// The default graph only: every Arno entry point here serves default-graph callers,
+/// and ^KG("out"/"in"/"deg") carry the graph key as their first subscript.
 ClassMethod BuildGraphJson() As %String
 {
 	Set nodes = ##class(%DynamicArray).%New()
 	Set edges = ##class(%DynamicArray).%New()
+	Set tG = ##class(Graph.KG.GraphKey).ForIndex("")
 
 	Set node = ""
 	For {
-		Set node = $Order(^KG("deg", node))
+		Set node = $Order(^KG("deg", tG, node))
 		Quit:node=""
 		Do nodes.%Push(node)
 		Set seen(node) = ""
 	}
 	Set node = ""
 	For {
-		Set node = $Order(^KG("in", node))
+		Set node = $Order(^KG("in", tG, node))
 		Quit:node=""
 		If '$Data(seen(node)) {
 			Do nodes.%Push(node)
@@ -101,15 +104,15 @@ ClassMethod BuildGraphJson() As %String
 
 	Set src = ""
 	For {
-		Set src = $Order(^KG("out", src))
+		Set src = $Order(^KG("out", tG, src))
 		Quit:src=""
 		Set pred = ""
 		For {
-			Set pred = $Order(^KG("out", src, pred))
+			Set pred = $Order(^KG("out", tG, src, pred))
 			Quit:pred=""
 			Set dst = ""
 			For {
-				Set dst = $Order(^KG("out", src, pred, dst))
+				Set dst = $Order(^KG("out", tG, src, pred, dst))
 				Quit:dst=""
 				Set e = ##class(%DynamicObject).%New()
 				Do e.%Set("src", src)

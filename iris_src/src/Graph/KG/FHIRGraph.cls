@@ -695,13 +695,20 @@ ClassMethod ResolveConcepts(pGraph As %String, pConceptGraph As %String = "", pI
 	Return tOut
 }
 
-/// The concepts reachable from pIdsJson in at most pHops over ^KG("out") of
-/// pConceptGraph, seeds included. pPredicatesJson restricts the predicates followed;
-/// empty or [] follows all.
-ClassMethod ExpandConcepts(pConceptGraph As %String = "", pIdsJson As %String = "[]", pPredicatesJson As %String = "", pHops As %Integer = 1) As %String
+/// The concepts reachable from pIdsJson in at most pHops of pConceptGraph, seeds
+/// included. pDirection picks the tree walked at every hop: "in" (the default)
+/// follows ^KG("in", g, o, p, s) from object to subject, which under child-to-parent
+/// edges (subClassOf, broader, is_a) reaches subclasses and a disease's genes; "out"
+/// follows ^KG("out", g, s, p, o) from subject to object; "both" does both. pPredicatesJson restricts the predicates followed; empty or [] follows all.
+ClassMethod ExpandConcepts(pConceptGraph As %String = "", pIdsJson As %String = "[]", pPredicatesJson As %String = "", pHops As %Integer = 1, pDirection As %String = "in") As %String
 {
 	Set tOut = ""
 	Try {
+		If (pDirection '= "out") && (pDirection '= "in") && (pDirection '= "both") {
+			Set tOut = {"status": "error", "error": ("direction must be out, in or both, got '"_pDirection_"'")}.%ToJSON()
+			Return tOut
+		}
+		Set tTrees = $Select(pDirection = "both": $ListBuild("out", "in"), 1: $ListBuild(pDirection))
 		Set tGk = ##class(Graph.KG.GraphKey).ForIndex(pConceptGraph)
 		Set tIds = ##class(%DynamicAbstractObject).%FromJSON(pIdsJson)
 		Kill tPredOk
@@ -729,19 +736,22 @@ ClassMethod ExpandConcepts(pConceptGraph As %String = "", pIdsJson As %String = 
 			For {
 				Set tS = $Order(tFrontier(tS))
 				Quit:tS=""
-				Set tP = ""
-				For {
-					Set tP = $Order(^KG("out", tGk, tS, tP))
-					Quit:tP=""
-					Continue:('tAllPreds)&&('$Data(tPredOk(tP)))
-					Set tO = ""
+				For tT = 1:1:$ListLength(tTrees) {
+					Set tTree = $List(tTrees, tT)
+					Set tP = ""
 					For {
-						Set tO = $Order(^KG("out", tGk, tS, tP, tO))
-						Quit:tO=""
-						Continue:$Data(tSeen(tO))
-						Set tSeen(tO) = ""
-						Set tNext(tO) = ""
-						Do tOrder.%Push(tO)
+						Set tP = $Order(^KG(tTree, tGk, tS, tP))
+						Quit:tP=""
+						Continue:('tAllPreds)&&('$Data(tPredOk(tP)))
+						Set tO = ""
+						For {
+							Set tO = $Order(^KG(tTree, tGk, tS, tP, tO))
+							Quit:tO=""
+							Continue:$Data(tSeen(tO))
+							Set tSeen(tO) = ""
+							Set tNext(tO) = ""
+							Do tOrder.%Push(tO)
+						}
 					}
 				}
 			}

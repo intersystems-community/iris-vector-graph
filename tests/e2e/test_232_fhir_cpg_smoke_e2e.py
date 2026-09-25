@@ -12,11 +12,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 
 import pytest
 
-from tests.e2e.fhir_conftest import _FIXTURES, GRAPH, FhirLoader
+from tests.e2e.fhir_conftest import _FIXTURES, GRAPH, FhirLoader, prefix_resources
 
 pytestmark = [pytest.mark.e2e, pytest.mark.slow]
 
@@ -25,15 +24,7 @@ BUNDLE = os.path.join(_FIXTURES, "cpg", "cpg-chf-2.0.0.json")
 
 def _prefixed(prefix):
     with open(BUNDLE) as fh:
-        raw = fh.read()
-    keys = {(e["resource"]["resourceType"], e["resource"]["id"]) for e in json.loads(raw)["entry"]}
-    # Longest ids first, so no id rewrites inside a longer one.
-    alt = "|".join(re.escape(f"{t}/{i}") for t, i in sorted(keys, key=lambda k: -len(k[1])))
-    raw = re.sub(rf"({alt})(?=[\"|/#])", lambda m: m.group(1).replace("/", f"/{prefix}-", 1), raw)
-    resources = [e["resource"] for e in json.loads(raw)["entry"]]
-    for r in resources:
-        r["id"] = f"{prefix}-{r['id']}"
-    return resources
+        return prefix_resources([e["resource"] for e in json.load(fh)["entry"]], prefix)
 
 
 @pytest.fixture(scope="module")

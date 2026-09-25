@@ -85,10 +85,10 @@ def test_resolve(fhir_engine, pipeline):
 
 
 def test_expand(fhir_engine, pipeline):
-    got = fhir_engine.fhir_expand_concepts(CG, ["C3"], hops=1)
+    got = fhir_engine.fhir_expand_concepts(CG, ["C3"], hops=1, direction="out")
     assert got[0] == "C3" and set(got) == {"C3", "C3.1"}
     assert fhir_engine.fhir_expand_concepts(CG, ["C3"], hops=0) == ["C3"]
-    assert fhir_engine.fhir_expand_concepts(CG, ["C3"], predicates=["broader"]) == ["C3"]
+    assert fhir_engine.fhir_expand_concepts(CG, ["C3"], predicates=["broader"], direction="out") == ["C3"]
 
 
 def test_relation_filter(fhir_engine, pipeline):
@@ -110,7 +110,7 @@ def test_deleted_is_not_returned(fhir_conn, fhir_engine, pipeline):
 def test_ppr_stays_in_graph(fhir_conn, fhir_engine, pipeline):
     """US3 scenario 3 / SC-004: every ranked node is a node of the FHIR graph."""
     # Unbounded: the 300 seeds hold the restart mass and would fill any small top-k.
-    scores = fhir_engine.fhir_concept_ppr(GRAPH, CG, PARENTS[:3], hops=1, top_k=None)
+    scores = fhir_engine.fhir_concept_ppr(GRAPH, CG, PARENTS[:3], hops=1, direction="out", top_k=None)
     assert scores
     nodes = {
         r[0] for r in _rows(fhir_conn, "SELECT node_id FROM Graph_KG.nodes WHERE graph_id = ?", GRAPH)
@@ -142,7 +142,7 @@ def test_latency_budget(fhir_conn, fhir_engine, pipeline):
     assert live >= 2000
     resolve = _median_ms(lambda: fhir_engine.fhir_resolve_concepts(GRAPH, CG, PARENTS))
     full = _median_ms(
-        lambda: fhir_engine.fhir_concept_ppr(GRAPH, CG, PARENTS, hops=1, max_iterations=20)
+        lambda: fhir_engine.fhir_concept_ppr(GRAPH, CG, PARENTS, hops=1, direction="out", max_iterations=20)
     )
     print(f"\nSC-005: resolve 10 concepts {resolve:.1f} ms; pipeline {full:.1f} ms (median of 7)")
     assert resolve <= 250, f"ResolveConcepts median {resolve:.1f} ms"

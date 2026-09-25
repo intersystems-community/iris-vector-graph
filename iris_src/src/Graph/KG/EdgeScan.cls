@@ -136,6 +136,9 @@ ClassMethod WriteAdjacency(s As %String, p As %String, o As %String, w As %Strin
 	Set ^KG("in", graph, o, p, s) = +w
 	Set tmp = $Increment(^KG("deg", graph, s))
 	Set tmp = $Increment(^KG("degp", graph, s, p))
+	// ^ArnoKG serves a cached snapshot while its stamp equals ^KG("__version"), so a
+	// write that leaves the stamp alone is invisible to the next Arno walk.
+	Set tmp = $Increment(^KG("__version"))
 	// ^NKG is per-identifier (no graph dimension); unchanged by spec 214
 	If $Data(^NKG("$meta", "nodeCount")) {
 		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(s)
@@ -177,6 +180,7 @@ ClassMethod WriteAdjacencyShadow(s As %String, p As %String, o As %String, w As 
 	If 'tExists {
 		Set tmp = $Increment(^KG("deg", graph, s))
 		Set tmp = $Increment(^KG("degp", graph, s, p))
+		Set tmp = $Increment(^KG("__version"))
 	}
 }
 
@@ -212,6 +216,7 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String, graph = 0)
 		}
 	}
 	Kill ^KG("in", graph, o, p, s)
+	Set tmp = $Increment(^KG("__version"))
 	If $Data(^NKG("$meta", "nodeCount")) {
 		Do ##class(Graph.KG.GraphIndex).DeleteIndex("", s, p, o, "")
 	}
