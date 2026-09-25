@@ -154,3 +154,131 @@ class TestLabelsRejectsNonNodes:
     )
     def test_labels_of_a_node_or_null_translates(self, cypher):
         tr(cypher)
+
+
+_LT = "localtime({hour: 12, minute: 31, second: 14, nanosecond: 645876123})"
+_T = "time({hour: 12, minute: 31, second: 14, microsecond: 645876, timezone: '+01:00'})"
+_D = "date({year: 1984, month: 10, day: 11})"
+_LDT = (
+    "localdatetime({year: 1984, week: 10, dayOfWeek: 3, hour: 12, minute: 31, "
+    "second: 14, millisecond: 645})"
+)
+_DT = "datetime({year: 1984, month: 10, day: 11, hour: 12, timezone: '+01:00'})"
+
+
+class TestTemporalProjectionFromVariables:
+    """Temporal3 [3]-[11], never ported from worktree-agent-a96a31b.
+
+    Main carried a96a31b's `_build_temporal_from_variable_map` but never called
+    it; the older `_build_date_sql_from_dynamic_base` appended IANA zone names
+    raw (`...Pacific/Honolulu`), dropped fractional seconds and the `Z` suffix.
+    """
+
+    @pytest.mark.parametrize(
+        "with_, expr, expected",
+        [
+            (f"{_LT} AS other", "time(other)", "12:31:14.645876123Z"),
+            (f"{_T} AS other", "time({time: other, timezone: '+05:00'})", "16:31:14.645876+05:00"),
+            (
+                f"{_LT} AS other",
+                "localdatetime({year: 1984, month: 10, day: 11, time: other})",
+                "1984-10-11T12:31:14.645876123",
+            ),
+            (
+                f"{_D} AS otherDate, {_LDT} AS otherTime",
+                "localdatetime({date: otherDate, time: otherTime})",
+                "1984-10-11T12:31:14.645",
+            ),
+            (f"{_DT} AS other", "localdatetime({datetime: other})", "1984-10-11T12:00"),
+            (
+                f"{_D} AS other",
+                "datetime({date: other, day: 28, hour: 10, minute: 10, second: 10, "
+                "timezone: 'Pacific/Honolulu'})",
+                "1984-10-28T10:10:10-10:00[Pacific/Honolulu]",
+            ),
+            (
+                f"{_LT} AS other",
+                "datetime({year: 1984, month: 10, day: 11, time: other})",
+                "1984-10-11T12:31:14.645876123Z",
+            ),
+            (
+                f"{_D} AS otherDate, {_LT} AS otherTime",
+                "datetime({date: otherDate, time: otherTime, day: 28, second: 42, "
+                "timezone: 'Pacific/Honolulu'})",
+                "1984-10-28T12:31:42.645876123-10:00[Pacific/Honolulu]",
+            ),
+            (
+                f"{_LDT} AS other",
+                "datetime({datetime: other, day: 28, second: 42, timezone: 'Pacific/Honolulu'})",
+                "1984-03-28T12:31:42.645-10:00[Pacific/Honolulu]",
+            ),
+        ],
+    )
+    def test_projection_result(self, iris_cursor, with_, expr, expected):
+        t = tr(f"WITH {with_} RETURN {expr} AS result")
+        params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
+        iris_cursor.execute(t.sql, params)
+        assert iris_cursor.fetchall()[0][0] == expected
+
+
+class TestDurationKeepsHoursPastADay:
+    """Temporal7 [6]; the hours → days carry came in with 3b88ee5.
+
+    A duration stores days and seconds separately, so `{days: 13, hours: 40}`
+    is not `{days: 14, hours: 16}` and the two are not equal.
+    """
+
+    def test_hours_are_not_folded_into_days(self):
+        sql = tr("RETURN duration({days: 13, hours: 40, minutes: 13, seconds: 10}) AS d").sql
+        assert "'P13DT40H13M10S'" in sql
+
+    def test_seconds_still_carry_into_minutes_and_hours(self):
+        sql = tr("RETURN duration({days: 14, hours: 16, minutes: 12, seconds: 70}) AS d").sql
+        assert "'P14DT16H13M10S'" in sql
+
+
+class TestListMembershipIsOneReader:
+    """Precedence1 [26], [28]; never ported from worktree-agent-a634adb.
+
+    The 3VL CASE repeats its condition, so each nested `b IN c` over a JSON
+    list was copied into the stage up to eight times, and IRIS failed at Prepare
+    with -400 <LIST>LoadTableFunction. Membership is now one scalar subquery
+    returning 1, 0 or NULL, which the CASE passes through.
+    """
+
+    QUERY = (
+        "UNWIND [true, false, null] AS a UNWIND [true, false, null] AS b "
+        "UNWIND [[], [true], [false], [null], [true, false], [true, false, null]] AS c "
+        "WITH collect((a OP b IN c) = (a OP (b IN c))) AS eq, "
+        "collect((a OP b IN c) <> ((a OP b) IN c)) AS neq "
+        "RETURN all(x IN eq WHERE x) AND any(x IN neq WHERE x) AS result"
+    )
+
+    @pytest.mark.parametrize("op", ["=", "<>", "<", ">", "<=", ">=", "OR", "XOR", "AND"])
+    def test_precedence_scenario_returns_true(self, iris_cursor, op):
+        t = tr(self.QUERY.replace("OP", op))
+        params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
+        iris_cursor.execute(t.sql, params)
+        assert iris_cursor.fetchall()[0][0] == 1
+
+    def test_membership_is_not_repeated_by_the_3vl_case(self):
+        sql = tr(
+            "UNWIND [1, null] AS b UNWIND [[1], []] AS c WITH collect(b IN c) AS xs RETURN xs"
+        ).sql
+        assert sql.count("JSON_TABLE(u1.c") == 1
+
+    @pytest.mark.parametrize(
+        "b, c, expected",
+        [
+            ("null", "[]", 0),
+            ("null", "[1]", None),
+            ("1", "[2, null]", None),
+            ("1", "[1, null]", 1),
+            ("2", "[1]", 0),
+        ],
+    )
+    def test_membership_three_valued_result(self, iris_cursor, b, c, expected):
+        t = tr(f"WITH {b} AS b, {c} AS c RETURN b IN c AS r")
+        params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
+        iris_cursor.execute(t.sql, params)
+        assert iris_cursor.fetchall()[0][0] == expected

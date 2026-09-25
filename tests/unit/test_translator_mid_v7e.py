@@ -666,7 +666,7 @@ class TestBooleanExprIn:
 
     def test_in_labels_function(self):
         sql = tr("MATCH (n) WHERE 'Person' IN labels(n) RETURN n.node_id")
-        assert "IN" in sql
+        assert ".__jv = 'Person'" in sql
 
     def test_in_non_list_rhs_raises(self):
         """IN with non-list RHS (string literal) should raise."""

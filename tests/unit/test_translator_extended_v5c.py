@@ -301,7 +301,8 @@ class TestInOperator:
     def test_in_list_comprehension_rhs(self):
         """WHERE n.type IN [x IN n.tags | x] — list comprehension as RHS."""
         sql = tr("MATCH (n) WHERE n.type IN [x IN n.tags | x] RETURN n")
-        assert " IN " in sql.upper()
+        # membership over a JSON array: one 1/0/NULL subquery
+        assert ".__jv = " in sql
         assert "JSON_TABLE" in sql.upper() or "SELECT" in sql.upper()
 
     def test_not_in_param_list(self):
@@ -518,7 +519,8 @@ class TestCaseAndInCombos:
     def test_in_range_result(self):
         """WHERE n.id IN range(1, 5) — range produces JSON array for IN."""
         sql = tr("MATCH (n) WHERE n.id IN range(1, 5) RETURN n")
-        assert " IN " in sql.upper()
+        # membership over a JSON array: one 1/0/NULL subquery
+        assert ".__jv = " in sql
         assert "JSON" in sql.upper() or "SELECT" in sql.upper()
 
     def test_contains_in_return(self):

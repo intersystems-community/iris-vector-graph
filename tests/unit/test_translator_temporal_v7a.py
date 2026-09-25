@@ -25,6 +25,11 @@ def tr(q, params=None):
     return sql[0] if isinstance(sql, list) else sql
 
 
+def _final_select(sql):
+    """The outer SELECT, after the WITH ... AS (...) stage CTEs."""
+    return sql[sql.rindex("\n)\nSELECT") + 3 :]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -424,20 +429,17 @@ class TestInlineFunctionCallBase:
 
 
 class TestVariableBase:
-    """Variable in scope forces _build_date_sql_from_dynamic_base to emit
-    LPAD(CAST(SUBSTRING(...))) runtime SQL."""
+    """A temporal WITH variable in the map base goes through
+    _build_temporal_from_variable_map, which folds the variable's literal value
+    into the projection (Temporal3)."""
 
     def test_date_from_date_var_no_overrides(self):
         sql = tr("WITH date('2018-04-05') AS d RETURN date({date: d})")
-        assert "LPAD" in sql
-        assert "SUBSTRING" in sql
-        assert "Stage1.d" in sql
+        assert "SUBSTRING('2018-04-05'" in _final_select(sql)
 
     def test_date_from_date_var_month_override(self):
         sql = tr("WITH date('2018-04-05') AS d RETURN date({date: d, month: 2})")
-        assert "LPAD" in sql
-        # month override as literal integer in the LPAD expression
-        assert "2" in sql
+        assert "'02'" in _final_select(sql)
 
     def test_date_from_date_var_year_override(self):
         sql = tr("WITH date('2018-04-05') AS d RETURN date({date: d, year: 2019})")
@@ -449,8 +451,7 @@ class TestVariableBase:
 
     def test_date_from_date_var_week_override(self):
         sql = tr("WITH date('2018-04-05') AS d RETURN date({date: d, week: 10})")
-        assert "DATEADD" in sql
-        assert "DATEPART" in sql
+        assert "DATEADD" in _final_select(sql)
 
     def test_date_from_date_var_ordinal_override(self):
         sql = tr("WITH date('2018-04-05') AS d RETURN date({date: d, ordinalDay: 100})")
@@ -459,31 +460,27 @@ class TestVariableBase:
 
     def test_date_from_date_var_quarter_override(self):
         sql = tr("WITH date('2018-04-05') AS d RETURN date({date: d, quarter: 3})")
-        assert "DATEDIFF" in sql
+        assert "DATEADD" in _final_select(sql)
 
     def test_date_from_datetime_var(self):
         sql = tr(
             "WITH datetime('2018-04-05T12:00:00') AS dt RETURN date({date: dt})"
         )
-        assert "LPAD" in sql
-        assert "Stage1.dt" in sql
+        assert "SUBSTRING('2018-04-05T12:00:00', 1, 10)" in _final_select(sql)
 
     def test_localtime_from_time_var_no_overrides(self):
         sql = tr(
             "WITH time('12:31:14+01:00') AS t RETURN localtime({time: t})"
         )
-        assert "Stage1.t" in sql
-        assert "LPAD" in sql
+        assert _final_select(sql).startswith("SELECT '12:31:14' ")
 
     def test_localtime_from_localtime_var(self):
         sql = tr("WITH localtime('12:31:14') AS lt RETURN localtime({time: lt})")
-        assert "Stage1.lt" in sql
+        assert _final_select(sql).startswith("SELECT '12:31:14' ")
 
     def test_time_from_localtime_var(self):
         sql = tr("WITH localtime('12:31:14') AS lt RETURN time({time: lt})")
-        assert "Stage1.lt" in sql
-        # Should append timezone suffix
-        assert "Z" in sql or "tz" in sql.lower() or "LIKE" in sql
+        assert "('12:31:14' || 'Z')" in _final_select(sql)
 
     def test_time_from_localtime_var_with_tz_override(self):
         sql = tr(
@@ -496,32 +493,30 @@ class TestVariableBase:
             "WITH datetime('2017-01-01T12:00:00+01:00') AS dt "
             "RETURN localdatetime({datetime: dt})"
         )
-        assert "Stage1.dt" in sql
-        assert "SUBSTRING" in sql
+        assert _final_select(sql).startswith("SELECT '2017-01-01T12:00:00' ")
 
     def test_datetime_from_localdatetime_var(self):
         sql = tr(
             "WITH localdatetime('2017-01-01T12:00:00') AS ldt "
             "RETURN datetime({datetime: ldt})"
         )
-        assert "Stage1.ldt" in sql
-        assert "Z" in sql
+        assert _final_select(sql).startswith("SELECT '2017-01-01T12:00:00Z' ")
 
     def test_localdatetime_from_date_and_time_vars(self):
         sql = tr(
             "WITH date('2017-01-01') AS d, time('12:31:14+01:00') AS t "
             "RETURN localdatetime({date: d, time: t})"
         )
-        assert "Stage1.d" in sql
-        assert "Stage1.t" in sql
+        assert "'2017-01-01'" in _final_select(sql)
+        assert "'12:31:14+01:00'" in _final_select(sql)
 
     def test_datetime_from_date_and_time_vars(self):
         sql = tr(
             "WITH date('2017-01-01') AS d, time('12:31:14+01:00') AS t "
             "RETURN datetime({date: d, time: t})"
         )
-        assert "Stage1.d" in sql
-        assert "Stage1.t" in sql
+        assert "'2017-01-01'" in _final_select(sql)
+        assert "'12:31:14'" in _final_select(sql)
         assert "+01:00" in sql  # TZ extracted from time variable
 
     def test_datetime_year_month_day_with_time_var(self):
@@ -530,7 +525,7 @@ class TestVariableBase:
             "RETURN datetime({year: 2017, month: 1, day: 1, time: t})"
         )
         assert "2017" in sql
-        assert "Stage1.t" in sql
+        assert "'12:31:14" in _final_select(sql)
 
     def test_localdatetime_year_month_day_with_time_var(self):
         sql = tr(
@@ -538,7 +533,7 @@ class TestVariableBase:
             "RETURN localdatetime({year: 2017, month: 1, day: 1, time: t})"
         )
         assert "2017" in sql
-        assert "Stage1.t" in sql
+        assert "'12:31:14" in _final_select(sql)
 
     def test_datetime_with_second_override_from_time_var(self):
         sql = tr(
@@ -1020,9 +1015,9 @@ class TestEdgeCases:
         assert "Z" in sql
 
     def test_date_from_var_no_override_produces_lpad(self):
-        # With no overrides, the variable base still routes through LPAD
+        # With no overrides, the variable's literal value is folded in
         sql = tr("WITH date('2017-10-11') AS d RETURN date({date: d})")
-        assert "LPAD" in sql
+        assert "SUBSTRING('2017-10-11'" in _final_select(sql)
 
     def test_duration_fractional_days(self):
         # 1.5 days = 36 hours
@@ -1041,20 +1036,19 @@ class TestEdgeCases:
         sql = tr(
             "WITH time('12:31:14+01:00') AS t RETURN time({time: t, hour: 10})"
         )
-        assert "Stage1.t" in sql
-        assert "10" in sql
+        assert "'10'" in _final_select(sql)
 
     def test_time_var_with_minute_override(self):
         sql = tr(
             "WITH time('12:31:14+01:00') AS t RETURN time({time: t, minute: 0})"
         )
-        assert "Stage1.t" in sql
+        assert "'00'" in _final_select(sql)
 
     def test_time_var_with_second_override(self):
         sql = tr(
             "WITH time('12:31:14+01:00') AS t RETURN time({time: t, second: 0})"
         )
-        assert "Stage1.t" in sql
+        assert "'00'" in _final_select(sql)
 
     def test_localdatetime_from_datetime_var_with_year_override(self):
         sql = tr(

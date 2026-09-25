@@ -2106,6 +2106,29 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     return outer_sql
 
 
+def _json_list_membership(left: str, right_sql: str, context) -> str:
+    """`left IN <JSON array>` as a predicate over one JSON_TABLE reader.
+
+    The scalar subquery returns 1, 0 or NULL with Cypher semantics (an empty
+    list gives false, a null operand or element with no match gives null). It is
+    recorded on the context so the 3VL CASE uses it as the value instead of
+    repeating the predicate, which multiplied the readers until IRIS failed at
+    Prepare with -400 <LIST>LoadTableFunction (Precedence1 [26], [28]).
+    """
+    a = context.next_alias("jin")
+    tri = (
+        f"(SELECT CASE WHEN SUM(CASE WHEN {a}.__jv = {left} THEN 1 ELSE 0 END) > 0 THEN 1 "
+        f"WHEN COUNT(*) > 0 AND ({left} IS NULL OR SUM(CASE WHEN {a}.__jv IS NULL THEN 1 ELSE 0 END) > 0) "
+        f"THEN NULL ELSE 0 END "
+        f"FROM JSON_TABLE({right_sql}, '$[*]' COLUMNS(__jv VARCHAR(1000) PATH '$')) {a})"
+    )
+    pred = f"({tri} = 1)"
+    if not hasattr(context, "tri_valued_predicates"):
+        context.tri_valued_predicates = {}
+    context.tri_valued_predicates[pred] = tri
+    return pred
+
+
 def _hoist_repeated_json_table_predicates(sql: str) -> str:
     """Compute each repeated list-predicate subquery once.
 
@@ -7954,12 +7977,21 @@ def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Opti
         return f"{left} <> {right}"
     if op == ast.BooleanOperator.LESS_THAN:
         return f"{left} < {right}"
+    # The NaN decomposition below repeats both operands. A list-membership
+    # subquery (1, 0 or NULL, never NaN) repeated that way can push IRIS into
+    # -400 LoadTableFunction, so it keeps the plain operator (Precedence1 [26]).
+    _mark = "(SELECT CASE WHEN SUM(CASE WHEN jin"
+    _has_subquery = _mark in left or _mark in right
     if op == ast.BooleanOperator.LESS_THAN_OR_EQUAL:
+        if _has_subquery:
+            return f"{left} <= {right}"
         # Decompose to avoid IRIS returning true for NaN <= x (NaN is treated as max float by IRIS)
         return f"(({left} < {right}) OR ({left} = {right}))"
     if op == ast.BooleanOperator.GREATER_THAN:
         return f"{left} > {right}"
     if op == ast.BooleanOperator.GREATER_THAN_OR_EQUAL:
+        if _has_subquery:
+            return f"{left} >= {right}"
         # Decompose to avoid IRIS returning true for NaN >= x (NaN is treated as max float by IRIS)
         return f"(({left} > {right}) OR ({left} = {right}))"
     if op == ast.BooleanOperator.STARTS_WITH:
@@ -8384,8 +8416,7 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
     ) or isinstance(right_expr, ast.ListComprehension)
     if _is_json_array_expr:
         right_sql = translate_expression(right_expr, context, segment="where")
-        jt_alias = context.next_alias("jin")
-        return f"{left} IN (SELECT __jv FROM JSON_TABLE({right_sql}, '$[*]' COLUMNS(__jv VARCHAR(1000) PATH '$')) {jt_alias})"
+        return _json_list_membership(left, right_sql, context)
     # Variable holding a JSON array (scalar variable from Stage, not an input_param list)
     if (
         isinstance(right_expr, ast.Variable)
@@ -8393,8 +8424,7 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
         and right_expr.name in context.scalar_variables
     ):
         right_sql = translate_expression(right_expr, context, segment="where")
-        jt_alias = context.next_alias("jin")
-        return f"{left} IN (SELECT __jv FROM JSON_TABLE({right_sql}, '$[*]' COLUMNS(__jv VARCHAR(1000) PATH '$')) {jt_alias})"
+        return _json_list_membership(left, right_sql, context)
     return None
 
 
@@ -13197,6 +13227,9 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             result = _build_date_from_map(args_exprs[0], with_time=False)
             if result is not None:
                 return result
+            result = _build_temporal_from_variable_map(fn, args_exprs[0], context)
+            if result is not None:
+                return result
             # Dynamic base: date({date: expr, ...overrides}) — generate SQL SUBSTRING ops
             result = _build_date_sql_from_dynamic_base(args_exprs[0], context, target_fn="date")
             if result is not None:
@@ -13219,6 +13252,9 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             return "NULL"
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
             result = _build_date_from_map(args_exprs[0], with_time=True, with_tz=False)
+            if result is not None:
+                return result
+            result = _build_temporal_from_variable_map(fn, args_exprs[0], context)
             if result is not None:
                 return result
             result = _build_date_sql_from_dynamic_base(
@@ -13267,6 +13303,9 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             result = _build_date_from_map(args_exprs[0], with_time=True, with_tz=True)
             if result is not None:
                 return result
+            result = _build_temporal_from_variable_map(fn, args_exprs[0], context)
+            if result is not None:
+                return result
             result = _build_date_sql_from_dynamic_base(args_exprs[0], context, target_fn="datetime")
             if result is not None:
                 return result
@@ -13295,6 +13334,10 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
         if not args:
             return "NULL"
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
+            if _has_map_key(args_exprs[0], "time"):
+                _dyn_result = _build_temporal_from_variable_map(fn, args_exprs[0], context)
+                if _dyn_result is not None:
+                    return _dyn_result
             # Check if map has a dynamic temporal base (time: var, localtime: var, etc.)
             _dyn_result = _build_date_sql_from_dynamic_base(args_exprs[0], context, target_fn=fn)
             if _dyn_result is not None:
@@ -13332,6 +13375,30 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
                 if fn == "time" and not any(c in parsed for c in "Z+-"):
                     parsed = parsed + "Z"
                 return f"'{parsed}'"
+        if fn == "time" and args_exprs and isinstance(args_exprs[0], ast.Variable):
+            temporal_type = context.temporal_types.get(args_exprs[0].name)
+            tlv = getattr(context, "temporal_literal_values", {})
+            lit = tlv.get(args_exprs[0].name)
+            if temporal_type == "localtime":
+                # localtime has no offset: time() adds Z
+                return f"'{lit}Z'" if lit is not None else f"({args[0]} || 'Z')"
+            if temporal_type == "localdatetime":
+                if lit is not None:
+                    return f"'{lit[11:]}Z'"
+                return f"(SUBSTRING({args[0]}, 12, 99) || 'Z')"
+            if temporal_type == "datetime":
+                # keep the offset, drop the [Zone] name
+                if lit is not None:
+                    import re as _re_tdt
+
+                    t_part = _re_tdt.sub(r"\[[^\]]+\]$", "", lit[11:])
+                    return f"'{t_part}'"
+                time_raw = f"SUBSTRING({args[0]}, 12, 99)"
+                return (
+                    f"CASE WHEN CHARINDEX('[', {time_raw}) > 0 "
+                    f"THEN SUBSTRING({time_raw}, 1, CHARINDEX('[', {time_raw}) - 1) "
+                    f"ELSE {time_raw} END"
+                )
         # Variable arg: may be datetime/localdatetime (extract time part) or time/localtime
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             base = args[0]
@@ -13419,10 +13486,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             extra_h = int(m_int / 60)
             m_int = m_int - extra_h * 60
             h_int += extra_h
-            # Normalize hours → days (truncating toward zero)
-            extra_d = int(h_int / 24)
-            h_int = h_int - extra_d * 24
-            d_int += extra_d
+            # No hours → days carry: a duration keeps days and seconds apart.
 
             result_str = _format_duration(int(years), mo_int, d_int, h_int, m_int, s_int, rem_ns)
             return f"'{result_str}'"
@@ -15208,6 +15272,9 @@ def _expr_boolean(expr, context, segment):
         return "1"
     if cond == "(1=0)":
         return "0"
+    tri = getattr(context, "tri_valued_predicates", {}).get(cond)
+    if tri is not None:
+        return tri
     # If translate_boolean_expression already returned a 1/0/NULL CASE expression
     # (e.g. for IN with null list elements, or 3VL AND/OR), don't wrap it again.
     # Also handle 3VL CASE WHEN patterns with (1=0)/(1=1) that need integer normalization.
