@@ -240,15 +240,17 @@ import iris, os, glob, sys, socket
 
 port = int(os.environ.get("IVG_PORT", "31971"))
 container = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
+# IVG_NAMESPACE deploys into a scratch namespace instead of the shared USER one.
+namespace = os.environ.get("IVG_NAMESPACE", "USER")
 
 # OrbStack: use direct :1972 via {container}.orb.local
 try:
     _orb_ip = socket.gethostbyname(f"{container}.orb.local")
-    conn = iris.connect(hostname=_orb_ip, port=1972, namespace="USER",
+    conn = iris.connect(hostname=_orb_ip, port=1972, namespace=namespace,
                         username="_SYSTEM", password="SYS")
 except Exception:
     try:
-        conn = iris.connect(hostname="localhost", port=port, namespace="USER",
+        conn = iris.connect(hostname="localhost", port=port, namespace=namespace,
                             username="_SYSTEM", password="SYS")
     except Exception as e:
         print(f"TCP connect failed (port {port}): {e}", file=sys.stderr)
@@ -256,14 +258,16 @@ except Exception:
 
 irisobj = iris.createIRIS(conn)
 cls_files = sorted(glob.glob("iris_src/src/**/*.cls", recursive=True))
-print(f"Deploying {len(cls_files)} classes via TCP write+compile...")
+print(f"Deploying {len(cls_files)} classes into {namespace} via TCP write+compile...")
 
 errors = []
 for cls_file in cls_files:
     with open(cls_file, "r") as f:
         content = f.read()
     rel = os.path.relpath(cls_file, "iris_src/src").replace(os.sep, "/")
-    dest = f"/tmp/tcpsrc/{rel}"
+    # A per-namespace staging directory, so two deploys into different namespaces
+    # cannot load each other's half-written files.
+    dest = f"/tmp/tcpsrc/{rel}" if namespace == "USER" else f"/tmp/tcpsrc_{namespace}/{rel}"
     parent = os.path.dirname(dest)
     irisobj.classMethodValue("%File", "CreateDirectoryChain", parent)
     stream = irisobj.classMethodObject("%Stream.FileCharacter", "%New")

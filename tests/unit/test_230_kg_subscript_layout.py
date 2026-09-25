@@ -40,6 +40,7 @@ GRAPH_KEY_TOKENS = frozenset(
         "g",  # the loop variable in the rebuild's per-graph walk
         "gg",  # the inner graph in a merged walk
         "tKey",  # Graph.KG.Eraser, from GraphKey.ForIndex
+        "pKey",  # Graph.KG.Eraser.EraseIdSet's parameter, its callers' tKey
         "pGraph",  # a method parameter, or a default-graph-only method's constant
         "graphKey",
         "tGraph",

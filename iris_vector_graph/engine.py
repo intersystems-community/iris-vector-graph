@@ -148,6 +148,7 @@ class _GraphSubEngine:
     def create_edge(self, *a, **kw): return self._e.create_edge(*a, **kw)
     def upsert_node(self, *a, **kw): return self._e.upsert_node(*a, **kw)
     def delete_node(self, *a, **kw): return self._e.delete_node(*a, **kw)
+    def delete_nodes_by_prefix(self, *a, **kw): return self._e.delete_nodes_by_prefix(*a, **kw)
     def delete_edge(self, *a, **kw): return self._e.delete_edge(*a, **kw)
     def bulk_create_nodes(self, *a, **kw): return self._e.bulk_create_nodes(*a, **kw)
     def bulk_create_edges(self, *a, **kw): return self._e.bulk_create_edges(*a, **kw)

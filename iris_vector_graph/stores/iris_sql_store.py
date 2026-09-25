@@ -622,41 +622,212 @@ class IRISGraphStore:
         self.conn.commit()
         return IVGResult(columns=["written"], rows=[[written]])
 
-    def delete_nodes(self, node_ids: list) -> IVGResult:
+    # Ids per statement or per Eraser call. IRIS failed to prepare the old
+    # unbounded ``IN`` list at 2000 parameters, and its edge statement doubled that.
+    _DELETE_CHUNK = 500
+
+    def _has_eraser_method(self, method: str) -> bool:
+        """Whether ``Graph.KG.Eraser.<method>`` is compiled here. Probed once per method."""
+        cache = self.__dict__.setdefault("_eraser_methods", {})
+        if method not in cache:
+            try:
+                cache[method] = bool(
+                    self._iris_obj().classMethodValue(
+                        "%Dictionary.CompiledMethod", "%ExistsId", f"Graph.KG.Eraser||{method}"
+                    )
+                )
+            except Exception:
+                cache[method] = False
+        return cache[method]
+
+    def delete_nodes(self, node_ids: list, *, graph: Optional[str] = None) -> IVGResult:
+        """Delete nodes from ONE graph, with their labels, props, edges and embeddings.
+
+        Args:
+            node_ids: The ids to delete. Duplicates and empty ids are ignored; ids
+                not present in ``graph`` are not an error and are not counted.
+            graph: The graph to delete from. ``None`` and ``""`` both mean the
+                default graph. Since the re-key to UNIQUE (graph_id, node_id) the
+                same id can exist in several graphs; only this graph's copy goes.
+
+        Returns:
+            ``deleted``: the number of ``Graph_KG.nodes`` rows actually removed.
+
+        With ``Graph.KG.Eraser`` deployed, each chunk is one ``EraseNodeIds`` call,
+        which owns its transaction and also removes the ids' ``^KG`` adjacency,
+        props and labels, bumps ``^KG("__version")`` and drops ``^NKG``. Without it
+        (an install with no ObjectScript classes, hence no ``^KG`` to maintain) the
+        same rows are deleted by chunked, graph-scoped SQL.
+        """
         _guard = getattr(self, "_ledger_guard", None)
         if _guard is not None:
             _guard.check_structural_write("store.delete_nodes")
-        if not node_ids:
+        canonical = validate_graph_name(graph)
+        ids = list(dict.fromkeys(str(n) for n in node_ids or [] if n is not None and str(n) != ""))
+        if not ids:
             return IVGResult(columns=["deleted"], rows=[[0]])
+        chunks = [ids[i : i + self._DELETE_CHUNK] for i in range(0, len(ids), self._DELETE_CHUNK)]
+
+        if self._has_eraser_method("EraseNodeIds"):
+            # The Eraser runs on the Native API; rows this connection wrote but has
+            # not committed are invisible to it on a separate connection.
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            deleted = 0
+            for chunk in chunks:
+                deleted += int(
+                    self._call_classmethod(
+                        "Graph.KG.Eraser", "EraseNodeIds", canonical, json.dumps(chunk)
+                    )
+                    or 0
+                )
+            return IVGResult(columns=["deleted"], rows=[[deleted]])
+
+        return self._delete_nodes_sql(chunks, canonical)
+
+    def _delete_nodes_sql(self, chunks: list, canonical: str) -> IVGResult:
+        scope = graph_scope_predicate()
         cursor = self.conn.cursor()
-        placeholders = ",".join("?" * len(node_ids))
-        cursor.execute(f"DELETE FROM Graph_KG.rdf_props WHERE s IN ({placeholders})", node_ids)
-        cursor.execute(f"DELETE FROM Graph_KG.rdf_labels WHERE s IN ({placeholders})", node_ids)
-        cursor.execute(
-            f"DELETE FROM Graph_KG.rdf_edges WHERE s IN ({placeholders}) OR o_id IN ({placeholders})",
-            node_ids + node_ids,
-        )
-        cursor.execute(f"DELETE FROM Graph_KG.nodes WHERE node_id IN ({placeholders})", node_ids)
-        deleted = len(node_ids)
-        self.conn.commit()
+
+        def run(sql, params, optional=False):
+            try:
+                cursor.execute(sql, params)
+            except Exception as e:
+                msg = str(e).lower()
+                if optional and ("not found" in msg or "-30" in msg or "does not exist" in msg):
+                    return 0
+                raise
+            rc = getattr(cursor, "rowcount", 0)
+            return rc if isinstance(rc, int) and rc > 0 else 0
+
+        deleted = 0
+        try:
+            for chunk in chunks:
+                ph = ",".join("?" * len(chunk))
+                # Each endpoint on its own: `s IN (…) OR o_id IN (…)` doubled the
+                # parameter count, and an OR defeats both indexes.
+                for col in ("s", "o_id"):
+                    run(
+                        "DELETE FROM Graph_KG.rdf_reifications WHERE edge_id IN ("
+                        f"SELECT edge_id FROM Graph_KG.rdf_edges WHERE {col} IN ({ph}) AND {scope})",
+                        chunk + [canonical],
+                        optional=True,
+                    )
+                    run(
+                        f"DELETE FROM Graph_KG.kg_EdgeEmbeddings WHERE {col} IN ({ph}) AND {scope}",
+                        chunk + [canonical],
+                        optional=True,
+                    )
+                    run(
+                        f"DELETE FROM Graph_KG.rdf_edges WHERE {col} IN ({ph}) AND {scope}",
+                        chunk + [canonical],
+                    )
+                run(f"DELETE FROM Graph_KG.rdf_labels WHERE s IN ({ph}) AND {scope}", chunk + [canonical])
+                run(f"DELETE FROM Graph_KG.rdf_props WHERE s IN ({ph}) AND {scope}", chunk + [canonical])
+                run(f"DELETE FROM Graph_KG.docs WHERE id IN ({ph}) AND {scope}", chunk + [canonical], optional=True)
+                for table in ("kg_NodeEmbeddings", "kg_NodeEmbeddings_optimized"):
+                    run(
+                        f"DELETE FROM Graph_KG.{table} WHERE node_id IN ({ph}) AND {scope}",
+                        chunk + [canonical],
+                        optional=True,
+                    )
+                deleted += run(
+                    f"DELETE FROM Graph_KG.nodes WHERE node_id IN ({ph}) AND {scope}",
+                    chunk + [canonical],
+                )
+            self.conn.commit()
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
         return IVGResult(columns=["deleted"], rows=[[deleted]])
 
-    def delete_edges(self, edges: list) -> IVGResult:
+    def delete_nodes_by_prefix(self, prefix: str, *, graph: Optional[str] = None) -> int:
+        """Delete every node in ``graph`` whose id starts with ``prefix``.
+
+        Runs ``Graph.KG.Eraser.EraseNodes`` in one transaction: labels, props,
+        docs, embeddings, incident edges in that graph (both directions), their
+        reifications and edge embeddings, and the ``^KG`` entries. Returns the
+        ``Graph_KG.nodes`` rows removed.
+
+        Raises:
+            ValueError: for an empty prefix, which would mean the whole graph —
+                use ``erase_graph`` for that.
+            RuntimeError: when ``Graph.KG.Eraser.EraseNodes`` is not deployed.
+        """
+        _guard = getattr(self, "_ledger_guard", None)
+        if _guard is not None:
+            _guard.check_structural_write("store.delete_nodes_by_prefix")
+        if not prefix:
+            raise ValueError(
+                "delete_nodes_by_prefix refuses an empty prefix, which would erase "
+                "the whole graph; use erase_graph(graph) for that"
+            )
+        canonical = validate_graph_name(graph)
+        if not self._has_eraser_method("EraseNodes"):
+            raise RuntimeError(
+                "Graph.KG.Eraser.EraseNodes is not deployed in this namespace; "
+                "load the iris_src classes first"
+            )
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        return int(self._call_classmethod("Graph.KG.Eraser", "EraseNodes", canonical, str(prefix)) or 0)
+
+    def delete_edges(self, edges: list, *, graph: Optional[str] = None) -> IVGResult:
+        """Delete ``(s, p, o)`` edges from ONE graph; returns the rows actually removed.
+
+        With ``Graph.KG.Eraser`` deployed this also removes the edges'
+        reifications, embeddings and ``^KG`` adjacency (``EraseEdges``).
+        """
         _guard = getattr(self, "_ledger_guard", None)
         if _guard is not None:
             _guard.check_structural_write("store.delete_edges")
-        if not edges:
+        canonical = validate_graph_name(graph)
+        triples = list(
+            dict.fromkeys((str(e[0]), str(e[1]), str(e[2])) for e in edges or [])
+        )
+        if not triples:
             return IVGResult(columns=["deleted"], rows=[[0]])
+
+        if self._has_eraser_method("EraseEdges"):
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+            deleted = 0
+            for i in range(0, len(triples), self._DELETE_CHUNK):
+                payload = json.dumps(
+                    [{"s": s, "p": p, "o": o} for s, p, o in triples[i : i + self._DELETE_CHUNK]]
+                )
+                deleted += int(
+                    self._call_classmethod("Graph.KG.Eraser", "EraseEdges", canonical, payload) or 0
+                )
+            return IVGResult(columns=["deleted"], rows=[[deleted]])
+
+        scope = graph_scope_predicate()
         cursor = self.conn.cursor()
         deleted = 0
-        for edge in edges:
-            s, p, o = edge[0], edge[1], edge[2]
-            cursor.execute(
-                "DELETE FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?",
-                [s, p, o],
-            )
-            deleted += 1
-        self.conn.commit()
+        try:
+            for s, p, o in triples:
+                cursor.execute(
+                    f"DELETE FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND {scope}",
+                    [s, p, o, canonical],
+                )
+                rc = getattr(cursor, "rowcount", 0)
+                deleted += rc if isinstance(rc, int) and rc > 0 else 0
+            self.conn.commit()
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            raise
         return IVGResult(columns=["deleted"], rows=[[deleted]])
 
     # ── SQL Passthrough ───────────────────────────────────────────────────────

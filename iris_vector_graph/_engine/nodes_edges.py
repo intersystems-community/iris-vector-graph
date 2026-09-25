@@ -1063,6 +1063,40 @@ class NodesEdgesMixin:
         self.invalidate_route_cache(canonical)
         return removed
 
+    def delete_nodes_by_prefix(self, prefix: str, graph: Optional[str] = None) -> int:
+        """Delete every node in one graph whose id starts with ``prefix``.
+
+        Runs ``Graph.KG.Eraser.EraseNodes`` in one transaction. It takes the
+        matching nodes' labels, props, documents and embeddings, their incident
+        edges in that graph (both directions) with the edges' reifications and
+        embeddings, and their ``^KG`` adjacency, props and labels. It bumps
+        ``^KG("__version")`` so a cached Arno snapshot is noticed as stale, and
+        drops ``^NKG`` when edges went.
+
+        Args:
+            prefix: A non-empty id prefix, matched exactly (case-sensitive).
+            graph: The graph to delete from; ``None`` and ``""`` are the default
+                graph. The same id in another graph is untouched.
+
+        Returns:
+            The number of ``Graph_KG.nodes`` rows removed.
+
+        Raises:
+            ValueError: for an empty prefix (that is ``erase_graph``), or a graph
+                name that cannot be a subscript.
+        """
+        _ledger_check(self, "delete_nodes_by_prefix")
+        if not prefix:
+            raise ValueError(
+                "delete_nodes_by_prefix refuses an empty prefix, which would erase "
+                "the whole graph; use erase_graph(graph) for that"
+            )
+        canonical = validate_graph_name(graph)
+        removed = int(self._store.delete_nodes_by_prefix(prefix, graph=canonical))
+        # EraseNodes drops ^NKG itself when it touched edges; nothing is deferred.
+        self._nkg_dirty = False
+        return removed
+
     def erase_all(self) -> int:
         """Remove every graph's content, including the stores no per-graph erase reaches.
 

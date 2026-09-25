@@ -10,6 +10,9 @@ import pytest
 logger = logging.getLogger(__name__)
 
 _GQS_CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+#: The namespace the session connects to and deploys into. USER unless a scratch
+#: namespace is named, so a run can be kept off the namespace other suites share.
+_IVG_NAMESPACE = os.environ.get("IVG_NAMESPACE", "USER")
 
 #: The vector width the session namespace is bootstrapped at, and the one the
 #: vector suite assumes for the shared `Graph_KG.kg_NodeEmbeddings`. Matches
@@ -160,12 +163,16 @@ def probe_instance_hostname(conn):
 
 
 def _deploy_objectscript(container_name: str) -> None:
+    # A scratch namespace stages its own copy: /tmp/src is what `compile-all` loads
+    # into USER, so overwriting it from here would hand the next USER compile this
+    # checkout's classes.
+    stage = "/tmp/src" if _IVG_NAMESPACE == "USER" else f"/tmp/src_{_IVG_NAMESPACE}"
     subprocess.run(
-        ["docker", "exec", container_name, "mkdir", "-p", "/tmp/src"],
+        ["docker", "exec", container_name, "mkdir", "-p", stage],
         capture_output=True,
     )
     subprocess.run(
-        ["docker", "cp", "iris_src/src/.", f"{container_name}:/tmp/src/"],
+        ["docker", "cp", "iris_src/src/.", f"{container_name}:{stage}/"],
         capture_output=True,
     )
     # Load each .cls file individually with "ck-d" (no background workers).
@@ -179,8 +186,8 @@ def _deploy_objectscript(container_name: str) -> None:
         # Get the container path relative to /tmp/src/
         rel = os.path.relpath(cls_file, "iris_src/src").replace(os.sep, "/")
         subprocess.run(
-            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", "USER"],
-            input=f'Do $system.OBJ.Load("/tmp/src/{rel}","ck-d")\nH\n',
+            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", _IVG_NAMESPACE],
+            input=f'Do $system.OBJ.Load("{stage}/{rel}","ck-d")\nH\n',
             capture_output=True, text=True, timeout=30,
         )
 
@@ -351,7 +358,7 @@ def iris_connection(iris_test_container):
         import iris.dbapi as _dbapi
         try:
             conn = _dbapi.connect(
-                hostname=_orb_ip, port=1972, namespace="USER",
+                hostname=_orb_ip, port=1972, namespace=_IVG_NAMESPACE,
                 username="_SYSTEM", password="SYS",
             )
             _which_path = f"OrbStack DNS {_orb_host} ({_orb_ip}):1972"
@@ -367,7 +374,7 @@ def iris_connection(iris_test_container):
         import iris.dbapi as _dbapi
         try:
             conn = _dbapi.connect(
-                hostname=cip, port=1972, namespace="USER",
+                hostname=cip, port=1972, namespace=_IVG_NAMESPACE,
                 username="_SYSTEM", password="SYS",
             )
             _which_path = f"container IP {cip}:1972"
@@ -381,7 +388,7 @@ def iris_connection(iris_test_container):
         import iris.dbapi as _dbapi
         try:
             conn = _dbapi.connect(
-                hostname="localhost", port=_IVG_PORT, namespace="USER",
+                hostname="localhost", port=_IVG_PORT, namespace=_IVG_NAMESPACE,
                 username="_SYSTEM", password="SYS",
             )
             _which_path = f"localhost:{_IVG_PORT} (socat proxy)"
@@ -699,7 +706,7 @@ def arno_iris_connection():
             hostname, port = cip, 1972
 
     conn = _dbapi.connect(
-        hostname=hostname, port=port, namespace="USER",
+        hostname=hostname, port=port, namespace=_IVG_NAMESPACE,
         username="_SYSTEM", password="SYS",
     )
 
