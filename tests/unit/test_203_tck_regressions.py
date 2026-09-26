@@ -1539,8 +1539,8 @@ class TestVarLengthExpandsInSql:
         t = tr("MATCH p = shortestPath((a {name: 'A'})-[*]->(b {name: 'B'})) RETURN p")
         assert t.var_length_paths
 
-    def test_optional_var_length_still_goes_to_the_engine(self):
-        t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) RETURN b")
+    def test_optional_var_length_with_constrained_target_goes_to_the_engine(self):
+        t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b:B) RETURN b")
         assert t.var_length_paths
 
     def test_var_length_with_non_scalar_relationship_property_goes_to_the_engine(self):
@@ -1678,3 +1678,38 @@ class TestRelationshipBoundByEarlierMatch:
     def test_var_length_path_value_uses_segment_columns(self):
         sql = _sql_text(tr(self.Q))
         assert "vlp5.p" not in sql and ".y" in sql, sql
+
+
+class TestLastOfEmptyList:
+    """Match9 [1]: a zero-hop `[r*0..1]` binds r to []; last(r) indexed -1 and the
+    JSON_ARRAYGET UDF failed the whole query (SQLCODE -400)."""
+
+    def test_last_is_guarded_by_length(self):
+        sql = _sql_text(tr("MATCH ()-[r*0..1]-() RETURN last(r) AS l"))
+        assert "CASE WHEN SQLUser.JSON_ARRAYLENGTH(" in sql and ") > 0 THEN SQLUser.JSON_ARRAYGET(" in sql, sql
+
+
+class TestOptionalVarLengthInSql:
+    """Match9 [8], [9]: a one-hop OPTIONAL MATCH over a variable-length relationship
+    between bound nodes went to the engine's BFS route, whose SQL joined the target
+    alias twice and left `__vl_rel__` placeholders in the WHERE (0 rows)."""
+
+    def test_bound_endpoints_left_join_the_expansion(self):
+        t = tr("MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL AND a <> b RETURN b")
+        sql = _sql_text(t)
+        assert not t.var_length_paths, sql
+        assert "LEFT OUTER JOIN JSON_TABLE(SQLUser.CY_VLP_PATHS(" in sql, sql
+        assert "__vl_rel__" not in sql, sql
+
+    def test_target_condition_is_in_the_on(self):
+        sql = _sql_text(tr("MATCH (a {name: 'A'}), (x) OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r, x, p"))
+        head, _, rest = sql.partition("LEFT OUTER JOIN JSON_TABLE(")
+        assert rest and " ON " in rest and ".t = n" in rest.split("WHERE")[0], sql
+
+    def test_two_hop_optional_keeps_the_engine_route(self):
+        t = tr("MATCH (a:A) OPTIONAL MATCH (a)-[:T]->()-[r*]->(b) RETURN b")
+        assert t.var_length_paths, _sql_text(t)
+
+    def test_path_is_null_when_nothing_matched(self):
+        sql = _sql_text(tr("MATCH (a {name: 'A'}), (x) OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r, x, p"))
+        assert ".t IS NULL THEN NULL ELSE '{\"nodes\":'" in sql, sql

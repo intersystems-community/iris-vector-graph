@@ -2928,8 +2928,12 @@ def _tts_process_parts(cypher_query, context, metadata):
                     context._match_where = (
                         _nxt.expression if isinstance(_nxt, ast.WhereClause) else None
                     )
+                    context._opt_single_hop = clause.optional and (
+                        sum(len(p.relationships) for p in clause.patterns) == 1
+                    )
                     translate_match_clause(clause, context, metadata)
                     context._match_where = None
+                    context._opt_single_hop = False
                     if clause.optional:
                         context.optional_match_new_aliases = (
                             set(context.variable_aliases.values()) - aliases_before_match
@@ -7434,8 +7438,22 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     relationship property values other than strings and integers.
     """
     vl = rel.variable_length
-    if vl.shortest or vl.all_shortest or optional or id_bound:
+    if vl.shortest or vl.all_shortest or id_bound:
         return False
+    # OPTIONAL MATCH: only a lone hop from a bound, unconstrained source to a bound
+    # or fresh unconstrained target, so the whole pattern fits one LEFT JOIN's ON.
+    if optional:
+        def _plain(node):
+            return not node.labels and not node.properties
+
+        src_bound = bool(source_node.variable) and source_node.variable in context.variable_aliases
+        tgt_ok = not target_node.variable or target_node.variable not in context.variable_aliases or (
+            _vlp_node_ref(context.variable_aliases[target_node.variable], target_node.variable)
+            is not None
+        )
+        if not (getattr(context, "_opt_single_hop", False) and src_bound and tgt_ok
+                and _plain(source_node) and _plain(target_node)):
+            return False
     # `[:T* {k: v}]` holds every relationship of the path to the map: string and
     # integer values are checked against each `r` object; others keep the engine route.
     rel_prop_filters = []
@@ -7490,25 +7508,52 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         f"SQLUser.CY_VLP_PATHS({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
     )
-    context.join_clauses.append(
-        f"JOIN JSON_TABLE({call}, '$[*]' COLUMNS("
-        f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
-        f"y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
-        f")) {vx} ON 1=1"
-    )
+    prop_conds = []
     for key, val in rel_prop_filters:
         z = context.next_alias("vpz")
-        context.where_conditions.append(
+        prop_conds.append(
             f"NOT EXISTS (SELECT 1 FROM JSON_TABLE({vx}.r, '$[*]' COLUMNS("
             f"v VARCHAR(4000) PATH '$.props.{key}')) {z} "
             f"WHERE {z}.v IS NULL OR {z}.v <> '{val}')"
         )
+    on = []
+    if optional:
+        # the target equality and the property checks belong to the ON, so a
+        # miss nulls the optional side instead of dropping the row
+        if not hasattr(context, "_vlp_optional"):
+            context._vlp_optional = set()
+        context._vlp_optional.add(vx)
+        if target_node.variable and target_node.variable in context.variable_aliases:
+            on.append(f"{vx}.t = " + _vlp_node_ref(
+                context.variable_aliases[target_node.variable], target_node.variable))
+        on += prop_conds
+        prop_conds = []
+    on = on or ["1=1"]
+    context.join_clauses.append(
+        f"{'LEFT OUTER JOIN' if optional else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
+        f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
+        f"y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
+        f")) {vx} ON {' AND '.join(on)}"
+    )
+    context.where_conditions.extend(prop_conds)
     if rel.variable:
         context.variable_aliases[rel.variable] = vx
         context.rel_variables.add(rel.variable)
         context.bind_variable_type(rel.variable, "relationship", force=True)
 
     # --- target ---------------------------------------------------------------
+    if optional:
+        if target_node.variable and target_node.variable not in context.variable_aliases:
+            tgt_alias = context.register_variable(target_node.variable)
+        elif target_node.variable:
+            return True
+        else:
+            tgt_alias = context.next_alias("n")
+            context.node_obj_aliases[id(target_node)] = tgt_alias
+        context.join_clauses.append(
+            f"LEFT OUTER JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+        )
+        return True
     if target_node.variable:
         tgt_alias = context.variable_aliases.get(target_node.variable)
         if tgt_alias is None:
@@ -16583,6 +16628,18 @@ def _vlp_path_sql(context, path_var, what):
     return acc
 
 
+def _vlp_path_value(context, path_var, nodes, types):
+    """'{"nodes":[...],"rels":[...]}' for a path with a CY_VLP_PATHS segment; null when
+    an OPTIONAL MATCH segment found no path."""
+    val = f"'{{\"nodes\":' || {nodes} || ',\"rels\":' || {types} || '}}'"
+    opt = getattr(context, "_vlp_optional", set())
+    missing = [a for a in context.path_edge_aliases.get(path_var, []) if a in opt]
+    if missing:
+        cond = " OR ".join(f"{a}.t IS NULL" for a in missing)
+        val = f"CASE WHEN {cond} THEN NULL ELSE {val} END"
+    return val
+
+
 def _expr_fn_path_funcs(fn, expr, context):
     if fn not in ("length", "nodes", "relationships") or len(expr.arguments) != 1:
         return None
@@ -16859,7 +16916,11 @@ def _expr_fn_list_ops(fn, args, args_exprs):
     if fn == "last":
         if not args:
             return "NULL"
-        return f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]})-1)"
+        # last([]) is null; indexing -1 makes the UDF fail the whole statement.
+        return (
+            f"CASE WHEN SQLUser.JSON_ARRAYLENGTH({args[0]}) > 0 THEN "
+            f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]})-1) END"
+        )
     if fn == "isempty":
         if not args:
             return "1"
@@ -17671,8 +17732,7 @@ def translate_return_clause(ret, context):
             if vlp_nodes is not None:
                 vlp_types = _vlp_path_sql(context, path_var, "types")
                 context.select_items.append(
-                    f"'{{\"nodes\":' || {vlp_nodes} || ',\"rels\":' || {vlp_types} || '}}'"
-                    f" AS {_safe_alias(path_var)}"
+                    f"{_vlp_path_value(context, path_var, vlp_nodes, vlp_types)} AS {_safe_alias(path_var)}"
                 )
                 context.optional_null_row_items.append("NULL")
                 continue
@@ -17756,8 +17816,7 @@ def translate_return_clause(ret, context):
                 if vlp_nodes is not None:
                     vlp_types = _vlp_path_sql(context, var_name, "types")
                     context.select_items.append(
-                        f"'{{\"nodes\":' || {vlp_nodes} || ',\"rels\":' || {vlp_types} || '}}'"
-                        f" AS {_safe_alias(alias)}"
+                        f"{_vlp_path_value(context, var_name, vlp_nodes, vlp_types)} AS {_safe_alias(alias)}"
                     )
                     continue
                 node_aliases = context.path_node_aliases[var_name]
@@ -17977,7 +18036,7 @@ def _named_path_json_sql(context, path_var):
     if vlp_nodes is not None:
         # A var-length segment has no `p` column; its nodes and types come from the row.
         vlp_types = _vlp_path_sql(context, path_var, "types")
-        return f"'{{\"nodes\":' || {vlp_nodes} || ',\"rels\":' || {vlp_types} || '}}'"
+        return _vlp_path_value(context, path_var, vlp_nodes, vlp_types)
     node_aliases = context.path_node_aliases[path_var]
     edge_aliases = context.path_edge_aliases.get(path_var, [])
     node_id_expr = getattr(context, "node_id_expr", {})
