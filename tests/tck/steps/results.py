@@ -11,19 +11,14 @@ except ImportError:
         def _d(f): return f
         return _d
 
+from tests.tck.side_effects import compare_side_effects, parse_side_effects_table
 from tests.tck.steps.comparison import SqlHydrator, TCKValue, TCKResultTable
+from tests.tck.steps.errors import KIND_SURFACE, classify, mismatch
+from tests.tck.strictness import lenient
 from iris_vector_graph.cypher.parser import CypherParseError
 
-ERROR_TYPE_MAP: dict[str, tuple[type, ...]] = {
-    "TypeError": (TypeError,),
-    "ArgumentError": (ValueError,),
-    "EntityNotFound": (KeyError,),
-    "SemanticError": (Exception,),
-    "SyntaxError": (SyntaxError, CypherParseError),
-    "ProcedureError": (Exception,),
-    "ParameterMissing": (KeyError, TypeError),
-    "ConstraintVerificationFailed": (Exception,),
-}
+# openCypher error kind -> the IVG/IRIS error surface that represents it (spec 229 FR-007).
+ERROR_TYPE_MAP = KIND_SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -53,9 +48,12 @@ def step_result_in_order_list_unordered(context):
 @then("the result should be empty")
 def step_result_should_be_empty(context):
     result = context.last_result
-    # An error counts as empty result for this check
-    if context.last_error is not None:
-        return
+    if lenient():
+        # pre-229 scoring: an error counted as an empty result
+        if context.last_error is not None:
+            return
+    else:
+        _fail_on_query_error(context, "an empty result")
     rows = result.rows if result is not None else []
     assert len(rows) == 0, (
         f"Expected empty result, got {len(rows)} rows: {rows}"
@@ -68,12 +66,34 @@ def step_result_should_be_empty(context):
 
 @then("no side effects")
 def step_no_side_effects(context):
-    pass  # IVG doesn't expose side-effect counters; pass if no crash
+    if lenient():
+        return
+    _assert_side_effects(context, {})
 
 
 @then("the side effects should be:")
 def step_side_effects_should_be(context):
-    pass  # Side-effect counting not implemented; pass silently
+    if lenient():
+        return
+    table = context.table
+    expected = parse_side_effects_table(table.headings, table.rows)
+    _assert_side_effects(context, expected)
+
+
+def _assert_side_effects(context, expected: dict) -> None:
+    """Compare the last query's measured delta (steps/query.py) with ``expected``.
+
+    The error check runs first: a query that raised and rolled back has a zero
+    delta, which must be reported as the error, not as a count mismatch.
+    """
+    _fail_on_query_error(context, "side effects")
+    diff = compare_side_effects(
+        getattr(context, "side_effects", None),
+        expected,
+        unexpected=getattr(context, "side_effects_unexpected", None),
+        capture_error=getattr(context, "side_effects_error", None),
+    )
+    assert diff is None, diff
 
 
 # ---------------------------------------------------------------------------
@@ -82,41 +102,39 @@ def step_side_effects_should_be(context):
 
 @then(u'a {err_type} should be raised at compile time: {detail}')
 def step_error_compile(context, err_type, detail):
-    step_error_type_raised(context, err_type)
+    step_error_type_raised(context, err_type, "compile time", detail)
 
 
 @then(u'a {err_type} should be raised at runtime: {detail}')
 def step_error_runtime(context, err_type, detail):
-    step_error_type_raised(context, err_type)
+    step_error_type_raised(context, err_type, "runtime", detail)
 
 
 @then(u'a {err_type} should be raised at any time: {detail}')
 def step_error_any_time(context, err_type, detail):
-    step_error_type_raised(context, err_type)
+    step_error_type_raised(context, err_type, "any time", detail)
 
 
-def step_error_type_raised(context, error_type: str):
-    expected_types = ERROR_TYPE_MAP.get(error_type, (Exception,))
+def step_error_type_raised(context, error_type: str, phase: str = "any time", detail: str = "*"):
+    """The query raised ``error_type`` at ``phase`` with ``detail`` (spec 229 US3).
+
+    Kind, phase and detail are matched through ``errors.classify``; a raise that maps to
+    no openCypher kind (a SQL prepare failure, a stale connection, an interpreter
+    TypeError) fails the step. An ``IVGResult.error`` string is classified the same way
+    rather than accepted for being non-empty (FR-008).
+    """
     err = getattr(context, "last_error", None)
-    # Also accept SQL-level errors stored in result.error (IRIS raises as result, not exception)
     if err is None:
         result = getattr(context, "last_result", None)
         result_error = getattr(result, "error", None) if result is not None else None
         if isinstance(result_error, str) and result_error:
-            return  # SQL error string in result counts as an error being raised
+            err = result_error
     assert err is not None, (
-        f"Expected a {error_type} to be raised, but no error occurred. "
+        f"Expected a {error_type} to be raised at {phase}: {detail}, but no error occurred. "
         f"Last result: {getattr(context, 'last_result', None)}"
     )
-    # Accept any Exception subclass for unmapped types (conservative)
-    if expected_types == (Exception,):
-        assert isinstance(err, Exception), (
-            f"Expected an exception, got {type(err)}: {err}"
-        )
-        return
-    assert isinstance(err, expected_types), (
-        f"Expected {error_type} ({expected_types}), got {type(err).__name__}: {err}"
-    )
+    why = mismatch(error_type, phase, detail, classify(err))
+    assert why is None, why
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +154,9 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
         list_unordered=list_unordered,
     )
     result = context.last_result
+    if not lenient():
+        _fail_on_query_error(context, "a result table")
+        assert result is not None, "Expected a result table, but no result was recorded (no query ran?)"
     raw_rows = result.rows if result is not None else []
     # The engine's own column list, even when empty: a missing or extra column is a
     # mismatch, not something to fill in from the expected header.
@@ -162,3 +183,19 @@ def _hydrator(context):
         return None
     schema = getattr(engine, "_schema_prefix", None)
     return SqlHydrator(conn, schema if isinstance(schema, str) and schema else "Graph_KG")
+
+
+def _fail_on_query_error(context, expected_what: str) -> None:
+    """A query that raised, or returned a result carrying an error, fails the step
+    (spec 229 FR-005/FR-006) with the exception type and message."""
+    err = getattr(context, "last_error", None)
+    if err is not None:
+        raise AssertionError(
+            f"Expected {expected_what}, but the query raised {type(err).__name__}: {err}"
+        )
+    result = getattr(context, "last_result", None)
+    result_error = getattr(result, "error", None) if result is not None else None
+    if isinstance(result_error, str) and result_error:
+        raise AssertionError(
+            f"Expected {expected_what}, but the query returned an error result: {result_error}"
+        )

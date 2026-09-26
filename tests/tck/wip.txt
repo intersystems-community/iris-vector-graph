@@ -1,6 +1,9 @@
 # TCK wip baseline — scenarios IVG cannot yet pass. DO NOT grow this list.
 # Format: feature_file::Scenario: title
 # reason: <why this scenario is @wip>
+# Required: every entry sits directly under its own non-empty "# reason: ..." line,
+# in the same comment block. load_wip_registry() (tests/tck/conftest.py) refuses a
+# file with a reasonless entry (spec 229 FR-011).
 # Baseline: 1015/3897 passing as of v2.4.8 + TCK harness fixes (2026-08-01)
 # Current:  3724/3897 passing as of 2026-09-25 (spec 203, full TCK, enterprise container)
 # Earlier:  1771/3897 passing as of 2026-08-01 (session 201 round-7)
