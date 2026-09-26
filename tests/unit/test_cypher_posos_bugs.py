@@ -18,16 +18,16 @@ from iris_vector_graph.cypher.translator import translate_to_sql
 
 class TestBooleanLiterals:
     def test_true_literal_in_where(self):
-        """WHERE n.flag = TRUE should parse and translate to = 1"""
+        """WHERE n.flag = TRUE should match stored 'true' and legacy '1'"""
         q = parse_query("MATCH (n:Drug) WHERE n.is_primary = TRUE RETURN n")
         sql = translate_to_sql(q)
-        assert "= 1" in sql.sql
+        assert "IN ('true', '1', 'True')" in sql.sql
 
     def test_false_literal_in_where(self):
-        """WHERE n.flag = FALSE should parse and translate to = 0"""
+        """WHERE n.flag = FALSE should match stored 'false' and legacy '0'"""
         q = parse_query("MATCH (n:Drug) WHERE n.active = FALSE RETURN n")
         sql = translate_to_sql(q)
-        assert "= 0" in sql.sql
+        assert "IN ('false', '0', 'False')" in sql.sql
 
     def test_null_literal_in_is_null(self):
         """WHERE n.prop IS NULL should work (NULL used in IS NULL context)"""
@@ -39,13 +39,13 @@ class TestBooleanLiterals:
         """true (lowercase) should also parse correctly"""
         q = parse_query("MATCH (n:Drug) WHERE n.enabled = true RETURN n")
         sql = translate_to_sql(q)
-        assert "= 1" in sql.sql
+        assert "IN ('true', '1', 'True')" in sql.sql
 
     def test_false_lowercase(self):
         """false (lowercase) should also parse correctly"""
         q = parse_query("MATCH (n:Drug) WHERE n.enabled = false RETURN n")
         sql = translate_to_sql(q)
-        assert "= 0" in sql.sql
+        assert "IN ('false', '0', 'False')" in sql.sql
 
     def test_not_false(self):
         """NOT FALSE should parse and translate"""
@@ -57,7 +57,7 @@ class TestBooleanLiterals:
         """Boolean combined with AND should work"""
         q = parse_query("MATCH (n:Drug) WHERE n.active = TRUE AND n.approved = TRUE RETURN n")
         sql = translate_to_sql(q)
-        assert sql.sql.count("= 1") == 2
+        assert sql.sql.count("IN ('true', '1', 'True')") == 2
 
 
 # ---------------------------------------------------------------------------

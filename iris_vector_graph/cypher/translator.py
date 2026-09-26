@@ -8,6 +8,7 @@ Supports multi-stage queries via Common Table Expressions (CTEs).
 import json
 import logging
 import dataclasses
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -18,6 +19,8 @@ from iris_vector_graph.security import (
     sanitize_identifier,
     validate_table_name,
 )
+
+from iris_vector_graph.prop_values import bool_spellings_sql, prop_text
 
 from . import ast
 from .parser import CypherParseError
@@ -555,6 +558,12 @@ class SQLQuery(BaseModel):
     # _route_var_length intercepts it and calls BFS instead — so the engine needs the
     # graph somewhere it can still read it (spec 227).
     graph_context: Optional[str] = None
+    # Result columns that return a stored property as it is (`n.flag`): the engine
+    # reads 'true' / 'false' there as booleans (see iris_vector_graph.prop_values).
+    bool_text_columns: List[int] = Field(default_factory=list)
+    # Number of RETURN items; the engine applies bool_text_columns only when the
+    # result has exactly this many columns.
+    return_arity: int = 0
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -4030,6 +4039,7 @@ def translate_to_sql(
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
         result.graph_context = graph_context
+        _store_bool_params_as_text(result)
         return result
 
     context = TranslationContext()
@@ -4056,7 +4066,45 @@ def translate_to_sql(
     else:
         sql_query = _tts_select_result(cypher_query, context, metadata, order_by_items)
     sql_query.graph_context = graph_context
+    _store_bool_params_as_text(sql_query)
+    sql_query.bool_text_columns = _bool_text_columns(cypher_query)
+    rc = getattr(cypher_query, "return_clause", None)
+    sql_query.return_arity = len(rc.items) if rc is not None else 0
     return sql_query
+
+
+_PROP_WRITE_RE = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE)\s+(?:\w+\.)?(?:rdf_props|rdf_edges)\b", re.IGNORECASE
+)
+
+
+def _store_bool_params_as_text(sql_query) -> None:
+    """Bind booleans written to rdf_props or edge qualifiers as 'true' / 'false'.
+
+    The DB-API binds a Python bool as an integer, so the text column stored '1'
+    and `toString(n.flag)` read it back as '1' (TypeConversion4 [4]). Every
+    boolean a Cypher write binds is a property value; comparisons against a
+    boolean are inlined as `IN (<spellings>)` and bind nothing.
+    """
+    stmts = sql_query.sql if isinstance(sql_query.sql, list) else [sql_query.sql]
+    for i, stmt in enumerate(stmts):
+        if i >= len(sql_query.parameters) or not isinstance(stmt, str):
+            continue
+        if not _PROP_WRITE_RE.search(stmt):
+            continue
+        sql_query.parameters[i] = [
+            prop_text(v) if isinstance(v, bool) else v for v in sql_query.parameters[i]
+        ]
+
+
+def _bool_text_columns(cypher_query) -> List[int]:
+    """Indexes of RETURN items that are a bare property of a bound variable."""
+    rc = getattr(cypher_query, "return_clause", None)
+    if rc is None:
+        return []
+    return [
+        i for i, item in enumerate(rc.items) if isinstance(item.expression, ast.PropertyReference)
+    ]
 
 
 def _collect_var_names(expr) -> set:
@@ -5337,7 +5385,9 @@ def _create_clause_relationship_entry(rel, i, pat, context):
 
                 # Store all values as strings — JSON_VALUE returns VARCHAR; ints stored
                 # as JSON numbers are returned as NULL by IRIS SQLUser.JSON_VALUE.
-                qualifiers_json = _json.dumps({k: str(v) for k, v in rel_props.items()})
+                qualifiers_json = _json.dumps(
+                    {k: prop_text(v) if isinstance(v, bool) else str(v) for k, v in rel_props.items()}
+                )
                 context.add_dml(
                     f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
                     [s_id, rt, t_id, qualifiers_json, _graph_of(context)],
@@ -5611,6 +5661,17 @@ def translate_delete_clause(delete, context, metadata):
             context._pending_edge_delete = (len(context.dml_statements) - 1, len(context.stages))
 
 
+def _merge_val_match(p_alias: str, val) -> str:
+    """Existing-node probe for one MERGE property: a boolean matches any spelling."""
+    if isinstance(val, bool):
+        return _stored_bool_in(f"{p_alias}.val", val)
+    return f"{p_alias}.val = ?"
+
+
+def _merge_val_params(k, val) -> list:
+    return [k] if isinstance(val, bool) else [k, str(val)]
+
+
 def _merge_pattern_existence_sql(merge_node, context=None):
     """Build the NOT EXISTS sub-SELECT that checks whether any node already matches
     the MERGE pattern (labels + properties).  Returns (sql_fragment, params_list).
@@ -5676,9 +5737,9 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             p_alias = f"_mp{ki}"
             prop_joins += (
                 f' JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {p_alias}.val = ?'
+                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
-            prop_params.extend([k, str(val)])
+            prop_params.extend(_merge_val_params(k, val))
         return (
             lbl0_join + extra_label_joins + prop_joins,
             params_prefix + prop_params,
@@ -5694,14 +5755,14 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             prop_joins_parts.append(
                 f"SELECT 1 FROM {_table('nodes')} _ml0 "
                 f'JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {p_alias}.val = ?'
+                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
         else:
             prop_joins_parts.append(
                 f'JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {p_alias}.val = ?'
+                f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
-        prop_params.extend([k, str(val)])
+        prop_params.extend(_merge_val_params(k, val))
     return " ".join(prop_joins_parts), prop_params
 
 
@@ -5931,7 +5992,11 @@ def translate_merge_clause(merge, context, metadata):
                     f'JOIN {_table("rdf_props")} {p_alias} ON '
                     f"{p_alias}.s = {node_alias}.node_id AND "
                     f'{p_alias}."key" = {context.add_join_param(k)} AND '
-                    f"{p_alias}.val = {context.add_join_param(str(val))}"
+                    + (
+                        _stored_bool_in(f"{p_alias}.val", val)
+                        if isinstance(val, bool)
+                        else f"{p_alias}.val = {context.add_join_param(str(val))}"
+                    )
                 )
 
     # --- Rewrite DML + SELECT for relationship MERGE patterns ---
@@ -6707,6 +6772,10 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
     # Determine the node variable from the expression's context
     node_var = ""
     sql, params = _translate_expr_for_update(expr, node_var)
+    if isinstance(expr, (ast.BooleanExpression, ast.ListPredicateExpression, ast.ExistsExpression)):
+        # A computed boolean is 1 / 0 in SQL; store it as 'true' / 'false' text.
+        sql = f"CASE WHEN ({sql}) = 1 THEN 'true' WHEN ({sql}) = 0 THEN 'false' END"
+        params = params + params
     return (sql, params, True)
 
 
@@ -7756,7 +7825,7 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                             f"({node_id_col} IS NULL OR {l_alias}.s IS NOT NULL)"
                         )
             for k, v in node.properties.items():
-                val_sql = translate_expression(v, context, segment="where")
+                val_sql = _prop_value_sql(v, context)
                 if _is_node_id_key(k, v):
                     context.where_conditions.append(f"{node_id_col} = {val_sql}")
                 else:
@@ -7771,10 +7840,10 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                     )
                     if optional:
                         context.where_conditions.append(
-                            f"({p_alias}.s IS NULL OR {p_alias}.val = {val_sql})"
+                            f"({p_alias}.s IS NULL OR {_prop_eq_sql(f'{p_alias}.val', v, val_sql, context)})"
                         )
                     else:
-                        context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+                        context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
         return
     alias = context.register_variable(node.variable) if node.variable else context.next_alias("n")
     # Track node type for semantic validation
@@ -7880,7 +7949,7 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                 if is_anchor_optional:
                     context.optional_null_row_labels.append(label)
     for k, v in node.properties.items():
-        val_sql = translate_expression(v, context, segment="where")
+        val_sql = _prop_value_sql(v, context)
         if _is_node_id_key(k, v):
             context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
@@ -7893,10 +7962,10 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
             )
             if optional:
                 context.where_conditions.append(
-                    f"({p_alias}.s IS NULL OR {p_alias}.val = {val_sql})"
+                    f"({p_alias}.s IS NULL OR {_prop_eq_sql(f'{p_alias}.val', v, val_sql, context)})"
                 )
             else:
-                context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+                context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
 
 
 def _vlp_node_ref(alias, variable):
@@ -7919,7 +7988,7 @@ def _vlp_apply_node_constraints(node, ref, context):
             f"ON {l_alias}.s = {ref} AND {l_alias}.label = {context.add_join_param(label)}"
         )
     for k, v in (node.properties or {}).items():
-        val_sql = translate_expression(v, context, segment="where")
+        val_sql = _prop_value_sql(v, context)
         if _is_node_id_key(k, v):
             context.where_conditions.append(f"{ref} = {val_sql}")
         else:
@@ -7928,7 +7997,7 @@ def _vlp_apply_node_constraints(node, ref, context):
                 f"JOIN {_table('rdf_props')} {p_alias} "
                 f'ON {p_alias}.s = {ref} AND {p_alias}."key" = {context.add_join_param(k)}'
             )
-            context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+            context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
 
 
 def _bound_edge_alias(rel, context):
@@ -8626,7 +8695,9 @@ def _trp_undirected_edge(
                         f"JOIN {_table('rdf_props')} {p_alias} ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}.\"key\" = {context.add_join_param(k)}"
                     )
                     context.where_conditions.append(
-                        f"{p_alias}.val = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
+                        _stored_bool_in(f"{p_alias}.val", v.value)
+                        if isinstance(v, ast.Literal) and isinstance(v.value, bool)
+                        else f"{p_alias}.val = {context.add_where_param(v.value if isinstance(v, ast.Literal) else str(v))}"
                     )
 
 
@@ -8652,9 +8723,9 @@ def _trp_apply_rel_inline_props(rel, edge_alias, context):
     if not rel.properties:
         return
     for k, v in rel.properties.items():
-        val_sql = translate_expression(v, context, segment="where")
+        val_sql = _prop_value_sql(v, context)
         context.where_conditions.append(
-            f"SQLUser.JSON_VALUE({edge_alias}.qualifiers, '$.{k}') = {val_sql}"
+            _prop_eq_sql(f"SQLUser.JSON_VALUE({edge_alias}.qualifiers, '$.{k}')", v, val_sql, context)
         )
 
 
@@ -8666,7 +8737,7 @@ def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias
         if prop_node is None or not prop_node.properties:
             continue
         for k, v in prop_node.properties.items():
-            val_sql = translate_expression(v, context, segment="where")
+            val_sql = _prop_value_sql(v, context)
             if k == "node_id":
                 context.where_conditions.append(f"{prop_alias}.node_id = {val_sql}")
             else:
@@ -8675,7 +8746,7 @@ def _trp_apply_inline_props(source_node, source_alias, target_node, target_alias
                     f"{jt} {_table('rdf_props')} {p_alias} "
                     f'ON {p_alias}.s = {prop_alias}.node_id AND {p_alias}."key" = {context.add_join_param(k)}'
                 )
-                context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+                context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
 
 
 def _trp_directed_edge_join(
@@ -8776,7 +8847,7 @@ def _trp_apply_anon_source_constraints(source_node, edge_alias, src_col, context
             f"ON {l_alias}.s = {src_ref} AND {l_alias}.label = {context.add_join_param(label)}"
         )
     for k, v in (source_node.properties or {}).items():
-        val_sql = translate_expression(v, context, segment="where")
+        val_sql = _prop_value_sql(v, context)
         if k == "node_id":
             context.where_conditions.append(f"{src_ref} = {val_sql}")
         else:
@@ -8785,7 +8856,7 @@ def _trp_apply_anon_source_constraints(source_node, edge_alias, src_col, context
                 f"{jt} {_table('rdf_props')} {p_alias} "
                 f'ON {p_alias}.s = {src_ref} AND {p_alias}."key" = {context.add_join_param(k)}'
             )
-            context.where_conditions.append(f"{p_alias}.val = {val_sql}")
+            context.where_conditions.append(_prop_eq_sql(f"{p_alias}.val", v, val_sql, context))
 
 
 def _trp_move_target_cond_to_edge_join(context, edge_alias, target_on, source_alias):
@@ -9917,6 +9988,66 @@ def _format_invalid_type(operand):
     return str(operand)
 
 
+def _static_bool(expr, context) -> Optional[bool]:
+    """The boolean an expression is before the query runs (literal or $param), else None."""
+    if isinstance(expr, ast.Literal) and isinstance(expr.value, bool):
+        return expr.value
+    if (
+        isinstance(expr, ast.Variable)
+        and expr.name not in context.variable_aliases
+        and isinstance(context.input_params.get(expr.name), bool)
+    ):
+        return context.input_params[expr.name]
+    return None
+
+
+def _is_stored_property(expr, context) -> bool:
+    """A property read from rdf_props or edge qualifiers, not from a map value."""
+    return (
+        isinstance(expr, ast.PropertyReference)
+        and expr.variable in context.variable_aliases
+        and expr.variable not in context.scalar_variables
+    )
+
+
+def _stored_bool_in(col_sql: str, value: bool, negate: bool = False) -> str:
+    """`col` holds `value` in any stored spelling ('true', legacy '1' or 'True')."""
+    return f"({col_sql} {'NOT ' if negate else ''}IN {bool_spellings_sql(value)})"
+
+
+def _stored_bool_comparison(op, left_expr, right_expr, context) -> Optional[str]:
+    """`n.flag = true` / `n.flag <> false` against a stored property.
+
+    The property is text; new rows hold 'true' / 'false', older ones '1' / '0'
+    or 'True' / 'False'. An inlined `val = 1` compared numerically and never
+    matched 'true', so the predicate names every spelling instead.
+    """
+    if right_expr is None:
+        return None
+    for prop, other in ((left_expr, right_expr), (right_expr, left_expr)):
+        b = _static_bool(other, context)
+        if b is not None and _is_stored_property(prop, context):
+            col = translate_expression(prop, context, segment="where")
+            return _stored_bool_in(col, b, negate=op == ast.BooleanOperator.NOT_EQUALS)
+    return None
+
+
+def _prop_value_sql(v, context) -> str:
+    """SQL for a pattern property value; a boolean binds nothing (see _prop_eq_sql)."""
+    b = _static_bool(v, context)
+    if b is not None:
+        return "1" if b else "0"
+    return translate_expression(v, context, segment="where")
+
+
+def _prop_eq_sql(col_sql: str, v, val_sql: str, context) -> str:
+    """`{k: v}` in a pattern: `col = v`, or every stored spelling of a boolean."""
+    b = _static_bool(v, context)
+    if b is not None:
+        return _stored_bool_in(col_sql, b)
+    return f"{col_sql} = {val_sql}"
+
+
 def _coerce_varchar_boolean_if_needed(operand, translated_sql, context) -> str:
     if isinstance(operand, ast.Variable) and operand.name in context.scalar_variables:
         return f"(({translated_sql} = '1' OR {translated_sql} = 'true'))"
@@ -10257,9 +10388,13 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
                 return "(1=0)"
             non_null_items = filtered
 
+        _stored = left_expr is not None and _is_stored_property(left_expr, context)
+
         def _serialize_in_item(item):
             if isinstance(item, ast.Literal):
                 v = item.value
+                if _stored and isinstance(v, bool):
+                    return bool_spellings_sql(v)[1:-1]
                 if isinstance(v, list):
                     # Nested list → JSON string for VARCHAR comparison
                     return context.add_where_param(json.dumps(_literal_to_python(item)))
@@ -10279,7 +10414,13 @@ def _boolean_expr_in(left, right_expr, context, left_expr=None):
             non_null_vals = [v for v in val if v is not None]
             if not non_null_vals:
                 return "NULL"
-            placeholders = ", ".join(context.add_where_param(v) for v in non_null_vals)
+            _stored = left_expr is not None and _is_stored_property(left_expr, context)
+            placeholders = ", ".join(
+                bool_spellings_sql(v)[1:-1]
+                if _stored and isinstance(v, bool)
+                else context.add_where_param(v)
+                for v in non_null_vals
+            )
             in_expr = f"{left} IN ({placeholders})"
             if null_vals:
                 return f"CASE WHEN {in_expr} THEN 1 ELSE NULL END"
@@ -10454,8 +10595,8 @@ def translate_boolean_expression(expr, context) -> str:
             if expr.variable in context.scalar_variables:
                 # JSON map: boolean stored as 'true'/'false'
                 return f"({prop_expr} = 'true')"
-            # rdf_props: boolean stored as '1'/'0'
-            return f"({prop_expr} = '1')"
+            # rdf_props: 'true', or a legacy '1' / 'True'
+            return _stored_bool_in(prop_expr, True)
         # Quantifier expressions (any/all/none/single) return a CASE WHEN 0/1/NULL
         # expression. When used as a standalone boolean predicate in WHERE, wrap with
         # = 1 so IRIS treats it as a proper predicate.  When used as an operand in a
@@ -10550,6 +10691,9 @@ def translate_boolean_expression(expr, context) -> str:
         rel_id_cond = _rel_identity_comparison(op, left_expr, right_expr, context)
         if rel_id_cond is not None:
             return rel_id_cond
+        stored_bool_cond = _stored_bool_comparison(op, left_expr, right_expr, context)
+        if stored_bool_cond is not None:
+            return stored_bool_cond
         # Constant folding: both sides are fully literal lists/maps — evaluate in Python
         # (SQL string comparison can't produce NULL for Cypher three-valued list equality)
         is_list_or_map = lambda e: (

@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.result import IVGResult
+from iris_vector_graph.prop_values import parse_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
@@ -289,6 +290,23 @@ def _build_path_func_columns(return_path_funcs: list, source_var: str, target_va
     return columns if columns else [source_var, target_var]
 
 
+
+def _decode_bool_text_columns(result, sql_query) -> None:
+    """Read 'true' / 'false' as booleans in columns that return a stored property."""
+    cols = getattr(sql_query, "bool_text_columns", None)
+    if not cols or not getattr(result, "rows", None):
+        return
+    if len(result.columns or []) != getattr(sql_query, "return_arity", 0):
+        return
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        for i in cols:
+            if i < len(row):
+                row[i] = parse_prop_text(row[i])
+        rows.append(row)
+    result.rows = rows
+
 class QueryMixin:
     def execute_aql(
         self,
@@ -458,6 +476,7 @@ class QueryMixin:
             _ledger_check(self, "cypher_dml")
             result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
             result.metadata = metadata
+            _decode_bool_text_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
                 result.columns = [
                     sql_query.column_name_map.get(col, col) for col in result.columns
@@ -468,6 +487,7 @@ class QueryMixin:
             p = sql_query.parameters[0] if sql_query.parameters else []
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
+            _decode_bool_text_columns(result, sql_query)
             if sql_query.bolt_column_types:
                 result.bolt_column_types = sql_query.bolt_column_types
             if sql_query.column_name_map and result.columns:
