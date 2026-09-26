@@ -327,6 +327,7 @@ class MergeClause(UpdatingClause):
     pattern: GraphPattern
     on_create: Optional[MergeAction] = None
     on_match: Optional[MergeAction] = None
+    path_variable: Optional[str] = None
 
 
 @dataclass(slots=True)

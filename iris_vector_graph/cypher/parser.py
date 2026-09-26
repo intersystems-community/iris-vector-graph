@@ -740,6 +740,13 @@ class Parser:
 
     def parse_merge_clause(self) -> ast.MergeClause:
         self.expect(TokenType.MERGE)
+        path_var = None
+        if (
+            self.peek().kind == TokenType.IDENTIFIER
+            and self.lexer.peek_ahead(1).kind == TokenType.EQUALS
+        ):
+            path_var = self.eat().value
+            self.eat()
         pattern = self.parse_graph_pattern()
 
         on_create = None
@@ -768,7 +775,9 @@ class Parser:
             elif action_type == "MATCH":
                 on_match = action
 
-        return ast.MergeClause(pattern=pattern, on_create=on_create, on_match=on_match)
+        return ast.MergeClause(
+            pattern=pattern, on_create=on_create, on_match=on_match, path_variable=path_var
+        )
 
     def parse_set_clause(self) -> ast.SetClause:
         self.expect(TokenType.SET)
