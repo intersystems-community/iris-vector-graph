@@ -4203,7 +4203,7 @@ def apply_pagination(
 
 def translate_updating_clause(upd, context, metadata):
     if isinstance(upd, ast.CreateClause):
-        translate_create_clause(upd, context, metadata)
+        translate_create_clause(upd, context, metadata, per_row=True)
     elif isinstance(upd, ast.DeleteClause):
         translate_delete_clause(upd, context, metadata)
     elif isinstance(upd, ast.MergeClause):
@@ -4631,6 +4631,16 @@ def _create_clause_node_entry(node, context):
         else:
             # Integer or other non-string literal: treat as a regular user property
             _id_is_user_property = True
+    if (
+        node_id_expr is None
+        and getattr(context, "_create_row_key", None)
+        and _create_node_per_row(node, context)
+    ):
+        if node.variable and _id_is_user_property:
+            if not hasattr(context, "_id_as_property_vars"):
+                context._id_as_property_vars = set()
+            context._id_as_property_vars.add(node.variable)
+        return
     if node_id_expr is None:
         import uuid as _uuid
 
@@ -4674,6 +4684,134 @@ def _create_clause_node_entry(node, context):
             context.where_conditions.append(
                 f"{alias}.node_id = {context.add_where_param(node_id_val)}"
             )
+
+
+def _create_row_key(context):
+    """SQL naming the incoming row a CREATE after MATCH runs for, or None.
+
+    openCypher runs CREATE once per incoming row, so a node it makes without an id
+    needs one id per row. The row is named by the `%ID` of every node and edge
+    table the preceding MATCH joined, which is short enough to fit `node_id` and
+    the same in every statement the clause emits, so the label, property and edge
+    inserts that follow find the node the first insert made for their row.
+
+    None when the rows come from a stage or an UNWIND literal: those carry no row
+    identity this can name, and the single-id path stays in force.
+    """
+    import re as _re
+
+    if context.stages or getattr(context, "foreach_literals", None):
+        return None
+    text = " ".join(context.from_clauses + context.join_clauses)
+    parts, seen = [], set()
+    for var, alias in context.variable_aliases.items():
+        if alias in seen or not _re.fullmatch(r"[ne]\d+", alias):
+            continue
+        if not _re.search(rf"\b(?:nodes|rdf_edges) {alias}\b", text):
+            continue
+        seen.add(alias)
+        parts.append(f"COALESCE(CAST({alias}.%ID AS VARCHAR(20)), '')")
+    return " || '|' || ".join(parts) or None
+
+
+def _create_node_per_row(node, context):
+    """Emit the inserts for a CREATEd node, one node per incoming row.
+
+    Returns False, having emitted nothing, when a property value cannot be computed
+    from the row alone (its translation needs a JOIN or WHERE of its own).
+    """
+    import uuid as _uuid
+
+    id_sql = f"'{_uuid.uuid4()}|' || {context._create_row_key}"
+    props = []
+    for k, v in node.properties.items():
+        if isinstance(v, (ast.Literal, ast.Variable, ast.MapLiteral)) or (
+            isinstance(v, ast.FunctionCall) and v.function_name.lower() in _TEMPORAL_CREATE_FNS
+        ):
+            val = _create_resolve_prop_value(v, context)
+            if isinstance(val, ast.Variable):
+                return False
+            if val is None:
+                continue
+            props.append((k, None, [val]))
+            continue
+        snap = (
+            len(context.join_clauses),
+            len(context.join_params),
+            len(context.where_conditions),
+            len(context.where_params),
+            len(context.select_params),
+        )
+        try:
+            expr_sql = translate_expression(v, context, segment="inline")
+        except Exception:
+            expr_sql = None
+        expr_params = list(context.select_params[snap[4] :])
+        del context.select_params[snap[4] :]
+        grew = (
+            len(context.join_clauses) > snap[0]
+            or len(context.join_params) > snap[1]
+            or len(context.where_conditions) > snap[2]
+            or len(context.where_params) > snap[3]
+        )
+        if expr_sql is None or grew:
+            del context.join_clauses[snap[0] :]
+            del context.join_params[snap[1] :]
+            del context.where_conditions[snap[2] :]
+            del context.where_params[snap[3] :]
+            return False
+        props.append((k, expr_sql, expr_params))
+
+    _gcol, _gval, _ = _child_graph_sql(context)
+
+    def _rows(extra_sql="", extra_params=()):
+        cte, sub, p = context.build_dml_subquery(
+            select_override=f"SELECT {id_sql} AS _nid{extra_sql}"
+        )
+        n = len(_cte_params(context, cte))
+        return cte, sub, p[:n], list(extra_params), p[n:]
+
+    cte, sub, cp, _, sp = _rows()
+    context.add_dml(
+        f"{cte}INSERT INTO {_table('nodes')} (node_id{_gcol}) "
+        f"SELECT DISTINCT _cg._nid{_gval} FROM ({sub}) AS _cg",
+        cp + sp,
+    )
+    for label in node.labels:
+        context.add_dml(
+            f"{cte}INSERT INTO {_table('rdf_labels')} (s, label{_gcol}) "
+            f"SELECT DISTINCT _cg._nid, ?{_gval} FROM ({sub}) AS _cg",
+            cp + [label] + sp,
+        )
+    for k, expr_sql, vals in props:
+        if expr_sql is None:
+            context.add_dml(
+                f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) '
+                f"SELECT DISTINCT _cg._nid, ?, ?{_gval} FROM ({sub}) AS _cg",
+                cp + [k, vals[0]] + sp,
+            )
+            if node.variable:
+                if not hasattr(context, "_create_node_props"):
+                    context._create_node_props = {}
+                context._create_node_props.setdefault(node.variable, {})[k] = vals[0]
+            continue
+        cte_v, sub_v, cp_v, ep, sp_v = _rows(
+            f", CAST(({expr_sql}) AS VARCHAR(4000)) AS _v", vals
+        )
+        context.add_dml(
+            f'{cte_v}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) '
+            f"SELECT DISTINCT _cg._nid, ?, _cg._v{_gval} FROM ({sub_v}) AS _cg "
+            f"WHERE _cg._v IS NOT NULL",
+            cp_v + [k] + ep + sp_v,
+        )
+
+    alias = context.register_variable(node.variable or f"__create_row_{id(node)}")
+    if not hasattr(context, "_create_row_aliases"):
+        context._create_row_aliases = {}
+    context._create_row_aliases[id(node)] = alias
+    context.join_clauses.append(f"CROSS JOIN {_table('nodes')} {alias}")
+    context.where_conditions.append(f"{alias}.node_id = {id_sql}")
+    return True
 
 
 def _create_clause_resolve_node_id(id_expr, node, context):
@@ -4807,11 +4945,16 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                     [s_id, rt, t_id, _graph_of(context)],
                 )
     else:
+        _row_aliases = getattr(context, "_create_row_aliases", {})
         s_alias = (
-            context.variable_aliases.get(source_node.variable) if source_node.variable else None
+            context.variable_aliases.get(source_node.variable)
+            if source_node.variable
+            else _row_aliases.get(id(source_node))
         )
         t_alias = (
-            context.variable_aliases.get(target_node.variable) if target_node.variable else None
+            context.variable_aliases.get(target_node.variable)
+            if target_node.variable
+            else _row_aliases.get(id(target_node))
         )
         s_expr, s_p = (
             ("?", [s_id])
@@ -4864,18 +5007,24 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             )
 
 
-def translate_create_clause(create, context, metadata):
+def translate_create_clause(create, context, metadata, per_row=False):
     # Correlate this clause's writes with the rows a preceding MATCH bound. Only when
     # that MATCH actually contributed a FROM clause — a MERGE reuses this function after
     # registering its own node, and gating that on itself would be circular.
     _prev_correlate = getattr(context, "_correlate_create_dml", False)
+    _prev_row_key = getattr(context, "_create_row_key", None)
     context._correlate_create_dml = bool(getattr(context, "match_preceded_create", False)) and bool(
         context.from_clauses
+    )
+    # A MERGE creates at most once, so only a plain CREATE makes a node per row.
+    context._create_row_key = (
+        _create_row_key(context) if per_row and context._correlate_create_dml else None
     )
     try:
         _translate_create_patterns(create, context, metadata)
     finally:
         context._correlate_create_dml = _prev_correlate
+        context._create_row_key = _prev_row_key
 
 
 def _translate_create_patterns(create, context, metadata):

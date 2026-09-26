@@ -1801,3 +1801,53 @@ class TestOptionalVarLengthInSql:
     def test_path_is_null_when_nothing_matched(self):
         sql = _sql_text(tr("MATCH (a {name: 'A'}), (x) OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r, x, p"))
         assert ".t IS NULL THEN NULL ELSE '{\"nodes\":'" in sql, sql
+
+
+def _stmts(t):
+    sqls = t.sql if isinstance(t.sql, list) else [t.sql]
+    params = t.parameters if isinstance(t.sql, list) else [t.parameters]
+    return list(zip(sqls, params))
+
+
+class TestCreateAfterMatchIsPerRow:
+    """Match5 [25]-[29] setup: `MATCH (d:D) CREATE (e:E {name: d.name + '0'})` made
+    one node for the whole statement (a single fixed id) instead of one per matched
+    row, and bound the AST of `d.name + '0'` as a parameter (IRIS ARGUMENT ERROR)."""
+
+    Q = (
+        "MATCH (d:D) CREATE (e1:E {name: d.name + '0'}), (e2:E {name: d.name + '1'}) "
+        "CREATE (d)-[:LIKES]->(e1), (d)-[:LIKES]->(e2)"
+    )
+
+    def test_no_ast_nodes_bound_as_parameters(self):
+        for sql, params in _stmts(tr(self.Q)):
+            for p in params:
+                assert isinstance(p, (str, int, float, bool, type(None))), (sql, p)
+            assert sql.count("?") == len(params), sql
+
+    def test_new_node_id_derives_from_the_matched_row(self):
+        node_inserts = [s for s, _ in _stmts(tr(self.Q)) if re.search(r"INSERT INTO \S*nodes \(", s)]
+        assert len(node_inserts) == 2
+        for s in node_inserts:
+            assert "n0.%ID" in s, s
+
+    def test_property_expression_is_computed_in_sql(self):
+        props = [s for s, _ in _stmts(tr(self.Q)) if re.search(r"INSERT INTO \S*rdf_props ", s)]
+        assert len(props) == 2
+        for s in props:
+            assert "n0" in s and "name" in s, s
+
+    def test_edges_target_the_per_row_node(self):
+        edges = [(s, p) for s, p in _stmts(tr(self.Q)) if re.search(r"INSERT INTO \S*rdf_edges ", s)]
+        assert len(edges) == 2
+        for s, _ in edges:
+            assert re.search(r"n\d+\.node_id c3", s), s
+
+    def test_anonymous_created_node_is_per_row(self):
+        stmts = _stmts(tr("MATCH (a:A) CREATE (a)-[:R]->(:B)"))
+        edge = [s for s, _ in stmts if re.search(r"INSERT INTO \S*rdf_edges ", s)]
+        assert len(edge) == 1 and re.search(r"n\d+\.node_id c3", edge[0]), edge
+
+    def test_create_without_match_keeps_literal_id(self):
+        stmts = _stmts(tr("CREATE (e:E {name: 'x'})"))
+        assert not any("%ID" in s for s, _ in stmts)
