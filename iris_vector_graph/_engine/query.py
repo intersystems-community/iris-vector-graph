@@ -486,6 +486,31 @@ def _prefix_value(v: Any) -> Any:
     return v
 
 
+def _decode_map_text_columns(result, sql_query) -> None:
+    """Re-type driver values in columns statically known to be a static map
+    field access (SQLQuery.map_text_columns — see _is_map_access_valued in
+    the translator): SQLUser.JSON_VALUE always returns VARCHAR text, whatever
+    the underlying JSON value's type, so a number or boolean embedded in a
+    map (Map1, Return4 [11], With4 [6]/[7]) loses its Cypher type on the way
+    out. Reuses `_prefix_value`'s text-typing rule (numeric text -> int/float,
+    prop_values.py's boolean spellings -> bool, else unchanged) — the same
+    rule CY_PROPS_MAP applies going in."""
+    names = {n.strip('"').lower() for n in getattr(sql_query, "map_text_columns", None) or []}
+    if not names or not getattr(result, "rows", None):
+        return
+    cols = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
+    if not cols:
+        return
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        for i in cols:
+            if i < len(row):
+                row[i] = _prefix_value(row[i])
+        rows.append(row)
+    result.rows = rows
+
+
 def _return_item_name(item) -> str:
     from iris_vector_graph.cypher import ast as _ast
 
@@ -764,6 +789,7 @@ class QueryMixin:
             _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
+            _decode_map_text_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
                 result.columns = [
                     sql_query.column_name_map.get(col, col) for col in result.columns
@@ -777,6 +803,7 @@ class QueryMixin:
             _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
+            _decode_map_text_columns(result, sql_query)
             if sql_query.bolt_column_types:
                 result.bolt_column_types = sql_query.bolt_column_types
             if sql_query.column_name_map and result.columns:

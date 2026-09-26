@@ -671,6 +671,15 @@ class SQLQuery(BaseModel):
     # engine rewrites bare-integer numeric tokens in the JSON array text to
     # X.0 form. By name, not index, like bool_expr_columns.
     float_list_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items that are a static map field access
+    # (`m.existing`, ast.PropertyAccessExpression — not a node/relationship
+    # property). SQLUser.JSON_VALUE always returns VARCHAR text, whatever the
+    # underlying JSON value's type (Map1, Return4 [11], With4 [6]/[7]): unlike
+    # a bare stored property (rdf_props.val), whose canonical-numeric text the
+    # driver retypes on its own, a JSON_VALUE result is always plain text. The
+    # engine re-decodes these columns the same way CY_PROPS_MAP types them
+    # going in. By name, not index, like bool_expr_columns.
+    map_text_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -776,6 +785,14 @@ class TranslationContext:
         # (see _numeric_static_type / float_list_expr_columns).
         self.float_list_expr_aliases: List[str] = (
             [] if parent is None else parent.float_list_expr_aliases
+        )
+        # SQL aliases of RETURN items that are a static map field access
+        # (see _is_map_access_valued / map_text_columns).
+        self.map_text_aliases: List[str] = [] if parent is None else parent.map_text_aliases
+        # WITH aliases whose value is statically a map field access (see
+        # _is_map_access_valued).
+        self.map_text_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "map_text_vars", set()))
         )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
@@ -4671,6 +4688,7 @@ def translate_to_sql(
     sql_query.int_expr_columns = list(context.int_expr_aliases)
     sql_query.float_expr_columns = list(context.float_expr_aliases)
     sql_query.float_list_expr_columns = list(context.float_list_expr_aliases)
+    sql_query.map_text_columns = list(context.map_text_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
@@ -13298,6 +13316,37 @@ def _static_value_kind(e) -> Optional[str]:
 _BOOL_VALUED_FUNCS = frozenset({"exists", "toboolean", "tobooleanornull", "isempty"})
 
 
+def _is_map_access_valued(e, context) -> bool:
+    """True when `e`'s SQL is a static map field access (`m.existing`), whatever
+    the row.
+
+    `_expr_property_access` always emits `SQLUser.JSON_VALUE(base, '$.field')`
+    for this AST node (ast.PropertyAccessExpression), whatever the underlying
+    JSON value's type — the UDF is declared VARCHAR and stringifies every
+    scalar on the way out. Unlike a bare stored property (rdf_props.val),
+    whose canonical-numeric text the DB-API driver retypes on its own, this is
+    always plain SQL text, so a number or boolean embedded in a map loses its
+    type on the way out (Map1, Return4 [11], With4 [6]/[7]). The engine
+    re-decodes these columns (map_text_columns) the same way CY_PROPS_MAP
+    types values going in.
+    """
+    if isinstance(e, ast.PropertyAccessExpression):
+        return True
+    if isinstance(e, ast.PropertyReference):
+        # `var.prop` where `var` is a WITH-bound scalar (a map literal, or the
+        # result of collect()/head()/etc. — not a graph node or relationship):
+        # _expr_property_reference's Stage/scalar_variables branch reads it the
+        # same way, via SQLUser.JSON_VALUE. Node/relationship property access
+        # (rdf_props.val, rdf_edges.qualifiers via an edge alias) is a
+        # different branch and already typed (node) or out of scope here
+        # (relationship — a separate JSON_VALUE call site, untouched by this
+        # fix).
+        return e.variable in getattr(context, "scalar_variables", ())
+    if isinstance(e, ast.Variable):
+        return e.name in getattr(context, "map_text_vars", ())
+    return False
+
+
 def _is_bool_valued(e, context) -> bool:
     """True when the Cypher value of `e` is a boolean (or null) whatever the row.
 
@@ -20807,6 +20856,8 @@ def translate_return_clause(ret, context):
             context.select_items.append(f"{sql} AS {safe}")
             if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
+            if _is_map_access_valued(item.expression, context):
+                context.map_text_aliases.append(safe)
             _num_t = _numeric_static_type(item.expression, context)
             if _num_t == "int":
                 context.int_expr_aliases.append(safe)
@@ -21055,6 +21106,10 @@ def translate_with_clause(with_clause, context):
             context.bool_vars.add(alias)
         else:
             context.bool_vars.discard(alias)
+        if _is_map_access_valued(item.expression, context):
+            context.map_text_vars.add(alias)
+        else:
+            context.map_text_vars.discard(alias)
         _num_t = _numeric_static_type(item.expression, context)
         if _num_t == "int":
             context.int_vars.add(alias)
