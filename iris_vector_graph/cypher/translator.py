@@ -187,6 +187,50 @@ def _graph_of(context) -> str:
     return getattr(context, "graph_context", None) or ""
 
 
+def _multigraph(context) -> bool:
+    """Whether the statement's graph is in multigraph mode (spec 234).
+
+    Asked of the engine once per statement and only by a relationship writer, so
+    a read or a node-only write never pays the lookup. Anything but a literal
+    `True` — no engine, a mock, a lookup that fails — is mode off, whose SQL is
+    byte-identical to the SQL before multigraph existed (FR-009).
+    """
+    cached = getattr(context, "_multigraph_mode", None)
+    if cached is None:
+        lookup = getattr(getattr(context, "_engine", None), "is_multigraph", None)
+        try:
+            cached = lookup is not None and lookup(getattr(context, "graph_context", None)) is True
+        except Exception:
+            cached = False
+        context._multigraph_mode = cached
+    return cached
+
+
+def _rel_literal_props(rel, context) -> Optional[dict]:
+    """A relationship pattern's inline properties as the strings `qualifiers` stores,
+    or None when one of them is not a scalar known at translation time."""
+    out = {}
+    for k, v in (rel.properties or {}).items():
+        if isinstance(v, ast.Literal):
+            v = v.value
+        elif isinstance(v, ast.Variable):
+            fl = getattr(context, "foreach_literals", {})
+            if v.name in fl:
+                v = fl[v.name]
+            elif v.name in context.input_params:
+                v = context.input_params[v.name]
+            else:
+                return None
+        else:
+            return None
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+            return None
+        out[k] = str(v)
+    return out
+
+
 def _graph_scope_fragment(fragment: str, safe_graph: str) -> str:
     """Scope the graph-owned tables read inside a single SQL fragment.
 
@@ -4582,19 +4626,66 @@ def _defer_edge_delete_past_create(context, create_start):
     )
 
 
+def _defer_edge_delete_past_merge(context, pending, merge):
+    """`MATCH …-[t]->… DELETE t MERGE …` in a multigraph (Merge5 [21]).
+
+    As with CREATE, the MERGE has to read the rows matched before the DELETE, and
+    so does the RETURN: it pairs those rows with the edge MERGE found or made. So
+    the DELETE moves behind both — `__after_result__` tells the executor to run it
+    once the result is read — bounded by the pre-statement edge_id high-water
+    mark, and the edges it will remove are kept out of MERGE's fit.
+
+    Returns the deferred statement for the caller to append after the MERGE, or
+    None when the rewrite does not apply. Mode off keeps today's order (FR-009).
+    """
+    if pending is None or not merge.pattern.relationships:
+        return None
+    idx, n_stages = pending
+    if n_stages != len(context.stages) or idx != len(context.dml_statements) - 1:
+        return None
+    if not _multigraph(context):
+        return None
+    del_sql, del_params = context.dml_statements[idx]
+    head = f"DELETE FROM {_table('rdf_edges')} WHERE edge_id IN ("
+    if not (del_sql.startswith(head) and del_sql.endswith(")")):
+        return None
+    context.dml_statements[idx] = (
+        f"__capture_edge_hwm__ SELECT COALESCE(MAX(edge_id), 0) FROM {_table('rdf_edges')}",
+        [],
+    )
+    context._merge_excluded_edges = (del_sql[len(head) : -1], list(del_params))
+    # The RETURN reads before the DELETE runs: its MATCH must not bind the edge
+    # MERGE just made as one of the edges to delete.
+    alias = getattr(context, "_pending_edge_delete_alias", None)
+    if alias:
+        context.where_conditions.append(f"{alias}.edge_id <= ?")
+        context.where_params.append("__EDGE_HWM__")
+    return (
+        f"__after_result__ {del_sql} AND edge_id <= ?",
+        list(del_params) + ["__EDGE_HWM__"],
+    )
+
+
 def translate_updating_clause(upd, context, metadata):
     if isinstance(upd, ast.CreateClause):
         _start = len(context.dml_statements)
         translate_create_clause(upd, context, metadata, per_row=True)
         _defer_edge_delete_past_create(context, _start)
         return
+    pending = getattr(context, "_pending_edge_delete", None)
     context._pending_edge_delete = None
     if isinstance(upd, ast.DeleteClause):
         translate_delete_clause(upd, context, metadata)
     elif isinstance(upd, ast.MergeClause):
         if upd.path_variable:
             _name_merge_path_elements(upd)
-        translate_merge_clause(upd, context, metadata)
+        deferred = _defer_edge_delete_past_merge(context, pending, upd)
+        try:
+            translate_merge_clause(upd, context, metadata)
+        finally:
+            context._merge_excluded_edges = None
+        if deferred is not None:
+            context.dml_statements.append(deferred)
         if upd.path_variable:
             _register_merge_path(upd, context)
     elif isinstance(upd, ast.SetClause):
@@ -5380,6 +5471,9 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             }
             # Exclude null values (null props are not stored per openCypher semantics)
             rel_props = {k: v for k, v in rel_props_raw.items() if v is not None}
+            if not getattr(context, "_merge_rel_create", False) and _multigraph(context):
+                _create_values_edge_keyed(context, s_id, rt, t_id, rel_props)
+                continue
             if rel_props:
                 import json as _json
 
@@ -5440,6 +5534,11 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             cte2, sql2, p2 = context.build_dml_subquery(
                 select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3"
             )
+            if _multigraph(context):
+                _create_matched_edge_keyed(
+                    context, rel, cte2, sql2, p2, s_p + [rt] + t_p
+                )
+                continue
             # rdf_edges holds one edge per (s, p, o_id, graph_id), so a row whose edge
             # already exists — an earlier row or clause created it — is skipped rather
             # than failing the transaction on u_spo_graph.
@@ -5458,6 +5557,71 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                 + p2[_n_cte:]
                 + [_graph_of(context)],
             )
+
+
+def _create_values_edge_keyed(context, s_id, rt, t_id, rel_props):
+    """A multigraph CREATE of one edge between known nodes (spec 234 FR-008).
+
+    The edge takes the next `ekey` of its triple instead of being refused by the
+    unique key. Every INSERT of a statement runs in order, so a CREATE that
+    writes the same triple twice (Match6 [14]) gets 0 and then 1.
+    """
+    import json as _json
+
+    g = _graph_of(context)
+    if rel_props:
+        cols, vals = "s, p, o_id, qualifiers, graph_id, ekey", "?, ?, ?, ?, ?"
+        row = [s_id, rt, t_id, _json.dumps({k: str(v) for k, v in rel_props.items()}), g]
+    else:
+        cols, vals = "s, p, o_id, graph_id, ekey", "?, ?, ?, ?"
+        row = [s_id, rt, t_id, g]
+    context.add_dml(
+        f"INSERT INTO {_table('rdf_edges')} ({cols}) "
+        f"SELECT {vals}, COALESCE(MAX(ekey) + 1, 0) FROM {_table('rdf_edges')} "
+        f"WHERE s = ? AND p = ? AND o_id = ? AND graph_id = ?",
+        row + [s_id, rt, t_id, g],
+    )
+
+
+def _create_matched_edge_keyed(context, rel, cte2, sql2, p2, select_params):
+    """A multigraph CREATE or MERGE of an edge per bound row (spec 234 FR-008).
+
+    CREATE makes one edge per row, parallel to whatever the triple already has:
+    no DISTINCT and no existence guard, and rows of the same triple number their
+    `ekey`s on from the triple's MAX. MERGE creates at most once per triple, so it
+    keeps DISTINCT and takes MAX + 1; `translate_merge_clause` then adds the
+    guard, which fits the whole pattern rather than the triple.
+    """
+    import json as _json
+
+    g = _graph_of(context)
+    merging = getattr(context, "_merge_rel_create", False)
+    props = _rel_literal_props(rel, context)
+    q_col, q_val, q_params = "", "", []
+    if props:
+        q_col, q_val = ", qualifiers", ", ?"
+        q_params = [_json.dumps(props)]
+    n_cte = len(context.all_stage_params) if cte2 else 0
+    edges = _table("rdf_edges")
+    next_key = (
+        f"COALESCE((SELECT MAX(_gx.ekey) FROM {edges} _gx WHERE _gx.s = _ge.c1 "
+        f"AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND _gx.graph_id = ?), -1)"
+    )
+    if merging:
+        next_key += " + 1"
+        source = f"(SELECT DISTINCT _gd.c1, _gd.c2, _gd.c3 FROM ({sql2}) _gd) AS _ge"
+    else:
+        next_key += (
+            " + ROW_NUMBER() OVER (PARTITION BY _ge.c1, _ge.c2, _ge.c3 ORDER BY _ge.c1)"
+        )
+        source = f"({sql2}) AS _ge"
+    # IRIS binds a leading CTE's markers first, then the outer select list, then
+    # the derived table (see the single-edge form in _create_clause_relationship_entry).
+    context.add_dml(
+        f"{cte2}INSERT INTO {edges} (s, p, o_id, graph_id, ekey{q_col}) "
+        f"SELECT _ge.c1, _ge.c2, _ge.c3, ?, {next_key}{q_val} FROM {source}",
+        p2[:n_cte] + [g, g] + q_params + select_params + p2[n_cte:],
+    )
 
 
 def translate_create_clause(create, context, metadata, per_row=False):
@@ -5548,6 +5712,9 @@ def _register_created_relationship(rel, i, pat, context):
         # Store identity for UNWIND+CREATE relationship tracking in _tts_finalize_context
         if rel.variable:
             context.input_params[f"__create_edge_{rel.variable}"] = (s_id, rel_type, t_id)
+        # In a multigraph the triple may already have edges: the one this CREATE
+        # made is the triple's newest, its highest ekey (spec 234).
+        newest = not getattr(context, "_merge_rel_create", False) and _multigraph(context)
         if not context.from_clauses:
             context.from_clauses.append(f"{_table('rdf_edges')} {e_alias}")
         else:
@@ -5556,13 +5723,24 @@ def _register_created_relationship(rel, i, pat, context):
                 f"{e_alias}.s = {context.add_join_param(s_id)}"
                 f" AND {e_alias}.p = {context.add_join_param(rel_type)}"
                 f" AND {e_alias}.o_id = {context.add_join_param(t_id)}"
+                + (_newest_ekey_sql(e_alias, context, context.add_join_param) if newest else "")
             )
             return
         context.where_conditions.append(
             f"{e_alias}.s = {context.add_where_param(s_id)}"
             f" AND {e_alias}.p = {context.add_where_param(rel_type)}"
             f" AND {e_alias}.o_id = {context.add_where_param(t_id)}"
+            + (_newest_ekey_sql(e_alias, context, context.add_where_param) if newest else "")
         )
+
+
+def _newest_ekey_sql(e_alias, context, add_param) -> str:
+    """`AND e.ekey = <the triple's highest ekey>`, binding through ``add_param``."""
+    return (
+        f" AND {e_alias}.ekey = (SELECT MAX(_gn.ekey) FROM {_table('rdf_edges')} _gn "
+        f"WHERE _gn.s = {e_alias}.s AND _gn.p = {e_alias}.p AND _gn.o_id = {e_alias}.o_id "
+        f"AND _gn.graph_id = {add_param(_graph_of(context))})"
+    )
 
 
 def translate_delete_clause(delete, context, metadata):
@@ -5659,6 +5837,7 @@ def translate_delete_clause(delete, context, metadata):
                 subparams,
             )
             context._pending_edge_delete = (len(context.dml_statements) - 1, len(context.stages))
+            context._pending_edge_delete_alias = alias
 
 
 def _merge_val_match(p_alias: str, val) -> str:
@@ -5834,6 +6013,68 @@ def _merge_action_value_sql(v, context, pre):
     return f"CAST(({sub}) AS VARCHAR(4000))", params
 
 
+def _merge_prop_preds(rel, alias, context, add_param):
+    """`AND JSON_VALUE(alias.qualifiers, '$.k') = ?` per inline property, binding
+    the stored string form through ``add_param``; "" when there is nothing to fit
+    or a value is not known at translation time."""
+    props = _rel_literal_props(rel, context) or {}
+    return "".join(
+        f" AND SQLUser.JSON_VALUE({alias}.qualifiers, '$.{_jsonpath_key(k)}') = {add_param(v)}"
+        for k, v in props.items()
+    )
+
+
+def _merge_excluded_edges_sql(alias, context, add_param):
+    """`AND alias.edge_id NOT IN (…)` for the edges an earlier DELETE of this
+    statement removes: they run after the MERGE (Merge5 [21]), and must not fit."""
+    excluded = getattr(context, "_merge_excluded_edges", None)
+    if not excluded:
+        return ""
+    inner_sql, inner_params = excluded
+    # Edges newer than the high-water mark are this statement's own: never deleted.
+    hwm = add_param("__EDGE_HWM__")
+    for p in inner_params:
+        add_param(p)
+    return f" AND ({alias}.edge_id > {hwm} OR {alias}.edge_id NOT IN ({inner_sql}))"
+
+
+def _merge_fit_guard(rel, rel_type, is_undirected, context):
+    """The multigraph MERGE guard (spec 234 US2): no edge of this statement's graph
+    fits the whole pattern — type, endpoints and inline properties — rather than
+    the single-edge guard's bare triple. Reads `_ge`, the create's derived table."""
+    params: list = [rel_type]
+    if is_undirected:
+        ends = (
+            "((_gm.s = _ge.c1 AND _gm.o_id = _ge.c3) OR (_gm.s = _ge.c3 AND _gm.o_id = _ge.c1))"
+        )
+        sql = f"SELECT 1 FROM {_table('rdf_edges')} _gm WHERE _gm.p = ? AND {ends}"
+    else:
+        sql = (
+            f"SELECT 1 FROM {_table('rdf_edges')} _gm WHERE _gm.s = _ge.c1 AND _gm.p = ? "
+            "AND _gm.o_id = _ge.c3"
+        )
+    sql += " AND _gm.graph_id = ?"
+    params.append(_graph_of(context))
+
+    def _add(v):
+        params.append(v)
+        return "?"
+
+    sql += _merge_prop_preds(rel, "_gm", context, _add)
+    sql += _merge_excluded_edges_sql("_gm", context, _add)
+    return sql, params
+
+
+def _merge_fit_join_sql(rel, e_alias, context) -> str:
+    """What a multigraph MERGE adds to its relationship's JOIN, so the RETURN sees
+    the edges that fit the whole pattern; "" with the mode off."""
+    if not _multigraph(context):
+        return ""
+    return _merge_prop_preds(rel, e_alias, context, context.add_join_param) + (
+        _merge_excluded_edges_sql(e_alias, context, context.add_join_param)
+    )
+
+
 def translate_merge_clause(merge, context, metadata):
     # Validate that MERGE pattern does not contain null property values.
     # Cypher semantic rule: null cannot be matched in MERGE operations.
@@ -5879,7 +6120,12 @@ def translate_merge_clause(merge, context, metadata):
             nodes=merge.pattern.nodes,
             relationships=_create_rels,
         )
-    translate_create_clause(ast.CreateClause(patterns=[_create_pattern]), context, metadata)
+    _prev_merge_rel_create = getattr(context, "_merge_rel_create", False)
+    context._merge_rel_create = True
+    try:
+        translate_create_clause(ast.CreateClause(patterns=[_create_pattern]), context, metadata)
+    finally:
+        context._merge_rel_create = _prev_merge_rel_create
 
     _found_by_pattern = None
     # --- Rewrite DML + SELECT for single-node MERGE patterns ---
@@ -6140,7 +6386,11 @@ def translate_merge_clause(merge, context, metadata):
                         # the derived table — and the aliases in there (n0, n2, l1 …) are
                         # scoped to it, so the guard can only read the columns _ge
                         # projects: c1 is the source node_id and c3 the target's.
-                        if not is_undirected:
+                        if _multigraph(context):
+                            _ge_guard, _ge_params = _merge_fit_guard(
+                                rel, rel_type, is_undirected, context
+                            )
+                        elif not is_undirected:
                             _ge_guard = (
                                 f"SELECT 1 FROM {_table('rdf_edges')} WHERE "
                                 "s = _ge.c1 AND p = ? AND o_id = _ge.c3"
@@ -6238,6 +6488,7 @@ def translate_merge_clause(merge, context, metadata):
                             f"{e_alias}.p = {context.add_join_param(rel_type)} AND ("
                             f"({e_alias}.s = {_sn_ref_u} AND {e_alias}.o_id = {_tn_ref_u}) OR "
                             f"({e_alias}.s = {_tn_ref_u} AND {e_alias}.o_id = {_sn_ref_u}))"
+                            + _merge_fit_join_sql(rel, e_alias, context)
                         )
                     else:
                         new_join = None
@@ -6264,6 +6515,7 @@ def translate_merge_clause(merge, context, metadata):
                             f"{e_alias}.s = {_sn_ref} AND "
                             f"{e_alias}.p = {context.add_join_param(rel_type)} AND "
                             f"{e_alias}.o_id = {_tn_ref}"
+                            + _merge_fit_join_sql(rel, e_alias, context)
                         )
 
     # Collect edge context for ON CREATE/ON MATCH SET on MATCH-bound node variables.

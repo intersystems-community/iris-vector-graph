@@ -801,6 +801,7 @@ class IRISGraphStore:
                     _del_re.IGNORECASE,
                 )
                 and not s.startswith("__constraint_check_delete_connected__")
+                and not s.startswith("__after_result__")
                 for s in stmts
             )
             last_is_select = (
@@ -844,8 +845,15 @@ class IRISGraphStore:
                 pre_captured_description = cursor.description
 
             edge_hwm = None
+            # `__after_result__` statements run once the result has been read: a
+            # multigraph `DELETE t MERGE … RETURN` (spec 234) reads the matched rows
+            # after MERGE wrote and before the DELETE removes what they matched.
+            after_result = []
             for i, stmt in enumerate(stmts):
                 p = params_list[i] if i < len(params_list) else []
+                if isinstance(stmt, str) and stmt.startswith("__after_result__"):
+                    after_result.append((stmt[len("__after_result__ ") :], p))
+                    continue
                 # `DELETE r CREATE …`: the translator runs the CREATE first and
                 # bounds the DELETE by the edge_id high-water mark from before it.
                 if isinstance(stmt, str) and stmt.startswith("__capture_edge_hwm__"):
@@ -876,6 +884,11 @@ class IRISGraphStore:
                 cursor.execute(stmt, p)
                 if cursor.description:
                     rows = cursor.fetchall()
+            description = cursor.description
+            for stmt, p in after_result:
+                if edge_hwm is not None and "__EDGE_HWM__" in p:
+                    p = [edge_hwm if v == "__EDGE_HWM__" else v for v in p]
+                cursor.execute(stmt, p)
             self.conn.commit()
 
             if pre_captured_rows is not None:
@@ -889,7 +902,7 @@ class IRISGraphStore:
                     snap_rows = [[v for j, v in enumerate(r) if j != rn_idx] for r in snap_rows]
                 return IVGResult(columns=cols, rows=[list(r) for r in snap_rows])
 
-            cols = [d[0] for d in cursor.description] if cursor.description else []
+            cols = [d[0] for d in description] if description else []
             # Strip internal ROW_NUMBER column injected by fetch-first-unsafe pagination
             if "__rn" in cols:
                 rn_idx = cols.index("__rn")

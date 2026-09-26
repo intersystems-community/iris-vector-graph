@@ -114,6 +114,7 @@ def before_all(context):
 
     # Clean up any leftover data from previous test sessions
     _flush_all_tck_data(context)
+    _enable_tck_multigraph(context)
 
 
 def before_scenario(context, scenario):
@@ -144,6 +145,10 @@ def after_scenario(context, scenario):
 def after_all(context):
     # Final cleanup
     _flush_all_tck_data(context)
+    # Leave the default graph as other suites expect it: single-edge.
+    if os.environ.get("IVG_TCK_MULTIGRAPH") != "0":
+        with contextlib.suppress(Exception):
+            context.engine.set_multigraph(None, False)
     with contextlib.suppress(Exception):
         context.conn.close()
 
@@ -216,6 +221,20 @@ def _db_schema(context) -> str:
     if engine is None:
         return "SQLUser"
     return getattr(engine, "_schema_prefix", "SQLUser")
+
+
+def _enable_tck_multigraph(context):
+    """Turn multigraph mode on for the default graph (spec 234 SC-001).
+
+    The TCK assumes a property graph, where two relationships may share type and
+    endpoints. ``IVG_TCK_MULTIGRAPH=0`` runs the suite with the mode off.
+    """
+    if os.environ.get("IVG_TCK_MULTIGRAPH") == "0":
+        return
+    try:
+        context.engine.set_multigraph(None, True)
+    except Exception as e:
+        logger.warning("Multigraph mode not enabled for the TCK: %s", e)
 
 
 def _flush_all_tck_data(context):
