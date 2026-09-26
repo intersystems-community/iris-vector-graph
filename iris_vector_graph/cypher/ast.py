@@ -66,6 +66,11 @@ class NodePattern:
     has_property_map: bool = False  # True for `(n {})` — an empty map is still a predicate
 
 
+# Relationship type the parser gives a variable-length pattern whose interval is
+# empty (`*2..1`): no edge carries it, so the pattern matches nothing.
+EMPTY_INTERVAL_TYPE = "__ivg_empty_hop_interval__"
+
+
 @dataclass(slots=True)
 class VariableLength:
     min_hops: int = 1
