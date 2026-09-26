@@ -653,6 +653,13 @@ class SQLQuery(BaseModel):
     # Result columns that return a stored property as it is (`n.flag`): the engine
     # reads 'true' / 'false' there as booleans (see iris_vector_graph.prop_values).
     bool_text_columns: List[int] = Field(default_factory=list)
+    # Result columns that read a relationship property through
+    # `SQLUser.JSON_VALUE(qualifiers, ...)` (`r.num`, or a dynamic `(expr).prop`
+    # that might be one): always SQL VARCHAR regardless of the JSON leaf's own
+    # type, unlike a node's `rdf_props.val` column (whose driver value is
+    # already typed). The engine promotes canonical int/float/bool text there
+    # (see iris_vector_graph.prop_values.parse_rel_prop_text).
+    rel_prop_text_columns: List[int] = Field(default_factory=list)
     # SQL aliases of RETURN items that are a comparison or label test: IRIS can type
     # the CASE that computes them as VARCHAR, so the engine reads '1' / '0' there.
     # By name, not index: a node or relationship item expands to several columns.
@@ -749,6 +756,13 @@ class TranslationContext:
         # Variables bound to relationship patterns in MATCH clauses.
         # Used by translate_to_sql() to tag Bolt column types as "relationship".
         self.rel_variables: set = set() if parent is None else parent.rel_variables.copy()
+        # WITH aliases carrying a bare relationship-property value (`WITH r.num AS num`):
+        # still SQL VARCHAR text at that point (JSON_VALUE on `qualifiers`), so a later
+        # bare RETURN of the alias needs the same decode as `RETURN r.num` itself
+        # (see _rel_prop_text_columns / SQLQuery.rel_prop_text_columns).
+        self.rel_prop_vars: set = (
+            set() if parent is None else set(getattr(parent, "rel_prop_vars", set()))
+        )
         self.system_procedure_call: Optional[Any] = None
         self.pending_where = None
         self.mapped_node_aliases: Dict[str, dict] = (
@@ -4667,6 +4681,7 @@ def translate_to_sql(
     sql_query.graph_context = graph_context
     _store_bool_params_as_text(sql_query)
     sql_query.bool_text_columns = _bool_text_columns(cypher_query)
+    sql_query.rel_prop_text_columns = _rel_prop_text_columns(cypher_query, context)
     sql_query.bool_expr_columns = list(context.bool_expr_aliases)
     sql_query.int_expr_columns = list(context.int_expr_aliases)
     sql_query.float_expr_columns = list(context.float_expr_aliases)
@@ -4723,6 +4738,40 @@ def _bool_text_columns(cypher_query) -> List[int]:
     return [
         i for i, item in enumerate(rc.items) if isinstance(item.expression, ast.PropertyReference)
     ]
+
+
+def _rel_prop_text_columns(cypher_query, context) -> List[int]:
+    """Indexes of RETURN items whose value is read via `JSON_VALUE` on a
+    relationship's `qualifiers` column, so always arrives as SQL VARCHAR text
+    (see SQLQuery.rel_prop_text_columns).
+
+    `r.prop` (`ast.PropertyReference` on a variable bound to `context.rel_variables`)
+    always takes that path (`_expr_propref_edge_alias`). A dynamic
+    `(expr).prop` (`ast.PropertyAccessExpression` — Graph6 [8]: `(list[1]).missing`)
+    takes it too whenever `expr` might evaluate to a relationship, which the
+    translator cannot rule out statically here (a list literal can mix nodes
+    and relationships); it is unconditionally included since a Cypher string
+    property looks identical to a number in this dynamic path already (the
+    same ambiguity `rdf_props.val`'s bare-property text accepts).
+    """
+    rc = getattr(cypher_query, "return_clause", None)
+    if rc is None:
+        return []
+    rel_vars = getattr(context, "rel_variables", set())
+    rel_prop_vars = getattr(context, "rel_prop_vars", set())
+    out = []
+    for i, item in enumerate(rc.items):
+        e = item.expression
+        if isinstance(e, ast.PropertyReference) and e.variable in rel_vars:
+            out.append(i)
+        elif isinstance(e, ast.PropertyAccessExpression):
+            out.append(i)
+        elif isinstance(e, ast.Variable) and e.name in rel_prop_vars:
+            # A WITH item projected a relationship's bare property under this alias
+            # (`WITH r.num AS num`) — the RETURN item is a bare re-projection of
+            # that alias, still the same JSON_VALUE text (Delete6 [12]).
+            out.append(i)
+    return out
 
 
 def _collect_var_names(expr) -> set:
@@ -6380,6 +6429,7 @@ def _translate_create_patterns(create, context, metadata):
 
 def _register_created_relationship(rel, i, pat, context):
     """Register a named relationship created by CREATE so RETURN r works."""
+    context.rel_variables.add(rel.variable)
     left_node, right_node = pat.nodes[i], pat.nodes[i + 1]
     if rel.direction == ast.Direction.INCOMING:
         source_node, target_node = right_node, left_node
@@ -21055,6 +21105,20 @@ def translate_with_clause(with_clause, context):
             context.bool_vars.add(alias)
         else:
             context.bool_vars.discard(alias)
+        if (
+            isinstance(item.expression, ast.PropertyReference)
+            and item.expression.variable in context.rel_variables
+        ) or (
+            isinstance(item.expression, ast.PropertyAccessExpression)
+        ):
+            context.rel_prop_vars.add(alias)
+        elif (
+            isinstance(item.expression, ast.Variable)
+            and item.expression.name in context.rel_prop_vars
+        ):
+            context.rel_prop_vars.add(alias)
+        else:
+            context.rel_prop_vars.discard(alias)
         _num_t = _numeric_static_type(item.expression, context)
         if _num_t == "int":
             context.int_vars.add(alias)

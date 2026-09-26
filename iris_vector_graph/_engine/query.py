@@ -8,7 +8,7 @@ from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph.prop_values import parse_prop_text
+from iris_vector_graph.prop_values import parse_prop_text, parse_rel_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 
@@ -370,6 +370,25 @@ def _decode_bool_text_columns(result, sql_query) -> None:
         for i in expr_cols:
             if i < len(row):
                 row[i] = _bool_expr_value(row[i])
+        rows.append(row)
+    result.rows = rows
+
+
+def _decode_rel_prop_text_columns(result, sql_query) -> None:
+    """Promote relationship-qualifier property text (SQLQuery.rel_prop_text_columns)
+    to int / float / bool, same as a node's bare property already arrives typed.
+    See iris_vector_graph.prop_values.parse_rel_prop_text."""
+    cols = getattr(sql_query, "rel_prop_text_columns", None) or []
+    if not cols or not getattr(result, "rows", None):
+        return
+    if len(result.columns or []) != getattr(sql_query, "return_arity", 0):
+        return
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        for i in cols:
+            if i < len(row):
+                row[i] = parse_rel_prop_text(row[i])
         rows.append(row)
     result.rows = rows
 
@@ -763,6 +782,7 @@ class QueryMixin:
             result.metadata = metadata
             _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
+            _decode_rel_prop_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
                 result.columns = [
@@ -776,6 +796,7 @@ class QueryMixin:
             result.metadata = metadata
             _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
+            _decode_rel_prop_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
             if sql_query.bolt_column_types:
                 result.bolt_column_types = sql_query.bolt_column_types
