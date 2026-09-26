@@ -583,12 +583,32 @@ def properties_subquery(node_expr: str) -> str:
     # We avoid native JSON_OBJECT in subqueries as it triggers an IRIS optimizer bug
     # (looking for %QPAR in the local schema) in some versions (e.g. 2025.1).
     # We use minimal REPLACE calls for performance while ensuring valid JSON escaping.
+    #
+    # This is the key/value *list* shape a node/relationship value's internal
+    # `_props` field carries (RETURN n, collect(n), path nodes, ...) — TCK
+    # comparison's `_blob_props` reads this shape (and a real map, see below).
+    # `properties(n)` as a RETURN expression in its own right must answer a
+    # Cypher map instead (Graph9 [1]); that is `properties_map_subquery` below,
+    # not this function — changing this one would ripple into every node/edge
+    # value hydration site that calls it.
     return (
         "(SELECT JSON_ARRAYAGG("
         "'{\"key\":\"' || REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"') || "
         "'\",\"value\":\"' || REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"') || '\"}') "
         f"FROM {_table('rdf_props')} WHERE s = {node_expr})"
     )
+
+
+def properties_map_subquery(node_expr: str) -> str:
+    """`properties(n)` as its own RETURN expression: a Cypher map, per spec
+    (`{key: value}`), not the key/value list `properties_subquery` builds for a
+    node/relationship *value*'s internal `_props` field. Built by CY_PROPS_MAP
+    (ObjectScript, not a SQL aggregate — IRIS SQL has no string-concatenating
+    aggregate to build a JSON object across rows from a subquery), which also
+    gives each value the same typing a bare property fetch already gets from
+    the driver (int text -> a JSON number, not a quoted string): 'true'/'false'
+    -> boolean, text that reads as a number -> a number, else a string."""
+    return f"SQLUser.CY_PROPS_MAP({node_expr}, '{_table('rdf_props')}')"
 
 
 class QueryMetadata(BaseModel):
@@ -14119,9 +14139,36 @@ def _expr_map_literal(expr, context, segment):
             parts.append(f"'\"'||'{safe_k}'||'\":'||{_graph_value_sql(v.name, context)}")
         else:
             val_sql = translate_expression(v, context, segment=segment)
-            parts.append(f"'\"'||'{safe_k}'||'\":\"'||CAST({val_sql} AS VARCHAR)||'\"'")
+            typed_val = _typed_json_value_sql(val_sql, context)
+            parts.append(f"'\"'||'{safe_k}'||'\":'||{typed_val}")
     inner = " || ',' || ".join(parts)
     return f"('{{'||{inner}||'}}')"
+
+
+def _typed_json_value_sql(val_sql: str, context) -> str:
+    """Embed a text-valued SQL expression as a typed JSON scalar, the same way a
+    bare property fetch is already typed by the DB-API driver (Graph9 [3], Return4
+    [9]): NULL -> `null`; the two spellings a stored boolean property uses
+    (prop_values.py) -> a bare `true`/`false`; text that reads as a number ->
+    a bare number (`count(x)`, `n.level`, ... are all text-typed SQL columns —
+    this is the one place that widens them back out); anything else -> an
+    escaped, quoted JSON string.
+
+    `val_sql` appears 4 times in the emitted SQL; a `?` placeholder it added once
+    (segment="select") must be duplicated 3 more times to match.
+    """
+    n_q = val_sql.count("?")
+    if n_q:
+        added = context.select_params[-n_q:]
+        for _ in range(3):
+            context.select_params.extend(added)
+    return (
+        "COALESCE(CASE WHEN "
+        f"({val_sql}) IN ('true', 'false') OR ISNUMERIC({val_sql}) = 1 "
+        f"THEN CAST({val_sql} AS VARCHAR) "
+        "ELSE '\"' || REPLACE(REPLACE(CAST(" + val_sql + " AS VARCHAR), "
+        "'\\', '\\\\'), '\"', '\\\"') || '\"' END, 'null')"
+    )
 
 
 def _literal_value_kind(value) -> Optional[str]:
@@ -19616,7 +19663,12 @@ def _expr_function_call(expr, context, segment):
                 raise SyntaxError(
                     f"properties() does not support scalar or list argument (InvalidArgumentType)"
                 )
-            # properties(r) on a relationship — qualifiers is a JSON object; return it directly
+            # properties(r) on a relationship — qualifiers is already a JSON object,
+            # but its values are all stored as text (translate_set_clause's edge
+            # INSERT: JSON_VALUE, which the qualifiers reader also uses, returns
+            # NULL for a JSON number). Retype them the same way CY_PROPS_MAP types
+            # a node's properties, so `r.level` stored as 9001 comes back as a
+            # number here too, not the text "9001" (Graph9 [2]).
             if isinstance(arg0, ast.Variable):
                 var_name = arg0.name
                 alias = context.variable_aliases.get(var_name, "")
@@ -19624,10 +19676,10 @@ def _expr_function_call(expr, context, segment):
                 is_current_edge = alias.startswith("e") and not alias.startswith("Stage")
                 is_stage_edge = alias.startswith("Stage") and var_name in edge_stage_vars
                 if is_current_edge:
-                    return f"{alias}.qualifiers"
+                    return f"SQLUser.CY_RETYPE_MAP({alias}.qualifiers)"
                 if is_stage_edge:
-                    return f"{alias}.{_safe_alias(var_name)}"
-        return properties_subquery(args[0] if args else "NULL")
+                    return f"SQLUser.CY_RETYPE_MAP({alias}.{_safe_alias(var_name)})"
+        return properties_map_subquery(args[0] if args else "NULL")
 
     # size(x) where x is a scalar list-predicate variable (VARCHAR holding either a
     # plain string or a JSON-encoded list/map): dispatch at runtime by first character.
