@@ -4059,7 +4059,7 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                 if orig_var in edge_stage_vars:
                     stage_alias = context.variable_aliases.get(orig_var, "")
                     if stage_alias.startswith("Stage"):
-                        col_ref = f"{stage_alias}.{orig_var}"
+                        col_ref = f"{stage_alias}.{_safe_alias(orig_var)}"
                         expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
                     else:
                         expr = translate_expression(item.expression, context, segment="select")
@@ -4095,7 +4095,7 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                 if orig_var in edge_stage_vars:
                     stage_alias = context.variable_aliases.get(orig_var, "")
                     if stage_alias.startswith("Stage"):
-                        col_ref = f"{stage_alias}.{orig_var}"
+                        col_ref = f"{stage_alias}.{_safe_alias(orig_var)}"
                         expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
                     else:
                         col_ref = alias_to_sql[var].strip()
@@ -5146,7 +5146,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             if s_id
             else (
                 (
-                    f"{s_alias}.{source_node.variable}"
+                    f"{s_alias}.{_safe_alias(source_node.variable)}"
                     if s_alias and s_alias.startswith("Stage")
                     else f"{s_alias}.node_id"
                 ),
@@ -5158,7 +5158,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             if t_id
             else (
                 (
-                    f"{t_alias}.{target_node.variable}"
+                    f"{t_alias}.{_safe_alias(target_node.variable)}"
                     if t_alias and t_alias.startswith("Stage")
                     else f"{t_alias}.node_id"
                 ),
@@ -5334,7 +5334,7 @@ def translate_delete_clause(delete, context, metadata):
             )
             return
 
-        node_col = var.name if is_stage_alias else "node_id"
+        node_col = _safe_alias(var.name) if is_stage_alias else "node_id"
         cte, subquery, subparams = context.build_dml_subquery(
             select_override=f"SELECT {alias}.{node_col}"
         )
@@ -5766,12 +5766,12 @@ def translate_merge_clause(merge, context, metadata):
                 # after the original variable (e.g. Stage1.a), not Stage1.node_id.
                 _stage_names = {s.split(" AS ")[0].strip() for s in getattr(context, "stages", [])}
                 _s_ref = (
-                    f"{src_alias}.{src_var}"
+                    f"{src_alias}.{_safe_alias(src_var)}"
                     if src_alias in _stage_names
                     else f"{src_alias}.node_id"
                 )
                 _t_ref = (
-                    f"{tgt_alias}.{tgt_var}"
+                    f"{tgt_alias}.{_safe_alias(tgt_var)}"
                     if tgt_alias in _stage_names
                     else f"{tgt_alias}.node_id"
                 )
@@ -5941,12 +5941,12 @@ def translate_merge_clause(merge, context, metadata):
                                 ]
                     elif src_alias and tgt_alias:
                         _sn_ref_u = (
-                            f"{src_alias}.{src_var}"
+                            f"{src_alias}.{_safe_alias(src_var)}"
                             if src_alias in _stage_names
                             else f"{src_alias}.node_id"
                         )
                         _tn_ref_u = (
-                            f"{tgt_alias}.{tgt_var}"
+                            f"{tgt_alias}.{_safe_alias(tgt_var)}"
                             if tgt_alias in _stage_names
                             else f"{tgt_alias}.node_id"
                         )
@@ -5967,12 +5967,12 @@ def translate_merge_clause(merge, context, metadata):
                     # Directed, no existing join: add one (MATCH-bound case)
                     if src_alias and tgt_alias:
                         _sn_ref = (
-                            f"{src_alias}.{src_var}"
+                            f"{src_alias}.{_safe_alias(src_var)}"
                             if src_alias in _stage_names
                             else f"{src_alias}.node_id"
                         )
                         _tn_ref = (
-                            f"{tgt_alias}.{tgt_var}"
+                            f"{tgt_alias}.{_safe_alias(tgt_var)}"
                             if tgt_alias in _stage_names
                             else f"{tgt_alias}.node_id"
                         )
@@ -7490,7 +7490,7 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                 # For CTE stage aliases (Stage1, Stage2…), the node_id column is stored
                 # under the variable name (e.g. Stage1.a1), not Stage1.node_id.
                 if alias.startswith("Stage"):
-                    node_id_col = f"{alias}.{node.variable}"
+                    node_id_col = f"{alias}.{_safe_alias(node.variable)}"
                 else:
                     node_id_col = f"{alias}.node_id"
                 jt = "LEFT OUTER JOIN" if optional else "JOIN"
@@ -7686,7 +7686,7 @@ def _vlp_node_ref(alias, variable):
     if not alias or alias.startswith("__"):
         return None
     if alias.startswith("Stage"):
-        return f"{alias}.{variable}" if variable else None
+        return f"{alias}.{_safe_alias(variable)}" if variable else None
     if alias[0] == "n":
         return f"{alias}.node_id"
     return None
@@ -8729,7 +8729,7 @@ def translate_relationship_pattern(
         Otherwise: alias.node_id
         """
         if alias.startswith("Stage") or alias == "VecSearch":
-            return f"{alias}.{variable}"
+            return f"{alias}.{_safe_alias(variable)}"
         if variable and variable in getattr(context, "collected_node_variables", set()):
             safe_var = _safe_alias(variable)
             return f"SQLUser.JSON_VALUE({alias}.{safe_var}, '$._id')"
@@ -8764,14 +8764,14 @@ def translate_relationship_pattern(
         dir_checks = []
         if not is_anon_source and not is_unbound_src:
             src_id = (
-                f"{source_alias}.{source_node.variable}"
+                f"{source_alias}.{_safe_alias(source_node.variable)}"
                 if source_alias.startswith("Stage")
                 else f"{source_alias}.node_id"
             )
             dir_checks.append(f"{src_id} = {stage}.{src_edge_col}")
         if not is_new_target and target_node.variable:
             tgt_id = (
-                f"{target_alias}.{target_node.variable}"
+                f"{target_alias}.{_safe_alias(target_node.variable)}"
                 if target_alias.startswith("Stage")
                 else f"{target_alias}.node_id"
             )
@@ -12674,8 +12674,8 @@ def _expr_variable(expr, context, segment):
         renames = getattr(context, "_tck_yield_renames", {})
         if expr.name in renames:
             _cte, orig_col = renames[expr.name]
-            return f"{alias}.{orig_col}"
-        return f"{alias}.{expr.name}"
+            return f"{alias}.{_safe_alias(orig_col)}"
+        return f"{alias}.{_safe_alias(expr.name)}"
     # For scalar variables from a Stage, qualify the column reference
     if expr.name in context.scalar_variables:
         if alias.startswith("Stage"):
@@ -17412,7 +17412,7 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
             context_alias = context.variable_aliases.get(var_name, "")
             if context_alias:
                 if context_alias.startswith("Stage"):
-                    return f"{context_alias}.{var_name}"
+                    return f"{context_alias}.{_safe_alias(var_name)}"
                 p_col = (
                     "_p"
                     if getattr(context, "_undirected_aliases", set())
@@ -17709,7 +17709,7 @@ def _expr_function_call(expr, context, segment):
             if is_current_edge:
                 return _expr_fn_keys([f"{alias}.qualifiers"])
             if is_stage_edge:
-                return _expr_fn_keys([f"{alias}.{var_name}"])
+                return _expr_fn_keys([f"{alias}.{_safe_alias(var_name)}"])
 
     def _translate_arg(a):
         if isinstance(a, ast.Literal) and not isinstance(a.value, list):
@@ -17757,7 +17757,7 @@ def _expr_function_call(expr, context, segment):
                 if is_current_edge:
                     return f"{alias}.qualifiers"
                 if is_stage_edge:
-                    return f"{alias}.{var_name}"
+                    return f"{alias}.{_safe_alias(var_name)}"
         return properties_subquery(args[0] if args else "NULL")
 
     # size(x) where x is a scalar list-predicate variable (VARCHAR holding either a
@@ -18351,7 +18351,7 @@ def translate_return_clause(ret, context):
             edge_stage_vars = getattr(context, "edge_stage_variables", set())
             if alias_name.startswith("Stage") and var_name in edge_stage_vars:
                 p_col = f"__edge_{var_name}_p"
-                q_col = f"{alias_name}.{var_name}"  # Stage column holding qualifiers JSON
+                q_col = f"{alias_name}.{_safe_alias(var_name)}"  # Stage column holding qualifiers JSON
                 edge_json = (
                     f'\'{{"type":"\' || {alias_name}.{p_col} || \'","props":\' || '
                     f"COALESCE({q_col}, '{{}}') || '}}'"
@@ -18365,9 +18365,9 @@ def translate_return_clause(ret, context):
                 renames_star = getattr(context, "_tck_yield_renames", {})
                 if var_name in renames_star:
                     _cte_s, orig_col_s = renames_star[var_name]
-                    sql_col_s = f"{alias_name}.{orig_col_s}"
+                    sql_col_s = f"{alias_name}.{_safe_alias(orig_col_s)}"
                 else:
-                    sql_col_s = f"{alias_name}.{var_name}"
+                    sql_col_s = f"{alias_name}.{_safe_alias(var_name)}"
                 context.select_items.append(f"{sql_col_s} AS {_safe_alias(var_name)}")
                 context.optional_null_row_items.append("NULL")
                 continue
@@ -18376,7 +18376,7 @@ def translate_return_clause(ret, context):
             if alias_name and not alias_name.startswith("e"):
                 prefix = var_name
                 if alias_name.startswith("Stage") or alias_name in _PROC_CTE_ALIASES:
-                    node_expr = var_name
+                    node_expr = _safe_alias(var_name)
                 else:
                     # Check if this node is null-gated by a downstream optional edge
                     gate_edge = context.opt_intermediate_nulled.get(alias_name)
@@ -18528,7 +18528,7 @@ def translate_return_clause(ret, context):
             if alias_name and alias_name.startswith("Stage") and var_name in edge_stage_vars:
                 prefix = item.alias or var_name
                 p_col = f"__edge_{var_name}_p"
-                q_col = f"{alias_name}.{var_name}"  # Stage1.r = qualifiers JSON
+                q_col = f"{alias_name}.{_safe_alias(var_name)}"  # Stage1.r = qualifiers JSON
                 edge_json = (
                     f'\'{{"type":"\' || {alias_name}.{p_col} || \'","props":\' || '
                     f"COALESCE({q_col}, '{{}}') || '}}'"
@@ -18570,9 +18570,9 @@ def translate_return_clause(ret, context):
                 renames = getattr(context, "_tck_yield_renames", {})
                 if var_name in renames:
                     _cte, orig_col = renames[var_name]
-                    sql_col = f"{alias_name}.{orig_col}"
+                    sql_col = f"{alias_name}.{_safe_alias(orig_col)}"
                 else:
-                    sql_col = f"{alias_name}.{var_name}"
+                    sql_col = f"{alias_name}.{_safe_alias(var_name)}"
                 prefix = item.alias or var_name
                 context.select_items.append(f"{sql_col} AS {_safe_alias(prefix)}")
                 continue
@@ -18595,7 +18595,7 @@ def translate_return_clause(ret, context):
             if alias_name and not alias_name.startswith("e") and not is_scalar:
                 prefix = item.alias or var_name
                 if alias_name.startswith("Stage") or alias_name in _PROC_CTE_ALIASES:
-                    node_expr = var_name
+                    node_expr = _safe_alias(var_name)
                 else:
                     # Check if this node is null-gated by a downstream optional edge.
                     # When multi-hop OPTIONAL MATCH fails the second hop, the intermediate

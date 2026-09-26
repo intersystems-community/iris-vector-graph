@@ -2059,8 +2059,8 @@ class TestRelationshipListPathByEdgeId:
     def test_bound_endpoints_are_the_chain_ends(self):
         sql = tr(self.M9).sql
         assert "CY_VLP_CHAIN(Stage1.__rels_rs_eids" in sql, sql
-        assert re.search(r"vlp\d+\.s = Stage1\.first", sql), sql
-        assert re.search(r"Stage1\.second = vlp\d+\.t", sql), sql
+        assert re.search(r'vlp\d+\.s = Stage1\."first"', sql), sql
+        assert re.search(r'Stage1\."second" = vlp\d+\.t', sql), sql
 
     def test_incoming_chain_direction(self):
         sql = tr(
@@ -2263,3 +2263,69 @@ class TestPathFunctionsOverCollectedPaths:
         assert "JSON_ARRAYGET(JSON_ARRAY(" in sql and "COUNT(" in sql.upper(), sql
         # the comprehension over collect() is itself an aggregate, not a grouping key
         assert "GROUP BY" not in sql, sql
+
+
+def _unquoted(sql, word):
+    """Occurrences of `word` as a bare SQL identifier (not "quoted", not in a string)."""
+    import re
+
+    s = re.sub(r"'(?:[^']|'')*'", "''", sql)
+    return re.findall(r'(?<![\w"])' + word + r'(?![\w"])', s, re.I)
+
+
+class TestReservedWordStageAliasesAreQuoted:
+    """Match9 [6]: `WITH a AS first … MATCH (first)-…` — a Cypher alias that is an
+    IRIS reserved word must be quoted wherever the SQL references its stage column.
+    """
+
+    M9 = (
+        "MATCH (a)-[r1]->()-[r2]->(b) WITH [r1, r2] AS rs, a AS first, b AS second LIMIT 1 "
+        "MATCH (first)-[rs*]->(second) RETURN first, second"
+    )
+
+    def test_match9_6_sql_quotes_first_everywhere(self):
+        sql = _sql(self.M9)
+        assert _unquoted(sql, "first") == []
+        assert 'Stage1."first"' in sql
+
+    def test_return_stage_node(self):
+        sql = _sql("MATCH (a) WITH a AS first RETURN first")
+        assert _unquoted(sql, "first") == []
+
+    def test_match_from_stage_node_both_directions(self):
+        for q in (
+            "MATCH (a) WITH a AS first MATCH (first)-->(b) RETURN b",
+            "MATCH (a) WITH a AS first MATCH (b)-->(first) RETURN b, first",
+            "MATCH (a) WITH a AS first OPTIONAL MATCH (first)-->(b) RETURN first, b",
+            "MATCH (a) WITH a AS first MATCH (first)-[*1..2]->(b) RETURN b",
+        ):
+            assert _unquoted(_sql(q), "first") == [], q
+
+    def test_stage_relationship(self):
+        sql = _sql("MATCH (a)-[r]->(b) WITH r AS first RETURN type(first), first")
+        assert _unquoted(sql, "first") == []
+
+    def test_delete_create_merge_from_stage(self):
+        for q in (
+            "MATCH (a) WITH a AS first DELETE first",
+            "MATCH (a) WITH a AS first CREATE (first)-[:T]->(:B)",
+            "MATCH (a) WITH a AS first MERGE (first)-[:T]->(b:B) RETURN b",
+            "MATCH (a) WITH a AS first SET first.x = 1 RETURN first",
+        ):
+            assert _unquoted(_sql(q), "first") == [], q
+
+    def test_count_alias_quoted(self):
+        sql = _sql("MATCH (a) WITH a AS count MATCH (count)-->(b) RETURN count, b")
+        assert _unquoted(sql, "count") == []
+
+    def test_non_reserved_alias_stays_unquoted(self):
+        sql = _sql("MATCH (a) WITH a AS x MATCH (x)-->(b) RETURN x, b")
+        assert "Stage1.x" in sql
+        assert '"x"' not in sql
+
+    def test_output_column_names_unquoted(self):
+        t = translate_to_sql(parse_query("MATCH (a) WITH a AS first RETURN first"), {})
+        sql = t.sql if isinstance(t.sql, str) else t.sql[-1]
+        assert "AS first_id" in sql
+        cmap = getattr(t, "column_name_map", None) or {}
+        assert all('"' not in str(k) and '"' not in str(v) for k, v in cmap.items())
