@@ -817,6 +817,11 @@ class TranslationContext:
         self.static_scalar_kinds: Dict[str, frozenset] = (
             {} if parent is None else dict(getattr(parent, "static_scalar_kinds", {}))
         )
+        # WITH alias -> value kind (see _literal_value_kind) when the alias was bound
+        # to a literal or a parameter; used to type-check dynamic subscripts.
+        self.with_value_kinds: Dict[str, str] = (
+            {} if parent is None else dict(getattr(parent, "with_value_kinds", {}))
+        )
         # Lists that mix graph values with other values (see _is_mixed_graph_list), and
         # the scalars taken from them: elements are type-tagged text, compared by CY_CMP.
         self.mixed_list_vars: Set[str] = (
@@ -1225,6 +1230,12 @@ def _tck_val_to_sql(val, col_name: str) -> str:
     return f"{val} AS {col_name}"
 
 
+_AGGREGATE_FUNCTION_NAMES = frozenset({
+    "count", "sum", "avg", "min", "max", "collect",
+    "stdev", "stdevp", "percentiledisc", "percentilecont",
+})
+
+
 def _translate_test_procedure(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     """Translate a TCK test procedure (test.*) to a CTE with materialized result rows.
 
@@ -1278,17 +1289,10 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
         call_args = []
         for i, arg in enumerate(proc.arguments or []):
             # Check for aggregation functions in arguments (InvalidAggregation)
-            if isinstance(arg, ast.FunctionCall) and arg.function_name.lower() in (
-                "count",
-                "sum",
-                "avg",
-                "min",
-                "max",
-                "collect",
-                "stdev",
-                "stdevp",
-                "percentiledisc",
-                "percentilecont",
+            # count(n) parses as an AggregationFunction, not a FunctionCall.
+            if _contains_aggregation(arg) or (
+                isinstance(arg, ast.FunctionCall)
+                and arg.function_name.lower() in _AGGREGATE_FUNCTION_NAMES
             ):
                 raise SyntaxError(
                     f"Procedure {proc_name}: aggregation functions are not allowed "
@@ -4599,6 +4603,9 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                 grouping_exprs_ob.add(_expr_to_cypher_text(gi.expression))
                 if gi.alias:
                     grouping_exprs_ob.add(gi.alias)
+            projected_vars_ob = set(grouping_exprs_ob)
+            for gi in non_agg_ret_items:
+                projected_vars_ob |= _collect_var_names(gi.expression)
             for ob_item in query.order_by_clause.items:
                 if not _contains_aggregation(ob_item.expression):
                     continue
@@ -4613,6 +4620,16 @@ def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> 
                     # Skip query parameter variables — they are constants, not bound variables
                     if isinstance(part, ast.Variable) and part.name in context.input_params:
                         continue
+                    # A variable the aggregating RETURN drops is out of scope after it
+                    # (ReturnOrderBy6 [4]): UndefinedVariable, not an ambiguity.
+                    if not getattr(ret, "star", False) and part_text not in grouping_exprs_ob:
+                        dropped = (
+                            _collect_var_names(part) - projected_vars_ob - context.input_params.keys()
+                        )
+                        if dropped:
+                            raise SyntaxError(
+                                f"UndefinedVariable: Variable `{sorted(dropped)[0]}` not defined"
+                            )
                     # Complex non-simple expressions (arithmetic etc.) mixed with aggregation
                     # are always ambiguous in ORDER BY, even if they are grouping keys.
                     is_simple = isinstance(part, (ast.Variable, ast.PropertyReference))
@@ -7612,6 +7629,29 @@ def _lead_cte(context, cte, lead, subparams):
     return list(subparams[:n]) + list(lead) + list(subparams[n:])
 
 
+def _check_property_value_type(expr, context, prop_name: str) -> None:
+    """A property holds a scalar or a list of scalars (Set1 [10]): a map literal, or a
+    list literal holding a map or a list, is an InvalidPropertyType."""
+    if isinstance(expr, ast.MapLiteral):
+        bad = True
+    elif isinstance(expr, ast.Literal) and isinstance(expr.value, list):
+        bad = any(
+            isinstance(el, ast.MapLiteral)
+            or (isinstance(el, ast.Literal) and isinstance(el.value, (list, dict)))
+            or isinstance(el, (list, dict))
+            for el in expr.value
+        )
+    else:
+        # A map parameter is kept as JSON text (an existing contract, see
+        # test_translator_mid_v7d::test_set_prop_param_dict_value).
+        bad = False
+    if bad:
+        raise TypeError(
+            f"InvalidPropertyType: property `{prop_name}` must be a scalar or a list of "
+            f"scalars, not a map or a nested collection"
+        )
+
+
 def translate_set_clause(set_cl, context, metadata):
     # Track which properties are being SET so we can exclude them from the final SELECT WHERE clause
     if not hasattr(context, "_set_properties"):
@@ -7661,6 +7701,7 @@ def translate_set_clause(set_cl, context, metadata):
                 prop_name,
                 item.value,
             )
+            _check_property_value_type(v, context, prop_name)
             # Detect edge alias: relationship variables use aliases starting with 'e' but not 'ES_'
             is_edge = alias and alias.startswith("e") and not alias.startswith("ES_")
             if is_edge:
@@ -8188,6 +8229,10 @@ def translate_match_clause(match_clause, context, metadata):
             and pattern.nodes[-1].variable in context.variable_aliases
         )
         skip_first_node_join = first_is_unbound and last_node_bound and bool(pattern.relationships)
+        if skip_first_node_join:
+            # The edge join registers this node later; its type is bound here so a
+            # later reuse as a relationship or path is still a VariableTypeConflict.
+            context.bind_variable_type(first_node.variable, "node")
         has_rels = bool(pattern.relationships)
         if not skip_first_node_join:
             if first_node.variable:
@@ -10168,6 +10213,8 @@ def _collect_cypher_vars(expr) -> set:
 
 
 def translate_where_clause(where, context):
+    if _contains_aggregation(where.expression):
+        raise SyntaxError("InvalidAggregation: aggregation is not allowed in WHERE")
     _check_where_unbound_vars(where.expression, context)
     _wp_len_before = len(context.where_params)
     _jc_before = len(context.join_clauses)
@@ -11191,7 +11238,9 @@ def _list_literal_in_3vl(lhs_list, rhs_items):
 
 def _boolean_expr_in(left, right_expr, context, left_expr=None):
     # Validate RHS is a list type; non-list literals (bool, int, str) are type errors
-    if isinstance(right_expr, ast.Literal) and not isinstance(right_expr.value, list):
+    if (
+        isinstance(right_expr, ast.Literal) and not isinstance(right_expr.value, list)
+    ) or isinstance(right_expr, ast.MapLiteral):
         raise SyntaxError("InvalidArgumentType: IN requires a list on the right-hand side")
     if isinstance(right_expr, ast.SubscriptExpression):
         inner_sql = translate_expression(right_expr.expression, context, segment="where")
@@ -12625,6 +12674,23 @@ def _expr_list_predicate(expr, context, segment):
         return f"(SELECT CASE MAX({rank}) WHEN 2 THEN 1 WHEN 1 THEN NULL ELSE 0 END {jt_from})"
 
 
+def _type_of_list_elements_check(expr) -> None:
+    """[x IN [r, 0] | type(x)]: type() of a literal element that is not null and so
+    cannot be a relationship (Graph4 [6])."""
+    args = expr.projection.arguments
+    if not (len(args) == 1 and isinstance(args[0], ast.Variable) and args[0].name == expr.variable):
+        return
+    for item in expr.source.value:
+        literal = isinstance(item, ast.MapLiteral) or (
+            isinstance(item, ast.Literal) and item.value is not None
+        )
+        if literal:
+            raise TypeError(
+                "InvalidArgumentValue: type() requires a relationship argument, "
+                f"got {_expr_to_cypher_text(item) or type(item).__name__}"
+            )
+
+
 def _list_comprehension_type_check(expr):
     """Check if a list comprehension's projection would receive invalid types.
 
@@ -12640,6 +12706,9 @@ def _list_comprehension_type_check(expr):
     if not isinstance(expr.projection, ast.FunctionCall):
         return
     fn = expr.projection.function_name.lower()
+    if fn == "type":
+        _type_of_list_elements_check(expr)
+        return
     if fn not in ("tointeger", "tofloat", "tostring", "toboolean"):
         return
     source_list = expr.source.value
@@ -13580,6 +13649,13 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
 
 
 def _expr_property_reference(expr, context, segment):
+    if context.variable_types.get(expr.variable) == "path" or (
+        expr.variable in context.named_paths and expr.variable not in context.variable_aliases
+    ):
+        raise SyntaxError(
+            f"InvalidArgumentType: property access on path `{expr.variable}`; "
+            f"a path has no properties"
+        )
     alias = context.variable_aliases.get(expr.variable)
     if not alias:
         raise SyntaxError(f"Undefined variable: {expr.variable}")
@@ -13913,9 +13989,60 @@ def _expr_map_literal(expr, context, segment):
     return f"('{{'||{inner}||'}}')"
 
 
+def _literal_value_kind(value) -> Optional[str]:
+    """Kind of a Python literal / parameter value: bool, int, float, str, list, map."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, (list, tuple)):
+        return "list"
+    if isinstance(value, dict):
+        return "map"
+    return None
+
+
+def _with_expr_value_kind(e, context) -> Optional[str]:
+    """Kind of a WITH item bound to a literal, a map literal, a parameter, or an alias
+    whose kind is already known."""
+    if isinstance(e, ast.MapLiteral):
+        return "map"
+    if isinstance(e, ast.Literal):
+        return _literal_value_kind(e.value)
+    if isinstance(e, ast.Variable):
+        if e.name in context.input_params:
+            return _literal_value_kind(context.input_params[e.name])
+        return getattr(context, "with_value_kinds", {}).get(e.name)
+    return None
+
+
+def _check_static_subscript(base, idx, context) -> None:
+    """expr[idx] with operand kinds known at translate time (List1 [6][7], Map2 [7][8])."""
+    kinds = getattr(context, "with_value_kinds", {})
+    base_kind = kinds.get(base.name) if isinstance(base, ast.Variable) else None
+    if base_kind in ("bool", "int", "float", "str"):
+        raise TypeError(
+            f"InvalidArgumentType: cannot subscript a {base_kind} value `{base.name}`; "
+            f"expected a list or a map"
+        )
+    if base_kind == "map":
+        idx_kind = _with_expr_value_kind(idx, context)
+        if idx_kind is not None and idx_kind != "str":
+            raise TypeError(
+                f"MapElementAccessByNonString: map `{base.name}` accessed by a {idx_kind} key"
+            )
+
+
 def _expr_subscript(expr, context, segment):
     base = expr.expression
     idx = expr.index
+    _check_static_subscript(base, idx, context)
     if isinstance(base, ast.Variable):
         base_alias = context.variable_aliases.get(base.name, "")
         is_scalar = base_alias.startswith("Stage") or base.name in context.scalar_variables
@@ -18779,9 +18906,10 @@ def _scalar_statistical(fn, args, args_exprs, context):
                 if isinstance(pct_expr, str) and pct_expr.replace(".", "", 1).isdigit()
                 else pct_expr
             )
-        if var_name or val_expr:
-            context._percentile_queries.append((val_expr, pct_val, fn, var_name, alias))
-        return f"__PERCENTILE_PLACEHOLDER_{len(context._percentile_queries)-1 if context._percentile_queries else 0}__"
+        # An ordinary aggregate: the projection groups by the other columns, and the
+        # UDF checks the percentile per group (ArgumentError NumberOutOfRange).
+        proc = "PCONT" if fn == "percentilecont" else "PDISC"
+        return f"IVG.Percentile_{proc}(JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)), {pct_expr})"
     return None
 
 
@@ -19002,6 +19130,10 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
     if fn == "type":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
             var_name = args_exprs[0].name
+            if context.variable_types.get(var_name) == "node":
+                raise CypherParseError(
+                    f"InvalidArgumentType: type() requires a relationship, `{var_name}` is a node"
+                )
             context_alias = context.variable_aliases.get(var_name, "")
             if context_alias:
                 if context_alias.startswith("Stage"):
@@ -19429,7 +19561,33 @@ def _expr_function_call(expr, context, segment):
     scalar_result = _expr_scalar_function(fn, sql_fn, args, expr.arguments, expr, context, segment)
     if scalar_result is not None:
         return scalar_result
+    if "." not in fn and fn not in _CYPHER_FN_MAP and fn not in _PASSTHROUGH_FUNCTION_NAMES:
+        raise SyntaxError(f"UnknownFunction: Unknown function '{expr.function_name}'")
     return f"{sql_fn}({', '.join(args)})"
+
+
+# Cypher / Neo4j function names that may reach the SQL pass-through in
+# _expr_function_call. Any other un-namespaced name is an UnknownFunction
+# (Return2 [18]) rather than a SQL function of the same name.
+_PASSTHROUGH_FUNCTION_NAMES = frozenset({
+    "abs", "ceil", "floor", "round", "sign", "rand", "sqrt", "exp", "log", "log10",
+    "e", "pi", "sin", "cos", "tan", "cot", "asin", "acos", "atan", "atan2",
+    "degrees", "radians", "haversin", "isnan",
+    "tolower", "toupper", "lower", "upper", "trim", "ltrim", "rtrim", "btrim",
+    "substring", "left", "right", "split", "replace", "reverse", "normalize",
+    "tostring", "tointeger", "tofloat", "toboolean", "tostringornull",
+    "tointegerornull", "tofloatornull", "tobooleanornull", "tobooleanlist",
+    "tointegerlist", "tofloatlist", "tostringlist",
+    "coalesce", "nullif", "exists", "size", "length", "head", "last", "tail",
+    "range", "keys", "values", "properties", "labels", "type", "id", "elementid",
+    "startnode", "endnode", "nodes", "relationships", "timestamp", "randomuuid",
+    "date", "datetime", "localdatetime", "time", "localtime", "duration",
+    "point", "distance", "valuetype", "isempty", "char_length", "character_length",
+    "count", "sum", "avg", "min", "max", "collect", "stdev", "stdevp",
+    "percentiledisc", "percentilecont", "reduce", "all", "any", "none", "single",
+    "stdevs", "tolist", "isinfinite", "vector_distance", "approx_count_distinct",
+    "shortestpath", "allshortestpaths",
+})
 
 
 def _expr_boolean(expr, context, segment):
@@ -19817,9 +19975,22 @@ def _expr_to_cypher_text(expr) -> str:
     return ""
 
 
+# Aggregates the parser leaves as plain FunctionCalls.
+_FUNCTION_CALL_AGGREGATES = frozenset(
+    {"stdev", "stdevs", "stdevp", "percentiledisc", "percentilecont"}
+)
+
+
+def _is_aggregate_call(expr) -> bool:
+    return isinstance(expr, ast.AggregationFunction) or (
+        isinstance(expr, ast.FunctionCall)
+        and expr.function_name.lower() in _FUNCTION_CALL_AGGREGATES
+    )
+
+
 def _contains_aggregation(expr) -> bool:
     """Recursively check if an expression contains an aggregation function."""
-    if isinstance(expr, ast.AggregationFunction):
+    if _is_aggregate_call(expr):
         return True
     if isinstance(expr, ast.BooleanExpression):
         return any(_contains_aggregation(o) for o in expr.operands)
@@ -19850,7 +20021,7 @@ def _collect_non_agg_var_refs(expr):
     operands, returns the non-aggregate operands at the top level.
     """
     results = []
-    if isinstance(expr, ast.AggregationFunction):
+    if _is_aggregate_call(expr):
         return []  # aggregation boundary — don't descend
     if isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_"):
         # Arithmetic: collect non-aggregate sub-operands that reference variables
@@ -20383,7 +20554,34 @@ def _is_fixed_named_path(context, name):
     return name not in vl_names
 
 
+def _check_with_column_names(with_clause) -> None:
+    """Two WITH items projecting the same name: ColumnNameConflict (With4 [4])."""
+    seen: set = set()
+    for item in with_clause.items:
+        name = item.alias
+        if name is None and isinstance(item.expression, ast.Variable):
+            name = item.expression.name
+        if name is None:
+            continue
+        if name in seen:
+            raise SyntaxError(
+                f"ColumnNameConflict: Multiple result columns with the same name are not "
+                f"supported: '{name}'"
+            )
+        seen.add(name)
+
+
 def translate_with_clause(with_clause, context):
+    _check_with_column_names(with_clause)
+    if not with_clause.star:
+        # Only projected names stay in scope; their kinds are re-derived per item.
+        _projected = {
+            i.alias or (i.expression.name if isinstance(i.expression, ast.Variable) else None)
+            for i in with_clause.items
+        }
+        _wvk = getattr(context, "with_value_kinds", {})
+        for _name in [n for n in _wvk if n not in _projected]:
+            del _wvk[_name]
     if with_clause.star:
         for var, alias in context.variable_aliases.items():
             if alias.startswith("e"):
@@ -20589,6 +20787,14 @@ def translate_with_clause(with_clause, context):
             _pname = item.expression.name
             if hasattr(context, "literal_list_vars") and _pname in context.literal_list_vars:
                 context.literal_list_vars[alias] = context.literal_list_vars[_pname]
+
+        _wvk = getattr(context, "with_value_kinds", None)
+        if _wvk is not None:
+            _vk = _with_expr_value_kind(item.expression, context)
+            if _vk is None:
+                _wvk.pop(alias, None)
+            else:
+                _wvk[alias] = _vk
 
         # Track non-map variables for property access TypeError enforcement.
         # Scalars (int, float, bool, str) and lists cannot have properties accessed on them.
