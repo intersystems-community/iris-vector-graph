@@ -1430,6 +1430,13 @@ class TestLabelsOfPathRejected:
     def test_labels_of_node_allowed(self):
         tr("MATCH p = (a) RETURN labels(a) AS l")
 
+class TestCreateAfterWithBindsStageParamsFirst:
+    """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
+    label marker, so the gate matched nothing and the node was never written."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->(:M) RETURN a",
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->({num: 1}) RETURN a",
             "MATCH (n:L) WITH n.num AS v CREATE (:M {num: v})",
@@ -1530,9 +1537,51 @@ class TestVarLengthExpandsInSql:
         t = tr("MATCH p = shortestPath((a {name: 'A'})-[*]->(b {name: 'B'})) RETURN p")
         assert t.var_length_paths
 
-    def test_optional_var_length_still_goes_to_the_engine(self):
+    def test_optional_var_length_expands_in_sql(self):
+        """Match7 [12]: one row per path (the engine BFS kept one per target).
+        IRIS cannot LEFT JOIN a JSON_TABLE reading an outer alias, so it is an
+        inner join on CY_VLP_OPT, which yields one all-null row for no path."""
         t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) RETURN b")
-        assert t.var_length_paths
+        assert not t.var_length_paths
+        sql = _sql_text(t)
+        assert "\nJOIN JSON_TABLE(SQLUser.CY_VLP_OPT(SQLUser.CY_VLP_PATHS(n0.node_id" in sql, sql
+        assert "LEFT OUTER JOIN JSON_TABLE" not in sql, sql
+        assert "LEFT OUTER JOIN nodes n3 ON n3.node_id = vlp2.t" in sql.replace("Graph_KG.", ""), sql
+
+    def test_optional_var_length_to_a_bound_target_filters_in_the_udf(self):
+        """Match7 [13], [20]: the target test must null the optional side, not drop the row."""
+        t = tr("MATCH (a:Single), (x:C) OPTIONAL MATCH (a)-[*]->(x) RETURN x")
+        assert not t.var_length_paths
+        sql = _sql_text(t)
+        assert "vlp" not in sql.rsplit("\nWHERE ", 1)[-1], sql
+        assert "CY_VLP_OPT(SQLUser.CY_VLP_PATHS(n0.node_id" in sql, sql
+        assert ", 1, n2.node_id, '[]', " in sql, sql
+
+    def test_optional_var_length_target_labels_filter_in_the_udf(self):
+        """Match7 [15]: no label EXISTS on the JSON_TABLE's ON (it would drop the null row)."""
+        t = tr(
+            "MATCH (a:A) OPTIONAL MATCH (a)-[:FOO]->(b:B) "
+            "OPTIONAL MATCH (b)<-[:BAR*]-(c:B) RETURN a, b, c"
+        )
+        assert not t.var_length_paths
+        sql = _sql_text(t)
+        vj = [ln for ln in sql.split("\n") if "CY_VLP_OPT" in ln]
+        assert len(vj) == 1 and "EXISTS" not in vj[0], sql
+        assert ", 0, '', '[\"B\"]', " in vj[0], sql
+        params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
+        assert sql.count("?") == len(params), sql
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) WHERE b.num = 1 RETURN b",
+            "MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b)-->(c) RETURN c",
+            "OPTIONAL MATCH (a)-[*]->(b) RETURN b",
+            "MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b {num: 1}) RETURN b",
+        ],
+    )
+    def test_other_optional_var_length_still_goes_to_the_engine(self, q):
+        assert tr(q).var_length_paths
 
     def test_var_length_with_relationship_properties_still_goes_to_the_engine(self):
         t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist) RETURN *")
@@ -1584,3 +1633,26 @@ class TestVarLengthExpandsInSql:
         assert body.startswith("New ")
         newed = {v.strip() for v in body[4:].split(" Set ", 1)[0].split(",")}
         assert {"adj", "st", "sd", "sl", "se", "args", "sql", "targ"} <= newed
+
+
+class TestDurationBeyondDatetimeRange:
+    """Temporal10 [9], [10]: years outside Python's 1..9999 folded to NULL."""
+
+    def test_between_large_dates(self):
+        t = tr(
+            "RETURN duration.between(date('-999999999-01-01'), date('+999999999-12-31')) AS duration"
+        )
+        assert "'P1999999998Y11M30D'" in _sql_text(t)
+
+    def test_in_seconds_large_local_datetimes(self):
+        t = tr(
+            "RETURN duration.inSeconds(localdatetime('-999999999-01-01'), "
+            "localdatetime('+999999999-12-31T23:59:59')) AS duration"
+        )
+        assert "'PT17531639991215H59M59S'" in _sql_text(t)
+
+    def test_between_large_reversed_is_negated(self):
+        t = tr(
+            "RETURN duration.between(date('+999999999-12-31'), date('-999999999-01-01')) AS duration"
+        )
+        assert "'P-1999999998Y-11M-30D'" in _sql_text(t)

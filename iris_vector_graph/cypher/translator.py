@@ -2907,6 +2907,14 @@ def _tts_process_parts(cypher_query, context, metadata):
                     _opt_join_start = len(context.join_clauses)
                     _opt_where_start = len(context.where_conditions)
                     context._mpt_opt_group = None
+                    context._vlp_opt_simple = clause.optional and (
+                        len(clause.patterns) == 1
+                        and len(clause.patterns[0].relationships) == 1
+                        and not (
+                            _ci + 1 < len(part.clauses)
+                            and isinstance(part.clauses[_ci + 1], ast.WhereClause)
+                        )
+                    )
                     # A CREATE later in this query part may only write what these rows
                     # license: openCypher runs it once per incoming row, so a MATCH that
                     # binds nothing must create nothing. See `_create_match_gate`.
@@ -7083,6 +7091,8 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
             # column doesn't exist in external SQL tables, and the label is enforced
             # by the SQL mapping itself.
             effective_labels = [] if alias in context.mapped_node_aliases else list(node.labels)
+            if alias in getattr(context, "_vlp_opt_targets", ()):
+                effective_labels = []  # CY_VLP_OPT kept only the paths ending on them
             if effective_labels or node.properties:
                 # For CTE stage aliases (Stage1, Stage2…), the node_id column is stored
                 # under the variable name (e.g. Stage1.a1), not Stage1.node_id.
@@ -7321,12 +7331,30 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     pattern loop uses to keep the other hops of the same pattern off those edges.
 
     Returns False, leaving the pattern to the engine's BFS route, for what that
-    route owns: shortest paths, an ID-bound endpoint, OPTIONAL MATCH, and
-    relationship property predicates.
+    route owns: shortest paths, an ID-bound endpoint, relationship property
+    predicates, and any OPTIONAL MATCH other than one bound-source var-length
+    hop with no WHERE.
+
+    IRIS cannot LEFT JOIN a JSON_TABLE that reads an outer alias, so an OPTIONAL
+    one is an inner join on `SQLUser.CY_VLP_OPT`, which keeps the paths ending at
+    the bound target / carrying the target's labels and returns one all-null row
+    (`[{}]`) when none do; the new target node is then LEFT JOINed.
     """
     vl = rel.variable_length
-    if vl.shortest or vl.all_shortest or optional or id_bound or rel.properties:
+    if vl.shortest or vl.all_shortest or id_bound or rel.properties:
         return False
+    if optional and (
+        not getattr(context, "_vlp_opt_simple", False)
+        or not source_node.variable
+        or context.variable_aliases.get(source_node.variable)
+        not in getattr(context, "optional_prebound_aliases", ())
+        or target_node.properties
+        or (target_node.labels and target_node.variable in context.variable_aliases)
+        or source_node.labels
+        or source_node.properties
+    ):
+        return False
+    jt = "LEFT OUTER JOIN" if optional else "JOIN"
     if not hasattr(context, "_vlp_aliases"):
         context._vlp_aliases = set()
         context._vlp_rel_aliases = {}
@@ -7370,6 +7398,18 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         f"SQLUser.CY_VLP_PATHS({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
     )
+    if optional:
+        tgt_bound = bool(target_node.variable and target_node.variable in context.variable_aliases)
+        t_ref = "''"
+        if tgt_bound:
+            t_ref = _vlp_node_ref(context.variable_aliases[target_node.variable], target_node.variable)
+            if t_ref is None:
+                return False
+        labels_json = json.dumps(list(target_node.labels or [])).replace("'", "''")
+        call = (
+            f"SQLUser.CY_VLP_OPT({call}, {1 if tgt_bound else 0}, {t_ref}, "
+            f"'{labels_json}', '{_table('rdf_labels')}')"
+        )
     context.join_clauses.append(
         f"JOIN JSON_TABLE({call}, '$[*]' COLUMNS("
         f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
@@ -7387,8 +7427,12 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         if tgt_alias is None:
             tgt_alias = context.register_variable(target_node.variable)
             context.join_clauses.append(
-                f"JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+                f"{jt} {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
             )
+            if optional:
+                context._vlp_opt_targets = getattr(context, "_vlp_opt_targets", set()) | {tgt_alias}
+        elif optional:
+            pass  # CY_VLP_OPT kept only the paths ending there
         else:
             tgt_ref = _vlp_node_ref(tgt_alias, target_node.variable)
             if tgt_ref is None:
@@ -7401,9 +7445,10 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
             tgt_alias = context.next_alias("n")
             context.node_obj_aliases[id(target_node)] = tgt_alias
             context.join_clauses.append(
-                f"JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+                f"{jt} {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
             )
-            _vlp_apply_node_constraints(target_node, f"{tgt_alias}.node_id", context)
+            if not optional:  # CY_VLP_OPT tested the labels
+                _vlp_apply_node_constraints(target_node, f"{tgt_alias}.node_id", context)
         else:
             context.where_conditions.append(f"{tgt_alias}.node_id = {vx}.t")
     return True
@@ -15160,11 +15205,117 @@ def _datetime_to_epoch_ns(dt):
     return whole_secs, ns_from_us % 1_000_000_000
 
 
+def _extended_local_temporal(temporal_str, fn_name, any_year=False):
+    """(y, mo, d, h, mi, s, ns) for a date / localdatetime whose year Python's
+    datetime cannot hold (outside 1..9999; any year with `any_year`), else None."""
+    import re as _re
+
+    if fn_name not in ("date", "localdatetime") or not isinstance(temporal_str, str):
+        return None
+    m = _re.fullmatch(
+        r"([+-]?\d+)-(\d{2})-(\d{2})(?:T(\d{2})(?::(\d{2})(?::(\d{2})(?:\.(\d{1,9}))?)?)?)?",
+        temporal_str.strip(),
+    )
+    if not m:
+        return None
+    y = int(m.group(1))
+    if 1 <= y <= 9999 and not any_year:
+        return None
+    return (
+        y, int(m.group(2)), int(m.group(3)), int(m.group(4) or 0), int(m.group(5) or 0),
+        int(m.group(6) or 0), int((m.group(7) or "0").ljust(9, "0")),
+    )
+
+
+def _extended_days(y, mo, d):
+    """Proleptic Gregorian day number (days_from_civil); any integer year."""
+    y -= mo <= 2
+    era = y // 400
+    yoe = y - era * 400
+    doy = (153 * (mo + (-3 if mo > 2 else 9)) + 2) // 5 + d - 1
+    return era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy
+
+
+def _extended_ns(t):
+    y, mo, d, h, mi, s, ns = t
+    return ((_extended_days(y, mo, d) * 86400 + h * 3600 + mi * 60 + s) * 10**9) + ns
+
+
+def _extended_add_months(t, months):
+    import calendar as _cal
+
+    y, mo, d = t[0], t[1], t[2]
+    idx = y * 12 + (mo - 1) + months
+    ny, nmo = idx // 12, idx % 12 + 1
+    last = _cal.monthrange(2000 if _cal.isleap(ny % 400 + 2000) else 2001, nmo)[1]
+    return (ny, nmo, min(d, last)) + tuple(t[3:])
+
+
+def _extended_iso_time(ns_total, hours_only=False):
+    sign = -1 if ns_total < 0 else 1
+    n = abs(ns_total)
+    secs, frac = divmod(n, 10**9)
+    days, rem = divmod(secs, 86400)
+    if hours_only:
+        rem += days * 86400
+        days = 0
+    h, rem = divmod(rem, 3600)
+    mi, sec = divmod(rem, 60)
+    parts = [f"{sign * days}D"] if days else []
+    tp = []
+    if h:
+        tp.append(f"{sign * h}H")
+    if mi:
+        tp.append(f"{sign * mi}M")
+    if sec or frac:
+        s_txt = f"{sec}.{frac:09d}".rstrip("0").rstrip(".") if frac else str(sec)
+        tp.append(("-" if sign < 0 else "") + s_txt + "S")
+    return "".join(parts), ("T" + "".join(tp)) if tp else ""
+
+
+def _extended_duration(lhs_str, lhs_fn, rhs_str, rhs_fn, seconds_only=False):
+    """duration.between / inSeconds on years beyond Python's datetime, in integer
+    arithmetic. None unless one side needs it and both are local types."""
+    a = _extended_local_temporal(lhs_str, lhs_fn)
+    b = _extended_local_temporal(rhs_str, rhs_fn)
+    if a is None and b is None:
+        return None
+    a = a or _extended_local_temporal(lhs_str, lhs_fn, any_year=True)
+    b = b or _extended_local_temporal(rhs_str, rhs_fn, any_year=True)
+    if a is None or b is None:
+        return None
+    if seconds_only:
+        d, t = _extended_iso_time(_extended_ns(b) - _extended_ns(a), hours_only=True)
+        return "P" + (t or "T0S")
+    months = (b[0] - a[0]) * 12 + (b[1] - a[1])
+    na, nb = _extended_ns(a), _extended_ns(b)
+    step = 1 if months > 0 else -1
+    while months and (
+        (step > 0 and _extended_ns(_extended_add_months(a, months)) > nb)
+        or (step < 0 and _extended_ns(_extended_add_months(a, months)) < nb)
+    ):
+        months -= step
+    rest = nb - _extended_ns(_extended_add_months(a, months))
+    yrs, mos = abs(months) // 12, abs(months) % 12
+    sg = -1 if months < 0 else 1
+    out = ""
+    if yrs:
+        out += f"{sg * yrs}Y"
+    if mos:
+        out += f"{sg * mos}M"
+    d, t = _extended_iso_time(rest)
+    out += d + t
+    return "P" + (out or "T0S")
+
+
 def _compute_duration_between(lhs_str, lhs_fn, rhs_str, rhs_fn):
     """Compute duration.between(lhs, rhs) → ISO duration string.
 
     Uses calendar-aware subtraction: years+months from calendar math, rest from timedelta.
     """
+    ext = _extended_duration(lhs_str, lhs_fn, rhs_str, rhs_fn)
+    if ext is not None:
+        return ext
     import datetime as _dt
     import re as _re
 
@@ -15659,6 +15810,9 @@ def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
     """Compute duration.inSeconds — only seconds (no years/months).
     Normalizes total seconds into H/M/S components.
     """
+    ext = _extended_duration(lhs_str, lhs_fn, rhs_str, rhs_fn, seconds_only=True)
+    if ext is not None:
+        return ext
     import datetime as _dt
 
     lhs_str, lhs_fn, rhs_str, rhs_fn = _localize_to_zone(lhs_str, lhs_fn, rhs_str, rhs_fn)
