@@ -615,3 +615,86 @@ class TestZonedTimeOrdering:
         )
         iris_cursor.execute(t.sql, t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters)
         assert tuple(int(v) for v in iris_cursor.fetchall()[0]) == (0, 1, 0, 1)
+
+
+class TestConstantListOperatorFolding:
+    """Precedence3 [2] [4] [5] [6], Precedence4 [4].
+
+    Operators over literal values fold at translate time with Cypher
+    semantics. Evaluated in SQL they went wrong: JSON_TABLE '$[i]' returned the
+    first scalar of a nested list, `IN` against a folded JSON string compared
+    the strings, and a folded `IN` was then compared with a list.
+    """
+
+    @staticmethod
+    def col(cypher):
+        sql = tr(cypher).sql
+        assert sql.startswith("SELECT ") and sql.endswith(" AS a"), sql
+        return sql[len("SELECT ") : -len(" AS a")]
+
+    @pytest.mark.parametrize(
+        "expr, expected",
+        [
+            ("[[1], [2, 3], [4, 5]] + [5, [6, 7], [8, 9], 10][2]", "[[1], [2, 3], [4, 5], 8, 9]"),
+            ("([[1], [2, 3], [4, 5]] + [5, [6, 7], [8, 9], 10])[2]", "[4, 5]"),
+            ("[1]+(2 IN [3])+4", "[1, false, 4]"),
+            ("(([1]+[2]) IN [3])+[4]", "[false, 4]"),
+            ("[1, 2, 3][-1]", "3"),
+        ],
+    )
+    def test_list_values(self, expr, expected):
+        c = self.col(f"RETURN {expr} AS a")
+        if expected.startswith("["):
+            assert f"'{expected}'" in c
+        else:
+            assert c == expected
+
+    @pytest.mark.parametrize(
+        "expr, expected",
+        [
+            ("[1]+2 IN [3]+4", "0"),
+            ("[1]+[2] IN [3]+[4]", "0"),
+            ("[1, 2] = [3, 4] IN [[3, 4], false]", "0"),
+            ("[1, 2] <> [3, 4] IN [[3, 4], false]", "1"),
+            ("[1, 2] < [3, 4] IN [[3, 4], false]", "NULL"),
+            ("[1, 2] >= ([3, 4] IN [[3, 4], false])", "NULL"),
+            ("([1, 2] < [3, 4]) IN [[3, 4], false]", "0"),
+            ("([1, 2] > [3, 4]) IN [[3, 4], false]", "1"),
+            ("('abc' STARTS WITH null OR true) = (('abc' STARTS WITH null) OR true)", "1"),
+            ("('abc' STARTS WITH null OR true) <> ('abc' STARTS WITH (null OR true))", "NULL"),
+            ("(true OR null STARTS WITH 'abc') <> ((true OR null) STARTS WITH 'abc')", "NULL"),
+            ("null IN [1, 2]", "NULL"),
+            ("2 IN [1, null, 2]", "1"),
+        ],
+    )
+    def test_boolean_values(self, expr, expected):
+        assert self.col(f"RETURN {expr} AS a") == expected
+
+    def test_non_boolean_logical_operand_still_errors(self):
+        with pytest.raises(Exception):
+            tr("RETURN 1 AND true AS a")
+
+
+class TestQuantifierOverCollect:
+    """List11 [3]: `all(ok IN collect(expr) WHERE ok)`.
+
+    The quantifier put JSON_ARRAYAGG inside a correlated JSON_TABLE source,
+    which IRIS rejects with SQLCODE -19. It is now a grouped SUM/COUNT.
+    """
+
+    def test_no_aggregate_inside_json_table(self):
+        sql = tr(
+            "UNWIND [1, 2] AS x RETURN all(ok IN collect(x > 0) WHERE ok) AS okay"
+        ).sql
+        assert "JSON_ARRAYAGG" not in sql
+        assert "SUM(CASE WHEN" in sql and "COUNT(" in sql
+
+    def test_grouping_key_beside_quantifier_is_grouped(self):
+        sql = tr(
+            "UNWIND [1, 2, 3] AS x RETURN x % 2 AS k, any(v IN collect(x) WHERE v > 1) AS a"
+        ).sql
+        assert "GROUP BY" in sql
+
+    def test_distinct_collect_keeps_the_list_path(self):
+        sql = tr("UNWIND [1, 1] AS x RETURN any(v IN collect(DISTINCT x) WHERE v > 0) AS a").sql
+        assert "JSON_TABLE" in sql

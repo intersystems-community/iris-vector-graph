@@ -8553,6 +8553,10 @@ def _collect_all_prop_refs(expr, context) -> set:
 
 
 def translate_boolean_expression(expr, context) -> str:
+    if isinstance(expr, ast.BooleanExpression):
+        _folded, _fv = _cy_try_fold(expr)
+        if _folded and (_fv is None or isinstance(_fv, bool)):
+            return "NULL" if _fv is None else ("(1=1)" if _fv else "(1=0)")
     if isinstance(expr, ast.ExistsExpression):
         result = _boolean_expr_exists(expr, context)
         if result is not None:
@@ -9394,6 +9398,95 @@ def _lp_needs_null_sentinel(source):
     return False
 
 
+def _lp_over_collect(expr, context, segment):
+    """Quantifier over `collect(arg)` as grouped aggregates.
+
+    `all(v IN collect(arg) WHERE p)` placed JSON_ARRAYAGG inside a correlated
+    JSON_TABLE source, which IRIS rejects (SQLCODE -19). The quantifier is a
+    count over the collected rows, so it becomes SUM/COUNT over the group with
+    `v` bound to `arg`. collect() skips nulls, so null rows are not counted.
+    Returns None when the shape does not apply.
+    """
+    src = expr.source
+    if not (
+        isinstance(src, ast.AggregationFunction)
+        and src.function_name.lower() == "collect"
+        and src.argument is not None
+        and not src.distinct
+    ):
+        return None
+    lens = (
+        len(context.select_params),
+        len(context.where_params),
+        len(context.join_params),
+        len(context.join_clauses),
+    )
+    arg_sql = translate_expression(src.argument, context, segment=segment)
+    sentinel = "__lp_collect__"
+    prev_alias = context.variable_aliases.get(expr.variable)
+    was_scalar = expr.variable in context.scalar_variables
+    context.variable_aliases[expr.variable] = sentinel
+    context.scalar_variables.add(expr.variable)
+    try:
+        if isinstance(expr.predicate, ast.BooleanExpression):
+            pred_sql = translate_boolean_expression(expr.predicate, context)
+        else:
+            pred_sql = translate_expression(expr.predicate, context, segment="where")
+    finally:
+        if prev_alias is None:
+            context.variable_aliases.pop(expr.variable, None)
+        else:
+            context.variable_aliases[expr.variable] = prev_alias
+        if not was_scalar:
+            context.scalar_variables.discard(expr.variable)
+    grew = (
+        len(context.select_params),
+        len(context.where_params),
+        len(context.join_params),
+        len(context.join_clauses),
+    ) != lens
+    if grew:
+        # Substitution below repeats the SQL; bound params would misalign.
+        del context.select_params[lens[0] :]
+        del context.where_params[lens[1] :]
+        del context.join_params[lens[2] :]
+        del context.join_clauses[lens[3] :]
+        return None
+    import re as _re_lpc
+
+    if pred_sql in ("1", "(1=1)", "1=1"):
+        pred_sql = "1 = 1"
+    elif pred_sql in ("0", "(1=0)", "1=0"):
+        pred_sql = "1 = 0"
+    elif pred_sql.startswith("CASE WHEN ") and pred_sql.endswith(" END"):
+        pred_sql = f"({pred_sql} = 1)"
+    elif pred_sql != "NULL" and not any(
+        op in pred_sql for op in ("=", "<", ">", " IN ", " IS ", " LIKE ", " NOT ")
+    ):
+        pred_sql = f"{pred_sql} = 1"
+    pred_sql = _re_lpc.sub(
+        rf"{sentinel}\.[A-Za-z_][A-Za-z0-9_]*|{sentinel}", lambda _m: f"({arg_sql})", pred_sql
+    )
+    nn = f"({arg_sql}) IS NOT NULL"
+    if pred_sql == "NULL":
+        sat_expr = dfail_expr = "0"
+    else:
+        sat_expr = f"SUM(CASE WHEN {nn} AND ({pred_sql}) THEN 1 ELSE 0 END)"
+        dfail_expr = f"SUM(CASE WHEN {nn} AND NOT ({pred_sql}) THEN 1 ELSE 0 END)"
+    unc_expr = f"(COUNT({arg_sql}) - {sat_expr} - {dfail_expr})"
+    q = expr.quantifier
+    if q == "all":
+        return f"(CASE WHEN {dfail_expr} > 0 THEN 0 WHEN {unc_expr} > 0 THEN NULL ELSE 1 END)"
+    if q == "none":
+        return f"(CASE WHEN {sat_expr} > 0 THEN 0 WHEN {unc_expr} > 0 THEN NULL ELSE 1 END)"
+    if q == "single":
+        return (
+            f"(CASE WHEN {sat_expr} >= 2 THEN 0 WHEN {sat_expr} = 1 AND {unc_expr} = 0 THEN 1"
+            f" WHEN {unc_expr} > 0 THEN NULL ELSE 0 END)"
+        )
+    return f"(CASE WHEN {sat_expr} > 0 THEN 1 WHEN {unc_expr} > 0 THEN NULL ELSE 0 END)"
+
+
 def _expr_list_predicate(expr, context, segment):
     # --- Static type check: raise SyntaxError for invalid argument types ---
     # Cypher semantics: arithmetic operators (%, *, -, /) on string/boolean list elements
@@ -9405,6 +9498,10 @@ def _expr_list_predicate(expr, context, segment):
             f"Type mismatch: {expr.quantifier}() predicate uses arithmetic on "
             f"non-numeric list elements (InvalidArgumentType)"
         )
+
+    collected = _lp_over_collect(expr, context, segment)
+    if collected is not None:
+        return collected
 
     # --- IRIS JSON_TABLE null-sentinel workaround ---
     # IRIS expands CAST('[[1,2,3]]' AS VARCHAR) to scalar rows (1,2,3) instead of
@@ -10745,6 +10842,182 @@ def _literal_to_python(node):
     if isinstance(node, ast.MapLiteral):
         return {k: _literal_to_python(val) for k, val in node.entries.items()}
     return None
+
+
+class _NoFold(Exception):
+    """Raised by _cy_fold when an expression is not a foldable constant."""
+
+
+def _cy_is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _cy_fold_eq(a, b):
+    """Cypher 3VL equality over folded Python values (None = unknown)."""
+    if a is None or b is None:
+        return None
+    if isinstance(a, list) and isinstance(b, list):
+        if len(a) != len(b):
+            return False
+        result = True
+        for x, y in zip(a, b):
+            r = _cy_fold_eq(x, y)
+            if r is False:
+                return False
+            if r is None:
+                result = None
+        return result
+    if _cy_is_num(a) and _cy_is_num(b):
+        return a == b
+    if type(a) is not type(b):
+        return False
+    return a == b
+
+
+def _cy_fold_order(a, b):
+    """Cypher ordering: -1/0/1, or None when incomparable or unknown."""
+    if a is None or b is None:
+        return None
+    if isinstance(a, list) and isinstance(b, list):
+        for x, y in zip(a, b):
+            c = _cy_fold_order(x, y)
+            if c is None:
+                return None
+            if c != 0:
+                return c
+        return (len(a) > len(b)) - (len(a) < len(b))
+    if (_cy_is_num(a) and _cy_is_num(b)) or (
+        type(a) is type(b) and isinstance(a, (str, bool))
+    ):
+        if a != a or b != b:  # NaN
+            return None
+        return (a > b) - (a < b)
+    return None
+
+
+def _cy_fold(node):
+    """Evaluate a translate-time constant expression with Cypher semantics.
+
+    Covers list/scalar literals combined by `+` (list or string operands),
+    integer subscripts, comparisons, `IN`, string predicates, `IS [NOT] NULL`
+    and the boolean connectives. Raises _NoFold for anything else, including
+    operand types whose error or coercion behaviour is handled elsewhere.
+    """
+    if isinstance(node, ast.Literal):
+        v = node.value
+        if isinstance(v, list):
+            return [_cy_fold(i) for i in v]
+        if isinstance(v, (dict, ast.MapLiteral)):
+            raise _NoFold
+        if v is None or isinstance(v, (bool, int, float, str)):
+            return v
+        raise _NoFold
+    if isinstance(node, ast.FunctionCall) and node.function_name == "__arith_+":
+        if len(node.arguments) != 2:
+            raise _NoFold
+        a, b = _cy_fold(node.arguments[0]), _cy_fold(node.arguments[1])
+        if isinstance(a, list) and b is not None:
+            return a + b if isinstance(b, list) else a + [b]
+        if isinstance(b, list) and a is not None:
+            return [a] + b
+        if isinstance(a, str) and isinstance(b, str):
+            return a + b
+        raise _NoFold
+    if isinstance(node, ast.SubscriptExpression):
+        base, idx = _cy_fold(node.expression), _cy_fold(node.index)
+        if not isinstance(base, list) or not (
+            idx is None or (isinstance(idx, int) and not isinstance(idx, bool))
+        ):
+            raise _NoFold
+        if idx is None:
+            return None
+        if -len(base) <= idx < len(base):
+            return base[idx]
+        return None
+    if not isinstance(node, ast.BooleanExpression):
+        raise _NoFold
+    op = node.operator
+    B = ast.BooleanOperator
+    vals = [_cy_fold(o) for o in node.operands]
+    if op in (B.AND, B.OR, B.XOR, B.NOT):
+        if any(not (v is None or isinstance(v, bool)) for v in vals):
+            raise _NoFold
+        if op == B.NOT:
+            return None if vals[0] is None else not vals[0]
+        if op == B.AND:
+            if False in vals:
+                return False
+            return None if None in vals else True
+        if op == B.OR:
+            if True in vals:
+                return True
+            return None if None in vals else False
+        if len(vals) != 2:
+            raise _NoFold
+        return None if None in vals else vals[0] != vals[1]
+    if op == B.IS_NULL:
+        return vals[0] is None
+    if op == B.IS_NOT_NULL:
+        return vals[0] is not None
+    if len(vals) != 2:
+        raise _NoFold
+    a, b = vals
+    if op == B.EQUALS:
+        return _cy_fold_eq(a, b)
+    if op == B.NOT_EQUALS:
+        r = _cy_fold_eq(a, b)
+        return None if r is None else not r
+    if op in (B.LESS_THAN, B.LESS_THAN_OR_EQUAL, B.GREATER_THAN, B.GREATER_THAN_OR_EQUAL):
+        c = _cy_fold_order(a, b)
+        if c is None:
+            return None
+        return {
+            B.LESS_THAN: c < 0,
+            B.LESS_THAN_OR_EQUAL: c <= 0,
+            B.GREATER_THAN: c > 0,
+            B.GREATER_THAN_OR_EQUAL: c >= 0,
+        }[op]
+    if op == B.IN:
+        if b is None:
+            return None
+        if not isinstance(b, list):
+            raise _NoFold
+        unknown = False
+        for item in b:
+            r = _cy_fold_eq(a, item)
+            if r is True:
+                return True
+            if r is None:
+                unknown = True
+        return None if unknown else False
+    if op in (B.STARTS_WITH, B.ENDS_WITH, B.CONTAINS):
+        if not (isinstance(a, str) and isinstance(b, str)):
+            return None  # null or a non-string operand
+        if op == B.STARTS_WITH:
+            return a.startswith(b)
+        if op == B.ENDS_WITH:
+            return a.endswith(b)
+        return b in a
+    raise _NoFold
+
+
+def _cy_try_fold(node):
+    """Return (True, value) if node folds to a constant, else (False, None).
+
+    Plain literals are not folded: they already translate directly.
+    """
+    if isinstance(node, ast.Literal):
+        return False, None
+    try:
+        return True, _cy_fold(node)
+    except (_NoFold, RecursionError, TypeError):
+        return False, None
+
+
+def _cy_value_to_literal(v):
+    if isinstance(v, list):
+        return ast.Literal(value=[_cy_value_to_literal(i) for i in v])
+    return ast.Literal(value=v)
 
 
 def _expr_literal(expr, context, segment):
@@ -15540,6 +15813,12 @@ def translate_expression(expr, context, segment="select") -> str:
 
     if isinstance(expr, ast.PatternComprehension):
         return _expr_pattern_comprehension(expr, context, segment)
+    if isinstance(expr, ast.SubscriptExpression) or (
+        isinstance(expr, ast.FunctionCall) and expr.function_name == "__arith_+"
+    ):
+        _folded, _fv = _cy_try_fold(expr)
+        if _folded:
+            return _expr_literal(_cy_value_to_literal(_fv), context, segment)
     if isinstance(expr, ast.FunctionCall) and expr.function_name == "__prop__":
         return _expr_prop(expr, context, segment)
     if isinstance(expr, ast.FunctionCall) and expr.function_name.startswith("__arith_"):
@@ -15864,6 +16143,8 @@ def _contains_aggregation(expr) -> bool:
         return any(_contains_aggregation(a) for a in expr.arguments)
     if isinstance(expr, ast.MapLiteral):
         return any(_contains_aggregation(v) for v in expr.entries.values())
+    if isinstance(expr, ast.ListPredicateExpression):
+        return _contains_aggregation(expr.source)
     if isinstance(expr, ast.Literal) and isinstance(expr.value, list):
         return any(
             _contains_aggregation(v)

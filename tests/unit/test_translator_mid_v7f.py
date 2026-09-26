@@ -134,7 +134,7 @@ class TestTranslateBooleanExpression:
     # Numeric cast for equality int vs float
     def test_int_float_equality_cast(self):
         sql = check("RETURN 1 = 1.0")
-        assert "CAST" in sql or "DOUBLE" in sql or "1=1" in sql
+        assert "CAST" in sql or "DOUBLE" in sql or "1=1" in sql or "SELECT 1 AS" in sql
 
     # Property reference boolean context (rdf_props stores '1'/'0')
     def test_property_ref_bool_context(self):

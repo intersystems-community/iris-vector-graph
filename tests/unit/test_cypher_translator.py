@@ -759,8 +759,8 @@ class TestBooleanLogic:
         query = "RETURN 1 IN [1, null, 3] AS result"
         result = translate_to_sql(parse_query(query))
         sql = result.sql if isinstance(result.sql, str) else "\n".join(result.sql)
-        # 1 IN [1, null, 3] should return true (1 is in the list)
-        assert "CASE WHEN" in sql  # Should use CASE for 3VL
+        # 1 IN [1, null, 3] is true (1 is in the list); constant-folded
+        assert "SELECT 1 AS" in sql
 
     def test_and_with_true_and_false(self):
         """Test AND with true and false."""
