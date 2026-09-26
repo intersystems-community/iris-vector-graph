@@ -1716,9 +1716,9 @@ class TestSetAfterStageBindsCteParamsFirst:
             assert p[0] == "Label1", (s, p)
             assert s.count("?") == len(p)
         upd = next(p for s, p in dml if "UPDATE" in s)
-        assert upd == ["Label1", "name", "newName", "name"]
+        assert upd == ["Label1", "newName", "name"]
         ins = next(p for s, p in dml if "INSERT" in s)
-        assert ins == ["Label1", "name", "name", "newName", "name"]
+        assert ins == ["Label1", "name", "newName", "name"]
 
     def test_set_label_after_stage_binds_stage_first(self):
         t = tr("MATCH (a:Label1) WITH collect(a) AS ns UNWIND ns AS n SET n:Foo RETURN n")
@@ -2394,3 +2394,147 @@ class TestCollectNodesOfPath:
     def test_collect_of_scalar_unchanged(self):
         sql = tr("MATCH (a) RETURN collect(a.name) AS names").sql
         assert "JSON_TABLE" not in sql, sql
+
+
+class TestCollectedNodePropertyKeyInlined:
+    """List12 [1]/[2] prerequisite: `[x IN nodes | x.name]` over collect(a) bound
+    the key as a parameter inside JSON_ARRAYAGG over JSON_TABLE, and IRIS failed
+    with 'Incorrect number of parameters'. The key is an escaped literal now."""
+
+    def test_comprehension_over_collected_nodes_inlines_key(self):
+        r = tr(
+            "MATCH (a:Label1) WITH collect(a) AS nodes "
+            "WITH nodes, [x IN nodes | x.name] AS oldNames RETURN oldNames"
+        )
+        assert "SQLUser.JSON_VALUE(lc2.x, '$._id') AND \"key\" = 'name')" in r.sql, r.sql
+        assert r.parameters[0] == ["Label1"], r.parameters
+
+    def test_quote_in_key_is_escaped(self):
+        sql = tr("MATCH (a) WITH collect(a) AS ns RETURN [x IN ns | x.`it's`] AS v").sql
+        assert "\"key\" = 'it''s')" in sql, sql
+
+
+class TestWhereOnBooleanWithAlias:
+    """Comparison2 [3]: `WITH lhs < rhs AS result WHERE result` expanded the alias
+    to its CASE value, and IRIS rejects a bare CASE as a predicate (SQLCODE -14)."""
+
+    def test_where_on_comparison_alias_is_a_predicate(self):
+        sql = tr(
+            "UNWIND [1, 2] AS a UNWIND [1, 3] AS c WITH a, c "
+            "WITH a, c, a < c AS b WHERE b RETURN a, c"
+        ).sql
+        assert "WHERE CASE WHEN" not in sql, sql
+        assert "WHERE Stage1.a < Stage1.c\n" in sql, sql
+
+    def test_where_on_property_comparison_alias(self):
+        sql = tr("MATCH (n) WITH n, n.x > 1 AS b WHERE b RETURN n").sql
+        assert "AND CASE WHEN" not in sql and "WHERE CASE WHEN" not in sql, sql
+
+    def test_negated_alias(self):
+        sql = tr("UNWIND [1, 2] AS a WITH a, a > 1 AS b WHERE NOT b RETURN a").sql
+        assert "NOT (CASE WHEN" not in sql, sql
+
+
+_DISTINCT_TYPES = (
+    "MATCH p = (n:N)-[r:REL]->() "
+    "UNWIND [n, r, p, 1.5, ['list'], 'text', null, false, 0.0 / 0.0, {a: 'map'}] AS types "
+)
+
+
+class TestMixedGraphValueList:
+    """ReturnOrderBy1 [11]/[12], WithOrderBy1 [21]/[22], Comparison2 [3]: a list
+    literal mixing graph values with other values keeps each element's type in
+    its text, so ORDER BY and comparisons can rank it (CY_SORT_KEY / CY_CMP)."""
+
+    def test_elements_carry_their_type(self):
+        sql = tr(_DISTINCT_TYPES + "RETURN types ORDER BY types").sql
+        assert "'{\"_id\":\"' || n0.node_id" in sql, sql
+        assert "'{\"type\":\"' || e3.p" in sql, sql
+        assert "'{\"nodes\":' || JSON_ARRAY(n0.node_id, n2.node_id)" in sql, sql
+        assert "'false'" in sql and "'NaN'" in sql, sql
+        assert "CAST('NaN' AS DOUBLE)" not in sql, sql
+
+    def test_homogeneous_graph_list_unchanged(self):
+        sql = tr("MATCH (n), (m) UNWIND [n, m] AS x RETURN x").sql
+        assert "JSON_ARRAY(n0.node_id, n1.node_id)" in sql, sql
+
+    def test_scalar_list_unchanged(self):
+        sql = tr("UNWIND [1, true, 'a'] AS x RETURN x").sql
+        assert "'true'" not in sql, sql
+
+    def test_subscripted_elements_compare_by_orderability(self):
+        sql = tr(
+            "MATCH p = (n)-[r]->() WITH [n, r, p, '', 1, 3.14, true, null, [], {}] AS types "
+            "UNWIND range(0, size(types) - 1) AS i UNWIND range(0, size(types) - 1) AS j "
+            "WITH types[i] AS lhs, types[j] AS rhs WHERE i <> j "
+            "WITH lhs, rhs, lhs < rhs AS result WHERE result RETURN lhs, rhs"
+        ).sql
+        assert "SQLUser.CY_CMP(Stage2.lhs, Stage2.rhs) = -1" in sql, sql
+        assert "'true'" in sql, sql
+
+    def test_plain_stage_comparison_unchanged(self):
+        sql = tr("UNWIND [1, 2] AS a WITH a WHERE a < 2 RETURN a").sql
+        assert "CY_CMP" not in sql, sql
+
+    @pytest.mark.parametrize(
+        "v, rank",
+        [
+            ('{"_id":"x","_labels":[],"_props":[]}', "b"),
+            ('{"type":"REL","props":{}}', "c"),
+            ('{"nodes":["a","b"],"rels":["REL"]}', "e"),
+            ('{"a": "map"}', "a"),
+        ],
+    )
+    def test_sort_key_ranks_graph_values(self, iris_cursor, v, rank):
+        iris_cursor.execute("SELECT SQLUser.CY_SORT_KEY(?, 'x')", [v])
+        assert iris_cursor.fetchone()[0][0] == rank
+
+
+class TestHarnessOrderedMixedTypes:
+    """ReturnOrderBy1 [11]/[12]: an ordered column mixing types normalises each
+    actual cell against its own expected cell, and a single relationship cell
+    ([:REL]) matches a {"type", "props"} value."""
+
+    def _table(self, cells):
+        from tests.tck.steps.comparison import TCKResultTable, TCKValue
+
+        return TCKResultTable(
+            columns=["types"],
+            rows=[[TCKValue.parse(c)] for c in cells],
+            ordered=True,
+            list_unordered=False,
+        )
+
+    def test_boolean_after_map_in_ordered_column(self):
+        t = self._table(["{a: 'map'}", "false", "1.5"])
+        rows = [{"types": '{"a": "map"}'}, {"types": "false"}, {"types": "1.5"}]
+        assert t.compare(rows, ["types"]) is None
+
+    def test_single_relationship_cell(self):
+        t = self._table(["{a: 'map'}", "[:REL]"])
+        rows = [{"types": '{"a": "map"}'}, {"types": '{"type":"REL","props":{}}'}]
+        assert t.compare(rows, ["types"]) is None
+
+    def test_wrong_relationship_type_still_fails(self):
+        t = self._table(["{a: 'map'}", "[:REL]"])
+        rows = [{"types": '{"a": "map"}'}, {"types": '{"type":"OTHER","props":{}}'}]
+        assert t.compare(rows, ["types"]) is not None
+
+    def test_unordered_mixed_types(self):
+        # WithOrderBy1 [21]/[22]: the same per-cell fallback applies unordered.
+        from tests.tck.steps.comparison import TCKResultTable, TCKValue
+
+        t = TCKResultTable(
+            columns=["types"],
+            rows=[[TCKValue.parse(c)] for c in ["{a: 'map'}", "[:REL]", "['list']", "false", "'text'"]],
+            ordered=False,
+            list_unordered=False,
+        )
+        rows = [
+            {"types": '["list"]'},
+            {"types": "false"},
+            {"types": '{"type":"REL","props":{}}'},
+            {"types": "text"},
+            {"types": '{"a": "map"}'},
+        ]
+        assert t.compare(rows, ["types"]) is None

@@ -8,7 +8,7 @@ Supports multi-stage queries via Common Table Expressions (CTEs).
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 from pydantic import BaseModel, Field
 
@@ -706,6 +706,14 @@ class TranslationContext:
         # known when it was unwound from a literal list. Null is not a kind.
         self.static_scalar_kinds: Dict[str, frozenset] = (
             {} if parent is None else dict(getattr(parent, "static_scalar_kinds", {}))
+        )
+        # Lists that mix graph values with other values (see _is_mixed_graph_list), and
+        # the scalars taken from them: elements are type-tagged text, compared by CY_CMP.
+        self.mixed_list_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "mixed_list_vars", set()))
+        )
+        self.mixed_value_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "mixed_value_vars", set()))
         )
         # Variable bound by `WITH collect(<literal list>) AS v` -> that list's elements:
         # every element of v is that same literal list.
@@ -4389,9 +4397,18 @@ def _register_merge_path(merge, context):
 
 
 def translate_unwind_clause(unwind, context):
+    _mixed_src = _is_mixed_graph_list(unwind.expression, context) or (
+        isinstance(unwind.expression, ast.Variable)
+        and unwind.expression.name in context.mixed_list_vars
+    )
     alias = context.register_variable(unwind.alias, prefix="u")
     context.scalar_variables.add(unwind.alias)
     context.bind_variable_type(unwind.alias, "scalar")
+    context.mixed_list_vars.discard(unwind.alias)
+    if _mixed_src:
+        context.mixed_value_vars.add(unwind.alias)
+    else:
+        context.mixed_value_vars.discard(unwind.alias)
 
     _kinds_map = getattr(context, "static_scalar_kinds", None)
     if _kinds_map is not None:
@@ -10448,12 +10465,14 @@ def translate_boolean_expression(expr, context) -> str:
     # Cypher orderability so `x < value` agrees with ORDER BY (lists, zoned temporals).
     # Only when a comprehension variable is involved: inside `(a < b) IN c` membership
     # subqueries the UDF call makes IRIS fail with -400 (Precedence1).
+    # Also when either side came from a list mixing graph values with others (Comparison2).
     if (
         op in _ordering_ops
         and _is_scalar_var(left_expr, context)
         and _is_scalar_var(right_expr, context)
         and any(
             str(context.variable_aliases.get(e.name, "")).startswith("lc")
+            or e.name in context.mixed_value_vars
             for e in (left_expr, right_expr)
         )
     ):
@@ -12281,11 +12300,12 @@ def _expr_property_reference(expr, context, segment):
     # Extract _id via a correlated subquery (can't use JSON_VALUE in JOIN ON in IRIS).
     if expr.variable in getattr(context, "collected_node_variables", set()):
         col_ref = f"{alias}.{_safe_alias(expr.variable)}"
-        prop_key = expr.property_name
-        context.select_params.append(prop_key)
+        # Inline, not bound: a key bound inside a stage's JSON_ARRAYAGG over JSON_TABLE
+        # made IRIS fail with 'Incorrect number of parameters' (List12).
         return (
             f"(SELECT val FROM {_table('rdf_props')} "
-            f"WHERE s = SQLUser.JSON_VALUE({col_ref}, '$._id') AND \"key\" = ?)"
+            f"WHERE s = SQLUser.JSON_VALUE({col_ref}, '$._id') "
+            f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
         )
     # Scalar variable from JSON_TABLE (list predicate / list comprehension): use JSON_VALUE
     # not rdf_props join.  The column holds a JSON-serialised value, not a graph node id.
@@ -12407,6 +12427,81 @@ def _graph_value_sql(var_name, context):
         f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
         f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
     )
+
+
+def _is_graph_value_var(item, context) -> bool:
+    return isinstance(item, ast.Variable) and (
+        item.name in context.named_paths or _graph_value_sql(item.name, context) is not None
+    )
+
+
+def _is_mixed_graph_list(expr, context) -> bool:
+    """A list literal holding a node, relationship or path next to other values
+    (`[n, r, p, 1.5, 'text', false]`)."""
+    if not (isinstance(expr, ast.Literal) and isinstance(expr.value, list) and expr.value):
+        return False
+    graph = [_is_graph_value_var(item, context) for item in expr.value]
+    return any(graph) and not all(graph)
+
+
+def _track_mixed_graph_value(alias, expr, context):
+    """Record `alias` as a mixed list (`WITH [n, 1] AS l`, `WITH l AS m`) or as a
+    value taken from one (`WITH l[i] AS x`, `UNWIND l AS x`)."""
+    lists, values = context.mixed_list_vars, context.mixed_value_vars
+    is_list = (isinstance(expr, ast.Variable) and expr.name in lists) or _is_mixed_graph_list(
+        expr, context
+    )
+    is_value = (isinstance(expr, ast.Variable) and expr.name in values) or (
+        isinstance(expr, ast.SubscriptExpression)
+        and isinstance(expr.expression, ast.Variable)
+        and expr.expression.name in lists
+    )
+    lists.discard(alias)
+    values.discard(alias)
+    if is_list:
+        lists.add(alias)
+    elif is_value:
+        values.add(alias)
+
+
+def _mixed_graph_list_sql(items, context, segment):
+    """JSON_ARRAY of a mixed list whose elements keep their type in their text:
+    node / relationship JSON, path JSON, 'true' / 'false', 'NaN'. CY_SORT_KEY and
+    CY_CMP rank those texts; a bare id or 1 / 0 would read as a string or number."""
+    import math as _math
+
+    sql_items = []
+    for item in items:
+        if isinstance(item, ast.Variable) and item.name not in context.named_paths:
+            g = _graph_value_sql(item.name, context)
+            if g is not None:
+                sql_items.append(g)
+                continue
+        if isinstance(item, ast.Literal) and isinstance(item.value, bool):
+            sql_items.append("'true'" if item.value else "'false'")
+            continue
+        folded, fv = _cy_try_fold(item)
+        if (folded and isinstance(fv, float) and _math.isnan(fv)) or (
+            # 0.0 / 0.0: CAST('NaN' AS DOUBLE) inside JSON_ARRAY is an IRIS error
+            isinstance(item, ast.FunctionCall)
+            and item.function_name == "__arith_/"
+            and len(item.arguments) == 2
+            and all(
+                isinstance(a, ast.Literal)
+                and isinstance(a.value, (int, float))
+                and not isinstance(a.value, bool)
+                and a.value == 0
+                for a in item.arguments
+            )
+            and any(isinstance(a.value, float) for a in item.arguments)
+        ):
+            sql_items.append("'NaN'")
+            continue
+        if isinstance(item, ast.Literal) and isinstance(item.value, str):
+            sql_items.append(f"'{item.value.replace(chr(39), chr(39) + chr(39))}'")
+            continue
+        sql_items.append(translate_expression(item, context, segment=segment))
+    return f"JSON_ARRAY({', '.join(sql_items)})"
 
 
 def _expr_map_literal(expr, context, segment):
@@ -13008,6 +13103,8 @@ def _expr_literal(expr, context, segment):
             # RETURN [n, r, m]: the node / relationship values themselves, not their ids
             graph_items = " || ',' || ".join(_graph_value_sql(item.name, context) for item in v)
             return f"('[' || {graph_items} || ']')"
+        if _is_mixed_graph_list(expr, context):
+            return _mixed_graph_list_sql(v, context, segment)
         sql_items = []
         for item in v:
             if isinstance(item, ast.Literal):
@@ -19053,6 +19150,7 @@ def translate_with_clause(with_clause, context):
                 _cll[alias] = _cll[_ce.name]
             else:
                 _cll.pop(alias, None)
+        _track_mixed_graph_value(alias, item.expression, context)
 
         # Track literal list variables for list-comprehension constant folding.
         # When a WITH item binds a variable to a literal list, record the Python value so that
@@ -19236,6 +19334,10 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
         # If this variable is an alias defined in the WITH, substitute it with the original expression
         if expr.name in alias_to_expr:
             original_expr = alias_to_expr[expr.name]
+            # A boolean alias here is a predicate: its value form is a CASE, which IRIS
+            # rejects as a WHERE condition (-14).
+            if isinstance(original_expr, ast.BooleanExpression):
+                return translate_boolean_expression(original_expr, context)
             # Recursively translate the original expression
             return translate_expression(original_expr, context, segment="where")
         # Otherwise, translate normally
