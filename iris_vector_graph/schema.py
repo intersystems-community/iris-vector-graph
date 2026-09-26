@@ -35,9 +35,10 @@ RDF_EDGES_DDL = """CREATE TABLE Graph_KG.rdf_edges(
   p          VARCHAR(128) %EXACT NOT NULL,
   o_id       VARCHAR(256) %EXACT NOT NULL,
   qualifiers %Library.DynamicObject,
+  ekey       INTEGER NOT NULL DEFAULT 0,
   CONSTRAINT fk_edges_source FOREIGN KEY (graph_id, s) REFERENCES Graph_KG.nodes (graph_id, node_id),
   CONSTRAINT fk_edges_dest FOREIGN KEY (graph_id, o_id) REFERENCES Graph_KG.nodes (graph_id, node_id),
-  CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)
+  CONSTRAINT u_spo_graph_ekey UNIQUE (s, p, o_id, graph_id, ekey)
 )"""
 
 #: Where the edges wait while the class that owned them is deleted. DDL-owned, so
@@ -680,7 +681,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         except Exception as e:
             logger.debug("graph_id tightening skipped: %s", e)
             status["tighten_graph_id_column"] = {"error": str(e)}
-        status["update_spo_unique_constraint"] = GraphSchema.update_spo_unique_constraint(cursor)
+        status.update(GraphSchema._spo_constraint_status(cursor))
         status["add_graph_id_to_nodes"] = GraphSchema.add_graph_id_to_nodes(cursor)
 
         return status
@@ -748,6 +749,101 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                 logger.debug("TUNE TABLE %s skipped: %s", qualified, e)
                 status[qualified] = False
         return status
+
+    @staticmethod
+    def _at_234(cursor) -> bool:
+        """Whether ``rdf_edges`` already carries a NOT NULL ``ekey`` and the widened key."""
+        try:
+            cursor.execute(
+                "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_edges' "
+                "AND COLUMN_NAME = 'ekey'"
+            )
+            row = cursor.fetchone()
+            if not row or str(row[0]).upper() != "NO":
+                return False
+            return "u_spo_graph_ekey" in GraphSchema._edge_constraints(cursor)
+        except Exception as e:
+            logger.debug("spec 234 probe failed: %s", e)
+            return False
+
+    @staticmethod
+    def _edge_constraints(cursor) -> set:
+        cursor.execute(
+            "SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
+            "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_edges'"
+        )
+        return {str(r[0]).lower() for r in cursor.fetchall()}
+
+    @staticmethod
+    def _spo_constraint_status(cursor) -> Dict[str, Any]:
+        """The unique-key half of schema setup.
+
+        ``update_spo_unique_constraint`` adds ``u_spo_graph`` on every run. Once the
+        table is at 234 that would put the triple-only key back beside the widened one
+        and refuse every parallel edge, so it is skipped there; before 234 it runs
+        first, and ``ensure_ekey`` then swaps it for ``u_spo_graph_ekey``.
+        """
+        status: Dict[str, Any] = {}
+        if GraphSchema._at_234(cursor):
+            status["update_spo_unique_constraint"] = True
+        else:
+            status["update_spo_unique_constraint"] = GraphSchema.update_spo_unique_constraint(cursor)
+        status["ensure_ekey"] = GraphSchema.ensure_ekey(cursor)
+        return status
+
+    @staticmethod
+    def ensure_ekey(cursor) -> Dict[str, Any]:
+        """Bring ``rdf_edges`` to spec 234: an ``ekey`` column and a unique key on
+        ``(s, p, o_id, graph_id, ekey)`` in place of ``(s, p, o_id, graph_id)``.
+
+        Five steps, each skipped when the catalog shows it done, so a second run is a
+        no-op and a run that died half way resumes: add the column, fill it with 0,
+        make it NOT NULL, add the widened key, drop the old one. The old key is dropped
+        only after the new one is in place, so the table never has neither. Every
+        existing row becomes ``ekey = 0``, which is the edge ``^KG`` already holds, so
+        neither the adjacency nor the ledger changes.
+        """
+        if GraphSchema._at_234(cursor):
+            try:
+                if "u_spo_graph" not in GraphSchema._edge_constraints(cursor):
+                    return {"status": "already at 234"}
+            except Exception:
+                return {"status": "already at 234"}
+        steps = []
+        try:
+            cursor.execute(
+                "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = 'rdf_edges' "
+                "AND COLUMN_NAME = 'ekey'"
+            )
+            row = cursor.fetchone()
+            nullable = None if not row else str(row[0]).upper()
+            if nullable is None:
+                cursor.execute("ALTER TABLE Graph_KG.rdf_edges ADD COLUMN ekey INTEGER DEFAULT 0")
+                steps.append("add column")
+                nullable = "YES"
+            if nullable != "NO":
+                cursor.execute("UPDATE Graph_KG.rdf_edges SET ekey = 0 WHERE ekey IS NULL")
+                steps.append("fill")
+                cursor.execute("ALTER TABLE Graph_KG.rdf_edges ALTER COLUMN ekey NOT NULL")
+                steps.append("not null")
+            constraints = GraphSchema._edge_constraints(cursor)
+            if "u_spo_graph_ekey" not in constraints:
+                cursor.execute(
+                    "ALTER TABLE Graph_KG.rdf_edges ADD CONSTRAINT u_spo_graph_ekey "
+                    "UNIQUE (s, p, o_id, graph_id, ekey)"
+                )
+                steps.append("add key")
+            if "u_spo_graph" in constraints:
+                cursor.execute("ALTER TABLE Graph_KG.rdf_edges DROP CONSTRAINT u_spo_graph")
+                steps.append("drop old key")
+        except Exception as e:
+            logger.warning("rdf_edges ekey migration stopped after %s: %s", steps, e)
+            return {"status": "failed", "steps": steps, "error": str(e)}
+        if not steps:
+            return {"status": "already at 234"}
+        return {"status": "migrated", "steps": steps}
 
     @staticmethod
     def update_spo_unique_constraint(cursor) -> bool:

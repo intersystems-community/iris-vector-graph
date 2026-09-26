@@ -16,21 +16,21 @@ user-story phase ends with an E2E gate.
 **Purpose**: settle the two IRIS facts the design depends on (research R8), and
 the counter-subscript sort order, before any code.
 
-- [ ] T001 Record the pre-change reference state on `ivg-iris-enterprise`. Take
+- [x] T001 Record the pre-change reference state on `ivg-iris-enterprise`. Take
       a `$Query` dump of `^KG` and the ledger head fingerprint from a seeded
       single-edge fixture. Save them to `specs/234-multigraph-parallel-edges/baseline.txt`
       for SC-003. Record `create_edge` and `^KG("out")` scan medians on a
       100k-edge graph for SC-004.
-- [ ] T002 Spike: on a scratch table copied from `rdf_edges`, check whether
+- [x] T002 Spike: on a scratch table copied from `rdf_edges`, check whether
       `ALTER TABLE … ADD COLUMN ekey INTEGER DEFAULT 0` backfills existing rows
       physically. Check `SELECT COUNT(*) WHERE ekey IS NULL`, then whether
       `ALTER COLUMN ekey NOT NULL` succeeds. Record the answer in `research.md`
       R8, and fix the migration step order in `plan.md` D2.
-- [ ] T003 Spike: check whether `INSERT INTO … SELECT …, COALESCE(m.mx, -1) + ROW_NUMBER() OVER (PARTITION BY c1, c2, c3 ORDER BY %ID) …`
+- [x] T003 Spike: check whether `INSERT INTO … SELECT …, COALESCE(m.mx, -1) + ROW_NUMBER() OVER (PARTITION BY c1, c2, c3 ORDER BY %ID) …`
       is accepted and correct on the enterprise image. Test it inside a CTE and
       with a correlated `MAX`. Record the answer in `research.md` R8. If it is
       rejected, mark plan D3's row-at-a-time fallback as the chosen path.
-- [ ] T004 Spike: in an IRIS terminal, confirm that `$Order` over
+- [x] T004 Spike: in an IRIS terminal, confirm that `$Order` over
       `^KG("out", g, s, p, o, …)` returns integer `ekey`s before the string
       subscript `"#"`. Confirm that `$Data` of a leaf with children is 11. Also
       check that `Kill ^KG("out", g, s, p, o)` removes the children. Record the
@@ -43,24 +43,24 @@ behaviour changes while the mode is off.
 
 ### Tests first
 
-- [ ] T005 [P] Unit test: `RDF_EDGES_DDL` declares
+- [x] T005 [P] Unit test: `RDF_EDGES_DDL` declares
       `ekey INTEGER NOT NULL DEFAULT 0` and `u_spo_graph_ekey`, and no longer
       declares `u_spo_graph` (`tests/unit/test_234_multigraph_sql.py`).
-- [ ] T006 [P] E2E test for the mode API. `is_multigraph` is False by default.
+- [x] T006 [P] E2E test for the mode API. `is_multigraph` is False by default.
       `set_multigraph(g, True)` sets it. Disabling with parallel edges present
       raises `parallel_edges_present` with a count. `EraseGraph` clears the
       mode (`tests/e2e/test_234_multigraph_storage_e2e.py`).
-- [ ] T007 [P] E2E test for the `WriteAdjacencyKeyed`/`DeleteAdjacencyKeyed`
+- [x] T007 [P] E2E test for the `WriteAdjacencyKeyed`/`DeleteAdjacencyKeyed`
       transitions. It covers one→two→three→two→one edges, deleting the lowest
       `ekey`, and deleting the last edge. After each step, assert: - the leaf value, the children and the `"#"` counter; - `deg`/`degp` equal to the live edge count; - `^NKG` present iff at least one edge is live; - after going back to one edge, a `$Query` dump byte-identical to a
       never-parallel edge.
 
       File: `tests/e2e/test_234_multigraph_storage_e2e.py`.
 
-- [ ] T008 [P] E2E test: after 200 random keyed creates and deletes over 20
+- [x] T008 [P] E2E test: after 200 random keyed creates and deletes over 20
       triples, `BuildKG` gives a `^KG` dump identical to the incrementally
       written one (FR-006) (`tests/e2e/test_234_multigraph_storage_e2e.py`).
-- [ ] T009 [P] E2E test for the upgrade. Start from a pre-234 schema: drop
+- [x] T009 [P] E2E test for the upgrade. Start from a pre-234 schema: drop
       `ekey`, restore `u_spo_graph`, seed data and run the 213 ledger. Then run
       the upgrade and check: - every row has `ekey = 0`; - the constraint swap happened; - the `^KG` dump and ledger head fingerprint equal the pre-upgrade ones
       (SC-003); - a second run reports `already at 234`.
@@ -69,26 +69,26 @@ behaviour changes while the mode is off.
 
 ### Implementation
 
-- [ ] T010 Add `ekey` and `u_spo_graph_ekey` to `RDF_EDGES_DDL`
+- [x] T010 Add `ekey` and `u_spo_graph_ekey` to `RDF_EDGES_DDL`
       (`iris_vector_graph/schema.py:31-41`).
-- [ ] T011 Add a migration `ensure_ekey` in the order fixed by T002. Wire it
+- [x] T011 Add a migration `ensure_ekey` in the order fixed by T002. Wire it
       next to `update_spo_unique_constraint` in the status block
       (`iris_vector_graph/schema.py:683`, `:753`).
-- [ ] T012 [P] Create `Graph.KG.GraphMode` with `IsMulti`, `Set` and
+- [x] T012 [P] Create `Graph.KG.GraphMode` with `IsMulti`, `Set` and
       `ParallelCount` (`iris_src/src/Graph/KG/GraphMode.cls`).
-- [ ] T013 [P] Add `set_multigraph`/`is_multigraph`, with the per-connection
+- [x] T013 [P] Add `set_multigraph`/`is_multigraph`, with the per-connection
       cache, to `iris_vector_graph/_engine/admin.py`. Add facade entries in
       `iris_vector_graph/engine.py` (`_GraphSubEngine`, `:143`).
-- [ ] T014 Register `^IVG.GraphMode`: - `STORE_PLAN` (`iris_vector_graph/_engine/snapshot.py:46`); - an inventory entry (`iris_src/src/Graph/KG/GraphStores.cls`); - kill per graph in `EraseGraph` and whole in `EraseAll`
+- [x] T014 Register `^IVG.GraphMode`: - `STORE_PLAN` (`iris_vector_graph/_engine/snapshot.py:46`); - an inventory entry (`iris_src/src/Graph/KG/GraphStores.cls`); - kill per graph in `EraseGraph` and whole in `EraseAll`
       (`iris_src/src/Graph/KG/Eraser.cls:47`, `:294`).
-- [ ] T015 Implement `WriteAdjacencyKeyed` and `DeleteAdjacencyKeyed` per plan
+- [x] T015 Implement `WriteAdjacencyKeyed` and `DeleteAdjacencyKeyed` per plan
       D2, gating `GraphIndex.DeleteIndex` on the last edge. Leave
       `WriteAdjacency` and `DeleteAdjacency` unchanged
       (`iris_src/src/Graph/KG/EdgeScan.cls:133`, `:198`).
-- [ ] T016 Make `BuildKG` read `ekey`, group by triple and write the leaf,
+- [x] T016 Make `BuildKG` read `ekey`, group by triple and write the leaf,
       children, counter and edge-counted `deg`/`degp`
       (`iris_src/src/Graph/KG/TraversalBuild.cls:26`).
-- [ ] T017 Compile via TCP deploy (`scripts/enterprise-container.sh`).
+- [x] T017 Compile via TCP deploy (`scripts/enterprise-container.sh`).
 
 **Gate**: T005–T009 pass. The full unit suite keeps its baseline (1F/8470P
 known). `tests/e2e/test_fhir_demo_e2e.py` and the 231/232 E2E tests pass.

@@ -588,6 +588,51 @@ class AdminMixin:
         )
         return json.loads(str(raw))
 
+    def set_multigraph(self, graph: Optional[str], enabled: bool) -> None:
+        """Turn multigraph mode on or off for one graph (spec 234).
+
+        In multigraph mode a graph may hold several edges with the same
+        ``(s, p, o)``; everywhere else it is off, and the graph behaves exactly
+        as before. Turning it off is refused with ``ParallelEdgesPresentError``
+        while any triple still has two edges.
+        """
+        from iris_vector_graph._validate import validate_graph_name
+        from iris_vector_graph.errors import ParallelEdgesPresentError
+
+        canonical = validate_graph_name(graph)
+        self._graph_mode_forget(canonical)
+        raw = str(
+            self._iris_obj().classMethodValue(
+                "Graph.KG.GraphMode", "Apply", canonical, 1 if enabled else 0
+            )
+        )
+        if raw.startswith("parallel_edges_present"):
+            count = int(raw.split(":", 1)[1]) if ":" in raw else 0
+            raise ParallelEdgesPresentError(canonical, count)
+        if raw != "ok":
+            raise RuntimeError(f"GraphMode.Apply({canonical!r}) failed: {raw}")
+
+    def is_multigraph(self, graph: Optional[str]) -> bool:
+        """Whether ``graph`` is in multigraph mode. Cached per engine."""
+        from iris_vector_graph._validate import validate_graph_name
+
+        canonical = validate_graph_name(graph)
+        cache = self.__dict__.setdefault("_graph_mode_cache", {})
+        if canonical not in cache:
+            raw = self._iris_obj().classMethodValue("Graph.KG.GraphMode", "IsMulti", canonical)
+            cache[canonical] = str(raw) == "1"
+        return cache[canonical]
+
+    def _graph_mode_forget(self, graph: Optional[str] = None) -> None:
+        """Drop the cached mode of one graph, or of every graph when ``graph`` is None."""
+        cache = self.__dict__.get("_graph_mode_cache")
+        if not cache:
+            return
+        if graph is None:
+            cache.clear()
+        else:
+            cache.pop(graph, None)
+
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Return active IRIS SQL queries.
 

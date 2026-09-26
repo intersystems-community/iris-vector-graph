@@ -66,14 +66,14 @@ class TestBulkIngestEdgesDuplicateSkip:
         This is a known schema issue — not a bulk_ingest bug per se."""
         cur = iris_connection.cursor()
         try:
-            # The unique constraint u_spo_graph covers (s, p, o_id, graph_id)
+            # The unique constraint u_spo_graph_ekey covers (s, p, o_id, graph_id, ekey)
             # Two rows with graph_id=NULL satisfy it because NULL != NULL
             cur.execute(
                 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-                "WHERE CONSTRAINT_NAME='u_spo_graph'"
+                "WHERE CONSTRAINT_NAME='u_spo_graph_ekey'"
             )
             constraint_exists = int(cur.fetchone()[0]) >= 1
-            assert constraint_exists, "u_spo_graph constraint should exist"
+            assert constraint_exists, "u_spo_graph_ekey constraint should exist"
             # Document: constraint is ineffective for NULL graph_id
             # (this test acts as a regression canary if the schema is fixed)
         finally:

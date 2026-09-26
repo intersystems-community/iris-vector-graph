@@ -93,6 +93,25 @@ class NodeNotFoundError(IVGError):
         super().__init__(f"Node {node_id!r} not found in the graph.")
 
 
+class ParallelEdgesPresentError(IVGError):
+    """A graph cannot leave multigraph mode while a triple still has two edges.
+
+    ``count`` is the number of ``(s, p, o)`` triples carrying more than one edge;
+    delete the extra edges (or erase the graph) and turn the mode off again.
+    """
+
+    code = "parallel_edges_present"
+
+    def __init__(self, graph: Optional[str], count: int):
+        self.graph = graph
+        self.count = count
+        super().__init__(
+            f"parallel_edges_present: graph {graph or '(default)'!s} has {count} "
+            "triple(s) with more than one edge; delete the extra edges before "
+            "turning multigraph mode off."
+        )
+
+
 __all__ = [
     "IVGError",
     "PrerequisiteError",
@@ -101,4 +120,5 @@ __all__ = [
     "EmbeddingsMissingError",
     "IndexNotSyncedError",
     "NodeNotFoundError",
+    "ParallelEdgesPresentError",
 ]

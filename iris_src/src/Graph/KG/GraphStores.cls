@@ -91,6 +91,10 @@ ClassMethod Inventory() As %DynamicArray
 	Do tStores.%Push(..Entry("^IVG.Ledger(""tuple"")", "global", "subscript 5", 1))
 	Do tStores.%Push(..Entry("^IVG.Ledger(""stmt"")", "global", "graph in the stored value", 1))
 
+	// --- graph-scoped globals: multigraph mode (spec 234) -------------------
+	// ^IVG.GraphMode(gKey)="multi" for each graph that allows parallel edges.
+	Do tStores.%Push(..Entry("^IVG.GraphMode", "global", "subscript 1", 1))
+
 	// --- not graph-scoped ---------------------------------------------------
 	//
 	// Everything below can be emptied wholesale but not split by graph. Spec 230

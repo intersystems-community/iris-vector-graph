@@ -217,6 +217,142 @@ ClassMethod DeleteAdjacency(s As %String, p As %String, o As %String, graph = 0)
 	}
 }
 
+/// Write one keyed edge of a multigraph (spec 234). Beside WriteAdjacency, not
+/// through it: with the mode off nothing calls this, and the single-edge writer
+/// stays exactly what it was.
+///
+/// graph is a derived index key (GraphKey.ForIndex); ekey is the row's
+/// Graph_KG.rdf_edges.ekey, and the row must already be written. The layout:
+///
+///   ^KG("out", g, s, p, o)          weight of the lowest live ekey
+///   ^KG("out", g, s, p, o, ekey)    that edge's weight   } only while the triple
+///   ^KG("out", g, s, p, o, "#")     live edge count      } has 2+ edges
+///   ^KG("in", g, o, p, s[, ekey])   mirror, no counter
+///
+/// A triple with one edge is byte-identical to one WriteAdjacency wrote, so every
+/// reader that stops at the leaf sees what it saw before. deg/degp count edges.
+/// ^NKG is set semantics: it is written by the first edge only.
+ClassMethod WriteAdjacencyKeyed(s As %String, p As %String, o As %String, w As %String = "1.0", graph = 0, ekey As %Integer = 0) As %Status
+{
+	Set tSC = $$$OK
+	Try {
+		Set tW = +w
+		Set tEkey = +ekey
+		If '$Data(^KG("out", graph, s, p, o)) {
+			Do ..WriteAdjacency(s, p, o, w, graph)
+			Quit
+		}
+		If '$Data(^KG("out", graph, s, p, o, "#")) {
+			// One edge so far, spelled as a bare leaf: which ekey it is lives only
+			// in its row.
+			Set tOther = ..OtherEdgeKey(s, p, o, graph, tEkey)
+			If tOther = "" {
+				// The same edge again: refresh its weight, count nothing.
+				Set ^KG("out", graph, s, p, o) = tW
+				Set ^KG("in", graph, o, p, s) = tW
+				Quit
+			}
+			Set tOldW = ^KG("out", graph, s, p, o)
+			Set ^KG("out", graph, s, p, o, tOther) = tOldW
+			Set ^KG("in", graph, o, p, s, tOther) = tOldW
+			Set ^KG("out", graph, s, p, o, tEkey) = tW
+			Set ^KG("in", graph, o, p, s, tEkey) = tW
+			Set ^KG("out", graph, s, p, o, "#") = 2
+			Set tmp = $Increment(^KG("deg", graph, s))
+			Set tmp = $Increment(^KG("degp", graph, s, p))
+		} ElseIf $Data(^KG("out", graph, s, p, o, tEkey)) {
+			Set ^KG("out", graph, s, p, o, tEkey) = tW
+			Set ^KG("in", graph, o, p, s, tEkey) = tW
+		} Else {
+			Set ^KG("out", graph, s, p, o, tEkey) = tW
+			Set ^KG("in", graph, o, p, s, tEkey) = tW
+			Set tmp = $Increment(^KG("out", graph, s, p, o, "#"))
+			Set tmp = $Increment(^KG("deg", graph, s))
+			Set tmp = $Increment(^KG("degp", graph, s, p))
+		}
+		Do ..SetLeafFromLowest(s, p, o, graph)
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Quit tSC
+}
+
+/// Delete one keyed edge of a multigraph (spec 234); the inverse of
+/// WriteAdjacencyKeyed. A triple whose last edge goes is deleted by
+/// DeleteAdjacency, which takes ^NKG with it; a triple that drops from two edges
+/// to one loses its children and counter, and is then byte-identical to one
+/// WriteAdjacency wrote with the survivor's weight.
+ClassMethod DeleteAdjacencyKeyed(s As %String, p As %String, o As %String, graph = 0, ekey As %Integer = 0) As %Status
+{
+	Set tSC = $$$OK
+	Try {
+		Set tEkey = +ekey
+		If '$Data(^KG("out", graph, s, p, o, "#")) {
+			Do ..DeleteAdjacency(s, p, o, graph)
+			Quit
+		}
+		// A repeated delete of a gone edge is a no-op, not a second decrement.
+		Quit:'$Data(^KG("out", graph, s, p, o, tEkey))
+		Kill ^KG("out", graph, s, p, o, tEkey)
+		Kill ^KG("in", graph, o, p, s, tEkey)
+		Set tDeg = $Increment(^KG("deg", graph, s), -1)
+		Set tDegP = $Increment(^KG("degp", graph, s, p), -1)
+		If tDeg <= 0 {
+			Kill ^KG("deg", graph, s)
+		}
+		If tDegP <= 0 {
+			Kill ^KG("degp", graph, s, p)
+		}
+		Set tCount = $Increment(^KG("out", graph, s, p, o, "#"), -1)
+		If tCount > 1 {
+			Do ..SetLeafFromLowest(s, p, o, graph)
+			Quit
+		}
+		// Back to one edge: the leaf takes the survivor's weight and the children go.
+		// Each is killed on its own; a Kill of the leaf would take the leaf too.
+		Set tLast = $Order(^KG("out", graph, s, p, o, ""))
+		If (tLast '= "") && (tLast '= "#") {
+			Set tW = ^KG("out", graph, s, p, o, tLast)
+			Kill ^KG("out", graph, s, p, o, tLast)
+			Kill ^KG("in", graph, o, p, s, tLast)
+			Set ^KG("out", graph, s, p, o) = tW
+			Set ^KG("in", graph, o, p, s) = tW
+		}
+		Kill ^KG("out", graph, s, p, o, "#")
+	} Catch tEx {
+		Set tSC = tEx.AsStatus()
+	}
+	Quit tSC
+}
+
+/// Point the leaf (out and in) at the weight of the lowest live ekey. Integer
+/// subscripts collate before "#", so the first $Order is that ekey.
+ClassMethod SetLeafFromLowest(s As %String, p As %String, o As %String, graph = 0) [ Private ]
+{
+	Set tLow = $Order(^KG("out", graph, s, p, o, ""))
+	Quit:(tLow = "")||(tLow = "#")
+	Set tW = ^KG("out", graph, s, p, o, tLow)
+	Set ^KG("out", graph, s, p, o) = tW
+	Set ^KG("in", graph, o, p, s) = tW
+}
+
+/// The lowest ekey of an (s, p, o) row in graph other than pEkey, or "" when
+/// there is none. Dynamic SQL, so this class still compiles in a namespace whose
+/// rdf_edges has no ekey column yet.
+ClassMethod OtherEdgeKey(s As %String, p As %String, o As %String, graph, pEkey As %Integer) As %String [ Private ]
+{
+	Set tName = $Select((graph = 0) || (graph = ""): "", 1: graph)
+	Set tSQL = "SELECT MIN(ekey) FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?"
+	Set tSQL = tSQL_" AND COALESCE(graph_id, '') = COALESCE(?, '') AND ekey <> ?"
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, s, p, o, tName, pEkey)
+	If tRS.%SQLCODE < 0 {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "OtherEdgeKey SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
+	}
+	Set tOther = ""
+	If tRS.%Next() { Set tOther = tRS.%GetData(1) }
+	Quit $Select(tOther = "": "", 1: +tOther)
+}
+
 /// Remove one edge's adjacency from every graph it appears in.
 ///
 /// "Every graph" is not a key value, so DeleteAdjacency cannot express it by

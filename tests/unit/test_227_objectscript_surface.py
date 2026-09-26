@@ -266,4 +266,4 @@ def test_the_ddl_declares_what_the_edge_class_could_not():
     assert "edge_id" in edges, "reification and prov read rdf_edges.edge_id"
     assert "CONSTRAINT fk_edges_source FOREIGN KEY (graph_id, s)" in edges
     assert "CONSTRAINT fk_edges_dest FOREIGN KEY (graph_id, o_id)" in edges
-    assert "CONSTRAINT u_spo_graph UNIQUE (s, p, o_id, graph_id)" in edges
+    assert "CONSTRAINT u_spo_graph_ekey UNIQUE (s, p, o_id, graph_id, ekey)" in edges

@@ -1061,6 +1061,8 @@ class NodesEdgesMixin:
         # route would outlive them and send the next write at a table that is gone,
         # which surfaces as a missing table rather than as a stale cache.
         self.invalidate_route_cache(canonical)
+        # The Eraser kills ^IVG.GraphMode(graph) too; a cached "multi" would outlive it.
+        getattr(self, "_graph_mode_forget", lambda *_: None)(canonical)
         return removed
 
     def erase_all(self) -> int:
@@ -1083,6 +1085,7 @@ class NodesEdgesMixin:
         removed = int(self._iris_obj().classMethodValue("Graph.KG.Eraser", "EraseAll"))
         self._nkg_dirty = False
         self.invalidate_route_cache()
+        getattr(self, "_graph_mode_forget", lambda *_: None)()
         return removed
 
     def drop_graph(self, graph_id: str) -> int:

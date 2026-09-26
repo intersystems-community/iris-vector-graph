@@ -224,6 +224,8 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 		Kill ^KG("label", tKey)
 		Kill ^KG("deg2p", tKey)
 		Kill ^KG("deg2p_exact", tKey)
+		// Spec 234: an erased graph is no longer a multigraph.
+		Kill ^IVG.GraphMode(tKey)
 		// ^KG("labelset") is content-addressed interning of temporal label sets and
 		// is deliberately append-only — Graph.KG.TemporalIndex documents that no
 		// purge touches it. A surviving entry is a hash with no referent, not
@@ -388,6 +390,7 @@ ClassMethod EraseAll() As %Integer
 
 		Do ..InvalidateDerived(1)
 		Kill ^ArnoKG
+		Kill ^IVG.GraphMode
 		Kill ^IVG.Ledger("stmt")
 		Kill ^IVG.Ledger("tuple")
 		// ^IVG.Ledger("rec") survives: erasure removes content, not history.
