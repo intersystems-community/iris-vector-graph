@@ -1,4 +1,5 @@
 """behave step definitions: Given … graph setup steps."""
+import re
 from uuid import uuid4
 
 try:
@@ -198,24 +199,62 @@ def _inject_label(query: str, label: str, inject_anonymous: bool = True) -> str:
     # Accumulate injected vars across ALL create blocks so that a variable defined
     # in one CREATE block is not re-labeled in a later CREATE block of the same query.
     all_create_injected_vars: set = set()
+    # Names bound in the current scope, and names a WITH (or UNION) has projected
+    # away. A dropped name reused later is a new node and needs the label again
+    # (Merge5 [18]/[19]).
+    in_scope: set = set()
+    dropped: set = set()
+    in_match = False
 
     for line in lines:
         stripped = line.strip().upper()
         first_word = stripped.split()[0] if stripped.split() else ''
         if first_word in ('CREATE', 'MERGE'):
             in_create = True
+            in_match = False
         elif first_word in ('MATCH', 'OPTIONAL', 'WITH', 'RETURN', 'WHERE',
                             'ORDER', 'SKIP', 'LIMIT', 'UNWIND', 'SET',
                             'DELETE', 'REMOVE', 'CALL', 'UNION'):
             in_create = False
+            in_match = first_word in ('MATCH', 'OPTIONAL')
+
+        if first_word in ('WITH', 'UNION'):
+            projected = _with_projected_names(line) if first_word == 'WITH' else set()
+            if projected is not None:
+                dropped |= in_scope - projected
+                dropped -= projected
+                in_scope = projected
+        elif in_match:
+            for m in re.finditer(r'\(([A-Za-z_][A-Za-z0-9_]*)', line):
+                in_scope.add(m.group(1))
+                dropped.discard(m.group(1))
 
         if in_create:
+            skip = match_bound.union(all_create_injected_vars) - dropped
             line, newly_injected = _inject_all_nodes_tracking(
-                line, label, skip_vars=match_bound.union(all_create_injected_vars),
-                inject_anonymous=inject_anonymous)
+                line, label, skip_vars=skip, inject_anonymous=inject_anonymous)
             all_create_injected_vars.update(newly_injected)
+            for m in re.finditer(r'\(([A-Za-z_][A-Za-z0-9_]*)', line):
+                in_scope.add(m.group(1))
+                dropped.discard(m.group(1))
         result_lines.append(line)
     return '\n'.join(result_lines)
+
+
+def _with_projected_names(line: str):
+    """Names a WITH line keeps in scope, or None for `WITH *` (keeps everything)."""
+    body = re.sub(r'^\s*WITH\s+(DISTINCT\s+)?', '', line, flags=re.IGNORECASE)
+    body = re.split(r'\b(?:WHERE|ORDER|SKIP|LIMIT)\b', body, flags=re.IGNORECASE)[0]
+    if body.strip().startswith('*'):
+        return None
+    names = set()
+    for item in body.split(','):
+        m = re.search(r'\bAS\s+([A-Za-z_][A-Za-z0-9_]*)\s*$', item, re.IGNORECASE)
+        if m:
+            names.add(m.group(1))
+        elif re.fullmatch(r'\s*[A-Za-z_][A-Za-z0-9_]*\s*', item):
+            names.add(item.strip())
+    return names
 
 
 def _inject_all_nodes_tracking(line: str, label: str, skip_vars: set = None,

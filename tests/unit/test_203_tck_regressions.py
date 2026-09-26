@@ -5,6 +5,8 @@ Each class names the openCypher TCK scenario and the commit that broke it
 scenario cannot silently regress again.
 """
 
+import re
+
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -1430,6 +1432,14 @@ class TestLabelsOfPathRejected:
     def test_labels_of_node_allowed(self):
         tr("MATCH p = (a) RETURN labels(a) AS l")
 
+class TestNodeInsertAfterWithBindsStageParamsFirst:
+    """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
+    label marker, so the gate matched nothing and the node was never written; the
+    (correctly ordered) edge insert then failed its foreign key."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->(:M) RETURN a",
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->({num: 1}) RETURN a",
             "MATCH (n:L) WITH n.num AS v CREATE (:M {num: v})",
@@ -1584,3 +1594,94 @@ class TestVarLengthExpandsInSql:
         assert body.startswith("New ")
         newed = {v.strip() for v in body[4:].split(" Set ", 1)[0].split(",")}
         assert {"adj", "st", "sd", "sl", "se", "args", "sql", "targ"} <= newed
+
+
+class TestMergedNodeFeedsLaterMerge:
+    """Merge5 [19]: a node found or made by `MERGE (c)` is bound by pattern.
+
+    A later `MERGE (a)-[:T]->(c)` has to use the matched row, not the id the
+    first MERGE would have given c had it created it.
+    """
+
+    def test_edge_merge_targets_the_matched_node(self):
+        t = tr(
+            "MATCH (n) WITH n AS a MERGE (c) MERGE (a)-[:T]->(c) RETURN a.id AS x"
+        )
+        edge_sql = next(s for s in t.sql if "INSERT INTO" in s and "rdf_edges" in s)
+        node_params = next(
+            p for s, p in zip(t.sql, t.parameters) if re.search(r"INSERT INTO (\w+\.)?nodes\b", s)
+        )
+        new_id = node_params[0]
+        edge_params = t.parameters[t.sql.index(edge_sql)]
+        assert new_id not in edge_params
+        assert "? c3" not in edge_sql
+
+
+class TestIsolationLabelFollowsWithScope:
+    """Merge5 [18]/[19]: the TCK harness labels a MERGE node with the scenario label
+    so it only sees this scenario's nodes. A variable projected away by `WITH` and
+    then reused names a new node, so it needs the label again; without it `MERGE (c)`
+    matched every node left in the database by earlier scenarios.
+    """
+
+    @staticmethod
+    def inject(q):
+        from tests.tck.steps.graph_setup import _inject_label
+
+        return _inject_label(q, "TCK_X", inject_anonymous=False).split("\n")
+
+    def test_merge_var_reused_after_with_is_labelled_again(self):
+        lines = self.inject(
+            "MATCH (n)\nWITH n AS a\nMERGE (c)\nMERGE (a)-[:T]->(c)\n"
+            "WITH a AS x\nMERGE (c)\nMERGE (x)-[:T]->(c)\nRETURN x.id AS x"
+        )
+        assert lines[2] == "MERGE (c:TCK_X)"
+        assert lines[3] == "MERGE (a)-[:T]->(c)"
+        assert lines[5] == "MERGE (c:TCK_X)"
+        assert lines[6] == "MERGE (x)-[:T]->(c)"
+
+    def test_with_alias_source_is_out_of_scope_afterwards(self):
+        lines = self.inject(
+            "MATCH (n)\nMATCH (m)\nWITH n AS a, m AS b\nMERGE (a)-[:T]->(b)\n"
+            "WITH a AS x, b AS y\nMERGE (a)\nMERGE (b)\nMERGE (a)-[:T]->(b)\n"
+            "RETURN x.id AS x, y.id AS y"
+        )
+        assert lines[3] == "MERGE (a)-[:T]->(b)"
+        assert lines[5] == "MERGE (a:TCK_X)"
+        assert lines[6] == "MERGE (b:TCK_X)"
+        assert lines[7] == "MERGE (a)-[:T]->(b)"
+
+    def test_passthrough_and_star_keep_variables_bound(self):
+        lines = self.inject("MATCH (a)\nWITH a\nMERGE (a)-[:T]->(b)\nWITH *\nMERGE (b)")
+        assert lines[2] == "MERGE (a)-[:T]->(b:TCK_X)"
+        assert lines[4] == "MERGE (b)"
+
+
+class TestSetAfterStageBindsCteParamsFirst:
+    """List12 [1]/[2]: a SET after `WITH` prefixes its DML with the stage CTE, whose
+    markers come first in the SQL. The SET value was bound ahead of them, so the
+    stage's label filter got 'newName' and the SET touched nothing."""
+
+    Q = (
+        "MATCH (a:Label1) WITH collect(a) AS nodes "
+        "WITH nodes, [x IN nodes | x.name] AS oldNames "
+        "UNWIND nodes AS n SET n.name = 'newName' RETURN n.name, oldNames"
+    )
+
+    def test_update_and_insert_bind_the_stage_label_first(self):
+        t = tr(self.Q)
+        dml = [(s, p) for s, p in zip(t.sql, t.parameters) if "UPDATE" in s or "INSERT" in s]
+        assert len(dml) == 2
+        for s, p in dml:
+            assert p[0] == "Label1", (s, p)
+            assert s.count("?") == len(p)
+        upd = next(p for s, p in dml if "UPDATE" in s)
+        assert upd == ["Label1", "name", "newName", "name"]
+        ins = next(p for s, p in dml if "INSERT" in s)
+        assert ins == ["Label1", "name", "name", "newName", "name"]
+
+    def test_set_label_after_stage_binds_stage_first(self):
+        t = tr("MATCH (a:Label1) WITH collect(a) AS ns UNWIND ns AS n SET n:Foo RETURN n")
+        s, p = next((s, p) for s, p in zip(t.sql, t.parameters) if "INSERT" in s)
+        assert p[0] == "Label1"
+        assert p[1:] == ["Foo", "Foo"]

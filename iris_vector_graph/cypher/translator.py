@@ -5239,6 +5239,7 @@ def translate_merge_clause(merge, context, metadata):
         )
     translate_create_clause(ast.CreateClause(patterns=[_create_pattern]), context, metadata)
 
+    _found_by_pattern = None
     # --- Rewrite DML + SELECT for single-node MERGE patterns ---
     # translate_create_clause generates INSERT ... WHERE NOT EXISTS (node_id = <uuid>).
     # For MERGE we need INSERT ... WHERE NOT EXISTS (<label/prop pattern match>)
@@ -5319,6 +5320,7 @@ def translate_merge_clause(merge, context, metadata):
 
         # --- Fix SELECT query to find the node by label/property, not by the new UUID ---
         if (_has_uuid_from or _has_uuid_cross) and _has_uuid_where:
+            _found_by_pattern = var_name
             del context.where_conditions[_pre_where_len:]
             del context.where_params[_pre_where_params_len:]
 
@@ -5947,6 +5949,12 @@ def translate_merge_clause(merge, context, metadata):
                                     [label, label],
                                 )
 
+    # The SELECT now finds this node by its pattern, whether it was just made or was
+    # already there. Later clauses must bind to that row, not to the id the node would
+    # have had if this MERGE created it (Merge5 [19]).
+    if _found_by_pattern:
+        context.input_params.pop(f"__create_id_{_found_by_pattern}", None)
+
 
 def _translate_set_value(expr, context, target_prop: str) -> tuple:
     """Translate a SET clause value expression for use in an UPDATE SET clause.
@@ -6121,6 +6129,17 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
     return (sql, params, True)
 
 
+def _lead_cte(context, cte, lead, subparams):
+    """Bind `lead` after the CTE's markers but ahead of the subquery's.
+
+    `build_dml_subquery` returns the CTE's params and the subquery's together; a
+    DML that puts its own markers between the two (`WITH ... UPDATE t SET val = ?
+    WHERE s IN (<subquery>)`) must split them (List12 [1]/[2]).
+    """
+    n = len(_cte_params(context, cte))
+    return list(subparams[:n]) + list(lead) + list(subparams[n:])
+
+
 def translate_set_clause(set_cl, context, metadata):
     # Track which properties are being SET so we can exclude them from the final SELECT WHERE clause
     if not hasattr(context, "_set_properties"):
@@ -6140,11 +6159,11 @@ def translate_set_clause(set_cl, context, metadata):
                         context._set_properties.add(k)
                         context.add_dml(
                             f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
-                            [v] + subparams + [k],
+                            _lead_cte(context, cte, [v], subparams) + [k],
                         )
                         context.add_dml(
                             f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
-                            [k, v] + subparams + [k],
+                            _lead_cte(context, cte, [k, v], subparams) + [k],
                         )
             elif isinstance(val_expr, ast.MapLiteral):
                 for k, v in val_expr.entries.items():
@@ -6156,11 +6175,11 @@ def translate_set_clause(set_cl, context, metadata):
                     )
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
-                        [val] + subparams + [k],
+                        _lead_cte(context, cte, [val], subparams) + [k],
                     )
                     context.add_dml(
                         f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
-                        [k, val] + subparams + [k],
+                        _lead_cte(context, cte, [k, val], subparams) + [k],
                     )
         elif isinstance(item.expression, ast.PropertyReference):
             prop_name = item.expression.property_name
@@ -6186,7 +6205,7 @@ def translate_set_clause(set_cl, context, metadata):
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
                         f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
                         f"WHERE edge_id IN ({subquery})",
-                        [k] + subparams,
+                        _lead_cte(context, cte, [k], subparams),
                     )
                 elif is_expr:
                     # Expression (e.g. r.num + 1): val_sql uses `val` for current-prop refs.
@@ -6201,14 +6220,14 @@ def translate_set_clause(set_cl, context, metadata):
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
                         f"SQLUser.CypherFn_IVGJSONSET(COALESCE(qualifiers, CAST('{{}}'  AS VARCHAR(256))), ?, CAST(({adapted_sql}) AS VARCHAR(256))) "
                         f"WHERE edge_id IN ({subquery})",
-                        [k] + val_params + subparams,
+                        _lead_cte(context, cte, [k] + val_params, subparams),
                     )
                 else:
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
                         f"SQLUser.CypherFn_IVGJSONSET(qualifiers, ?, ?) "
                         f"WHERE edge_id IN ({subquery})",
-                        [k, str(val_for_json)] + subparams,
+                        _lead_cte(context, cte, [k, str(val_for_json)], subparams),
                     )
             else:
                 # When variable is from UNWIND (scalar_variable), the alias refers to
@@ -6229,7 +6248,7 @@ def translate_set_clause(set_cl, context, metadata):
                     # val_sql uses `val` for same-property refs (safe in UPDATE context).
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_props")} SET val = {val_sql} WHERE s IN ({subquery}) AND "key" = ?',
-                        val_params + subparams + [k],
+                        _lead_cte(context, cte, val_params, subparams) + [k],
                     )
                     # For INSERT (when property doesn't exist), build an insert-safe expression
                     # where bare `val` references are replaced by correlated subqueries from rdf_props.
@@ -6264,18 +6283,18 @@ def translate_set_clause(set_cl, context, metadata):
                         f"WHERE node_id IN ({subquery}) AND NOT EXISTS ("
                         f'SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?'
                         f")",
-                        [k] + val_params + subparams + [k],
+                        _lead_cte(context, cte, [k] + val_params, subparams) + [k],
                     )
                 else:
                     # Literal / parameter value
                     val = val_params[0] if val_params else None
                     context.add_dml(
                         f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
-                        [val] + subparams + [k],
+                        _lead_cte(context, cte, [val], subparams) + [k],
                     )
                     context.add_dml(
                         f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = {_table("nodes")}.node_id AND "key" = ?)',
-                        [k, val] + subparams + [k],
+                        _lead_cte(context, cte, [k, val], subparams) + [k],
                     )
         elif (
             isinstance(item.expression, ast.Variable)
@@ -6313,7 +6332,7 @@ def translate_set_clause(set_cl, context, metadata):
                 context._set_properties.add(k)
                 context.add_dml(
                     f'{cte_lo}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery_lo})',
-                    [k, val] + subparams_lo,
+                    _lead_cte(context, cte_lo, [k, val], subparams_lo),
                 )
         elif isinstance(item.expression, ast.Variable):
             alias = context.variable_aliases.get(item.expression.name)
@@ -6329,7 +6348,7 @@ def translate_set_clause(set_cl, context, metadata):
             for label in label_list:
                 context.add_dml(
                     f"{cte}INSERT INTO {_table('rdf_labels')} (s, label) SELECT node_id, ? FROM {_table('nodes')} WHERE node_id IN ({subquery}) AND NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = {_table('nodes')}.node_id AND label = ?)",
-                    [label] + subparams + [label],
+                    _lead_cte(context, cte, [label], subparams) + [label],
                 )
 
 
@@ -6372,7 +6391,7 @@ def translate_remove_clause(remove, context, metadata):
                     f'{cte}UPDATE {_table("rdf_edges")} SET qualifiers = '
                     f"SQLUser.CypherFn_IVGJSONREMOVE(qualifiers, ?) "
                     f"WHERE edge_id IN ({subquery})",
-                    [k] + subparams,
+                    _lead_cte(context, cte, [k], subparams),
                 )
             else:
                 cte, subquery, subparams = context.build_dml_subquery(
