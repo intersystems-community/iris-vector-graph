@@ -236,3 +236,57 @@ class TestOrdering:
     def test_zero_rows_expected(self):
         assert _cmp(["x"], [], [{"x": 1}]) is not None
         assert _cmp(["x"], [], []) is None
+
+
+class TestHarnessArtifacts:
+    """What the harness itself adds to the graph is not part of the result."""
+
+    def test_isolation_label_left_out_of_labels_list(self):
+        assert _cmp(["labels(n)"], [["['A']"]], [{"labels(n)": '["A","TCK_abcd1234"]'}]) is None
+        assert _cmp(["labels(n)"], [["[]"]], [{"labels(n)": '["TCK_abcd1234"]'}]) is None
+        assert _cmp(["labels(n)"], [["['A']"]], [{"labels(n)": '["A","B","TCK_abcd1234"]'}]) is not None
+
+    def test_isolation_like_string_expected_is_not_dropped(self):
+        assert _cmp(["x"], [["['TCK_abcd1234']"]], [{"x": '["TCK_abcd1234"]'}]) is None
+
+    def test_stored_boolean_text_is_the_boolean(self):
+        row = _node_cols("n", "id1", ["A"], {"b": "true"})
+        hyd = FakeHydrator({"id1": (["A"], {"b": "true"})})
+        assert _cmp(["n"], [["(:A {b: true})"]], [row], list(row), hydrator=hyd) is None
+        row = _node_cols("n", "id1", ["A"], {"b": "1"})
+        hyd = FakeHydrator({"id1": (["A"], {"b": 1})})
+        assert _cmp(["n"], [["(:A {b: true})"]], [row], list(row), hydrator=hyd) is not None
+
+
+class _FakeCursor:
+    def __init__(self, tables):
+        self.tables, self.rows = tables, []
+
+    def execute(self, sql, params):
+        self.rows = next(v for t, v in self.tables.items() if f".{t} " in sql)
+
+    def fetchall(self):
+        return self.rows
+
+    def close(self):
+        pass
+
+
+class _FakeConn:
+    def __init__(self, tables):
+        self.tables = tables
+
+    def cursor(self):
+        return _FakeCursor(self.tables)
+
+
+def test_hydrator_drops_null_valued_property_rows():
+    """SET n.p = null can leave a NULL-valued row; a null property is an absent one."""
+    from tests.tck.steps.comparison import SqlHydrator
+
+    conn = _FakeConn({
+        "nodes": [("",)],
+        "rdf_labels": [("A", "")],
+        "rdf_props": [("p1", None, ""), ("p2", 46, "")],
+    })
+    assert SqlHydrator(conn).node("id1") == {"labels": ["A"], "props": {"p2": 46}}

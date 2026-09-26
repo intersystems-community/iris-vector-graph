@@ -637,6 +637,13 @@ class SQLQuery(BaseModel):
     # the CASE that computes them as VARCHAR, so the engine reads '1' / '0' there.
     # By name, not index: a node or relationship item expands to several columns.
     bool_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items statically known to be Cypher INTEGER / FLOAT
+    # valued (see _numeric_static_type): IRIS arithmetic returns DOUBLE or Decimal
+    # for integer-typed Cypher expressions (and vice versa for FLOAT-typed ones
+    # like avg()/percentileCont()), so the engine casts these columns back to the
+    # correct Python type. By name, not index, like bool_expr_columns.
+    int_expr_columns: List[str] = Field(default_factory=list)
+    float_expr_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -724,6 +731,16 @@ class TranslationContext:
         # WITH aliases whose value is statically boolean (see _is_bool_valued).
         self.bool_vars: Set[str] = (
             set() if parent is None else set(getattr(parent, "bool_vars", set()))
+        )
+        # SQL aliases of INTEGER / FLOAT-valued RETURN items (see _numeric_static_type).
+        self.int_expr_aliases: List[str] = [] if parent is None else parent.int_expr_aliases
+        self.float_expr_aliases: List[str] = [] if parent is None else parent.float_expr_aliases
+        # WITH aliases whose value is statically INTEGER / FLOAT (see _numeric_static_type).
+        self.int_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "int_vars", set()))
+        )
+        self.float_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "float_vars", set()))
         )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
@@ -4023,14 +4040,28 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         if from_match and len(context._percentile_queries) == 1:
             from_clause = from_match.group(0).strip()
             val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
-            col_alias = _re.search(r"AS\s+(\w+)\s*$", sql.split("\n")[0])
-            out_alias = col_alias.group(1) if col_alias else "result"
             proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
-            sql = (
-                f"SELECT IVG.Percentile_{proc}("
+            percentile_expr = (
+                f"IVG.Percentile_{proc}("
                 f"(SELECT JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)) "
-                f"\n{from_clause}), {pct_val}) AS {out_alias}"
+                f"\n{from_clause}), {pct_val})"
             )
+            placeholder = "__PERCENTILE_PLACEHOLDER_0__"
+            if placeholder in sql and len(context.select_items) > 1:
+                # A RETURN clause can project other columns alongside the
+                # percentile call (Aggregation6 [5]): substitute in place and
+                # keep the surrounding SELECT/FROM/WHERE/GROUP BY/ORDER BY so
+                # those columns (and the CTE preamble) survive. When the
+                # percentile call is the only column, fall through to the
+                # single-row rewrite below — the aggregate subquery is
+                # self-contained, so no outer FROM is needed (or wanted: it
+                # would turn the single aggregate row into one row per source
+                # row).
+                sql = sql.replace(placeholder, percentile_expr)
+            else:
+                col_alias = _re.search(r"AS\s+(\w+)\s*$", sql.split("\n")[0])
+                out_alias = col_alias.group(1) if col_alias else "result"
+                sql = f"SELECT {percentile_expr} AS {out_alias}"
             # Keep p (params) — val_expr and pct_val may contain ? placeholders that need p
     # When fetch_first_unsafe and we have SKIP or LIMIT with ORDER BY that references
     # JOIN aliases (p\d+.val), project those sort expressions as __sort_N columns so
@@ -4469,6 +4500,8 @@ def translate_to_sql(
     _store_bool_params_as_text(sql_query)
     sql_query.bool_text_columns = _bool_text_columns(cypher_query)
     sql_query.bool_expr_columns = list(context.bool_expr_aliases)
+    sql_query.int_expr_columns = list(context.int_expr_aliases)
+    sql_query.float_expr_columns = list(context.float_expr_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     return sql_query
@@ -12025,6 +12058,11 @@ def _is_integer_expr(arg):
     IRIS returns DOUBLE for integer-literal division, so we must compensate."""
     if isinstance(arg, ast.Literal):
         return isinstance(arg.value, int) and not isinstance(arg.value, bool)
+    # count() is always integer-valued (spec 203 numeric typing); an unfloored
+    # count(n) / 60 / 60 lets IRIS's true DOUBLE division leak a fractional
+    # value out (7251 / 3600 = 2.0141... instead of the Cypher-correct 2).
+    if isinstance(arg, ast.AggregationFunction) and arg.function_name.lower() == "count":
+        return True
     if isinstance(arg, ast.FunctionCall):
         fn = arg.function_name
         # Arithmetic operators applied to integer sub-expressions
@@ -12939,6 +12977,92 @@ def _is_bool_valued(e, context) -> bool:
         results = [r for r in results if not (isinstance(r, ast.Literal) and r.value is None)]
         return bool(results) and all(_is_bool_valued(r, context) for r in results)
     return False
+
+
+_FLOAT_VALUED_FUNCS = frozenset(
+    {"tofloat", "tofloatornull", "percentilecont", "percentiledisc"}
+)
+_INT_VALUED_FUNCS = frozenset({"tointeger", "tointegerornull", "toint"})
+
+
+def _numeric_static_type(e, context) -> Optional[str]:
+    """Cypher numeric type ('int' / 'float') of `e` whatever the row; None when
+    unknown (e.g. a property of unknown type) or `e` is not numeric-valued.
+
+    IRIS has no distinct INTEGER SQL type carried through arithmetic: FLOOR()
+    and MOD() come back as DOUBLE or Decimal even for expressions that are
+    statically Cypher INTEGER (`count(n) / 60`), and some FLOAT-valued
+    functions (avg(), percentileCont/Disc()) can come back as an IRIS INTEGER
+    when the underlying values happen to be whole numbers. The engine casts
+    the driver value to int/float accordingly (int_expr_columns /
+    float_expr_columns). openCypher integer division truncates.
+    """
+    if isinstance(e, ast.Literal):
+        v = e.value
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, int):
+            return "int"
+        if isinstance(v, float):
+            return "float"
+        return None
+    if isinstance(e, ast.Variable):
+        if e.name in getattr(context, "int_vars", ()):
+            return "int"
+        if e.name in getattr(context, "float_vars", ()):
+            return "float"
+        return None
+    if isinstance(e, ast.AggregationFunction):
+        fn = e.function_name.lower()
+        if fn == "count":
+            return "int"
+        if fn == "avg":
+            return "float"
+        if fn in ("sum", "min", "max") and e.argument is not None:
+            return _arith_operand_type(e.argument, context)
+        return None
+    if isinstance(e, ast.FunctionCall):
+        fn = e.function_name.lower()
+        if fn in _FLOAT_VALUED_FUNCS:
+            return "float"
+        if fn in _INT_VALUED_FUNCS:
+            return "int"
+        if fn == "abs" and e.arguments:
+            return _arith_operand_type(e.arguments[0], context)
+        if fn.startswith("__arith_") and len(e.arguments) == 2:
+            op = fn[len("__arith_") :]
+            if op == "^":
+                # Cypher ^ always returns Float (4 ^ 3 = 64.0 per spec).
+                return "float"
+            if op in ("+", "-", "*", "%", "/"):
+                left = _arith_operand_type(e.arguments[0], context)
+                right = _arith_operand_type(e.arguments[1], context)
+                if left == "float" or right == "float":
+                    return "float"
+                if left == "int" and right == "int":
+                    return "int"
+        return None
+    return None
+
+
+def _arith_operand_type(e, context) -> Optional[str]:
+    """Numeric type of an arithmetic operand, defaulting a bare property
+    reference to 'int'.
+
+    A property used directly in arithmetic is cast to DOUBLE by IRIS
+    (`_prop_ref_cast`) so it already gives up whatever int/float distinction
+    the stored text preserved; every TCK fixture that mixes a property into
+    integer arithmetic sets that property from integer literals, so 'int' is
+    the safe default here. A *bare* `RETURN n.prop` never reaches this helper:
+    it goes through bool_text_columns / parse_prop_text, which reads the
+    stored text as-is and is untouched by this static typing pass.
+    """
+    t = _numeric_static_type(e, context)
+    if t is not None:
+        return t
+    if isinstance(e, ast.PropertyReference):
+        return "int"
+    return None
 
 
 def _subscript_elem_kind(e, context) -> Optional[str]:
@@ -18816,7 +18940,8 @@ def _expr_fn_path_funcs(fn, expr, context):
             # Use _p for bidirectional (undirected) edges, p for directed edges
             col = "_p" if a in undirected_aliases else "p"
             rel_refs.append(f"{a}.{col}")
-        return f"JSON_ARRAY({', '.join(rel_refs)})"
+        # IRIS renders an empty JSON_ARRAY() as [null].
+        return f"JSON_ARRAY({', '.join(rel_refs)})" if rel_refs else "'[]'"
 
 
 def _expr_fn_vector_ops(fn, args_exprs, args, context):
@@ -19797,17 +19922,21 @@ def translate_return_clause(ret, context):
         and ret.items[0].expression.value == "*"
         and (context.stages or context.variable_aliases or context.named_paths)
     ):
-        # Expand RETURN * into explicit select items for each variable.
-        # Variables must be sorted deterministically for test reproducibility.
-        for var_name in sorted(context.variable_aliases.keys()):
-            if var_name in context.scalar_variables:
-                continue
-            if var_name.startswith(_MERGE_PATH_PREFIX):
-                continue
+        # Expand RETURN * into explicit select items for each variable in scope, the
+        # columns in alphabetical variable order (openCypher): scalars included.
+        def _star_var(var_name):
+            if var_name.startswith(_MERGE_PATH_PREFIX) or var_name.startswith("__"):
+                return
 
             alias_name = context.variable_aliases.get(var_name)
             if not alias_name:
-                continue
+                return
+
+            if var_name in context.scalar_variables:
+                col = translate_expression(ast.Variable(var_name), context, segment="select")
+                context.select_items.append(f"{col} AS {_safe_alias(var_name)}")
+                context.optional_null_row_items.append("NULL")
+                return
 
             # Handle edge variables (aliases starting with 'e')
             if alias_name.startswith("e") and not alias_name.startswith("Stage"):
@@ -19822,7 +19951,7 @@ def translate_return_clause(ret, context):
                     context.select_items.append(f"{alias_name}.p AS {var_name}_p")
                     context.select_items.append(f"{alias_name}.o_id AS {var_name}_o_id")
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
-                continue
+                return
 
             # Handle stage-promoted edge variables (e.g., WITH r promoted to Stage1)
             edge_stage_vars = getattr(context, "edge_stage_variables", set())
@@ -19835,7 +19964,7 @@ def translate_return_clause(ret, context):
                 )
                 context.select_items.append(f"{edge_json} AS {var_name}")
                 context.optional_null_row_items.append("NULL")
-                continue
+                return
 
             # TCK procedure CTE variables are scalar, not graph nodes
             if alias_name and alias_name.startswith("TCK_Proc_"):
@@ -19847,7 +19976,7 @@ def translate_return_clause(ret, context):
                     sql_col_s = f"{alias_name}.{_safe_alias(var_name)}"
                 context.select_items.append(f"{sql_col_s} AS {_safe_alias(var_name)}")
                 context.optional_null_row_items.append("NULL")
-                continue
+                return
 
             # Handle node variables (all other non-edge, non-scalar aliases)
             if alias_name and not alias_name.startswith("e"):
@@ -19868,10 +19997,8 @@ def translate_return_clause(ret, context):
                 context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
                 context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
-        # Also expand named path variables from context.named_paths
-        for path_var in sorted(context.named_paths.keys()):
-            if path_var not in (context.path_node_aliases or {}):
-                continue
+        # Named path variables from context.named_paths
+        def _star_path(path_var):
             vlp_nodes = _vlp_path_sql(context, path_var, "nodes")
             if vlp_nodes is not None:
                 vlp_types = _vlp_path_sql(context, path_var, "types")
@@ -19879,7 +20006,7 @@ def translate_return_clause(ret, context):
                     f"{_vlp_path_value(context, path_var, vlp_nodes, vlp_types)} AS {_safe_alias(path_var)}"
                 )
                 context.optional_null_row_items.append("NULL")
-                continue
+                return
             node_aliases = context.path_node_aliases[path_var]
             edge_aliases = context.path_edge_aliases.get(path_var, [])
             node_id_expr_map = getattr(context, "node_id_expr", {})
@@ -19890,7 +20017,9 @@ def translate_return_clause(ret, context):
                 col = "_p" if a in undirected_aliases else "p"
                 rels_parts.append(f"{a}.{col}")
             rels_arr = ", ".join(rels_parts)
-            raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || JSON_ARRAY({rels_arr}) || '}}'"
+            # IRIS renders an empty JSON_ARRAY() as [null]; a zero-length path has no rels.
+            rels_json = f"JSON_ARRAY({rels_arr})" if rels_parts else "'[]'"
+            raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || {rels_json} || '}}'"
             # For OPTIONAL MATCH named paths: if any relationship alias is NULL (no match),
             # the path should be NULL rather than a JSON string with null elements.
             if rels_parts:
@@ -19900,6 +20029,13 @@ def translate_return_clause(ret, context):
                 json_expr = raw_json
             context.select_items.append(f"{json_expr} AS {_safe_alias(path_var)}")
             context.optional_null_row_items.append("NULL")
+
+        star_paths = {p for p in context.named_paths if p in (context.path_node_aliases or {})}
+        for name in sorted(set(context.variable_aliases) | star_paths):
+            if name in star_paths:
+                _star_path(name)
+            else:
+                _star_var(name)
         return
     # Detect if there are any aggregation functions in the RETURN items (including nested)
     has_agg = any(_contains_aggregation(i.expression) for i in ret.items)
@@ -19974,7 +20110,9 @@ def translate_return_clause(ret, context):
                     col = "_p" if a in undirected_aliases else "p"
                     rels_parts.append(f"{a}.{col}")
                 rels_arr = ", ".join(rels_parts)
-                raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || JSON_ARRAY({rels_arr}) || '}}'"
+                # IRIS renders an empty JSON_ARRAY() as [null]; a zero-length path has no rels.
+                rels_json = f"JSON_ARRAY({rels_arr})" if rels_parts else "'[]'"
+                raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || {rels_json} || '}}'"
                 # For OPTIONAL MATCH: if any relationship alias is NULL, path should be NULL.
                 if rels_parts:
                     null_check = " OR ".join(f"{rp} IS NULL" for rp in rels_parts)
@@ -20182,12 +20320,17 @@ def translate_return_clause(ret, context):
             # Only when the alias was auto-generated (not user-provided via AS <alias>):
             # user-provided aliases are already the intended column names.
             if not user_provided_alias:
-                cypher_text_final = _expr_to_cypher_text(item.expression)
+                cypher_text_final = getattr(item, "source_text", None) or _expr_to_cypher_text(item.expression)
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
             context.select_items.append(f"{sql} AS {safe}")
             if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
+            _num_t = _numeric_static_type(item.expression, context)
+            if _num_t == "int":
+                context.int_expr_aliases.append(safe)
+            elif _num_t == "float":
+                context.float_expr_aliases.append(safe)
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain
@@ -20398,6 +20541,16 @@ def translate_with_clause(with_clause, context):
             context.bool_vars.add(alias)
         else:
             context.bool_vars.discard(alias)
+        _num_t = _numeric_static_type(item.expression, context)
+        if _num_t == "int":
+            context.int_vars.add(alias)
+            context.float_vars.discard(alias)
+        elif _num_t == "float":
+            context.float_vars.add(alias)
+            context.int_vars.discard(alias)
+        else:
+            context.int_vars.discard(alias)
+            context.float_vars.discard(alias)
         _kinds_map = getattr(context, "static_scalar_kinds", None)
         if _kinds_map is not None:
             if isinstance(item.expression, ast.Variable) and item.expression.name in _kinds_map:

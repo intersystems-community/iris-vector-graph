@@ -265,6 +265,8 @@ class ReturnItem:
         FunctionCall,
     ]
     alias: Optional[str] = None
+    # The item's text as written in the query; an un-aliased RETURN column is named by it.
+    source_text: Optional[str] = field(default=None, compare=False)
 
 
 @dataclass(slots=True)
