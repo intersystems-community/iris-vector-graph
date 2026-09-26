@@ -19433,17 +19433,21 @@ def translate_return_clause(ret, context):
         and ret.items[0].expression.value == "*"
         and (context.stages or context.variable_aliases or context.named_paths)
     ):
-        # Expand RETURN * into explicit select items for each variable.
-        # Variables must be sorted deterministically for test reproducibility.
-        for var_name in sorted(context.variable_aliases.keys()):
-            if var_name in context.scalar_variables:
-                continue
-            if var_name.startswith(_MERGE_PATH_PREFIX):
-                continue
+        # Expand RETURN * into explicit select items for each variable in scope, the
+        # columns in alphabetical variable order (openCypher): scalars included.
+        def _star_var(var_name):
+            if var_name.startswith(_MERGE_PATH_PREFIX) or var_name.startswith("__"):
+                return
 
             alias_name = context.variable_aliases.get(var_name)
             if not alias_name:
-                continue
+                return
+
+            if var_name in context.scalar_variables:
+                col = translate_expression(ast.Variable(var_name), context, segment="select")
+                context.select_items.append(f"{col} AS {_safe_alias(var_name)}")
+                context.optional_null_row_items.append("NULL")
+                return
 
             # Handle edge variables (aliases starting with 'e')
             if alias_name.startswith("e") and not alias_name.startswith("Stage"):
@@ -19458,7 +19462,7 @@ def translate_return_clause(ret, context):
                     context.select_items.append(f"{alias_name}.p AS {var_name}_p")
                     context.select_items.append(f"{alias_name}.o_id AS {var_name}_o_id")
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
-                continue
+                return
 
             # Handle stage-promoted edge variables (e.g., WITH r promoted to Stage1)
             edge_stage_vars = getattr(context, "edge_stage_variables", set())
@@ -19471,7 +19475,7 @@ def translate_return_clause(ret, context):
                 )
                 context.select_items.append(f"{edge_json} AS {var_name}")
                 context.optional_null_row_items.append("NULL")
-                continue
+                return
 
             # TCK procedure CTE variables are scalar, not graph nodes
             if alias_name and alias_name.startswith("TCK_Proc_"):
@@ -19483,7 +19487,7 @@ def translate_return_clause(ret, context):
                     sql_col_s = f"{alias_name}.{_safe_alias(var_name)}"
                 context.select_items.append(f"{sql_col_s} AS {_safe_alias(var_name)}")
                 context.optional_null_row_items.append("NULL")
-                continue
+                return
 
             # Handle node variables (all other non-edge, non-scalar aliases)
             if alias_name and not alias_name.startswith("e"):
@@ -19504,10 +19508,8 @@ def translate_return_clause(ret, context):
                 context.select_items.append(f"{labels_subquery(node_expr)} AS {prefix}_labels")
                 context.select_items.append(f"{properties_subquery(node_expr)} AS {prefix}_props")
                 context.optional_null_row_items.extend(["NULL", "NULL", "NULL"])
-        # Also expand named path variables from context.named_paths
-        for path_var in sorted(context.named_paths.keys()):
-            if path_var not in (context.path_node_aliases or {}):
-                continue
+        # Named path variables from context.named_paths
+        def _star_path(path_var):
             vlp_nodes = _vlp_path_sql(context, path_var, "nodes")
             if vlp_nodes is not None:
                 vlp_types = _vlp_path_sql(context, path_var, "types")
@@ -19515,7 +19517,7 @@ def translate_return_clause(ret, context):
                     f"{_vlp_path_value(context, path_var, vlp_nodes, vlp_types)} AS {_safe_alias(path_var)}"
                 )
                 context.optional_null_row_items.append("NULL")
-                continue
+                return
             node_aliases = context.path_node_aliases[path_var]
             edge_aliases = context.path_edge_aliases.get(path_var, [])
             node_id_expr_map = getattr(context, "node_id_expr", {})
@@ -19538,6 +19540,13 @@ def translate_return_clause(ret, context):
                 json_expr = raw_json
             context.select_items.append(f"{json_expr} AS {_safe_alias(path_var)}")
             context.optional_null_row_items.append("NULL")
+
+        star_paths = {p for p in context.named_paths if p in (context.path_node_aliases or {})}
+        for name in sorted(set(context.variable_aliases) | star_paths):
+            if name in star_paths:
+                _star_path(name)
+            else:
+                _star_var(name)
         return
     # Detect if there are any aggregation functions in the RETURN items (including nested)
     has_agg = any(_contains_aggregation(i.expression) for i in ret.items)
