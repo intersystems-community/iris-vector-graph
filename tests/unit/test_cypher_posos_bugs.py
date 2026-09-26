@@ -154,8 +154,14 @@ class TestStringFunctionTranslation:
         sql = translate_to_sql(q)
         assert "LENGTH(" in sql.sql
 
-    def test_unknown_function_uppercased(self):
-        """Unknown functions should still be uppercased as a best-effort fallback"""
-        q = parse_query("MATCH (n:Drug) RETURN someCustomFn(n.name)")
+    def test_qualified_function_uppercased(self):
+        """A schema-qualified function passes through to SQL, uppercased."""
+        q = parse_query("MATCH (n:Drug) RETURN SQLUser.someCustomFn(n.name)")
         sql = translate_to_sql(q)
-        assert "SOMECUSTOMFN(" in sql.sql
+        assert "SQLUSER.SOMECUSTOMFN(" in sql.sql
+
+    def test_unqualified_unknown_function_is_rejected(self):
+        """openCypher: an unknown function is a compile-time UnknownFunction (Return2 [18])."""
+        q = parse_query("MATCH (n:Drug) RETURN someCustomFn(n.name)")
+        with pytest.raises(SyntaxError, match="UnknownFunction"):
+            translate_to_sql(q)
