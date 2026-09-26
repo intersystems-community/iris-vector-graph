@@ -191,6 +191,21 @@ def _inject_label(query: str, label: str, inject_anonymous: bool = True) -> str:
 
     Within a multi-line CREATE/MERGE block, tracks injected variables to avoid
     re-injecting labels on variable references in subsequent lines (e.g., relationships).
+
+    A single node pattern's parens can themselves wrap across two physical
+    lines (Create4 [1] "Generate the movie graph"):
+
+        CREATE (theMatrixReloaded:Movie {title: 'The Matrix Reloaded', released: 2003,
+                tagline: 'Free your mind'})
+
+    Matching '(' against ')' one physical line at a time found no closer on
+    line one, so the label injector rewrote the lone '(' to '()' in place and
+    left the rest of the line — the variable name onward — untouched, which
+    then reappeared verbatim after the '()' on the next scan: a syntax error,
+    not a labelled node. Physical lines belonging to the same CREATE/MERGE
+    clause are buffered until their parens balance before injection runs, so
+    the scan always sees a whole node pattern regardless of which physical
+    line its ')' lands on.
     """
     match_bound = _extract_match_bound_vars(query)
     lines = query.split('\n')
@@ -206,7 +221,10 @@ def _inject_label(query: str, label: str, inject_anonymous: bool = True) -> str:
     dropped: set = set()
     in_match = False
 
-    for line in lines:
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
         stripped = line.strip().upper()
         first_word = stripped.split()[0] if stripped.split() else ''
         if first_word in ('CREATE', 'MERGE'):
@@ -230,14 +248,33 @@ def _inject_label(query: str, label: str, inject_anonymous: bool = True) -> str:
                 dropped.discard(m.group(1))
 
         if in_create:
+            # A node/relationship pattern with unbalanced parens continues onto
+            # the next physical line(s); buffer them so the injector scans one
+            # complete pattern instead of a truncated fragment. Valid Cypher
+            # cannot open a new clause mid-pattern, so it is always safe to
+            # skip clause detection for the buffered continuation lines.
+            buffered = [line]
+            depth = line.count('(') - line.count(')')
+            j = i
+            while depth > 0 and j + 1 < n:
+                j += 1
+                buffered.append(lines[j])
+                depth += lines[j].count('(') - lines[j].count(')')
+            joined = '\n'.join(buffered)
+
             skip = match_bound.union(all_create_injected_vars) - dropped
-            line, newly_injected = _inject_all_nodes_tracking(
-                line, label, skip_vars=skip, inject_anonymous=inject_anonymous)
+            joined, newly_injected = _inject_all_nodes_tracking(
+                joined, label, skip_vars=skip, inject_anonymous=inject_anonymous)
             all_create_injected_vars.update(newly_injected)
-            for m in re.finditer(r'\(([A-Za-z_][A-Za-z0-9_]*)', line):
+            for m in re.finditer(r'\(([A-Za-z_][A-Za-z0-9_]*)', joined):
                 in_scope.add(m.group(1))
                 dropped.discard(m.group(1))
+            result_lines.append(joined)
+            i = j + 1
+            continue
+
         result_lines.append(line)
+        i += 1
     return '\n'.join(result_lines)
 
 
