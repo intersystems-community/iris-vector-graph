@@ -792,112 +792,6 @@ class TestOptionalUndirectedHopToBoundTarget:
     """Match8 [2]: `OPTIONAL MATCH (a)--(b)` with both ends bound put the
     target equality in the WHERE, dropping every unmatched (null) row."""
 
-def _edge_insert(t):
-    """The (sql, params) of the rdf_edges INSERT a translation emits."""
-    for sql, params in zip(t.sql, t.parameters):
-        if "INSERT INTO" in sql and "rdf_edges" in sql:
-            return sql, params
-    raise AssertionError("no rdf_edges INSERT")
-
-
-class TestEdgeInsertAfterWithBindsStageParamsFirst:
-    """Merge5 [16], [17]: MERGE/CREATE of a relationship between WITH-aliased nodes.
-
-    The edge INSERT is `WITH Stage1 AS (…) INSERT … SELECT _ge.c1, …, ? FROM (…) AS _ge`.
-    IRIS binds the CTE's markers first, then the outer select list, then the derived
-    table. The parameters put the outer graph_id first, so the CTE's label filter
-    got '' and the INSERT matched no rows.
-    """
-
-    @pytest.mark.parametrize("verb", ["MERGE", "CREATE"])
-    def test_stage_params_precede_graph_id(self, verb):
-        t = tr(f"MATCH (n:L) MATCH (m:L) WITH n AS a, m AS b {verb} (a)-[r:T]->(b) RETURN a")
-        sql, params = _edge_insert(t)
-        assert sql.startswith("WITH Stage1")
-        assert params[:3] == ["L", "L", ""]
-        assert params[3] == "T"
-
-    def test_no_stage_keeps_outer_first(self):
-        t = tr("MATCH (a:L), (b:L) MERGE (a)-[r:T]->(b) RETURN a")
-        _sql, params = _edge_insert(t)
-        assert params[:2] == ["", "T"]
-
-
-class TestIdOfAStageNodeIsAProperty:
-    """Merge5 [16], [17], [19]: `WITH n AS a … RETURN a.id` returned the node_id.
-
-    Outside a stage `n.id` reads the `id` property; through a WITH it compiled to
-    the stage column itself, so an integer `id` property came back as a UUID.
-    """
-
-    def test_stage_id_reads_the_property(self):
-        sql = tr("MATCH (n:L) WITH n AS a RETURN a.id AS a").sql
-        assert "SELECT a AS a" not in sql
-        assert '"key" = ?' in sql
-
-
-class TestMergeBindsANamedPath:
-    """Merge1 [13], Merge5 [10]: `MERGE p = (…) RETURN p` was a parse error."""
-
-    def test_parser_keeps_the_path_variable(self):
-        q = parse_query("MERGE p = (a {num: 1}) RETURN p")
-        merge = q.query_parts[0].clauses[0]
-        assert merge.path_variable == "p"
-
-    def test_single_node_path_projects(self):
-        sql = tr("MERGE p = (a:L {num: 1}) RETURN p").sql
-        assert "Undefined" not in str(sql)
-
-    def test_relationship_path_joins_the_edge(self):
-        t = tr("MERGE (a:L {num: 1}) MERGE (b:L {num: 2}) MERGE p = (a)-[:R]->(b) RETURN p")
-        final = t.sql[-1] if isinstance(t.sql, list) else t.sql
-        assert "rdf_edges" in final
-
-
-class TestMergeActionReadsBoundRows:
-    """Merge2 [5], Merge3 [4], Merge4 [2]: `ON CREATE/ON MATCH SET city.name =
-    person.bornIn` bound the PropertyReference AST as a parameter, which the
-    driver rejects ("Unsupported argument type")."""
-
-    @pytest.mark.parametrize(
-        "actions",
-        [
-            "ON CREATE SET city.name = person.bornIn",
-            "ON MATCH SET city.name = person.bornIn",
-            "ON MATCH SET city.name = person.bornIn ON CREATE SET city.name = person.bornIn",
-        ],
-    )
-    def test_no_ast_is_bound(self, actions):
-        t = tr(f"MATCH (person:Person) MERGE (city:City) {actions} RETURN person.bornIn")
-        for params in t.parameters:
-            assert all(p is None or isinstance(p, (str, int, float)) for p in params), params
-        assert "SELECT TOP 1" in "\n".join(t.sql)
-        for sql, params in zip(t.sql, t.parameters):
-            assert sql.count("?") == len(params), sql
-
-
-class TestMergeActionCopiesNodeIntoRelationship:
-    """Merge6 [6], Merge7 [4]: `ON CREATE/ON MATCH SET r = a` (copy the node's
-    properties onto the merged relationship) was silently dropped."""
-
-    @pytest.mark.parametrize("action", ["ON CREATE", "ON MATCH"])
-    def test_qualifiers_built_from_node_props(self, action):
-        t = tr(
-            "MATCH (a {name: 'A'}), (b {name: 'B'}) "
-            f"MERGE (a)-[r:TYPE]->(b) {action} SET r = a"
-        )
-        sqls = t.sql if isinstance(t.sql, list) else [t.sql]
-        upd = [s for s in sqls if "rdf_edges SET qualifiers" in s and "LIST(" in s]
-        assert len(upd) == 1, sqls
-        for sql, params in zip(t.sql, t.parameters):
-            assert sql.count("?") == len(params), sql
-
-
-class TestNodeInsertAfterWithBindsStageParamsFirst:
-    """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
-    label marker, so the gate matched nothing and the node was never written; the
-    (correctly ordered) edge insert then failed its foreign key."""
-
     @pytest.mark.parametrize(
         "q",
         [
@@ -1430,6 +1324,116 @@ class TestLabelsOfPathRejected:
     def test_labels_of_node_allowed(self):
         tr("MATCH p = (a) RETURN labels(a) AS l")
 
+
+def _edge_insert(t):
+    """The (sql, params) of the rdf_edges INSERT a translation emits."""
+    for sql, params in zip(t.sql, t.parameters):
+        if "INSERT INTO" in sql and "rdf_edges" in sql:
+            return sql, params
+    raise AssertionError("no rdf_edges INSERT")
+
+
+class TestEdgeInsertAfterWithBindsStageParamsFirst:
+    """Merge5 [16], [17]: MERGE/CREATE of a relationship between WITH-aliased nodes.
+
+    The edge INSERT is `WITH Stage1 AS (…) INSERT … SELECT _ge.c1, …, ? FROM (…) AS _ge`.
+    IRIS binds the CTE's markers first, then the outer select list, then the derived
+    table. The parameters put the outer graph_id first, so the CTE's label filter
+    got '' and the INSERT matched no rows.
+    """
+
+    @pytest.mark.parametrize("verb", ["MERGE", "CREATE"])
+    def test_stage_params_precede_graph_id(self, verb):
+        t = tr(f"MATCH (n:L) MATCH (m:L) WITH n AS a, m AS b {verb} (a)-[r:T]->(b) RETURN a")
+        sql, params = _edge_insert(t)
+        assert sql.startswith("WITH Stage1")
+        assert params[:3] == ["L", "L", ""]
+        assert params[3] == "T"
+
+    def test_no_stage_keeps_outer_first(self):
+        t = tr("MATCH (a:L), (b:L) MERGE (a)-[r:T]->(b) RETURN a")
+        _sql, params = _edge_insert(t)
+        assert params[:2] == ["", "T"]
+
+
+class TestIdOfAStageNodeIsAProperty:
+    """Merge5 [16], [17], [19]: `WITH n AS a … RETURN a.id` returned the node_id.
+
+    Outside a stage `n.id` reads the `id` property; through a WITH it compiled to
+    the stage column itself, so an integer `id` property came back as a UUID.
+    """
+
+    def test_stage_id_reads_the_property(self):
+        sql = tr("MATCH (n:L) WITH n AS a RETURN a.id AS a").sql
+        assert "SELECT a AS a" not in sql
+        assert '"key" = ?' in sql
+
+
+class TestMergeBindsANamedPath:
+    """Merge1 [13], Merge5 [10]: `MERGE p = (…) RETURN p` was a parse error."""
+
+    def test_parser_keeps_the_path_variable(self):
+        q = parse_query("MERGE p = (a {num: 1}) RETURN p")
+        merge = q.query_parts[0].clauses[0]
+        assert merge.path_variable == "p"
+
+    def test_single_node_path_projects(self):
+        sql = tr("MERGE p = (a:L {num: 1}) RETURN p").sql
+        assert "Undefined" not in str(sql)
+
+    def test_relationship_path_joins_the_edge(self):
+        t = tr("MERGE (a:L {num: 1}) MERGE (b:L {num: 2}) MERGE p = (a)-[:R]->(b) RETURN p")
+        final = t.sql[-1] if isinstance(t.sql, list) else t.sql
+        assert "rdf_edges" in final
+
+
+class TestMergeActionReadsBoundRows:
+    """Merge2 [5], Merge3 [4], Merge4 [2]: `ON CREATE/ON MATCH SET city.name =
+    person.bornIn` bound the PropertyReference AST as a parameter, which the
+    driver rejects ("Unsupported argument type")."""
+
+    @pytest.mark.parametrize(
+        "actions",
+        [
+            "ON CREATE SET city.name = person.bornIn",
+            "ON MATCH SET city.name = person.bornIn",
+            "ON MATCH SET city.name = person.bornIn ON CREATE SET city.name = person.bornIn",
+        ],
+    )
+    def test_no_ast_is_bound(self, actions):
+        t = tr(f"MATCH (person:Person) MERGE (city:City) {actions} RETURN person.bornIn")
+        for params in t.parameters:
+            assert all(p is None or isinstance(p, (str, int, float)) for p in params), params
+        assert "SELECT TOP 1" in "\n".join(t.sql)
+        for sql, params in zip(t.sql, t.parameters):
+            assert sql.count("?") == len(params), sql
+
+
+class TestMergeActionCopiesNodeIntoRelationship:
+    """Merge6 [6], Merge7 [4]: `ON CREATE/ON MATCH SET r = a` (copy the node's
+    properties onto the merged relationship) was silently dropped."""
+
+    @pytest.mark.parametrize("action", ["ON CREATE", "ON MATCH"])
+    def test_qualifiers_built_from_node_props(self, action):
+        t = tr(
+            "MATCH (a {name: 'A'}), (b {name: 'B'}) "
+            f"MERGE (a)-[r:TYPE]->(b) {action} SET r = a"
+        )
+        sqls = t.sql if isinstance(t.sql, list) else [t.sql]
+        upd = [s for s in sqls if "rdf_edges SET qualifiers" in s and "LIST(" in s]
+        assert len(upd) == 1, sqls
+        for sql, params in zip(t.sql, t.parameters):
+            assert sql.count("?") == len(params), sql
+
+
+class TestNodeInsertAfterWithBindsStageParamsFirst:
+    """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
+    label marker, so the gate matched nothing and the node was never written; the
+    (correctly ordered) edge insert then failed its foreign key."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->(:M) RETURN a",
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->({num: 1}) RETURN a",
             "MATCH (n:L) WITH n.num AS v CREATE (:M {num: v})",
@@ -1471,6 +1475,7 @@ class TestRowDrivenEdgeInsertSkipsAnExistingEdge:
         assert sql.count(" AS _ge WHERE ") == 1, sql
         assert "AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE" in sql.replace("Graph_KG.", ""), sql
         assert sql.count("?") == len(params), sql
+
 
 def _sql_text(t):
     return t.sql if isinstance(t.sql, str) else "\n".join(t.sql)
@@ -1584,3 +1589,48 @@ class TestVarLengthExpandsInSql:
         assert body.startswith("New ")
         newed = {v.strip() for v in body[4:].split(" Set ", 1)[0].split(",")}
         assert {"adj", "st", "sd", "sl", "se", "args", "sql", "targ"} <= newed
+
+
+def _sql(q, params=None):
+    t = translate_to_sql(parse_query(q), params or {})
+    return "\n".join(t.sql) if isinstance(t.sql, list) else t.sql
+
+
+class TestCountDistinctRelationshipIsByIdentity:
+    def test_count_distinct_rel_uses_edge_id(self):
+        # Return6 [16]: count(DISTINCT r) counted distinct types (e.p), so every
+        # same-type relationship collapsed to 1.
+        sql = _sql("MATCH (a)-[r:ATE]->(b) RETURN a, count(DISTINCT r) AS c")
+        assert "COUNT(DISTINCT e" in sql and ".edge_id)" in sql
+        assert ".p) AS c" not in sql
+
+
+class TestUnwindMapParamPropertyIntoMerge:
+    def _params(self, q, params):
+        t = translate_to_sql(parse_query(q), params)
+        ps = t.parameters if t.parameters and isinstance(t.parameters[0], list) else [t.parameters]
+        return [x for p in ps for x in p]
+
+    def test_unwound_map_property_resolves_per_element(self):
+        # Unwind1 [14]: `prop.login` over an unwound map parameter was bound as the
+        # PropertyReference itself, not the element's value.
+        flat = self._params(
+            "UNWIND $props AS prop MERGE (p:Person {login: prop.login}) "
+            "SET p.name = prop.name RETURN p.name, p.login",
+            {"props": [{"login": "l1", "name": "n1"}, {"login": "l2", "name": "n2"}]},
+        )
+        assert not any("PropertyReference" in str(x) for x in flat)
+        assert {"l1", "l2", "n1", "n2"} <= {str(x) for x in flat}
+
+    def test_return_scans_only_the_projected_variable(self):
+        # Unwind1 [6]: y (matched) and e (merged) were both rebuilt as tables and
+        # comma-joined, so IRIS rejected the LEFT JOIN on the first one (-23).
+        t = translate_to_sql(
+            parse_query(
+                "UNWIND $events AS event MATCH (y:Year {year: event.year}) "
+                "MERGE (e:Event {id: event.id}) MERGE (y)<-[:IN]-(e) RETURN e.id AS x ORDER BY x"
+            ),
+            {"events": [{"year": 2016, "id": 1}, {"year": 2016, "id": 2}]},
+        )
+        final = t.sql[-1] if isinstance(t.sql, list) else t.sql
+        assert final.count("nodes n") == 1
