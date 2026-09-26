@@ -200,3 +200,56 @@ class TestExtractionPriority:
             store=store,
         )
         assert not store.conn.cursor.called  # SQL cursor never touched
+
+
+# ── A labeled source already bound by a preceding relationship ─────────────
+#
+# Match7 [19]: `MATCH (a {name: 'A'}) OPTIONAL MATCH p = (a)-->(b)-[*]->(c)
+# RETURN p`. The TCK isolation harness tags every node in a scenario with the
+# same label, so `b` — the var-length hop's source — carries a label despite
+# being bound by the preceding `(a)-->(b)` join, not by that label. `b`'s join
+# line in the generated SQL is a real correlation (`ON n2.node_id = e3.o_id`),
+# not the `ON 1=1` cartesian marker the still-unbound target (`c`) gets. Label
+# lookup for that label matches every node carrying it — `a` included — so BFS
+# ran from `a` too and found `b` itself as a false-positive `c`.
+class TestLabelOnAJoinBoundSourceDoesNotWiden:
+
+    _JOIN_SQL = (
+        "SELECT CASE WHEN (e3.p IS NULL OR e1.p IS NULL) THEN NULL ELSE 'x' END AS p\n"
+        "FROM Graph_KG.nodes n0\n"
+        "JOIN Graph_KG.rdf_props p1 ON p1.s = n0.node_id AND p1.\"key\" = ?\n"
+        "LEFT OUTER JOIN Graph_KG.rdf_edges e3 ON e3.s = n0.node_id\n"
+        "LEFT OUTER JOIN Graph_KG.nodes n2 ON n2.node_id = e3.o_id\n"
+        "JOIN Graph_KG.nodes n4 ON 1=1\n"
+        "WHERE p1.val = ?"
+    )
+
+    def test_join_bound_source_skips_the_label_lookup(self):
+        """A label on a join-bound source must not fall back to a label scan."""
+        store = _store(query_nodes_rows=[["a_id"], ["b_id"]])  # both tagged
+        cursor = store.conn.cursor.return_value
+        cursor.fetchall.return_value = [("b_id",)]  # the join finds only b
+
+        ids = extract_vlp_source_ids(
+            sql_query=_sql_query(sql=self._JOIN_SQL, params=["name", "A"]),
+            source_labels=["TCK_isolation"],
+            source_alias="n2",
+            target_alias="n4",
+            store=store,
+        )
+        assert not store.query_nodes.called, "must not widen via the label scan"
+        assert ids == ["b_id"]
+
+    def test_unbound_labeled_source_still_uses_the_label_path(self):
+        """A source with no preceding join (a fresh label anchor) is unaffected."""
+        store = _store(query_nodes_rows=[["b_id"], ["other_id"]])
+        sql = "SELECT val\nFROM Graph_KG.nodes n0\nJOIN Graph_KG.nodes n1 ON 1=1"
+        ids = extract_vlp_source_ids(
+            sql_query=_sql_query(sql=sql, params=[]),
+            source_labels=["Gene"],
+            source_alias="n0",
+            target_alias="n1",
+            store=store,
+        )
+        assert set(ids) == {"b_id", "other_id"}
+        store.query_nodes.assert_called_once_with(label_filter="Gene")

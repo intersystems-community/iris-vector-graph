@@ -53,8 +53,28 @@ def extract_vlp_source_ids(
     if store is None:
         return []
 
+    sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
+
+    # A source already bound by a preceding relationship hop in the same
+    # pattern (`(a)-->(b)-[*]->(c)`: the var-length hop's source is `b`, bound
+    # by the earlier `(a)-->(b)`) shows up in the generated SQL as a real JOIN
+    # on `source_alias` — not the `ON 1=1` cartesian marker the still-unbound
+    # target gets. A label on such a source (a real one, or the isolation tag
+    # the TCK harness puts on every node in a scenario) is an extra filter on
+    # top of that join, not an alternate way to find the source: matching by
+    # label alone finds every node carrying it, not just the one actually
+    # reachable via the join (Match7 [19] — the shared isolation label made
+    # BFS start from `a` too, which then found `b` itself as a false `c`).
+    source_prebound_by_join = bool(source_alias) and bool(
+        re.search(
+            r'\bJOIN\s+\S+\s+' + re.escape(source_alias) + r'\s+ON\s+(?!1\s*=\s*1\b)',
+            sql_str,
+            re.IGNORECASE,
+        )
+    )
+
     # ── Path 1: label-based ──────────────────────────────────────────────────
-    if source_labels:
+    if source_labels and not source_prebound_by_join:
         label_sets = []
         for lbl in source_labels:
             try:
@@ -68,8 +88,6 @@ def extract_vlp_source_ids(
         for s in label_sets[1:]:
             common = common & s
         return list(common)
-
-    sql_str = sql_query.sql if isinstance(sql_query.sql, str) else ""
 
     # ── Path 2: direct node_id = ? fast path ────────────────────────────────
     if source_alias:
@@ -1412,6 +1430,12 @@ class QueryMixin:
             if is_count:
                 col_name = next(iter(col_map.keys()), "count")
                 return IVGResult(columns=[col_name], rows=[[0]], metadata=sql_query.query_metadata)
+            if is_optional:
+                null_cols = _optional_null_columns(
+                    sql_query,
+                    [_id_col, _labels_col, _props_col] if _node_triple_in_sql else out_cols,
+                )
+                return IVGResult(columns=null_cols, rows=[[None] * len(null_cols)], metadata=sql_query.query_metadata)
             return IVGResult(columns=out_cols, rows=[], metadata=sql_query.query_metadata)
 
         # Step 2: BFS from each source node.
