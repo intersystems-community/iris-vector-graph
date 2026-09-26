@@ -11,6 +11,7 @@ from iris_vector_graph._validate import (
 )
 from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
 from iris_vector_graph.constants import DEFAULT_GRAPH
+from iris_vector_graph.prop_values import parse_prop_text, prop_text
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
 
@@ -353,6 +354,8 @@ class NodesEdgesMixin:
                                     str(val).startswith("[") and str(val).endswith("]")
                                 ):
                                     parsed_val = json.loads(val)
+                                else:
+                                    parsed_val = parse_prop_text(val)
                             except Exception:
                                 pass
                             node_map[s][store_key] = parsed_val
@@ -742,7 +745,7 @@ class NodesEdgesMixin:
             for k, v in props.items():
                 if v is None:
                     continue
-                val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                val_str = prop_text(v)
                 if _children_scoped:
                     prop_data.append([graph_id, node_id, k, val_str, graph_id, node_id, k])
                 else:
@@ -1225,7 +1228,7 @@ class NodesEdgesMixin:
                 for k, v in props.items():
                     if v is None:
                         continue
-                    val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                    val_str = prop_text(v)
                     if _children_scoped:
                         # params: [graph_id, s, key, val, graph_id, s, key]
                         all_props.append(
@@ -1615,7 +1618,7 @@ class NodesEdgesMixin:
             cursor.close()
         if properties:
             for k, v in (properties or {}).items():
-                val_str = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                val_str = prop_text(v)
                 cursor2 = self.conn.cursor()
                 try:
                     if _children_scoped:

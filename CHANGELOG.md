@@ -103,6 +103,20 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
 resource keys and references, which identify patients; deploy IVG in the FHIR namespace
 only for users who may already read the repository's tables.
 
+**Booleans are stored as `'true'` / `'false'`**
+
+- New boolean property writes (Cypher `CREATE`, `SET`, `MERGE`, `ON CREATE` / `ON MATCH`,
+  map and `$param` properties, edge qualifiers, `create_node` / `create_edge`, the bulk
+  loader and reification properties) store `'true'` / `'false'` in `rdf_props.val`
+  instead of `'1'` / `'0'` (or `'True'` / `'False'` from the Python API). `RETURN n.flag`,
+  `get_nodes` and Bolt read them back as booleans, and `toString(n.flag)` is `'true'`.
+- Boolean equality still matches legacy rows: `n.flag = true`, bare `WHERE n.flag`,
+  `{flag: true}` patterns and `IN [true]` match `'true'`, `'1'` and `'True'` (`false`:
+  `'false'`, `'0'`, `'False'`). Existing rows are not rewritten and the schema does not
+  change.
+- `MERGE` on a boolean property matched only `'True'`, so it missed the `'1'` rows that
+  Cypher wrote; it now matches every spelling.
+
 ### v4.0.1 (unreleased)
 
 **Fixed**

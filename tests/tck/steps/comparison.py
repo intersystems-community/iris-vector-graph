@@ -503,7 +503,7 @@ def _node_matches(node_data: dict, pattern: dict, isolation_label: str | None = 
             # try string/int normalisation
             av = actual_props.get(k)
             if isinstance(v, bool) and isinstance(av, str):
-                if (v and av in ("1", "true", "True")) or (not v and av in ("0", "false", "False")):
+                if av == ("true" if v else "false"):
                     continue
             if isinstance(v, int) and not isinstance(v, bool) and isinstance(av, str):
                 try:
@@ -591,7 +591,7 @@ def normalise_iris_value(iris_val: Any, expected_tck_val: Any) -> Any:
         return float(iris_val)
     if isinstance(expected_tck_val, bool):
         if isinstance(iris_val, str):
-            return iris_val.lower() in ("true", "1")
+            return {"true": True, "false": False}.get(iris_val, iris_val)
         if isinstance(iris_val, int):
             return iris_val != 0
         return bool(iris_val)

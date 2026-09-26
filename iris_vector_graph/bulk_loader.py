@@ -28,6 +28,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from iris_vector_graph.exceptions import BulkLoadError
+from iris_vector_graph.prop_values import prop_text
 from iris_vector_graph.schema import _call_classmethod
 
 logger = logging.getLogger(__name__)
@@ -293,7 +294,7 @@ class BulkLoader:
                 for k, v in attrs.items():
                     if k in (label_attr, "namespace") or v is None:
                         continue
-                    s = json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                    s = prop_text(v)
                     if len(s) > 60000:
                         s = s[:60000]
                     props[k] = s

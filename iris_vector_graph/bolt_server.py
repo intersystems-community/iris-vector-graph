@@ -19,6 +19,8 @@ from typing import Any
 
 from fastapi import WebSocket
 
+from iris_vector_graph.prop_values import parse_prop_text
+
 log = logging.getLogger(__name__)
 
 BOLT_MAGIC = b'\x60\x60\xb0\x17'
@@ -836,14 +838,14 @@ class BoltSession:
                         try:
                             kv = json.loads(item)
                             if isinstance(kv, dict) and "key" in kv:
-                                val = kv.get("value", "")
+                                val = parse_prop_text(kv.get("value", ""))
                                 if len(str(val)) > 200:
                                     val = str(val)[:200] + "..."
                                 props[kv["key"]] = val
                         except Exception:
                             pass
                     elif isinstance(item, dict) and "key" in item:
-                        val = item.get("value", "")
+                        val = parse_prop_text(item.get("value", ""))
                         if len(str(val)) > 200:
                             val = str(val)[:200] + "..."
                         props[item["key"]] = val
