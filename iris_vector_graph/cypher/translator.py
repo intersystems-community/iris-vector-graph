@@ -4290,10 +4290,44 @@ def apply_pagination(
     return sql
 
 
+def _defer_edge_delete_past_create(context, create_start):
+    """`MATCH …-[r]->… DELETE r CREATE …` in one statement: every clause sees the
+    rows matched before the statement, but the statements are static SQL that each
+    re-run the MATCH, so a CREATE after the DELETE finds nothing (Match5 [26]).
+
+    Run the CREATE first and the DELETE after it, limited to edges that existed
+    before the statement: the DELETE re-matches, and with `WHERE NOT a:A` the edges
+    the CREATE just made would match too (Match5 [27]). edge_id is an IDENTITY, so
+    the pre-statement MAX(edge_id) — captured by the executor through the
+    `__capture_edge_hwm__` statement — bounds exactly the old edges.
+    """
+    pending = getattr(context, "_pending_edge_delete", None)
+    context._pending_edge_delete = None
+    if pending is None:
+        return
+    idx, n_stages = pending
+    if n_stages != len(context.stages) or idx != create_start - 1:
+        return
+    if len(context.dml_statements) == create_start:
+        return
+    del_sql, del_params = context.dml_statements.pop(idx)
+    context.dml_statements.insert(
+        idx,
+        (f"__capture_edge_hwm__ SELECT COALESCE(MAX(edge_id), 0) FROM {_table('rdf_edges')}", []),
+    )
+    context.dml_statements.append(
+        (f"{del_sql} AND edge_id <= ?", list(del_params) + ["__EDGE_HWM__"])
+    )
+
+
 def translate_updating_clause(upd, context, metadata):
     if isinstance(upd, ast.CreateClause):
+        _start = len(context.dml_statements)
         translate_create_clause(upd, context, metadata, per_row=True)
-    elif isinstance(upd, ast.DeleteClause):
+        _defer_edge_delete_past_create(context, _start)
+        return
+    context._pending_edge_delete = None
+    if isinstance(upd, ast.DeleteClause):
         translate_delete_clause(upd, context, metadata)
     elif isinstance(upd, ast.MergeClause):
         if upd.path_variable:
@@ -5318,20 +5352,17 @@ def translate_delete_clause(delete, context, metadata):
             s_col = "_src" if is_undirected else "s"
             p_col = "_p" if is_undirected else "p"
             o_col = "_dst" if is_undirected else "o_id"
-            cte_s, subquery_s, subparams_s = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.{s_col}"
-            )
-            cte_p, subquery_p, subparams_p = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.{p_col}"
-            )
-            cte_o, subquery_o, subparams_o = context.build_dml_subquery(
-                select_override=f"SELECT {alias}.{o_col}"
+            # By edge_id, the matched edges themselves: three independent IN lists
+            # on s, p and o_id also deleted any edge whose endpoints and type each
+            # occurred somewhere in the match. The undirected CTE carries edge_id.
+            cte, subquery, subparams = context.build_dml_subquery(
+                select_override=f"SELECT {alias}.edge_id"
             )
             context.add_dml(
-                f"{cte_s}DELETE FROM {_table('rdf_edges')} WHERE "
-                f"s IN ({subquery_s}) AND p IN ({subquery_p}) AND o_id IN ({subquery_o})",
-                subparams_s + subparams_p + subparams_o,
+                f"{cte}DELETE FROM {_table('rdf_edges')} WHERE edge_id IN ({subquery})",
+                subparams,
             )
+            context._pending_edge_delete = (len(context.dml_statements) - 1, len(context.stages))
 
 
 def _merge_pattern_existence_sql(merge_node, context=None):
