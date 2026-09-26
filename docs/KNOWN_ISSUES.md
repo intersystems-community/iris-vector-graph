@@ -1745,7 +1745,9 @@ prepare time.
     is expected;
   - ReturnOrderBy6 [4] raises `AmbiguousAggregationExpression` where `UndefinedVariable`
     is expected;
-  - MatchWhere1 [14] raises `UndefinedVariable` where `InvalidArgumentType` is expected.
+  - MatchWhere1 [14] raises `UndefinedVariable` where `InvalidArgumentType` is expected;
+  - Map2 [6] (a map parameter indexed by an integer) raises
+    `ListElementAccessByNonInteger` where `MapElementAccessByNonString` is expected.
 - **Accidental Python error**: Set1 [10] (a list of maps as a property). `json.dumps`
   fails on an AST node before IVG checks the property type, which should be
   `InvalidPropertyType`.
