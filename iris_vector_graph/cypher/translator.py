@@ -7,6 +7,7 @@ Supports multi-stage queries via Common Table Expressions (CTEs).
 
 import json
 import logging
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Union
 
@@ -2976,7 +2977,15 @@ def _tts_process_parts(cypher_query, context, metadata):
             # Still need to add the UNWIND to context for RETURN clause access
             translate_unwind_clause(unwind_clause, context)
         else:
+            _skip_ci = set()
             for _ci, clause in enumerate(part.clauses):
+                if _ci in _skip_ci:
+                    continue
+                if isinstance(clause, ast.MatchClause) and _optional_match_cannot_bind(
+                    cypher_query, i, _ci, context
+                ):
+                    _skip_ci.add(_ci + 1)  # its WHERE
+                    continue
                 if isinstance(clause, ast.MatchClause):
                     aliases_before_match = set(context.variable_aliases.values())
                     _opt_join_start = len(context.join_clauses)
@@ -3051,6 +3060,70 @@ def _tts_process_parts(cypher_query, context, metadata):
             context._unwind_create_node_ids = {}
             context._unwind_create_rel_ids = {}
     return is_transactional
+
+
+def _optional_match_cannot_bind(cypher_query, part_idx, clause_idx, context):
+    """True for `OPTIONAL MATCH <pattern> WHERE v IS NULL AND …` with v a variable
+    the pattern introduces, when nothing afterwards reads the pattern's new
+    variables.
+
+    A matched v is never null, so the pattern contributes nothing but the null
+    extension of each row, which no later clause can observe (Match9 [8]).
+    """
+    part = cypher_query.query_parts[part_idx]
+    clause = part.clauses[clause_idx]
+    if not clause.optional or clause_idx + 1 >= len(part.clauses):
+        return False
+    where = part.clauses[clause_idx + 1]
+    if not isinstance(where, ast.WhereClause):
+        return False
+    new_vars = set()
+    for pat in clause.patterns:
+        new_vars |= {n.variable for n in pat.nodes if n.variable}
+        new_vars |= {r.variable for r in pat.relationships if r.variable}
+    new_vars |= {np.variable for np in clause.named_paths if getattr(np, "variable", None)}
+    new_vars -= set(context.variable_aliases)
+    if not new_vars:
+        return False
+    conjuncts, todo = [], [where.expression]
+    while todo:
+        e = todo.pop()
+        if isinstance(e, ast.BooleanExpression) and e.operator == ast.BooleanOperator.AND:
+            todo.extend(e.operands)
+        else:
+            conjuncts.append(e)
+    if not any(
+        isinstance(c, ast.BooleanExpression)
+        and c.operator == ast.BooleanOperator.IS_NULL
+        and isinstance(c.operands[0], ast.Variable)
+        and c.operands[0].name in new_vars
+        for c in conjuncts
+    ):
+        return False
+    later = [
+        part.clauses[clause_idx + 2 :],
+        part.with_clause,
+        cypher_query.query_parts[part_idx + 1 :],
+        cypher_query.return_clause,
+        cypher_query.order_by_clause,
+    ]
+    reads = _ast_var_names(later)
+    todo = [later]
+    while todo:  # pattern variables are plain strings, not Variable nodes
+        x = todo.pop()
+        if isinstance(x, (list, tuple)):
+            todo.extend(x)
+        elif isinstance(x, (ast.NodePattern, ast.RelationshipPattern, ast.NamedPath)):
+            reads.add(x.variable)
+            if isinstance(x, ast.NamedPath):
+                todo.append(x.pattern)
+        elif dataclasses.is_dataclass(x) and not isinstance(x, type):
+            todo.extend(getattr(x, f.name) for f in dataclasses.fields(x))
+    if any(getattr(w, "star", False) for w in [part.with_clause] + [
+        p.with_clause for p in cypher_query.query_parts[part_idx + 1 :]
+    ]):
+        return False
+    return not (reads & new_vars)
 
 
 def _ast_var_names(node, acc=None):
@@ -3465,6 +3538,55 @@ def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl):
     )
 
 
+def _pre_update_stage_snapshot(cypher_query, context, all_ctes, sql):
+    """Keep a WITH's computed values at what they were before a later SET/REMOVE.
+
+    Each statement recomputes its stage CTEs, so the RETURN, which runs after the
+    UPDATE, would recompute `[x IN nodes | x.name] AS oldNames` from the new values
+    (List12 [1]/[2]). Returns `(snapshot_stmt, ctes)`: the statement the executor
+    runs before any DML to capture the stage, and the CTE list with the stage
+    renamed `{stage}__live` and a `{stage} AS (__SNAPSHOT__)` placeholder the
+    executor fills from the capture. None when nothing needs capturing.
+    """
+    import json as _json
+    import re
+
+    parts = cypher_query.query_parts
+    if len(parts) < 2 or parts[-1].with_clause is not None or parts[-2].with_clause is None:
+        return None
+    last = parts[-1].clauses
+    if not any(isinstance(c, (ast.SetClause, ast.RemoveClause)) for c in last):
+        return None
+    if any(isinstance(c, ast.DeleteClause) for c in last):
+        return None
+    cols = [
+        it.alias
+        for it in parts[-2].with_clause.items
+        if it.alias and not isinstance(it.expression, (ast.Variable, ast.Literal))
+    ]
+    if not cols:
+        return None
+    name = f"Stage{len(context.stages)}"
+    head = f"{name} AS ("
+    pos = [i for i, c in enumerate(all_ctes) if c.startswith(head)]
+    if len(pos) != 1 or not re.search(rf"\bFROM {name}\b", sql):
+        return None
+    i = pos[0]
+    snap_stmt = (
+        "__snapshot_stage__ "
+        + _json.dumps({"stage": name, "cols": cols})
+        + "\nWITH "
+        + ",\n".join(all_ctes)
+        + f"\nSELECT * FROM {name}"
+    )
+    ctes = (
+        all_ctes[:i]
+        + [f"{name}__live AS (" + all_ctes[i][len(head) :], f"{name} AS (__SNAPSHOT__)"]
+        + all_ctes[i + 1 :]
+    )
+    return snap_stmt, ctes
+
+
 def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     """Assemble SQLQuery for transactional (DML) queries."""
     stmts, all_params = [], []
@@ -3517,6 +3639,11 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     if all_ctes and sql is not None:
         sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
         sql = _hoist_repeated_json_table_predicates(sql)
+        _snap = _pre_update_stage_snapshot(cypher_query, context, all_ctes, sql)
+        if _snap is not None:
+            _snap_stmt, all_ctes = _snap
+            stmts.insert(0, _snap_stmt)
+            all_params.insert(0, list(context.all_stage_params))
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
         if optional_union_sql:
