@@ -143,6 +143,7 @@ def _inject_match_label_in_line(line: str, label: str, skip_vars: set = None) ->
 
     if skip_vars is None:
         skip_vars = set()
+    seen = set()
 
     def replacer(m):
         inner = m.group(1)
@@ -162,6 +163,12 @@ def _inject_match_label_in_line(line: str, label: str, skip_vars: set = None) ->
             return m.group(0)
         if var_name and var_name in skip_vars:
             return m.group(0)  # Don't add label to already-bound variable
+        # One label per variable: a second `(n)` on the line may be a parenthesised
+        # expression (`MATCH (n) WHERE (n)`, Pattern1 [11]), not a pattern.
+        if var_name:
+            if var_name in seen:
+                return m.group(0)
+            seen.add(var_name)
         # Insert label BEFORE any property map {…} so the result is valid Cypher.
         if '{' in inner:
             label_part, _, props_part = inner.partition('{')

@@ -1643,6 +1643,20 @@ class TestUnwindRangeClippedToWithLimit:
         sql = _sql("UNWIND range(1000000, 2000000) AS i WITH i LIMIT 3000 RETURN sum(i)")
         assert "1002999" in sql and "1003000" not in sql
 
+    def test_limit_after_skip_keeps_skip_plus_limit(self):
+        sql = _sql("UNWIND range(1, 500) AS i WITH i SKIP 2 LIMIT 3 RETURN i")
+        assert "JSON_ARRAY(1, 2, 3, 4, 5)" in sql
+
     def test_ordered_with_is_not_clipped(self):
         sql = _sql("UNWIND range(1, 20) AS i WITH i ORDER BY i DESC LIMIT 3 RETURN i")
         assert "20" in sql
+
+
+class TestHarnessScopesEachMatchVariableOnce:
+    def test_parenthesised_where_variable_is_not_labelled(self):
+        # Pattern1 [11]: `MATCH (n) WHERE (n)` became `WHERE (n:TCK_x)`, a label
+        # predicate, so the expected InvalidArgumentType never fired.
+        from tests.tck.steps.query import _inject_match_scope
+
+        out = _inject_match_scope("MATCH (n) WHERE (n) RETURN n", "TCK_x")
+        assert out == "MATCH (n:TCK_x) WHERE (n) RETURN n"
