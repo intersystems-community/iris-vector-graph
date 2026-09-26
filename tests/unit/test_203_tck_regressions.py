@@ -1543,8 +1543,9 @@ class TestVarLengthExpandsInSql:
         t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) RETURN b")
         assert t.var_length_paths
 
-    def test_var_length_with_relationship_properties_still_goes_to_the_engine(self):
-        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist) RETURN *")
+    def test_var_length_with_non_scalar_relationship_property_goes_to_the_engine(self):
+        # String/integer maps are checked in SQL (TestVarLengthRelationshipPropertyMap).
+        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988.5}]->(b:Artist) RETURN *")
         assert t.var_length_paths
 
     def test_node_id_bound_endpoint_keeps_the_engine_bfs_fast_path(self):
@@ -1642,3 +1643,38 @@ class TestQuantifierOverPathElements:
         sql = _sql_text(tr(self.NODES))
         final = sql.split(")\nSELECT ", 1)[1]
         assert final.startswith("COALESCE((SELECT JSON_ARRAYAGG('{\"_id\"") and " AS nodes" in final, sql
+
+
+class TestVarLengthRelationshipPropertyMap:
+    """Match4 [5]: `[:T* {year: 1988}]` holds every relationship of the path to the
+    map; it went to the engine route, which dropped the start node."""
+
+    def test_every_relationship_is_checked(self):
+        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist) RETURN *")
+        sql = _sql_text(t)
+        assert "CY_VLP_PATHS" in sql and not t.var_length_paths, sql
+        assert "PATH '$.props.year'" in sql and "<> '1988'" in sql, sql
+
+    def test_non_scalar_value_keeps_the_engine_route(self):
+        t = tr("MATCH (a)-[:T* {w: 1.5}]->(b) RETURN b")
+        assert "CY_VLP_PATHS" not in _sql_text(t)
+
+
+class TestRelationshipBoundByEarlierMatch:
+    """Match4 [7]: a relationship bound by one MATCH and crossed again in the next was
+    re-joined under its own alias (duplicate alias, duplicate CTE)."""
+
+    Q = "MATCH ()-[r:EDGE]-() MATCH p = (n)-[*0..1]-()-[r]-()-[*0..1]-(m) RETURN count(p) AS c"
+
+    def test_fresh_edge_row_held_to_bound_identity(self):
+        sql = _sql_text(tr("MATCH ()-[r:EDGE]-() MATCH (n)-[r]-(m) RETURN n, m"))
+        assert sql.count("JOIN _ue3 e3") == 0, sql
+        assert "e3._os = e" in sql and "e3._oo = e" in sql, sql
+
+    def test_directed_reuse(self):
+        sql = _sql_text(tr("MATCH ()-[r:T]->() MATCH (n)<-[r]-(m) RETURN n, m"))
+        assert "e3.s = e" in sql and "e3.o_id = e" in sql, sql
+
+    def test_var_length_path_value_uses_segment_columns(self):
+        sql = _sql_text(tr(self.Q))
+        assert "vlp5.p" not in sql and ".y" in sql, sql
