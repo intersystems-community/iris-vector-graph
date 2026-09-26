@@ -169,6 +169,17 @@ def plan_row_merge(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opti
         # MERGE after a DELETE in the same part, reading none of the part's rows.
         if outer:
             return None
+        head_bound = _graph_vars(
+            list(q.query_parts[:k])
+            + [ast.QueryPart(clauses=list(head_clauses), with_clause=None)]
+        )
+        if bound_by_suffix & head_bound:
+            # The suffix's MERGE reuses a variable the head already bound (and
+            # perhaps deleted), e.g. `MATCH (a)-[t:T]->(b) DELETE t MERGE
+            # (a)-[t2:T]->(b)` (Merge5 [20], [21]). That entity's identity has
+            # to flow row-by-row from the head's MATCH; a bare row count can't
+            # carry it, so the static translator handles the whole statement.
+            return None
         if _has_updates(q.query_parts[:k]) or any(
             isinstance(c, ast.UpdatingClause) and not isinstance(c, ast.DeleteClause)
             for c in head_clauses

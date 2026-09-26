@@ -963,7 +963,20 @@ class IRISGraphStore:
             for stmt, p in after_result:
                 if edge_hwm is not None and "__EDGE_HWM__" in p:
                     p = [edge_hwm if v == "__EDGE_HWM__" else v for v in p]
-                cursor.execute(stmt, p)
+                if stmt.startswith("__constraint_check_delete_connected__"):
+                    actual_sql = stmt[len("__constraint_check_delete_connected__ ") :]
+                    count = 0
+                    for chunk_sql in _expand_captured_ids(actual_sql, captured_ids):
+                        cursor.execute(chunk_sql, p)
+                        count_row = cursor.fetchone()
+                        count += (count_row[0] or 0) if count_row else 0
+                    if count > 0:
+                        raise Exception(
+                            "ConstraintVerificationFailed: Cannot delete node with existing relationships. Use DETACH DELETE."
+                        )
+                    continue
+                for chunk_sql in _expand_captured_ids(stmt, captured_ids):
+                    cursor.execute(chunk_sql, p)
             self.conn.commit()
 
             if pre_captured_rows is not None:
