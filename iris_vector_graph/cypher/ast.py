@@ -63,6 +63,7 @@ class NodePattern:
     labels: List[str] = field(default_factory=list)
     properties: Dict[str, Any] = field(default_factory=dict)
     labels_or: bool = False
+    has_property_map: bool = False  # True for `(n {})` — an empty map is still a predicate
 
 
 @dataclass(slots=True)

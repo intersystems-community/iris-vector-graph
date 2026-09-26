@@ -615,3 +615,185 @@ class TestZonedTimeOrdering:
         )
         iris_cursor.execute(t.sql, t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters)
         assert tuple(int(v) for v in iris_cursor.fetchall()[0]) == (0, 1, 0, 1)
+
+
+class TestWithForwardsPathVariable:
+    """With1 [4]: a named path projected through WITH stays a path value."""
+
+    def test_single_node_path_through_with(self):
+        sql = tr("MATCH p = (a:X) WITH p RETURN p").sql
+        assert "Stage1" in sql
+        assert '"nodes"' in sql
+        assert "Stage1.p" in sql
+
+    def test_path_with_relationship_through_with(self):
+        sql = tr("MATCH p = (a:X)-[:T]->(b) WITH p AS q RETURN q").sql
+        assert '"rels"' in sql
+        assert "Stage1.q" in sql
+
+
+class TestUnlabelledOptionalMatchNullRow:
+    """Graph6 [7]: a lone unlabelled OPTIONAL MATCH yields one null row when empty."""
+
+    def test_null_row_when_match_is_empty(self):
+        sql = tr("OPTIONAL MATCH ()-[r]->() RETURN r.missing").sql
+        assert "UNION ALL" in sql
+        assert "NOT EXISTS (SELECT 1 FROM (" in sql
+
+    def test_labelled_anchor_keeps_label_check(self):
+        sql = tr("OPTIONAL MATCH (a:L)-[r]->() RETURN r.missing").sql
+        assert "NOT EXISTS (SELECT 1 FROM (" not in sql
+
+    def test_not_after_match(self):
+        sql = tr("MATCH (a:L) OPTIONAL MATCH (a)-[r]->() RETURN r.missing").sql
+        assert "__om" not in sql
+
+
+class TestNamedPathAsValue:
+    """Return4 [6]: a named path can be an aggregation argument."""
+
+    def test_count_distinct_path(self):
+        sql = tr("MATCH p = (n:X)-->(b) RETURN coUnt( dIstInct p )").sql
+        assert "COUNT(DISTINCT" in sql.upper()
+        assert '"nodes"' in sql
+
+
+class TestCreateBoundNodeWithEmptyMap:
+    """Create1 [19]: `(n {})` on a bound node is VariableAlreadyBound."""
+
+    def test_empty_map_on_bound_node(self):
+        with pytest.raises(SyntaxError, match="VariableAlreadyBound"):
+            tr("CREATE (n:Foo)\nCREATE (n {})-[:OWNS]->(:Dog)")
+
+    def test_bare_bound_node_allowed(self):
+        tr("CREATE (n:Foo)\nCREATE (n)-[:OWNS]->(:Dog)")
+
+
+class TestWithOrderByUnprojectedAggregate:
+    """WithOrderBy4 [14]: sorting by an aggregate the WITH does not project reads
+    variables that are out of scope."""
+
+    def test_unprojected_aggregate_raises(self):
+        with pytest.raises(SyntaxError, match="UndefinedVariable"):
+            tr(
+                "MATCH (a:A) WITH a.num2 % 3 AS mod, min(a.num + a.num2) AS min "
+                "ORDER BY sum(a.num + a.num2) LIMIT 2 RETURN mod, min"
+            )
+
+    def test_projected_aggregate_allowed(self):
+        tr(
+            "MATCH (a:A) WITH a.num2 % 3 AS mod, sum(a.num + a.num2) AS sum "
+            "ORDER BY sum(a.num + a.num2) LIMIT 2 RETURN mod, sum"
+        )
+
+    def test_projected_aggregate_with_param_allowed(self):
+        tr(
+            "MATCH (person) WITH avg(person.age) AS avgAge "
+            "ORDER BY $age + avg(person.age) - 1000 RETURN avgAge",
+            {"age": 38},
+        )
+
+
+
+class TestWithOrderByParameterBinding:
+    """WithOrderBy4 [16]: a $param inside a WITH ORDER BY expression must be bound."""
+
+    def test_param_in_sort_expression_bound(self):
+        t = tr(
+            "MATCH (person:X) WITH avg(person.age) AS avgAge "
+            "ORDER BY $age + avg(person.age) - 1000 RETURN avgAge",
+            {"age": 38},
+        )
+        params = t.parameters[0]
+        assert 38 in params
+        assert t.sql.count("?") == len(params)
+
+
+
+class TestWithOrderByPriorStageVariable:
+    """WithOrderBy4 [8]: ORDER BY a variable the earlier WITH projected but this
+    one does not; the column is only visible inside the sort wrapper."""
+
+    def test_prior_stage_column_projected_for_sort(self):
+        t = tr(
+            "MATCH (a:A) WITH a, a.num + a.num2 AS sum "
+            "WITH a, a.num2 % 3 AS mod ORDER BY sum LIMIT 3 RETURN a, mod"
+        )
+        tail = t.sql.split("__ob ORDER BY", 1)[1].split("\n", 1)[0]
+        assert "Stage1." not in tail
+        assert t.sql.count("?") == len(t.parameters[0])
+
+
+
+class TestPatternPredicateBoundNodeLabel:
+    """WithWhere4 [2]: a label on an already-bound node inside a pattern
+    predicate, `(a)-[:T]->(b:TheLabel)`, must constrain b."""
+
+    def test_bound_node_label_checked(self):
+        t = tr(
+            "MATCH (a), (b) WITH a, b WHERE (a)-[:T]->(b:MissingLabel) RETURN b"
+        )
+        assert "MissingLabel" in t.parameters[0]
+        assert t.sql.count("?") == len(t.parameters[0])
+
+    def test_where_clause_bound_node_label_checked(self):
+        t = tr("MATCH (a), (b) WHERE (a)-[:T]->(b:Foo) RETURN b")
+        assert "Foo" in t.parameters[0]
+        assert t.sql.count("?") == len(t.parameters[0])
+
+
+
+class TestPropertyOfNodeFromListElement:
+    """Graph6 [4]: `(list[1]).prop` where the element is a node id, not a map,
+    reads the node property instead of parsing the id as JSON."""
+
+    def test_list_element_property_reads_node_props(self):
+        t = tr("MATCH (n) WITH [123, n] AS list RETURN (list[1]).existing")
+        assert "rdf_props" in t.sql.split("FROM Stage1")[0].split("Stage1 AS")[-1] or (
+            "rdf_props" in t.sql.rsplit("SELECT", 1)[-1]
+        )
+        assert t.sql.count("?") == len(t.parameters[0])
+
+    def test_map_element_property_still_json(self):
+        t = tr("WITH [{a: 1}] AS list RETURN (list[0]).a AS a")
+        assert "JSON_VALUE" in t.sql
+
+
+
+class TestDeletedEntityAccess:
+    """Return2 [15]-[17]: reading properties or labels of an entity deleted in the
+    same query part raises EntityNotFound (DeletedEntityAccess)."""
+
+    def test_property_of_deleted_node(self):
+        with pytest.raises(KeyError, match="DeletedEntityAccess"):
+            tr("MATCH (n) DELETE n RETURN n.num")
+
+    def test_labels_of_deleted_node(self):
+        with pytest.raises(KeyError, match="DeletedEntityAccess"):
+            tr("MATCH (n) DELETE n RETURN labels(n)")
+
+    def test_property_of_deleted_relationship(self):
+        with pytest.raises(KeyError, match="DeletedEntityAccess"):
+            tr("MATCH ()-[r]->() DELETE r RETURN r.num")
+
+    def test_type_of_deleted_relationship_allowed(self):
+        tr("MATCH ()-[r]->() DELETE r RETURN type(r)")
+
+    def test_deleted_node_itself_allowed(self):
+        tr("MATCH (n) DELETE n RETURN n")
+
+    def test_property_of_other_variable_allowed(self):
+        tr("MATCH (n)-[r]->(m) DELETE r RETURN n.num")
+
+
+
+class TestLabelsOfPathRejected:
+    """Graph3 [8]: labels(p) on a named path is InvalidArgumentType (a path
+    value is now translatable, so the check must be explicit)."""
+
+    def test_labels_of_path_raises(self):
+        with pytest.raises(SyntaxError, match="InvalidArgumentType"):
+            tr("MATCH p = (a) RETURN labels(p) AS l")
+
+    def test_labels_of_node_allowed(self):
+        tr("MATCH p = (a) RETURN labels(a) AS l")
