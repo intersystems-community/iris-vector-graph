@@ -1,6 +1,9 @@
 """TCK result comparison: value parsing and table diff."""
 from __future__ import annotations
 
+import contextlib
+import json
+import math
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -140,6 +143,730 @@ def _split_tck_list(s: str) -> list[str]:
     return items
 
 
+
+
+# ---------------------------------------------------------------------------
+# Expected values: a TCK result cell parsed into typed values, with graph
+# values (nodes, relationships, paths) as their own types rather than strings.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExpNode:
+    labels: frozenset
+    props: dict
+
+    def __repr__(self) -> str:
+        return f"({''.join(':' + lb for lb in sorted(self.labels))} {self.props})"
+
+
+@dataclass
+class ExpRel:
+    type: str
+    props: dict
+
+    def __repr__(self) -> str:
+        return f"[:{self.type} {self.props}]"
+
+
+@dataclass
+class ExpPath:
+    nodes: list
+    rels: list  # (ExpRel, forward: bool), one per hop
+
+    def __repr__(self) -> str:
+        out = [repr(self.nodes[0])] if self.nodes else []
+        for (rel, fwd), node in zip(self.rels, self.nodes[1:]):
+            out.append(f"-{rel!r}->" if fwd else f"<-{rel!r}-")
+            out.append(repr(node))
+        return "<" + "".join(out) + ">"
+
+
+_INT_TEXT = re.compile(r"-?\d+")
+_FLOAT_TEXT = re.compile(
+    r"-?(?:\d+\.\d*|\.\d+)(?:[eE][-+]?\d+)?|-?\d+[eE][-+]?\d+|-?(?:NaN|Infinity|inf|nan)"
+)
+
+
+class _ExpectedParser:
+    """Recursive-descent reader for a TCK result cell."""
+
+    _TOKEN_END = set(" \t\n,]})>")
+
+    def __init__(self, text: str):
+        self.s = text
+        self.i = 0
+
+    def fail(self, msg: str):
+        raise ValueError(f"TCK cell {self.s!r}: {msg} at offset {self.i}")
+
+    def ws(self):
+        while self.i < len(self.s) and self.s[self.i] in " \t\n\r":
+            self.i += 1
+
+    def peek(self, k: int = 0) -> str:
+        j = self.i + k
+        return self.s[j] if j < len(self.s) else ""
+
+    def expect(self, ch: str):
+        self.ws()
+        if self.peek() != ch:
+            self.fail(f"expected {ch!r}")
+        self.i += 1
+
+    def ident(self) -> str:
+        self.ws()
+        if self.peek() == "`":
+            end = self.s.index("`", self.i + 1)
+            name = self.s[self.i + 1:end]
+            self.i = end + 1
+            return name
+        j = self.i
+        while j < len(self.s) and (self.s[j].isalnum() or self.s[j] == "_"):
+            j += 1
+        if j == self.i:
+            self.fail("expected a name")
+        name, self.i = self.s[self.i:j], j
+        return name
+
+    def value(self) -> Any:
+        self.ws()
+        c = self.peek()
+        if c == "'":
+            return self.string()
+        if c == "[":
+            j = self.i + 1
+            while j < len(self.s) and self.s[j] in " \t":
+                j += 1
+            if j < len(self.s) and self.s[j] == ":":
+                return self.rel()
+            return self.list_()
+        if c == "{":
+            return self.map_()
+        if c == "(":
+            return self.node()
+        if c == "<":
+            return self.path()
+        return self.token()
+
+    def string(self) -> str:
+        j = self.i + 1
+        while j < len(self.s):
+            if self.s[j] == "\\":
+                j += 2
+                continue
+            if self.s[j] == "'":
+                break
+            j += 1
+        if j >= len(self.s):
+            self.fail("unterminated string")
+        raw, self.i = self.s[self.i:j + 1], j + 1
+        return _parse_tck_value(raw)
+
+    def token(self) -> Any:
+        j = self.i
+        while j < len(self.s) and self.s[j] not in self._TOKEN_END:
+            j += 1
+        tok, self.i = self.s[self.i:j], j
+        if tok == "null":
+            return None
+        if tok in ("true", "false"):
+            return tok == "true"
+        if tok == "NaN":
+            return float("nan")
+        if tok in ("Infinity", "-Infinity"):
+            return float(tok.replace("Infinity", "inf"))
+        if _INT_TEXT.fullmatch(tok):
+            return int(tok)
+        try:
+            return float(tok)
+        except ValueError:
+            self.fail(f"unreadable value {tok!r}")
+
+    def list_(self) -> list:
+        self.expect("[")
+        out: list = []
+        self.ws()
+        if self.peek() == "]":
+            self.i += 1
+            return out
+        while True:
+            out.append(self.value())
+            self.ws()
+            if self.peek() == ",":
+                self.i += 1
+                continue
+            self.expect("]")
+            return out
+
+    def map_(self) -> dict:
+        self.expect("{")
+        out: dict = {}
+        self.ws()
+        if self.peek() == "}":
+            self.i += 1
+            return out
+        while True:
+            key = self.ident()
+            self.expect(":")
+            out[key] = self.value()
+            self.ws()
+            if self.peek() == ",":
+                self.i += 1
+                continue
+            self.expect("}")
+            return out
+
+    def _labels_and_props(self, close: str):
+        labels: list[str] = []
+        props: dict = {}
+        self.ws()
+        if self.peek() not in (":", "{", close):
+            self.ident()  # a variable name carries no value
+        self.ws()
+        while self.peek() == ":":
+            self.i += 1
+            labels.append(self.ident())
+            self.ws()
+        if self.peek() == "{":
+            props = self.map_()
+        self.expect(close)
+        return labels, props
+
+    def node(self) -> ExpNode:
+        self.expect("(")
+        labels, props = self._labels_and_props(")")
+        return ExpNode(frozenset(labels), props)
+
+    def rel(self) -> ExpRel:
+        self.expect("[")
+        labels, props = self._labels_and_props("]")
+        if len(labels) != 1:
+            self.fail("a relationship has exactly one type")
+        return ExpRel(labels[0], props)
+
+    def path(self) -> ExpPath:
+        self.expect("<")
+        nodes = [self.node()]
+        rels: list = []
+        while True:
+            self.ws()
+            if self.peek() == ">":
+                self.i += 1
+                return ExpPath(nodes, rels)
+            if self.peek() == "<":
+                self.i += 1
+                self.expect("-")
+                rel = self.rel()
+                self.expect("-")
+                rels.append((rel, False))
+            else:
+                self.expect("-")
+                rel = self.rel()
+                self.expect("-")
+                self.expect(">")
+                rels.append((rel, True))
+            nodes.append(self.node())
+
+
+def parse_expected(cell: str) -> Any:
+    """A TCK result cell as a typed value: None, bool, int, float, str, list, dict,
+    ExpNode, ExpRel or ExpPath. `'(:A)'` is a string, `(:A)` is a node."""
+    p = _ExpectedParser(cell.strip())
+    v = p.value()
+    p.ws()
+    if p.i != len(p.s):
+        p.fail("trailing text")
+    return v
+
+
+def _parse_node_pattern(s: str) -> dict | None:
+    """A node cell as {"labels": [...], "props": {...}}; None if it is not a node."""
+    try:
+        v = parse_expected(s)
+    except ValueError:
+        return None
+    if not isinstance(v, ExpNode):
+        return None
+    return {"labels": sorted(v.labels), "props": v.props}
+
+
+# ---------------------------------------------------------------------------
+# Actual values. IVG returns graph values as JSON text and many scalars as
+# VARCHAR text, so the actual side is decoded against the expected value's
+# shape, but never loosened: text becomes a number only when it is the
+# number's own spelling (`1` is an integer, `1.0` a float), JSON keeps its
+# types, and nothing but null equals null.
+# ---------------------------------------------------------------------------
+
+
+class SqlHydrator:
+    """Reads nodes and relationships back from the tables by id, so a path (which the
+    engine returns as ids and types only) and a node's typed properties can be checked."""
+
+    def __init__(self, conn, schema: str = "Graph_KG"):
+        self.conn = conn
+        self.schema = schema
+        self._nodes: dict = {}
+        self._edges: dict = {}
+
+    def _rows(self, sql: str, params: list):
+        cur = self.conn.cursor()
+        try:
+            cur.execute(sql, params)
+            return cur.fetchall()
+        finally:
+            with contextlib.suppress(Exception):
+                cur.close()
+
+    @staticmethod
+    def _default_graph(g) -> bool:
+        return g in (None, "")
+
+    def node(self, node_id: str):
+        if node_id in self._nodes:
+            return self._nodes[node_id]
+        s = self.schema
+        exists = [r for r in self._rows(f"SELECT graph_id FROM {s}.nodes WHERE node_id = ?", [node_id])
+                  if self._default_graph(r[0])]
+        if not exists:
+            self._nodes[node_id] = None
+            return None
+        labels = [r[0] for r in self._rows(f"SELECT label, graph_id FROM {s}.rdf_labels WHERE s = ?", [node_id])
+                  if self._default_graph(r[1])]
+        props = {r[0]: r[1] for r in self._rows(f"SELECT key, val, graph_id FROM {s}.rdf_props WHERE s = ?", [node_id])
+                 if self._default_graph(r[2])}
+        self._nodes[node_id] = {"labels": labels, "props": props}
+        return self._nodes[node_id]
+
+    def edges(self, s_id: str, o_id: str, rel_type: str) -> list[dict]:
+        key = (s_id, o_id, rel_type)
+        if key not in self._edges:
+            s = self.schema
+            rows = self._rows(
+                f"SELECT qualifiers, graph_id FROM {s}.rdf_edges WHERE s = ? AND p = ? AND o_id = ?",
+                [s_id, rel_type, o_id],
+            )
+            self._edges[key] = [_as_props(r[0]) for r in rows if self._default_graph(r[1])]
+        return self._edges[key]
+
+
+def _json_or(v: Any, typ: type) -> Any:
+    """`v` if it already is `typ`, the JSON it spells if that is `typ`, else None."""
+    if isinstance(v, typ):
+        return v
+    if isinstance(v, tuple) and typ is list:
+        return list(v)
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, typ) else None
+    return None
+
+
+def _as_props(raw: Any) -> dict:
+    if raw is None or raw == "":
+        return {}
+    d = _json_or(raw, dict)
+    return d if d is not None else {}
+
+
+def _is_int(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _float_eq(a: float, b: float) -> bool:
+    return a == b or (math.isnan(a) and math.isnan(b))
+
+
+def _decimal(av: Decimal, ev: Any) -> Any:
+    """IRIS NUMERIC carries no Cypher type: an integral value reads as an integer
+    unless a float is expected; a fractional one is always a float."""
+    if isinstance(ev, float) or av != av.to_integral_value():
+        return float(av)
+    return int(av)
+
+
+def normalise_iris_value(iris_val: Any, expected_tck_val: Any) -> Any:
+    """An IRIS scalar decoded against the expected value's type, without loosening it:
+    text becomes a bool only as `true`/`false`, an integer only as integer digits, a
+    float only in float syntax; a float never becomes an integer."""
+    if isinstance(iris_val, Decimal):
+        return _decimal(iris_val, expected_tck_val)
+    if not isinstance(iris_val, str):
+        return list(iris_val) if isinstance(iris_val, tuple) else iris_val
+    t = iris_val.strip()
+    if isinstance(expected_tck_val, bool):
+        return {"true": True, "false": False}.get(t, iris_val)
+    if _is_int(expected_tck_val) and _INT_TEXT.fullmatch(t):
+        return int(t)
+    if isinstance(expected_tck_val, float) and _FLOAT_TEXT.fullmatch(t):
+        return float(t.replace("Infinity", "inf"))
+    if isinstance(expected_tck_val, (list, dict)):
+        parsed = _json_or(iris_val, type(expected_tck_val))
+        if parsed is not None:
+            return parsed
+    return iris_val
+
+
+class _Matcher:
+    def __init__(self, hydrator=None):
+        self.hydrator = hydrator
+
+    # -- scalars / collections ------------------------------------------------
+
+    def match(self, ev: Any, av: Any, text_ok: bool = True, unordered: bool = False) -> bool:
+        """`text_ok`: `av` came through a VARCHAR, so `'1'` may spell the integer 1.
+        Inside decoded JSON and hydrated properties a string is only ever a string."""
+        if isinstance(av, Decimal):
+            av = _decimal(av, ev)
+        if isinstance(av, tuple):
+            av = list(av)
+        if ev is None:
+            return av is None
+        if av is None:
+            return False
+        if isinstance(ev, ExpNode):
+            return self.node(ev, av)
+        if isinstance(ev, ExpRel):
+            return self.rel(ev, av)
+        if isinstance(ev, ExpPath):
+            return self.path(ev, av)
+        if isinstance(ev, bool):
+            if isinstance(av, bool):
+                return av == ev
+            return text_ok and isinstance(av, str) and av.strip() == ("true" if ev else "false")
+        if _is_int(ev):
+            if _is_int(av):
+                return av == ev
+            return text_ok and isinstance(av, str) and bool(_INT_TEXT.fullmatch(av.strip())) and int(av) == ev
+        if isinstance(ev, float):
+            if isinstance(av, float):
+                return _float_eq(av, ev)
+            if text_ok and isinstance(av, str) and _FLOAT_TEXT.fullmatch(av.strip()):
+                return _float_eq(float(av.strip().replace("Infinity", "inf")), ev)
+            return False
+        if isinstance(ev, str):
+            return isinstance(av, str) and av == ev
+        if isinstance(ev, list):
+            al = _json_or(av, list)
+            if al is None or len(al) != len(ev):
+                return False
+            if unordered:
+                return _perfect_matching(len(ev), len(al), lambda i, j: self.match(ev[i], al[j], text_ok=False))
+            return all(self.match(e, a, text_ok=False) for e, a in zip(ev, al))
+        if isinstance(ev, dict):
+            ad = _json_or(av, dict)
+            if ad is None or set(ad) != set(ev):
+                return False
+            return all(self.match(ev[k], ad[k], text_ok=False) for k in ev)
+        return False
+
+    def stored(self, ev: Any, text: Any, float_from_int_text: bool = False) -> bool:
+        """A property value as the engine renders it inside a node / relationship value:
+        text, with lists and maps as JSON. `float_from_int_text`: node renderings drop a
+        float's `.0` (`1.0` -> `"1"`); the hydrated check then carries the type."""
+        if not isinstance(text, str):
+            return self.match(ev, text, text_ok=False)
+        if isinstance(ev, float) and float_from_int_text and _INT_TEXT.fullmatch(text.strip()):
+            return float(text) == ev
+        if isinstance(ev, (list, dict)):
+            return self.match(ev, text, text_ok=False)
+        return self.match(ev, text, text_ok=True)
+
+    # -- nodes ---------------------------------------------------------------
+
+    @staticmethod
+    def _node_obj(av: Any):
+        d = _json_or(av, dict)
+        if d is None or "_labels" not in d:
+            return None
+        return d
+
+    @staticmethod
+    def _labels(raw: Any) -> set:
+        lst = _json_or(raw, list) if raw is not None else []
+        return {lb for lb in (lst or []) if not (isinstance(lb, str) and lb.startswith("TCK_"))}
+
+    @staticmethod
+    def _blob_props(raw: Any) -> dict:
+        if isinstance(raw, dict):
+            return raw
+        items = _json_or(raw, list) if raw is not None else []
+        out: dict = {}
+        for item in items or []:
+            if isinstance(item, str):
+                item = _json_or(item, dict)
+            if isinstance(item, dict) and "key" in item:
+                out[item["key"]] = item.get("value")
+        return out
+
+    def node(self, ev: ExpNode, av: Any) -> bool:
+        d = self._node_obj(av)
+        if d is None:
+            return False
+        if self._labels(d.get("_labels")) != set(ev.labels):
+            return False
+        props = self._blob_props(d.get("_props"))
+        if set(props) != set(ev.props):
+            return False
+        if not all(self.stored(ev.props[k], props[k], float_from_int_text=True) for k in ev.props):
+            return False
+        return self.hydrated_node(ev, d.get("_id"), required=False)
+
+    def hydrated_node(self, ev: ExpNode, node_id: Any, required: bool) -> bool:
+        """The node as stored, with typed property values. `required`: the value carried
+        only an id (a path), so a node that cannot be read back is a mismatch."""
+        if self.hydrator is None or node_id is None:
+            return not required
+        h = self.hydrator.node(node_id)
+        if h is None:
+            return not required
+        if self._labels(h["labels"]) != set(ev.labels):
+            return False
+        if set(h["props"]) != set(ev.props):
+            return False
+        return all(self.match(ev.props[k], h["props"][k], text_ok=False) for k in ev.props)
+
+    # -- relationships ---------------------------------------------------------
+
+    def _rel_props_match(self, ev: ExpRel, props: dict) -> bool:
+        return set(props) == set(ev.props) and all(self.stored(ev.props[k], props[k]) for k in ev.props)
+
+    def rel(self, ev: ExpRel, av: Any) -> bool:
+        d = _json_or(av, dict)
+        if d is None:
+            return False
+        if "type" in d and "_labels" not in d:
+            return d["type"] == ev.type and self._rel_props_match(ev, _as_props(d.get("props")))
+        if "_type" in d:  # RETURN r expanded to r_s / r_p / r_o_id
+            if d["_type"] != ev.type:
+                return False
+            if self.hydrator is None:
+                return not ev.props
+            cands = self.hydrator.edges(d.get("_s"), d.get("_o_id"), ev.type)
+            return any(self._rel_props_match(ev, c) for c in cands)
+        return False
+
+    # -- paths -----------------------------------------------------------------
+
+    def path(self, ev: ExpPath, av: Any) -> bool:
+        d = _json_or(av, dict)
+        if d is None or "nodes" not in d or "rels" not in d:
+            return False
+        nodes, rels = d["nodes"] or [], d["rels"] or []
+        if len(nodes) != len(ev.nodes) or len(rels) != len(ev.rels):
+            return False
+        if self.hydrator is None:
+            return False  # a path is ids and types; without the store it cannot be checked
+        ids = []
+        for exp_node, n in zip(ev.nodes, nodes):
+            if isinstance(n, dict):
+                if "_labels" in n and not self.node(exp_node, n):
+                    return False
+                n = n.get("_id", n.get("id"))
+            ids.append(n)
+            if not self.hydrated_node(exp_node, n, required=True):
+                return False
+        for i, ((exp_rel, forward), r) in enumerate(zip(ev.rels, rels)):
+            if isinstance(r, dict):
+                if not self.rel(exp_rel, r):
+                    return False
+                r = r.get("type")
+            if r != exp_rel.type:
+                return False
+            s, o = (ids[i], ids[i + 1]) if forward else (ids[i + 1], ids[i])
+            if not any(self._rel_props_match(exp_rel, c) for c in self.hydrator.edges(s, o, exp_rel.type)):
+                return False
+        return True
+
+
+def _why(m: _Matcher, ev: Any, av: Any, depth: int = 0) -> str:
+    """A short tag naming why `av` is not `ev`, for the failure message (diagnostic only;
+    it never decides a match)."""
+    if isinstance(av, Decimal):
+        av = _decimal(av, ev)
+    if ev is None:
+        if av in ([], {}, "", "[]", "{}", 0):
+            return "null-got-empty"
+        return "null-got-value"
+    if av is None:
+        return "value-got-null" if ev not in ([], {}, "") else "empty-got-null"
+    if isinstance(ev, bool):
+        if _is_int(av) or (isinstance(av, str) and av.strip() in ("0", "1")):
+            return "bool-got-int"
+        return "bool"
+    if _is_int(ev):
+        if isinstance(av, float) or (isinstance(av, str) and _FLOAT_TEXT.fullmatch(av.strip())):
+            return "int-got-float" if float(av) == ev else "int-value"
+        if isinstance(av, str) and not _INT_TEXT.fullmatch(av.strip()):
+            return "int-got-text"
+        return "int-value"
+    if isinstance(ev, float):
+        if _is_int(av) or (isinstance(av, str) and _INT_TEXT.fullmatch(av.strip())):
+            return "float-got-int" if float(av) == ev else "float-value"
+        return "float-value"
+    if isinstance(ev, str):
+        return "string-got-" + type(av).__name__ if not isinstance(av, str) else "string-value"
+    if isinstance(ev, ExpNode):
+        d = m._node_obj(av)
+        if d is None:
+            return "node-got-nonnode"
+        labels = m._labels(d.get("_labels"))
+        if labels != set(ev.labels):
+            return "node-extra-labels" if labels > set(ev.labels) else "node-labels"
+        props = m._blob_props(d.get("_props"))
+        if set(props) != set(ev.props):
+            return "node-extra-props" if set(props) > set(ev.props) else "node-prop-keys"
+        if not all(m.stored(ev.props[k], props[k], float_from_int_text=True) for k in ev.props):
+            return "node-prop-value"
+        return "node-prop-type(hydrated)"
+    if isinstance(ev, ExpRel):
+        d = _json_or(av, dict)
+        if d is None:
+            return "rel-got-" + type(av).__name__
+        t = d.get("type", d.get("_type"))
+        if t != ev.type:
+            return "rel-type"
+        props = _as_props(d.get("props")) if "type" in d else None
+        if props is not None and set(props) > set(ev.props):
+            return "rel-extra-props"
+        return "rel-props"
+    if isinstance(ev, ExpPath):
+        d = _json_or(av, dict)
+        if d is None or "nodes" not in d:
+            return "path-got-nonpath"
+        if len(d.get("nodes") or []) != len(ev.nodes) or len(d.get("rels") or []) != len(ev.rels):
+            return "path-length"
+        if m.hydrator is None:
+            return "path-unhydrated"
+        flipped = ExpPath(ev.nodes, [(r, not f) for r, f in ev.rels])
+        if m.path(flipped, av):
+            return "path-direction"
+        return "path-node-or-rel"
+    if isinstance(ev, (list, dict)):
+        typ = type(ev)
+        a = _json_or(av, typ)
+        if a is None:
+            return f"{typ.__name__}-got-" + type(av).__name__
+        if len(a) != len(ev):
+            return f"{typ.__name__}-length"
+        if typ is dict:
+            if set(a) != set(ev):
+                return "map-keys"
+            pairs = [(ev[k], a[k]) for k in ev]
+        else:
+            pairs = list(zip(ev, a))
+        for e, x in pairs:
+            if not m.match(e, x, text_ok=False):
+                inner = _why(m, e, x, depth + 1)
+                if isinstance(x, str) and not isinstance(e, (str, ExpNode, ExpRel, ExpPath, list, dict)):
+                    inner = "text-in-json(" + inner + ")"
+                return f"in-{typ.__name__}:{inner}"
+        return f"{typ.__name__}-order"
+    return "value"
+
+
+def _row_diff(m: _Matcher, exp_row: list, act_row: list, columns: list[str], list_unordered: bool) -> str:
+    out = []
+    for col, e, a in zip(columns, exp_row, act_row):
+        if not m.match(e, a, text_ok=True, unordered=list_unordered):
+            out.append(f"{col}: {_why(m, e, a)} (expected {e!r}, got {a!r})")
+    return "; ".join(out)
+
+
+def _node_matches(node_data: dict, pattern: dict, isolation_label: str | None = None) -> bool:
+    """An IVG node value against a {"labels", "props"} pattern: labels and properties exact."""
+    exp = ExpNode(frozenset(pattern.get("labels") or []), dict(pattern.get("props") or {}))
+    return _Matcher().node(exp, node_data)
+
+
+def _perfect_matching(n_exp: int, n_act: int, ok) -> bool:
+    """Whether every expected item pairs with a distinct actual item (Kuhn's algorithm)."""
+    if n_exp != n_act:
+        return False
+    cache: dict = {}
+
+    def edge(i, j):
+        if (i, j) not in cache:
+            cache[(i, j)] = ok(i, j)
+        return cache[(i, j)]
+
+    owner = [-1] * n_act
+    for i in range(n_exp):  # greedy first: exact values almost always pair directly
+        for j in range(n_act):
+            if owner[j] == -1 and edge(i, j):
+                owner[j] = i
+                break
+    placed = set(owner) - {-1}
+
+    def augment(i, seen):
+        for j in range(n_act):
+            if j in seen or not edge(i, j):
+                continue
+            seen.add(j)
+            if owner[j] == -1 or augment(owner[j], seen):
+                owner[j] = i
+                return True
+        return False
+
+    return all(i in placed or augment(i, set()) for i in range(n_exp))
+
+
+# ---------------------------------------------------------------------------
+# Columns and tables
+# ---------------------------------------------------------------------------
+
+
+def _collapse_columns(actual_columns: list[str]) -> list[tuple[str, tuple[str, ...], str]]:
+    """IVG returns a node column `n` as n_id / n_labels / n_props and a relationship
+    column `r` as r_s / r_p / r_o_id. Each entry: (name, source columns, kind)."""
+    present = set(actual_columns)
+    out = []
+    used: set = set()
+    for c in actual_columns:
+        if c in used:
+            continue
+        for suffixes, kind in ((("_id", "_labels", "_props"), "node"), (("_s", "_p", "_o_id"), "rel")):
+            if c.endswith(suffixes[0]):
+                base = c[: -len(suffixes[0])]
+                group = tuple(base + s for s in suffixes)
+                if base and all(g in present for g in group):
+                    out.append((base, group, kind))
+                    used.update(group)
+                    break
+        else:
+            out.append((c, (c,), "plain"))
+            used.add(c)
+    return out
+
+
+def _collapsed_value(row: dict, group: tuple[str, ...], kind: str) -> Any:
+    vals = [row.get(g) for g in group]
+    if kind == "plain":
+        return vals[0]
+    if kind == "node":
+        nid, labels, props = vals
+        if nid is None:
+            return None  # OPTIONAL MATCH miss
+        return {"_id": nid, "_labels": labels, "_props": props}
+    s, p, o = vals
+    if s is None and p is None and o is None:
+        return None
+    return {"_type": p, "_s": s, "_o_id": o}
+
+
+def _remap_node_columns(actual_row: dict, tck_columns: list[str], actual_columns: list[str]) -> dict:
+    """The row with node / relationship column groups collapsed to one value each."""
+    out = dict(actual_row)
+    for name, group, kind in _collapse_columns(actual_columns):
+        if kind != "plain":
+            out[name] = _collapsed_value(actual_row, group, kind)
+    return out
+
+
 @dataclass
 class TCKResultTable:
     columns: list[str]
@@ -147,874 +874,58 @@ class TCKResultTable:
     ordered: bool
     list_unordered: bool
 
-    def compare(self, actual_rows: list[dict], actual_columns: list[str]) -> str | None:
-        """Return diff string on mismatch, None on match."""
-        expected_rows = [
-            {col: cell.python for col, cell in zip(self.columns, row)}
-            for row in self.rows
-        ]
+    def compare(self, actual_rows: list[dict], actual_columns: list[str], hydrator=None) -> str | None:
+        """None when the result equals the table exactly, else a description of the first
+        difference. Columns must be the expected header, by name and in order."""
+        groups = _collapse_columns(list(actual_columns))
+        got_cols = [g[0] for g in groups]
+        if got_cols != list(self.columns):
+            return f"Column mismatch: expected {list(self.columns)}, got {got_cols} (raw {list(actual_columns)})"
 
-        # Remap IVG's expanded node columns (var_id, var_labels, var_props) → var
-        remapped_rows = [_remap_node_columns(row, self.columns, actual_columns) for row in actual_rows]
-
-        # Case-insensitive column renaming: IVG lowercases function names (toInteger→tointeger).
-        # Also normalize whitespace (cOuNt( * ) vs count(*)) for function call column names.
-        # Build a lower-normalized→tck_col map so actual rows use TCK-canonical casing.
-        import re as _re_col
-        def _norm_col(s: str) -> str:
-            """Normalize column name: lowercase + collapse all whitespace."""
-            return _re_col.sub(r'\s+', '', s.lower())
-        lower_to_tck = {_norm_col(col): col for col in self.columns}
-        remapped_rows = [
-            {lower_to_tck.get(_norm_col(k), k): v for k, v in row.items()}
-            for row in remapped_rows
-        ]
-
-        # Build a column-level type schema from ALL expected rows.
-        # For each column, take the first non-None expected value so that
-        # normalise_iris_value knows the target type regardless of row order.
-        # This prevents unordered comparisons from using the wrong positional
-        # expected row to type-hint the actual value (e.g. IRIS returns '1'/'0'
-        # for booleans from JSON_TABLE, but if the positionally-aligned expected
-        # row has null for that column we'd miss the bool cast).
-        type_schema: dict[str, Any] = {}
-        for col in self.columns:
-            for exp_row in expected_rows:
-                v = exp_row.get(col)
-                if v is not None:
-                    type_schema[col] = v
-                    break
-
-        # normalise actual values against expected types (use type_schema not
-        # position-matched row so unordered result sets normalise correctly)
-        norm_actual = [
-            _normalise_row_with_nodes(row, type_schema, self.columns)
-            for row in remapped_rows
-        ]
-
-        if len(norm_actual) != len(expected_rows):
+        expected = [[parse_expected(cell.raw) for cell in row] for row in self.rows]
+        actual = [[_collapsed_value(r, g, k) for _, g, k in groups] for r in actual_rows]
+        if len(actual) != len(expected):
             return (
-                f"Row count mismatch: expected {len(expected_rows)}, got {len(norm_actual)}\n"
-                f"Expected: {expected_rows}\n"
-                f"Actual:   {norm_actual}"
+                f"Row count mismatch: expected {len(expected)}, got {len(actual)}\n"
+                f"Expected: {expected}\nActual:   {actual}"
+            )
+        m = _Matcher(hydrator)
+
+        def row_eq(i: int, j: int) -> bool:
+            return all(
+                m.match(e, a, text_ok=True, unordered=self.list_unordered)
+                for e, a in zip(expected[i], actual[j])
             )
 
-        def _matches(exp, i):
-            if _rows_equal(exp, norm_actual[i], self.columns, self.list_unordered):
-                return True
-            # A column mixing types (ORDER BY over [n, r, 1.5, false, ...]):
-            # normalise the cell against its own expected value instead.
-            own = {c: type_schema.get(c) if exp.get(c) is None else exp[c] for c in self.columns}
-            act2 = _normalise_row_with_nodes(remapped_rows[i], own, self.columns)
-            return _rows_equal(exp, act2, self.columns, self.list_unordered)
-
+        cols = list(self.columns)
         if self.ordered:
-            for i, (exp, act) in enumerate(zip(expected_rows, norm_actual)):
-                if not _matches(exp, i):
-                    return f"Row {i} mismatch:\n  expected: {exp}\n  actual:   {act}"
+            for i in range(len(expected)):
+                if not row_eq(i, i):
+                    return (
+                        f"Row {i} mismatch: {_row_diff(m, expected[i], actual[i], cols, self.list_unordered)}\n"
+                        f"  expected: {expected[i]}\n  actual:   {actual[i]}"
+                    )
             return None
-        else:
-            # unordered: bipartite matching — each expected row must match a distinct
-            # actual row.  Simple sort-then-compare fails when expected uses node
-            # pattern strings ("(:A)") and actual uses node dicts (sort keys differ).
-            # Greedy matching fails when a less-specific pattern consumes a node that
-            # a more-specific pattern needed, so we use backtracking.
-            def _can_match(exp_rows, avail_indices):
-                if not exp_rows:
-                    return True
-                exp = exp_rows[0]
-                for i in avail_indices:
-                    if _matches(exp, i):
-                        remaining = [j for j in avail_indices if j != i]
-                        if _can_match(exp_rows[1:], remaining):
-                            return True
-                return False
-
-            avail = list(range(len(norm_actual)))
-            if not _can_match(expected_rows, avail):
-                return (
-                    f"Unordered comparison: no perfect matching found\n"
-                    f"Expected: {expected_rows}\n"
-                    f"Actual:   {norm_actual}"
-                )
-            return None
-
-
-def _remap_node_columns(actual_row: dict, tck_columns: list[str], actual_columns: list[str]) -> dict:
-    """Collapse IVG's var_id/var_labels/var_props and var_s/var_p/var_o_id triplets.
-
-    IVG expands RETURN n into n_id, n_labels, n_props columns (nodes).
-    IVG expands RETURN r into r_s, r_p, r_o_id columns (relationships).
-    TCK expects a single column with node/relationship pattern notation.
-    """
-    result = dict(actual_row)
-    for col in tck_columns:
-        id_key = f"{col}_id"
-        labels_key = f"{col}_labels"
-        props_key = f"{col}_props"
-        s_key = f"{col}_s"
-        p_key = f"{col}_p"
-        o_id_key = f"{col}_o_id"
-        if id_key in actual_columns and labels_key in actual_columns and props_key in actual_columns:
-            node_id = actual_row.get(id_key)
-            node_labels = actual_row.get(labels_key)
-            node_props = actual_row.get(props_key)
-            # Null node from OPTIONAL MATCH: id is None and labels/props are empty
-            _empty = ("[]", "null", None)
-            if node_id is None and (node_labels is None or node_labels in _empty) and (node_props is None or node_props in _empty):
-                result[col] = None
-            else:
-                result[col] = {
-                    "_id": node_id,
-                    "_labels": node_labels,
-                    "_props": node_props,
-                }
-        elif s_key in actual_columns and p_key in actual_columns and o_id_key in actual_columns:
-            # Relationship triplet: collapse var_s/var_p/var_o_id into var dict
-            rel_s = actual_row.get(s_key)
-            rel_type = actual_row.get(p_key)
-            rel_o = actual_row.get(o_id_key)
-            if rel_s is None and rel_type is None and rel_o is None:
-                result[col] = None
-            else:
-                result[col] = {"_type": rel_type, "_s": rel_s, "_o_id": rel_o}
-    return result
-
-
-def _parse_node_pattern(s: str) -> dict | None:
-    """Parse TCK node pattern like (:A), (:B {name: 'x'}) into a dict.
-
-    Returns None if s is not a node pattern.
-    """
-    s = s.strip()
-    if not (s.startswith("(") and s.endswith(")")):
-        return None
-    inner = s[1:-1].strip()
-    # inner may be empty, :Label, :Label {props}, var:Label, var {props}
-    labels: list[str] = []
-    props: dict = {}
-    # extract variable name (no colon at start)
-    if inner and not inner.startswith(":"):
-        # variable name up to ':' or ' ' or '{'
-        end = 0
-        while end < len(inner) and inner[end] not in (":", " ", "{"):
-            end += 1
-        inner = inner[end:].lstrip()
-    # extract labels (:A:B...)
-    while inner.startswith(":"):
-        inner = inner[1:]
-        end = 0
-        while end < len(inner) and inner[end] not in (":", " ", "{"):
-            end += 1
-        labels.append(inner[:end])
-        inner = inner[end:].lstrip()
-    # extract props {k: v}
-    if inner.startswith("{") and inner.endswith("}"):
-        props = _parse_tck_value(inner)
-    return {"labels": labels, "props": props}
-
-
-def _parse_path_pattern(s: str) -> dict | None:
-    """Parse TCK path pattern like <(:A)-[:R]->(:B)> into structured form.
-
-    Returns a dict with:
-      nodes: list of node pattern dicts (from _parse_node_pattern)
-      rels: list of relationship type strings (or None for anonymous rels)
-    or None if s is not a path pattern.
-    """
-    s = s.strip()
-    if not (s.startswith("<") and s.endswith(">")):
-        return None
-    inner = s[1:-1].strip()
-
-    nodes: list[dict] = []
-    rels: list[str | None] = []
-
-    # Parse alternating: node, rel, node, rel, node...
-    i = 0
-    while i < len(inner):
-        # Skip whitespace
-        while i < len(inner) and inner[i] in (" ", "\t", "\n"):
-            i += 1
-        if i >= len(inner):
-            break
-
-        # Expect a node pattern: (...)
-        if inner[i] == "(":
-            # Find matching )
-            depth = 1
-            j = i + 1
-            while j < len(inner) and depth > 0:
-                if inner[j] == "(":
-                    depth += 1
-                elif inner[j] == ")":
-                    depth -= 1
-                j += 1
-            node_str = inner[i:j]
-            node_pattern = _parse_node_pattern(node_str)
-            if node_pattern:
-                nodes.append(node_pattern)
-            i = j
-        else:
-            i += 1
-
-        # Skip whitespace
-        while i < len(inner) and inner[i] in (" ", "\t", "\n"):
-            i += 1
-        if i >= len(inner):
-            break
-
-        # Expect a relationship pattern: -[...]-> or -[...]- or <-[...]-
-        # Format: -[type]-> or -[type]- or <-[type]- or <-[type]->
-        if inner[i] == "-" or (i > 0 and inner[i] == "<"):
-            # Look for [ ] pair
-            start = i
-            # Find the opening [
-            bracket_start = inner.find("[", i)
-            if bracket_start != -1:
-                # Find the closing ]
-                bracket_end = inner.find("]", bracket_start)
-                if bracket_end != -1:
-                    # Extract relationship type
-                    rel_inner = inner[bracket_start + 1:bracket_end].strip()
-                    # rel_inner may be empty, :Type, var:Type, etc.
-                    rel_type = None
-                    if rel_inner:
-                        # Extract type after : (if any) or just use the identifier
-                        if ":" in rel_inner:
-                            rel_type = rel_inner.split(":", 1)[1].strip()
-                        else:
-                            # Look for identifier before any space or end
-                            for ch in rel_inner:
-                                if ch in (" ", "{"):
-                                    break
-                                if ch.isalnum() or ch == "_":
-                                    continue
-                            # For now, if there's content, try to extract type
-                            # Simple case: just the type name
-                            rel_type = rel_inner.split()[0].lstrip(":") if rel_inner else None
-                    # `[:KNOWS {num: 1}]` — the type ends where the property map starts
-                    if rel_type:
-                        rel_type = rel_type.split("{", 1)[0].strip() or None
-                    rels.append(rel_type)
-                    i = bracket_end + 1
-                    # Skip any trailing -> or - or <
-                    while i < len(inner) and inner[i] in ("-", ">", "<"):
-                        i += 1
-                else:
-                    i += 1
-            else:
-                i += 1
-        else:
-            i += 1
-
-    return {"nodes": nodes, "rels": rels}
-
-
-def _paths_equal(expected_path: dict, actual_path_json: dict) -> bool:
-    """Compare a TCK path pattern with an IVG path JSON representation.
-
-    expected_path: {"nodes": [node_pattern, ...], "rels": [rel_type | None, ...]}
-    actual_path_json: {"nodes": [node_id, ...], "rels": [rel_type | None, ...]}
-
-    Strategy:
-    - Check structure: same number of nodes and rels (n nodes → n-1 rels)
-    - For rel types: they must match (both None or both the same string)
-    - For nodes: we cannot fully validate without DB hydration, so we accept if:
-      * The number of nodes matches
-      * Expected has no label/prop constraints (empty pattern) OR
-      * We could hydrate (not available here, so skip for now)
-    """
-    exp_nodes = expected_path.get("nodes", [])
-    exp_rels = expected_path.get("rels", [])
-
-    act_node_ids = actual_path_json.get("nodes", [])
-    act_rels = actual_path_json.get("rels", [])
-
-    # Check structure: n nodes → n-1 rels
-    if len(exp_nodes) != len(act_node_ids):
-        return False
-
-    # rels can be empty (single-node path like <>)
-    # or have n-1 elements (multi-node path)
-    # actual_path_json may have n rels (with trailing None) or n-1
-    # We're lenient: as long as counts are close, accept it
-    if len(exp_rels) > len(act_rels) + 1:
-        return False
-    if len(act_rels) > len(exp_rels) + 1:
-        return False
-
-    # Check rel types: must match where specified
-    for i, (exp_rel, act_rel) in enumerate(zip(exp_rels, act_rels)):
-        if exp_rel is not None and act_rel is not None:
-            if exp_rel != act_rel:
-                return False
-
-    return True
-
-
-def _node_matches(node_data: dict, pattern: dict, isolation_label: str | None = None) -> bool:
-    """Check if an IVG node data dict matches a TCK node pattern dict."""
-    raw_labels = node_data.get("_labels", "[]")
-    if isinstance(raw_labels, str):
-        import json
-        try:
-            actual_labels_list = json.loads(raw_labels)
-        except (json.JSONDecodeError, ValueError):
-            actual_labels_list = []
-    else:
-        actual_labels_list = list(raw_labels) if raw_labels else []
-
-    # strip isolation label(s) — any TCK_* label
-    actual_labels = {lbl for lbl in actual_labels_list if not lbl.startswith("TCK_")}
-
-    expected_labels = set(pattern["labels"])
-    if not expected_labels.issubset(actual_labels):
-        return False
-
-    expected_props = pattern.get("props") or {}
-    raw_props = node_data.get("_props", "[]")
-    if isinstance(raw_props, str):
-        import json
-        try:
-            props_list = json.loads(raw_props)
-        except (json.JSONDecodeError, ValueError):
-            props_list = []
-    else:
-        props_list = list(raw_props) if raw_props else []
-
-    # props_list is a list of {key, value} dicts OR JSON-encoded strings of same
-    actual_props: dict = {}
-    if isinstance(props_list, list):
-        for item in props_list:
-            if isinstance(item, str):
-                import json as _j
-                try:
-                    item = _j.loads(item)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-            if isinstance(item, dict) and "key" in item:
-                actual_props[item["key"]] = item.get("value")
-    elif isinstance(props_list, dict):
-        actual_props = props_list
-
-    for k, v in expected_props.items():
-        if actual_props.get(k) != v:
-            # try string/int normalisation
-            av = actual_props.get(k)
-            if isinstance(v, bool) and isinstance(av, str):
-                if av == ("true" if v else "false"):
-                    continue
-            if isinstance(v, int) and not isinstance(v, bool) and isinstance(av, str):
-                try:
-                    if int(av) == v:
-                        continue
-                except ValueError:
-                    pass
-            if isinstance(v, float) and isinstance(av, str):
-                try:
-                    if abs(float(av) - v) < 1e-9 * max(1.0, abs(v)):
-                        continue
-                except ValueError:
-                    pass
-            if isinstance(v, str) and isinstance(av, (int, float)):
-                if str(av) == v:
-                    continue
-            # If expected is a complex type (list, dict) and actual is a string, try JSON parsing
-            if isinstance(v, (list, dict)) and isinstance(av, str):
-                try:
-                    import json as _j
-                    parsed_av = _j.loads(av)
-                    if parsed_av == v:
-                        continue
-                except (json.JSONDecodeError, ValueError, TypeError):
-                    pass
-            return False
-    return True
-
-
-def _normalise_row_with_nodes(actual: dict, expected: dict, columns: list[str]) -> dict:
-    """Normalise actual row values, with special handling for node-format TCK cells."""
-    import json as _json
-    result = {}
-    for col in columns:
-        aval = actual.get(col)
-        eval_ = expected.get(col)
-        if isinstance(eval_, str):
-            pattern = _parse_node_pattern(eval_)
-            if pattern is not None:
-                # If actual value is a JSON string with node blob, parse it
-                if isinstance(aval, str):
-                    try:
-                        parsed = _json.loads(aval)
-                        if isinstance(parsed, dict) and "_id" in parsed and "_labels" in parsed:
-                            aval = parsed
-                    except (ValueError, TypeError):
-                        pass
-                if isinstance(aval, dict) and "_labels" in aval:
-                    # Keep node data as-is; comparison is done in _rows_equal
-                    result[col] = aval
-                    continue
-        result[col] = normalise_iris_value(aval, eval_)
-    return result
-
-
-def _normalise_row(actual: dict, expected: dict, columns: list[str]) -> dict:
-    result = {}
-    for col in columns:
-        aval = actual.get(col)
-        eval_ = expected.get(col)
-        result[col] = normalise_iris_value(aval, eval_)
-    return result
-
-
-def normalise_iris_value(iris_val: Any, expected_tck_val: Any) -> Any:
-    """Cast IRIS value to match expected TCK type."""
-    # IRIS stores '' as NULL — coerce back when expected is empty string
-    if iris_val is None and expected_tck_val == '':
-        return ''
-    # None vs list: IRIS function like labels() returns None instead of empty list
-    if iris_val is None and isinstance(expected_tck_val, list):
-        # ... but a null relationship / relationship list ([:T], [[:X]]) stays null
-        if expected_tck_val and all(
-            (isinstance(x, str) and x.startswith(":"))
-            or (isinstance(x, list) and len(x) == 1 and isinstance(x[0], str) and x[0].startswith(":"))
-            for x in expected_tck_val
-        ):
-            return None
-        return []
-    if iris_val is None:
-        return None
-    if isinstance(iris_val, Decimal):
-        if isinstance(expected_tck_val, int) and not isinstance(expected_tck_val, bool):
-            return int(iris_val)
-        return float(iris_val)
-    if isinstance(expected_tck_val, bool):
-        if isinstance(iris_val, str):
-            return {"true": True, "false": False}.get(iris_val, iris_val)
-        if isinstance(iris_val, int):
-            return iris_val != 0
-        return bool(iris_val)
-    if isinstance(expected_tck_val, int) and not isinstance(expected_tck_val, bool):
-        if isinstance(iris_val, str):
-            try:
-                return int(iris_val)
-            except ValueError:
-                pass
-        if isinstance(iris_val, float):
-            return int(iris_val)
-    if isinstance(expected_tck_val, float):
-        if isinstance(iris_val, str):
-            try:
-                return float(iris_val)
-            except ValueError:
-                pass
-    if isinstance(expected_tck_val, dict):
-        if isinstance(iris_val, str):
-            import json
-            try:
-                parsed = json.loads(iris_val)
-                if isinstance(parsed, dict):
-                    # Normalize string values to int/float when expected dict has numeric vals
-                    expected_dict = expected_tck_val
-                    result = {}
-                    for k, v in parsed.items():
-                        exp_v = expected_dict.get(k)
-                        if isinstance(exp_v, int) and not isinstance(exp_v, bool) and isinstance(v, str):
-                            try:
-                                result[k] = int(v)
-                                continue
-                            except (ValueError, TypeError):
-                                pass
-                        if isinstance(exp_v, float) and isinstance(v, str):
-                            try:
-                                result[k] = float(v)
-                                continue
-                            except (ValueError, TypeError):
-                                pass
-                        result[k] = v
-                    return result
-                # properties() returns [{key:..., value:...}] array (or list of
-                # JSON strings from IRIS double-encoding) — convert to dict
-                def _try_parse_item(item):
-                    if isinstance(item, dict):
-                        return item
-                    if isinstance(item, str):
-                        try:
-                            obj = json.loads(item)
-                            if isinstance(obj, dict):
-                                return obj
-                        except (json.JSONDecodeError, ValueError):
-                            pass
-                    return None
-                if isinstance(parsed, list):
-                    parsed_items = [_try_parse_item(x) for x in parsed]
-                    if parsed_items and all(
-                        item is not None and "key" in item and "value" in item
-                        for item in parsed_items
-                    ):
-                        result = {}
-                        for item in parsed_items:
-                            k = item["key"]
-                            v = item["value"]
-                            try:
-                                result[k] = int(v)
-                            except (ValueError, TypeError):
-                                try:
-                                    result[k] = float(v)
-                                except (ValueError, TypeError):
-                                    result[k] = v
-                        return result
-            except (json.JSONDecodeError, ValueError):
-                pass
-    if isinstance(expected_tck_val, list):
-        if isinstance(iris_val, (list, tuple)):
-            import json as _json
-            result_list = list(iris_val)
-            # Strip TCK isolation labels (TCK_*) from lists (e.g., from labels() function)
-            result_list = [item for item in result_list if not (isinstance(item, str) and item.startswith("TCK_"))]
-            # Recursively normalize nested elements against expected element types
-            if expected_tck_val:
-                norm = []
-                for i, item in enumerate(result_list):
-                    exp_elem = expected_tck_val[i] if i < len(expected_tck_val) else expected_tck_val[-1]
-                    if isinstance(item, str) and isinstance(exp_elem, list):
-                        try:
-                            parsed_item = _json.loads(item)
-                            norm.append(normalise_iris_value(parsed_item, exp_elem))
-                        except (ValueError, TypeError):
-                            norm.append(item)
-                    else:
-                        norm.append(normalise_iris_value(item, exp_elem))
-                return norm
-            return result_list
-        # JSON string → list (e.g., labels() returns JSON array as string)
-        if isinstance(iris_val, str):
-            import json
-            try:
-                parsed = json.loads(iris_val)
-                if isinstance(parsed, list):
-                    # Strip TCK isolation labels from the parsed list
-                    result_list = [item for item in parsed if not (isinstance(item, str) and item.startswith("TCK_"))]
-                    return normalise_iris_value(result_list, expected_tck_val)
-            except (json.JSONDecodeError, ValueError):
-                pass
-    # None vs 0: IRIS count() may return None instead of 0
-    if iris_val is None and isinstance(expected_tck_val, int) and expected_tck_val == 0:
-        return 0
-    return iris_val
-
-
-def _as_rel_obj(v: Any):
-    """A relationship value as {"type", "props"}, or None if it is not one."""
-    import json as _json
-
-    if isinstance(v, str):
-        try:
-            v = _json.loads(v)
-        except (ValueError, TypeError):
-            return None
-    if isinstance(v, dict) and "type" in v:
-        props = v.get("props") or {}
-        if isinstance(props, str):
-            try:
-                props = _json.loads(props)
-            except (ValueError, TypeError):
-                props = {}
-        return {"type": v["type"], "props": props if isinstance(props, dict) else {}}
-    return None
-
-
-def _rel_obj_matches(pattern: str, rel: dict) -> bool:
-    """TCK relationship pattern ':T' or ':T {k: v}' against a {"type", "props"} value."""
-    m = re.match(r":(\w+)\s*(?:\{(.*)\})?$", pattern.strip())
-    if not m or rel["type"] != m.group(1):
-        return False
-    expected = _parse_tck_value("{" + m.group(2) + "}") if m.group(2) else {}
-    actual = rel["props"]
-    if set(actual.keys()) != set(expected.keys()):
-        return False
-    for k, pv in expected.items():
-        av = actual.get(k)
-        if isinstance(pv, (int, float)) and not isinstance(pv, bool):
-            try:
-                av = type(pv)(av)
-            except (TypeError, ValueError):
-                pass
-        if av != pv:
-            return False
-    return True
-
-
-def _graph_value_matches(ev: Any, av: Any, unordered: bool = False) -> bool:
-    """Nested TCK value holding node / relationship patterns — `[(:A), [:T], (:B)]`,
-    `{node1: (:A), rel: [:T]}` — against the engine's JSON list / map of node and
-    relationship values. `unordered` ignores the order of the outermost list."""
-    import json as _json
-
-    if isinstance(av, str) and av[:1] in ("[", "{"):
-        try:
-            av = _json.loads(av)
-        except (ValueError, TypeError):
-            pass
-    if isinstance(ev, str):
-        pattern = _parse_node_pattern(ev)
-        if pattern is not None:
-            return isinstance(av, dict) and "_labels" in av and _node_matches(av, pattern)
-        return ev == av
-    if isinstance(ev, list) and len(ev) == 1 and isinstance(ev[0], str) and ev[0].startswith(":"):
-        rel = _as_rel_obj(av)
-        return rel is not None and _rel_obj_matches(ev[0], rel)
-    if isinstance(ev, list):
-        if not (isinstance(av, list) and len(ev) == len(av)):
-            return False
-        if not unordered:
-            return all(_graph_value_matches(e, a) for e, a in zip(ev, av))
-
-        def _match(i, avail):
-            if i == len(ev):
-                return True
-            return any(
-                _graph_value_matches(ev[i], av[j]) and _match(i + 1, avail - {j}) for j in avail
+        if not _perfect_matching(len(expected), len(actual), row_eq):
+            return (
+                "Unordered comparison: no perfect matching found: "
+                f"{self._unmatched(m, expected, actual, row_eq)}\n"
+                f"Expected: {expected}\nActual:   {actual}"
             )
+        return None
 
-        return _match(0, frozenset(range(len(av))))
-    if isinstance(ev, dict):
-        return isinstance(av, dict) and set(ev) == set(av) and all(
-            _graph_value_matches(ev[k], av[k]) for k in ev
-        )
-    return ev == av
-
-
-def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) -> bool:
-    for col in columns:
-        ev = exp.get(col)
-        av = act.get(col)
-        # Path pattern comparison: TCK expects "<(:A)-[:R]->(:B)>"
-        if isinstance(ev, str):
-            path_pattern = _parse_path_pattern(ev)
-            if path_pattern is not None:
-                # Expected value is a path pattern; actual should be path JSON
-                if isinstance(av, str):
-                    # Try to parse as JSON path
-                    try:
-                        import json
-                        path_json = json.loads(av)
-                        if isinstance(path_json, dict) and "nodes" in path_json and "rels" in path_json:
-                            if not _paths_equal(path_pattern, path_json):
-                                return False
-                            continue
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                # Path mismatch
-                return False
-        # Node pattern comparison: TCK expects "(:A)" or "(:B {name: 'x'})"
-        if isinstance(ev, str):
-            pattern = _parse_node_pattern(ev)
-            if pattern is not None:
-                if isinstance(av, dict) and "_labels" in av:
-                    if not _node_matches(av, pattern):
-                        return False
-                    continue
-                # av is not a node dict — mismatch
-                return False
-        # Relationship pattern comparison: TCK expects "[':TYPE']" or "[':TYPE {props}']"
-        # Actual value from engine is either the type string 'TYPE' or a JSON edge object.
-        if isinstance(ev, list) and len(ev) == 1 and isinstance(ev[0], str) and ev[0].startswith(":"):
-            rel_pattern_str = ev[0]  # e.g. ':REL' or ':REL {property2: 24}'
-            # Parse relationship type and properties from the TCK pattern string
-            import re as _re_rel, json as _json_rel
-            _rel_type_m = _re_rel.match(r':(\w+)\s*(?:\{(.*)\})?$', rel_pattern_str.strip())
-            if _rel_type_m:
-                _expected_type = _rel_type_m.group(1)
-                _expected_props_str = _rel_type_m.group(2)
-                _expected_props = _parse_tck_value('{' + _expected_props_str + '}') if _expected_props_str else {}
-                # av may be: type string 'TYPE', JSON edge object '{"type":"TYPE","props":{...}}',
-                # or a remapped relationship dict {"_type": "TYPE", "_s": ..., "_o_id": ...}
-                if isinstance(av, dict) and "_type" in av:
-                    # Remapped relationship triplet from _remap_node_columns
-                    _actual_type = av["_type"]
-                    if _actual_type != _expected_type:
-                        return False
-                    if _expected_props:
-                        return False  # No props available in triplet format
-                    continue
-                if isinstance(av, str):
-                    try:
-                        _av_obj = _json_rel.loads(av)
-                        if isinstance(_av_obj, dict) and "type" in _av_obj:
-                            _actual_type = _av_obj["type"]
-                            _actual_props_raw = _av_obj.get("props", {})
-                            if isinstance(_actual_props_raw, str):
-                                try:
-                                    _actual_props = _json_rel.loads(_actual_props_raw)
-                                except Exception:
-                                    _actual_props = {}
-                            else:
-                                _actual_props = _actual_props_raw
-                            if _actual_type != _expected_type:
-                                return False
-                            # Compare props: coerce numeric strings
-                            for pk, pv in _expected_props.items():
-                                _av = _actual_props.get(pk)
-                                if isinstance(pv, int) and not isinstance(pv, bool):
-                                    try:
-                                        _av = int(_av)
-                                    except (TypeError, ValueError):
-                                        pass
-                                elif isinstance(pv, float):
-                                    try:
-                                        _av = float(_av)
-                                    except (TypeError, ValueError):
-                                        pass
-                                if _av != pv:
-                                    return False
-                            if set(_actual_props.keys()) != set(_expected_props.keys()):
-                                return False
-                            continue
-                    except (ValueError, TypeError):
-                        pass
-                    # Fallback: type-only match (no props)
-                    if not _expected_props and av == _expected_type:
-                        continue
-                return False
-            continue
-        # List of relationships, in path order: TCK [[':T {k: v}'], [':T']] vs actual
-        # {"type", "props"} values (a var-length relationship, or relationships(p)).
-        # A single relationship cell [:T] against one {"type", "props"} value.
-        if (
-            isinstance(ev, list)
-            and len(ev) == 1
-            and isinstance(ev[0], str)
-            and ev[0].startswith(":")
-            and not isinstance(av, list)
-        ):
-            _one = _as_rel_obj(av)
-            if _one is not None:
-                if _rel_obj_matches(ev[0], _one):
-                    continue
-                return False
-        av_seq = av
-        if isinstance(ev, list) and isinstance(av, str) and av.startswith("["):
-            try:
-                import json as _json_rl
-
-                av_seq = _json_rl.loads(av)
-            except (ValueError, TypeError):
-                av_seq = av
-        if (
-            isinstance(ev, list)
-            and isinstance(av_seq, list)
-            and ev
-            and len(ev) == len(av_seq)
-            and all(
-                isinstance(x, list) and len(x) == 1 and isinstance(x[0], str) and x[0].startswith(":")
-                for x in ev
+    def _unmatched(self, m, expected, actual, row_eq) -> str:
+        """The first expected row no actual row equals, against its closest actual row."""
+        cols = list(self.columns)
+        for i, exp in enumerate(expected):
+            if any(row_eq(i, j) for j in range(len(actual))):
+                continue
+            best = max(
+                range(len(actual)),
+                key=lambda j: sum(
+                    m.match(e, a, text_ok=True, unordered=self.list_unordered)
+                    for e, a in zip(exp, actual[j])
+                ),
             )
-        ):
-            av_rels = [_as_rel_obj(x) for x in av_seq]
-            if all(r is not None for r in av_rels):
-                if all(_rel_obj_matches(e[0], r) for e, r in zip(ev, av_rels)):
-                    continue
-                return False
-        # List-of-nodes comparison: TCK [(), ()] vs actual [{"_id":..., "_labels":..., "_props":...}]
-        if isinstance(ev, list) and isinstance(av, list):
-            # Parse items that are JSON strings of node objects (from collect(nodeVar))
-            import json as _json_list
-            def _parse_node_item(item):
-                if isinstance(item, str):
-                    try:
-                        parsed = _json_list.loads(item)
-                        if isinstance(parsed, dict) and "_id" in parsed:
-                            return parsed
-                    except (ValueError, TypeError):
-                        pass
-                return item
-            av_parsed = [_parse_node_item(x) for x in av]
-            # List-of-paths comparison: TCK [<(:A)-[:R]->(:B)>] vs actual [{"nodes":[...],"rels":[...]}]
-            ev_path_patterns = [_parse_path_pattern(x) if isinstance(x, str) else None for x in ev]
-            all_path_patterns = all(p is not None for p in ev_path_patterns)
-            av_path_dicts = []
-            for item in av_parsed:
-                if isinstance(item, dict) and "nodes" in item and "rels" in item:
-                    av_path_dicts.append(item)
-                elif isinstance(item, str):
-                    try:
-                        parsed = _json_list.loads(item)
-                        if isinstance(parsed, dict) and "nodes" in parsed and "rels" in parsed:
-                            av_path_dicts.append(parsed)
-                            continue
-                    except (ValueError, TypeError):
-                        pass
-                    av_path_dicts.append(None)
-                else:
-                    av_path_dicts.append(None)
-            all_path_dicts = all(p is not None for p in av_path_dicts)
-            if all_path_patterns and all_path_dicts:
-                if len(ev_path_patterns) != len(av_path_dicts):
-                    return False
-                if list_unordered:
-                    def _list_paths_match(patterns, avail):
-                        if not patterns:
-                            return True
-                        p = patterns[0]
-                        for i in avail:
-                            if _paths_equal(p, av_path_dicts[i]):
-                                remaining = [j for j in avail if j != i]
-                                if _list_paths_match(patterns[1:], remaining):
-                                    return True
-                        return False
-                    if not _list_paths_match(ev_path_patterns, list(range(len(av_path_dicts)))):
-                        return False
-                else:
-                    for pat, path in zip(ev_path_patterns, av_path_dicts):
-                        if not _paths_equal(pat, path):
-                            return False
-                continue
-            # Detect if all expected items are node patterns
-            ev_patterns = [_parse_node_pattern(x) if isinstance(x, str) else None for x in ev]
-            all_node_patterns = all(p is not None for p in ev_patterns)
-            if all_node_patterns and all(isinstance(x, dict) and "_id" in x for x in av_parsed):
-                if len(ev_patterns) != len(av_parsed):
-                    return False
-                if list_unordered:
-                    # Backtracking match for unordered node lists
-                    def _list_nodes_match(patterns, avail):
-                        if not patterns:
-                            return True
-                        p = patterns[0]
-                        for i in avail:
-                            if _node_matches(av_parsed[i], p):
-                                remaining = [j for j in avail if j != i]
-                                if _list_nodes_match(patterns[1:], remaining):
-                                    return True
-                        return False
-                    if not _list_nodes_match(ev_patterns, list(range(len(av_parsed)))):
-                        return False
-                else:
-                    for pat, node in zip(ev_patterns, av_parsed):
-                        if not _node_matches(node, pat):
-                            return False
-                continue
-            if ev != av_parsed and _graph_value_matches(ev, av, unordered=list_unordered):
-                continue
-            if list_unordered:
-                if sorted(str(x) for x in ev) != sorted(str(x) for x in av_parsed):
-                    return False
-            else:
-                if ev != av_parsed:
-                    return False
-            continue
-        if ev != av and isinstance(ev, (list, dict)) and _graph_value_matches(ev, av):
-            continue
-        if ev != av:
-            return False
-    return True
-
-
-def _sort_key(row: dict, columns: list[str]) -> tuple:
-    return tuple(str(row.get(c, "")) for c in columns)
-
-
-def _sort_rows(rows: list[dict], columns: list[str]) -> list[dict]:
-    return sorted(rows, key=lambda r: _sort_key(r, columns))
+            return f"row {i}: {_row_diff(m, exp, actual[best], cols, self.list_unordered)}"
+        return "multiplicity (every expected row has an equal actual row, but not one each)"
