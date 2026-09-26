@@ -295,6 +295,23 @@ def _build_path_func_columns(return_path_funcs: list, source_var: str, target_va
 _BOOL_DIGITS = {"1": True, "0": False}
 
 
+_INTERNAL_COLUMN = re.compile(r"__sort\d+(?:_[ns])?")
+
+
+def _drop_internal_columns(result) -> None:
+    """Remove the translator's __sortN sort-key columns (and their values) from a result."""
+    columns = list(getattr(result, "columns", None) or [])
+    drop = [i for i, c in enumerate(columns) if _INTERNAL_COLUMN.fullmatch(str(c))]
+    if not drop:
+        return
+    keep = [i for i in range(len(columns)) if i not in set(drop)]
+    result.columns = [columns[i] for i in keep]
+    result.rows = [[row[i] for i in keep if i < len(row)] for row in (result.rows or [])]
+    bolt = getattr(result, "bolt_column_types", None)
+    if bolt and len(bolt) == len(columns):
+        result.bolt_column_types = [bolt[i] for i in keep]
+
+
 def _decode_bool_text_columns(result, sql_query) -> None:
     """Read 'true' / 'false' as booleans in columns that return a stored property,
     and '1' / '0' text as booleans in columns that return a comparison or label test."""
@@ -560,6 +577,7 @@ class QueryMixin:
             _ledger_check(self, "cypher_dml")
             result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
             result.metadata = metadata
+            _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
                 result.columns = [
@@ -571,6 +589,7 @@ class QueryMixin:
             p = sql_query.parameters[0] if sql_query.parameters else []
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
+            _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             if sql_query.bolt_column_types:
                 result.bolt_column_types = sql_query.bolt_column_types

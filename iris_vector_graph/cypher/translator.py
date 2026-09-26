@@ -19587,7 +19587,7 @@ def translate_return_clause(ret, context):
             # Only when the alias was auto-generated (not user-provided via AS <alias>):
             # user-provided aliases are already the intended column names.
             if not user_provided_alias:
-                cypher_text_final = _expr_to_cypher_text(item.expression)
+                cypher_text_final = getattr(item, "source_text", None) or _expr_to_cypher_text(item.expression)
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
             context.select_items.append(f"{sql} AS {safe}")

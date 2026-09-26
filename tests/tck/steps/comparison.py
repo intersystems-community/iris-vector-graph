@@ -434,8 +434,9 @@ class SqlHydrator:
             return None
         labels = [r[0] for r in self._rows(f"SELECT label, graph_id FROM {s}.rdf_labels WHERE s = ?", [node_id])
                   if self._default_graph(r[1])]
+        # A NULL-valued row (left by SET n.p = null) is an absent property.
         props = {r[0]: r[1] for r in self._rows(f"SELECT key, val, graph_id FROM {s}.rdf_props WHERE s = ?", [node_id])
-                 if self._default_graph(r[2])}
+                 if self._default_graph(r[2]) and r[1] is not None}
         self._nodes[node_id] = {"labels": labels, "props": props}
         return self._nodes[node_id]
 
@@ -449,6 +450,17 @@ class SqlHydrator:
             )
             self._edges[key] = [_as_props(r[0]) for r in rows if self._default_graph(r[1])]
         return self._edges[key]
+
+
+_ISOLATION_LABEL = re.compile(r"TCK_[0-9a-f]{8}")
+
+
+def _without_isolation_labels(actual: list, expected: list) -> list:
+    """The harness tags every scenario node with a TCK_xxxxxxxx label, which labels()
+    then returns. Such a string is dropped unless the expected list holds it."""
+    keep = {e for e in expected if isinstance(e, str)}
+    return [a for a in actual
+            if not (isinstance(a, str) and _ISOLATION_LABEL.fullmatch(a) and a not in keep)]
 
 
 def _json_or(v: Any, typ: type) -> Any:
@@ -552,7 +564,10 @@ class _Matcher:
             return isinstance(av, str) and av == ev
         if isinstance(ev, list):
             al = _json_or(av, list)
-            if al is None or len(al) != len(ev):
+            if al is None:
+                return False
+            al = _without_isolation_labels(al, ev)
+            if len(al) != len(ev):
                 return False
             if unordered:
                 return _perfect_matching(len(ev), len(al), lambda i, j: self.match(ev[i], al[j], text_ok=False))
@@ -628,7 +643,14 @@ class _Matcher:
             return False
         if set(h["props"]) != set(ev.props):
             return False
-        return all(self.match(ev.props[k], h["props"][k], text_ok=False) for k in ev.props)
+        return all(self._hydrated_value(ev.props[k], h["props"][k]) for k in ev.props)
+
+    def _hydrated_value(self, ev: Any, hv: Any) -> bool:
+        # rdf_props.val carries no type tag: a boolean is stored as the text 'true' /
+        # 'false' (never '1' / '0' on new writes), and nothing else distinguishes it.
+        if isinstance(ev, bool) and isinstance(hv, str):
+            return hv == ("true" if ev else "false")
+        return self.match(ev, hv, text_ok=False)
 
     # -- relationships ---------------------------------------------------------
 
