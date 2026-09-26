@@ -127,6 +127,28 @@ measured in a mode that users get only when they ask for it. Every published
 figure should come with a second run using `IVG_TCK_MULTIGRAPH=0`, and the list
 of scenarios that pass only with the mode on.
 
+### Latest local runs (not published)
+
+These are result-conformance figures only. The harness caveats below apply.
+
+| IVG commit | Multigraph | Passed / eligible | Ignored upstream |
+| ---------- | ---------- | ----------------- | ---------------- |
+| `b82049e`  | off        | 3892 / 3896       | 1                |
+
+With multigraph on at the same commit, the `match`, `merge` and `graph` areas
+were rerun, and every eligible scenario in them passed. The four scenarios
+that fail with the mode off all pass with it on:
+
+- `Match6 [14]` Named path with undirected fixed variable length pattern
+- `Merge5 [3]` Matching two relationships
+- `Merge5 [5]` Filtering relationships
+- `Merge5 [21]` Do not match on deleted relationships
+
+Each of them needs two relationships of the same type between the same pair of
+nodes. The earlier full run with multigraph on, r11 at an older commit, scored
+3893 / 3896 eligible. Its three failures (`Merge1 [9]`, `Merge1 [14]` and
+`Merge9 [4]`) pass at `b82049e` in both modes.
+
 ## Result format
 
 `run_all.sh` writes the following into `<out>`:
