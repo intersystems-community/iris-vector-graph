@@ -707,6 +707,11 @@ class TranslationContext:
         self.static_scalar_kinds: Dict[str, frozenset] = (
             {} if parent is None else dict(getattr(parent, "static_scalar_kinds", {}))
         )
+        # Variable bound by `WITH collect(<literal list>) AS v` -> that list's elements:
+        # every element of v is that same literal list.
+        self.collected_literal_lists: Dict[str, list] = (
+            {} if parent is None else dict(getattr(parent, "collected_literal_lists", {}))
+        )
 
     def next_alias(self, prefix: str = "t") -> str:
         alias = f"{prefix}{self._alias_counter}"
@@ -4398,6 +4403,11 @@ def translate_unwind_clause(unwind, context):
             _kinds_map[unwind.alias] = _k
         else:
             _kinds_map.pop(unwind.alias, None)
+    _cll = getattr(context, "collected_literal_lists", {})
+    if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in _cll:
+        context.literal_list_vars[unwind.alias] = _cll[unwind.expression.name]
+    else:
+        context.literal_list_vars.pop(unwind.alias, None)
 
     # Detect UNWIND of a collected node list: mark alias as collected_node_variable
     # so property access generates a rdf_props join using the _id from the JSON blob.
@@ -4415,6 +4425,9 @@ def translate_unwind_clause(unwind, context):
         if all(isinstance(v, (str, int, float, bool)) or v is None for v in _items):
             _use_union = True
             _union_rows = _items
+    elif _empty_string_list(unwind.expression, context) is not None:
+        _use_union = True
+        _union_rows = _empty_string_list(unwind.expression, context)
 
     if _use_union:
         col = _safe_alias(unwind.alias)
@@ -4480,6 +4493,21 @@ def translate_unwind_clause(unwind, context):
         context.join_clauses.append(f"CROSS JOIN {json_table_sql}")
     else:
         context.from_clauses.append(json_table_sql)
+
+
+def _empty_string_list(expr, context) -> Optional[list]:
+    """The strings of a variable bound to a literal string list holding '', else None.
+    JSON_TABLE reads '' back as NULL, so such a list is iterated from its literals."""
+    if not isinstance(expr, ast.Variable):
+        return None
+    llv = getattr(context, "literal_list_vars", {})
+    elems = llv.get(context.variable_aliases.get(expr.name, expr.name), llv.get(expr.name))
+    if elems is None:
+        return None
+    items = _extract_literal_value(elems)
+    if not items or not all(isinstance(v, str) for v in items) or "" not in items:
+        return None
+    return items
 
 
 def _extract_literal_value(v):
@@ -10415,6 +10443,15 @@ def translate_boolean_expression(expr, context) -> str:
     )
     if right.startswith("CASE WHEN ") and " END" in right:
         right = f"({right})"
+    # Operands of statically different kinds are never equal in Cypher ('0' <> 0), but
+    # SQL would coerce; the result is null when either side is null, else false.
+    if op in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS) and any(
+        isinstance(e, ast.Variable) for e in (left_expr, right_expr)
+    ):
+        _lk, _rk = _operand_kinds(left_expr, context), _operand_kinds(right_expr, context)
+        if _lk and _rk and not (_lk & _rk):
+            _neq = "1" if op == ast.BooleanOperator.NOT_EQUALS else "0"
+            return f"(CASE WHEN ({left}) IS NULL OR ({right}) IS NULL THEN NULL ELSE {_neq} END = 1)"
     if op in (
         ast.BooleanOperator.LESS_THAN,
         ast.BooleanOperator.LESS_THAN_OR_EQUAL,
@@ -11361,6 +11398,9 @@ def _list_comprehension_type_check(expr):
                 )
 
 
+_MISSING = object()
+
+
 def _expr_list_comprehension(expr, context, segment):
     # Aggregation functions (count(*), sum(), etc.) are not allowed inside list comprehensions.
     # openCypher TCK List12[7]: [x IN list | count(*)] → InvalidAggregation SyntaxError.
@@ -11380,6 +11420,19 @@ def _expr_list_comprehension(expr, context, segment):
     ):
         arg_sql = translate_expression(expr.source.argument, context, segment=segment)
         var = sanitize_identifier(expr.variable)
+        # Over collect(p) of a named path the variable is p on each aggregated row,
+        # so nodes(x) / relationships(x) / length(x) resolve as they would for p.
+        _lc_path_saved = None
+        _src_arg = expr.source.argument
+        if isinstance(_src_arg, ast.Variable) and _src_arg.name in context.named_paths:
+            _lc_path_saved = tuple(
+                d.get(expr.variable, _MISSING)
+                for d in (context.named_paths, context.path_node_aliases, context.path_edge_aliases)
+            )
+            context.named_paths[expr.variable] = context.named_paths[_src_arg.name]
+            for d in (context.path_node_aliases, context.path_edge_aliases):
+                if _src_arg.name in d:
+                    d[expr.variable] = d[_src_arg.name]
         context.variable_aliases[expr.variable] = "__lc_collect__"
         context.scalar_variables.add(expr.variable)
         # pred and proj use variable as a scalar: bind to a sentinel alias that maps back to arg_sql
@@ -11399,8 +11452,31 @@ def _expr_list_comprehension(expr, context, segment):
         if expr.projection:
             proj_sql_raw = translate_expression(expr.projection, context, segment=segment)
             select_expr = proj_sql_raw.replace(f"__lc_collect__.{var}", arg_sql)
+            # head(nodes(x)) / last(nodes(x)) is a node id: list the node itself.
+            _pj = expr.projection
+            if (
+                _lc_path_saved is not None
+                and isinstance(_pj, ast.FunctionCall)
+                and _pj.function_name.lower() in ("head", "last")
+                and len(_pj.arguments) == 1
+                and _path_elem_kind(_pj.arguments[0], context) == "node"
+            ):
+                select_expr = (
+                    f"'{{\"_id\":\"' || {select_expr} || '\",' "
+                    f"|| '\"_labels\":' || {labels_subquery(select_expr)} || ',' "
+                    f"|| '\"_props\":' || COALESCE({properties_subquery(select_expr)}, '[]') || '}}'"
+                )
         del context.variable_aliases[expr.variable]
         context.scalar_variables.discard(expr.variable)
+        if _lc_path_saved is not None:
+            for d, prev in zip(
+                (context.named_paths, context.path_node_aliases, context.path_edge_aliases),
+                _lc_path_saved,
+            ):
+                if prev is _MISSING:
+                    d.pop(expr.variable, None)
+                else:
+                    d[expr.variable] = prev
         if pred_case:
             return f"JSON_ARRAYAGG({pred_case}{select_expr} ELSE NULL END)"
         return f"JSON_ARRAYAGG({select_expr})"
@@ -11504,6 +11580,12 @@ def _expr_list_comprehension(expr, context, segment):
     context.path_elem_vars.pop(expr.variable, None)
     if _pek_prev:
         context.path_elem_vars[expr.variable] = _pek_prev
+    _es_items = _empty_string_list(expr.source, context)
+    if _es_items is not None:
+        rows = " UNION ALL ".join(
+            "SELECT '" + s.replace("'", "''") + f"' AS {safe_var}" for s in _es_items
+        )
+        return f"(SELECT JSON_ARRAYAGG({select_expr}) FROM ({rows}) {alias}{where_clause})"
     # Use VARCHAR to support both scalar values and JSON objects
     return (
         f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
@@ -11575,6 +11657,39 @@ def _static_value_kind(e) -> Optional[str]:
     ):
         return "num"
     return None
+
+
+def _subscript_elem_kind(e, context) -> Optional[str]:
+    """Kind of `v[i]` for a literal integer i and v known to hold a literal list."""
+    if not (
+        isinstance(e, ast.SubscriptExpression)
+        and isinstance(e.expression, ast.Variable)
+        and isinstance(e.index, ast.Literal)
+        and isinstance(e.index.value, int)
+        and not isinstance(e.index.value, bool)
+    ):
+        return None
+    elems = getattr(context, "literal_list_vars", {}).get(e.expression.name)
+    if elems is None:
+        return None
+    i = e.index.value
+    if not -len(elems) <= i < len(elems):
+        return None
+    return _static_value_kind(elems[i])
+
+
+def _operand_kinds(e, context) -> Optional[frozenset]:
+    """Value kinds a comparison operand can take (null aside); None when unknown."""
+    if isinstance(e, ast.Variable):
+        return getattr(context, "static_scalar_kinds", {}).get(e.name)
+    if isinstance(e, ast.FunctionCall) and len(e.arguments) == 1:
+        fn = e.function_name.lower()
+        if fn in ("tointeger", "tofloat"):
+            return frozenset({"num"})
+        if fn == "tostring":
+            return frozenset({"str"})
+    k = _static_value_kind(e)
+    return frozenset({k}) if k is not None else None
 
 
 def _expr_case(expr, context, segment):
@@ -18111,7 +18226,7 @@ def _contains_aggregation(expr) -> bool:
         return any(_contains_aggregation(a) for a in expr.arguments)
     if isinstance(expr, ast.MapLiteral):
         return any(_contains_aggregation(v) for v in expr.entries.values())
-    if isinstance(expr, ast.ListPredicateExpression):
+    if isinstance(expr, (ast.ListPredicateExpression, ast.ListComprehension)):
         return _contains_aggregation(expr.source)
     if isinstance(expr, ast.Literal) and isinstance(expr.value, list):
         return any(
@@ -18764,8 +18879,26 @@ def translate_with_clause(with_clause, context):
         if _kinds_map is not None:
             if isinstance(item.expression, ast.Variable) and item.expression.name in _kinds_map:
                 _kinds_map[alias] = _kinds_map[item.expression.name]
+            elif _subscript_elem_kind(item.expression, context) is not None:
+                _kinds_map[alias] = frozenset({_subscript_elem_kind(item.expression, context)})
             else:
                 _kinds_map.pop(alias, None)
+        _cll = getattr(context, "collected_literal_lists", None)
+        if _cll is not None:
+            _ce = item.expression
+            if (
+                isinstance(_ce, ast.AggregationFunction)
+                and _ce.function_name.lower() == "collect"
+                and not getattr(_ce, "distinct", False)
+                and isinstance(_ce.argument, ast.Literal)
+                and isinstance(_ce.argument.value, list)
+                and _is_fully_literal(_ce.argument)
+            ):
+                _cll[alias] = _ce.argument.value
+            elif isinstance(_ce, ast.Variable) and _ce.name in _cll:
+                _cll[alias] = _cll[_ce.name]
+            else:
+                _cll.pop(alias, None)
 
         # Track literal list variables for list-comprehension constant folding.
         # When a WITH item binds a variable to a literal list, record the Python value so that

@@ -2194,3 +2194,72 @@ class TestBidirectedBracketRelationship:
         a = tr("MATCH (a:A)-[:LIKES]->()<-[:LIKES*3]->(c) RETURN c.name")
         b = tr("MATCH (a:A)-[:LIKES]->()-[:LIKES*3]-(c) RETURN c.name")
         assert a.sql == b.sql and a.parameters == b.parameters
+
+
+class TestEmptyStringSurvivesLiteralListIteration:
+    """WithOrderBy1 [45] (string example): JSON_TABLE turns '' into NULL, so '' was
+    neither sorted first nor counted as smaller than the other strings. A literal
+    string list iterates as a UNION ALL of literals instead."""
+
+    Q = (
+        "WITH ['b', '', 'a'] AS values "
+        "WITH values, size(values) AS numOfValues "
+        "UNWIND values AS value "
+        "WITH size([x IN values WHERE x < value]) AS x, value, numOfValues ORDER BY value "
+        "WITH numOfValues, collect(x) AS orderedX "
+        "RETURN orderedX = range(0, numOfValues - 1) AS equal"
+    )
+
+    def test_no_json_table_over_the_literal_list(self):
+        sql = tr(self.Q).sql
+        assert 'JSON_TABLE(Stage2."values"' not in sql, sql
+        assert "JSON_TABLE(Stage1.\"values\"" not in sql, sql
+
+    def test_comprehension_iterates_inlined_literals(self):
+        sql = tr(self.Q).sql
+        assert "SELECT '' AS x" in sql, sql
+
+    def test_list_without_empty_string_keeps_json_table(self):
+        sql = tr("WITH ['b', 'a'] AS vs UNWIND vs AS v RETURN v").sql
+        assert "JSON_TABLE" in sql, sql
+
+
+class TestListElementKindAcrossCollectUnwind:
+    """Comparison1 [3]: `collect(['0', 0])` unwound gives `arr[0]` = '0' (a string);
+    SQL compared it to toInteger(n.id) = 0 and matched. Cypher equality across value
+    kinds is false (null when either side is null)."""
+
+    def test_string_element_never_equals_integer(self):
+        sql = tr(
+            "WITH collect(['0', 0]) AS things UNWIND things AS arr "
+            "WITH arr[0] AS expected MATCH (n) WHERE toInteger(n.id) = expected RETURN n"
+        ).sql
+        assert "= Stage2.expected" not in sql, sql
+        assert "ELSE 0 END = 1" in sql, sql
+
+    def test_numeric_element_still_compares(self):
+        sql = tr(
+            "WITH collect([0, 0.5]) AS numbers UNWIND numbers AS arr "
+            "WITH arr[0] AS expected MATCH (n) WHERE toInteger(n.id) = expected RETURN n"
+        ).sql
+        assert "= Stage2.expected" in sql, sql
+
+
+class TestPathFunctionsOverCollectedPaths:
+    """List12 [4]/[5]: `[x IN collect(p) | head(nodes(x))]` raised "'x' is not a named
+    path variable"; the comprehension variable ranges over the collected path."""
+
+    def test_nodes_of_comprehension_variable_over_collect(self):
+        sql = tr("MATCH p = (n)-->() RETURN [x IN collect(p) | head(nodes(x))] AS p").sql
+        # the head node id, rendered as the node itself
+        assert "JSON_ARRAYAGG('{\"_id\":\"' || SQLUser.JSON_ARRAYGET(JSON_ARRAY(n0.node_id, n1.node_id), 0)" in sql, sql
+        assert '"_labels"' in sql, sql
+
+    def test_in_with_next_to_count(self):
+        sql = tr(
+            "MATCH p = (n:A)-->() WITH [x IN collect(p) | head(nodes(x))] AS p, count(n) AS c "
+            "RETURN p, c"
+        ).sql
+        assert "JSON_ARRAYGET(JSON_ARRAY(" in sql and "COUNT(" in sql.upper(), sql
+        # the comprehension over collect() is itself an aggregate, not a grouping key
+        assert "GROUP BY" not in sql, sql
