@@ -9337,6 +9337,46 @@ def _mpt_expand_pattern_lengths(pat):
     return expansions
 
 
+def _mpt_exists_vlp(pat, context) -> Optional[str]:
+    """EXISTS over CY_VLP_PATHS for a lone var-length hop too long to unroll
+    (`WHERE (n)-[:T*]-(m)`) between two bound, unconstrained nodes; None otherwise."""
+    if len(pat.relationships) != 1 or len(pat.nodes) != 2:
+        return None
+    rel = pat.relationships[0]
+    vl = rel.variable_length
+    if (
+        vl is None
+        or vl.shortest
+        or vl.all_shortest
+        or vl.max_hops <= _MPT_UNROLL_MAX_HOPS
+        or rel.properties
+        or rel.variable
+    ):
+        return None
+    refs = []
+    for node in pat.nodes:
+        if node is None or not node.variable or node.labels or node.properties:
+            return None
+        ref = _vlp_node_ref(context.variable_aliases.get(node.variable), node.variable)
+        if ref is None:
+            return None
+        refs.append(ref)
+    direction = (
+        "both"
+        if rel.direction == ast.Direction.BOTH
+        else ("in" if rel.direction == ast.Direction.INCOMING else "out")
+    )
+    types_json = json.dumps(list(rel.types or [])).replace("'", "''")
+    graph = getattr(context, "graph_context", None)
+    gall, gid = (1, "-") if graph is None else (0, graph.replace("'", "''"))
+    vx = context.next_alias("vlx")
+    return (
+        f"EXISTS (SELECT 1 FROM JSON_TABLE(SQLUser.CY_VLP_PATHS({refs[0]}, '{types_json}', "
+        f"'{direction}', {vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}'), "
+        f"'$[*]' COLUMNS(t VARCHAR(512) PATH '$.t')) {vx} WHERE {vx}.t = {refs[1]})"
+    )
+
+
 def _mpt_exists_one_expansion(nodes, rels, context) -> str:
     """EXISTS (...) for one fixed-length pattern-predicate chain.
 
@@ -9498,6 +9538,9 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
                     return f"{prefix}({count_sub}) = {cmp_sql}"
 
     if pat.relationships and expr.where_condition is None:
+        vlp_sub = _mpt_exists_vlp(pat, context)
+        if vlp_sub is not None:
+            return f"NOT {vlp_sub}" if expr.negated else vlp_sub
         expansions = _mpt_expand_pattern_lengths(pat)
         if expansions is not None:
             subs = [_mpt_exists_one_expansion(nodes, rels, context) for nodes, rels in expansions]
