@@ -292,12 +292,28 @@ def _build_path_func_columns(return_path_funcs: list, source_var: str, target_va
 
 
 
-_BOOL_DIGITS = {"1": True, "0": False}
+_BOOL_DIGITS = {"1": True, "0": False, "true": True, "false": False}
+
+
+def _bool_expr_value(v):
+    """A value from a statically boolean column: 1 / 0 (int, Decimal or text) and
+    'true' / 'false' become True / False; null and anything else are left alone."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return _BOOL_DIGITS.get(v, v)
+    if isinstance(v, int) or type(v).__name__ == "Decimal":
+        if v == 1:
+            return True
+        if v == 0:
+            return False
+    return v
 
 
 def _decode_bool_text_columns(result, sql_query) -> None:
     """Read 'true' / 'false' as booleans in columns that return a stored property,
-    and '1' / '0' text as booleans in columns that return a comparison or label test."""
+    and 1 / 0 as booleans in columns whose value is statically boolean
+    (comparisons, label tests, quantifiers, boolean literals, ...)."""
     cols = getattr(sql_query, "bool_text_columns", None) or []
     names = {n.strip('"').lower() for n in getattr(sql_query, "bool_expr_columns", None) or []}
     if not (cols or names) or not getattr(result, "rows", None):
@@ -316,8 +332,8 @@ def _decode_bool_text_columns(result, sql_query) -> None:
             if i < len(row):
                 row[i] = parse_prop_text(row[i])
         for i in expr_cols:
-            if i < len(row) and isinstance(row[i], str):
-                row[i] = _BOOL_DIGITS.get(row[i], row[i])
+            if i < len(row):
+                row[i] = _bool_expr_value(row[i])
         rows.append(row)
     result.rows = rows
 

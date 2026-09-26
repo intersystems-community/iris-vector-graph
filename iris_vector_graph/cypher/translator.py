@@ -692,6 +692,10 @@ class TranslationContext:
         self.column_name_map: Dict[str, str] = {} if parent is None else parent.column_name_map
         # SQL aliases of boolean-valued RETURN items (SQLQuery.bool_expr_columns).
         self.bool_expr_aliases: List[str] = [] if parent is None else parent.bool_expr_aliases
+        # WITH aliases whose value is statically boolean (see _is_bool_valued).
+        self.bool_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "bool_vars", set()))
+        )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
         # List of (label_value, param_placeholder) tuples — one per optional label constraint.
@@ -2829,6 +2833,7 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
 
     sqls = []
     all_params = []
+    branch_bool_cols: List[List[str]] = []
     for branch in branches:
         branch_copy = ast.CypherQuery(
             query_parts=branch.query_parts,
@@ -2844,6 +2849,7 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
         # SIGSEGVs in %qaqpre. Dropping it here re-armed that crash for every UNION
         # whose branch joined tables under a LIMIT, however the caller was holding it.
         r = translate_to_sql(branch_copy, params, engine=engine, procedures=procedures)
+        branch_bool_cols.append(list(getattr(r, "bool_expr_columns", None) or []))
         sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
         all_params.extend(r.parameters)
     sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
@@ -2857,7 +2863,11 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
     flat_params = []
     for p_list in all_params:
         flat_params.extend(p_list)
-    return SQLQuery(sql=combined, parameters=[flat_params])
+    # A column is boolean only when it is boolean in every branch.
+    bool_cols = [
+        c for c in branch_bool_cols[0] if all(c in other for other in branch_bool_cols[1:])
+    ]
+    return SQLQuery(sql=combined, parameters=[flat_params], bool_expr_columns=bool_cols)
 
 
 def _tts_process_parts(cypher_query, context, metadata):
@@ -4771,6 +4781,7 @@ def translate_unwind_clause(unwind, context):
     context.scalar_variables.add(unwind.alias)
     context.bind_variable_type(unwind.alias, "scalar")
     context.mixed_list_vars.discard(unwind.alias)
+    context.bool_vars.discard(unwind.alias)
     if _mixed_src:
         context.mixed_value_vars.add(unwind.alias)
     else:
@@ -12377,6 +12388,37 @@ def _static_value_kind(e) -> Optional[str]:
     return None
 
 
+_BOOL_VALUED_FUNCS = frozenset({"exists", "toboolean", "tobooleanornull", "isempty"})
+
+
+def _is_bool_valued(e, context) -> bool:
+    """True when the Cypher value of `e` is a boolean (or null) whatever the row.
+
+    IRIS has no boolean SQL type, so such a RETURN column comes back as 1 / 0 or
+    '1' / '0'; the engine reads it back as True / False (bool_expr_columns).
+    """
+    if isinstance(e, ast.Literal):
+        return isinstance(e.value, bool)
+    if isinstance(
+        e,
+        (ast.BooleanExpression, ast.LabelPredicate, ast.ListPredicateExpression, ast.ExistsExpression),
+    ):
+        return True
+    if isinstance(e, ast.FunctionCall):
+        return e.function_name.lower() in _BOOL_VALUED_FUNCS
+    if isinstance(e, ast.Variable):
+        if e.name in getattr(context, "bool_vars", ()):
+            return True
+        return getattr(context, "static_scalar_kinds", {}).get(e.name) == frozenset({"bool"})
+    if isinstance(e, ast.CaseExpression):
+        results = [w.result for w in e.when_clauses]
+        if e.else_result is not None:
+            results.append(e.else_result)
+        results = [r for r in results if not (isinstance(r, ast.Literal) and r.value is None)]
+        return bool(results) and all(_is_bool_valued(r, context) for r in results)
+    return False
+
+
 def _subscript_elem_kind(e, context) -> Optional[str]:
     """Kind of `v[i]` for a literal integer i and v known to hold a literal list."""
     if not (
@@ -19620,7 +19662,7 @@ def translate_return_clause(ret, context):
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
             context.select_items.append(f"{sql} AS {safe}")
-            if isinstance(item.expression, (ast.BooleanExpression, ast.LabelPredicate)):
+            if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
         else:
             context.select_items.append(sql)
@@ -19822,6 +19864,10 @@ def translate_with_clause(with_clause, context):
                 ):
                     context.non_integer_index_vars.add(alias)
 
+        if _is_bool_valued(item.expression, context):
+            context.bool_vars.add(alias)
+        else:
+            context.bool_vars.discard(alias)
         _kinds_map = getattr(context, "static_scalar_kinds", None)
         if _kinds_map is not None:
             if isinstance(item.expression, ast.Variable) and item.expression.name in _kinds_map:
