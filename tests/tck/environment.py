@@ -316,6 +316,17 @@ def _teardown_label(context, label: str):
         if store and hasattr(store, "conn"):
             schema = _db_schema(context)
             cursor = store.conn.cursor()
+            # Their relationships go first: rdf_edges references nodes, so one
+            # `CREATE ()-[:R]->()` failed the whole node sweep (-124) and every
+            # later scenario's unlabelled nodes piled up, visible to `MATCH ()`.
+            _unlabelled = (
+                f"SELECT node_id FROM {schema}.nodes WHERE node_id NOT IN "
+                f"(SELECT DISTINCT s FROM {schema}.rdf_labels)"
+            )
+            cursor.execute(
+                f"DELETE FROM {schema}.rdf_edges WHERE s IN ({_unlabelled}) "
+                f"OR o_id IN ({_unlabelled})"
+            )
             cursor.execute(
                 f"DELETE FROM {schema}.nodes WHERE node_id NOT IN "
                 f"(SELECT DISTINCT s FROM {schema}.rdf_labels)"

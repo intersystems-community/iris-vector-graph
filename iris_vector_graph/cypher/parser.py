@@ -727,16 +727,14 @@ class Parser:
     def parse_delete_clause(self) -> ast.DeleteClause:
         detach = self.matches(TokenType.DETACH)
         self.expect(TokenType.DELETE)
-        vars = []
+        # An expression, not just a variable: `DELETE friends[$i]`, `DELETE m.key`
+        # (Delete5). The translator rejects what is not a node, relationship or path.
+        exprs = []
         while True:
-            var_tok = self.expect(TokenType.IDENTIFIER)
-            var_name = var_tok.value
-            if var_name is None:
-                raise CypherParseError("Expected variable for DELETE")
-            vars.append(ast.Variable(var_name))
+            exprs.append(self.parse_expression())
             if not self.matches(TokenType.COMMA):
                 break
-        return ast.DeleteClause(expressions=vars, detach=detach)
+        return ast.DeleteClause(expressions=exprs, detach=detach)
 
     def parse_merge_clause(self) -> ast.MergeClause:
         self.expect(TokenType.MERGE)
