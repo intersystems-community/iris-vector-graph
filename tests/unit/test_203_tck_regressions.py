@@ -1997,3 +1997,101 @@ class TestCreateAfterMatchIsPerRow:
     def test_create_without_match_keeps_literal_id(self):
         stmts = _stmts(tr("CREATE (e:E {name: 'x'})"))
         assert not any("%ID" in s for s, _ in stmts)
+
+
+class TestRelationshipListPathByEdgeId:
+    """Match4 [8], Match9 [6]: `WITH [r1, r2] AS rs … MATCH (first)-[rs*]->(second)`.
+
+    A relationship carried through WITH carries its edge_id, a list of
+    relationships carries the list of edge ids, and a var-length pattern over a
+    bound list walks exactly those edges, in order, through CY_VLP_CHAIN.
+    """
+
+    M4 = (
+        "MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs LIMIT 1 "
+        "MATCH (first)-[rs*]->(second) RETURN first, second"
+    )
+    M9 = (
+        "MATCH (a)-[r1]->()-[r2]->(b) WITH [r1, r2] AS rs, a AS first, b AS second LIMIT 1 "
+        "MATCH (first)-[rs*]->(second) RETURN first, second"
+    )
+
+    def test_with_relationship_carries_its_edge_id(self):
+        sql = tr("MATCH ()-[r]->() WITH r RETURN r").sql
+        assert re.search(r"e\d+\.edge_id AS __edge_r_id", sql), sql
+
+    def test_forwarded_relationship_keeps_its_edge_id(self):
+        sql = tr("MATCH ()-[r]->() WITH r WITH r AS q RETURN q").sql
+        assert "Stage1.__edge_r_id AS __edge_q_id" in sql, sql
+
+    def test_grouped_relationship_groups_on_edge_id(self):
+        sql = tr("MATCH ()-[r]->() WITH r, count(*) AS c RETURN r, c").sql
+        assert re.search(r"GROUP BY .*e\d+\.edge_id", sql, re.S), sql
+
+    def test_list_of_relationships_carries_edge_ids(self):
+        sql = tr(self.M4).sql
+        assert re.search(
+            r"JSON_ARRAY\(e\d+\.edge_id, e\d+\.edge_id\) AS __rels_rs_eids", sql
+        ), sql
+
+    def test_collected_relationships_carry_edge_ids(self):
+        sql = tr("MATCH ()-[r]->() WITH collect(r) AS rs RETURN rs").sql
+        assert re.search(r"JSON_ARRAYAGG\(e\d+\.edge_id\).* AS __rels_rs_eids", sql), sql
+
+    def test_forwarded_list_keeps_its_edge_ids(self):
+        sql = tr(
+            "MATCH ()-[r1]->()-[r2]->() WITH [r1, r2] AS rs WITH rs AS xs "
+            "MATCH (a)-[xs*]->(b) RETURN a, b"
+        ).sql
+        assert "Stage1.__rels_rs_eids AS __rels_xs_eids" in sql, sql
+        assert "CY_VLP_CHAIN(Stage2.__rels_xs_eids" in sql, sql
+
+    def test_bound_list_walks_the_chain_not_all_paths(self):
+        q = tr(self.M4)
+        assert "CY_VLP_CHAIN(Stage1.__rels_rs_eids, 'out'" in q.sql, q.sql
+        assert "CY_VLP_PATHS" not in q.sql, q.sql
+        assert q.var_length_paths in (None, []), q.var_length_paths
+
+    def test_fresh_source_is_the_chain_start(self):
+        sql = tr(self.M4).sql
+        assert re.search(r"vlp\d+\.s = n\d+\.node_id", sql), sql
+
+    def test_bound_endpoints_are_the_chain_ends(self):
+        sql = tr(self.M9).sql
+        assert "CY_VLP_CHAIN(Stage1.__rels_rs_eids" in sql, sql
+        assert re.search(r"vlp\d+\.s = Stage1\.first", sql), sql
+        assert re.search(r"Stage1\.second = vlp\d+\.t", sql), sql
+
+    def test_incoming_chain_direction(self):
+        sql = tr(
+            "MATCH ()-[r1]->()-[r2]->() WITH [r2, r1] AS rs "
+            "MATCH (a)<-[rs*]-(b) RETURN a, b"
+        ).sql
+        assert "CY_VLP_CHAIN(Stage1.__rels_rs_eids, 'in'" in sql, sql
+
+    def test_unbound_var_length_still_walks_all_paths(self):
+        sql = tr("MATCH (a)-[rs*]->(b) RETURN a, b").sql
+        assert "CY_VLP_PATHS" in sql and "CY_VLP_CHAIN" not in sql, sql
+
+
+class TestVlpChainUdfDefinition:
+    """CY_VLP_CHAIN ships with the other CY_ UDFs and survives DBAPI DDL."""
+
+    def _ddl(self):
+        from iris_vector_graph.schema import GraphSchema
+
+        hits = [s for s in GraphSchema.get_procedures_sql_list() if "SQLUser.CY_VLP_CHAIN(" in s]
+        assert len(hits) == 1, hits
+        return hits[0]
+
+    def test_is_deployed_with_the_procedures(self):
+        assert "CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_CHAIN(" in self._ddl()
+
+    def test_body_has_no_ddl_tokenizer_hazards(self):
+        body = self._ddl().split("LANGUAGE OBJECTSCRIPT", 1)[1]
+        assert "'" not in body and "?" not in body and ":1" not in body.replace(" : 1", "")
+
+    def test_returns_the_vlp_row_columns_plus_source(self):
+        body = self._ddl()
+        for key in ('"t"', '"l"', '"n"', '"y"', '"r"', '"k"', '"s"'):
+            assert key in body, key

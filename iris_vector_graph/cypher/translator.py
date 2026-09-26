@@ -7716,6 +7716,47 @@ def _where_pins_id(expr, var) -> bool:
     return False
 
 
+def _rel_edge_id_sql(name, context):
+    """SQL for the edge_id of relationship variable `name`, else None."""
+    alias = context.variable_aliases.get(name, "")
+    if alias.startswith("Stage"):
+        if name in getattr(context, "edge_stage_variables", set()):
+            return f"{alias}.__edge_{name}_id"
+        return None
+    if alias.startswith("e") and name in context.rel_variables:
+        return f"{alias}.edge_id"
+    return None
+
+
+def _with_rel_list_edge_ids(expr, context):
+    """The edge ids, as a JSON array, of a WITH item that is a list of relationships:
+    `[r1, r2]`, `collect(r)`, or such a list forwarded from an earlier stage. A
+    var-length pattern over that variable (`-[rs*]->`) walks exactly those edges."""
+    if isinstance(expr, ast.Variable):
+        alias = context.variable_aliases.get(expr.name, "")
+        if alias.startswith("Stage") and expr.name in getattr(context, "rel_list_vars", ()):
+            return f"{alias}.__rels_{expr.name}_eids"
+        return None
+    if isinstance(expr, ast.Literal) and isinstance(expr.value, list) and expr.value:
+        ids = []
+        for el in expr.value:
+            ref = _rel_edge_id_sql(el.name, context) if isinstance(el, ast.Variable) else None
+            if ref is None:
+                return None
+            ids.append(ref)
+        return f"JSON_ARRAY({', '.join(ids)})"
+    if (
+        isinstance(expr, ast.AggregationFunction)
+        and expr.function_name.lower() == "collect"
+        and not expr.distinct
+        and isinstance(expr.argument, ast.Variable)
+    ):
+        ref = _rel_edge_id_sql(expr.argument.name, context)
+        if ref is not None:
+            return f"COALESCE(JSON_ARRAYAGG({ref}), CAST('[]' AS VARCHAR(256)))"
+    return None
+
+
 def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
     """Expand a variable-length relationship in SQL, one row per path.
 
@@ -7740,7 +7781,14 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
     equality and the property checks.
     """
     vl = rel.variable_length
-    if vl.shortest or vl.all_shortest or id_bound:
+    # `-[rs*]->` over a list of relationships bound by an earlier WITH walks
+    # exactly those edges, in order (CY_VLP_CHAIN), from the chain's start
+    chain_ids = None
+    if rel.variable and rel.variable in getattr(context, "rel_list_vars", ()):
+        _st = context.variable_aliases.get(rel.variable, "")
+        if _st.startswith("Stage") and not optional:
+            chain_ids = f"{_st}.__rels_{rel.variable}_eids"
+    if chain_ids is None and (vl.shortest or vl.all_shortest or id_bound):
         return False
     opt_via_udf = False
     if optional:
@@ -7829,6 +7877,8 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         f"SQLUser.CY_VLP_PATHS({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
     )
+    if chain_ids is not None:
+        call = f"SQLUser.CY_VLP_CHAIN({chain_ids}, '{direction}', '{_table('rdf_edges')}')"
     prop_conds = []
     for key, val in rel_prop_filters:
         z = context.next_alias("vpz")
@@ -7863,10 +7913,13 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
                 context.variable_aliases[target_node.variable], target_node.variable))
         on += prop_conds
         prop_conds = []
+    if chain_ids is not None:
+        on.append(f"{vx}.s = {src_ref}")
     on = on or ["1=1"]
     context.join_clauses.append(
         f"{'LEFT OUTER JOIN' if optional and not opt_via_udf else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
-        f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
+        + ("s VARCHAR(512) PATH '$.s', " if chain_ids is not None else "")
+        + f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
         f"y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
         f")) {vx} ON {' AND '.join(on)}"
     )
@@ -18724,7 +18777,7 @@ def translate_with_clause(with_clause, context):
             prev_var = item.expression.name
             # Propagate identity columns using new alias name
             stage_col_name = alias
-            for suffix in ("_s", "_p", "_o"):
+            for suffix in ("_s", "_p", "_o", "_id"):
                 context.select_items.append(
                     f"{prev_stage}.__edge_{prev_var}{suffix} AS __edge_{stage_col_name}{suffix}"
                 )
@@ -18766,6 +18819,16 @@ def translate_with_clause(with_clause, context):
                 context.select_items.append(f"{e_alias}.s AS __edge_{stage_col_name}_s")
                 context.select_items.append(f"{e_alias}.p AS __edge_{stage_col_name}_p")
                 context.select_items.append(f"{e_alias}.o_id AS __edge_{stage_col_name}_o")
+            # the relationship's identity: parallel edges share the triple
+            context.select_items.append(f"{e_alias}.edge_id AS __edge_{stage_col_name}_id")
+        _rel_list_eids = _with_rel_list_edge_ids(item.expression, context)
+        if not hasattr(context, "rel_list_vars"):
+            context.rel_list_vars = set()
+        _rel_list_vars = context.rel_list_vars
+        _rel_list_vars.discard(alias)
+        if _rel_list_eids is not None:
+            context.select_items.append(f"{_rel_list_eids} AS __rels_{alias}_eids")
+            _rel_list_vars.add(alias)
         context.select_items.append(f"{sql} AS {_safe_alias(alias).replace('.', '_')}")
         if has_agg and not _contains_aggregation(item.expression):
             # For edge variables in GROUP BY, also include s/p/o identity columns so that
@@ -18784,6 +18847,7 @@ def translate_with_clause(with_clause, context):
                             f"{e_alias_gb}._p",
                             f"{e_alias_gb}._dst",
                             f"{e_alias_gb}.qualifiers",
+                            f"{e_alias_gb}.edge_id",
                         ]
                     )
                 else:
@@ -18793,6 +18857,7 @@ def translate_with_clause(with_clause, context):
                             f"{e_alias_gb}.p",
                             f"{e_alias_gb}.o_id",
                             f"{e_alias_gb}.qualifiers",
+                            f"{e_alias_gb}.edge_id",
                         ]
                     )
             else:
