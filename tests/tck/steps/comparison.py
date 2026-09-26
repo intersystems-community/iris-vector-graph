@@ -737,10 +737,10 @@ def _rel_obj_matches(pattern: str, rel: dict) -> bool:
     return True
 
 
-def _graph_value_matches(ev: Any, av: Any) -> bool:
+def _graph_value_matches(ev: Any, av: Any, unordered: bool = False) -> bool:
     """Nested TCK value holding node / relationship patterns — `[(:A), [:T], (:B)]`,
     `{node1: (:A), rel: [:T]}` — against the engine's JSON list / map of node and
-    relationship values."""
+    relationship values. `unordered` ignores the order of the outermost list."""
     import json as _json
 
     if isinstance(av, str) and av[:1] in ("[", "{"):
@@ -757,9 +757,19 @@ def _graph_value_matches(ev: Any, av: Any) -> bool:
         rel = _as_rel_obj(av)
         return rel is not None and _rel_obj_matches(ev[0], rel)
     if isinstance(ev, list):
-        return isinstance(av, list) and len(ev) == len(av) and all(
-            _graph_value_matches(e, a) for e, a in zip(ev, av)
-        )
+        if not (isinstance(av, list) and len(ev) == len(av)):
+            return False
+        if not unordered:
+            return all(_graph_value_matches(e, a) for e, a in zip(ev, av))
+
+        def _match(i, avail):
+            if i == len(ev):
+                return True
+            return any(
+                _graph_value_matches(ev[i], av[j]) and _match(i + 1, avail - {j}) for j in avail
+            )
+
+        return _match(0, frozenset(range(len(av))))
     if isinstance(ev, dict):
         return isinstance(av, dict) and set(ev) == set(av) and all(
             _graph_value_matches(ev[k], av[k]) for k in ev
@@ -964,7 +974,7 @@ def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) 
                         if not _node_matches(node, pat):
                             return False
                 continue
-            if not list_unordered and ev != av_parsed and _graph_value_matches(ev, av):
+            if ev != av_parsed and _graph_value_matches(ev, av, unordered=list_unordered):
                 continue
             if list_unordered:
                 if sorted(str(x) for x in ev) != sorted(str(x) for x in av_parsed):

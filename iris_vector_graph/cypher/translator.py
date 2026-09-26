@@ -13133,6 +13133,25 @@ def _expr_aggregation(expr, context, segment):
             )
             distinct_kw = "DISTINCT " if expr.distinct else ""
             return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{node_json}), CAST('[]' AS VARCHAR(256)))"
+    # collect(nodes(p)): each element is the path's list of nodes, not of node ids
+    if (
+        fn == "JSON_ARRAYAGG"
+        and not expr.distinct
+        and isinstance(expr.argument, ast.FunctionCall)
+        and expr.argument.function_name.lower() == "nodes"
+        and _path_elem_kind(expr.argument, context) == "node"
+    ):
+        lc = context.next_alias("lc")
+        nid = f"{lc}.x"
+        node_json = (
+            f"'{{\"_id\":\"' || {nid} || '\",' "
+            f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+            f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+        )
+        return (
+            f"COALESCE(JSON_ARRAYAGG((SELECT JSON_ARRAYAGG({node_json}) FROM JSON_TABLE({arg}, "
+            f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc})), CAST('[]' AS VARCHAR(256)))"
+        )
     if fn in ("MIN", "MAX") and isinstance(expr.argument, ast.Variable):
         # Values unwound from a literal list of lists or of mixed kinds: VARCHAR
         # order is not Cypher orderability (list < string < boolean < number,

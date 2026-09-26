@@ -2314,3 +2314,17 @@ class TestPathFunctionsOnWithProjectedPath:
     def test_length_of_projected_path(self):
         sql = tr("MATCH p = ()-[]->() WITH p RETURN length(p) AS l").sql
         assert "SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE(Stage1.p, '$.rels'))" in sql, sql
+
+
+class TestCollectNodesOfPath:
+    """ReturnOrderBy2 [12]: collect(nodes(p)) collected id lists; each element must
+    be the path's list of nodes."""
+
+    def test_collect_nodes_hydrates_each_path(self):
+        sql = tr("MATCH p = (a)-[*]->(b) RETURN collect(nodes(p)) AS paths, length(p) AS l").sql
+        assert "JSON_ARRAYAGG((SELECT JSON_ARRAYAGG('{\"_id\":\"' || " in sql, sql
+        assert "FROM JSON_TABLE(SQLUser.LIST_CONCAT(JSON_ARRAY(n0.node_id), vlp1.n)" in sql, sql
+
+    def test_collect_of_scalar_unchanged(self):
+        sql = tr("MATCH (a) RETURN collect(a.name) AS names").sql
+        assert "JSON_TABLE" not in sql, sql
