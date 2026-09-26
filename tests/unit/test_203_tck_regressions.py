@@ -615,3 +615,188 @@ class TestZonedTimeOrdering:
         )
         iris_cursor.execute(t.sql, t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters)
         assert tuple(int(v) for v in iris_cursor.fetchall()[0]) == (0, 1, 0, 1)
+
+
+def _param_count_ok(t) -> bool:
+    return t.sql.count("?") == len(t.parameters[0])
+
+
+class TestOptionalMatchIsAllOrNothing:
+    """Match7 [9], [11]; MatchWhere6 [7].
+
+    A multi-hop OPTIONAL MATCH used to be a flat chain of LEFT OUTER JOINs, so a
+    partial match (first hop found, second not) survived as an extra NULL row
+    next to the full match. The hops of one OPTIONAL MATCH now form one nested
+    join group, so they null out together, and the optional WHERE and the
+    per-pattern edge-uniqueness guards join the group's ON instead of the
+    statement's WHERE.
+    """
+
+    def test_two_hop_optional_is_one_nested_join_group(self):
+        t = tr("MATCH (a:Single), (c:C) OPTIONAL MATCH (a)-->(b)-->(c) RETURN b")
+        assert "LEFT OUTER JOIN (" in t.sql
+        # inner hops are plain joins inside the group
+        grp = t.sql[t.sql.index("LEFT OUTER JOIN (") :]
+        assert grp.count("LEFT OUTER JOIN") == 1
+        # the uniqueness guard moved into the group's ON, not the WHERE
+        where = t.sql[t.sql.rindex("WHERE ") :] if "\nWHERE " in t.sql else ""
+        assert "e6.s IS NULL" not in where
+        assert _param_count_ok(t)
+
+    def test_optional_where_goes_into_the_group(self):
+        t = tr(
+            "MATCH (a)-[r {name: 'r1'}]-(b) OPTIONAL MATCH (b)-[r2]-(c) "
+            "WHERE r <> r2 RETURN a, b, c"
+        )
+        assert "LEFT OUTER JOIN (" in t.sql
+        assert ".node_id IS NULL OR" not in t.sql
+        assert _param_count_ok(t)
+
+    def test_optional_where_on_property_of_far_node(self):
+        t = tr(
+            "MATCH (x:X) OPTIONAL MATCH (x)-[:E1]->(y:Y)-[:E2]->(z:Z) "
+            "WHERE x.val < z.val RETURN x, y, z"
+        )
+        assert "LEFT OUTER JOIN (" in t.sql
+        assert "n4.node_id IS NULL OR" not in t.sql
+        assert _param_count_ok(t)
+
+    def test_single_hop_optional_without_where_is_unchanged(self):
+        t = tr("MATCH (a) OPTIONAL MATCH (a)-[:R]->(b) RETURN a, b")
+        assert "LEFT OUTER JOIN (" not in t.sql
+
+
+class TestUndirectedRelationshipInlineProperties:
+    """Match7 [11]: `(a)-[r {name: 'r1'}]-(b)` ignored the property map, so both
+    edges matched. The undirected CTE now filters on its qualifiers too."""
+
+    def test_undirected_inline_property_filters_the_edge(self):
+        t = tr("MATCH (a)-[r {name: 'r1'}]-(b) RETURN a")
+        assert "JSON_VALUE(e" in t.sql and "qualifiers, '$.name')" in t.sql
+
+
+def _where_exists(t) -> str:
+    return t.sql[t.sql.index("EXISTS (") :]
+
+
+class TestPatternPredicateShape:
+    """Pattern1 [10], [13], [18]; MatchWhere4 [2].
+
+    A pattern predicate (`WHERE (n)-[..]-(m)`) kept only the first relationship
+    type, ignored `*N..M` bounds, dropped labels on bound nodes and left
+    anonymous interior nodes unconnected.
+    """
+
+    def test_every_alternative_type_is_accepted(self):
+        t = tr("MATCH (n), (m) WHERE (n)-[:REL1|REL2|REL3]-(m) RETURN n, m")
+        assert "IN ('REL1', 'REL2', 'REL3')" in _where_exists(t)
+
+    def test_fixed_length_var_length_is_unrolled_with_distinct_edges(self):
+        t = tr("MATCH (n) WHERE (n)-[:REL1*2]-() RETURN n")
+        ex = _where_exists(t)
+        assert ex.count("rdf_edges ex") == 2
+        assert ".edge_id <> " in ex
+        assert _param_count_ok(t)
+
+    def test_bounded_range_is_a_disjunction_of_lengths(self):
+        t = tr("MATCH (n), (m) WHERE (n)-[:R*1..2]->(m) RETURN n")
+        assert t.sql.count("EXISTS (SELECT 1 FROM") == 2
+
+    def test_label_on_bound_node_is_checked(self):
+        t = tr("MATCH (a), (b) WHERE (a)-[:T]->(b:MissingLabel) RETURN b")
+        assert "rdf_labels" in _where_exists(t)
+        assert "MissingLabel" in t.parameters[0]
+        assert _param_count_ok(t)
+
+    def test_anonymous_interior_node_links_both_hops(self):
+        t = tr("MATCH (a), (b) WHERE (a)-[:X]->()-[:Y]->(b) RETURN a")
+        ex = _where_exists(t)
+        assert "ex2.o_id = n" in ex or "ex3.o_id = n" in ex
+        assert ex.count(".s = n") >= 2
+
+
+class TestOptionalUndirectedHopToBoundTarget:
+    """Match8 [2]: `OPTIONAL MATCH (a)--(b)` with both ends bound put the
+    target equality in the WHERE, dropping every unmatched (null) row."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (a), (b) WITH * OPTIONAL MATCH (a)--(b) RETURN count(*)",
+            "MATCH (a), (b) OPTIONAL MATCH (a)--(b) RETURN count(*)",
+        ],
+    )
+    def test_target_equality_is_in_the_on_clause(self, q):
+        t = tr(q)
+        assert "\nWHERE" not in t.sql.split("LEFT OUTER JOIN", 1)[1]
+        assert "._dst" in t.sql.split("LEFT OUTER JOIN", 1)[1]
+
+
+class TestPatternComprehensionKeepsNulls:
+    """Pattern2 [4], [5]: `[(n)-->(b) | b.name]` must keep a null element for
+    every match whose projection is null; JSON_ARRAYAGG drops NULLs."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "MATCH (n) RETURN [(n)-[:T]->(b) | b.name] AS list",
+            "MATCH (n) RETURN [(n)-[r:T]->() | r.name] AS list",
+        ],
+    )
+    def test_null_projection_is_kept(self, q):
+        t = tr(q)
+        assert "JSON_ARRAYAGG(COALESCE(" in t.sql
+        assert "'null')" in t.sql
+
+
+class TestUndirectedRelationshipEqualityIsPhysical:
+    """Match7 [11]: `r <> r2` between two undirected hops compared the
+    traversal-oriented _src/_dst, so one edge walked both ways looked like two
+    different relationships."""
+
+    def test_undirected_rels_compare_physical_endpoints(self):
+        t = tr(
+            "MATCH (a)-[r {name: 'r1'}]-(b) OPTIONAL MATCH (b)-[r2]-(c) "
+            "WHERE r <> r2 RETURN a, b, c"
+        )
+        assert "e2._os <> e4._os" in t.sql and "e2._oo <> e4._oo" in t.sql
+
+
+class TestPatternComprehensionDirectionAndScalarSource:
+    """Pattern2 [7], [11]: pattern comprehensions ignored the arrow (every
+    pattern was walked outgoing) and, inside a list comprehension, joined the
+    loop variable as `lc.node_id` although the JSON_TABLE column is `lc.x`."""
+
+    def test_incoming_walks_the_edge_backwards(self):
+        t = tr("MATCH (n) RETURN [(n)<-[:T]-(m) | m.name] AS l")
+        assert "epc1.o_id = n0.node_id" in t.sql
+        assert "pct2.node_id = epc1.s" in t.sql
+
+    def test_undirected_concatenates_both_directions(self):
+        t = tr("MATCH (liker) RETURN [p = (liker)--() | p] AS isNew")
+        assert "SQLUser.LIST_CONCAT(" in t.sql
+        assert "epc1.s <> epc1.o_id" in t.sql
+
+    def test_list_comprehension_variable_is_the_json_table_column(self):
+        t = tr(
+            "MATCH p = (n:X)-->() "
+            "RETURN n, [x IN nodes(p) | size([(x)-->(:Y) | 1])] AS list"
+        )
+        assert ".node_id AND pcl" not in t.sql
+        assert "= lc4.x" in t.sql
+
+
+class TestOptionalGroupKeepsSubqueriesOutOfInnerOn:
+    """Match7 [7]: a label EXISTS inside the nested group's inner ON made IRIS
+    fail with <UNDEFINED>flattenExists^%qaqpre; it now sits in the outer ON."""
+
+    def test_label_exists_goes_to_the_outer_on(self):
+        t = tr(
+            "MATCH (a:L {name: 'A'}) "
+            "OPTIONAL MATCH (a)-[:KNOWS]->()-[:KNOWS]->(foo:L) RETURN foo"
+        )
+        grp = t.sql[t.sql.index("LEFT OUTER JOIN (") :]
+        inner = grp[: grp.index(") ON ")]
+        assert "EXISTS" not in inner and "SELECT" not in inner
+        assert "EXISTS" in grp[grp.index(") ON ") :]
+        assert _param_count_ok(t)
