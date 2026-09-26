@@ -8073,20 +8073,20 @@ def _trp_undirected_edge(
         where_fwd = f"WHERE 1=1{pred_filter}"
         where_rev = f"WHERE s != o_id{pred_filter}"
         cte_body = (
-            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, qualifiers\n"
+            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
             f"  FROM {edges_tbl}\n"
             f"  {where_fwd}\n"
             f"  UNION ALL\n"
-            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, qualifiers\n"
+            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
             f"  FROM {edges_tbl}\n"
             f"  {where_rev}"
         )
     else:
         cte_body = (
-            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, qualifiers\n"
+            f"  SELECT s AS _src, p AS _p, o_id AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
             f"  FROM {edges_tbl}\n"
             f"  UNION ALL\n"
-            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, qualifiers\n"
+            f"  SELECT o_id AS _src, p AS _p, s AS _dst, s AS _os, o_id AS _oo, qualifiers, edge_id\n"
             f"  FROM {edges_tbl} WHERE s != o_id"
         )
 

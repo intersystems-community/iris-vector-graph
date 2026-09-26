@@ -1885,6 +1885,14 @@ class TestCountDistinctRelationshipIsByIdentity:
         assert "COUNT(DISTINCT e" in sql and ".edge_id)" in sql
         assert ".p) AS c" not in sql
 
+    def test_undirected_cte_carries_edge_id(self):
+        # CountingSubgraphMatches1 [7]: the undirected _ue CTE had no edge_id, so
+        # count(DISTINCT r) over it failed with -29.
+        sql = _sql("MATCH (n)-[r]-(n) RETURN count(DISTINCT r)")
+        assert "COUNT(DISTINCT e1.edge_id)" in sql
+        cte = sql.split("SELECT COUNT", 1)[0]
+        assert cte.count("edge_id") == 2
+
 
 class TestUnwindMapParamPropertyIntoMerge:
     def _params(self, q, params):
