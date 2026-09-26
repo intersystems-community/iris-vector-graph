@@ -1430,6 +1430,15 @@ class TestLabelsOfPathRejected:
     def test_labels_of_node_allowed(self):
         tr("MATCH p = (a) RETURN labels(a) AS l")
 
+
+class TestNodeInsertAfterWithBindsStageParamsFirst:
+    """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
+    label marker, so the gate matched nothing and the node was never written; the
+    (correctly ordered) edge insert then failed its foreign key."""
+
+    @pytest.mark.parametrize(
+        "q",
+        [
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->(:M) RETURN a",
             "MATCH (n:L) WITH n AS a CREATE (a)-[:T]->({num: 1}) RETURN a",
             "MATCH (n:L) WITH n.num AS v CREATE (:M {num: v})",
@@ -1584,3 +1593,52 @@ class TestVarLengthExpandsInSql:
         assert body.startswith("New ")
         newed = {v.strip() for v in body[4:].split(" Set ", 1)[0].split(",")}
         assert {"adj", "st", "sd", "sl", "se", "args", "sql", "targ"} <= newed
+
+
+class TestQuantifierOverPathElements:
+    """Quantifier1-4 [8], [9].
+
+    `nodes(p)` of a var-length path is a list of node ids and `relationships(p)`
+    a list of `{"type", "props"}` objects, so `x.name` over either read the
+    element as a map and was NULL for every element.
+    """
+
+    NODES = (
+        "MATCH p = (:SNodes)-[*0..3]->(x) WITH tail(nodes(p)) AS nodes "
+        "RETURN nodes, none(x IN nodes WHERE x.name = 'a') AS result"
+    )
+    RELS = (
+        "MATCH p = (:SRelationships)-[*0..4]->(x) "
+        "WITH tail(relationships(p)) AS relationships, COUNT(*) AS c "
+        "RETURN relationships, any(x IN relationships WHERE x.name = 'a') AS result"
+    )
+
+    def test_node_element_property_reads_rdf_props(self):
+        sql = _sql_text(tr(self.NODES))
+        assert "FROM rdf_props WHERE s = qc" in sql.replace("Graph_KG.", ""), sql
+        assert "JSON_VALUE(qc" not in sql, sql
+
+    def test_relationship_element_property_reads_props(self):
+        sql = _sql_text(tr(self.RELS))
+        # SQLUser.JSON_VALUE reads one key per call.
+        assert "'$.props'), '$.name'" in sql, sql
+
+    def test_direct_nodes_call_is_a_node_list(self):
+        sql = _sql_text(
+            tr("MATCH p = (a)-[*1..2]->(b) RETURN all(x IN nodes(p) WHERE x.name = 'a') AS r")
+        )
+        assert "FROM rdf_props WHERE s = qc" in sql.replace("Graph_KG.", ""), sql
+
+    def test_comprehension_over_path_nodes(self):
+        sql = _sql_text(tr("MATCH p = (a)-[*1..2]->(b) RETURN [x IN nodes(p) | x.name] AS r"))
+        assert "FROM rdf_props WHERE s = lc" in sql.replace("Graph_KG.", ""), sql
+
+    def test_plain_map_list_keeps_json_value(self):
+        sql = _sql_text(tr("UNWIND [[{name: 'a'}]] AS l RETURN any(x IN l WHERE x.name = 'a') AS r"))
+        assert "'$.name'" in sql, sql
+
+    def test_returned_node_list_alias_renders_nodes(self):
+        # `RETURN nodes` of a WITH alias of nodes(p) returns node objects, not ids.
+        sql = _sql_text(tr(self.NODES))
+        final = sql.split(")\nSELECT ", 1)[1]
+        assert final.startswith("COALESCE((SELECT JSON_ARRAYAGG('{\"_id\"") and " AS nodes" in final, sql

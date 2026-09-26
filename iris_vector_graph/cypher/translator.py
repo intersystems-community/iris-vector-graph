@@ -683,6 +683,14 @@ class TranslationContext:
         self.collected_node_lists: Dict[str, str] = (
             {} if parent is None else parent.collected_node_lists.copy()
         )
+        # WITH aliases / loop variables holding elements of `nodes(p)` ("node": node
+        # ids) or of a var-length `relationships(p)` ("vrel": {"type","props"} objects).
+        self.path_elem_lists: Dict[str, str] = (
+            {} if parent is None else dict(getattr(parent, "path_elem_lists", {}))
+        )
+        self.path_elem_vars: Dict[str, str] = (
+            {} if parent is None else dict(getattr(parent, "path_elem_vars", {}))
+        )
         # (alias, prop_name) pairs for properties that appear in IS NULL / IS NOT NULL
         # checks in the current boolean context.  The structural guard (OPT-3 EXISTS) is
         # suppressed for these so that nodes lacking the property produce a NULL val that
@@ -2684,6 +2692,11 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     context.collected_node_lists[alias] = context.collected_node_lists[
                         item.expression.name
                     ]
+            _pk = _path_elem_kind(item.expression, context) if alias else None
+            if _pk:
+                context.path_elem_lists[alias] = _pk
+            elif alias:
+                context.path_elem_lists.pop(alias, None)
     if not part.with_clause.star:
         # Fixed-length named paths do not survive a WITH as paths: projected ones are now
         # scalar stage columns, the rest are out of scope.
@@ -2911,7 +2924,12 @@ def _tts_process_parts(cypher_query, context, metadata):
                     # license: openCypher runs it once per incoming row, so a MATCH that
                     # binds nothing must create nothing. See `_create_match_gate`.
                     context.match_preceded_create = True
+                    _nxt = part.clauses[_ci + 1] if _ci + 1 < len(part.clauses) else None
+                    context._match_where = (
+                        _nxt.expression if isinstance(_nxt, ast.WhereClause) else None
+                    )
                     translate_match_clause(clause, context, metadata)
+                    context._match_where = None
                     if clause.optional:
                         context.optional_match_new_aliases = (
                             set(context.variable_aliases.values()) - aliases_before_match
@@ -3712,6 +3730,16 @@ def translate_to_sql(
     context._engine = engine
     context._tck_procedures = procedures or {}  # TCK test procedures
     context.graph_context = graph_context
+    # `approx_count_distinct` is answered by the engine from `var_length_paths`
+    # (spec 230), so its var-length pattern must keep the engine route.
+    context._vlp_engine_agg = bool(
+        cypher_query.return_clause
+        and any(
+            isinstance(it.expression, (ast.FunctionCall, ast.AggregationFunction))
+            and getattr(it.expression, "function_name", "").lower() == "approx_count_distinct"
+            for it in cypher_query.return_clause.items
+        )
+    )
     metadata = QueryMetadata()
     context._metadata = metadata
     is_transactional = _tts_process_parts(cypher_query, context, metadata)
@@ -7310,6 +7338,47 @@ def _vlp_apply_node_constraints(node, ref, context):
             context.where_conditions.append(f"{p_alias}.val = {val_sql}")
 
 
+def _path_elem_kind(expr, context):
+    """"node" when `expr` is a list of path node ids (`nodes(p)`), "vrel" when it is a
+    var-length path's relationship objects (`relationships(p)`), else None. Sees
+    through `tail` / `reverse` and WITH aliases of either."""
+    if isinstance(expr, ast.Variable):
+        return getattr(context, "path_elem_lists", {}).get(expr.name)
+    if not isinstance(expr, ast.FunctionCall) or len(expr.arguments) != 1:
+        return None
+    fn = expr.function_name.lower()
+    arg = expr.arguments[0]
+    if fn in ("tail", "reverse"):
+        return _path_elem_kind(arg, context)
+    if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
+        return None
+    if fn == "nodes":
+        return "node"
+    if fn == "relationships" and _vlp_path_sql(context, arg.name, "length") is not None:
+        return "vrel"
+    return None
+
+
+def _where_pins_id(expr, var) -> bool:
+    """True when a top-level conjunct of `expr` is `var.node_id = <value>` (or `var.id`),
+    which pins the endpoint just like `{node_id: $src}` in the pattern."""
+    if expr is None or not var or not isinstance(expr, ast.BooleanExpression):
+        return False
+    if expr.operator == ast.BooleanOperator.AND:
+        return any(_where_pins_id(op, var) for op in expr.operands)
+    if expr.operator != ast.BooleanOperator.EQUALS or len(expr.operands) != 2:
+        return False
+    for ref, other in (expr.operands, reversed(expr.operands)):
+        if (
+            isinstance(ref, ast.PropertyReference)
+            and ref.variable == var
+            and ref.property_name in ("node_id", "id")
+            and isinstance(other, (ast.Variable, ast.Literal))
+        ):
+            return True
+    return False
+
+
 def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
     """Expand a variable-length relationship in SQL, one row per path.
 
@@ -7435,6 +7504,9 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
             or dst_id_param is not None
             or "node_id" in (source_node.properties or {})
             or "node_id" in (target_node.properties or {})
+            or _where_pins_id(getattr(context, "_match_where", None), source_node.variable)
+            or _where_pins_id(getattr(context, "_match_where", None), target_node.variable)
+            or getattr(context, "_vlp_engine_agg", False)
         )
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
@@ -10576,6 +10648,10 @@ def _expr_list_predicate(expr, context, segment):
     col_type = "VARCHAR(1000)"
     context.variable_aliases[expr.variable] = f"{alias}"
     context.scalar_variables.add(expr.variable)
+    _pek = _path_elem_kind(expr.source, context)
+    _pek_prev = context.path_elem_vars.pop(expr.variable, None)
+    if _pek:
+        context.path_elem_vars[expr.variable] = _pek
     # Snapshot param lists so we can stringify newly added numeric params.
     _sp_len = len(context.select_params)
     _wp_len = len(context.where_params)
@@ -10602,6 +10678,9 @@ def _expr_list_predicate(expr, context, segment):
     pred_sql = _re_qp.sub(r"CAST\('([^']+)' AS DOUBLE\)", _cast_double_to_str, pred_sql)
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
+    context.path_elem_vars.pop(expr.variable, None)
+    if _pek_prev:
+        context.path_elem_vars[expr.variable] = _pek_prev
     pred_with_alias = pred_sql
     for col in ("node_id", "p", "val", "label"):
         pred_with_alias = pred_with_alias.replace(f"{alias}.{col}", f"{alias}.{var}")
@@ -10876,6 +10955,10 @@ def _expr_list_comprehension(expr, context, segment):
         context, "collected_node_lists", {}
     ):
         context.collected_node_variables.add(expr.variable)
+    _pek = _path_elem_kind(expr.source, context)
+    _pek_prev = context.path_elem_vars.pop(expr.variable, None)
+    if _pek:
+        context.path_elem_vars[expr.variable] = _pek
     where_clause = ""
     if expr.predicate:
         if isinstance(expr.predicate, ast.BooleanExpression):
@@ -10890,6 +10973,9 @@ def _expr_list_comprehension(expr, context, segment):
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
     context.collected_node_variables.discard(expr.variable)
+    context.path_elem_vars.pop(expr.variable, None)
+    if _pek_prev:
+        context.path_elem_vars[expr.variable] = _pek_prev
     # Use VARCHAR to support both scalar values and JSON objects
     return (
         f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
@@ -11517,6 +11603,22 @@ def _expr_property_reference(expr, context, segment):
     # not rdf_props join.  The column holds a JSON-serialised value, not a graph node id.
     # Guard: only call JSON_VALUE when the value is a JSON object (starts with '{').
     # JSON_VALUE raises SQLCODE=-400 on non-JSON or non-matching path.
+    _pek = getattr(context, "path_elem_vars", {}).get(expr.variable)
+    if _pek and expr.variable in context.scalar_variables:
+        col_ref = f"{alias}.{_safe_alias(expr.variable)}"
+        if _pek == "node":
+            # An element of nodes(p) is the node's id.
+            return (
+                f"(SELECT val FROM {_table('rdf_props')} WHERE s = {col_ref} "
+                f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
+            )
+        prop = _jsonpath_key(expr.property_name)
+        return (
+            f"CASE WHEN ({col_ref}) IS NULL OR SUBSTRING({col_ref}, 1, 1) <> '{{' "
+            # SQLUser.JSON_VALUE reads a single key, so step into `props` first.
+            f"THEN NULL ELSE SQLUser.JSON_VALUE(SQLUser.JSON_VALUE({col_ref}, '$.props'), "
+            f"'$.{prop}') END"
+        )
     if expr.variable in context.scalar_variables:
         col_ref = f"{alias}.{_safe_alias(expr.variable)}"
         runtime = _runtime_temporal_accessor(col_ref, expr.property_name)
@@ -17659,6 +17761,25 @@ def translate_return_clause(ret, context):
                     context._return_alias_map[prefix] = var_name
                 continue
             if alias_name == "scalar":
+                continue
+            # A WITH alias of `nodes(p)` holds node ids; return the nodes themselves.
+            if is_scalar and getattr(context, "path_elem_lists", {}).get(var_name) == "node":
+                col = translate_expression(item.expression, context, segment="select")
+                lc = context.next_alias("lc")
+                nid = f"{lc}.x"
+                node_json = (
+                    f"'{{\"_id\":\"' || {nid} || '\",' "
+                    f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+                    f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+                )
+                context.select_items.append(
+                    f"COALESCE((SELECT JSON_ARRAYAGG({node_json}) FROM JSON_TABLE({col}, "
+                    f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc}), CAST('[]' AS VARCHAR(256))) "
+                    f"AS {_safe_alias(item.alias or var_name)}"
+                )
+                context.optional_null_row_items.append("NULL")
+                if has_agg:
+                    context.group_by_items.append(col)
                 continue
             # TCK procedure CTE: variables are scalar columns, not graph nodes
             if alias_name and alias_name.startswith("TCK_Proc_"):
