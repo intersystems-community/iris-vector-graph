@@ -148,6 +148,11 @@ def after_all(context):
         context.conn.close()
 
 
+def _tck_namespace() -> str:
+    """Namespace the harness connects to: IVG_TCK_NAMESPACE, default USER."""
+    return (os.environ.get("IVG_TCK_NAMESPACE") or "").strip() or "USER"
+
+
 def _connect(container_name: str, port: int):
     """Connect to the IRIS container.
 
@@ -163,7 +168,7 @@ def _connect(container_name: str, port: int):
         import iris.dbapi as _dbapi
         try:
             conn = _dbapi.connect(
-                hostname=_orb_ip, port=1972, namespace="USER",
+                hostname=_orb_ip, port=1972, namespace=_tck_namespace(),
                 username="_SYSTEM", password="SYS",
             )
             logger.info("TCK connected to %s via OrbStack %s (%s):1972", container_name, _orb_host, _orb_ip)
@@ -177,13 +182,18 @@ def _connect(container_name: str, port: int):
         import iris.dbapi as _dbapi
         try:
             conn = _dbapi.connect(
-                hostname="localhost", port=port, namespace="USER",
+                hostname="localhost", port=port, namespace=_tck_namespace(),
                 username="_SYSTEM", password="SYS",
             )
             logger.info("TCK harness connected to %s via localhost:%s", container_name, port)
             return conn
         except Exception as e:
             logger.warning("Direct connect to localhost:%s failed (%s) — trying iris_devtester", port, e)
+
+    if _tck_namespace() != "USER":
+        # iris_devtester attaches to USER only; never fall back to a namespace
+        # other than the one requested.
+        raise RuntimeError(f"Cannot connect to namespace {_tck_namespace()} on '{container_name}'")
 
     try:
         from iris_devtester import IRISContainer as IRC
