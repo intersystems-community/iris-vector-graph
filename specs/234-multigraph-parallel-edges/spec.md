@@ -38,13 +38,18 @@ exists today.
 ### Session 2026-09-26
 
 - Q: Multigraph as the default, opt-in, or never? → A: Opt-in (option B).
-- Q: Scope of the mode: per graph or per namespace? → A (recommended, pending
-  confirmation): per graph, including the default graph. A namespace holds FHIR
-  graphs, ontology graphs and user graphs side by side, and they want different
-  answers. A per-namespace switch would force one answer on all of them.
-- Q: Layout of parallel edges in `^KG`? → A (recommended, pending confirmation):
-  children under the existing leaf, and only while two or more edges share a
-  triple (research R3, option 1).
+- Q: Scope of the mode: per graph or per namespace? → A: per graph, including
+  the default graph, stored in `^IVG.GraphMode(gKey)`.
+- Q: Layout of parallel edges in `^KG`? → A: children
+  `^KG("out", g, s, p, o, ekey)` under the existing leaf, present only while two
+  or more edges share a triple (research R3, option 1).
+- Q: What do `deg`/`degp` count in a multigraph? → A: live edges, not triples.
+- Q: How do PPR/PageRank/Arno treat parallel edges? → A: set semantics, one
+  adjacency entry per triple with the representative weight; `^NKG` unchanged.
+- Q: How are edge embeddings keyed? → A: per triple, unchanged; parallel edges
+  share one embedding.
+- Q: What does `create_edge` return in a multigraph? → A: unchanged
+  (True/False). A new `create_edge_returning_id()` returns the new `edge_id`.
 
 ## User Scenarios & Testing _(mandatory)_
 
@@ -190,7 +195,7 @@ fingerprints and row counts with the pre-upgrade values.
 - **A ledger tuple ref to a triple with several live edges**: the call fails with
   `ambiguous_tuple` unless the ref carries `ekey` or a `stmt_id`.
 - **Edge embeddings**: they stay keyed by triple and attach to the triple, not to
-  one parallel edge (non-goal; open question Q5).
+  one parallel edge (non-goal; settled 2026-09-26).
 - **`BuildKG` rebuilding a multigraph**: it rebuilds children and counters from
   `rdf_edges` rows. It must produce the same `^KG` as incremental writes.
 
@@ -238,9 +243,10 @@ fingerprints and row counts with the pre-upgrade values.
 #### Writers
 
 - **FR-007**: In a multigraph graph, `create_edge` MUST always create a new edge.
-  It allocates `ekey = COALESCE(MAX(ekey) + 1, 0)` over the triple, and returns
-  the new `edge_id`. The single-edge return contract (True/False) is unchanged
-  when the mode is off.
+  It allocates `ekey = COALESCE(MAX(ekey) + 1, 0)` over the triple. Its return
+  contract (True/False) is unchanged in both modes. A new method
+  `create_edge_returning_id()` MUST create the edge the same way and return the
+  new `edge_id` in both modes.
 - **FR-008**: In a multigraph graph, the translator's CREATE MUST emit one edge
   per input row.
   - This covers CREATE with VALUES (T58) and CREATE after MATCH (T59).
@@ -386,14 +392,4 @@ fingerprints and row counts with the pre-upgrade values.
 
 ## Open Questions
 
-- **Q1**: Per-graph (recommended) or per-namespace mode?
-- **Q2**: The `^KG` layout: children under the leaf (recommended) or a side tree
-  `^KG("outx")`?
-- **Q3**: Should `deg`/`degp` count edges (recommended; it matches `rdf_edges`)
-  or triples (it matches `^NKG` and the `^KG` leaves)?
-- **Q4**: For PPR in a multigraph: keep set semantics with the representative
-  weight (recommended), or sum the parallel weights?
-- **Q5**: Should edge embeddings for parallel edges stay per triple
-  (recommended), or be re-keyed by `edge_id`?
-- **Q6**: Should `create_edge` in a multigraph return the new `edge_id` (a
-  return-type change), or True with the id available elsewhere?
+None. All six were settled on 2026-09-26 (see Clarifications).
