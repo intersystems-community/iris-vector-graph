@@ -59,18 +59,41 @@ def parse_behave_junit(xml_text: str) -> list[dict]:
     return scenarios
 
 
+_REASON_PREFIX = "# reason:"
+
+
 def load_wip_registry(wip_path: str | None = None) -> set[str]:
-    """Load wip.txt into a set of 'feature_file::Scenario: title' keys."""
+    """Load wip.txt into a set of 'feature_file::Scenario: title' keys.
+
+    Every entry must sit directly under its own non-empty ``# reason: ...`` line, in
+    the same comment block (spec 229 FR-011, SC-006). A reasonless entry raises
+    ``ValueError``, so the runner refuses to start rather than defer silently.
+    """
     path = wip_path or str(WIP_FILE)
     registry: set[str] = set()
+    missing: list[str] = []
     try:
         with open(path) as f:
-            for line in f:
+            reason = False
+            for n, line in enumerate(f, start=1):
                 line = line.strip()
-                if line and not line.startswith("#"):
+                if not line:
+                    reason = False
+                elif line.startswith("#"):
+                    if line.lower().startswith(_REASON_PREFIX):
+                        reason = bool(line[len(_REASON_PREFIX):].strip())
+                else:
+                    if not reason:
+                        missing.append(f"line {n}: {line}")
                     registry.add(line)
+                    reason = False
     except FileNotFoundError:
         pass
+    if missing:
+        raise ValueError(
+            f"{path}: every deferral entry needs its own '# reason: ...' line above it; "
+            "missing for:\n  " + "\n  ".join(missing)
+        )
     return registry
 
 

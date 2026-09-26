@@ -51,8 +51,15 @@ class TestResultSteps:
     def test_error_type_assertion_pass(self):
         from tests.tck.steps.results import step_error_type_raised
 
+        from iris_vector_graph.cypher.parser import parse_query
+        from iris_vector_graph.cypher.translator import translate_to_sql
+
         ctx = MagicMock()
-        ctx.last_error = TypeError("bad type")
+        # A TypeError IVG itself raised; a bare TypeError("bad type") no longer
+        # passes, because it carries no evidence IVG raised it (spec 229 US3).
+        with pytest.raises(TypeError) as info:
+            translate_to_sql(parse_query("RETURN labels(1)"), {}, engine=None)
+        ctx.last_error = info.value
         # should not raise
         step_error_type_raised(ctx, "TypeError")
 

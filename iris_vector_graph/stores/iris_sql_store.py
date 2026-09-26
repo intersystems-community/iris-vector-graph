@@ -739,8 +739,10 @@ class IRISGraphStore:
                 rows = [[v for i, v in enumerate(r) if i != rn_idx] for r in rows]
             return IVGResult(columns=cols, rows=[list(r) for r in rows], sql=sql, params=params)
         except Exception as e:
-            err = str(e)[:200]
-            logger.warning("execute_sql error: %s", err)
+            # Keep the whole text: IRIS puts a failing UDF's %msg (where IVG names the
+            # Cypher error kind) after ~200 characters of SQLCODE/Location preamble.
+            err = str(e)
+            logger.warning("execute_sql error: %s", err[:500])
             try:
                 self.conn.rollback()
             except Exception:
