@@ -1,0 +1,526 @@
+{
+ "CREATE (a:A), (b:B) CREATE (a)-[:T {name: 'r1'}]->(b)": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'T'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'{\"name\": \"r1\"}'",
+    "''"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)"
+  ]
+ },
+ "CREATE (a:A), (b:B) CREATE (a)-[:TYPE]->(b) CREATE (a)-[:TYPE]->(b)": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'TYPE'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "''"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'TYPE'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "''"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)"
+  ]
+ },
+ "CREATE (a:A), (b:B) CREATE (a)-[r:T]->(b) RETURN r": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'T'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "''"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'T'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)",
+   "SELECT '{\"type\":\"' || e2.p || '\",\"props\":' || COALESCE(e2.qualifiers, '{}') || '}' AS r\nFROM nodes n0\nCROSS JOIN nodes n1\nJOIN rdf_edges e2 ON e2.s = ? AND e2.p = ? AND e2.o_id = ?\nWHERE n0.node_id = ? AND n1.node_id = ?"
+  ]
+ },
+ "CREATE (a:A), (b:B) MERGE (a)-[r:R]->(b) RETURN r": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "''",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
+   "SELECT '{\"type\":\"' || e2.p || '\",\"props\":' || COALESCE(e2.qualifiers, '{}') || '}' AS r\nFROM nodes n0\nCROSS JOIN nodes n1\nJOIN rdf_edges e2 ON e2.s = ? AND e2.p = ? AND e2.o_id = ?\nWHERE n0.node_id = ? AND n1.node_id = ?"
+  ]
+ },
+ "CREATE (a:A)-[:R]->(b:B)": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "''"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) VALUES (?, ?, ?, ?)"
+  ]
+ },
+ "MATCH (a)-[r:T]->(b) DELETE r CREATE (a)-[:U]->(b)": {
+  "params": [
+   [],
+   [
+    "''",
+    "'U'",
+    "'T'",
+    "''"
+   ],
+   [
+    "'T'",
+    "'__EDGE_HWM__'"
+   ]
+  ],
+  "sql": [
+   "__capture_edge_hwm__ SELECT COALESCE(MAX(edge_id), 0) FROM rdf_edges",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n1.node_id c3\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
+   "DELETE FROM rdf_edges WHERE edge_id IN (SELECT e2.edge_id\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AND edge_id <= ?"
+  ]
+ },
+ "MATCH (a)-[t:T]->(b) DELETE t MERGE (a)-[t2:T {name: 'rel3'}]->(b) RETURN t2.name": {
+  "params": [
+   [
+    "'T'"
+   ],
+   [
+    "''",
+    "'T'",
+    "'T'",
+    "''",
+    "'T'"
+   ],
+   [
+    "'T'",
+    "'T'"
+   ]
+  ],
+  "sql": [
+   "DELETE FROM rdf_edges WHERE edge_id IN (SELECT e2.edge_id\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id)",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n1.node_id c3\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
+   "SELECT CASE WHEN e3.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE(e3.qualifiers, '$.name') END AS t2_name\nFROM nodes n0\nJOIN rdf_edges e2 ON e2.s = n0.node_id AND e2.p = ?\nJOIN nodes n1 ON n1.node_id = e2.o_id\nJOIN rdf_edges e3 ON e3.s = n0.node_id AND e3.p = ? AND e3.o_id = n1.node_id"
+  ]
+ },
+ "MATCH (a:A) CREATE (a)-[:R]->(:B)": {
+  "params": [
+   [
+    "'A'"
+   ],
+   [
+    "'B'",
+    "'A'"
+   ],
+   [
+    "''",
+    "'R'",
+    "'A'",
+    "''"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id) SELECT DISTINCT _cg._nid FROM (SELECT '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '') AS _nid\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg",
+   "INSERT INTO rdf_labels (s, label) SELECT DISTINCT _cg._nid, ? FROM (SELECT '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '') AS _nid\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nWHERE l1.s IS NOT NULL AND n2.node_id = '00000000-0000-0000-0000-000000000000|' || COALESCE(CAST(n0.%ID AS VARCHAR(20)), '')) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))"
+  ]
+ },
+ "MATCH (a:A) MERGE (a)-[:R]->(b:B {name: 'x'})": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'B'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'name'",
+    "'x'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'name'"
+   ],
+   [
+    "''",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "''",
+    "'R'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT DISTINCT ?, '' FROM (SELECT 1 AS _one\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT DISTINCT ?, ? FROM (SELECT 1 AS _one\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_props (s, \"key\", val) SELECT DISTINCT ?, ?, ? FROM (SELECT 1 AS _one\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nWHERE l1.s IS NOT NULL) AS _cg WHERE NOT EXISTS (SELECT 1 FROM rdf_props WHERE s = ? AND \"key\" = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, ? c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nWHERE l1.s IS NOT NULL AND n2.node_id = ?) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)"
+  ]
+ },
+ "MATCH (a:A), (b:B) CREATE (a)-[:T]->(b)": {
+  "params": [
+   [
+    "''",
+    "'T'",
+    "'A'",
+    "'B'",
+    "''"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))"
+  ]
+ },
+ "MATCH (a:A), (b:B) CREATE (a)-[r:T {name: 'x'}]->(b) RETURN r.name": {
+  "params": [
+   [
+    "''",
+    "'T'",
+    "'A'",
+    "'B'",
+    "''"
+   ],
+   [
+    "'A'",
+    "'B'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
+   "SELECT CASE WHEN e4.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE(e4.qualifiers, '$.name') END AS r_name\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
+  ]
+ },
+ "MATCH (a:A), (b:B) MERGE (a)-[r:TYPE {name: 'r2'}]->(b) RETURN count(r)": {
+  "params": [
+   [
+    "''",
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''",
+    "'TYPE'"
+   ],
+   [
+    "'A'",
+    "'B'",
+    "'TYPE'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
+   "SELECT COUNT(e4.p) AS count_r_\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.s = n0.node_id AND e4.p = ? AND e4.o_id = n2.node_id\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
+  ]
+ },
+ "MATCH (a:A), (b:B) MERGE (a)-[r:TYPE]-(b) RETURN r": {
+  "params": [
+   [
+    "''",
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''",
+    "'TYPE'",
+    "'TYPE'"
+   ],
+   [
+    "'A'",
+    "'B'",
+    "'TYPE'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE (s = _ge.c1 AND p = ? AND o_id = _ge.c3) OR (s = _ge.c3 AND p = ? AND o_id = _ge.c1))",
+   "SELECT '{\"type\":\"' || e4.p || '\",\"props\":' || COALESCE(e4.qualifiers, '{}') || '}' AS r\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.p = ? AND ((e4.s = n0.node_id AND e4.o_id = n2.node_id) OR (e4.s = n2.node_id AND e4.o_id = n0.node_id))\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
+  ]
+ },
+ "MATCH (a:A), (b:B) MERGE (a)-[r:TYPE]->(b) RETURN count(r)": {
+  "params": [
+   [
+    "''",
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''",
+    "'TYPE'"
+   ],
+   [
+    "'A'",
+    "'B'",
+    "'TYPE'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n0.node_id c1, ? c2, n2.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
+   "SELECT COUNT(e4.p) AS count_r_\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.s = n0.node_id AND e4.p = ? AND e4.o_id = n2.node_id\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
+  ]
+ },
+ "MATCH (a:A), (b:B) MERGE (a)<-[r:TYPE {k: 1}]-(b) RETURN r.k": {
+  "params": [
+   [
+    "''",
+    "'TYPE'",
+    "'A'",
+    "'B'",
+    "''",
+    "'TYPE'"
+   ],
+   [
+    "'A'",
+    "'B'",
+    "'TYPE'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM (SELECT n2.node_id c1, ? c2, n0.node_id c3\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL) AS _ge WHERE NOT EXISTS (SELECT 1 FROM rdf_edges _gx WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 AND COALESCE(_gx.graph_id, '') = COALESCE(?, '')) AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = _ge.c1 AND p = ? AND o_id = _ge.c3)",
+   "SELECT CASE WHEN e4.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE(e4.qualifiers, '$.k') END AS r_k\nFROM nodes n0\nJOIN rdf_labels l1 ON l1.s = n0.node_id AND l1.label = ?\nCROSS JOIN nodes n2\nJOIN rdf_labels l3 ON l3.s = n2.node_id AND l3.label = ?\nJOIN rdf_edges e4 ON e4.s = n2.node_id AND e4.p = ? AND e4.o_id = n0.node_id\nWHERE l1.s IS NOT NULL AND l3.s IS NOT NULL"
+  ]
+ },
+ "MERGE (a:A)-[r:R]->(b:B) RETURN r": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'A'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'B'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "''",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_labels WHERE s = ? AND label = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, graph_id) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM rdf_edges WHERE s = ? AND p = ? AND o_id = ?)",
+   "SELECT '{\"type\":\"' || e2.p || '\",\"props\":' || COALESCE(e2.qualifiers, '{}') || '}' AS r\nFROM nodes n0\nCROSS JOIN nodes n1\nJOIN rdf_edges e2 ON e2.s = ? AND e2.p = ? AND e2.o_id = ?\nWHERE n0.node_id = ? AND n1.node_id = ?"
+  ]
+ },
+ "UNWIND [1, 2] AS i MATCH (a:A), (b:B) CREATE (a)-[:R {i: i}]->(b)": {
+  "params": [
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'00000000-0000-0000-0000-000000000000'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000001'",
+    "'00000000-0000-0000-0000-000000000001'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000000'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000001'",
+    "'{\"i\": \"1\"}'",
+    "''"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000002'",
+    "'00000000-0000-0000-0000-000000000002'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000003'",
+    "'00000000-0000-0000-0000-000000000003'"
+   ],
+   [
+    "'00000000-0000-0000-0000-000000000002'",
+    "'R'",
+    "'00000000-0000-0000-0000-000000000003'",
+    "'{\"i\": \"2\"}'",
+    "''"
+   ]
+  ],
+  "sql": [
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO nodes (node_id, graph_id) SELECT ?, '' WHERE NOT EXISTS (SELECT 1 FROM nodes WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
+   "INSERT INTO rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)"
+  ]
+ }
+}

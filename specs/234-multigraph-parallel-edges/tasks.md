@@ -148,10 +148,14 @@ Start with T018. Skip any task that merged code already satisfies, and mark it
 
 ### Tests first
 
-- [ ] T027 [P] [US1] Unit tests for multigraph mode: - CREATE with VALUES emits an `ekey` subselect and no triple guard; - CREATE after MATCH drops `DISTINCT` and the NOT EXISTS guard; - with the mode off, both are byte-identical to golden SQL captured at
+- [x] T027 [P] [US1] Unit tests for multigraph mode: - CREATE with VALUES emits an `ekey` subselect and no triple guard; - CREATE after MATCH drops `DISTINCT` and the NOT EXISTS guard; - with the mode off, both are byte-identical to golden SQL captured at
       `972ae7c`.
 
       File: `tests/unit/test_234_multigraph_sql.py`.
+
+      Done in `tests/unit/test_234_multigraph_cypher_sql.py`. The golden file,
+      `tests/unit/golden/234_mode_off_sql.json`, was captured at `5bb7437`,
+      the commit before the translator change.
 
 - [ ] T028 [P] [US1] Integration test at the SQL layer: two parallel INSERTs
       get `ekey` 0 and 1; a racing duplicate `ekey` gets `-119` and succeeds on
@@ -162,6 +166,10 @@ Start with T018. Skip any task that merged code already satisfies, and mark it
       neighbour appears once while `GraphVerify` and `Subgraph` count 2. Check
       the Bolt ids equal the `edge_id`s. Also cover Match6 [14]'s same-triple
       double CREATE (`tests/e2e/test_234_multigraph_cypher_e2e.py`).
+      Partly done: `count(r)`, distinct `edge_id`s, `ekey` 0/1, CREATE after
+      MATCH, the Match6 [14] shape and the mode-off check pass. Open: delete
+      one of two, `deg`/`degp`, `GraphVerify`/`Subgraph` (needs T036) and the
+      Bolt ids (needs T026; `id(r)` is SQLCODE -29 in both modes today).
 - [ ] T030 [P] [US1] E2E test: - `create_edge` returns True twice in multigraph mode, and False on the
       second call with the mode off; - `create_edge_returning_id()` returns distinct `edge_id`s, and `None` for
       a single-edge duplicate; - `delete_edge(edge_id=)` removes exactly one edge.
@@ -182,16 +190,19 @@ Start with T018. Skip any task that merged code already satisfies, and mark it
       `edge_id=` parameter, and a multigraph `set_edge_weight` that does not
       touch the counters (`iris_vector_graph/_engine/nodes_edges.py:821`,
       `:892`, `:922`). Add the facade in `iris_vector_graph/engine.py`.
-- [ ] T034 [US1] Translator CREATE with VALUES in multigraph mode, with the
+- [x] T034 [US1] Translator CREATE with VALUES in multigraph mode, with the
       `ekey` subselect (`iris_vector_graph/cypher/translator.py:5062-5067`).
-- [ ] T035 [US1] Translator CREATE after MATCH in multigraph mode, using the
+- [x] T035 [US1] Translator CREATE after MATCH in multigraph mode, using the
       `ROW_NUMBER` path or the row-at-a-time fallback chosen in T003
       (`iris_vector_graph/cypher/translator.py:5113-5119`).
 - [ ] T036 [US1] Make the edge-counting readers descend into children: - `GraphVerify.VerifyGraph` (`iris_src/src/Graph/KG/GraphVerify.cls:35`); - `iris_src/src/Graph/KG/Subgraph.cls`; - the path-returning parts of `iris_src/src/Graph/KG/TraversalBFS.cls`,
       `TraversalPaths.cls` and `TraversalKHop.cls`.
-- [ ] T037 [US1] Add `IVG_TCK_MULTIGRAPH=1` support: `set_multigraph` in
+- [x] T037 [US1] Add `IVG_TCK_MULTIGRAPH=1` support: `set_multigraph` in
       `before_all`, and again after each `_flush_all_tck_data`
       (`tests/tck/environment.py:85`).
+      Done as on by default (SC-001): the harness turns the mode on for the
+      default graph in `before_all` and off again in `after_all`;
+      `IVG_TCK_MULTIGRAPH=0` runs the suite with the mode off.
 
 **Gate**: T027–T032 pass. With `IVG_TCK_MULTIGRAPH=1`, Match6 [14] passes.
 `/tmp/tck_cmp.sh $PWD match create delete set` shows 0 REG with the variable
@@ -201,22 +212,26 @@ set and with it unset.
 
 ### Tests first
 
-- [ ] T038 [P] [US2] Unit test: with the mode off, MERGE relationship SQL is
+- [x] T038 [P] [US2] Unit test: with the mode off, MERGE relationship SQL is
       byte-identical to golden SQL captured at `972ae7c` for the Merge5 and
       Merge1 patterns. With the mode on, the create guard uses the full fit
       predicate, including inline properties
       (`tests/unit/test_234_multigraph_sql.py`).
-- [ ] T039 [US2] E2E test for US2 acceptance scenarios 1–4: Merge5 [3], [5] and
+- [x] T039 [US2] E2E test for US2 acceptance scenarios 1–4: Merge5 [3], [5] and
       [21] shapes in multigraph mode, plus the mode-off check
       (`tests/e2e/test_234_multigraph_cypher_e2e.py`).
 
 ### Implementation
 
-- [ ] T040 [US2] Multigraph MERGE: - match every fitting edge; - create one edge with a fresh `ekey` only when none fits; - re-evaluate per input row.
+- [x] T040 [US2] Multigraph MERGE: - match every fitting edge; - create one edge with a fresh `ekey` only when none fits; - re-evaluate per input row.
 
       Locations: `translate_merge_clause`,
       `iris_vector_graph/cypher/translator.py:5499`; the NOT EXISTS rewrite at
       `:5773-5790`.
+
+      `DELETE t MERGE … RETURN` (Merge5 [21]) moves the DELETE behind the
+      result as an `__after_result__` statement, bounded by the edge_id
+      high-water mark; `execute_transaction` runs it after reading the result.
 
 **Gate**: T038–T039 pass. With `IVG_TCK_MULTIGRAPH=1`, Merge5 [3], [5] and
 [21] pass. `/tmp/tck_cmp.sh $PWD merge` shows 0 REG with the variable set and
