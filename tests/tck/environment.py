@@ -277,10 +277,38 @@ def _flush_all_tck_data(context):
 
 
 def _teardown_label(context, label: str):
+    # The Cypher delete can leave rows behind (e.g. a node keeps its other labels
+    # while its isolation label goes), and a leftover label name hides the next
+    # scenario's +labels (spec 229). So the ids of the nodes carrying the isolation
+    # label are read before the Cypher delete and swept from every table after it.
+    # Ids are bound, not correlated: a DELETE correlated on its own table can silently
+    # delete nothing on IRIS; rdf_labels goes before nodes (FK rdf_labels.s -> nodes).
+    ids: list = []
+    store = getattr(getattr(context, "engine", None), "_store", None)
+    schema = _db_schema(context)
+    with contextlib.suppress(Exception):
+        if store and hasattr(store, "conn"):
+            cursor = store.conn.cursor()
+            cursor.execute(f"SELECT DISTINCT s FROM {schema}.rdf_labels WHERE label = ?", [label])
+            ids = [r[0] for r in cursor.fetchall()]
     with contextlib.suppress(Exception):
         context.engine.execute_cypher(
             f"MATCH (n:{label}) DETACH DELETE n", {}
         )
+    with contextlib.suppress(Exception):
+        if ids:
+            cursor = store.conn.cursor()
+            for i in range(0, len(ids), 200):
+                chunk = ids[i:i + 200]
+                marks = ", ".join("?" for _ in chunk)
+                cursor.execute(
+                    f"DELETE FROM {schema}.rdf_edges WHERE s IN ({marks}) OR o_id IN ({marks})",
+                    chunk + chunk,
+                )
+                cursor.execute(f"DELETE FROM {schema}.rdf_props WHERE s IN ({marks})", chunk)
+                cursor.execute(f"DELETE FROM {schema}.rdf_labels WHERE s IN ({marks})", chunk)
+                cursor.execute(f"DELETE FROM {schema}.nodes WHERE node_id IN ({marks})", chunk)
+            store.conn.commit()
     # Clean up orphaned nodes (no labels) left by anonymous CREATE endpoints
     # in main test queries that weren't given the isolation label.
     with contextlib.suppress(Exception):
@@ -291,6 +319,18 @@ def _teardown_label(context, label: str):
             cursor.execute(
                 f"DELETE FROM {schema}.nodes WHERE node_id NOT IN "
                 f"(SELECT DISTINCT s FROM {schema}.rdf_labels)"
+            )
+            store.conn.commit()
+    # rdf_props has no FK to nodes: drop properties the node sweep above orphaned,
+    # so side-effect snapshots (spec 229) do not grow across the run.
+    with contextlib.suppress(Exception):
+        store = getattr(context.engine, "_store", None)
+        if store and hasattr(store, "conn"):
+            schema = _db_schema(context)
+            cursor = store.conn.cursor()
+            cursor.execute(
+                f"DELETE FROM {schema}.rdf_props WHERE s NOT IN "
+                f"(SELECT node_id FROM {schema}.nodes)"
             )
             store.conn.commit()
 

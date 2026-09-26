@@ -11,8 +11,11 @@ except ImportError:
         def _d(f): return f
         return _d
 
+from tests.tck.side_effects import compare_side_effects, parse_side_effects_table
 from tests.tck.steps.comparison import TCKValue, TCKResultTable
 from tests.tck.steps.errors import KIND_SURFACE, classify, mismatch
+from tests.tck.strictness import lenient
+from iris_vector_graph.cypher.parser import CypherParseError
 
 # openCypher error kind -> the IVG/IRIS error surface that represents it (spec 229 FR-007).
 ERROR_TYPE_MAP = KIND_SURFACE
@@ -45,9 +48,12 @@ def step_result_in_order_list_unordered(context):
 @then("the result should be empty")
 def step_result_should_be_empty(context):
     result = context.last_result
-    # An error counts as empty result for this check
-    if context.last_error is not None:
-        return
+    if lenient():
+        # pre-229 scoring: an error counted as an empty result
+        if context.last_error is not None:
+            return
+    else:
+        _fail_on_query_error(context, "an empty result")
     rows = result.rows if result is not None else []
     assert len(rows) == 0, (
         f"Expected empty result, got {len(rows)} rows: {rows}"
@@ -60,12 +66,34 @@ def step_result_should_be_empty(context):
 
 @then("no side effects")
 def step_no_side_effects(context):
-    pass  # IVG doesn't expose side-effect counters; pass if no crash
+    if lenient():
+        return
+    _assert_side_effects(context, {})
 
 
 @then("the side effects should be:")
 def step_side_effects_should_be(context):
-    pass  # Side-effect counting not implemented; pass silently
+    if lenient():
+        return
+    table = context.table
+    expected = parse_side_effects_table(table.headings, table.rows)
+    _assert_side_effects(context, expected)
+
+
+def _assert_side_effects(context, expected: dict) -> None:
+    """Compare the last query's measured delta (steps/query.py) with ``expected``.
+
+    The error check runs first: a query that raised and rolled back has a zero
+    delta, which must be reported as the error, not as a count mismatch.
+    """
+    _fail_on_query_error(context, "side effects")
+    diff = compare_side_effects(
+        getattr(context, "side_effects", None),
+        expected,
+        unexpected=getattr(context, "side_effects_unexpected", None),
+        capture_error=getattr(context, "side_effects_error", None),
+    )
+    assert diff is None, diff
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +154,9 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
         list_unordered=list_unordered,
     )
     result = context.last_result
+    if not lenient():
+        _fail_on_query_error(context, "a result table")
+        assert result is not None, "Expected a result table, but no result was recorded (no query ran?)"
     raw_rows = result.rows if result is not None else []
     actual_cols = (
         result.columns
@@ -144,3 +175,19 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
 
     diff = tck_table.compare(actual_rows, actual_cols)
     assert diff is None, f"Result mismatch:\n{diff}"
+
+
+def _fail_on_query_error(context, expected_what: str) -> None:
+    """A query that raised, or returned a result carrying an error, fails the step
+    (spec 229 FR-005/FR-006) with the exception type and message."""
+    err = getattr(context, "last_error", None)
+    if err is not None:
+        raise AssertionError(
+            f"Expected {expected_what}, but the query raised {type(err).__name__}: {err}"
+        )
+    result = getattr(context, "last_result", None)
+    result_error = getattr(result, "error", None) if result is not None else None
+    if isinstance(result_error, str) and result_error:
+        raise AssertionError(
+            f"Expected {expected_what}, but the query returned an error result: {result_error}"
+        )
