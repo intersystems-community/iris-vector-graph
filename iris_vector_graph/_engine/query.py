@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
+from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.prop_values import parse_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
@@ -435,6 +436,10 @@ def _return_item_name(item) -> str:
     return str(e)
 
 
+# Rows a count-only CREATE pipeline (cypher.count_create) may fan out to.
+_COUNT_CREATE_MAX_ROWS = 100_000
+
+
 class QueryMixin:
     def execute_aql(
         self,
@@ -587,7 +592,31 @@ class QueryMixin:
             result = self._execute_row_merge(row_merge, parameters, procedures)
             if result is not None:
                 return result
+        count_create = plan_count_create(parsed, parameters)
+        if count_create is not None:
+            return self._execute_count_create(count_create, parameters, procedures)
         return self._execute_parsed(parsed, parameters, procedures)
+
+
+    def _execute_count_create(self, steps, parameters, procedures=None):
+        """Run a MATCH/CREATE pipeline whose rows carry no values (see
+        cypher.count_create): each MATCH multiplies the row count, each CREATE
+        runs once per row."""
+        rows = 1
+        for kind, q in steps:
+            if kind == "count":
+                res = self._execute_parsed(q, parameters, procedures)
+                n = res.rows[0][0] if res.rows and res.rows[0] else 0
+                rows *= int(n or 0)
+                if rows > _COUNT_CREATE_MAX_ROWS:
+                    raise ValueError(
+                        f"CREATE would run for {rows} rows "
+                        f"(limit {_COUNT_CREATE_MAX_ROWS})"
+                    )
+            else:
+                for _ in range(rows):
+                    self._execute_parsed(q, parameters, procedures)
+        return IVGResult(columns=[], rows=[])
 
     def _execute_row_merge(self, plan, parameters, procedures=None):
         """Run the prefix, then the MERGE suffix once per row (see cypher.merge_rows).

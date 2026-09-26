@@ -42,6 +42,57 @@ def _fix_iris_json(raw3: str) -> str:
     return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
 
+#: Captured ids inlined per statement; a larger capture runs the statement per chunk.
+_CAPTURED_ID_CHUNK = 500
+_CAPTURE_PREFIX = "__capture_ids__ "
+_IDS_TOKEN_RE = _re_global.compile(r"__IDS_(\w+?)__")
+
+
+def _ids_literal(ids: list) -> str:
+    """`'a', 'b'` for an IN list; `NULL` (matches nothing) for no ids."""
+    if not ids:
+        return "NULL"
+    out = []
+    for v in ids:
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out.append(str(v))
+        else:
+            out.append("'" + str(v).replace("'", "''") + "'")
+    return ", ".join(out)
+
+
+def _expand_captured_ids(stmt: str, captured: dict) -> list:
+    """`stmt` with every `__IDS_<key>__` replaced by the ids captured under key.
+
+    A DELETE clause captures the ids it touches once, before it writes anything
+    (`__capture_ids__ <key>\\n<select>`); its later statements read the capture,
+    so deleting a node's labels cannot hide the node from the statement that
+    deletes its row. Returns one statement per chunk of ids: with several keys,
+    each key is chunked in turn with the other keys' lists empty, which covers
+    every id exactly once for the OR-of-IN-lists shapes the translator writes.
+    """
+    keys = list(dict.fromkeys(_IDS_TOKEN_RE.findall(stmt)))
+    if not keys:
+        return [stmt]
+    for k in keys:
+        if k not in captured:
+            raise RuntimeError(f"no ids captured under {k!r} before: {stmt[:200]}")
+    if all(len(captured[k]) <= _CAPTURED_ID_CHUNK for k in keys):
+        return [_IDS_TOKEN_RE.sub(lambda m: _ids_literal(captured[m.group(1)]), stmt)]
+    out = []
+    for key in keys:
+        ids = captured[key]
+        for i in range(0, max(len(ids), 1), _CAPTURED_ID_CHUNK):
+            chunk = ids[i : i + _CAPTURED_ID_CHUNK]
+            out.append(
+                _IDS_TOKEN_RE.sub(
+                    lambda m, c=chunk, k=key: _ids_literal(c if m.group(1) == k else []),
+                    stmt,
+                )
+            )
+    return out
+
+
 def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> str:
     """The body of `{stage} AS (…)` that reads `cols` from rows captured before the DML.
 
@@ -752,7 +803,9 @@ class IRISGraphStore:
     @staticmethod
     def _stmt_is_dml(stmt: str) -> bool:
         """Return True if stmt is a DELETE/INSERT/UPDATE DML (not a SELECT)."""
-        if stmt.startswith(("__constraint_check_delete_connected__", "__capture_edge_hwm__")):
+        if stmt.startswith(
+            ("__constraint_check_delete_connected__", "__capture_edge_hwm__", _CAPTURE_PREFIX)
+        ):
             return False  # handled separately; not a data-mutating DML
         upper = stmt.lstrip().upper()
         # Statements may be prefixed by a CTE ("WITH … DELETE …")
@@ -804,6 +857,7 @@ class IRISGraphStore:
                 )
                 and not s.startswith("__constraint_check_delete_connected__")
                 and not s.startswith("__after_result__")
+                and not s.startswith(_CAPTURE_PREFIX)
                 for s in stmts
             )
             last_is_select = (
@@ -847,6 +901,7 @@ class IRISGraphStore:
                 pre_captured_description = cursor.description
 
             edge_hwm = None
+            captured_ids: dict = {}
             # `__after_result__` statements run once the result has been read: a
             # multigraph `DELETE t MERGE … RETURN` (spec 234) reads the matched rows
             # after MERGE wrote and before the DELETE removes what they matched.
@@ -868,13 +923,25 @@ class IRISGraphStore:
                 if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ "):
                     continue  # captured before the loop
                 stmt = _fill_snapshots(stmt)
+                # `__capture_ids__ <key>\n<select>`: the ids a DELETE clause
+                # touches, read once before it writes (spec 229).
+                if isinstance(stmt, str) and stmt.startswith(_CAPTURE_PREFIX):
+                    key, cap_sql = stmt[len(_CAPTURE_PREFIX) :].split("\n", 1)
+                    cursor.execute(cap_sql, p)
+                    seen = dict.fromkeys(
+                        r[0] for r in cursor.fetchall() if r and r[0] is not None
+                    )
+                    captured_ids[key.strip()] = list(seen)
+                    continue
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"
                 ):
                     actual_sql = stmt[len("__constraint_check_delete_connected__ ") :]
-                    cursor.execute(actual_sql, p)
-                    count_row = cursor.fetchone()
-                    count = count_row[0] if count_row else 0
+                    count = 0
+                    for chunk_sql in _expand_captured_ids(actual_sql, captured_ids):
+                        cursor.execute(chunk_sql, p)
+                        count_row = cursor.fetchone()
+                        count += (count_row[0] or 0) if count_row else 0
                     if count > 0:
                         raise Exception(
                             "ConstraintVerificationFailed: Cannot delete node with existing relationships. Use DETACH DELETE."
@@ -883,8 +950,14 @@ class IRISGraphStore:
                 # Skip the final SELECT — already executed above for pre-snapshot.
                 if pre_captured_rows is not None and i == len(stmts) - 1:
                     continue
-                cursor.execute(stmt, p)
-                if cursor.description:
+                is_dml = isinstance(stmt, str) and self._stmt_is_dml(stmt)
+                for chunk_sql in (
+                    _expand_captured_ids(stmt, captured_ids) if isinstance(stmt, str) else [stmt]
+                ):
+                    cursor.execute(chunk_sql, p)
+                # IRIS keeps the previous SELECT's description after a DML
+                # statement; fetching on it is a null pointer exception.
+                if cursor.description and not is_dml:
                     rows = cursor.fetchall()
             description = cursor.description
             for stmt, p in after_result:
