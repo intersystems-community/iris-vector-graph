@@ -1722,35 +1722,16 @@ got EOF` carries no openCypher detail code. The harness matches it on kind and p
   `CypherFn_IVGTYPEERROR`, or through a UDF whose `%msg` starts with the kind (such as
   `ArgumentError: NumberOutOfRange: ...` from `IVG.Percentile`).
 
-### Engine gaps the strict step exposed
+### Engine gaps the strict step exposed (fixed)
 
-Each of these scenarios passed only because some error was raised. IVG does refuse the
-query, but it raises the wrong kind or detail, or it emits SQL that IRIS refuses at
-prepare time.
-
-- **SQL prepare errors instead of a Cypher error**:
-  - `InvalidAggregation`: Call1 [16] (`-23`), MatchWhere1 [15] (`-19`);
-  - `UnknownFunction`: Return2 [18] (`-359`);
-  - `ColumnNameConflict`: With4 [4] (`-27`);
-  - `type()` on a non-relationship: Graph4 [6], [7] (`-29`);
-  - `IN` on a non-list literal: List5 [42] example 5 (`-1`);
-  - `percentileDisc()` in a larger query: Aggregation6 [5] (`-23`);
-  - variable reuse in two examples: Match1 [10] example 20 and Match2 [9] example 22
-    (`-23`).
-- **Untagged UDF failures instead of `TypeError`**: indexing a non-list or non-map,
-  where `JSON_VALUE`/`JSON_ARRAYGET` fail with an empty `%msg`. These are List1 [6],
-  [7] and Map2 [8].
-- **Wrong detail**:
-  - WithOrderBy4 [20] raises `NoExpressionAlias` where `AmbiguousAggregationExpression`
-    is expected;
-  - ReturnOrderBy6 [4] raises `AmbiguousAggregationExpression` where `UndefinedVariable`
-    is expected;
-  - MatchWhere1 [14] raises `UndefinedVariable` where `InvalidArgumentType` is expected;
-  - Map2 [6] (a map parameter indexed by an integer) raises
-    `ListElementAccessByNonInteger` where `MapElementAccessByNonString` is expected.
-- **Accidental Python error**: Set1 [10] (a list of maps as a property). `json.dumps`
-  fails on an AST node before IVG checks the property type, which should be
-  `InvalidPropertyType`.
+When the strict step landed, about 20 scenarios had been passing only because some error
+was raised: SQL prepare errors (`-23`, `-19`, `-359`, `-27`, `-29`, `-1`) where a Cypher
+error was due, untagged `JSON_VALUE`/`JSON_ARRAYGET` failures, wrong details, and a
+`json.dumps` failure in Set1 [10]. All of them are fixed on the 203 branch. Examples are
+Call1 [16] and MatchWhere1 [15] (`InvalidAggregation`), Return2 [18] (`UnknownFunction`),
+With4 [4] (`ColumnNameConflict`), Map2 [6] (`MapElementAccessByNonString`) and Set1 [10]
+(`InvalidPropertyType`). Each now raises the expected kind and detail from the translator.
+Verified in the `937d4b7` capture, where strict scoring is 3896/3896.
 
 ---
 

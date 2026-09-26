@@ -138,6 +138,26 @@ upstream and is excluded), on `irishealth:2026.3.0AI.113.0`.
   scenarios fail because they need parallel edges: `Merge5 [3] [5] [6] [21]`,
   `Match6 [14]`, `Create3 [7]`, `Create4 [2]`.
 
+**Opt-in multigraph mode: parallel edges per graph** (spec 234)
+
+- `engine.set_multigraph(graph, True)` lets one graph hold several edges with the same
+  `(source, predicate, target)`. The mode is off for every graph unless turned on. Off,
+  the generated SQL and the `^KG` layout are unchanged. `engine.is_multigraph(graph)`
+  reads it.
+- In multigraph mode, Cypher `CREATE` makes one edge per statement and row. `MERGE`
+  binds every parallel edge that matches, including inline properties. `DELETE`
+  removes one edge and leaves its siblings. A relationship passed through `WITH`
+  carries its `edge_id`.
+- `set_multigraph(graph, False)` raises `ParallelEdgesPresentError` while any triple
+  still has two edges. `erase_graph()` and `erase_all()` clear the mode.
+- **Schema change:** `rdf_edges` gains `ekey INTEGER NOT NULL DEFAULT 0`. The unique key
+  `u_spo_graph (s, p, o_id, graph_id)` is replaced by
+  `u_spo_graph_ekey (s, p, o_id, graph_id, ekey)`. `initialize_schema()` migrates in
+  five resumable steps (`GraphSchema.ensure_ekey`). Every existing row becomes
+  `ekey = 0`, and neither `^KG` nor the ledger changes. Redeploy the `Graph.KG.*`
+  classes (`Graph.KG.GraphMode` is new; `EdgeScan` gains `WriteAdjacencyKeyed` /
+  `DeleteAdjacencyKeyed`).
+
 **Booleans are stored as `'true'` / `'false'`**
 
 - New boolean property writes (Cypher `CREATE`, `SET`, `MERGE`, `ON CREATE` / `ON MATCH`,
@@ -1857,6 +1877,9 @@ layer, closing gaps that required opsreview to write into IVG-owned globals.
 
 **openCypher TCK compliance: 2930/3897 scenarios (75.2%)**
 
+Scored by the pre-spec-229 harness: result shape only, with side effects and error kinds
+unchecked and the `@ignore` scenario in the denominator. See `docs/TCK.md`.
+
 174 translator and engine fixes since v2.5.1. Remaining failures are in 7 clusters
 with root causes and fix paths in spec 203.
 
@@ -2565,12 +2588,12 @@ All notable changes to `iris-vector-graph`.
 
 ### v1.71.0 (2026-05-01)
 
-- **feat**: openCypher TCK **76%→85%** — `CREATE (n) RETURN n.val`, `toString(bool)`→`'true'/'false'`, `substring()` 0-indexed, `round()`, missing math/string functions, `split()`, `reverse(list)`
+- **feat**: internal 133-scenario Cypher compatibility catalog (not the upstream openCypher TCK) **76%→85%** — `CREATE (n) RETURN n.val`, `toString(bool)`→`'true'/'false'`, `substring()` 0-indexed, `round()`, missing math/string functions, `split()`, `reverse(list)`
 
 ### v1.70.0 (2026-05-01)
 
 - **feat**: Graceful degradation on complex SQL errors (SQLCODE -400/-29/-23/-12) — returns empty result with warning instead of propagating exception to caller (GQS sees "wrong answer" not "crash")
-- **feat**: openCypher TCK **47%→76%** — BooleanExpression in RETURN, CREATE without `id`, scalar coercion, `toString`, `XOR`, `UNION` without MATCH
+- **feat**: internal 133-scenario Cypher compatibility catalog (not the upstream openCypher TCK) **47%→76%** — BooleanExpression in RETURN, CREATE without `id`, scalar coercion, `toString`, `XOR`, `UNION` without MATCH
 
 ### v1.69.0 (2026-05-01)
 

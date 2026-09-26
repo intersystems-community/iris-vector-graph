@@ -1,6 +1,15 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.4.0 → 1.5.0 (MINOR — conformance gate made current)
+Bump rationale: the "future obligation" to run the openCypher TCK is met. The
+  harness runs all 3897 upstream scenarios strictly (3896/3896 eligible at
+  937d4b7). The stale facts ("no Python runner", "~1,615 scenarios", "has not
+  run the TCK", "1,339 scenarios") are replaced, and the obligation becomes a
+  merge gate: a full-suite run with 0 regressions and 0 missing scenarios.
+
+Previous report (1.3.0 → 1.4.0) follows.
+
 Version change: 1.3.0 → 1.4.0 (MINOR — principle VI materially expanded)
 Bump rationale: Principle VI named docker-compose.yml as the single authority for
   "the container name", but this repository runs two containers with two jobs:
@@ -157,9 +166,9 @@ Reference: `tests/integration/test_cypher_advanced.py::test_integration_directio
 
 #### Conformance resources to consult when changing the translator
 
-- **openCypher TCK** (`github.com/opencypher/openCypher`, `tck/features/`):
-  ~1,615 scenarios across 220 `.feature` files.  No Python runner exists — official
-  harness is Scala/JVM only.  Key files for IVG's scope:
+- **openCypher TCK**, vendored as the submodule `vendor/opencypher` (pinned at
+  `677cbafa`, 3897 scenarios across 37 areas). It runs under `behave` through
+  `tests/tck/`; see `docs/TCK.md`. Key files for pre-bound patterns:
   `clauses/match/Match7.feature` (bound-target patterns),
   `clauses/match/` (pattern matching),
   `expressions/aggregation/` (count, collect),
@@ -168,19 +177,19 @@ Reference: `tests/integration/test_cypher_advanced.py::test_integration_directio
   same repo — normative semantics for pre-bound variable behavior.
 - **cbm bug record**: `productivity-framework/specs/073-suite-failure-repair/CBM-BUG-optional-match-cross-join.md`
 
-#### Future obligation (tracked, not yet required)
+#### Full-suite TCK gate (required)
 
-IVG has **not run the openCypher TCK**.  Spec 201 (`201-opencypher-tck-harness`)
-MUST deliver a `behave`-based harness that runs **all 1,339 TCK scenarios**.
-Every scenario that runs must pass at 100%.  Scenarios IVG cannot pass are tagged
-`@wip` with a documented reason; only four categories are known `@wip` at spec
-time: `expressions/graph` (Neo4j-specific), `expressions/temporal` (IRIS extension
-model), `expressions/pattern` (partial), and `@NegativeTest` scenarios requiring
-exact Neo4j error message text.  All other TCK categories — including all mutation
-clauses — are in scope and must pass.
+The harness (specs 201, 203, 229) runs every upstream scenario. It is strict by
+default: side effects are measured, error kind, phase and detail are matched, and
+columns, nodes and paths are compared exactly. At `937d4b7` it scores 3896/3896
+eligible, strict and typed. The single `@ignore` scenario upstream is excluded.
 
-The `@wip` count MUST NOT increase on any PR.  Until the harness ships, the
-direction-symmetry gate above is the minimum bar.
+Any change to the translator, the parser, an `_engine/` SQL-generating mixin, a
+`CY_*` UDF or the harness itself MUST run the full suite
+(`scripts/tck/run_sharded.sh`) before merge. It MUST show 0 regressions against the
+current baseline `results.tsv` (`scripts/tck/summarize.py diff`) and 0 scenarios
+missing from the run. A deferral in `tests/tck/wip.txt` MUST carry a reason, and
+the list MUST NOT grow.
 
 **Unit tests alone are insufficient** for translator changes that affect JOIN shape.
 
@@ -273,4 +282,4 @@ amendments MUST be documented and explicitly approved before implementation begi
 Version increments follow semantic versioning: MAJOR for backward-incompatible governance
 changes, MINOR for new or materially expanded principles, PATCH for clarifications.
 
-**Version**: 1.4.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-09-19
+**Version**: 1.5.0 | **Ratified**: 2026-01-31 | **Last Amended**: 2026-09-26

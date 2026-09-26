@@ -240,6 +240,37 @@ The `^KG` adjacency index partitions by graph key so BFS and variable-length
 paths stay within their graph. Existing callers that never pass `graph=` are
 unaffected — their data lands in the default graph.
 
+### Multigraph mode (parallel edges)
+
+By default a graph holds at most one edge per `(source, predicate, target)`, and writing
+the same triple twice leaves one edge. FHIR sync, RDF import and the ledger rely on
+this. openCypher instead treats the graph as a multigraph, where `CREATE (a)-[:T]->(b)`
+run twice makes two relationships. You can turn that on per graph (spec 234):
+
+```python
+engine.set_multigraph(None, True)     # None = the default graph; or a graph name
+engine.is_multigraph(None)            # True; cached per engine
+
+engine.execute_cypher("CREATE (a:A), (b:B) CREATE (a)-[:T]->(b) CREATE (a)-[:T]->(b)")
+engine.execute_cypher("MATCH (:A)-[r:T]->(:B) RETURN count(r)")   # 2
+```
+
+In multigraph mode:
+
+- `CREATE` makes one edge per statement and row. Each parallel edge has its own
+  `edge_id` and an `ekey` (0, 1, ...).
+- `MERGE` binds every parallel edge that matches, including its inline properties. It
+  creates a new edge only when none fits.
+- `DELETE` removes one edge and leaves its siblings. Paths walk each parallel edge.
+- `^KG` out-neighbours list the target once. `deg`/`degp` count live edges.
+  PageRank, PPR and Arno see one adjacency entry per triple, and parallel edges share
+  one edge embedding.
+
+`set_multigraph(graph, False)` raises `ParallelEdgesPresentError` (with the number of
+affected triples) while any triple still has two edges. `erase_graph()` and
+`erase_all()` clear the mode. With the mode off, the SQL IVG generates is byte-for-byte
+the same as before spec 234.
+
 ---
 
 ## 3. Cypher Queries

@@ -104,23 +104,27 @@ and the newly-failing count is recorded.
 
 ## Phase 5: Error kinds are matched, not merely counted (US3, P2)
 
-- [ ] T026 [P] [US3] Write the test that a `-119`/`-121` integrity error satisfies
+- [x] T026 [P] [US3] Write the test that a `-119`/`-121` integrity error satisfies
       `ConstraintVerificationFailed`
-- [ ] T027 [P] [US3] Write the test that a prepare-time `-23` does **not** satisfy it, and
+- [x] T027 [P] [US3] Write the test that a prepare-time `-23` does **not** satisfy it, and
       that the message distinguishes the two
-- [ ] T028 [P] [US3] Write the test that a result object carrying an arbitrary non-empty
+- [x] T028 [P] [US3] Write the test that a result object carrying an arbitrary non-empty
       `error` string no longer passes an error-expecting step without a kind check (FR-008)
-- [ ] T029 [P] [US3] Write the test that the runner refuses a deferral entry with no reason
-- [ ] T030 [US3] Replace the bare `(Exception,)` entries in `ERROR_TYPE_MAP` with mappings to
+- [x] T029 [P] [US3] Write the test that the runner refuses a deferral entry with no reason
+- [x] T030 [US3] Replace the bare `(Exception,)` entries in `ERROR_TYPE_MAP` with mappings to
       the IVG/IRIS error surface, including SQLCODE ranges
-- [ ] T031 [US3] Remove the early return in `step_error_type_raised` that accepts any
+- [x] T031 [US3] Remove the early return in `step_error_type_raised` that accepts any
       `result.error` string
-- [ ] T032 [US3] Add the required-reason format to `wip.txt` (or its replacement) and the
+- [x] T032 [US3] Add the required-reason format to `wip.txt` (or its replacement) and the
       runner check; migrate the 129 existing entries, adding a reason to each
-- [ ] T033 [US3] List every error kind IVG genuinely cannot distinguish, with its reason, in
+- [x] T033 [US3] List every error kind IVG genuinely cannot distinguish, with its reason, in
       `docs/KNOWN_ISSUES.md`
 
 **Gate (E2E)**: T026–T029 pass; SC-006 holds — the runner refuses a reasonless entry.
+
+Status 2026-09-26: done. Tests are in `tests/unit/tck/test_error_kinds.py`, the
+mapping is in `tests/tck/steps/errors.py`, and `tests/tck/wip.txt` holds 3
+reasoned entries.
 
 ---
 
@@ -144,6 +148,8 @@ and the newly-failing count is recorded.
 **Gate (E2E)**: SC-002 proven in T040; all four supplementary scenarios pass against the
 current tree.
 
+Status 2026-09-26: not started. `tests/tck/features_ivg/` does not exist.
+
 ---
 
 ## Phase 7: Report what is measured (US5, P3)
@@ -158,9 +164,16 @@ current tree.
       give the write number beside it (FR-014, SC-007)
 - [ ] T045 [US5] Update `CHANGELOG.md` with both numbers and a note that the previously
       published figure measured result shape only
-- [ ] T046 [US5] Run `markdownlint-cli2 --fix` and `prettier --write` on every `.md` touched
+- [x] T046 [US5] Run `markdownlint-cli2 --fix` and `prettier --write` on every `.md` touched
 
 **Gate**: SC-005 and SC-007 hold.
+
+Status 2026-09-26: superseded in part. Instead of two verdicts per scenario, one
+run records a capture (`IVG_TCK_CAPTURE`), and `scripts/tck/rescore.py` scores
+it offline in `default`, `typed` or `lenient` mode. The strict number (3896/3896
+at `937d4b7`) is in `CHANGELOG.md` v4.1.0 and `docs/TCK.md`. The v2.6.0 75.2%
+line is now labelled as lenient-harness. T041–T045 are left open because their
+exact wording is not met.
 
 ---
 

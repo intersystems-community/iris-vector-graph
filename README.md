@@ -368,6 +368,7 @@ classes still have to be deployed into the namespace.
 | [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput             |
 | [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details                 |
 | [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance                      |
+| [openCypher TCK](docs/TCK.md)                            | How the TCK figure is produced, what a pass checks, how to rerun it  |
 | [Changelog](CHANGELOG.md)                                | Full version history                                                 |
 
 ---

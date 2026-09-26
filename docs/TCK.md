@@ -37,6 +37,23 @@ IVG_TCK_NAMESPACE=TCKA IVG_TCK_MULTIGRAPH=0 scripts/tck/run_all.sh /tmp/tck_run_
   /tmp/tck_run/results.tsv /tmp/tck_run_mg0/results.tsv
 ```
 
+To gate a commit without touching the working tree, extract that commit into
+its own directory and point `IVG_REPO` at it. Python-only changes need no
+redeploy. After a `.cls` or UDF change, rerun `setup_namespace.sh` on every
+namespace first.
+
+```bash
+S=$(git rev-parse --short HEAD); D=~/.cache/ivg-tck/src_$S
+mkdir -p $D && git archive $S | tar -x -C $D && ln -sfn $PWD/.venv $D/.venv
+IVG_REPO=$D IVG_TCK_CAPTURE=~/.cache/ivg-tck/cap_$S \
+  scripts/tck/run_sharded.sh ~/.cache/ivg-tck/run_$S TCKB TCKC TCKD TCKE
+.venv/bin/python scripts/tck/summarize.py diff base.tsv ~/.cache/ivg-tck/run_$S/results.tsv
+.venv/bin/python -m scripts.tck.rescore ~/.cache/ivg-tck/cap_$S --mode typed
+```
+
+An extracted tree has no `.git`, so `RUN_INFO` records its commit as blank and
+`(dirty)`. Keep the commit in the directory name.
+
 `tests/tck/features` is a symlink into `vendor/opencypher/tck/features`. In
 this repository the symlink is committed with an absolute path under one
 developer's home directory. On any other machine, repoint it after
@@ -61,10 +78,19 @@ All scripts live in `scripts/tck/`.
   one `behave` process per area.
 - `summarize.py <out> [out.tsv]` prints the summary line and writes the
   per-scenario TSV.
+- `run_sharded.sh <out> <NS> [NS ...]` runs the whole suite split across
+  several namespaces in parallel. Areas are dealt out largest first, so the
+  shards finish together. It writes one `results.tsv`. With nine namespaces a
+  full run takes about 8 minutes.
 - `summarize.py diff A.tsv B.tsv` lists scenarios that pass in one TSV and not
   in the other.
 - `compare.sh <area> ...` runs some areas and prints `REG` and `GAIN` lines
   against `$TCK_BASE`.
+- `python -m scripts.tck.rescore <capture_dir> --mode default|typed|lenient`
+  rescores a capture (`IVG_TCK_CAPTURE`, below) offline, with no IRIS
+  connection. `default` should reproduce the recorded verdicts, and any
+  mismatch it lists is a bug in the capture. `typed` also requires each result
+  cell to have the right Python type. `lenient` applies the pre-spec-229 rules.
 
 Every script takes its settings from the environment. None of them has a path
 hard-coded.
@@ -77,6 +103,13 @@ hard-coded.
 - `IVG_TCK_MULTIGRAPH`: `0` runs with multigraph mode off. Default on. See
   below.
 - `IVG_TCK_RUN_IGNORED`: `1` also runs scenarios tagged `@ignore` upstream.
+- `IVG_TCK_LENIENT`: `1` restores the pre-spec-229 scoring, which reproduces
+  old baselines such as 3894/3897. Under it an error counts as an empty result
+  and the side-effect steps pass without measuring. Default off.
+- `IVG_TCK_CAPTURE`: a directory. For each area the harness writes a JSONL file
+  with one record per scenario: query, expected and actual rows (each cell
+  tagged with its Python type), side-effect counts, the error, and the verdict.
+  `rescore.py` reads it.
 - `PYTHON`: interpreter. Default `<repo>/.venv/bin/python`. A git worktree
   falls back to the main checkout's venv.
 - `TCK_TIMEOUT`: seconds per area. Default `900`.
@@ -127,27 +160,30 @@ measured in a mode that users get only when they ask for it. Every published
 figure should come with a second run using `IVG_TCK_MULTIGRAPH=0`, and the list
 of scenarios that pass only with the mode on.
 
-### Latest local runs (not published)
+### Latest runs
 
-These are result-conformance figures only. The harness caveats below apply.
+Both runs are at IVG `937d4b7`, TCK `677cbafa`, on `irishealth:2026.3.0AI.113.0`,
+scored by the strict default harness.
 
-| IVG commit | Multigraph | Passed / eligible | Ignored upstream |
-| ---------- | ---------- | ----------------- | ---------------- |
-| `b82049e`  | off        | 3892 / 3896       | 1                |
+| Multigraph | Passed / eligible | Typed        | Ignored upstream |
+| ---------- | ----------------- | ------------ | ---------------- |
+| on         | 3896 / 3896       | 3896 / 3896  | 1                |
+| off        | 3889 / 3896       | not rescored | 1                |
 
-With multigraph on at the same commit, the `match`, `merge` and `graph` areas
-were rerun, and every eligible scenario in them passed. The four scenarios
-that fail with the mode off all pass with it on:
+With the mode off, seven scenarios fail. Each needs two relationships of the
+same type between the same pair of nodes:
 
+- `Create3 [7]` WITH-CREATE: nodes are not created when aliases are applied to
+  variable names multiple times
+- `Create4 [2]` Many CREATE clauses
 - `Match6 [14]` Named path with undirected fixed variable length pattern
 - `Merge5 [3]` Matching two relationships
 - `Merge5 [5]` Filtering relationships
+- `Merge5 [6]` Creating relationship when all matches filtered out
 - `Merge5 [21]` Do not match on deleted relationships
 
-Each of them needs two relationships of the same type between the same pair of
-nodes. The earlier full run with multigraph on, r11 at an older commit, scored
-3893 / 3896 eligible. Its three failures (`Merge1 [9]`, `Merge1 [14]` and
-`Merge9 [4]`) pass at `b82049e` in both modes.
+Earlier figures are kept in `CHANGELOG.md`. The lenient harness scored r11 at
+3894/3897 and the v2.6.0 run at 2930/3897.
 
 ## Result format
 
@@ -193,40 +229,51 @@ style tooling, not for engines. Those scenarios run and count normally.
 
 ## What a pass does and does not verify
 
-These results measure **result conformance**: the rows a query returns. They do
-not measure write conformance. A pass does **not** mean the scenario's full
-expectation was checked.
+Since spec 229 the harness is strict by default. At `937d4b7` a pass checks the
+following:
 
-As of the harness at commit `b82049e`:
+- **Side effects.** `And no side effects` and `And the side effects should be:`
+  compare snapshots of nodes, relationships, labels and properties taken before
+  and after the query. A `CREATE` that writes one node too many fails.
+- **Errors.** `Then a <Kind> should be raised at <phase>: <detail>` maps the
+  exception onto an openCypher kind, phase and detail
+  (`tests/tck/steps/errors.py`). An error with no mapped kind fails. A query
+  that raises does not pass `the result should be empty`, and it fails any step
+  that expects a result table.
+- **Columns.** The result's column names must equal the expected ones, in
+  order. An extra column fails.
+- **Nodes and relationships.** Labels and property keys must match exactly,
+  not as a subset. Property values are also read back from storage and
+  compared.
+- **Paths.** Every node on the path is read back by id, and every step must
+  resolve to a stored relationship with the expected type, direction and
+  properties.
+- **`@ignore`.** Graph5 [2] is excluded from both the numerator and the
+  denominator.
 
-- **Side effects are not checked.** `And no side effects` and
-  `And the side effects should be:` are both no-op steps. About 3200 scenarios
-  assert one or the other. A `CREATE` that wrote the wrong number of nodes, or a
-  query that should not write but did, can still pass.
-- **Error kind and phase are not checked.** For the 695 error scenarios, any
-  exception passes. So does an error string on the result. `SemanticError`,
-  `ProcedureError` and `ConstraintVerificationFailed` accept any `Exception`,
-  and "at compile time" and "at runtime" are not told apart.
-- **"The result should be empty" passes when the query raised.**
-- **Value comparison is loose.** Here is how comparison currently works:
-  - An expected node matches an actual node when the expected labels and
-    properties are a subset of the actual ones.
-  - Columns in the result that the expected table does not name are not
-    rejected.
-  - Paths are compared by node labels and relationship types, not by identity.
-  - Some null-like values compare equal to empty lists and empty strings.
+Typed scoring (`rescore.py --mode typed`) also requires every top-level cell to
+have the right type. For example, integer `1`, float `1.0`, text `'1'` and
+boolean `true` count as different values.
+
+The harness still does not check the following:
+
+- **Error detail, when IVG's message names none.** A bare parse error is
+  matched on kind and phase alone. See
+  [TCK error matching](KNOWN_ISSUES.md#tck-error-matching-verified-2026-09-26).
+- **Runtime vs compile time, in one direction.** A scenario that expects a
+  runtime error accepts one raised at translation, because IVG binds parameters
+  and folds constants early.
+- **Types of stored property values.** `rdf_props.val` carries no type tag, so
+  an integer property stored as `'1'` matches `1`. Top-level cells are typed;
+  property values inside nodes are not.
 - **Isolation rewrites queries.** Each scenario's setup and queries get a
   per-scenario label (`TCK_<hex>`), injected by regex, so that scenarios do not
   see each other's data. Such a rewrite can change what a query means.
 - **Multigraph mode is on** by default. See above.
 
-Spec 229 (`specs/229-tck-write-verification`) is making side effects, error
-kinds, empty results and node, path and column comparison strict. The work is
-in progress on other branches. When it lands, the figure will drop, and the
-result-conformance and write-conformance numbers will be reported separately.
-Until then, quote any figure from this suite as "result conformance; side
-effects and error kinds not verified", together with the IVG commit, the TCK
-commit, and the multigraph setting.
+Quote a figure from this suite with the IVG commit, the TCK commit, the
+multigraph setting, and whether it is typed.
 
-The old "133/133" and "85%→91.7%" CHANGELOG lines measured an internal
-133-scenario catalogue, not this suite.
+The old "133/133", "47%→76%→85%" and "85%→91.7%" CHANGELOG lines measured an
+internal 133-scenario catalogue, not this suite. The v2.x
+"2930/3897 (75.2%)" line was scored by the lenient harness.
