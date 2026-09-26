@@ -103,6 +103,41 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
 resource keys and references, which identify patients; deploy IVG in the FHIR namespace
 only for users who may already read the repository's tables.
 
+**openCypher TCK: 3896/3896 eligible scenarios, strict and typed** (specs 203, 229)
+
+Measured on branch `203-tck-remaining-scenarios` at `937d4b7`, against the upstream
+suite at `vendor/opencypher` `677cbafa` (3897 scenarios; Graph5 [2] is `@ignore`
+upstream and is excluded), on `irishealth:2026.3.0AI.113.0`.
+
+- Strict is the harness default. Side effects (`no side effects`,
+  `the side effects should be:`) are measured by snapshot diff, error scenarios must
+  raise the expected error type, and an error no longer passes
+  `the result should be empty`. `IVG_TCK_LENIENT=1` restores the old matching for comparison.
+- Typed scoring: a cell passes only when the value and its Cypher type match, so `1`
+  vs `'1'`, `1` vs `1.0` and `true` vs `'true'` count as failures. Typed went from
+  3859 to 3896 with these fixes:
+  - A relationship property read through `JSON_VALUE` (always VARCHAR) is decoded
+    back to its int/float/boolean (`parse_rel_prop_text`,
+    `SQLQuery.rel_prop_text_columns`). A relationship created in the same statement
+    is now registered as a relationship variable (Create2, Create6, Delete6, Graph6,
+    Remove3, Set6, Return2 [4]).
+  - A static map field access (`m.key`) is re-typed the same way `CY_PROPS_MAP`
+    typed the value going in (`SQLQuery.map_text_columns`; Map1, Return4 [11], With4
+    [6]/[7]).
+  - A value from a list that mixes graph values with other types, and `min()`/`max()`
+    over one, keeps its type (`SQLQuery.mixed_expr_columns`). So does a WITH alias of
+    a stored property (`prop_text_expr_columns`).
+  - Rows from TCK test procedures keep INTEGER/FLOAT/BOOLEAN output types.
+- Tooling: `scripts/tck/run_sharded.sh <out> <NS>...` runs the suite across IRIS
+  namespaces in parallel (about 8 minutes on 9 namespaces). `IVG_TCK_CAPTURE=<dir>`
+  writes one JSONL record per scenario, and
+  `python -m scripts.tck.rescore <dir> --mode typed` rescores it offline. `scripts/tck/summarize.py diff` reports a
+  per-scenario regression list between two runs.
+- The TCK runs with multigraph mode on (parallel edges between the same endpoints,
+  spec 234). The production default is single-edge. With `IVG_TCK_MULTIGRAPH=0`, 7
+  scenarios fail because they need parallel edges: `Merge5 [3] [5] [6] [21]`,
+  `Match6 [14]`, `Create3 [7]`, `Create4 [2]`.
+
 **Booleans are stored as `'true'` / `'false'`**
 
 - New boolean property writes (Cypher `CREATE`, `SET`, `MERGE`, `ON CREATE` / `ON MATCH`,
