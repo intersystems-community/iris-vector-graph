@@ -2859,3 +2859,140 @@ class TestMixedListRelElementPropertyNested:
             r"SQLUser\.JSON_VALUE\(SQLUser\.JSON_VALUE\(.*?, '\$\.props'\), '\$\.existing'\)",
             tail,
         ), tail
+
+
+def _sql_list(t):
+    return t.sql if isinstance(t.sql, list) else [t.sql]
+
+
+def _flat_params(t):
+    return [v for ps in t.parameters for v in (ps or [])]
+
+
+class TestMergeAfterWithRunsPerRow:
+    """Merge1 [9], Merge9 [4]: a MERGE whose properties come from a WITH stage.
+
+    The static MERGE made one node id for every row and bound the stage variable
+    itself (the string "Variable(name='p')") into the existence probe, so the
+    probe never matched and the RETURN found nothing. MERGE runs once per row and
+    reads its own writes, so the rows are read first and the MERGE is run per row
+    with the row's values bound as literals.
+    """
+
+    MERGE1_9 = (
+        "MATCH (foo) WITH foo.x AS x, foo.y AS y "
+        "MERGE (:N {x: x, y: y + 1}) MERGE (:N {x: x, y: y}) MERGE (:N {x: x + 1, y: y}) "
+        "RETURN x, y"
+    )
+    MERGE9_4 = (
+        "UNWIND [42] AS props WITH props WHERE props > 32 WITH DISTINCT props AS p "
+        "MERGE (a:A {num: p}) RETURN a.num AS prop"
+    )
+
+    def test_rows_are_read_by_a_select_of_the_with_aliases(self):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        plan = plan_row_merge(parse_query(self.MERGE1_9), {})
+        assert plan is not None and plan.row_vars == ["x", "y"]
+        t = translate_to_sql(plan.prefix, {})
+        assert not t.is_transactional
+        assert "INSERT" not in " ".join(_sql_list(t))
+
+    def test_each_row_merges_with_its_values_bound(self):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        plan = plan_row_merge(parse_query(self.MERGE1_9), {})
+        t = translate_to_sql(plan.bind({"x": 0, "y": 2}), {})
+        params = [str(v) for v in _flat_params(t)]
+        assert not any("Variable(" in v for v in params), params
+        assert "3" in params  # y + 1 folded
+        assert "1" in params  # x + 1 folded
+        assert _sql_list(t)[-1].lstrip().upper().startswith("SELECT")
+
+    def test_distinct_stage_after_a_filtered_stage(self):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        plan = plan_row_merge(parse_query(self.MERGE9_4), {})
+        assert plan is not None and plan.row_vars == ["p"]
+        prefix_sql = " ".join(_sql_list(translate_to_sql(plan.prefix, {})))
+        assert "DISTINCT" in prefix_sql and "> 32" in prefix_sql
+        params = [str(v) for v in _flat_params(translate_to_sql(plan.bind({"p": 42}), {}))]
+        assert "42" in params
+        assert not any("Variable(" in v for v in params), params
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            "UNWIND [1, 2] AS x MERGE (n {id: x}) RETURN count(*)",
+            "MATCH (n) WITH n MERGE (m:M) RETURN m",
+            "MATCH (n) WITH n.x AS x MERGE (m:M {x: x}) RETURN count(*)",
+            "MATCH (n) WITH n, n.x AS x MERGE (m:M {x: x}) RETURN n",
+            "MERGE (m:M {x: 1}) RETURN m",
+        ],
+    )
+    def test_other_shapes_keep_the_static_translation(self, q):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        assert plan_row_merge(parse_query(q), {}) is None
+
+
+class TestMergeAfterDeleteRunsPerRow:
+    """Merge1 [14]: `MATCH (a:A) DELETE a MERGE (a2:A) RETURN a2.num`.
+
+    With a DELETE the final SELECT runs before the DML, so it found the A nodes the
+    DELETE was about to remove and returned their properties. The DELETE runs
+    first, reporting how many rows it matched, then the MERGE once per row: the
+    first creates the node and the second finds it.
+    """
+
+    Q = "MATCH (a:A) DELETE a MERGE (a2:A) RETURN a2.num"
+
+    def test_prefix_deletes_and_counts_the_rows(self):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        plan = plan_row_merge(parse_query(self.Q), {})
+        assert plan is not None and plan.row_vars == []
+        sqls = _sql_list(translate_to_sql(plan.prefix, {}))
+        assert any(re.match(r"DELETE FROM (?:\w+\.)?nodes\b", s) for s in sqls), sqls
+        assert "COUNT(*)" in sqls[-1].upper()
+
+    def test_merge_no_longer_joins_the_deleted_match(self):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        plan = plan_row_merge(parse_query(self.Q), {})
+        final = _sql_list(translate_to_sql(plan.bind({}), {}))[-1]
+        assert "CROSS JOIN" not in final and "n0" in final
+
+    def test_aggregating_return_keeps_the_static_translation(self):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        q = "MATCH (a:A) DELETE a MERGE (a2:A) RETURN count(*)"
+        assert plan_row_merge(parse_query(q), {}) is None
+
+
+class TestNestedLiteralUnwindCreate:
+    """Merge1 [9] setup: `UNWIND [0, 1, 2] AS x UNWIND [0, 1, 2] AS y CREATE ({x: x, y: y})`.
+
+    Only the first UNWIND of a part was unrolled; the second was skipped, so `y`
+    was undefined and the setup made no nodes. Consecutive literal-list UNWINDs
+    unroll over their cartesian product.
+    """
+
+    def test_every_pair_gets_its_own_node(self):
+        t = tr("UNWIND [0, 1] AS x UNWIND [0, 1, 2] AS y CREATE ({x: x, y: y})")
+        sqls = _sql_list(t)
+        node_inserts = [s for s in sqls if re.match(r"INSERT INTO (?:\w+\.)?nodes\b", s)]
+        assert len(node_inserts) == 6
+        pairs = []
+        for s, p in zip(sqls, t.parameters):
+            is_prop = re.match(r"INSERT INTO (?:\w+\.)?rdf_props\b", s)
+            if is_prop and p[1] == "x":
+                pairs.append([p[2]])
+            elif is_prop and p[1] == "y":
+                pairs[-1].append(p[2])
+        assert sorted(tuple(x) for x in pairs) == [(a, b) for a in (0, 1) for b in (0, 1, 2)]
+
+    def test_return_after_nested_unwind_create_keeps_both_variables(self):
+        t = tr("UNWIND [0, 1] AS x UNWIND [5] AS y CREATE ({x: x, y: y}) RETURN x, y")
+        final = _sql_list(t)[-1]
+        assert final.lstrip().upper().startswith("SELECT"), final
