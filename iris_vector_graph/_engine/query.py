@@ -453,6 +453,19 @@ def _return_item_name(item) -> str:
     return getattr(item, "source_text", None) or str(e)
 
 
+def _optional_null_columns(sql_query, fallback) -> list:
+    """Columns of the single null row an OPTIONAL var-length match with no target
+    answers: the translated SELECT's (Cypher-named), else `fallback`."""
+    aliases = [
+        a for a in getattr(sql_query, "select_aliases", None) or []
+        if not _INTERNAL_COLUMN.fullmatch(a)
+    ]
+    if not aliases:
+        return list(fallback)
+    names = getattr(sql_query, "column_name_map", None) or {}
+    return [names.get(a, a) for a in aliases]
+
+
 def _fill_empty_columns(result, parsed) -> None:
     """An empty result still carries the RETURN clause's column names; several routes
     (var-length BFS, DML with LIMIT 0, subqueries) return columns=[] when no row comes back."""
@@ -1507,7 +1520,10 @@ class QueryMixin:
 
         if not target_ids:
             if is_optional:
-                null_cols = [_id_col, _labels_col, _props_col] if _node_triple_in_sql else out_cols
+                null_cols = _optional_null_columns(
+                    sql_query,
+                    [_id_col, _labels_col, _props_col] if _node_triple_in_sql else out_cols,
+                )
                 return IVGResult(columns=null_cols, rows=[[None] * len(null_cols)], metadata=sql_query.query_metadata)
             return IVGResult(columns=out_cols, rows=[], metadata=sql_query.query_metadata)
 
