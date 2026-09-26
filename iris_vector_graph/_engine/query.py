@@ -352,14 +352,26 @@ def _decode_bool_text_columns(result, sql_query) -> None:
     (comparisons, label tests, quantifiers, boolean literals, ...)."""
     cols = getattr(sql_query, "bool_text_columns", None) or []
     names = {n.strip('"').lower() for n in getattr(sql_query, "bool_expr_columns", None) or []}
-    if not (cols or names) or not getattr(result, "rows", None):
+    prop_names = {
+        n.strip('"').lower() for n in getattr(sql_query, "prop_text_expr_columns", None) or []
+    }
+    if not (cols or names or prop_names) or not getattr(result, "rows", None):
         return
     if len(result.columns or []) != getattr(sql_query, "return_arity", 0):
         cols = []
     expr_cols = [
         i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names
     ]
-    if not (cols or expr_cols):
+    # By name, not index: a WITH-chain alias of a bare property reference
+    # (`WITH a.bool AS bool ... RETURN bool`) is a plain Variable in the final
+    # RETURN, not the PropertyReference `bool_text_columns` (index-based)
+    # matches. `parse_prop_text` is the narrow, safe decode here too — it
+    # only ever flips the exact 'true'/'false' spellings, so it never
+    # misreads an int/float property that happens to read "1" or "0".
+    prop_cols = [
+        i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in prop_names
+    ]
+    if not (cols or expr_cols or prop_cols):
         return
     rows = []
     for row in result.rows:
@@ -370,6 +382,9 @@ def _decode_bool_text_columns(result, sql_query) -> None:
         for i in expr_cols:
             if i < len(row):
                 row[i] = _bool_expr_value(row[i])
+        for i in prop_cols:
+            if i < len(row):
+                row[i] = parse_prop_text(row[i])
         rows.append(row)
     result.rows = rows
 
@@ -465,6 +480,56 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
 
 _INT_TEXT = re.compile(r"-?(?:0|[1-9]\d*)")
 _FLOAT_TEXT = re.compile(r"-?(?:0|[1-9]\d*)\.\d+(?:[eE][-+]?\d+)?")
+
+
+def _mixed_scalar_value(v):
+    """A row value from a column holding a Cypher-heterogeneous mix of types
+    (SQLQuery.mixed_expr_columns): an UNWIND/subscript/WITH alias of a list
+    mixing graph values with other values, or max()/min() over one. Such a
+    column's raw text spells its value the way `_mixed_graph_list_sql` /
+    `CY_EXP_ORDKEY` (translator.py) encode it -- 'true'/'false' for a
+    boolean, 'NaN' for a float division-by-zero, a bare numeric literal's
+    own text for a number -- because the column itself can hold any Cypher
+    type row to row and IRIS has no type tag to carry alongside a VARCHAR
+    value.
+
+    Node / relationship / path JSON, a plain JSON list/map, a real string,
+    and null already decode correctly downstream (the live TCK matcher,
+    `tests/tck/capture.py`'s `tag_maybe_json`) and are left untouched here.
+    """
+    if not isinstance(v, str):
+        return v
+    if v == "true":
+        return True
+    if v == "false":
+        return False
+    if v == "NaN":
+        return float("nan")
+    if _INT_TEXT.fullmatch(v):
+        return int(v)
+    if _FLOAT_TEXT.fullmatch(v):
+        return float(v)
+    return v
+
+
+def _decode_mixed_expr_columns(result, sql_query) -> None:
+    """Cast driver text in columns statically known to hold a Cypher-
+    heterogeneous scalar (SQLQuery.mixed_expr_columns) to each row's own
+    real Python type. See `_mixed_scalar_value`."""
+    names = {n.strip('"').lower() for n in getattr(sql_query, "mixed_expr_columns", None) or []}
+    if not names or not getattr(result, "rows", None):
+        return
+    cols = [i for i, c in enumerate(result.columns or []) if str(c).strip('"').lower() in names]
+    if not cols:
+        return
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        for i in cols:
+            if i < len(row):
+                row[i] = _mixed_scalar_value(row[i])
+        rows.append(row)
+    result.rows = rows
 
 
 def _prefix_value(v: Any) -> Any:
@@ -764,6 +829,7 @@ class QueryMixin:
             _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
+            _decode_mixed_expr_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
                 result.columns = [
                     sql_query.column_name_map.get(col, col) for col in result.columns
@@ -777,6 +843,7 @@ class QueryMixin:
             _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
+            _decode_mixed_expr_columns(result, sql_query)
             if sql_query.bolt_column_types:
                 result.bolt_column_types = sql_query.bolt_column_types
             if sql_query.column_name_map and result.columns:

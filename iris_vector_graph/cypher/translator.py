@@ -671,6 +671,21 @@ class SQLQuery(BaseModel):
     # engine rewrites bare-integer numeric tokens in the JSON array text to
     # X.0 form. By name, not index, like bool_expr_columns.
     float_list_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items whose value is a Cypher-heterogeneous scalar:
+    # an UNWIND/subscript/WITH alias of a list mixing graph values with other
+    # types (TranslationContext.mixed_value_vars), or max()/min() over one.
+    # Such a column's raw text spells its value the way _mixed_graph_list_sql /
+    # CY_EXP_ORDKEY encode it ('true'/'false', 'NaN', a bare numeric literal's
+    # text) because the column itself can hold any Cypher type row to row and
+    # IRIS has no type tag to carry alongside a VARCHAR value. By name, not
+    # index, like bool_expr_columns.
+    mixed_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items that are a WITH-chain alias of a bare stored
+    # property reference (`WITH a.bool AS bool ... RETURN bool`): the same
+    # 'true'/'false'-only decode bool_text_columns applies to a direct
+    # `RETURN a.bool`, reached by name instead of index because the property
+    # is no longer a PropertyReference by the time it is RETURNed.
+    prop_text_expr_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -776,6 +791,19 @@ class TranslationContext:
         # (see _numeric_static_type / float_list_expr_columns).
         self.float_list_expr_aliases: List[str] = (
             [] if parent is None else parent.float_list_expr_aliases
+        )
+        # SQL aliases of RETURN items whose value is a Cypher-heterogeneous
+        # scalar (see _is_mixed_min_max / mixed_value_vars / mixed_expr_columns).
+        self.mixed_expr_aliases: List[str] = (
+            [] if parent is None else parent.mixed_expr_aliases
+        )
+        # WITH aliases whose value is (transitively) a bare stored property
+        # reference (see prop_text_expr_columns).
+        self.prop_text_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "prop_text_vars", set()))
+        )
+        self.prop_text_aliases: List[str] = (
+            [] if parent is None else parent.prop_text_aliases
         )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
@@ -4671,6 +4699,8 @@ def translate_to_sql(
     sql_query.int_expr_columns = list(context.int_expr_aliases)
     sql_query.float_expr_columns = list(context.float_expr_aliases)
     sql_query.float_list_expr_columns = list(context.float_list_expr_aliases)
+    sql_query.mixed_expr_columns = list(context.mixed_expr_aliases)
+    sql_query.prop_text_expr_columns = list(context.prop_text_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
@@ -13392,6 +13422,21 @@ def _numeric_static_type(e, context) -> Optional[str]:
     return None
 
 
+def _is_mixed_min_max(e, context) -> bool:
+    """`max()`/`min()` over a variable holding a heterogeneous mix of Cypher
+    types, or a list (Aggregation2 [11]/[12]): `_expr_aggregation` answers it
+    via `CY_EXP_ORDVAL(fn(CY_EXP_ORDKEY(...)))`, which reads back the winning
+    element's own text -- the same decode a mixed UNWIND/subscript column
+    needs (SQLQuery.mixed_expr_columns)."""
+    if not (isinstance(e, ast.AggregationFunction) and e.function_name.upper() in ("MIN", "MAX")):
+        return False
+    arg = e.argument
+    if not isinstance(arg, ast.Variable):
+        return False
+    kinds = getattr(context, "static_scalar_kinds", {}).get(arg.name)
+    return bool(kinds) and ("list" in kinds or len(kinds) > 1)
+
+
 def _arith_operand_type(e, context) -> Optional[str]:
     """Numeric type of an arithmetic operand, defaulting a bare property
     reference to 'int'.
@@ -20818,6 +20863,16 @@ def translate_return_clause(ret, context):
                 and _numeric_static_type(item.expression.projection, context) == "float"
             ):
                 context.float_list_expr_aliases.append(safe)
+            if (
+                isinstance(item.expression, ast.Variable)
+                and item.expression.name in context.mixed_value_vars
+            ) or _is_mixed_min_max(item.expression, context):
+                context.mixed_expr_aliases.append(safe)
+            if isinstance(item.expression, ast.PropertyReference) or (
+                isinstance(item.expression, ast.Variable)
+                and item.expression.name in context.prop_text_vars
+            ):
+                context.prop_text_aliases.append(safe)
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain
@@ -21055,6 +21110,13 @@ def translate_with_clause(with_clause, context):
             context.bool_vars.add(alias)
         else:
             context.bool_vars.discard(alias)
+        if isinstance(item.expression, ast.PropertyReference) or (
+            isinstance(item.expression, ast.Variable)
+            and item.expression.name in context.prop_text_vars
+        ):
+            context.prop_text_vars.add(alias)
+        else:
+            context.prop_text_vars.discard(alias)
         _num_t = _numeric_static_type(item.expression, context)
         if _num_t == "int":
             context.int_vars.add(alias)
