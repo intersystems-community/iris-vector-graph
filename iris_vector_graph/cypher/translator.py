@@ -2847,10 +2847,12 @@ def _tts_process_parts(cypher_query, context, metadata):
             # Still need to add the UNWIND to context for RETURN clause access
             translate_unwind_clause(unwind_clause, context)
         else:
-            for clause in part.clauses:
+            for _ci, clause in enumerate(part.clauses):
                 if isinstance(clause, ast.MatchClause):
                     aliases_before_match = set(context.variable_aliases.values())
                     _opt_join_start = len(context.join_clauses)
+                    _opt_where_start = len(context.where_conditions)
+                    context._mpt_opt_group = None
                     # A CREATE later in this query part may only write what these rows
                     # license: openCypher runs it once per incoming row, so a MATCH that
                     # binds nothing must create nothing. See `_create_match_gate`.
@@ -2861,6 +2863,13 @@ def _tts_process_parts(cypher_query, context, metadata):
                             set(context.variable_aliases.values()) - aliases_before_match
                         )
                         context.opt_join_start_idx = _opt_join_start
+                        _n_hops = sum(len(p.relationships) for p in clause.patterns)
+                        _where_next = _ci + 1 < len(part.clauses) and isinstance(
+                            part.clauses[_ci + 1], ast.WhereClause
+                        )
+                        _added_where = len(context.where_conditions) > _opt_where_start
+                        if _n_hops >= 2 or (_n_hops and (_where_next or _added_where)):
+                            _mpt_group_optional_joins(context, _opt_join_start, _opt_where_start)
                     else:
                         context.optional_match_new_aliases = set()
                 elif isinstance(clause, ast.UnwindClause):
@@ -6014,6 +6023,225 @@ def translate_remove_clause(remove, context, metadata):
                 )
 
 
+def _mpt_split_conjuncts(cond: str) -> list:
+    """Split `cond` on its top-level ANDs (paren- and quote-aware).
+
+    Returns [cond] unchanged when a top-level CASE or BETWEEN would make an AND
+    ambiguous."""
+    import re as _re
+
+    parts, depth, buf, i, q = [], 0, [], 0, None
+    up = cond.upper()
+    while i < len(cond):
+        ch = cond[i]
+        if q:
+            buf.append(ch)
+            if ch == q:
+                q = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            q = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and up.startswith(" AND ", i):
+            parts.append("".join(buf).strip())
+            buf = []
+            i += 5
+            continue
+        elif depth == 0 and (up.startswith("CASE ", i) or up.startswith("BETWEEN ", i)):
+            if i == 0 or not (cond[i - 1].isalnum() or cond[i - 1] == "_"):
+                return [cond.strip()]
+        buf.append(ch)
+        i += 1
+    parts.append("".join(buf).strip())
+    return [p for p in parts if p]
+
+
+def _mpt_sql_refs(sql: str) -> set:
+    """Table aliases `sql` qualifies columns with, minus aliases it declares itself."""
+    import re as _re
+
+    stripped = _re.sub(r"'(?:[^']|'')*'", "''", sql)
+    refs = set(_re.findall(r"(?<![\w.%])([A-Za-z_]\w*)\.(?=[\w\"%])", stripped))
+    local = set(_re.findall(r"\b(?:FROM|JOIN)\s+[\w.%\"]+\s+([A-Za-z_]\w*)", stripped, _re.I))
+    schema = _table("nodes").split(".")[0] if "." in _table("nodes") else None
+    refs -= local
+    if schema:
+        refs.discard(schema)
+    return refs
+
+
+def _mpt_parse_left_join(jc: str):
+    """`LEFT OUTER JOIN <src> <alias> ON <cond>` -> (src, alias, cond) or None."""
+    import re as _re
+
+    m = _re.match(r"\s*LEFT OUTER JOIN\s+", jc)
+    if not m:
+        return None
+    rest = jc[m.end():]
+    if rest.startswith("("):
+        depth = 0
+        for k, ch in enumerate(rest):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+        src, rest = rest[: k + 1], rest[k + 1 :]
+    else:
+        sm = _re.match(r"([\w.%\"]+)", rest)
+        if not sm:
+            return None
+        src, rest = sm.group(1), rest[sm.end():]
+    am = _re.match(r"\s+([A-Za-z_]\w*)\s+ON\s+", rest)
+    if not am:
+        return None
+    return src, am.group(1), rest[am.end():]
+
+
+def _mpt_render_opt_group(group) -> tuple:
+    """Render the nested join group -> (sql, params)."""
+    items = group["items"]
+    first_src, first_alias = items[0][0], items[0][1]
+    inner, params = [f"{first_src} {first_alias}"], []
+    for src, alias, conjs, kind in items[1:]:
+        conj_sql = " AND ".join(c for c, _ in conjs) or "1=1"
+        inner.append(f"{kind} {src} {alias} ON {conj_sql}")
+        for _, p in conjs:
+            params.extend(p)
+    outer_sql = " AND ".join(c for c, _ in group["outer"]) or "1=1"
+    for _, p in group["outer"]:
+        params.extend(p)
+    return f"LEFT OUTER JOIN ({' '.join(inner)}) ON {outer_sql}", params
+
+
+def _mpt_join_param_offset(context, idx: int) -> int:
+    return sum(fc.count("?") for fc in context.from_clauses) + sum(
+        jc.count("?") for jc in context.join_clauses[:idx]
+    )
+
+
+def _mpt_params_consistent(context) -> bool:
+    return _mpt_join_param_offset(context, len(context.join_clauses)) == len(
+        context.join_params
+    ) and sum(c.count("?") for c in context.where_conditions) == len(context.where_params)
+
+
+def _mpt_group_optional_joins(context, start: int, where_start: int) -> None:
+    """Fold the LEFT OUTER JOINs one OPTIONAL MATCH added into one nested join group.
+
+    openCypher's OPTIONAL MATCH is all-or-nothing: either the whole pattern matches
+    or every new variable is null. A flat chain of LEFT JOINs lets a partial match
+    (first hop found, last not) survive as an extra row. In
+    `LEFT OUTER JOIN (e1 JOIN n1 ON .. JOIN e2 ON ..) ON <outer>` the hops are inner
+    joins, so they appear or vanish together. Conjuncts that reference aliases
+    outside the group move to the group's ON, as do the WHERE conditions the
+    clause added (edge-uniqueness guards) — in the WHERE they dropped the row
+    instead of nulling the optional side.
+    """
+    seg = context.join_clauses[start:]
+    if len(seg) < 2 or not _mpt_params_consistent(context):
+        return
+    parsed = [_mpt_parse_left_join(jc) for jc in seg]
+    if any(p is None for p in parsed):
+        return
+    off = _mpt_join_param_offset(context, start)
+    seg_params = list(context.join_params[off:])
+    internal: set = set()
+    items, outer = [], []
+    pi = 0
+    for idx, (src, alias, cond) in enumerate(parsed):
+        internal.add(alias)
+        conjs = []
+        for c in _mpt_split_conjuncts(cond):
+            n = c.count("?")
+            cp = seg_params[pi : pi + n]
+            pi += n
+            # A subquery (EXISTS / IN (SELECT ..)) in an inner ON crashes the
+            # IRIS optimizer (<UNDEFINED>flattenExists^%qaqpre, Match7 [7]);
+            # the group's outer ON sees every inner alias, so it goes there.
+            if idx > 0 and _mpt_sql_refs(c) <= internal and "SELECT" not in c.upper():
+                conjs.append((c, cp))
+            else:
+                outer.append((c, cp))
+        items.append((src, alias, conjs, "JOIN"))
+    wp_start = sum(c.count("?") for c in context.where_conditions[:where_start])
+    moved = []
+    wpi = wp_start
+    for c in context.where_conditions[where_start:]:
+        n = c.count("?")
+        moved.append((c, list(context.where_params[wpi : wpi + n])))
+        wpi += n
+    outer.extend(moved)
+    del context.where_conditions[where_start:]
+    del context.where_params[wp_start:]
+    group = {"start": start, "items": items, "outer": outer, "internal": internal}
+    sql, params = _mpt_render_opt_group(group)
+    context.join_clauses[start:] = [sql]
+    context.join_params[off:] = params
+    context._mpt_opt_group = group
+
+
+def _mpt_push_where_into_opt_group(context, cond: str, jc_before: int, jp_before: int,
+                                   wp_before: int) -> bool:
+    """Put an OPTIONAL MATCH's WHERE into the ON of its nested join group.
+
+    Joins the WHERE translation added (property lookups) are placed before the group
+    when they only read outer aliases, or inside it when they only read group
+    aliases. Returns False (nothing changed) when that is not possible."""
+    group = getattr(context, "_mpt_opt_group", None)
+    if not group or group["start"] != getattr(context, "opt_join_start_idx", None):
+        return False
+    start = group["start"]
+    if start >= len(context.join_clauses) or jc_before != start + 1:
+        return False
+    new_joins = context.join_clauses[jc_before:]
+    new_jparams = list(context.join_params[jp_before:])
+    internal = group["internal"]
+    before, inside = [], []
+    pi = 0
+    import re as _re
+
+    for jc in new_joins:
+        n = jc.count("?")
+        jp = new_jparams[pi : pi + n]
+        pi += n
+        refs = _mpt_sql_refs(jc)
+        m = _re.match(r"\s*(LEFT OUTER JOIN|LEFT JOIN|JOIN)\s+([\w.%\"]+)\s+([A-Za-z_]\w*)\s+ON\s+(.*)$",
+                      jc, _re.S)
+        own = {m.group(3)} if m else set()
+        if not (refs - own) & internal:
+            before.append((jc, jp))
+        elif m and (refs - own) <= internal and "SELECT" not in m.group(4).upper():
+            inside.append((m.group(1), m.group(2), m.group(3), m.group(4), jp))
+        else:
+            return False
+    if pi != len(new_jparams):
+        return False
+    wparams = list(context.where_params[wp_before:])
+    if cond.count("?") != len(wparams):
+        return False
+    del context.where_params[wp_before:]
+    # rebuild: joins-before, then the group
+    del context.join_clauses[jc_before:]
+    del context.join_params[jp_before:]
+    for kind, src, alias, on, jp in inside:
+        group["items"].append((src, alias, [(on, jp)], kind))
+        internal.add(alias)
+    group["outer"].append((cond, wparams))
+    g_off = _mpt_join_param_offset(context, start)
+    g_sql, g_params = _mpt_render_opt_group(group)
+    context.join_clauses[start:] = [jc for jc, _ in before] + [g_sql]
+    context.join_params[g_off:] = [p for _, jp in before for p in jp] + g_params
+    group["start"] = start + len(before)
+    context.opt_join_start_idx = group["start"]
+    return True
+
+
 def translate_match_clause(match_clause, context, metadata):
     # For OPTIONAL MATCH: snapshot the set of alias strings already bound before
     # this clause starts.  _trp_directed_edge uses this to choose the correct null
@@ -6937,12 +7165,19 @@ def _trp_undirected_edge(
 
     # Join the CTE as the edge alias.
     target_on = f"{t_ref} = {edge_alias}._dst"
+    # OPTIONAL hop to an already-bound target: the target equality belongs in
+    # the edge's ON, or the WHERE throws away the unmatched (null) rows.
+    bound_target_in_on = not (
+        is_new_target and not target_alias.startswith("Stage")
+    ) and str(jt).upper().startswith("LEFT")
     if is_anon_source:
         # No bound source node — the first hop; use as FROM or cross-JOIN.
         if not context.from_clauses:
             context.from_clauses.append(f"{cte_name} {edge_alias}")
+            bound_target_in_on = False
         else:
-            context.join_clauses.append(f"{jt} {cte_name} {edge_alias} ON 1=1")
+            anon_on = target_on if bound_target_in_on else "1=1"
+            context.join_clauses.append(f"{jt} {cte_name} {edge_alias} ON {anon_on}")
         # Apply source node labels via _src column (anonymous source has no node table)
         for label in source_node.labels or []:
             l_alias = context.next_alias("l")
@@ -6953,12 +7188,14 @@ def _trp_undirected_edge(
     else:
         # Bound source: filter by source node id in the JOIN condition.
         src_filter = f"{edge_alias}._src = {s_ref}"
+        if bound_target_in_on:
+            src_filter = f"{src_filter} AND {target_on}"
         context.join_clauses.append(f"{jt} {cte_name} {edge_alias} ON {src_filter}")
 
     context._undirected_aliases.add(edge_alias)
     if is_new_target and not target_alias.startswith("Stage"):
         context.join_clauses.append(f"{jt} {_table('nodes')} {target_alias} ON {target_on}")
-    else:
+    elif not bound_target_in_on:
         context.where_conditions.append(target_on)
     context.variable_aliases[rel.variable or edge_alias] = edge_alias
     for prop_node, prop_alias in (
@@ -7472,6 +7709,7 @@ def translate_relationship_pattern(
             is_new_target,
             is_anon_source=is_anon_source,
         )
+        _trp_apply_rel_inline_props(rel, edge_alias, context)
         return
 
     # Direction-symmetry fix: when source is unbound but target is already bound,
@@ -7590,6 +7828,8 @@ def _collect_cypher_vars(expr) -> set:
 def translate_where_clause(where, context):
     _check_where_unbound_vars(where.expression, context)
     _wp_len_before = len(context.where_params)
+    _jc_before = len(context.join_clauses)
+    _jp_before = len(context.join_params)
     cond = translate_boolean_expression(where.expression, context)
     # NULL in WHERE is invalid SQL. In Cypher, NULL in WHERE means "no match" — use (1=0).
     if cond == "NULL" or cond == "(NULL)":
@@ -7599,6 +7839,10 @@ def translate_where_clause(where, context):
     # instead of WHERE. In Cypher, OPTIONAL MATCH + WHERE means: if the WHERE fails,
     # null out the optional variables (return the row with NULLs) rather than drop the row.
     opt_new = getattr(context, "optional_match_new_aliases", set())
+    if opt_new and _mpt_push_where_into_opt_group(
+        context, cond, _jc_before, _jp_before, _wp_len_before
+    ):
+        return
     if opt_new:
         cypher_vars = _collect_cypher_vars(where.expression)
         opt_cypher_vars = {v for v in cypher_vars if context.variable_aliases.get(v) in opt_new}
@@ -7824,8 +8068,141 @@ def _exists_edge_conds(rel, left_node, right_node, edge_alias, child_ctx):
         elif right_ref:
             conds.append(f"({edge_alias}.s = {right_ref} OR {edge_alias}.o_id = {right_ref})")
     if rel.types:
-        conds.append(f"{edge_alias}.p = '{rel.types[0]}'")
+        if len(rel.types) == 1:
+            conds.append(f"{edge_alias}.p = {_mpt_sql_str(rel.types[0])}")
+        else:
+            conds.append(
+                f"{edge_alias}.p IN ({', '.join(_mpt_sql_str(t) for t in rel.types)})"
+            )
     return conds if conds else ["1=1"]
+
+
+def _mpt_sql_str(value) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+# Pattern predicates unroll `*N..M` into fixed-length chains; beyond these
+# limits (including the parser's default max for `*`) they keep one hop.
+_MPT_UNROLL_MAX_HOPS = 4
+_MPT_UNROLL_MAX_COMBOS = 8
+
+
+def _mpt_expand_pattern_lengths(pat):
+    """Expand a pattern predicate into fixed-length (nodes, rels) chains.
+
+    Returns a list of expansions, one per combination of var-length hop
+    counts. A rel of None means a zero-length hop (both ends are one node).
+    Returns None when the combinations exceed _MPT_UNROLL_MAX_COMBOS.
+    """
+    import itertools
+
+    choices = []
+    for rel in pat.relationships:
+        vl = rel.variable_length
+        if (
+            vl is None
+            or vl.shortest
+            or vl.all_shortest
+            or vl.max_hops > _MPT_UNROLL_MAX_HOPS
+        ):
+            choices.append([None])
+        else:
+            choices.append(list(range(vl.min_hops, vl.max_hops + 1)))
+    n_combos = 1
+    for c in choices:
+        n_combos *= len(c)
+    if n_combos > _MPT_UNROLL_MAX_COMBOS:
+        return None
+    expansions = []
+    for combo in itertools.product(*choices):
+        nodes = [pat.nodes[0]]
+        rels = []
+        for rel, n_len, nxt in zip(pat.relationships, combo, pat.nodes[1:]):
+            if n_len is None:
+                rels.append(rel)
+                nodes.append(nxt)
+            elif n_len == 0:
+                rels.append(None)
+                nodes.append(nxt)
+            else:
+                hop = ast.RelationshipPattern(
+                    types=list(rel.types),
+                    direction=rel.direction,
+                    properties=dict(rel.properties or {}),
+                )
+                for k in range(n_len):
+                    rels.append(hop)
+                    nodes.append(nxt if k == n_len - 1 else ast.NodePattern())
+        expansions.append((nodes, rels))
+    return expansions
+
+
+def _mpt_exists_one_expansion(nodes, rels, context) -> str:
+    """EXISTS (...) for one fixed-length pattern-predicate chain.
+
+    Anonymous interior (or labelled) nodes get their own alias so consecutive
+    hops connect, labels on already-bound nodes are checked, and the edges of
+    the chain are pairwise distinct (relationship uniqueness).
+    """
+    import dataclasses
+
+    child_ctx = TranslationContext()
+    child_ctx.input_params = context.input_params
+    child_ctx._alias_counter = context._alias_counter
+    child_ctx.variable_aliases = dict(context.variable_aliases)
+    sub_froms = []
+    sub_wheres = []
+
+    named = []
+    for i, node in enumerate(nodes):
+        if node is not None and not node.variable:
+            interior = 0 < i < len(nodes) - 1
+            if interior or node.labels:
+                node = dataclasses.replace(node, variable=f"__mpt_anon{i}")
+        named.append(node)
+
+    for node in named:
+        if node is None or not node.variable:
+            continue
+        if node.variable not in child_ctx.variable_aliases:
+            _register_unbound_node(node, child_ctx, sub_froms, sub_wheres)
+        elif node.labels:
+            n_alias = child_ctx.variable_aliases[node.variable]
+            for lbl in node.labels:
+                lbl_alias = child_ctx.next_alias("l")
+                sub_froms.append(f"{_table('rdf_labels')} {lbl_alias}")
+                sub_wheres.append(
+                    f"{lbl_alias}.s = {n_alias}.node_id"
+                    f" AND {lbl_alias}.label = {child_ctx.add_where_param(lbl)}"
+                )
+
+    edge_aliases = []
+    for i, rel in enumerate(rels):
+        left_node, right_node = named[i], named[i + 1]
+        if rel is None:
+            la = child_ctx.variable_aliases.get(getattr(left_node, "variable", None))
+            ra = child_ctx.variable_aliases.get(getattr(right_node, "variable", None))
+            if la and ra and la != ra:
+                sub_wheres.append(f"{la}.node_id = {ra}.node_id")
+            continue
+        edge_alias = child_ctx.next_alias("ex")
+        sub_froms.append(f"{_table('rdf_edges')} {edge_alias}")
+        sub_wheres.extend(_exists_edge_conds(rel, left_node, right_node, edge_alias, child_ctx))
+        edge_aliases.append(edge_alias)
+    for i, a in enumerate(edge_aliases):
+        for b in edge_aliases[i + 1 :]:
+            sub_wheres.append(f"{a}.edge_id <> {b}.edge_id")
+
+    for p in child_ctx.where_params:
+        context.where_params.append(p)
+    for p in child_ctx.join_params:
+        context.join_params.append(p)
+    if not sub_froms:
+        return f"EXISTS (SELECT 1 WHERE {' AND '.join(sub_wheres) or '1=1'})"
+    return (
+        f"EXISTS (SELECT 1 FROM {', '.join(sub_froms)}"
+        f" WHERE {' AND '.join(sub_wheres) or '1=1'})"
+    )
 
 
 def _register_unbound_node(node, child_ctx, sub_froms, sub_wheres):
@@ -7919,6 +8296,13 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
                     count_sub = f"SELECT COUNT(*) FROM {', '.join(sub_froms)} WHERE {' AND '.join(sub_wheres)}"
                     prefix = "NOT " if expr.negated else ""
                     return f"{prefix}({count_sub}) = {cmp_sql}"
+
+    if pat.relationships and expr.where_condition is None:
+        expansions = _mpt_expand_pattern_lengths(pat)
+        if expansions is not None:
+            subs = [_mpt_exists_one_expansion(nodes, rels, context) for nodes, rels in expansions]
+            body = subs[0] if len(subs) == 1 else "(" + " OR ".join(subs) + ")"
+            return f"NOT {body}" if expr.negated else body
 
     if pat.relationships:
         child_ctx = TranslationContext()
@@ -8498,8 +8882,15 @@ def _rel_identity_comparison(op, left_expr, right_expr, context) -> Optional[str
             f"__edge_{var_name}_o",
         )
 
+    # Two edges of the current query compare by physical identity: an
+    # undirected CTE row exposes it as _os/_oo, whatever the traversal
+    # direction (Match7 [11]). Stage columns keep the traversal orientation.
+    _both_current = left_info[0] != "stage" and right_info[0] != "stage"
+
     def _current_cols(alias, is_undirected=False):
         if is_undirected:
+            if _both_current:
+                return (f"{alias}._os", f"{alias}._p", f"{alias}._oo")
             return (f"{alias}._src", f"{alias}._p", f"{alias}._dst")
         return (f"{alias}.s", f"{alias}.p", f"{alias}.o_id")
 
@@ -8792,7 +9183,17 @@ def translate_boolean_expression(expr, context) -> str:
 
     # Two untyped scalar variables (UNWIND / comprehension / WITH scalars): compare by
     # Cypher orderability so `x < value` agrees with ORDER BY (lists, zoned temporals).
-    if op in _ordering_ops and _is_scalar_var(left_expr, context) and _is_scalar_var(right_expr, context):
+    # Only when a comprehension variable is involved: inside `(a < b) IN c` membership
+    # subqueries the UDF call makes IRIS fail with -400 (Precedence1).
+    if (
+        op in _ordering_ops
+        and _is_scalar_var(left_expr, context)
+        and _is_scalar_var(right_expr, context)
+        and any(
+            str(context.variable_aliases.get(e.name, "")).startswith("lc")
+            for e in (left_expr, right_expr)
+        )
+    ):
         _l = translate_expression(left_expr, context, segment="where")
         _r = translate_expression(right_expr, context, segment="where")
         _cmp_pred = {
@@ -8968,6 +9369,9 @@ def _sql_arg(v) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
+_MPT_JSON_NULL_MARK = '"\\u0001"'
+
+
 def _expr_pattern_comprehension(expr, context, segment):
     pat = expr.pattern
     src_node = pat.nodes[0] if pat.nodes else None
@@ -8986,10 +9390,17 @@ def _expr_pattern_comprehension(expr, context, segment):
             safe_types = ", ".join(f"'{t.replace(chr(39), chr(39)*2)}'" for t in rel.types)
             pred_type = f" AND {e_alias}.p IN ({safe_types})"
 
-    src_bind = ""
+    def _pc_node_ref(var):
+        # A list-comprehension loop variable is a JSON_TABLE column holding
+        # the node id, not a nodes row (Pattern2 [7]).
+        n_alias = context.variable_aliases[var]
+        if var in context.scalar_variables and var not in context.collected_node_variables:
+            return f"{n_alias}.{_safe_alias(var)}"
+        return f"{n_alias}.node_id"
+
+    src_id = None
     if src_node and src_node.variable and src_node.variable in context.variable_aliases:
-        src_id = f"{context.variable_aliases[src_node.variable]}.node_id"
-        src_bind = f" AND {e_alias}.s = {src_id}"
+        src_id = _pc_node_ref(src_node.variable)
 
     # Target node label filters
     tgt_label_join = ""
@@ -9009,11 +9420,33 @@ def _expr_pattern_comprehension(expr, context, segment):
     # Target node variable binding (bound target node in MATCH)
     tgt_bind = ""
     if tgt_node and tgt_node.variable and tgt_node.variable in context.variable_aliases:
-        tgt_id = f"{context.variable_aliases[tgt_node.variable]}.node_id"
+        tgt_id = _pc_node_ref(tgt_node.variable)
         tgt_bind = f" AND {t_alias}.node_id = {tgt_id}"
 
     tgt_var = tgt_node.variable if tgt_node else None
     path_var = getattr(expr, "path_variable", None)
+    direction = rel.direction if rel is not None else ast.Direction.OUTGOING
+
+    def _pc_one(agg_sql, near, far, extra=""):
+        src_bind = f" AND {e_alias}.{near} = {src_id}" if src_id else ""
+        return (
+            f"COALESCE((SELECT {agg_sql} FROM "
+            f"{_table('rdf_edges')} {e_alias} "
+            f"JOIN {_table('nodes')} {t_alias} ON {t_alias}.node_id = {e_alias}.{far}"
+            f"{tgt_label_join}"
+            f" WHERE 1=1{pred_type}{src_bind}{tgt_label_cond}{tgt_bind}{extra}), '[]')"
+        )
+
+    def _pc_assemble(make_agg):
+        # make_agg(near) -> aggregate SQL for one walking direction, where
+        # `near` is the edge column bound to the pattern's first node.
+        if direction == ast.Direction.INCOMING:
+            return _pc_one(make_agg("o_id"), "o_id", "s")
+        if direction == ast.Direction.BOTH:
+            fwd = _pc_one(make_agg("s"), "s", "o_id")
+            back = _pc_one(make_agg("o_id"), "o_id", "s", f" AND {e_alias}.s <> {e_alias}.o_id")
+            return f"SQLUser.LIST_CONCAT({fwd}, {back})"
+        return _pc_one(make_agg("s"), "s", "o_id")
 
     # When projection is the path variable itself, return path JSON
     if (
@@ -9022,23 +9455,17 @@ def _expr_pattern_comprehension(expr, context, segment):
         and isinstance(expr.projection, ast.Variable)
         and expr.projection.name == path_var
     ):
-        src_node_id = (
-            f"{context.variable_aliases[src_node.variable]}.node_id"
-            if src_node and src_node.variable and src_node.variable in context.variable_aliases
-            else f"{e_alias}.s"
-        )
         rel_type_expr = f"{e_alias}.p"
-        path_json = (
-            f"'{{\"nodes\":' || JSON_ARRAY({src_node_id}, {t_alias}.node_id)"
-            f" || ',\"rels\":' || JSON_ARRAY({rel_type_expr}) || '}}'"
-        )
-        return (
-            f"COALESCE((SELECT JSON_ARRAYAGG({path_json}) FROM "
-            f"{_table('rdf_edges')} {e_alias} "
-            f"JOIN {_table('nodes')} {t_alias} ON {t_alias}.node_id = {e_alias}.o_id"
-            f"{tgt_label_join}"
-            f" WHERE 1=1{pred_type}{src_bind}{tgt_label_cond}{tgt_bind}), '[]')"
-        )
+
+        def _path_agg(near):
+            src_node_id = src_id or f"{e_alias}.{near}"
+            path_json = (
+                f"'{{\"nodes\":' || JSON_ARRAY({src_node_id}, {t_alias}.node_id)"
+                f" || ',\"rels\":' || JSON_ARRAY({rel_type_expr}) || '}}'"
+            )
+            return f"JSON_ARRAYAGG({path_json})"
+
+        return _pc_assemble(_path_agg)
 
     if (
         expr.projection
@@ -9066,13 +9493,16 @@ def _expr_pattern_comprehension(expr, context, segment):
     else:
         proj_sql = f"{t_alias}.node_id"
 
-    return (
-        f"COALESCE((SELECT JSON_ARRAYAGG({proj_sql}) FROM "
-        f"{_table('rdf_edges')} {e_alias} "
-        f"JOIN {_table('nodes')} {t_alias} ON {t_alias}.node_id = {e_alias}.o_id"
-        f"{tgt_label_join}"
-        f" WHERE 1=1{pred_type}{src_bind}{tgt_label_cond}{tgt_bind}), '[]')"
-    )
+    agg_sql = f"JSON_ARRAYAGG({proj_sql})"
+    if isinstance(expr.projection, ast.PropertyReference):
+        # JSON_ARRAYAGG drops NULLs, but a missing property is a null list
+        # element. Aggregate a $Char(1) marker instead and turn it into null.
+        agg_sql = (
+            f"REPLACE(JSON_ARRAYAGG(COALESCE({proj_sql}, CHAR(1))), "
+            f"'{_MPT_JSON_NULL_MARK}', 'null')"
+        )
+
+    return _pc_assemble(lambda near: agg_sql)
 
 
 def _expr_prop(expr, context, segment):
