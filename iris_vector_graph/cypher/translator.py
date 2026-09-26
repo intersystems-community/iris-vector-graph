@@ -2135,16 +2135,23 @@ def _hoist_repeated_json_table_predicates(sql: str) -> str:
     The 3VL CASE around a condition repeats it, so `all(...) AND any(...)` puts
     four JSON_TABLE readers in the final SELECT, and IRIS fails at Prepare with
     -400 <LIST>LoadTableFunction. When the final SELECT reads a single stage,
-    each repeated, parameter-free list-predicate scalar
+    each repeated, parameter-free list-predicate or comprehension scalar
     `(SELECT CASE WHEN ... JSON_TABLE(StageN. ...))` becomes a column of a
-    derived table aliased StageN, so other StageN references stand.
+    derived table aliased StageN, so other StageN references stand. A grouping
+    stage repeats its keys in GROUP BY, so its source is hoisted the same way.
     """
     import re as _re_hj
 
     m = None
     for cand in _re_hj.finditer(r"\nFROM (Stage\d+)(?=\s*$|\s+(?:WHERE|ORDER BY|GROUP BY)\b)", sql):
-        if sql[: cand.start()].count("(") == sql[: cand.start()].count(")"):
+        depth = sql[: cand.start()].count("(") - sql[: cand.start()].count(")")
+        if depth == 0:
             m = cand
+        elif depth == 1 and sql[cand.end() :].lstrip().startswith("GROUP BY"):
+            # An aggregating final stage is demoted to `FROM (SELECT ... GROUP BY ...) StageM`.
+            opener = sql.rfind("\nFROM (SELECT ", 0, cand.start())
+            if opener >= 0 and sql[:opener].count("(") == sql[:opener].count(")"):
+                m = cand
     if m is None:
         return sql
     stage = m.group(1)
@@ -2163,7 +2170,18 @@ def _hoist_repeated_json_table_predicates(sql: str) -> str:
                 if depth == 0:
                     break
         frag = sql[j : k + 1]
-        if frag.startswith("(SELECT CASE WHEN ") and f"JSON_TABLE({stage}." in frag and "?" not in frag:
+        if j < m.start() < k:
+            # The demoted aggregating subquery that holds the source stage.
+            i = j + 1
+            continue
+        if (
+            (
+                frag.startswith("(SELECT CASE WHEN ")
+                or (frag.startswith("(SELECT JSON_ARRAYAGG(") and f") FROM JSON_TABLE({stage}." in frag)
+            )
+            and f"JSON_TABLE({stage}." in frag
+            and "?" not in frag
+        ):
             frags.append(frag)
             i = k + 1
         else:
@@ -8707,6 +8725,9 @@ def translate_boolean_expression(expr, context) -> str:
         ast.BooleanOperator.GREATER_THAN_OR_EQUAL,
     )
     if op in _ordering_ops and right_expr is not None:
+        folded = _fold_zoned_ordering(op, left_expr, right_expr, context)
+        if folded is not None:
+            return folded
         _is_lit_list = lambda e: isinstance(e, ast.Literal) and isinstance(e.value, list)
         if _is_lit_list(left_expr) and _is_lit_list(right_expr):
             if _is_fully_literal(left_expr) and _is_fully_literal(right_expr):
@@ -9087,6 +9108,24 @@ def _expr_arith(expr, context, segment):
     op = expr.function_name[len("__arith_") :]
     left = translate_expression(expr.arguments[0], context, segment=segment)
     right = translate_expression(expr.arguments[1], context, segment=segment)
+    if op in "+-*/" and any(_is_temporal_call(a) for a in expr.arguments):
+        return f"SQLUser.CY_TEMPORAL_ARITH({left}, '{op}', {right})"
+    if op in "-*/":
+        base = _expr_arith_numeric(expr, op, left, right)
+        # A property or variable may hold a duration or temporal string; the
+        # operand SQL is repeated, so only cheap, parameter-free operands.
+        dyn = [
+            sql_
+            for arg, sql_ in zip(expr.arguments, (left, right))
+            if isinstance(arg, (ast.PropertyReference, ast.Variable))
+        ]
+        if dyn and "?" not in left + right and "SELECT" not in (left + right).upper():
+            cond = " OR ".join(f"SUBSTRING(CAST({d} AS VARCHAR(4096)), 1, 1) = 'P'" for d in dyn)
+            return (
+                f"CASE WHEN {cond} THEN SQLUser.CY_TEMPORAL_ARITH({left}, '{op}', {right})"
+                f" ELSE {base} END"
+            )
+        return base
     if op == "%":
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
@@ -9184,31 +9223,11 @@ def _expr_arith(expr, context, segment):
                 js = _json.dumps(combined)
                 return f"CAST('{js.replace(chr(39), chr(39)+chr(39))}' AS VARCHAR({max(len(js)+1, 256)}))"
 
-            # Runtime: JSON array concat via subquery building.
-            # If one side is a scalar (not a list), wrap it as a single-element JSON array.
-            def _ensure_array_sql(arg_expr, arg_sql):
-                """Return SQL that is always a JSON array (wrapping scalar in [v] if needed)."""
-                if _is_list(arg_expr):
-                    # Variables that alias a Stage column may be UNWIND scalars at runtime
-                    # (UNWIND x → Stage2.x is a scalar but _is_list() returns True due to Stage prefix).
-                    # Use a runtime check: if the value doesn't start with '[', wrap it.
-                    if isinstance(arg_expr, ast.Variable):
-                        return f"(CASE WHEN SUBSTRING(CAST({arg_sql} AS VARCHAR(10)), 1, 1) = '[' THEN {arg_sql} ELSE ('[' || CAST({arg_sql} AS VARCHAR(4096)) || ']') END)"
-                    return arg_sql
-                # Scalar: wrap in JSON array string
-                return f"('[' || CAST({arg_sql} AS VARCHAR(4096)) || ']')"
-
-            left_arr = _ensure_array_sql(expr.arguments[0], left)
-            right_arr = _ensure_array_sql(expr.arguments[1], right)
-            # Generate row numbers up to 100 to handle practical list sizes (each element is extracted)
-            row_gen = "SELECT 0 AS n" + "".join(f" UNION ALL SELECT {i}" for i in range(1, 100))
-            return (
-                f"(SELECT JSON_ARRAYAGG(x.v) FROM ("
-                f"SELECT JSON_VALUE({left_arr}, '$[' || rn.n || ']') AS v FROM ({row_gen}) rn WHERE rn.n < SQLUser.JSON_ARRAYLENGTH({left_arr})"
-                f" UNION ALL "
-                f"SELECT JSON_VALUE({right_arr}, '$[' || rn.n || ']') AS v FROM ({row_gen}) rn WHERE rn.n < SQLUser.JSON_ARRAYLENGTH({right_arr})"
-                f") x)"
-            )
+            # SQLUser.LIST_CONCAT appends the elements of whichever side is a
+            # JSON array and the value of whichever side is not, so element
+            # types survive. A JSON_VALUE row-generator here lost them and
+            # made IRIS fail to compile the correlated derived table.
+            return f"SQLUser.LIST_CONCAT({left}, {right})"
         # Runtime-polymorphic +: when one or both operands are PropertyReferences
         # the value type is unknown at compile time (could be list or number/string).
         # Emit a CASE that detects JSON arrays at runtime and does concat vs. arithmetic.
@@ -9269,6 +9288,8 @@ def _expr_arith(expr, context, segment):
                 f" THEN SUBSTRING({la_str}, 1, CHAR_LENGTH({la_str})-1) || ',' || SUBSTRING({ra_str}, 2)"
                 f" WHEN CHAR_LENGTH({la_str}) > 2 THEN {la_str}"
                 f" ELSE {ra_str} END"
+                f" WHEN SUBSTRING(__la, 1, 1) = 'P' OR SUBSTRING(__ra, 1, 1) = 'P'"
+                f" THEN SQLUser.CY_TEMPORAL_ARITH(__la, '+', __ra)"
                 f" ELSE (CAST(__la AS DOUBLE) + CAST(__ra AS DOUBLE)) END"
                 f" FROM (SELECT CAST({left} AS VARCHAR(4096)) AS __la,"
                 f" CAST({right} AS VARCHAR(4096)) AS __ra) __arrc)"
@@ -9276,26 +9297,40 @@ def _expr_arith(expr, context, segment):
         # Numeric +: cast property references to DOUBLE
         left = _prop_ref_cast(expr.arguments[0], left)
         right = _prop_ref_cast(expr.arguments[1], right)
-    else:
-        # -, *, /: always numeric — cast property references to DOUBLE
-        left = _prop_ref_cast(expr.arguments[0], left)
-        right = _prop_ref_cast(expr.arguments[1], right)
-        if op == "/":
-            both_int = _is_integer_expr(expr.arguments[0]) and _is_integer_expr(expr.arguments[1])
-            rhs_arg = expr.arguments[1]
-            if (
-                isinstance(rhs_arg, ast.Literal)
-                and isinstance(rhs_arg.value, (int, float))
-                and rhs_arg.value != 0
-            ):
-                # Cypher: integer/integer = floor division (3/2=1, -7/2=-4).
-                # IRIS promotes to DOUBLE (3/2=1.5), so wrap in FLOOR for integer operands.
-                if both_int:
-                    return f"FLOOR({left} {op} {right})"
-                return f"({left} {op} {right})"
+    return f"({left} {op} {right})"
+
+
+_TEMPORAL_CALLS = ("date", "localtime", "time", "localdatetime", "datetime", "duration")
+
+
+def _is_temporal_call(arg):
+    """A call that returns a temporal value or a duration string."""
+    if not isinstance(arg, ast.FunctionCall):
+        return False
+    name = arg.function_name.lower()
+    return name in _TEMPORAL_CALLS or name.startswith("duration.")
+
+
+def _expr_arith_numeric(expr, op, left, right):
+    """`-`, `*`, `/` on numbers: cast property references to DOUBLE."""
+    left = _prop_ref_cast(expr.arguments[0], left)
+    right = _prop_ref_cast(expr.arguments[1], right)
+    if op == "/":
+        both_int = _is_integer_expr(expr.arguments[0]) and _is_integer_expr(expr.arguments[1])
+        rhs_arg = expr.arguments[1]
+        if (
+            isinstance(rhs_arg, ast.Literal)
+            and isinstance(rhs_arg.value, (int, float))
+            and rhs_arg.value != 0
+        ):
+            # Cypher: integer/integer = floor division (3/2=1, -7/2=-4).
+            # IRIS promotes to DOUBLE (3/2=1.5), so wrap in FLOOR for integer operands.
             if both_int:
-                return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE FLOOR({left} {op} {right}) END"
-            return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE ({left} {op} {right}) END"
+                return f"FLOOR({left} {op} {right})"
+            return f"({left} {op} {right})"
+        if both_int:
+            return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE FLOOR({left} {op} {right}) END"
+        return f"CASE WHEN {right} = 0 AND {left} IS NOT NULL THEN CAST('NaN' AS DOUBLE) ELSE ({left} {op} {right}) END"
     return f"({left} {op} {right})"
 
 
@@ -9829,6 +9864,53 @@ def _detect_temporal_type(expr, context) -> Optional[str]:
     return None
 
 
+_DURATION_FIELDS = frozenset(
+    (
+        "years quarters months weeks days hours minutes seconds milliseconds microseconds "
+        "nanoseconds quartersOfYear monthsOfQuarter monthsOfYear daysOfWeek minutesOfHour "
+        "secondsOfMinute millisecondsOfSecond microsecondsOfSecond nanosecondsOfSecond"
+    ).split()
+)
+
+
+def _runtime_temporal_accessor(col_ref: str, prop_name: str) -> Optional[str]:
+    """`v.prop` on a value whose type is only known at runtime.
+
+    Dispatches on the string's shape: duration, date-time, date, time, then a
+    JSON map. Returns None when no temporal type has the accessor.
+    """
+    branches = []
+    for pattern, ttype in (
+        ("P%", "duration"),
+        ("____-__-__T%", "datetime"),
+        ("____-__-__", "date"),
+        ("__:__%", "time"),
+    ):
+        comp = _extract_temporal_component(col_ref, ttype, prop_name)
+        if comp:
+            branches.append(f"WHEN {col_ref} LIKE '{pattern}' THEN {comp}")
+    if not branches:
+        return None
+    prop = _jsonpath_key(prop_name)
+    return (
+        f"CASE WHEN {col_ref} IS NULL THEN NULL {' '.join(branches)}"
+        f" WHEN SUBSTRING({col_ref}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({col_ref}, '$.{prop}')"
+        f" ELSE NULL END"
+    )
+
+
+_CALENDAR_FIELDS = frozenset(
+    "year quarter month week weekYear day ordinalDay dayOfYear weekDay dayOfWeek dayOfQuarter quarterDay".split()
+)
+_ZONED_FIELDS = frozenset("timezone offset offsetMinutes offsetSeconds epochSeconds epochMillis".split())
+
+
+def _temporal_field(base_sql: str, prop_name: str) -> str:
+    """Calendar, zone and epoch fields via CY_TEMPORAL_FIELD (ISO week, leap years, `[Zone]`)."""
+    call = f"SQLUser.CY_TEMPORAL_FIELD({base_sql}, '{prop_name}')"
+    return call if prop_name in ("timezone", "offset") else f"CAST({call} AS BIGINT)"
+
+
 def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: str) -> Optional[str]:
     """Generate SQL to extract a temporal component from an ISO temporal string.
 
@@ -9840,6 +9922,11 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
     Returns:
         SQL expression to extract the component, or None if unsupported
     """
+
+    if temporal_type in ("date", "localdatetime", "datetime") and prop_name in _CALENDAR_FIELDS:
+        return _temporal_field(base_sql, prop_name)
+    if temporal_type == "datetime" and prop_name in _ZONED_FIELDS:
+        return _temporal_field(base_sql, prop_name)
 
     # Date components: '2024-01-15'
     if temporal_type == "date":
@@ -9959,6 +10046,8 @@ def _extract_temporal_component(base_sql: str, temporal_type: str, prop_name: st
     # Duration: 'P[n]Y[n]M[n]DT[n]H[n]M[n]S' (ISO 8601)
     # Format from _format_duration: PnYnMnDTnHnMn.nS  (components omitted if 0)
     # Examples: 'PT22H', 'P30Y8M13D', 'P1YT4M50S', 'PT-22H', 'P-27DT-21H-40M-32.142S'
+    if temporal_type == "duration" and prop_name in _DURATION_FIELDS:
+        return f"SQLUser.CY_DURATION_FIELD({base_sql}, '{prop_name}')"
     if temporal_type == "duration":
         # Helper expressions used by multiple properties
         # t_pos: position of 'T' in string (0 if no T)
@@ -10173,6 +10262,9 @@ def _expr_property_reference(expr, context, segment):
                     f"TypeError: Type mismatch: expected Map or Node, but was {expr.variable!r} (non-map scalar)"
                 )
             col_ref = f"{alias}.{_safe_alias(expr.variable)}"
+            runtime = _runtime_temporal_accessor(col_ref, expr.property_name)
+            if runtime and expr.variable not in edge_stage_vars:
+                return runtime
             return f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{expr.property_name}') END"
         # Node variables from Stage: get property value for the stage node id.
         # When called from ORDER BY (segment="inline"), use a correlated subquery instead of
@@ -10212,6 +10304,9 @@ def _expr_property_reference(expr, context, segment):
     # JSON_VALUE raises SQLCODE=-400 on non-JSON or non-matching path.
     if expr.variable in context.scalar_variables:
         col_ref = f"{alias}.{_safe_alias(expr.variable)}"
+        runtime = _runtime_temporal_accessor(col_ref, expr.property_name)
+        if runtime:
+            return runtime
         prop = _jsonpath_key(expr.property_name)
         return (
             f"CASE WHEN ({col_ref}) IS NULL OR SUBSTRING({col_ref}, 1, 1) <> '{{' "
@@ -10851,16 +10946,12 @@ def _scalar_string(fn, args, args_exprs, context=None):
         is_list = (
             isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
         ) or isinstance(arg_expr, ast.ListComprehension)
-        if is_list:
-            return f"SQLUser.LIST_REVERSE({args[0]})"
-        # For variables or expressions that may be either a string or a JSON array
-        # at runtime, use CASE to dispatch: arrays start with '[', strings use REVERSE.
-        if isinstance(arg_expr, (ast.Variable, ast.CaseExpression)):
-            return (
-                f"(CASE WHEN SUBSTRING(CAST({args[0]} AS VARCHAR(10)), 1, 1) = '['"
-                f" THEN SQLUser.LIST_REVERSE({args[0]})"
-                f" ELSE REVERSE({args[0]}) END)"
-            )
+        # One UDF reverses a JSON array (keeping element types) or a string,
+        # so the argument is named once: IRIS inlines CTEs, and a CASE that
+        # repeated it multiplied the readers of chained stages until Prepare
+        # failed with -400 <LIST>LoadTableFunction.
+        if is_list or isinstance(arg_expr, (ast.Variable, ast.CaseExpression)):
+            return f"SQLUser.CY_REVERSE({args[0]})"
         return f"REVERSE({args[0]})"
     if fn == "split":
         return f"SQLUser.STR_SPLIT({args[0]}, {args[1]})" if len(args) >= 2 else "NULL"
@@ -11862,7 +11953,8 @@ def _build_date_from_map(m, with_time=False, with_tz=False):
                         from zoneinfo import ZoneInfo as _ZoneInfo
 
                         _zi = _ZoneInfo(tz_name)
-                        _aware = _dt.datetime(y_out, mo_out, d_out, tzinfo=_zi)
+                        # Offset at the wall time, not midnight: DST days change mid-day.
+                        _aware = _dt.datetime(y_out, mo_out, d_out, h % 24, mi % 60, tzinfo=_zi)
                         _off = _aware.utcoffset()
                         _total_s = int(_off.total_seconds())
                         _sign = "+" if _total_s >= 0 else "-"
@@ -13201,6 +13293,45 @@ def _build_temporal_from_variable_map(fn, m, context):
     return None
 
 
+def _fold_zoned_ordering(op, left_expr, right_expr, context):
+    """`x < d` on two WITH-bound zoned time/datetime literals, compared as instants."""
+    types = getattr(context, "temporal_types", {})
+    lits = getattr(context, "temporal_literal_values", {})
+    sides = []
+    for e in (left_expr, right_expr):
+        if not isinstance(e, ast.Variable) or e.name not in lits:
+            return None
+        sides.append((lits[e.name], types.get(e.name)))
+    (ls, lf), (rs, rf) = sides
+    if lf != rf or lf not in ("time", "datetime"):
+        return None
+    if lf == "time":
+        ls, rs = "2000-01-01T" + ls, "2000-01-01T" + rs
+    lv, rv = _temporal_to_datetime_obj(ls, "datetime"), _temporal_to_datetime_obj(rs, "datetime")
+    if lv is None or rv is None or (lv == rv and ls != rs):
+        return None  # datetime keeps microseconds; a nanosecond tie is left to SQL
+    result = {
+        ast.BooleanOperator.LESS_THAN: lv < rv,
+        ast.BooleanOperator.LESS_THAN_OR_EQUAL: lv <= rv,
+        ast.BooleanOperator.GREATER_THAN: lv > rv,
+        ast.BooleanOperator.GREATER_THAN_OR_EQUAL: lv >= rv,
+    }[op]
+    return "(1=1)" if result else "(1=0)"
+
+
+def _statement_now(fn, context):
+    """No-arg `date()`, `time()`, ...: one UTC clock read per statement, as a literal."""
+    now = getattr(context, "statement_now", None)
+    if now is None:
+        import datetime as _dt
+
+        now = context.statement_now = _dt.datetime.now(_dt.timezone.utc)
+    t = now.strftime("%H:%M:%S.") + f"{now.microsecond * 1000:09d}"
+    d = now.date().isoformat()
+    return "'" + {"date": d, "localtime": t, "time": t + "Z", "localdatetime": f"{d}T{t}",
+                  "datetime": f"{d}T{t}Z"}[fn] + "'"
+
+
 def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
     if fn == "isnan":
         if not args:
@@ -13222,7 +13353,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
         return "SQLUser.NEWID()"
     if fn == "date":
         if not args:
-            return "NULL"
+            return _statement_now(fn, context)
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
             result = _build_date_from_map(args_exprs[0], with_time=False)
             if result is not None:
@@ -13249,7 +13380,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
         return args[0]
     if fn in ("localdatetime",):
         if not args:
-            return "NULL"
+            return _statement_now(fn, context)
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
             result = _build_date_from_map(args_exprs[0], with_time=True, with_tz=False)
             if result is not None:
@@ -13298,7 +13429,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
         )
     if fn in ("datetime",):
         if not args:
-            return "NULL"
+            return _statement_now(fn, context)
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
             result = _build_date_from_map(args_exprs[0], with_time=True, with_tz=True)
             if result is not None:
@@ -13332,7 +13463,7 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
         return args[0]
     if fn in ("localtime", "time"):
         if not args:
-            return "NULL"
+            return _statement_now(fn, context)
         if args_exprs and isinstance(args_exprs[0], ast.MapLiteral):
             if _has_map_key(args_exprs[0], "time"):
                 _dyn_result = _build_temporal_from_variable_map(fn, args_exprs[0], context)
@@ -13443,9 +13574,13 @@ def _scalar_numeric_and_datetime(fn, args, args_exprs, context):
             ns_d = _extract_num_from_map_entry(m, "nanoseconds", 0)
 
             # Normalize: fractional months → days, fractional weeks → days, etc.
-            # months with fraction → convert fraction to days (avg 30.436875)
+            # months with fraction → convert fraction to days (avg 30.436875);
+            # fractional years carry into months first.
+            months = months + years * 12
             mo_int = int(months)
             mo_frac = months - mo_int
+            years = int(mo_int / 12)
+            mo_int = mo_int - years * 12
             days = days + mo_frac * 30.436875
 
             # weeks → days
@@ -14047,11 +14182,71 @@ def _compute_duration_indays(lhs_str, lhs_fn, rhs_str, rhs_fn):
     return _format_duration(0, 0, days_total, 0, 0, 0, 0)
 
 
+def _fold_temporal_literal(expr, context):
+    """The ISO string a constant temporal constructor translates to, or None."""
+    import re as _re
+
+    try:
+        sql = translate_expression(expr, context)
+    except Exception:
+        return None
+    m = _re.fullmatch(r"'([^']*)'", sql.strip())
+    return m.group(1) if m else None
+
+
+def _localize_to_zone(lhs_str, lhs_fn, rhs_str, rhs_fn):
+    """Read a local operand in the other operand's zone, as Neo4j does.
+
+    `duration.inSeconds(datetime(... [Europe/Stockholm]), localdatetime(...))`
+    places the local value in Stockholm at its own date, so a DST day is 23 or
+    25 hours. A localtime takes the zoned operand's date; a date its midnight.
+    """
+    import datetime as _dt
+    import re as _re
+
+    def _zone_of(ts):
+        m = _re.search(r"(Z|[+-]\d{2}:?\d{2})?(?:\[(.+)\])?$", ts)
+        return (m.group(1), m.group(2)) if m and (m.group(1) or m.group(2)) else (None, None)
+
+    def _place(zoned, local, local_fn):
+        off, name = _zone_of(zoned)
+        if local_fn == "date":
+            wall = local + "T00:00"
+        elif local_fn == "localtime":
+            wall = zoned[:10] + "T" + local
+        else:
+            wall = local
+        if name:
+            try:
+                from zoneinfo import ZoneInfo
+
+                base = _dt.datetime.fromisoformat(wall[:19] if len(wall) >= 19 else wall)
+                utcoff = base.replace(tzinfo=ZoneInfo(name)).utcoffset()
+            except Exception:
+                return None
+            secs = int(utcoff.total_seconds())
+            sign = "+" if secs >= 0 else "-"
+            off = f"{sign}{abs(secs) // 3600:02d}:{abs(secs) % 3600 // 60:02d}"
+        return wall + ("Z" if off in (None, "Z") else off)
+
+    if lhs_fn == "datetime" and rhs_fn in ("date", "localdatetime", "localtime"):
+        placed = _place(lhs_str, rhs_str, rhs_fn)
+        if placed:
+            return lhs_str, lhs_fn, placed, "datetime"
+    if rhs_fn == "datetime" and lhs_fn in ("date", "localdatetime", "localtime"):
+        placed = _place(rhs_str, lhs_str, lhs_fn)
+        if placed:
+            return placed, "datetime", rhs_str, rhs_fn
+    return lhs_str, lhs_fn, rhs_str, rhs_fn
+
+
 def _compute_duration_inseconds(lhs_str, lhs_fn, rhs_str, rhs_fn):
     """Compute duration.inSeconds — only seconds (no years/months).
     Normalizes total seconds into H/M/S components.
     """
     import datetime as _dt
+
+    lhs_str, lhs_fn, rhs_str, rhs_fn = _localize_to_zone(lhs_str, lhs_fn, rhs_str, rhs_fn)
 
     # Use the same tz-aware logic as duration.between
     _TZ_AWARE = ("time", "datetime")
@@ -14225,8 +14420,13 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
                 if fn_inner in ("date", "datetime", "localdatetime", "localtime", "time"):
+                    if not expr.arguments:
+                        return _statement_now(fn_inner, context)[1:-1], fn_inner
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
+                    folded = _fold_temporal_literal(expr, context)
+                    if folded is not None:
+                        return folded, fn_inner
             return None, None
 
         lhs_str, lhs_fn = _get_temporal_lit(lhs_expr)
@@ -14246,8 +14446,13 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
                 if fn_inner in ("date", "datetime", "localdatetime", "localtime", "time"):
+                    if not expr.arguments:
+                        return _statement_now(fn_inner, context)[1:-1], fn_inner
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
+                    folded = _fold_temporal_literal(expr, context)
+                    if folded is not None:
+                        return folded, fn_inner
             return None, None
 
         lhs_str, lhs_fn = _get_temporal_lit(args_exprs[0])
@@ -14267,8 +14472,13 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
                 if fn_inner in ("date", "datetime", "localdatetime", "localtime", "time"):
+                    if not expr.arguments:
+                        return _statement_now(fn_inner, context)[1:-1], fn_inner
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
+                    folded = _fold_temporal_literal(expr, context)
+                    if folded is not None:
+                        return folded, fn_inner
             return None, None
 
         lhs_str, lhs_fn = _get_temporal_lit(args_exprs[0])
@@ -14288,8 +14498,13 @@ def _eval_temporal_ns_function(fn, args_exprs, context):
             if isinstance(expr, ast.FunctionCall):
                 fn_inner = expr.function_name.lower()
                 if fn_inner in ("date", "datetime", "localdatetime", "localtime", "time"):
+                    if not expr.arguments:
+                        return _statement_now(fn_inner, context)[1:-1], fn_inner
                     if expr.arguments and isinstance(expr.arguments[0], ast.Literal):
                         return expr.arguments[0].value, fn_inner
+                    folded = _fold_temporal_literal(expr, context)
+                    if folded is not None:
+                        return folded, fn_inner
             return None, None
 
         lhs_str, lhs_fn = _get_temporal_lit(args_exprs[0])

@@ -327,13 +327,17 @@ class TestObjectScriptBodiesTheDdlParserAccepts:
     (`quit:x>0 x`), so it is the comma inside the clause list that breaks it, not
     the colon. `$S(...)` and `$CASE(...)` fail identically.
 
+    The trigger is the colon touching the next token: `$SELECT(i = 1: a, 1: b)`
+    installs (measured with `CY_TEMPORAL_ARITH`), because `: b` is no parameter
+    name. So the rule flags a clause list whose colon has no space after it.
+
     `kg_Betweenness` shipped with one, so it was the only algorithm function that
     did not exist after `initialize_schema`: the DDL failed, the error landed in
     `_install_procedures`'s non-core branch as a `logger.debug`, and calling it
     returned `SQLCODE -359 ... 'GRAPH_KG.KG_BETWEENNESS' does not exist`.
     """
 
-    _CLAUSE_LIST = re.compile(r"\$(?:SELECT|S|CASE)\s*\([^()]*,[^()]*\)", re.IGNORECASE)
+    _CLAUSE_LIST = re.compile(r"\$(?:SELECT|S|CASE)\s*\((?=[^()]*,)[^()]*:[^\s()][^()]*\)", re.IGNORECASE)
 
     def _objectscript_bodies(self):
         from iris_vector_graph.schema import GraphSchema

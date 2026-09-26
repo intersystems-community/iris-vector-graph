@@ -52,23 +52,23 @@ def _select_expr(sql: str) -> str:
 class TestNoArgs:
     def test_date_no_args(self):
         sql = tr("RETURN date()")
-        assert "NULL" in sql
+        assert "NULL" not in sql
 
     def test_datetime_no_args(self):
         sql = tr("RETURN datetime()")
-        assert "NULL" in sql
+        assert "NULL" not in sql
 
     def test_localtime_no_args(self):
         sql = tr("RETURN localtime()")
-        assert "NULL" in sql
+        assert "NULL" not in sql
 
     def test_time_no_args(self):
         sql = tr("RETURN time()")
-        assert "NULL" in sql
+        assert "NULL" not in sql
 
     def test_localdatetime_no_args(self):
         sql = tr("RETURN localdatetime()")
-        assert "NULL" in sql
+        assert "NULL" not in sql
 
 
 # ===========================================================================
@@ -719,7 +719,7 @@ class TestDurationConstruction:
 
     def test_duration_map_months_days_seconds(self):
         sql = tr("RETURN duration({months: 14, days: 3, seconds: 15})")
-        assert "'P14M3DT15S'" in sql
+        assert "'P1Y2M3DT15S'" in sql
 
     def test_duration_map_years_months(self):
         sql = tr("RETURN duration({years: 1, months: 2})")

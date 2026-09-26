@@ -2,7 +2,8 @@
 # Format: feature_file::Scenario: title
 # reason: <why this scenario is @wip>
 # Baseline: 1015/3897 passing as of v2.4.8 + TCK harness fixes (2026-08-01)
-# Current:  1771/3897 passing as of 2026-08-01 (session 201 round-7)
+# Current:  3724/3897 passing as of 2026-09-25 (spec 203, full TCK, enterprise container)
+# Earlier:  1771/3897 passing as of 2026-08-01 (session 201 round-7)
 #   Key fixes: 3VL boolean simplification (AND/OR null folding, CASE WHEN unwrapping),
 #              _expr_boolean CASE WHEN detection, comparison.py '1'/'0' bool coercion,
 #              XOR/NOT VARCHAR boolean coercion, reserved word ORDER BY alias,
@@ -15,112 +16,6 @@
 #              quantifier property access via JSON_VALUE for scalar vars,
 #              size() on scalar vars: runtime dispatch (JSON_ARRAYLENGTH vs LENGTH)
 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [10] In-query call to procedure should fail if too many explicit argument are given
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [11] Standalone call to procedure should fail if implicit argument is missing
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [12] In-query call to procedure that has outputs fails if no outputs are yielded
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [15] In-query procedure call should fail if shadowing an already bound variable
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [16] In-query procedure call should fail if one of the argument expressions uses an aggregation function
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [1] Standalone call to procedure that takes no arguments and yields no results
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [2] Standalone call to procedure that takes no arguments and yields no results, called with implicit arguments
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [3] In-query call to procedure that takes no arguments and yields no results
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [4] In-query call to procedure that takes no arguments and yields no results and consumes no rows
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [5] Standalone call to STRING procedure that takes no arguments
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [6] In-query call to STRING procedure that takes no arguments
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [7] Standalone call to procedure should fail if explicit argument is missing
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [8] In-query call to procedure should fail if explicit argument is missing
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call1.Call1 - Basic procedure calling::Scenario: [9] Standalone call to procedure should fail if too many explicit argument are given
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call2.Call2 - Procedure arguments::Scenario: [1] In-query call to procedure with explicit arguments
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call2.Call2 - Procedure arguments::Scenario: [2] Standalone call to procedure with explicit arguments
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call2.Call2 - Procedure arguments::Scenario: [3] Standalone call to procedure with implicit arguments
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call2.Call2 - Procedure arguments::Scenario: [4] In-query call to procedure that takes arguments fails when trying to pass them implicitly
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call2.Call2 - Procedure arguments::Scenario: [5] Standalone call to procedure should fail if input type is wrong
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call2.Call2 - Procedure arguments::Scenario: [6] In-query call to procedure should fail if input type is wrong
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call3.Call3 - Assignable-type arguments::Scenario: [1] Standalone call to procedure with argument of type NUMBER accepts value of type INTEGER
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call3.Call3 - Assignable-type arguments::Scenario: [2] In-query call to procedure with argument of type NUMBER accepts value of type INTEGER
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call3.Call3 - Assignable-type arguments::Scenario: [3] Standalone call to procedure with argument of type NUMBER accepts value of type FLOAT
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call3.Call3 - Assignable-type arguments::Scenario: [4] In-query call to procedure with argument of type NUMBER accepts value of type FLOAT
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call3.Call3 - Assignable-type arguments::Scenario: [5] Standalone call to procedure with argument of type FLOAT accepts value of type INTEGER
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call3.Call3 - Assignable-type arguments::Scenario: [6] In-query call to procedure with argument of type FLOAT accepts value of type INTEGER
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call4.Call4 - Null Arguments::Scenario: [1] Standalone call to procedure with null argument
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call4.Call4 - Null Arguments::Scenario: [2] In-query call to procedure with null argument
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [1] Explicit procedure result projection
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [2] Explicit procedure result projection with RETURN *
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [3] The order of yield items is irrelevant -- @1.1 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [3] The order of yield items is irrelevant -- @1.2 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.1 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.10 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.11 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.2 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.3 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.4 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.5 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.6 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.7 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.8 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [4] Rename outputs to unbound variable names -- @1.9 
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [5] Fail on renaming to an already bound variable name
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [6] Fail on renaming all outputs to the same variable name
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [7] Fail on in-query call to procedure with YIELD *
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call5.Call5 - Results projection::Scenario: [8] Allow standalone call to procedure with YIELD *
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call6.Call6 - Call clause interoperation with other clauses::Scenario: [1] Calling the same STRING procedure twice using the same outputs in each call
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call6.Call6 - Call clause interoperation with other clauses::Scenario: [2] Project procedure results between query scopes with WITH clause
-# reason: IVG does not yet support this scenario
-features.clauses.call.Call6.Call6 - Call clause interoperation with other clauses::Scenario: [3] Project procedure results between query scopes with WITH clause and rename the projection
-# reason: IVG stores all values as VARCHAR; 64-bit integer precision lost
-features.clauses.create.Create1.Create1 - Creating nodes::Scenario: [12] CREATE does not lose precision on large integers
-# reason: multi-hop CREATE — intermediate edges not all generated
-features.clauses.create.Create5.Create5 - Multiple hops create patterns::Scenario: [4] Create a pattern with multiple hops with multiple types and varying directions
-# reason: multi-hop CREATE — intermediate edges not all generated
-features.clauses.create.Create5.Create5 - Multiple hops create patterns::Scenario: [5] Create a pattern with multiple hops and varying directions
 # reason: null guard missing for OPTIONAL MATCH rel → DELETE
 features.clauses.delete.Delete2.Delete2 - Deleting relationships::Scenario: [4] Ignore null when deleting relationship
 # reason: undirected MATCH expand not supported

@@ -97,9 +97,9 @@ def test_randomuuid_function():
 # ---------------------------------------------------------------------------
 
 def test_date_no_args():
-    """date() with no args returns NULL."""
+    """date() with no args reads the statement clock."""
     sql = tr("RETURN date() AS r")
-    assert "NULL" in sql
+    assert "NULL" not in sql
 
 
 def test_date_from_string_literal():
@@ -131,9 +131,9 @@ def test_date_from_variable():
 # ---------------------------------------------------------------------------
 
 def test_localdatetime_no_args():
-    """localdatetime() with no args returns NULL."""
+    """localdatetime() with no args reads the statement clock."""
     sql = tr("RETURN localdatetime() AS r")
-    assert "NULL" in sql
+    assert "NULL" not in sql
 
 
 def test_localdatetime_from_string():
@@ -174,9 +174,9 @@ def test_localdatetime_variable_arg_runtime():
 # ---------------------------------------------------------------------------
 
 def test_datetime_no_args():
-    """datetime() with no args returns NULL."""
+    """datetime() with no args reads the statement clock."""
     sql = tr("RETURN datetime() AS r")
-    assert "NULL" in sql
+    assert "NULL" not in sql
 
 
 def test_datetime_from_string():
@@ -203,15 +203,15 @@ def test_datetime_from_localdatetime_var():
 # ---------------------------------------------------------------------------
 
 def test_time_no_args():
-    """time() with no args returns NULL."""
+    """time() with no args reads the statement clock."""
     sql = tr("RETURN time() AS r")
-    assert "NULL" in sql
+    assert "NULL" not in sql
 
 
 def test_localtime_no_args():
-    """localtime() with no args returns NULL."""
+    """localtime() with no args reads the statement clock."""
     sql = tr("RETURN localtime() AS r")
-    assert "NULL" in sql
+    assert "NULL" not in sql
 
 
 def test_time_from_map():

@@ -617,15 +617,15 @@ class TestExtractTemporalComponent:
 
     def test_localdatetime_year(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.year")
-        assert "SUBSTRING" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_localdatetime_month(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.month")
-        assert "SUBSTRING" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_localdatetime_day(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.day")
-        assert "SUBSTRING" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_localdatetime_quarter(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.quarter")
@@ -633,15 +633,15 @@ class TestExtractTemporalComponent:
 
     def test_localdatetime_day_of_week(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.dayOfWeek")
-        assert "DAYOFWEEK" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_localdatetime_day_of_year(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.dayOfYear")
-        assert "DAYOFYEAR" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_localdatetime_week(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45') AS dt RETURN dt.week")
-        assert "WEEK" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_localdatetime_millisecond(self):
         sql = check("WITH localdatetime('2024-01-15T12:30:45.123') AS dt RETURN dt.millisecond")

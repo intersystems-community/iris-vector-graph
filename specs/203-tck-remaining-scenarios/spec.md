@@ -254,6 +254,42 @@ fixes that lived only on agent branches. Both are folded into this spec.
 Result: `main` 2661/3079, this branch 2802/3079, no scenario that passes on
 `main` fails here.
 
+### Temporal runtime functions (full TCK)
+
+Full TCK (all 3897 scenarios, `USER` namespace) went from 3600 at `6cc0d21` to
+3724 (95.6%), with no regressions. Temporal rose from 957/1004 to 1002/1004.
+
+- `SQLUser.CY_TEMPORAL_ARITH(a, op, b)` handles:
+  - temporal ± duration
+  - duration ± duration
+  - duration × or ÷ a number
+  - a numeric fallback for everything else
+
+  `+`, `-`, `*` and `/` route to it when an operand is a temporal constructor
+  or a runtime value starting with `P`. `LIST_CONCAT` also delegates
+  scalar + scalar to it.
+
+- `SQLUser.CY_DURATION_FIELD(v, f)` returns duration accessors as totals, as
+  Neo4j does (`months` of `P1Y4M` is 16). Seconds are floored and
+  `nanosecondsOfSecond` is never negative.
+- `SQLUser.CY_TEMPORAL_FIELD(v, f)` covers the date, datetime and localdatetime
+  accessors:
+  - ISO `week` and `weekYear`
+  - `dayOfQuarter` in leap years
+  - `timezone` and `offset` with a `[Zone]` suffix
+  - `epochSeconds` and `epochMillis` after applying the offset
+- An accessor on a value whose type is only known at runtime (`WITH x AS d
+RETURN d.hour`) dispatches on the string's shape.
+- No-arg `date()`, `time()`, `localtime()`, `localdatetime()` and `datetime()`
+  read one clock per statement instead of returning NULL.
+- `duration.inSeconds(zoned, local)` reads the local operand in the zoned
+  operand's zone. Map-built datetimes take their DST offset at the wall time,
+  not at midnight.
+- Ordering two zoned `time`/`datetime` literals compares instants.
+
+Still failing in temporal: Temporal10 [9] and [10]. Their year ±999999999 dates
+are outside Python's `datetime` range.
+
 ---
 
 ## Out of Scope

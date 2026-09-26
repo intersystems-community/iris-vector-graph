@@ -215,18 +215,17 @@ def test_datetime_from_string_z():
 def test_date_year_component():
     # WITH date as variable → SUBSTRING for year
     sql = tr("WITH date('2020-06-15') AS d RETURN d.year AS y")
-    assert "SUBSTRING" in sql
-    assert "CAST" in sql
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_date_month_component():
     sql = tr("WITH date('2020-06-15') AS d RETURN d.month AS m")
-    assert "SUBSTRING" in sql
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_date_day_component():
     sql = tr("WITH date('2020-06-15') AS d RETURN d.day AS dv")
-    assert "SUBSTRING" in sql
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_date_week_component():
@@ -242,18 +241,17 @@ def test_date_dayofweek_component():
 
 def test_date_ordinalday_component():
     sql = tr("WITH date('2020-06-15') AS d RETURN d.ordinalDay AS od")
-    assert "DAYOFYEAR" in sql.upper()
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_date_quarter_component():
     sql = tr("WITH date('2020-06-15') AS d RETURN d.quarter AS q")
-    assert "SUBSTRING" in sql
-    assert "CAST" in sql
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_date_weekyear_component():
     sql = tr("WITH date('2020-06-15') AS d RETURN d.weekYear AS wy")
-    assert "DATEADD" in sql.upper() or "DAYOFWEEK" in sql.upper()
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_localdatetime_hour_component():
@@ -273,7 +271,7 @@ def test_localdatetime_second_component():
 
 def test_localdatetime_year_component():
     sql = tr("WITH localdatetime('2020-06-15T12:30:00') AS dt RETURN dt.year AS y")
-    assert "SUBSTRING" in sql
+    assert "CY_TEMPORAL_FIELD" in sql
 
 
 def test_localdatetime_epochseconds():
@@ -548,12 +546,12 @@ def test_duration_between_same_date():
 def test_duration_property_years():
     # duration.years component via WITH variable
     sql = tr("WITH duration('P2Y3M') AS dur RETURN dur.years AS y")
-    assert "CHARINDEX" in sql.upper() or "SUBSTRING" in sql.upper()
+    assert "CY_DURATION_FIELD" in sql
 
 
 def test_duration_property_months():
     sql = tr("WITH duration('P2Y3M') AS dur RETURN dur.months AS m")
-    assert "CHARINDEX" in sql.upper() or "SUBSTRING" in sql.upper()
+    assert "CY_DURATION_FIELD" in sql
 
 
 def test_duration_property_days():
@@ -563,12 +561,12 @@ def test_duration_property_days():
 
 def test_duration_property_hours():
     sql = tr("WITH duration('PT22H') AS dur RETURN dur.hours AS h")
-    assert "CHARINDEX" in sql.upper() or "SUBSTRING" in sql.upper()
+    assert "CY_DURATION_FIELD" in sql
 
 
 def test_duration_property_minutes():
     sql = tr("WITH duration('PT1H30M') AS dur RETURN dur.minutes AS m")
-    assert "CHARINDEX" in sql.upper() or "SUBSTRING" in sql.upper()
+    assert "CY_DURATION_FIELD" in sql
 
 
 # ---------------------------------------------------------------------------

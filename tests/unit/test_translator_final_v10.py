@@ -325,27 +325,27 @@ class TestExtractTemporalComponent:
     def test_date_weekYear(self):
         # Use WITH to promote date to a typed variable so temporal extraction runs
         sql = tr("WITH date('2024-01-01') AS d RETURN d.weekYear")
-        assert "DATEPART" in sql or "DATEADD" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_date_week(self):
         sql = tr("WITH date('2024-01-01') AS d RETURN d.week")
-        assert "WEEK" in sql or "fn WEEK" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_date_dayOfWeek(self):
         sql = tr("WITH date('2024-01-01') AS d RETURN d.dayOfWeek")
-        assert "DAYOFWEEK" in sql or "MOD" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_date_weekDay(self):
         sql = tr("WITH date('2024-01-01') AS d RETURN d.weekDay")
-        assert "DAYOFWEEK" in sql or "MOD" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_date_dayOfYear(self):
         sql = tr("WITH date('2024-01-01') AS d RETURN d.dayOfYear")
-        assert "DAYOFYEAR" in sql or "fn DAYOFYEAR" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_date_ordinalDay(self):
         sql = tr("WITH date('2024-01-01') AS d RETURN d.ordinalDay")
-        assert "DAYOFYEAR" in sql or "fn DAYOFYEAR" in sql
+        assert "CY_TEMPORAL_FIELD" in sql
 
     def test_date_quarter(self):
         sql = tr("WITH date('2024-03-15') AS d RETURN d.quarter")
