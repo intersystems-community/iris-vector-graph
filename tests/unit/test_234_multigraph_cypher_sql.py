@@ -204,6 +204,35 @@ def test_merge_with_properties_matches_and_guards_on_them():
     assert _markers(select) == len(sparams)
 
 
+def test_merge_relationship_property_from_a_with_stage_is_not_dropped():
+    """Merge5 [14] "Using list properties via variable": `foobar: roles` where
+    `roles` comes from `WITH ..., split(str, ',') AS roles` is bound to a stage
+    column, not a literal or a FOREACH value — the only two things the
+    literal-endpoint fast path's property resolution understood. Anything else
+    was silently dropped rather than read from the row.
+    """
+    stmts = _on(
+        "CREATE (a:Foo), (b:Bar) WITH a, b UNWIND ['a,b', 'a,b'] AS str "
+        "WITH a, b, split(str, ',') AS roles "
+        "MERGE (a)-[r:FB {foobar: roles}]->(b) RETURN count(*)"
+    )
+    (sql, params), = _edge_writes(stmts)
+    assert "qualifiers" in sql
+    assert "__dyn0" in sql  # the stage column the qualifiers expression reads
+    assert repr('"foobar": ') in params
+    assert _markers(sql) == len(params)
+
+
+def test_merge_relationship_property_still_literal_when_not_stage_bound():
+    # A literal alongside the fast path stays byte-identical: the new dynamic-
+    # property machinery only engages when a property actually needs a stage.
+    (sql, params), = _edge_writes(
+        _on("CREATE (a:A), (b:B) MERGE (a)-[r:T {name: 'x'}]->(b) RETURN r")
+    )
+    assert "__dyn" not in sql
+    assert repr('{"name": "x"}') in params
+
+
 def test_merge_undirected_guards_both_directions():
     stmts = _on("MATCH (a:A), (b:B) MERGE (a)-[r:TYPE]-(b) RETURN r")
     (sql, params), = _edge_writes(stmts)

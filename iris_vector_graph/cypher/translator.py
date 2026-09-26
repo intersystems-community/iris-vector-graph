@@ -231,6 +231,34 @@ def _rel_literal_props(rel, context) -> Optional[dict]:
     return out
 
 
+def _rel_dynamic_stage_props(rel, context) -> list:
+    """Relationship inline properties whose value has to be read from a stage
+    column at execution time (Merge5 [14] "Using list properties via variable"):
+
+        WITH a, b, split(str, ',') AS roles
+        MERGE (a)-[r:FB {foobar: roles}]->(b)
+
+    ``_rel_literal_props`` (and the equivalent inline logic in
+    ``_create_clause_relationship_entry``) only resolve a compile-time literal
+    or a FOREACH binding; a value bound by an earlier WITH/UNWIND is neither,
+    and was silently dropped instead of being read from the row. Returns
+    ``[(key, stage_alias, safe_column)]``, skipping anything the literal path
+    already handles (a literal, a FOREACH literal, or a plain query parameter)
+    so the two never double-count the same property.
+    """
+    out = []
+    for k, v in (rel.properties or {}).items():
+        if not isinstance(v, ast.Variable):
+            continue
+        fl = getattr(context, "foreach_literals", {})
+        if v.name in fl or v.name in context.input_params:
+            continue
+        alias = context.variable_aliases.get(v.name)
+        if alias and alias.startswith("Stage"):
+            out.append((k, alias, _safe_alias(v.name)))
+    return out
+
+
 def _graph_scope_fragment(fragment: str, safe_graph: str) -> str:
     """Scope the graph-owned tables read inside a single SQL fragment.
 
@@ -619,6 +647,9 @@ class SQLQuery(BaseModel):
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
+    # Aliases of the final SELECT's items, in order (empty when any item has none).
+    # Routes that answer without running the SQL (var-length BFS) shape to these.
+    select_aliases: List[str] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -4513,7 +4544,22 @@ def translate_to_sql(
     sql_query.float_expr_columns = list(context.float_expr_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
+    sql_query.select_aliases = _select_aliases(context.select_items)
     return sql_query
+
+
+_SELECT_ALIAS_RE = re.compile(r'\sAS\s+("?)([A-Za-z_][\w.]*)\1\s*$', re.IGNORECASE)
+
+
+def _select_aliases(select_items) -> List[str]:
+    """The alias of each top-level SELECT item; [] unless every item has one."""
+    out = []
+    for item in select_items or []:
+        m = _SELECT_ALIAS_RE.search(str(item))
+        if not m:
+            return []
+        out.append(m.group(2))
+    return out
 
 
 _PROP_WRITE_RE = re.compile(
@@ -5868,7 +5914,12 @@ def _create_clause_relationship_entry(rel, i, pat, context):
 
     s_id = _create_clause_resolve_node_id(s_id_expr, source_node, context)
     t_id = _create_clause_resolve_node_id(t_id_expr, target_node, context)
-    if s_id and t_id:
+    # A property bound to a WITH-projected stage column needs a FROM to read it
+    # from, which the literal-endpoint fast path below never builds (Merge5
+    # [14]) — route those through the alias/stage-aware path even though both
+    # endpoints are otherwise known literally.
+    _dyn_stage_props = _rel_dynamic_stage_props(rel, context) if rel.properties else []
+    if s_id and t_id and not _dyn_stage_props:
         for rt in rel.types:
             rel_props_raw = {
                 k: (
@@ -5940,16 +5991,24 @@ def _create_clause_relationship_entry(rel, i, pat, context):
                 [],
             )
         )
+        # Extra SELECT columns for properties a WITH bound to a stage column
+        # (Merge5 [14]) — read alongside the endpoints so _create_matched_edge_keyed
+        # can fold them into qualifiers instead of the value being dropped.
+        _dyn_cols = "".join(
+            f", {salias}.{scol} AS __dyn{idx}"
+            for idx, (_k, salias, scol) in enumerate(_dyn_stage_props)
+        )
+        _dyn_keys = [k for k, _salias, _scol in _dyn_stage_props]
         for rt in rel.types:
             # IRIS binds a leading CTE's markers first, then the outer select list,
             # then the derived table — so graph_id sits after the stage parameters
             # but ahead of everything inside `_ge`.
             cte2, sql2, p2 = context.build_dml_subquery(
-                select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3"
+                select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3{_dyn_cols}"
             )
             if _multigraph(context):
                 _create_matched_edge_keyed(
-                    context, rel, cte2, sql2, p2, s_p + [rt] + t_p
+                    context, rel, cte2, sql2, p2, s_p + [rt] + t_p, dyn_keys=_dyn_keys
                 )
                 continue
             # rdf_edges holds one edge per (s, p, o_id, graph_id), so a row whose edge
@@ -5996,7 +6055,7 @@ def _create_values_edge_keyed(context, s_id, rt, t_id, rel_props):
     )
 
 
-def _create_matched_edge_keyed(context, rel, cte2, sql2, p2, select_params):
+def _create_matched_edge_keyed(context, rel, cte2, sql2, p2, select_params, dyn_keys=None):
     """A multigraph CREATE or MERGE of an edge per bound row (spec 234 FR-008).
 
     CREATE makes one edge per row, parallel to whatever the triple already has:
@@ -6004,14 +6063,37 @@ def _create_matched_edge_keyed(context, rel, cte2, sql2, p2, select_params):
     `ekey`s on from the triple's MAX. MERGE creates at most once per triple, so it
     keeps DISTINCT and takes MAX + 1; `translate_merge_clause` then adds the
     guard, which fits the whole pattern rather than the triple.
+
+    ``dyn_keys`` names properties (Merge5 [14]) whose value ``sql2`` already
+    projects as ``__dyn0``, ``__dyn1``, … (one per key, in order) alongside
+    ``c1``/``c2``/``c3`` — read from a stage column rather than known at
+    translation time, so they cannot be folded into a literal qualifiers JSON
+    blob the way ``_rel_literal_props`` handles a literal or FOREACH value.
     """
     import json as _json
 
     g = _graph_of(context)
     merging = getattr(context, "_merge_rel_create", False)
     props = _rel_literal_props(rel, context)
+    dyn_cols = "".join(f", _gd.__dyn{i}" for i in range(len(dyn_keys or ()))) if merging else ""
     q_col, q_val, q_params = "", "", []
-    if props:
+    if dyn_keys:
+        # Fold both the compile-time-literal properties and the stage-bound ones
+        # into one qualifiers JSON object, built with `||` since the dynamic
+        # ones are only known as a column at execution time. `roles` etc. are
+        # already JSON text (e.g. split() emits a JSON array), so its column is
+        # spliced in raw rather than re-quoted as a JSON string.
+        frags = []
+        for k, v in (props or {}).items():
+            frags.append("? || ?")
+            q_params.append(_json.dumps(k) + ": ")
+            q_params.append(_json.dumps(v))
+        for idx, k in enumerate(dyn_keys):
+            frags.append(f"? || COALESCE(_ge.__dyn{idx}, 'null')")
+            q_params.append(_json.dumps(k) + ": ")
+        q_col = ", qualifiers"
+        q_val = ", ('{' || " + " || ', ' || ".join(frags) + " || '}')"
+    elif props:
         q_col, q_val = ", qualifiers", ", ?"
         q_params = [_json.dumps(props)]
     n_cte = len(context.all_stage_params) if cte2 else 0
@@ -6022,7 +6104,7 @@ def _create_matched_edge_keyed(context, rel, cte2, sql2, p2, select_params):
     )
     if merging:
         next_key += " + 1"
-        source = f"(SELECT DISTINCT _gd.c1, _gd.c2, _gd.c3 FROM ({sql2}) _gd) AS _ge"
+        source = f"(SELECT DISTINCT _gd.c1, _gd.c2, _gd.c3{dyn_cols} FROM ({sql2}) _gd) AS _ge"
     else:
         next_key += (
             " + ROW_NUMBER() OVER (PARTITION BY _ge.c1, _ge.c2, _ge.c3 ORDER BY _ge.c1)"

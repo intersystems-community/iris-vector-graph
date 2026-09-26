@@ -1698,6 +1698,57 @@ class TestIsolationLabelFollowsWithScope:
         assert lines[4] == "MERGE (b)"
 
 
+class TestMultilineCreatePatternGetsLabelled:
+    """Create4 [1] "Generate the movie graph": a node pattern's parens can wrap
+    across two physical lines —
+
+        CREATE (theMatrixReloaded:Movie {title: 'The Matrix Reloaded', released: 2003,
+                tagline: 'Free your mind'})
+
+    The isolation label injector matched `(` against `)` one physical line at a
+    time, so a pattern with no closing paren on its own line found none, and the
+    unmatched `(` was rewritten to `()` in place — the rest of the line (the
+    variable name onward) fell through untouched, producing
+    `CREATE ()theMatrixReloaded:Movie {...` on the next line. That is a syntax
+    error, not a labelled node.
+    """
+
+    @staticmethod
+    def inject(q):
+        from tests.tck.steps.graph_setup import _inject_label
+
+        return _inject_label(q, "TCK_X", inject_anonymous=False)
+
+    def test_wrapped_property_map_keeps_the_pattern_intact(self):
+        out = self.inject(
+            "CREATE (theMatrixReloaded:Movie {title: 'The Matrix Reloaded', released: 2003,\n"
+            "        tagline: 'Free your mind'})"
+        )
+        assert "()theMatrixReloaded" not in out
+        assert (
+            "(theMatrixReloaded:Movie:TCK_X {title: 'The Matrix Reloaded', released: 2003,"
+            in out
+        )
+        assert "tagline: 'Free your mind'})" in out
+
+    def test_wrapped_node_is_still_a_single_node_pattern(self):
+        out = self.inject("CREATE (a:Movie {title: 'X',\n  tagline: 'Y'})")
+        # Exactly one label was added for the one logical node, not one per
+        # physical line (which the old per-line "(" -> "()" corruption could
+        # double up on a re-scan of the leftover text).
+        assert out.count(":TCK_X") == 1
+
+    def test_relationship_after_a_wrapped_node_is_unaffected(self):
+        out = self.inject(
+            "CREATE (a:Movie {title: 'X',\n"
+            "  tagline: 'Y'})\n"
+            "CREATE (a)-[:DIRECTED]->(b:Person {name: 'Z'})"
+        )
+        assert "()a" not in out
+        assert "(a:Movie:TCK_X {title: 'X'," in out
+        assert "CREATE (a)-[:DIRECTED]->(b:Person:TCK_X {name: 'Z'})" in out
+
+
 class TestSetAfterStageBindsCteParamsFirst:
     """List12 [1]/[2]: a SET after `WITH` prefixes its DML with the stage CTE, whose
     markers come first in the SQL. The SET value was bound ahead of them, so the
