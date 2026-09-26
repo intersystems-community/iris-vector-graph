@@ -2714,6 +2714,8 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
         for _pv in [n for n in context.named_paths if _is_fixed_named_path(context, n)]:
             context.named_paths.pop(_pv, None)
         context.scalar_variables.update(_fwd)
+        # ... holding the path JSON, which nodes(p) / length(p) read
+        context.stage_path_vars = _fwd
     context.variable_aliases = new_aliases
 
 
@@ -17397,6 +17399,17 @@ def _expr_fn_path_funcs(fn, expr, context):
     # null literal: nodes(null), relationships(null), length(null) → NULL
     if isinstance(arg, ast.Literal) and arg.value is None:
         return "NULL"
+    if (
+        isinstance(arg, ast.Variable)
+        and arg.name not in context.named_paths
+        and arg.name in getattr(context, "stage_path_vars", ())
+        and fn in ("nodes", "length")
+    ):
+        # a path projected through WITH: the stage column holds {"nodes": [...], "rels": [...]}
+        col = translate_expression(arg, context, segment="select")
+        if fn == "nodes":
+            return f"SQLUser.JSON_VALUE({col}, '$.nodes')"
+        return f"SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE({col}, '$.rels'))"
     if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
         if isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
             if fn in ("nodes", "relationships"):
@@ -18706,6 +18719,34 @@ def translate_return_clause(ret, context):
                 if has_agg:
                     context.group_by_items.append(node_expr)
                 continue
+        # nodes(p) of a path projected through WITH holds node ids; return the nodes
+        _ie = item.expression
+        if (
+            isinstance(_ie, ast.FunctionCall)
+            and _ie.function_name.lower() == "nodes"
+            and len(_ie.arguments) == 1
+            and isinstance(_ie.arguments[0], ast.Variable)
+            and _ie.arguments[0].name not in context.named_paths
+            and _ie.arguments[0].name in getattr(context, "stage_path_vars", ())
+            and item.alias
+        ):
+            col = translate_expression(_ie, context, segment="select")
+            lc = context.next_alias("lc")
+            nid = f"{lc}.x"
+            node_json = (
+                f"'{{\"_id\":\"' || {nid} || '\",' "
+                f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+                f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+            )
+            context.select_items.append(
+                f"COALESCE((SELECT JSON_ARRAYAGG({node_json}) FROM JSON_TABLE({col}, "
+                f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc}), CAST('[]' AS VARCHAR(256))) "
+                f"AS {_safe_alias(item.alias)}"
+            )
+            context.optional_null_row_items.append("NULL")
+            if has_agg:
+                context.group_by_items.append(col)
+            continue
         context._graph_value_elems = isinstance(item.expression, ast.MapLiteral) or (
             isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list)
         )

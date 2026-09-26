@@ -2301,3 +2301,16 @@ class TestUnboundedVarLengthPatternPredicate:
     def test_bounded_predicate_still_unrolls(self):
         sql = tr("MATCH (n), (m) WHERE (n)-[:R*1..2]->(m) RETURN n, m").sql
         assert "CY_VLP_PATHS" not in sql, sql
+
+
+class TestPathFunctionsOnWithProjectedPath:
+    """With6 [4]: a path projected through WITH is a stage column holding the path
+    JSON; nodes(p) / length(p) must read it instead of raising 'not a named path'."""
+
+    def test_nodes_of_projected_path(self):
+        sql = tr("MATCH p = ()-[*]->() WITH count(*) AS c, p AS p RETURN nodes(p) AS nodes").sql
+        assert "SQLUser.JSON_VALUE(Stage1.p, '$.nodes')" in sql, sql
+
+    def test_length_of_projected_path(self):
+        sql = tr("MATCH p = ()-[]->() WITH p RETURN length(p) AS l").sql
+        assert "SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE(Stage1.p, '$.rels'))" in sql, sql
