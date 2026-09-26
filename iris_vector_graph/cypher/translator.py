@@ -561,6 +561,10 @@ class SQLQuery(BaseModel):
     # Result columns that return a stored property as it is (`n.flag`): the engine
     # reads 'true' / 'false' there as booleans (see iris_vector_graph.prop_values).
     bool_text_columns: List[int] = Field(default_factory=list)
+    # SQL aliases of RETURN items that are a comparison or label test: IRIS can type
+    # the CASE that computes them as VARCHAR, so the engine reads '1' / '0' there.
+    # By name, not index: a node or relationship item expands to several columns.
+    bool_expr_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -642,6 +646,8 @@ class TranslationContext:
         )
         # Maps SQL-safe column alias → Cypher expression text for post-execution column renaming.
         self.column_name_map: Dict[str, str] = {} if parent is None else parent.column_name_map
+        # SQL aliases of boolean-valued RETURN items (SQLQuery.bool_expr_columns).
+        self.bool_expr_aliases: List[str] = [] if parent is None else parent.bool_expr_aliases
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
         # List of (label_value, param_placeholder) tuples — one per optional label constraint.
@@ -4068,6 +4074,7 @@ def translate_to_sql(
     sql_query.graph_context = graph_context
     _store_bool_params_as_text(sql_query)
     sql_query.bool_text_columns = _bool_text_columns(cypher_query)
+    sql_query.bool_expr_columns = list(context.bool_expr_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     return sql_query
@@ -19311,6 +19318,8 @@ def translate_return_clause(ret, context):
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
             context.select_items.append(f"{sql} AS {safe}")
+            if isinstance(item.expression, (ast.BooleanExpression, ast.LabelPredicate)):
+                context.bool_expr_aliases.append(safe)
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain

@@ -193,6 +193,37 @@ class TestReadersTreatTextAsBoolean:
         assert res.rows == [("true",)]
 
 
+class TestBooleanExpressionColumns:
+    """A comparison or label test that IRIS types as VARCHAR comes back as '1'/'0';
+    WithOrderBy1 [45] (list = after ORDER BY + collect) and Graph5 [1]-[3] (a:B)."""
+
+    def test_comparison_and_label_items_are_tagged_by_alias(self):
+        t = tr("MATCH (a) RETURN a, a:B AS l, a.k = 1 AS e, a.k AS k, NOT a.f AS n")
+        assert t.bool_expr_columns == ["l", "e", "n"]
+
+    def test_unaliased_items_use_generated_alias(self):
+        t = tr("MATCH (a) RETURN a, a:B")
+        assert t.bool_expr_columns == list(t.column_name_map)
+
+    def test_non_boolean_items_not_tagged(self):
+        t = tr("MATCH (a) RETURN a.k + 1 AS k, toString(a.k = 1) AS s")
+        assert t.bool_expr_columns == []
+
+    def test_engine_decodes_by_name_when_node_expands_columns(self):
+        from types import SimpleNamespace
+
+        from iris_vector_graph._engine.query import _decode_bool_text_columns
+
+        sq = SimpleNamespace(bool_text_columns=[], bool_expr_columns=['"result"'], return_arity=2)
+        res = SimpleNamespace(
+            columns=["a_id", "a_labels", "a_props", "result"],
+            rows=[("1", "[]", "[]", "1"), ("0", "[]", "[]", "0"), ("x", "[]", "[]", 1), ("y", "[]", "[]", None)],
+        )
+        _decode_bool_text_columns(res, sq)
+        assert [r[0] for r in res.rows] == ["1", "0", "x", "y"]
+        assert [r[3] for r in res.rows] == [True, False, 1, None]
+
+
 class TestHarnessIsStrict:
     def test_legacy_text_no_longer_equals_boolean(self):
         from tests.tck.steps.comparison import normalise_iris_value
