@@ -175,16 +175,6 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
     assert diff is None, f"Result mismatch:\n{diff}"
 
 
-def _hydrator(context):
-    """Reads result nodes / path hops back from the scenario's tables (paths carry ids only)."""
-    conn = getattr(context, "conn", None)
-    engine = getattr(context, "engine", None)
-    if conn is None or not hasattr(conn, "cursor"):
-        return None
-    schema = getattr(engine, "_schema_prefix", None)
-    return SqlHydrator(conn, schema if isinstance(schema, str) and schema else "Graph_KG")
-
-
 def _fail_on_query_error(context, expected_what: str) -> None:
     """A query that raised, or returned a result carrying an error, fails the step
     (spec 229 FR-005/FR-006) with the exception type and message."""
@@ -199,3 +189,13 @@ def _fail_on_query_error(context, expected_what: str) -> None:
         raise AssertionError(
             f"Expected {expected_what}, but the query returned an error result: {result_error}"
         )
+
+
+def _hydrator(context):
+    """Reads result nodes / path hops back from the scenario's tables (paths carry ids only)."""
+    conn = getattr(context, "conn", None)
+    engine = getattr(context, "engine", None)
+    if conn is None or not hasattr(conn, "cursor"):
+        return None
+    schema = getattr(engine, "_schema_prefix", None)
+    return SqlHydrator(conn, schema if isinstance(schema, str) and schema else "Graph_KG")
