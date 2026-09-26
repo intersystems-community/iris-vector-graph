@@ -6182,15 +6182,42 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             # rdf_edges holds one edge per (s, p, o_id, graph_id), so a row whose edge
             # already exists — an earlier row or clause created it — is skipped rather
             # than failing the transaction on u_spo_graph.
+            #
+            # Inline relationship properties were dropped here: unlike the multigraph
+            # INSERT (_create_matched_edge_keyed), this one never carried a qualifiers
+            # column, so a non-literal-endpoint CREATE/MERGE with `{k: v}` silently lost
+            # it (Merge5 [8], Merge5 [14], Merge7 [4], Merge7 [5]). Build the same
+            # qualifiers JSON _create_matched_edge_keyed does — literal props via
+            # ``_rel_literal_props``, a WITH/UNWIND-bound value via ``_dyn_stage_props``
+            # spliced in with ``||`` since it is only known as a column at execution time.
+            import json as _json_cre
+
+            _props_literal = _rel_literal_props(rel, context)
+            _q_col, _q_val, _q_params = "", "", []
+            if _dyn_stage_props:
+                _frags = []
+                for _k, _v in (_props_literal or {}).items():
+                    _frags.append("? || ?")
+                    _q_params.append(_json_cre.dumps(_k) + ": ")
+                    _q_params.append(_json_cre.dumps(_v))
+                for _idx, _k in enumerate(_dyn_keys):
+                    _frags.append(f"? || COALESCE(_ge.__dyn{_idx}, 'null')")
+                    _q_params.append(_json_cre.dumps(_k) + ": ")
+                _q_col = ", qualifiers"
+                _q_val = ", ('{' || " + " || ', ' || ".join(_frags) + " || '}')"
+            elif _props_literal:
+                _q_col, _q_val = ", qualifiers", ", ?"
+                _q_params = [_json_cre.dumps(_props_literal)]
             _n_cte = len(context.all_stage_params) if cte2 else 0
             context.add_dml(
-                f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
-                f"SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM ({sql2}) AS _ge "
+                f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id{_q_col}) "
+                f"SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ?{_q_val} FROM ({sql2}) AS _ge "
                 f"WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} _gx "
                 f"WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 "
                 f"AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
                 p2[:_n_cte]
                 + [_graph_of(context)]
+                + _q_params
                 + s_p
                 + [rt]
                 + t_p

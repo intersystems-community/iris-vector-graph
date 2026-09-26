@@ -51,6 +51,12 @@ def _on(query: str) -> list:
     return list(zip(out["sql"], out["params"]))
 
 
+def _off(query: str) -> list:
+    """(sql, params) pairs for ``query`` translated with the mode off."""
+    out = translate(query, engine=_Engine(False))
+    return list(zip(out["sql"], out["params"]))
+
+
 def _edge_writes(stmts) -> list:
     return [(s, p) for s, p in stmts if "INSERT INTO rdf_edges" in s]
 
@@ -231,6 +237,50 @@ def test_merge_relationship_property_still_literal_when_not_stage_bound():
     )
     assert "__dyn" not in sql
     assert repr('{"name": "x"}') in params
+
+
+def test_mode_off_create_after_match_keeps_literal_properties():
+    """Merge5 [8] / TCK Create-after-MATCH: with a non-literal endpoint (bound by
+    MATCH rather than known at translate time), the single-edge INSERT never
+    carried a qualifiers column, so `{name: 'Lola'}`-style inline properties on
+    a freshly created relationship were silently dropped when multigraph mode
+    is off (the product's default). Regression for the missing ``+properties``
+    side effect."""
+    (sql, params), = _edge_writes(
+        _off("MATCH (a:A), (b:B) CREATE (a)-[r:T {name: 'Lola'}]->(b) RETURN r.name")
+    )
+    assert "qualifiers" in sql
+    assert repr('{"name": "Lola"}') in params
+    assert _markers(sql) == len(params)
+
+
+def test_mode_off_merge_relationship_property_from_a_with_stage_is_not_dropped():
+    """Merge5 [14] "Using list properties via variable" with multigraph mode off:
+    same root cause as the mode-on regression above (`_rel_dynamic_stage_props`),
+    but the single-edge INSERT path never read it at all."""
+    stmts = _off(
+        "CREATE (a:Foo), (b:Bar) WITH a, b UNWIND ['a,b', 'a,b'] AS str "
+        "WITH a, b, split(str, ',') AS roles "
+        "MERGE (a)-[r:FB {foobar: roles}]->(b) RETURN count(*)"
+    )
+    (sql, params), = _edge_writes(stmts)
+    assert "qualifiers" in sql
+    assert "__dyn0" in sql
+    assert repr('"foobar": ') in params
+    assert _markers(sql) == len(params)
+
+
+def test_mode_off_on_match_set_r_equals_node_has_something_to_remove():
+    """Merge7 [4]/[5] "Copying properties ... with ON MATCH": the *setup* query
+    `MATCH (a),(b) CREATE (a)-[:TYPE {name: 'bar'}]->(b)` must actually store
+    `name: 'bar'` with multigraph off, or the later `ON MATCH SET r = a` has
+    nothing to remove and `-properties` under-reports (observed 0, expected 1)
+    even though the new value was written correctly."""
+    (sql, params), = _edge_writes(
+        _off("MATCH (a:A), (b:B) CREATE (a)-[:TYPE {name: 'bar'}]->(b)")
+    )
+    assert "qualifiers" in sql
+    assert repr('{"name": "bar"}') in params
 
 
 def test_merge_undirected_guards_both_directions():
