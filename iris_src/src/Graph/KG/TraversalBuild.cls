@@ -76,6 +76,16 @@ ClassMethod BuildKG() As %Status
 		// the graph and the subject; it does not any more, and a reader still passing
 		// that 0 finds nothing and reports zero rather than erroring (FR-015).
 		Set count = 0
+		// Spec 234: once any graph is a multigraph, rebuild from the keyed rows
+		// instead. With no graph in that mode the loop below runs exactly as before.
+		If $Data(^IVG.GraphMode) {
+			Set count = ..BuildKGKeyed()
+			TCommit
+			Try { Do ..BuildNKG() } Catch buildEx {
+				Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: BuildNKG skipped: "_buildEx.DisplayString(), 0, 1)
+			}
+			Return $$$OK
+		}
 		&sql(DECLARE c3 CURSOR FOR SELECT s, p, o_id, qualifiers, graph_id FROM Graph_KG.rdf_edges)
 		&sql(OPEN c3)
 		For {
@@ -111,6 +121,79 @@ ClassMethod BuildKG() As %Status
 		If $TLevel > 0 { TRollback }
 		Return ex.AsStatus()
 	}
+}
+
+/// BuildKG's edge pass when some graph is a multigraph (spec 234). Rows arrive
+/// ordered by triple and ekey, so each triple is written once: the leaf takes the
+/// lowest ekey's weight, and a multigraph triple with two or more edges also gets
+/// its children and "#" counter — the layout EdgeScan.WriteAdjacencyKeyed keeps
+/// incrementally. deg/degp count rows, as the single-edge loop does. A graph not
+/// in multigraph mode gets leaves only, whatever its rows. Dynamic SQL, because
+/// ekey is not a column until the 234 migration has run. Returns the row count.
+ClassMethod BuildKGKeyed() As %Integer [ Private ]
+{
+	Set tSQL = "SELECT s, p, o_id, qualifiers, graph_id, ekey FROM Graph_KG.rdf_edges"
+	Set tSQL = tSQL_" ORDER BY graph_id, s, p, o_id, ekey"
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL)
+	If tRS.%SQLCODE < 0 {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "BuildKG keyed SQLCODE "_tRS.%SQLCODE_": "_tRS.%Message))
+	}
+	Set tCount = 0
+	Set (tG, tS, tP, tO) = "", tN = 0
+	Kill tEdges
+	For {
+		Set tMore = tRS.%Next()
+		If tMore {
+			Set s = tRS.%GetData(1), p = tRS.%GetData(2), o = tRS.%GetData(3)
+			If (s = "") || (p = "") || (o = "") Continue
+			Set g = ##class(Graph.KG.GraphKey).ForIndex(tRS.%GetData(5))
+			Set tSame = (tN > 0) && (g = tG) && (s = tS) && (p = tP) && (o = tO)
+		}
+		If (tN > 0) && ('tMore || 'tSame) {
+			Do ..WriteKeyedTriple(tG, tS, tP, tO, .tEdges, tN)
+			Kill tEdges
+			Set tN = 0
+		}
+		Quit:'tMore
+		Set tG = g, tS = s, tP = p, tO = o
+		Set weight = 1.0
+		Set qual = tRS.%GetData(4)
+		If qual '= "" {
+			Try {
+				Set obj = $Select($IsObject(qual): qual, 1: ##class(%DynamicObject).%FromJSON(qual))
+				If ($IsObject(obj)) && (obj.weight '= "") Set weight = obj.weight
+			} Catch {}
+		}
+		Set tN = tN + 1
+		Set tEdges(tN) = $ListBuild(+tRS.%GetData(6), weight)
+		Set tCount = tCount + 1
+		If tCount # 50000 = 0 { TCommit  TStart }
+	}
+	Quit tCount
+}
+
+/// Write one triple's pN rows (pEdges(i) = $ListBuild(ekey, weight), lowest ekey
+/// first) into ^KG out/in/deg/degp.
+ClassMethod WriteKeyedTriple(g, s, p, o, ByRef pEdges, pN As %Integer) [ Private ]
+{
+	Set tMulti = (pN > 1) && ($Get(^IVG.GraphMode(g)) = "multi")
+	Set tLeaf = $List(pEdges(1), 2)
+	If 'tMulti {
+		// The single-edge loop's answer: the last row's weight on a bare leaf.
+		Set tLeaf = $List(pEdges(pN), 2)
+	}
+	Set ^KG("out", g, s, p, o) = tLeaf
+	Set ^KG("in", g, o, p, s) = tLeaf
+	If tMulti {
+		For i = 1:1:pN {
+			Set tEkey = $List(pEdges(i), 1), tW = $List(pEdges(i), 2)
+			Set ^KG("out", g, s, p, o, tEkey) = tW
+			Set ^KG("in", g, o, p, s, tEkey) = tW
+		}
+		Set ^KG("out", g, s, p, o, "#") = pN
+	}
+	Set tmp = $Increment(^KG("deg", g, s), pN)
+	Set tmp = $Increment(^KG("degp", g, s, p), pN)
 }
 
 ClassMethod InitNKGSkeleton() As %Status

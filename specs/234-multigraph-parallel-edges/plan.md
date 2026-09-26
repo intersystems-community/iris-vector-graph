@@ -82,6 +82,12 @@ With the mode off, the SQL, `^KG` and ledger bytes are identical to today.
 - **Inventory**: an entry in `STORE_PLAN` (`_engine/snapshot.py:46`) and one in
   `GraphStores.cls`. `Eraser.EraseGraph` (`Eraser.cls:47`) kills the entry, and
   `EraseAll` (`:294`) kills the whole global.
+- **As built**: `IsMulti`, `Set` and `ParallelCount` take the graph _name_,
+  not `gKey`, and resolve the key with `GraphKey.ForIndex` themselves.
+  `ParallelCount` needs the SQL spelling of the graph (`GraphKey.ForName`) for
+  its `WHERE`, which a `gKey` cannot give back. A fourth method, `Apply(graph,
+on)`, returns `"ok"`, `"parallel_edges_present:N"` or `"error:…"` so the
+  Python side does not have to parse a `%Status`.
 - **Python-side cache**: a per-connection dictionary cleared by
   `set_multigraph`. The translator gets the mode through `context`, like
   `graph_context`.
@@ -101,6 +107,13 @@ With the mode off, the SQL, `^KG` and ledger bytes are identical to today.
 
   The order means there is always a unique key in place. The step is idempotent,
   and it reports `already at 234`.
+
+  Spike T002 confirmed this order is required (research R8): `ADD COLUMN …
+DEFAULT 0` leaves existing rows NULL, and `NOT NULL` fails until the fill has
+  run. Each step is skipped when the catalog shows it done, so a migration
+  interrupted part-way resumes. At 234 the status block skips
+  `update_spo_unique_constraint`, which would otherwise try to re-create
+  `u_spo_graph`.
 
 - **EdgeScan**: `WriteAdjacencyKeyed` and `DeleteAdjacencyKeyed` go in
   `EdgeScan.cls`, next to `WriteAdjacency` (`:133`) and `DeleteAdjacency`

@@ -155,6 +155,8 @@ class _GraphSubEngine:
     def get_edge_count(self, *a, **kw): return self._e.get_edge_count(*a, **kw)
     def get_labels(self, *a, **kw): return self._e.get_labels(*a, **kw)
     def get_relationship_types(self, *a, **kw): return self._e.get_relationship_types(*a, **kw)
+    def set_multigraph(self, *a, **kw): return self._e.set_multigraph(*a, **kw)
+    def is_multigraph(self, *a, **kw): return self._e.is_multigraph(*a, **kw)
 
 
 class _CypherSubEngine:

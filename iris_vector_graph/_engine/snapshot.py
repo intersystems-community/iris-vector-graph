@@ -87,6 +87,9 @@ STORE_PLAN = {
     "^NKG": "global",
     '^IVG.Ledger("tuple")': "global",
     '^IVG.Ledger("stmt")': "global",
+    # Spec 234: which graphs are multigraphs. Without it a restored multigraph's
+    # parallel edges come back in a graph that refuses a second edge per triple.
+    "^IVG.GraphMode": "global",
     "^ArnoKG": "derived",
 }
 
@@ -701,6 +704,8 @@ class SnapshotMixin:
                 ("Graph.KG.LedgerRevisionD", [[]]),
                 ("Graph.KG.LedgerRevisionI", [[]]),
                 ("Graph.KG.LedgerStatsD", [[]]),
+                # spec 234: per-graph multigraph mode
+                ("IVG.GraphMode", [[]]),
             ]
             try:
                 iris_obj = self._iris_obj()
