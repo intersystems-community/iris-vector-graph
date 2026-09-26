@@ -5137,6 +5137,38 @@ def _defer_edge_delete_past_merge(context, pending, merge):
     )
 
 
+def _defer_multi_delete_past_merge(context, pending, merge):
+    """`MATCH (a)…-[ab]->(b)-[bc]->(c) DELETE ab, bc, b, c MERGE …` (Merge5 [20]).
+
+    `translate_delete_clause`'s multi-target path physically removes the edges
+    and nodes it deletes right away. A later MERGE that reuses a surviving
+    variable (`a`) reaches it through the same join graph the MATCH built —
+    which still walks through the edges/nodes just deleted — so it finds
+    nothing. Move those physical deletes past the MERGE, the same way the
+    single-edge case does, and keep the node ids they will remove out of the
+    MERGE's own existence checks (`context._merge_excluded_nodes`), so a node
+    this DELETE removes cannot satisfy a later MERGE (it stays gone once the
+    deferred delete runs).
+
+    Returns the deferred statements for the caller to append after the MERGE,
+    or None when the rewrite does not apply.
+    """
+    if pending is None:
+        return None
+    start, end, n_stages, node_id_keys = pending
+    if n_stages != len(context.stages) or end != len(context.dml_statements):
+        return None
+    if not merge.pattern.nodes:
+        return None
+    deferred = [(f"__after_result__ {sql}", params) for sql, params in context.dml_statements[start:end]]
+    del context.dml_statements[start:end]
+    if node_id_keys:
+        context._merge_excluded_nodes = list(getattr(context, "_merge_excluded_nodes", None) or []) + list(
+            node_id_keys
+        )
+    return deferred
+
+
 def translate_updating_clause(upd, context, metadata):
     if isinstance(upd, ast.CreateClause):
         _start = len(context.dml_statements)
@@ -5145,18 +5177,25 @@ def translate_updating_clause(upd, context, metadata):
         return
     pending = getattr(context, "_pending_edge_delete", None)
     context._pending_edge_delete = None
+    pending_multi = getattr(context, "_pending_multi_delete", None)
+    context._pending_multi_delete = None
     if isinstance(upd, ast.DeleteClause):
         translate_delete_clause(upd, context, metadata)
     elif isinstance(upd, ast.MergeClause):
         if upd.path_variable:
             _name_merge_path_elements(upd)
         deferred = _defer_edge_delete_past_merge(context, pending, upd)
+        deferred_multi = None
+        if deferred is None:
+            deferred_multi = _defer_multi_delete_past_merge(context, pending_multi, upd)
         try:
             translate_merge_clause(upd, context, metadata)
         finally:
             context._merge_excluded_edges = None
         if deferred is not None:
             context.dml_statements.append(deferred)
+        if deferred_multi is not None:
+            context.dml_statements.extend(deferred_multi)
         if upd.path_variable:
             _register_merge_path(upd, context)
     elif isinstance(upd, ast.SetClause):
@@ -6340,6 +6379,8 @@ def translate_delete_clause(delete, context, metadata):
         context.dml_statements.append((f"__capture_ids__ {key}\n{cte}{subquery}", subparams))
         captured[(name, alias)] = f"__IDS_{key}__"
 
+    _mutate_start = len(context.dml_statements)
+
     # Relationships first.
     for name, alias, is_edge, is_stage_alias in targets:
         if not is_edge:
@@ -6403,6 +6444,19 @@ def translate_delete_clause(delete, context, metadata):
     for ids in node_ids:
         context.add_dml(f"DELETE FROM {_table('nodes')} WHERE node_id IN ({ids})", [])
 
+    if not single_edge and _mutate_start < len(context.dml_statements):
+        # A later MERGE in the same statement may need a variable this DELETE
+        # did not remove (e.g. `a` survives `DELETE ab, bc, b, c`) but whose
+        # only path through the MATCH's join graph runs through what this
+        # DELETE removes. `_defer_multi_delete_past_merge` can move these
+        # physical deletes past that MERGE so its joins still see them.
+        context._pending_multi_delete = (
+            _mutate_start,
+            len(context.dml_statements),
+            len(context.stages),
+            list(node_ids),
+        )
+
 
 def _merge_val_match(p_alias: str, val) -> str:
     """Existing-node probe for one MERGE property: a boolean matches any spelling."""
@@ -6437,8 +6491,19 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             return context.input_params.get(v.name, v)
         return v
 
+    # A `MATCH … DELETE … MERGE …` in the same statement (Merge5 [20]) defers
+    # the physical node delete past this MERGE so a surviving variable's join
+    # chain still works, but the node it removes must stay invisible to this
+    # existence check — it is logically gone even though its row is still
+    # there until the deferred delete runs after the result.
+    excluded_nodes = getattr(context, "_merge_excluded_nodes", None) if context is not None else None
+    exclusion_sql = "".join(f" AND _ml0.node_id NOT IN ({key})" for key in (excluded_nodes or []))
+
     if not labels and not props:
         # No constraints — any node in the graph matches; check by a sentinel always-true.
+        if excluded_nodes:
+            excl = "".join(f" AND node_id NOT IN ({key})" for key in excluded_nodes)
+            return f"SELECT 1 FROM {_table('nodes')} WHERE 1=1{excl}", []
         return f"SELECT 1 FROM {_table('nodes')} WHERE 1=1", []
 
     joins = []
@@ -6484,7 +6549,7 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             )
             prop_params.extend(_merge_val_params(k, val))
         return (
-            lbl0_join + extra_label_joins + prop_joins,
+            lbl0_join + extra_label_joins + prop_joins + exclusion_sql,
             params_prefix + prop_params,
         )
 
@@ -6506,7 +6571,7 @@ def _merge_pattern_existence_sql(merge_node, context=None):
                 f'{p_alias}.s = _ml0.node_id AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
             )
         prop_params.extend(_merge_val_params(k, val))
-    return " ".join(prop_joins_parts), prop_params
+    return " ".join(prop_joins_parts) + exclusion_sql, prop_params
 
 
 def _validate_merge_pattern_no_null_properties(merge_node):
@@ -6866,6 +6931,12 @@ def translate_merge_clause(merge, context, metadata):
                         else f"{p_alias}.val = {context.add_join_param(str(val))}"
                     )
                 )
+            # A node this statement's own (deferred) DELETE will remove is
+            # logically gone already (Merge5 [20]): the pattern lookup above
+            # would otherwise still find it, since its row survives until the
+            # deferred delete runs after the result.
+            for key in getattr(context, "_merge_excluded_nodes", None) or []:
+                context.where_conditions.append(f"{node_alias}.node_id NOT IN ({key})")
 
     # --- Rewrite DML + SELECT for relationship MERGE patterns ---
     # For MERGE patterns with relationships (e.g., MERGE (a)-[r:TYPE]->(b)),

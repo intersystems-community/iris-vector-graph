@@ -90,6 +90,47 @@ class TestMergeOnMatchedPropertyRunsPerRow:
         assert plan_row_merge(parse_query(q), {}) is None
 
 
+class TestMergeAfterDeleteReusingHeadBoundVars:
+    """Merge5 [20]/[21]: `MATCH ... DELETE ... MERGE ...` where the MERGE pattern
+    reuses a node the head's MATCH bound (`a`, `b`, ...), not just a fresh
+    pattern variable local to the MERGE.
+
+    The row-collapse plan (`MERGE after a DELETE`) only replays entity identity
+    when the suffix's MERGE patterns are entirely self-contained (Merge1 [14]:
+    `MATCH (a) DELETE a MERGE (b:A)` — `b` is new). When the suffix also
+    references a variable the head bound (`a`/`b`/`t` here), that identity has
+    to flow row-by-row from the head's MATCH, which a bare `count(*)` row
+    cannot carry — so the plan must bail and let the static translator (which
+    sees the whole MATCH) handle the statement.
+    """
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            # Merge5 [21]: reuses both matched nodes in the MERGE relationship.
+            "MATCH (a)-[t:T]->(b) DELETE t MERGE (a)-[t2:T {name: 'rel3'}]->(b) "
+            "RETURN t2.name",
+            # Merge5 [20]: reuses `a` in a later MERGE relationship.
+            "MATCH (a:A)-[ab]->(b:B)-[bc]->(c:C) DELETE ab, bc, b, c "
+            "MERGE (newB:B {num: 1}) MERGE (a)-[:REL]->(newB) MERGE (newC:C) "
+            "MERGE (newB)-[:REL]->(newC)",
+        ],
+    )
+    def test_reused_head_bound_var_keeps_the_static_translation(self, q):
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        assert plan_row_merge(parse_query(q), {}) is None
+
+    def test_merge1_14_still_uses_the_row_collapse_plan(self):
+        """Sanity check: a MERGE with no head-bound variable still takes the
+        fast row-collapse path this branch exists for."""
+        from iris_vector_graph.cypher.merge_rows import plan_row_merge
+
+        plan = plan_row_merge(parse_query("MATCH (a) DELETE a MERGE (b:A)"), {})
+        assert plan is not None
+        assert plan.row_vars == []
+
+
 class TestMergeRelationshipOnCreateOnMatch:
     """Merge6 [1] / Merge7 [2]: `MATCH (a:A), (b:B) MERGE (a)-[r:KNOWS]->(b)` with
     an ON CREATE / ON MATCH action.
