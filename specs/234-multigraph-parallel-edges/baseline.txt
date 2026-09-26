@@ -1,0 +1,85 @@
+# Spec 234 T001 baseline (pre-change)
+
+Taken on ivg-iris-enterprise (USER@31972) against the classes and Python of
+commit 2b3da99, before any spec 234 change was deployed.
+
+rdf_edges columns: ['edge_id', 'graph_id', 's', 'p', 'o_id', 'qualifiers']
+rdf_edges constraints: ['fk_edges_dest', 'fk_edges_source', 'IDKEY', 'IDKEYField_As_PKey', 'u_spo_graph']
+
+## SC-004 performance (ledger off)
+
+graph ivg234:perf: 10000 nodes, 100000 edge rows, KGEdgeCount(all graphs) 10000, load 79.8s
+create_edge median over 200: 0.882 ms (p90 1.170 ms)
+^KG("out") per-source scan (EdgeScan.MatchEdges, 200 sources) median: 0.118 ms (p90 0.139 ms), last result 421 bytes
+(A whole-graph MatchEdges over 100k edges throws: its JSON result passes the long-string limit.)
+(load time is 0 when the graph was already loaded by an earlier run of this script.)
+
+## SC-003 seeded fixture
+
+seed_graph(engine, 5, 4, prefix='ivg234:u') plus ivg234:a -IVG234_LINKS-> ivg234:b in
+graph ivg234:storage; ledger.enable(); rebuild_kg().
+
+ledger head: seq=1 revision_id=76df67c2b9ad11f19bc2dae654c7d383 kind=genesis
+ledger verify: diverges; 8 difference(s); classification unrecorded_writes
+(revision_id is a fresh UUID per run; compare seq, kind, the verify line and the dump hash.)
+^KG dump sha256 (excluding __version): 5af9d96e1b93c0ad04c5aeeb42a115d20e37d8fc3cfd0536fe7203c7bd3db75b
+^KG dump lines: 43
+
+```text
+^KG('deg', '0', 'ivg234:u0') = '1'
+^KG('deg', '0', 'ivg234:u1') = '1'
+^KG('deg', '0', 'ivg234:u2') = '1'
+^KG('deg', '0', 'ivg234:u3') = '1'
+^KG('deg', 'ivg234:storage', 'ivg234:a') = '1'
+^KG('deg2p', '0', 'ivg234:u0', 'R') = '1'
+^KG('deg2p', '0', 'ivg234:u1', 'R') = '1'
+^KG('deg2p', '0', 'ivg234:u2', 'R') = '1'
+^KG('deg2p_exact', '0', 'ivg234:u0', 'R') = '1'
+^KG('deg2p_exact', '0', 'ivg234:u1', 'R') = '1'
+^KG('deg2p_exact', '0', 'ivg234:u2', 'R') = '1'
+^KG('degp', '0', 'ivg234:u0', 'R') = '1'
+^KG('degp', '0', 'ivg234:u1', 'R') = '1'
+^KG('degp', '0', 'ivg234:u2', 'R') = '1'
+^KG('degp', '0', 'ivg234:u3', 'R') = '1'
+^KG('degp', 'ivg234:storage', 'ivg234:a', 'IVG234_LINKS') = '1'
+^KG('in', '0', 'ivg234:u1', 'R', 'ivg234:u0') = '1'
+^KG('in', '0', 'ivg234:u2', 'R', 'ivg234:u1') = '1'
+^KG('in', '0', 'ivg234:u3', 'R', 'ivg234:u2') = '1'
+^KG('in', '0', 'ivg234:u4', 'R', 'ivg234:u3') = '1'
+^KG('in', 'ivg234:storage', 'ivg234:b', 'IVG234_LINKS', 'ivg234:a') = '1'
+^KG('label', '0', 'Seed', 'ivg234:u0') = ''
+^KG('label', '0', 'Seed', 'ivg234:u1') = ''
+^KG('label', '0', 'Seed', 'ivg234:u2') = ''
+^KG('label', '0', 'Seed', 'ivg234:u3') = ''
+^KG('label', '0', 'Seed', 'ivg234:u4') = ''
+^KG('out', '0', 'ivg234:u0', 'R', 'ivg234:u1') = '1'
+^KG('out', '0', 'ivg234:u1', 'R', 'ivg234:u2') = '1'
+^KG('out', '0', 'ivg234:u2', 'R', 'ivg234:u3') = '1'
+^KG('out', '0', 'ivg234:u3', 'R', 'ivg234:u4') = '1'
+^KG('out', 'ivg234:storage', 'ivg234:a', 'IVG234_LINKS', 'ivg234:b') = '1'
+^KG('prop', '0', 'ivg234:u0', 'id') = 'ivg234:u0'
+^KG('prop', '0', 'ivg234:u0', 'idx') = '0'
+^KG('prop', '0', 'ivg234:u1', 'id') = 'ivg234:u1'
+^KG('prop', '0', 'ivg234:u1', 'idx') = '1'
+^KG('prop', '0', 'ivg234:u2', 'id') = 'ivg234:u2'
+^KG('prop', '0', 'ivg234:u2', 'idx') = '2'
+^KG('prop', '0', 'ivg234:u3', 'id') = 'ivg234:u3'
+^KG('prop', '0', 'ivg234:u3', 'idx') = '3'
+^KG('prop', '0', 'ivg234:u4', 'id') = 'ivg234:u4'
+^KG('prop', '0', 'ivg234:u4', 'idx') = '4'
+^KG('prop', 'ivg234:storage', 'ivg234:a', 'id') = 'ivg234:a'
+^KG('prop', 'ivg234:storage', 'ivg234:b', 'id') = 'ivg234:b'
+```
+
+## Notes
+
+- Script: /tmp/baseline234.py (not committed), run with PYTHONPATH on a
+  `git archive` of 2b3da99. Before this run the live rdf_edges had been
+  returned to the pre-234 shape (ekey and u_spo_graph_ekey dropped), so the
+  columns and constraints above are the real pre-change schema.
+- Two runs gave the same ^KG dump sha256. create_edge medians were 0.687 ms
+  and 0.882 ms, so SC-004 comparisons should allow for that run-to-run noise.
+- KGEdgeCount counts (graph, source) pairs, not edges: 10000 here.
+- The ledger verify "diverges / unrecorded_writes" result is pre-existing:
+  the fixture writes before ledger.enable(), and SC-003 compares against it as
+  it stands.

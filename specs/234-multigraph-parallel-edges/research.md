@@ -178,6 +178,16 @@ With layout 1, the representative weight `w_rep` is the weight of the live edge
 with the lowest `ekey`. Spec FR-005 gives the rules for moving from one to many
 edges and back.
 
+**Spike T004 (2026-09-26, enterprise image, USER@31972)** confirmed layout 1:
+
+- `$Order` over a leaf's children returned `0, 1, 2, 10, "#"`. Integer `ekey`s
+  come back in numeric order, and the string counter `"#"` sorts after them, so
+  a walk that stops at the first non-numeric subscript never reads it as an
+  `ekey`.
+- `$Data` of a leaf with children is 11, and `$Order` at the `o` level is not
+  affected by the children.
+- `Kill ^KG("out", g, s, p, o)` removed the children and `"#"` with the leaf.
+
 ## R4. Ledger
 
 - Statement ids already give a relationship an identity that does not depend on
@@ -222,11 +232,32 @@ That is why the two scenarios are in this spec.
 
 ## R8. Tooling facts relied on
 
-- **`ALTER TABLE … ADD COLUMN … DEFAULT 0`**: whether IRIS backfills existing
-  rows physically is not verified here. The migration must `UPDATE … SET ekey =
-0 WHERE ekey IS NULL` before it adds NOT NULL. This is to be verified in the
-  first implementation task.
-- **`ROW_NUMBER() OVER (PARTITION BY …)`**: the translator already emits
-  `ROW_NUMBER() OVER` (translator.py:1760, 2279). `PARTITION BY` inside
-  `INSERT … SELECT` on the enterprise image is to be verified, and FR-008 has a
-  fallback if it does not work.
+Both were verified in spikes T002 and T003 (2026-09-26, enterprise image
+`irishealth:2026.3.0AI.113.0`, USER@31972, scratch tables only).
+
+- **`ALTER TABLE … ADD COLUMN … DEFAULT 0` does not backfill.** On a 500-row
+  table every existing row read `ekey IS NULL` after the ADD, and
+  `IS_NULLABLE` stayed `YES`. Rows inserted after the ADD that omit `ekey` get 0.
+  - `ALTER COLUMN ekey NOT NULL` fails with SQLCODE -305 while a NULL row
+    exists. After `UPDATE … SET ekey = 0 WHERE ekey IS NULL` it succeeds; a
+    NULL insert is then refused (-108), and an insert that omits `ekey` still
+    gets 0.
+  - The widened `UNIQUE (s, p, o_id, graph_id, ekey)` adds cleanly next to the
+    old key, and the old key then drops. A parallel `ekey = 1` row is accepted;
+    a second `ekey = 0` row is refused (-119).
+  - `DROP COLUMN ekey` fails (-322) while a constraint names it; the
+    constraint has to go first. The upgrade test's downgrade fixture relies on
+    this order.
+  - So the migration order in plan D2 (add → fill → not null → add key → drop
+    old key) is required, not just preferred.
+- **`ROW_NUMBER() OVER (PARTITION BY …)` works inside `INSERT … SELECT`.** Both
+  of these forms gave correct keys (existing max 4 → new rows 5, 6; a new
+  triple → 0, 1, 2):
+  - `COALESCE((SELECT MAX(ekey) … correlated), -1) + ROW_NUMBER() OVER
+(PARTITION BY s, p, o_id ORDER BY src.%ID)`;
+  - the same with a derived-table `LEFT JOIN (SELECT …, MAX(ekey) … GROUP BY
+…)`.
+
+  The CTE form `INSERT INTO … WITH m AS (…) SELECT …` is rejected (SQLCODE -1,
+  "VALUES expected, WITH found"). FR-008 therefore uses the correlated or
+  derived-table form, and the row-at-a-time fallback is not needed.
