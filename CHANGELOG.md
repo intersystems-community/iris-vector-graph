@@ -2486,7 +2486,7 @@ All notable changes to `iris-vector-graph`.
 
 ### v1.77.0 (2026-05-01)
 
-- **feat**: openCypher TCK **100% (133/133)** on IRIS 2026.1 community and enterprise, 99.2% on IRIS 2025.1 community
+- **feat**: internal 133-scenario Cypher compatibility catalog **100% (133/133)** on IRIS 2026.1 community and enterprise, 99.2% on IRIS 2025.1 community. This was not the upstream openCypher TCK (3897 scenarios); see the 203/229 entries for that suite
 - **fix**: `CREATE (:A)-[:REL]->(:B)` — anonymous unnamed nodes now track UUIDs in `_anon_node_keys` for correct edge INSERT
 - **feat**: Map projection `n{.name}` — new `MapProjection` AST node, parser, and translator (generates `LEFT JOIN rdf_props` per projected key)
 - **fix**: `MATCH ()-[r:T]->()` anonymous source nodes no longer generate Cartesian product; edge table used directly as FROM
@@ -2512,7 +2512,7 @@ All notable changes to `iris-vector-graph`.
 
 ### v1.72.0 (2026-05-01)
 
-- **feat**: openCypher TCK **85%→91.7%** — scalar coercion in Bolt (`Decimal`→`float`, JSON string→list), `SQLUser.RAND()`/`NEWID()` UDFs, `XOR` operator, `UNION/UNION ALL` without MATCH
+- **feat**: internal 133-scenario Cypher compatibility catalog (not the upstream openCypher TCK) **85%→91.7%** — scalar coercion in Bolt (`Decimal`→`float`, JSON string→list), `SQLUser.RAND()`/`NEWID()` UDFs, `XOR` operator, `UNION/UNION ALL` without MATCH
 
 ### v1.71.0 (2026-05-01)
 
