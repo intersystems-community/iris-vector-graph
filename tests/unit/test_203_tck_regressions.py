@@ -790,10 +790,6 @@ class TestPatternPredicateShape:
         assert ex.count(".s = n") >= 2
 
 
-class TestOptionalUndirectedHopToBoundTarget:
-    """Match8 [2]: `OPTIONAL MATCH (a)--(b)` with both ends bound put the
-    target equality in the WHERE, dropping every unmatched (null) row."""
-
 def _edge_insert(t):
     """The (sql, params) of the rdf_edges INSERT a translation emits."""
     for sql, params in zip(t.sql, t.parameters):
@@ -895,10 +891,9 @@ class TestMergeActionCopiesNodeIntoRelationship:
             assert sql.count("?") == len(params), sql
 
 
-class TestNodeInsertAfterWithBindsStageParamsFirst:
-    """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
-    label marker, so the gate matched nothing and the node was never written; the
-    (correctly ordered) edge insert then failed its foreign key."""
+class TestOptionalUndirectedHopToBoundTarget:
+    """Match8 [2]: `OPTIONAL MATCH (a)--(b)` with both ends bound put the
+    target equality in the WHERE, dropping every unmatched (null) row."""
 
     @pytest.mark.parametrize(
         "q",
@@ -1432,6 +1427,7 @@ class TestLabelsOfPathRejected:
     def test_labels_of_node_allowed(self):
         tr("MATCH p = (a) RETURN labels(a) AS l")
 
+
 class TestNodeInsertAfterWithBindsStageParamsFirst:
     """Create3 [6]-[8]: a node CREATEd after `WITH` bound its own id to the CTE's
     label marker, so the gate matched nothing and the node was never written; the
@@ -1540,12 +1536,13 @@ class TestVarLengthExpandsInSql:
         t = tr("MATCH p = shortestPath((a {name: 'A'})-[*]->(b {name: 'B'})) RETURN p")
         assert t.var_length_paths
 
-    def test_optional_var_length_still_goes_to_the_engine(self):
-        t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) RETURN b")
+    def test_optional_var_length_with_constrained_target_goes_to_the_engine(self):
+        t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b:B) RETURN b")
         assert t.var_length_paths
 
-    def test_var_length_with_relationship_properties_still_goes_to_the_engine(self):
-        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist) RETURN *")
+    def test_var_length_with_non_scalar_relationship_property_goes_to_the_engine(self):
+        # String/integer maps are checked in SQL (TestVarLengthRelationshipPropertyMap).
+        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988.5}]->(b:Artist) RETURN *")
         assert t.var_length_paths
 
     def test_node_id_bound_endpoint_keeps_the_engine_bfs_fast_path(self):
@@ -1685,3 +1682,122 @@ class TestSetAfterStageBindsCteParamsFirst:
         s, p = next((s, p) for s, p in zip(t.sql, t.parameters) if "INSERT" in s)
         assert p[0] == "Label1"
         assert p[1:] == ["Foo", "Foo"]
+
+
+class TestQuantifierOverPathElements:
+    """Quantifier1-4 [8], [9].
+
+    `nodes(p)` of a var-length path is a list of node ids and `relationships(p)`
+    a list of `{"type", "props"}` objects, so `x.name` over either read the
+    element as a map and was NULL for every element.
+    """
+
+    NODES = (
+        "MATCH p = (:SNodes)-[*0..3]->(x) WITH tail(nodes(p)) AS nodes "
+        "RETURN nodes, none(x IN nodes WHERE x.name = 'a') AS result"
+    )
+    RELS = (
+        "MATCH p = (:SRelationships)-[*0..4]->(x) "
+        "WITH tail(relationships(p)) AS relationships, COUNT(*) AS c "
+        "RETURN relationships, any(x IN relationships WHERE x.name = 'a') AS result"
+    )
+
+    def test_node_element_property_reads_rdf_props(self):
+        sql = _sql_text(tr(self.NODES))
+        assert "FROM rdf_props WHERE s = qc" in sql.replace("Graph_KG.", ""), sql
+        assert "JSON_VALUE(qc" not in sql, sql
+
+    def test_relationship_element_property_reads_props(self):
+        sql = _sql_text(tr(self.RELS))
+        # SQLUser.JSON_VALUE reads one key per call.
+        assert "'$.props'), '$.name'" in sql, sql
+
+    def test_direct_nodes_call_is_a_node_list(self):
+        sql = _sql_text(
+            tr("MATCH p = (a)-[*1..2]->(b) RETURN all(x IN nodes(p) WHERE x.name = 'a') AS r")
+        )
+        assert "FROM rdf_props WHERE s = qc" in sql.replace("Graph_KG.", ""), sql
+
+    def test_comprehension_over_path_nodes(self):
+        sql = _sql_text(tr("MATCH p = (a)-[*1..2]->(b) RETURN [x IN nodes(p) | x.name] AS r"))
+        assert "FROM rdf_props WHERE s = lc" in sql.replace("Graph_KG.", ""), sql
+
+    def test_plain_map_list_keeps_json_value(self):
+        sql = _sql_text(tr("UNWIND [[{name: 'a'}]] AS l RETURN any(x IN l WHERE x.name = 'a') AS r"))
+        assert "'$.name'" in sql, sql
+
+    def test_returned_node_list_alias_renders_nodes(self):
+        # `RETURN nodes` of a WITH alias of nodes(p) returns node objects, not ids.
+        sql = _sql_text(tr(self.NODES))
+        final = sql.split(")\nSELECT ", 1)[1]
+        assert final.startswith("COALESCE((SELECT JSON_ARRAYAGG('{\"_id\"") and " AS nodes" in final, sql
+
+
+class TestVarLengthRelationshipPropertyMap:
+    """Match4 [5]: `[:T* {year: 1988}]` holds every relationship of the path to the
+    map; it went to the engine route, which dropped the start node."""
+
+    def test_every_relationship_is_checked(self):
+        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist) RETURN *")
+        sql = _sql_text(t)
+        assert "CY_VLP_PATHS" in sql and not t.var_length_paths, sql
+        assert "PATH '$.props.year'" in sql and "<> '1988'" in sql, sql
+
+    def test_non_scalar_value_keeps_the_engine_route(self):
+        t = tr("MATCH (a)-[:T* {w: 1.5}]->(b) RETURN b")
+        assert "CY_VLP_PATHS" not in _sql_text(t)
+
+
+class TestRelationshipBoundByEarlierMatch:
+    """Match4 [7]: a relationship bound by one MATCH and crossed again in the next was
+    re-joined under its own alias (duplicate alias, duplicate CTE)."""
+
+    Q = "MATCH ()-[r:EDGE]-() MATCH p = (n)-[*0..1]-()-[r]-()-[*0..1]-(m) RETURN count(p) AS c"
+
+    def test_fresh_edge_row_held_to_bound_identity(self):
+        sql = _sql_text(tr("MATCH ()-[r:EDGE]-() MATCH (n)-[r]-(m) RETURN n, m"))
+        assert sql.count("JOIN _ue3 e3") == 0, sql
+        assert "e3._os = e" in sql and "e3._oo = e" in sql, sql
+
+    def test_directed_reuse(self):
+        sql = _sql_text(tr("MATCH ()-[r:T]->() MATCH (n)<-[r]-(m) RETURN n, m"))
+        assert "e3.s = e" in sql and "e3.o_id = e" in sql, sql
+
+    def test_var_length_path_value_uses_segment_columns(self):
+        sql = _sql_text(tr(self.Q))
+        assert "vlp5.p" not in sql and ".y" in sql, sql
+
+
+class TestLastOfEmptyList:
+    """Match9 [1]: a zero-hop `[r*0..1]` binds r to []; last(r) indexed -1 and the
+    JSON_ARRAYGET UDF failed the whole query (SQLCODE -400)."""
+
+    def test_last_is_guarded_by_length(self):
+        sql = _sql_text(tr("MATCH ()-[r*0..1]-() RETURN last(r) AS l"))
+        assert "CASE WHEN SQLUser.JSON_ARRAYLENGTH(" in sql and ") > 0 THEN SQLUser.JSON_ARRAYGET(" in sql, sql
+
+
+class TestOptionalVarLengthInSql:
+    """Match9 [8], [9]: a one-hop OPTIONAL MATCH over a variable-length relationship
+    between bound nodes went to the engine's BFS route, whose SQL joined the target
+    alias twice and left `__vl_rel__` placeholders in the WHERE (0 rows)."""
+
+    def test_bound_endpoints_left_join_the_expansion(self):
+        t = tr("MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL AND a <> b RETURN b")
+        sql = _sql_text(t)
+        assert not t.var_length_paths, sql
+        assert "LEFT OUTER JOIN JSON_TABLE(SQLUser.CY_VLP_PATHS(" in sql, sql
+        assert "__vl_rel__" not in sql, sql
+
+    def test_target_condition_is_in_the_on(self):
+        sql = _sql_text(tr("MATCH (a {name: 'A'}), (x) OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r, x, p"))
+        head, _, rest = sql.partition("LEFT OUTER JOIN JSON_TABLE(")
+        assert rest and " ON " in rest and ".t = n" in rest.split("WHERE")[0], sql
+
+    def test_two_hop_optional_keeps_the_engine_route(self):
+        t = tr("MATCH (a:A) OPTIONAL MATCH (a)-[:T]->()-[r*]->(b) RETURN b")
+        assert t.var_length_paths, _sql_text(t)
+
+    def test_path_is_null_when_nothing_matched(self):
+        sql = _sql_text(tr("MATCH (a {name: 'A'}), (x) OPTIONAL MATCH p = (a)-[r*]->(x) RETURN r, x, p"))
+        assert ".t IS NULL THEN NULL ELSE '{\"nodes\":'" in sql, sql

@@ -683,6 +683,14 @@ class TranslationContext:
         self.collected_node_lists: Dict[str, str] = (
             {} if parent is None else parent.collected_node_lists.copy()
         )
+        # WITH aliases / loop variables holding elements of `nodes(p)` ("node": node
+        # ids) or of a var-length `relationships(p)` ("vrel": {"type","props"} objects).
+        self.path_elem_lists: Dict[str, str] = (
+            {} if parent is None else dict(getattr(parent, "path_elem_lists", {}))
+        )
+        self.path_elem_vars: Dict[str, str] = (
+            {} if parent is None else dict(getattr(parent, "path_elem_vars", {}))
+        )
         # (alias, prop_name) pairs for properties that appear in IS NULL / IS NOT NULL
         # checks in the current boolean context.  The structural guard (OPT-3 EXISTS) is
         # suppressed for these so that nodes lacking the property produce a NULL val that
@@ -2684,6 +2692,11 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     context.collected_node_lists[alias] = context.collected_node_lists[
                         item.expression.name
                     ]
+            _pk = _path_elem_kind(item.expression, context) if alias else None
+            if _pk:
+                context.path_elem_lists[alias] = _pk
+            elif alias:
+                context.path_elem_lists.pop(alias, None)
     if not part.with_clause.star:
         # Fixed-length named paths do not survive a WITH as paths: projected ones are now
         # scalar stage columns, the rest are out of scope.
@@ -2911,7 +2924,16 @@ def _tts_process_parts(cypher_query, context, metadata):
                     # license: openCypher runs it once per incoming row, so a MATCH that
                     # binds nothing must create nothing. See `_create_match_gate`.
                     context.match_preceded_create = True
+                    _nxt = part.clauses[_ci + 1] if _ci + 1 < len(part.clauses) else None
+                    context._match_where = (
+                        _nxt.expression if isinstance(_nxt, ast.WhereClause) else None
+                    )
+                    context._opt_single_hop = clause.optional and (
+                        sum(len(p.relationships) for p in clause.patterns) == 1
+                    )
                     translate_match_clause(clause, context, metadata)
+                    context._match_where = None
+                    context._opt_single_hop = False
                     if clause.optional:
                         context.optional_match_new_aliases = (
                             set(context.variable_aliases.values()) - aliases_before_match
@@ -3712,6 +3734,16 @@ def translate_to_sql(
     context._engine = engine
     context._tck_procedures = procedures or {}  # TCK test procedures
     context.graph_context = graph_context
+    # `approx_count_distinct` is answered by the engine from `var_length_paths`
+    # (spec 230), so its var-length pattern must keep the engine route.
+    context._vlp_engine_agg = bool(
+        cypher_query.return_clause
+        and any(
+            isinstance(it.expression, (ast.FunctionCall, ast.AggregationFunction))
+            and getattr(it.expression, "function_name", "").lower() == "approx_count_distinct"
+            for it in cypher_query.return_clause.items
+        )
+    )
     metadata = QueryMetadata()
     context._metadata = metadata
     is_transactional = _tts_process_parts(cypher_query, context, metadata)
@@ -6738,14 +6770,33 @@ def translate_match_clause(match_clause, context, metadata):
         for i, rel in enumerate(pattern.relationships):
             src_node = pattern.nodes[i]
             tgt_node = pattern.nodes[i + 1]
-            translate_relationship_pattern(
-                rel,
-                src_node,
-                tgt_node,
-                context,
-                metadata,
-                optional=match_clause.optional,
-            )
+            bound_ea = _bound_edge_alias(rel, context)
+            if bound_ea:
+                # A relationship bound by an earlier MATCH: walk a fresh edge row and
+                # hold it to the bound one's identity, in whichever direction this
+                # pattern crosses it. Re-joining under the bound alias duplicated it.
+                fresh = ast.RelationshipPattern(
+                    types=list(rel.types or []),
+                    direction=rel.direction,
+                    properties=dict(rel.properties or {}),
+                )
+                translate_relationship_pattern(
+                    fresh, src_node, tgt_node, context, metadata, optional=match_clause.optional
+                )
+                fresh_ea = context.rel_obj_aliases.get(id(fresh))
+                context.rel_obj_aliases[id(rel)] = fresh_ea
+                und = getattr(context, "_undirected_aliases", set())
+                for a, b in zip(_edge_ident_cols(bound_ea, und), _edge_ident_cols(fresh_ea, und)):
+                    context.where_conditions.append(f"{a} = {b}")
+            else:
+                translate_relationship_pattern(
+                    rel,
+                    src_node,
+                    tgt_node,
+                    context,
+                    metadata,
+                    optional=match_clause.optional,
+                )
             last_node = tgt_node
             is_back_ref = (
                 src_node.variable and tgt_node.variable and src_node.variable == tgt_node.variable
@@ -7329,6 +7380,68 @@ def _vlp_apply_node_constraints(node, ref, context):
             context.where_conditions.append(f"{p_alias}.val = {val_sql}")
 
 
+def _bound_edge_alias(rel, context):
+    """The edge alias of a fixed-length relationship variable an earlier MATCH of this
+    SELECT already bound, else None."""
+    if not rel.variable or rel.variable_length is not None:
+        return None
+    alias = context.variable_aliases.get(rel.variable)
+    if not alias or not alias.startswith("e") or alias.startswith("ES_"):
+        return None
+    joined = context.from_clauses + context.join_clauses
+    if not any(c.endswith(f" {alias}") or f" {alias} ON " in c for c in joined):
+        return None
+    return alias
+
+
+def _edge_ident_cols(alias, undirected):
+    """The physical (s, p, o_id) columns of an edge alias."""
+    if alias in undirected:
+        return (f"{alias}._os", f"{alias}._p", f"{alias}._oo")
+    return (f"{alias}.s", f"{alias}.p", f"{alias}.o_id")
+
+
+def _path_elem_kind(expr, context):
+    """"node" when `expr` is a list of path node ids (`nodes(p)`), "vrel" when it is a
+    var-length path's relationship objects (`relationships(p)`), else None. Sees
+    through `tail` / `reverse` and WITH aliases of either."""
+    if isinstance(expr, ast.Variable):
+        return getattr(context, "path_elem_lists", {}).get(expr.name)
+    if not isinstance(expr, ast.FunctionCall) or len(expr.arguments) != 1:
+        return None
+    fn = expr.function_name.lower()
+    arg = expr.arguments[0]
+    if fn in ("tail", "reverse"):
+        return _path_elem_kind(arg, context)
+    if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
+        return None
+    if fn == "nodes":
+        return "node"
+    if fn == "relationships" and _vlp_path_sql(context, arg.name, "length") is not None:
+        return "vrel"
+    return None
+
+
+def _where_pins_id(expr, var) -> bool:
+    """True when a top-level conjunct of `expr` is `var.node_id = <value>` (or `var.id`),
+    which pins the endpoint just like `{node_id: $src}` in the pattern."""
+    if expr is None or not var or not isinstance(expr, ast.BooleanExpression):
+        return False
+    if expr.operator == ast.BooleanOperator.AND:
+        return any(_where_pins_id(op, var) for op in expr.operands)
+    if expr.operator != ast.BooleanOperator.EQUALS or len(expr.operands) != 2:
+        return False
+    for ref, other in (expr.operands, reversed(expr.operands)):
+        if (
+            isinstance(ref, ast.PropertyReference)
+            and ref.variable == var
+            and ref.property_name in ("node_id", "id")
+            and isinstance(other, (ast.Variable, ast.Literal))
+        ):
+            return True
+    return False
+
+
 def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
     """Expand a variable-length relationship in SQL, one row per path.
 
@@ -7341,11 +7454,36 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
 
     Returns False, leaving the pattern to the engine's BFS route, for what that
     route owns: shortest paths, an ID-bound endpoint, OPTIONAL MATCH, and
-    relationship property predicates.
+    relationship property values other than strings and integers.
     """
     vl = rel.variable_length
-    if vl.shortest or vl.all_shortest or optional or id_bound or rel.properties:
+    if vl.shortest or vl.all_shortest or id_bound:
         return False
+    # OPTIONAL MATCH: only a lone hop from a bound, unconstrained source to a bound
+    # or fresh unconstrained target, so the whole pattern fits one LEFT JOIN's ON.
+    if optional:
+        def _plain(node):
+            return not node.labels and not node.properties
+
+        src_bound = bool(source_node.variable) and source_node.variable in context.variable_aliases
+        tgt_ok = not target_node.variable or target_node.variable not in context.variable_aliases or (
+            _vlp_node_ref(context.variable_aliases[target_node.variable], target_node.variable)
+            is not None
+        )
+        if not (getattr(context, "_opt_single_hop", False) and src_bound and tgt_ok
+                and _plain(source_node) and _plain(target_node)):
+            return False
+    # `[:T* {k: v}]` holds every relationship of the path to the map: string and
+    # integer values are checked against each `r` object; others keep the engine route.
+    rel_prop_filters = []
+    for k, v in (rel.properties or {}).items():
+        if isinstance(v, ast.Literal):
+            v = v.value
+        elif isinstance(v, ast.Variable):
+            v = context.input_params.get(v.name)
+        if isinstance(v, bool) or not isinstance(v, (int, str)):
+            return False
+        rel_prop_filters.append((_jsonpath_key(k), str(v).replace("'", "''")))
     if not hasattr(context, "_vlp_aliases"):
         context._vlp_aliases = set()
         context._vlp_rel_aliases = {}
@@ -7389,18 +7527,52 @@ def _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, 
         f"SQLUser.CY_VLP_PATHS({src_ref}, '{types_json}', '{direction}', "
         f"{vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}')"
     )
+    prop_conds = []
+    for key, val in rel_prop_filters:
+        z = context.next_alias("vpz")
+        prop_conds.append(
+            f"NOT EXISTS (SELECT 1 FROM JSON_TABLE({vx}.r, '$[*]' COLUMNS("
+            f"v VARCHAR(4000) PATH '$.props.{key}')) {z} "
+            f"WHERE {z}.v IS NULL OR {z}.v <> '{val}')"
+        )
+    on = []
+    if optional:
+        # the target equality and the property checks belong to the ON, so a
+        # miss nulls the optional side instead of dropping the row
+        if not hasattr(context, "_vlp_optional"):
+            context._vlp_optional = set()
+        context._vlp_optional.add(vx)
+        if target_node.variable and target_node.variable in context.variable_aliases:
+            on.append(f"{vx}.t = " + _vlp_node_ref(
+                context.variable_aliases[target_node.variable], target_node.variable))
+        on += prop_conds
+        prop_conds = []
+    on = on or ["1=1"]
     context.join_clauses.append(
-        f"JOIN JSON_TABLE({call}, '$[*]' COLUMNS("
+        f"{'LEFT OUTER JOIN' if optional else 'JOIN'} JSON_TABLE({call}, '$[*]' COLUMNS("
         f"t VARCHAR(512) PATH '$.t', l INTEGER PATH '$.l', n VARCHAR(32000) PATH '$.n', "
         f"y VARCHAR(32000) PATH '$.y', r VARCHAR(32000) PATH '$.r', k VARCHAR(32000) PATH '$.k'"
-        f")) {vx} ON 1=1"
+        f")) {vx} ON {' AND '.join(on)}"
     )
+    context.where_conditions.extend(prop_conds)
     if rel.variable:
         context.variable_aliases[rel.variable] = vx
         context.rel_variables.add(rel.variable)
         context.bind_variable_type(rel.variable, "relationship", force=True)
 
     # --- target ---------------------------------------------------------------
+    if optional:
+        if target_node.variable and target_node.variable not in context.variable_aliases:
+            tgt_alias = context.register_variable(target_node.variable)
+        elif target_node.variable:
+            return True
+        else:
+            tgt_alias = context.next_alias("n")
+            context.node_obj_aliases[id(target_node)] = tgt_alias
+        context.join_clauses.append(
+            f"LEFT OUTER JOIN {_table('nodes')} {tgt_alias} ON {tgt_alias}.node_id = {vx}.t"
+        )
+        return True
     if target_node.variable:
         tgt_alias = context.variable_aliases.get(target_node.variable)
         if tgt_alias is None:
@@ -7454,6 +7626,9 @@ def _trp_variable_length(rel, source_node, target_node, context, metadata, optio
             or dst_id_param is not None
             or "node_id" in (source_node.properties or {})
             or "node_id" in (target_node.properties or {})
+            or _where_pins_id(getattr(context, "_match_where", None), source_node.variable)
+            or _where_pins_id(getattr(context, "_match_where", None), target_node.variable)
+            or getattr(context, "_vlp_engine_agg", False)
         )
         if _trp_vlp_native(rel, source_node, target_node, context, metadata, optional, id_bound):
             return
@@ -10595,6 +10770,10 @@ def _expr_list_predicate(expr, context, segment):
     col_type = "VARCHAR(1000)"
     context.variable_aliases[expr.variable] = f"{alias}"
     context.scalar_variables.add(expr.variable)
+    _pek = _path_elem_kind(expr.source, context)
+    _pek_prev = context.path_elem_vars.pop(expr.variable, None)
+    if _pek:
+        context.path_elem_vars[expr.variable] = _pek
     # Snapshot param lists so we can stringify newly added numeric params.
     _sp_len = len(context.select_params)
     _wp_len = len(context.where_params)
@@ -10621,6 +10800,9 @@ def _expr_list_predicate(expr, context, segment):
     pred_sql = _re_qp.sub(r"CAST\('([^']+)' AS DOUBLE\)", _cast_double_to_str, pred_sql)
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
+    context.path_elem_vars.pop(expr.variable, None)
+    if _pek_prev:
+        context.path_elem_vars[expr.variable] = _pek_prev
     pred_with_alias = pred_sql
     for col in ("node_id", "p", "val", "label"):
         pred_with_alias = pred_with_alias.replace(f"{alias}.{col}", f"{alias}.{var}")
@@ -10895,6 +11077,10 @@ def _expr_list_comprehension(expr, context, segment):
         context, "collected_node_lists", {}
     ):
         context.collected_node_variables.add(expr.variable)
+    _pek = _path_elem_kind(expr.source, context)
+    _pek_prev = context.path_elem_vars.pop(expr.variable, None)
+    if _pek:
+        context.path_elem_vars[expr.variable] = _pek
     where_clause = ""
     if expr.predicate:
         if isinstance(expr.predicate, ast.BooleanExpression):
@@ -10909,6 +11095,9 @@ def _expr_list_comprehension(expr, context, segment):
     del context.variable_aliases[expr.variable]
     context.scalar_variables.discard(expr.variable)
     context.collected_node_variables.discard(expr.variable)
+    context.path_elem_vars.pop(expr.variable, None)
+    if _pek_prev:
+        context.path_elem_vars[expr.variable] = _pek_prev
     # Use VARCHAR to support both scalar values and JSON objects
     return (
         f"(SELECT JSON_ARRAYAGG({select_expr}) FROM "
@@ -11536,6 +11725,22 @@ def _expr_property_reference(expr, context, segment):
     # not rdf_props join.  The column holds a JSON-serialised value, not a graph node id.
     # Guard: only call JSON_VALUE when the value is a JSON object (starts with '{').
     # JSON_VALUE raises SQLCODE=-400 on non-JSON or non-matching path.
+    _pek = getattr(context, "path_elem_vars", {}).get(expr.variable)
+    if _pek and expr.variable in context.scalar_variables:
+        col_ref = f"{alias}.{_safe_alias(expr.variable)}"
+        if _pek == "node":
+            # An element of nodes(p) is the node's id.
+            return (
+                f"(SELECT val FROM {_table('rdf_props')} WHERE s = {col_ref} "
+                f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
+            )
+        prop = _jsonpath_key(expr.property_name)
+        return (
+            f"CASE WHEN ({col_ref}) IS NULL OR SUBSTRING({col_ref}, 1, 1) <> '{{' "
+            # SQLUser.JSON_VALUE reads a single key, so step into `props` first.
+            f"THEN NULL ELSE SQLUser.JSON_VALUE(SQLUser.JSON_VALUE({col_ref}, '$.props'), "
+            f"'$.{prop}') END"
+        )
     if expr.variable in context.scalar_variables:
         col_ref = f"{alias}.{_safe_alias(expr.variable)}"
         runtime = _runtime_temporal_accessor(col_ref, expr.property_name)
@@ -16442,6 +16647,18 @@ def _vlp_path_sql(context, path_var, what):
     return acc
 
 
+def _vlp_path_value(context, path_var, nodes, types):
+    """'{"nodes":[...],"rels":[...]}' for a path with a CY_VLP_PATHS segment; null when
+    an OPTIONAL MATCH segment found no path."""
+    val = f"'{{\"nodes\":' || {nodes} || ',\"rels\":' || {types} || '}}'"
+    opt = getattr(context, "_vlp_optional", set())
+    missing = [a for a in context.path_edge_aliases.get(path_var, []) if a in opt]
+    if missing:
+        cond = " OR ".join(f"{a}.t IS NULL" for a in missing)
+        val = f"CASE WHEN {cond} THEN NULL ELSE {val} END"
+    return val
+
+
 def _expr_fn_path_funcs(fn, expr, context):
     if fn not in ("length", "nodes", "relationships") or len(expr.arguments) != 1:
         return None
@@ -16718,7 +16935,11 @@ def _expr_fn_list_ops(fn, args, args_exprs):
     if fn == "last":
         if not args:
             return "NULL"
-        return f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]})-1)"
+        # last([]) is null; indexing -1 makes the UDF fail the whole statement.
+        return (
+            f"CASE WHEN SQLUser.JSON_ARRAYLENGTH({args[0]}) > 0 THEN "
+            f"SQLUser.JSON_ARRAYGET({args[0]}, SQLUser.JSON_ARRAYLENGTH({args[0]})-1) END"
+        )
     if fn == "isempty":
         if not args:
             return "1"
@@ -17530,8 +17751,7 @@ def translate_return_clause(ret, context):
             if vlp_nodes is not None:
                 vlp_types = _vlp_path_sql(context, path_var, "types")
                 context.select_items.append(
-                    f"'{{\"nodes\":' || {vlp_nodes} || ',\"rels\":' || {vlp_types} || '}}'"
-                    f" AS {_safe_alias(path_var)}"
+                    f"{_vlp_path_value(context, path_var, vlp_nodes, vlp_types)} AS {_safe_alias(path_var)}"
                 )
                 context.optional_null_row_items.append("NULL")
                 continue
@@ -17615,8 +17835,7 @@ def translate_return_clause(ret, context):
                 if vlp_nodes is not None:
                     vlp_types = _vlp_path_sql(context, var_name, "types")
                     context.select_items.append(
-                        f"'{{\"nodes\":' || {vlp_nodes} || ',\"rels\":' || {vlp_types} || '}}'"
-                        f" AS {_safe_alias(alias)}"
+                        f"{_vlp_path_value(context, var_name, vlp_nodes, vlp_types)} AS {_safe_alias(alias)}"
                     )
                     continue
                 node_aliases = context.path_node_aliases[var_name]
@@ -17678,6 +17897,25 @@ def translate_return_clause(ret, context):
                     context._return_alias_map[prefix] = var_name
                 continue
             if alias_name == "scalar":
+                continue
+            # A WITH alias of `nodes(p)` holds node ids; return the nodes themselves.
+            if is_scalar and getattr(context, "path_elem_lists", {}).get(var_name) == "node":
+                col = translate_expression(item.expression, context, segment="select")
+                lc = context.next_alias("lc")
+                nid = f"{lc}.x"
+                node_json = (
+                    f"'{{\"_id\":\"' || {nid} || '\",' "
+                    f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+                    f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+                )
+                context.select_items.append(
+                    f"COALESCE((SELECT JSON_ARRAYAGG({node_json}) FROM JSON_TABLE({col}, "
+                    f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc}), CAST('[]' AS VARCHAR(256))) "
+                    f"AS {_safe_alias(item.alias or var_name)}"
+                )
+                context.optional_null_row_items.append("NULL")
+                if has_agg:
+                    context.group_by_items.append(col)
                 continue
             # TCK procedure CTE: variables are scalar columns, not graph nodes
             if alias_name and alias_name.startswith("TCK_Proc_"):
@@ -17813,6 +18051,11 @@ def translate_return_clause(ret, context):
 
 def _named_path_json_sql(context, path_var):
     """SQL for a fixed-length named path value: '{"nodes":[...],"rels":[...]}'."""
+    vlp_nodes = _vlp_path_sql(context, path_var, "nodes")
+    if vlp_nodes is not None:
+        # A var-length segment has no `p` column; its nodes and types come from the row.
+        vlp_types = _vlp_path_sql(context, path_var, "types")
+        return _vlp_path_value(context, path_var, vlp_nodes, vlp_types)
     node_aliases = context.path_node_aliases[path_var]
     edge_aliases = context.path_edge_aliases.get(path_var, [])
     node_id_expr = getattr(context, "node_id_expr", {})
