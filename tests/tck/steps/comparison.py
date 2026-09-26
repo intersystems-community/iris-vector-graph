@@ -566,6 +566,13 @@ def normalise_iris_value(iris_val: Any, expected_tck_val: Any) -> Any:
         return ''
     # None vs list: IRIS function like labels() returns None instead of empty list
     if iris_val is None and isinstance(expected_tck_val, list):
+        # ... but a null relationship / relationship list ([:T], [[:X]]) stays null
+        if expected_tck_val and all(
+            (isinstance(x, str) and x.startswith(":"))
+            or (isinstance(x, list) and len(x) == 1 and isinstance(x[0], str) and x[0].startswith(":"))
+            for x in expected_tck_val
+        ):
+            return None
         return []
     if iris_val is None:
         return None
