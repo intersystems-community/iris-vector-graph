@@ -1478,6 +1478,7 @@ class TestRowDrivenEdgeInsertSkipsAnExistingEdge:
         assert "AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE" in sql.replace("Graph_KG.", ""), sql
         assert sql.count("?") == len(params), sql
 
+
 def _sql_text(t):
     return t.sql if isinstance(t.sql, str) else "\n".join(t.sql)
 
@@ -1869,3 +1870,74 @@ class TestDurationBeyondDatetimeRange:
             "RETURN duration.between(date('+999999999-12-31'), date('-999999999-01-01')) AS duration"
         )
         assert "'P-1999999998Y-11M-30D'" in _sql_text(t)
+
+
+def _sql(q, params=None):
+    t = translate_to_sql(parse_query(q), params or {})
+    return "\n".join(t.sql) if isinstance(t.sql, list) else t.sql
+
+
+class TestCountDistinctRelationshipIsByIdentity:
+    def test_count_distinct_rel_uses_edge_id(self):
+        # Return6 [16]: count(DISTINCT r) counted distinct types (e.p), so every
+        # same-type relationship collapsed to 1.
+        sql = _sql("MATCH (a)-[r:ATE]->(b) RETURN a, count(DISTINCT r) AS c")
+        assert "COUNT(DISTINCT e" in sql and ".edge_id)" in sql
+        assert ".p) AS c" not in sql
+
+
+class TestUnwindMapParamPropertyIntoMerge:
+    def _params(self, q, params):
+        t = translate_to_sql(parse_query(q), params)
+        ps = t.parameters if t.parameters and isinstance(t.parameters[0], list) else [t.parameters]
+        return [x for p in ps for x in p]
+
+    def test_unwound_map_property_resolves_per_element(self):
+        # Unwind1 [14]: `prop.login` over an unwound map parameter was bound as the
+        # PropertyReference itself, not the element's value.
+        flat = self._params(
+            "UNWIND $props AS prop MERGE (p:Person {login: prop.login}) "
+            "SET p.name = prop.name RETURN p.name, p.login",
+            {"props": [{"login": "l1", "name": "n1"}, {"login": "l2", "name": "n2"}]},
+        )
+        assert not any("PropertyReference" in str(x) for x in flat)
+        assert {"l1", "l2", "n1", "n2"} <= {str(x) for x in flat}
+
+    def test_return_scans_only_the_projected_variable(self):
+        # Unwind1 [6]: y (matched) and e (merged) were both rebuilt as tables and
+        # comma-joined, so IRIS rejected the LEFT JOIN on the first one (-23).
+        t = translate_to_sql(
+            parse_query(
+                "UNWIND $events AS event MATCH (y:Year {year: event.year}) "
+                "MERGE (e:Event {id: event.id}) MERGE (y)<-[:IN]-(e) RETURN e.id AS x ORDER BY x"
+            ),
+            {"events": [{"year": 2016, "id": 1}, {"year": 2016, "id": 2}]},
+        )
+        final = t.sql[-1] if isinstance(t.sql, list) else t.sql
+        assert final.count("nodes n") == 1
+
+
+class TestUnwindRangeClippedToWithLimit:
+    def test_range_is_clipped_to_the_limit(self):
+        # Aggregation3 [2]: range(1000000, 2000000) was spelled out as a million-element
+        # JSON_ARRAY literal and IRIS failed at Prepare (<STRINGSTACK>).
+        sql = _sql("UNWIND range(1000000, 2000000) AS i WITH i LIMIT 3000 RETURN sum(i)")
+        assert "1002999" in sql and "1003000" not in sql
+
+    def test_limit_after_skip_keeps_skip_plus_limit(self):
+        sql = _sql("UNWIND range(1, 500) AS i WITH i SKIP 2 LIMIT 3 RETURN i")
+        assert "JSON_ARRAY(1, 2, 3, 4, 5)" in sql
+
+    def test_ordered_with_is_not_clipped(self):
+        sql = _sql("UNWIND range(1, 20) AS i WITH i ORDER BY i DESC LIMIT 3 RETURN i")
+        assert "20" in sql
+
+
+class TestHarnessScopesEachMatchVariableOnce:
+    def test_parenthesised_where_variable_is_not_labelled(self):
+        # Pattern1 [11]: `MATCH (n) WHERE (n)` became `WHERE (n:TCK_x)`, a label
+        # predicate, so the expected InvalidArgumentType never fired.
+        from tests.tck.steps.query import _inject_match_scope
+
+        out = _inject_match_scope("MATCH (n) WHERE (n) RETURN n", "TCK_x")
+        assert out == "MATCH (n:TCK_x) WHERE (n) RETURN n"

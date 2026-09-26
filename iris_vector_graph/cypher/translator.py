@@ -2886,7 +2886,13 @@ def _tts_process_parts(cypher_query, context, metadata):
                 context.variable_aliases[unwind_clause.alias] = "__foreach_literal__"
                 context.foreach_literals = getattr(context, "foreach_literals", {})
                 context.foreach_literals[unwind_clause.alias] = item_val
-                for clause in part.clauses:
+                _map_val = _extract_literal_value(item_val)
+                _iter_clauses = (
+                    _bind_unwound_map_props(part.clauses, unwind_clause.alias, _map_val)
+                    if isinstance(_map_val, dict)
+                    else part.clauses
+                )
+                for clause in _iter_clauses:
                     if isinstance(clause, ast.UnwindClause):
                         continue  # handled by foreach expansion above
                     elif isinstance(clause, ast.UpdatingClause):
@@ -2982,18 +2988,48 @@ def _tts_process_parts(cypher_query, context, metadata):
         if part.with_clause:
             # If UNWIND+CREATE relationship expansion ran, reset context to correct single-table
             # structure before building the WITH stage (avoids 5-JOIN spurious structure).
-            _apply_unwind_create_context_reset(context)
+            _apply_unwind_create_context_reset(context, part.with_clause)
             _to_sql_handle_with(part, context, i)
     return is_transactional
 
 
-def _apply_unwind_create_context_reset(context):
+def _ast_var_names(node, acc=None):
+    """Names of the variables an AST fragment reads (`x` and `x.k`)."""
+    import dataclasses as _dc
+
+    acc = set() if acc is None else acc
+    if isinstance(node, ast.Variable):
+        acc.add(node.name)
+    elif isinstance(node, ast.PropertyReference):
+        acc.add(node.variable)
+    elif isinstance(node, (list, tuple)):
+        for x in node:
+            _ast_var_names(x, acc)
+    elif isinstance(node, dict):
+        for x in node.values():
+            _ast_var_names(x, acc)
+    elif _dc.is_dataclass(node) and not isinstance(node, type):
+        for f in _dc.fields(node):
+            _ast_var_names(getattr(node, f.name), acc)
+    return acc
+
+
+def _apply_unwind_create_context_reset(context, projection=None):
     """Reset FROM/JOIN/WHERE to correct single-table structure after UNWIND+CREATE expansion.
 
     Called before translating a WITH clause or RETURN that follows UNWIND+CREATE.
     Prevents the accumulated per-iteration JOIN structure from leaking into CTEs.
+    `projection` (the RETURN / WITH clause) limits the rebuilt tables to the
+    variables it reads.
     """
     unwind_node_ids = getattr(context, "_unwind_create_node_ids", {})
+    if unwind_node_ids and projection is not None:
+        # Each tracked variable becomes its own table, cross-joined with the others:
+        # keep only the ones the projection reads, or `MERGE (y)<-[:IN]-(e) RETURN e`
+        # multiplies e's rows by y's (Unwind1 [6]).
+        _used = _ast_var_names(projection)
+        if _used & set(unwind_node_ids):
+            unwind_node_ids = {k: v for k, v in unwind_node_ids.items() if k in _used}
     if unwind_node_ids:
         context.select_items, context.select_params = [], []
         context.join_clauses, context.join_params = [], []
@@ -3091,7 +3127,7 @@ def _tts_finalize_context(cypher_query, context):
     # Reset context to a fresh single-table scan filtered to the collected IDs.
     # Skip when any query part had a WITH — the Stage CTE already handles scoping.
     if cypher_query.return_clause and not any_part_had_with:
-        _apply_unwind_create_context_reset(context)
+        _apply_unwind_create_context_reset(context, cypher_query.return_clause)
 
     # Handle standalone CALL (no RETURN): synthesize RETURN for yielded / all output items
     _proc = cypher_query.procedure_call
@@ -3719,6 +3755,50 @@ def _check_deleted_entity_access(cypher_query) -> None:
                 )
 
 
+def _clip_unwind_range_to_with_limit(cypher_query):
+    """`UNWIND range(a, b) AS i WITH i LIMIT n`: only the first skip + n elements survive.
+
+    A static range is spelled out as a JSON_ARRAY literal, so a wide one fails at
+    Prepare (<STRINGSTACK>, Aggregation3 [2]). Range order is fixed, and a plain
+    pass-through WITH (no WHERE / ORDER BY / DISTINCT / aggregation) keeps it, so
+    the tail can be dropped before translation.
+    """
+    for part in getattr(cypher_query, "query_parts", None) or []:
+        w = part.with_clause
+        if (
+            w is None
+            or len(part.clauses) != 1
+            or not isinstance(part.clauses[0], ast.UnwindClause)
+            or w.where_clause is not None
+            or w.order_by_clause is not None
+            or w.distinct
+            or w.star
+            or not all(isinstance(it.expression, ast.Variable) for it in w.items)
+        ):
+            continue
+        lim = w.limit.value if isinstance(w.limit, ast.Literal) else w.limit
+        skip = w.skip.value if isinstance(w.skip, ast.Literal) else (w.skip or 0)
+        if not isinstance(lim, int) or not isinstance(skip, int) or isinstance(lim, bool):
+            continue
+        fc = part.clauses[0].expression
+        if not (
+            isinstance(fc, ast.FunctionCall)
+            and fc.function_name.lower() == "range"
+            and len(fc.arguments) in (2, 3)
+            and all(
+                isinstance(a, ast.Literal) and type(a.value) is int for a in fc.arguments
+            )
+        ):
+            continue
+        start, end = fc.arguments[0].value, fc.arguments[1].value
+        step = fc.arguments[2].value if len(fc.arguments) == 3 else 1
+        if step == 0:
+            continue
+        clipped = start + (skip + max(lim, 0) - 1) * step
+        if (step > 0 and clipped < end) or (step < 0 and clipped > end):
+            fc.arguments[1] = ast.Literal(clipped)
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -3731,6 +3811,7 @@ def translate_to_sql(
     # forgotten by the sixth (spec 227).
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)
+    _clip_unwind_range_to_with_limit(cypher_query)
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -4380,6 +4461,40 @@ def _extract_literal_value(v):
         return {k: _extract_literal_value(val) for k, val in v.items()}
     else:
         return v
+
+
+def _bind_unwound_map_props(node, var, value):
+    """Copy of `node` with every `var.key` replaced by the unwound map's value.
+
+    The Python-side UNWIND expansion binds the variable itself per element, but
+    a property of it (`UNWIND $maps AS m MERGE (:P {k: m.k})`) would otherwise
+    reach the DML as the PropertyReference object.
+    """
+    import dataclasses as _dc
+
+    if isinstance(node, ast.PropertyReference):
+        if node.variable == var:
+            return ast.Literal(value.get(node.property_name))
+        return node
+    if isinstance(node, (list, tuple)):
+        new = [_bind_unwound_map_props(x, var, value) for x in node]
+        if all(a is b for a, b in zip(new, node)):
+            return node
+        return type(node)(new)
+    if isinstance(node, dict):
+        new = {k: _bind_unwound_map_props(x, var, value) for k, x in node.items()}
+        if all(new[k] is node[k] for k in node):
+            return node
+        return new
+    if _dc.is_dataclass(node) and not isinstance(node, type):
+        changes = {}
+        for f in _dc.fields(node):
+            old = getattr(node, f.name)
+            new = _bind_unwound_map_props(old, var, value)
+            if new is not old:
+                changes[f.name] = new
+        return _dc.replace(node, **changes) if changes else node
+    return node
 
 
 _TEMPORAL_CREATE_FNS = frozenset(
@@ -12589,6 +12704,19 @@ def _expr_aggregation(expr, context, segment):
             return (
                 f"SQLUser.CY_EXP_ORDVAL({fn}(%EXACT(SQLUser.CY_EXP_ORDKEY({arg}, 'top'))))"
             )
+    if (
+        fn == "COUNT"
+        and expr.distinct
+        and isinstance(expr.argument, ast.Variable)
+        and expr.argument.name in context.rel_variables
+    ):
+        # A relationship variable translates to its type (`eN.p`); distinctness is
+        # by identity, so count edge ids (Return6 [16]).
+        import re as _re_cd
+
+        _ra = context.variable_aliases.get(expr.argument.name, "")
+        if _re_cd.fullmatch(r"e\d+", str(_ra)):
+            arg = f"{_ra}.edge_id"
     result_expr = f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
     # collect() must return [] not NULL when all collected values are NULL
     if fn == "JSON_ARRAYAGG":
@@ -17021,6 +17149,11 @@ def _expr_fn_range(args_exprs):
             vals = list(range(start, end + (1 if step > 0 else -1), step))
             if not vals:
                 return _EMPTY_JSON_ARRAY
+            if len(vals) > 100:
+                # A JSON_ARRAY of thousands of arguments fails to compile as a cached
+                # query; spell it as a string literal, as fully literal lists are.
+                txt = "[" + ",".join(str(v) for v in vals) + "]"
+                return f"CAST('{txt}' AS VARCHAR({max(len(txt) + 1, 256)}))"
             return f"JSON_ARRAY({', '.join(str(v) for v in vals)})"
     except ValueError:
         raise
