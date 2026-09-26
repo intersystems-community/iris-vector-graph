@@ -4093,6 +4093,145 @@ def _clip_unwind_range_to_with_limit(cypher_query):
             fc.arguments[1] = ast.Literal(clipped)
 
 
+def _container_access(expr, params, bound):
+    """`base`, `[step, ...]` for `m.key[0]`-style access; steps are ("key", k) / ("idx", i).
+
+    None when `expr` is not a chain of map keys and constant list indices over one
+    variable. A `$param` parses as a Variable; it is an index when it is a
+    parameter and not a bound variable.
+    """
+    steps = []
+    while True:
+        if isinstance(expr, ast.SubscriptExpression):
+            idx = expr.index
+            if isinstance(idx, ast.Literal) and isinstance(idx.value, int):
+                val = idx.value
+            elif (
+                isinstance(idx, ast.Variable)
+                and idx.name not in bound
+                and isinstance(params.get(idx.name), int)
+            ):
+                val = params[idx.name]
+            else:
+                return None
+            if isinstance(val, bool):
+                return None
+            steps.append(("idx", val))
+            expr = expr.expression
+        elif isinstance(expr, ast.PropertyAccessExpression):
+            steps.append(("key", expr.property_name))
+            expr = expr.expression
+        elif isinstance(expr, ast.PropertyReference):
+            steps.append(("key", expr.property_name))
+            return expr.variable, steps[::-1]
+        elif isinstance(expr, ast.Variable):
+            return expr.name, steps[::-1]
+        else:
+            return None
+
+
+def _lower_delete_containers(cypher_query, params) -> None:
+    """`WITH collect(n) AS l DELETE l[$i]` as `WITH n SKIP $i LIMIT 1 DELETE n` (Delete5).
+
+    DELETE of a list element or a map value names an entity by where it sits in a
+    value the previous WITH built. That value cannot be materialised here (a
+    collected relationship keeps only its type), so the access is resolved against
+    the WITH expression instead: a map key selects the entry, and an index into
+    `collect(v)` selects rows of `v` (collect order is the row order, so contiguous
+    indices are a SKIP / LIMIT window). A collected path is replaced by its nodes
+    and relationships, naming the anonymous ones.
+
+    Only the shape Delete5 uses: the DELETE is the query's last part, alone, with
+    no RETURN, and the WITH before it has a single item and no WHERE, ORDER BY,
+    DISTINCT, SKIP or LIMIT of its own. Anything else is left for the translator,
+    which rejects a non-variable DELETE target.
+    """
+    parts = getattr(cypher_query, "query_parts", None) or []
+    if len(parts) < 2 or getattr(cypher_query, "return_clause", None) is not None:
+        return
+    last, prev = parts[-1], parts[-2]
+    if last.with_clause is not None or len(last.clauses) != 1:
+        return
+    delete = last.clauses[0]
+    if not isinstance(delete, ast.DeleteClause):
+        return
+    if all(isinstance(e, ast.Variable) for e in delete.expressions):
+        return
+    w = prev.with_clause
+    if (
+        w is None
+        or len(w.items) != 1
+        or w.where_clause is not None
+        or w.order_by_clause is not None
+        or w.distinct
+        or w.star
+        or w.skip is not None
+        or w.limit is not None
+    ):
+        return
+    item = w.items[0]
+    if not item.alias:
+        return
+
+    resolved = []  # (variable, index or None)
+    for e in delete.expressions:
+        acc = _container_access(e, params, {item.alias})
+        if acc is None or acc[0] != item.alias:
+            return
+        node, index = item.expression, None
+        for i, (kind, val) in enumerate(acc[1]):
+            if kind == "key" and isinstance(node, ast.MapLiteral) and val in node.entries:
+                node = node.entries[val]
+            elif (
+                kind == "idx"
+                and i == len(acc[1]) - 1
+                and isinstance(node, ast.AggregationFunction)
+                and node.function_name.lower() == "collect"
+                and not node.distinct
+                and isinstance(node.argument, ast.Variable)
+                and val >= 0
+            ):
+                node, index = node.argument, val
+            else:
+                return
+        if not isinstance(node, ast.Variable):
+            return
+        resolved.append((node.name, index))
+
+    names = {v for v, _ in resolved}
+    indexed = {i is not None for _, i in resolved}
+    if len(names) != 1 or len(indexed) != 1:
+        return
+    var = names.pop()
+    skip = limit = None
+    if indexed.pop():
+        idxs = sorted({i for _, i in resolved})
+        if idxs != list(range(idxs[0], idxs[-1] + 1)):
+            return
+        skip, limit = idxs[0], len(idxs)
+
+    elements = [var]
+    for cl in prev.clauses:
+        for np_ in getattr(cl, "named_paths", None) or []:
+            if np_.variable != var:
+                continue
+            # The MatchClause pattern and NamedPath.pattern are one object, so
+            # naming an anonymous element here names it in the MATCH too.
+            elements = []
+            for k, n in enumerate(np_.pattern.nodes):
+                if n.variable is None:
+                    n.variable = f"__dp_{k}"
+                elements.append(n.variable)
+            for k, r in enumerate(np_.pattern.relationships):
+                if r.variable is None:
+                    r.variable = f"__dr_{k}"
+                elements.append(r.variable)
+
+    w.items = [ast.ReturnItem(expression=ast.Variable(n), alias=n) for n in elements]
+    w.skip, w.limit = skip, limit
+    delete.expressions = [ast.Variable(n) for n in elements]
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -4106,6 +4245,7 @@ def translate_to_sql(
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)
     _clip_unwind_range_to_with_limit(cypher_query)
+    _lower_delete_containers(cypher_query, params or {})
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -5771,92 +5911,119 @@ def _newest_ekey_sql(e_alias, context, add_param) -> str:
     )
 
 
-def translate_delete_clause(delete, context, metadata):
-    for var in delete.expressions:
-        alias = context.variable_aliases.get(var.name)
+def _delete_targets(delete, context) -> list:
+    """What one DELETE clause removes: `(name, alias, is_edge, is_stage_alias)` each.
+
+    A named path contributes every node and relationship on it (Delete3). Anything
+    that is not a variable is an error: a label belongs to REMOVE (InvalidDelete),
+    and a value that is not an entity cannot be deleted (InvalidArgumentType).
+    Container elements (`friends[$i]`, `map.key`) were lowered to variables by
+    `_lower_delete_containers` before translation.
+    """
+    stage_names = {st.split(" AS ")[0].strip() for st in getattr(context, "stages", [])}
+    edge_stage_vars = getattr(context, "edge_stage_variables", set())
+    out, seen = [], set()
+
+    def _add(name, alias, is_edge):
+        # Every variable carried by a WITH shares the stage alias; the column is
+        # the variable, so a stage target is identified by both.
+        key = (alias, name) if alias in stage_names else alias
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((name, alias, is_edge, alias in stage_names))
+
+    for expr in delete.expressions:
+        if isinstance(expr, ast.LabelPredicate):
+            raise SyntaxError(
+                "InvalidDelete: DELETE removes nodes and relationships; use REMOVE for a label"
+            )
+        if not isinstance(expr, ast.Variable):
+            raise SyntaxError(
+                "InvalidArgumentType: DELETE expects a node, a relationship or a path, "
+                f"got {type(expr).__name__}"
+            )
+        name = expr.name
+        alias = context.variable_aliases.get(name)
+        if not alias and name in getattr(context, "path_node_aliases", {}):
+            for na in context.path_node_aliases.get(name, []):
+                _add(name, na, False)
+            for ea in context.path_edge_aliases.get(name, []):
+                _add(name, ea, True)
+            continue
         if not alias:
-            raise SyntaxError(f"Undefined variable: {var.name}")
+            raise SyntaxError(f"Undefined variable: {name}")
+        _add(name, alias, alias.startswith("e") or name in edge_stage_vars)
+    return out
 
-        # Detect whether the variable is a relationship (edge), taking into account
-        # variables promoted to a CTE stage via WITH.
-        is_edge_var = alias.startswith("e") or var.name in getattr(
-            context, "edge_stage_variables", set()
-        )
-        # When alias is a CTE stage (e.g. "Stage1"), the node_id column is named
-        # after the variable (e.g. "n"), not "node_id".
-        stage_names = {s.split(" AS ")[0].strip() for s in getattr(context, "stages", [])}
-        is_stage_alias = alias in stage_names
 
-        if is_edge_var and is_stage_alias:
-            # Relationship variable promoted through WITH into a CTE stage.
-            # The Stage SELECT now includes __edge_<var>_s/p/o identity columns;
-            # use them to reconstruct the edge identity for deletion.
-            s_col = f"__edge_{var.name}_s"
-            p_col = f"__edge_{var.name}_p"
-            o_col = f"__edge_{var.name}_o"
+def translate_delete_clause(delete, context, metadata):
+    """DELETE / DETACH DELETE, as statements that read ids captured up front (spec 229).
+
+    Every statement used to re-run the MATCH as its own subquery. The MATCH joins
+    `rdf_labels`, so once the first statement had deleted a node's labels the later
+    ones found nothing, and `MATCH (n:X) DELETE n` left the node row behind. Now
+    the clause first captures, for each target, the ids the MATCH binds
+    (`__capture_ids__ <key>`), before anything is written; every later statement
+    reads `__IDS_<key>__`. Relationships go before the connected-node check, so
+    `DELETE r, a, b` is not refused for the edge it is deleting itself.
+
+    A clause deleting exactly one relationship keeps its single `edge_id IN
+    (subquery)` statement: `DELETE r CREATE ...` / `DELETE t MERGE ...` move that
+    statement past the write (`_defer_edge_delete_past_create` / `_merge`).
+    """
+    targets = _delete_targets(delete, context)
+    single_edge = len(targets) == 1 and targets[0][2] and not targets[0][3]
+
+    stage_sql = " ".join(getattr(context, "stages", []))
+
+    def _stage_edge_id(name):
+        col = f"__edge_{name}_id"
+        return col if f"AS {col}" in stage_sql else None
+
+    captured = {}  # (name, alias) -> `__IDS_<key>__`
+    for name, alias, is_edge, is_stage_alias in targets:
+        if single_edge or (is_edge and is_stage_alias and not _stage_edge_id(name)):
+            continue
+        if is_edge and is_stage_alias:
+            id_expr = f"{alias}.{_stage_edge_id(name)}"
+        elif is_edge:
+            id_expr = f"{alias}.edge_id"
+        elif is_stage_alias:
+            id_expr = f"{alias}.{_safe_alias(name)}"
+        else:
+            # A source node the MATCH folded into its edge (`(:X)-->()`) has no
+            # `nodes` join of its own; its id is the edge's `s` / `o_id`.
+            id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
+        cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}")
+        key = f"d{len(context.dml_statements)}"
+        context.dml_statements.append((f"__capture_ids__ {key}\n{cte}{subquery}", subparams))
+        captured[(name, alias)] = f"__IDS_{key}__"
+
+    # Relationships first.
+    for name, alias, is_edge, is_stage_alias in targets:
+        if not is_edge:
+            continue
+        if is_stage_alias and (name, alias) not in captured:
+            # Relationship variable promoted through WITH into a CTE stage, with
+            # no __edge_<var>_id column: delete by its __edge_<var>_s/p/o.
+            s_col = f"__edge_{name}_s"
+            p_col = f"__edge_{name}_p"
+            o_col = f"__edge_{name}_o"
             cte_s, subquery_s, subparams_s = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.{s_col}"
             )
             _, subquery_p, _ = context.build_dml_subquery(select_override=f"SELECT {alias}.{p_col}")
             _, subquery_o, _ = context.build_dml_subquery(select_override=f"SELECT {alias}.{o_col}")
-            # All three calls return the same CTE and params (same Stage1 binding).
-            # The CTE appears once in the SQL; params are bound once.
             context.add_dml(
                 f"{cte_s}DELETE FROM {_table('rdf_edges')} WHERE "
                 f"s IN ({subquery_s}) AND p IN ({subquery_p}) AND o_id IN ({subquery_o})",
                 subparams_s,
             )
-            return
-
-        node_col = _safe_alias(var.name) if is_stage_alias else "node_id"
-        cte, subquery, subparams = context.build_dml_subquery(
-            select_override=f"SELECT {alias}.{node_col}"
-        )
-        # When a CTE is present, the subquery is a bare reference (no ?); params are CTE-only
-        # and used once. When no CTE, the subquery has its own ? for each IN clause.
-        # The subquery appears twice (s IN ... OR o_id IN ...): bind the CTE's params once
-        # and the subquery's own params (e.g. label JOINs next to a non-stage CTE such as
-        # an undirected-edge union) twice.
-        _n_cte = len(subparams) - subquery.count("?")
-        dual_params = subparams + subparams[_n_cte:] if _n_cte >= 0 else subparams + subparams
-        if delete.detach:
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_edges')} WHERE s IN ({subquery}) OR o_id IN ({subquery})",
-                dual_params,
-            )
-        elif not is_edge_var:
-            # Non-DETACH DELETE: guard against connected nodes (Cypher constraint).
-            # Stored as a sentinel SQL so execute_transaction can raise the right error.
-            context.add_dml(
-                f"__constraint_check_delete_connected__ {cte}SELECT COUNT(*) FROM {_table('rdf_edges')} WHERE s IN ({subquery}) OR o_id IN ({subquery})",
-                dual_params,
-            )
-        if not is_edge_var:
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_labels')} WHERE s IN ({subquery})", subparams
-            )
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})", subparams
-            )
-            context.add_dml(
-                # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
-                # (graph_id, node_id) with emb_rowid as the identity, so the old
-                # column name is SQLCODE -29 on every DETACH DELETE.
-                f"{cte}DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id IN ({subquery})",
-                subparams,
-            )
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('nodes')} WHERE node_id IN ({subquery})",
-                subparams,
-            )
-        else:
-            is_undirected = alias in getattr(context, "_undirected_aliases", set())
-            s_col = "_src" if is_undirected else "s"
-            p_col = "_p" if is_undirected else "p"
-            o_col = "_dst" if is_undirected else "o_id"
-            # By edge_id, the matched edges themselves: three independent IN lists
-            # on s, p and o_id also deleted any edge whose endpoints and type each
-            # occurred somewhere in the match. The undirected CTE carries edge_id.
+            continue
+        if single_edge:
+            # By edge_id, the matched edges themselves. The undirected CTE carries
+            # edge_id.
             cte, subquery, subparams = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.edge_id"
             )
@@ -5866,6 +6033,35 @@ def translate_delete_clause(delete, context, metadata):
             )
             context._pending_edge_delete = (len(context.dml_statements) - 1, len(context.stages))
             context._pending_edge_delete_alias = alias
+            continue
+        context.add_dml(
+            f"DELETE FROM {_table('rdf_edges')} WHERE edge_id IN ({captured[(name, alias)]})",
+            [],
+        )
+
+    node_ids = [captured[(name, alias)] for name, alias, is_edge, _ in targets if not is_edge]
+    for ids in node_ids:
+        if delete.detach:
+            context.add_dml(
+                f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({ids}) OR o_id IN ({ids})", []
+            )
+        else:
+            # Stored as a sentinel so execute_transaction raises the Cypher error.
+            context.add_dml(
+                f"__constraint_check_delete_connected__ SELECT COUNT(*) FROM "
+                f"{_table('rdf_edges')} WHERE s IN ({ids}) OR o_id IN ({ids})",
+                [],
+            )
+    for ids in node_ids:
+        context.add_dml(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({ids})", [])
+        context.add_dml(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({ids})", [])
+        # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
+        # (graph_id, node_id).
+        context.add_dml(
+            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id IN ({ids})", []
+        )
+    for ids in node_ids:
+        context.add_dml(f"DELETE FROM {_table('nodes')} WHERE node_id IN ({ids})", [])
 
 
 def _merge_val_match(p_alias: str, val) -> str:
@@ -12488,7 +12684,9 @@ def _expr_propref_edge_alias(expr, context, alias):
         return f"{alias}.{'_src' if is_undirected else 's'}"
     if expr.property_name == "o_id":
         return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
-    if is_undirected or is_edgescan:
+    # The undirected UNION CTE carries `qualifiers`, so `r.id` on `()-[r]-()`
+    # reads it like a directed edge does (Delete2 [3] compared NULL = 42).
+    if is_edgescan:
         return "NULL"
     return f"CASE WHEN {alias}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}') END"
 
