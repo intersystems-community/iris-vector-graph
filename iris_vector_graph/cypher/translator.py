@@ -3725,6 +3725,50 @@ def _check_deleted_entity_access(cypher_query) -> None:
                 )
 
 
+def _clip_unwind_range_to_with_limit(cypher_query):
+    """`UNWIND range(a, b) AS i WITH i LIMIT n`: only the first skip + n elements survive.
+
+    A static range is spelled out as a JSON_ARRAY literal, so a wide one fails at
+    Prepare (<STRINGSTACK>, Aggregation3 [2]). Range order is fixed, and a plain
+    pass-through WITH (no WHERE / ORDER BY / DISTINCT / aggregation) keeps it, so
+    the tail can be dropped before translation.
+    """
+    for part in getattr(cypher_query, "query_parts", None) or []:
+        w = part.with_clause
+        if (
+            w is None
+            or len(part.clauses) != 1
+            or not isinstance(part.clauses[0], ast.UnwindClause)
+            or w.where_clause is not None
+            or w.order_by_clause is not None
+            or w.distinct
+            or w.star
+            or not all(isinstance(it.expression, ast.Variable) for it in w.items)
+        ):
+            continue
+        lim = w.limit.value if isinstance(w.limit, ast.Literal) else w.limit
+        skip = w.skip.value if isinstance(w.skip, ast.Literal) else (w.skip or 0)
+        if not isinstance(lim, int) or not isinstance(skip, int) or isinstance(lim, bool):
+            continue
+        fc = part.clauses[0].expression
+        if not (
+            isinstance(fc, ast.FunctionCall)
+            and fc.function_name.lower() == "range"
+            and len(fc.arguments) in (2, 3)
+            and all(
+                isinstance(a, ast.Literal) and type(a.value) is int for a in fc.arguments
+            )
+        ):
+            continue
+        start, end = fc.arguments[0].value, fc.arguments[1].value
+        step = fc.arguments[2].value if len(fc.arguments) == 3 else 1
+        if step == 0:
+            continue
+        clipped = start + (skip + max(lim, 0) - 1) * step
+        if (step > 0 and clipped < end) or (step < 0 and clipped > end):
+            fc.arguments[1] = ast.Literal(clipped)
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -3737,6 +3781,7 @@ def translate_to_sql(
     # forgotten by the sixth (spec 227).
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)
+    _clip_unwind_range_to_with_limit(cypher_query)
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -16701,6 +16746,11 @@ def _expr_fn_range(args_exprs):
             vals = list(range(start, end + (1 if step > 0 else -1), step))
             if not vals:
                 return _EMPTY_JSON_ARRAY
+            if len(vals) > 100:
+                # A JSON_ARRAY of thousands of arguments fails to compile as a cached
+                # query; spell it as a string literal, as fully literal lists are.
+                txt = "[" + ",".join(str(v) for v in vals) + "]"
+                return f"CAST('{txt}' AS VARCHAR({max(len(txt) + 1, 256)}))"
             return f"JSON_ARRAY({', '.join(str(v) for v in vals)})"
     except ValueError:
         raise

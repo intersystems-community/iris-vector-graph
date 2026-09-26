@@ -1634,3 +1634,15 @@ class TestUnwindMapParamPropertyIntoMerge:
         )
         final = t.sql[-1] if isinstance(t.sql, list) else t.sql
         assert final.count("nodes n") == 1
+
+
+class TestUnwindRangeClippedToWithLimit:
+    def test_range_is_clipped_to_the_limit(self):
+        # Aggregation3 [2]: range(1000000, 2000000) was spelled out as a million-element
+        # JSON_ARRAY literal and IRIS failed at Prepare (<STRINGSTACK>).
+        sql = _sql("UNWIND range(1000000, 2000000) AS i WITH i LIMIT 3000 RETURN sum(i)")
+        assert "1002999" in sql and "1003000" not in sql
+
+    def test_ordered_with_is_not_clipped(self):
+        sql = _sql("UNWIND range(1, 20) AS i WITH i ORDER BY i DESC LIMIT 3 RETURN i")
+        assert "20" in sql
