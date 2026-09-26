@@ -1252,15 +1252,39 @@ def _tck_type_coerce(val, arg_type_str: str):
     return val
 
 
+_TCK_INT_LITERAL_RE = re.compile(r"-?(?:0|[1-9]\d*)")
+_TCK_FLOAT_LITERAL_RE = re.compile(r"-?(?:0|[1-9]\d*)\.\d+(?:[eE][-+]?\d+)?")
+
+
 def _tck_val_to_sql(val, col_name: str) -> str:
-    """Convert a Python value to a SQL literal expression for a SELECT column."""
+    """Convert a Python value to a SQL literal expression for a SELECT column.
+
+    behave table cells are always Python str, even for an unquoted Cypher
+    literal like `46` or `true` — only a *quoted* cell ("'Malmö'") is
+    actually a Cypher string. Treating every str cell as a SQL string
+    literal turned declared INTEGER?/FLOAT? outputs into TEXT columns, so a
+    result like `46` came back from IRIS as the text '46' instead of the int
+    46 (typed TCK scoring: int->str — Call2 [1]/[2]/[3], Call5 [3]/[4]/[8]).
+    """
     if val is None:
         return f"NULL AS {col_name}"
-    # val is a string if it came from behave's table (still quoted like 'Malmö')
+    if isinstance(val, bool):
+        return f"{1 if val else 0} AS {col_name}"
+    if isinstance(val, (int, float)):
+        return f"{val} AS {col_name}"
     if isinstance(val, str):
-        if val.startswith("'") and val.endswith("'"):
-            val = val[1:-1]
-        escaped = val.replace("'", "''")
+        s = val.strip()
+        if s.lower() == "null":
+            return f"NULL AS {col_name}"
+        if s.startswith("'") and s.endswith("'"):
+            inner = s[1:-1]
+            escaped = inner.replace("'", "''")
+            return f"'{escaped}' AS {col_name}"
+        if s.lower() in ("true", "false"):
+            return f"{1 if s.lower() == 'true' else 0} AS {col_name}"
+        if _TCK_INT_LITERAL_RE.fullmatch(s) or _TCK_FLOAT_LITERAL_RE.fullmatch(s):
+            return f"{s} AS {col_name}"
+        escaped = s.replace("'", "''")
         return f"'{escaped}' AS {col_name}"
     return f"{val} AS {col_name}"
 
