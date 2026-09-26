@@ -2894,8 +2894,26 @@ def _tts_process_parts(cypher_query, context, metadata):
             # Accumulate created node IDs per variable for use in RETURN
             if not hasattr(context, "_unwind_create_node_ids"):
                 context._unwind_create_node_ids = {}  # var_name → [uuid, ...]
+            # A node MERGE finds its node by pattern (FROM + JOINs), not by id. Each
+            # element starts from the pre-loop rows, or element 2's SET cross-joins
+            # element 1's node; the lookup is kept for the RETURN (Unwind1 [14]).
+            context._unwind_merge_node_subqs = {}  # var_name → [(sql, params), ...]
+            _rows_before = (
+                list(context.from_clauses),
+                list(context.join_clauses),
+                list(context.join_params),
+                list(context.where_conditions),
+                list(context.where_params),
+            )
             for item in unwind_literals:
                 item_val = item.value if isinstance(item, ast.Literal) else item
+                (
+                    context.from_clauses,
+                    context.join_clauses,
+                    context.join_params,
+                    context.where_conditions,
+                    context.where_params,
+                ) = (list(x) for x in _rows_before)
                 # Start each iteration from the pre-loop state so new vars don't accumulate
                 context.variable_aliases = dict(aliases_before)
                 context.variable_aliases[unwind_clause.alias] = "__foreach_literal__"
@@ -2919,6 +2937,29 @@ def _tts_process_parts(cypher_query, context, metadata):
                     nid = context.input_params.get(f"__create_id_{var_name}")
                     if nid:
                         context._unwind_create_node_ids.setdefault(var_name, []).append(nid)
+                    elif (
+                        var_name != unwind_clause.alias
+                        and var_name not in context.rel_variables
+                        and context.from_clauses
+                        and (
+                            len(context.from_clauses) > len(_rows_before[0])
+                            or len(context.join_clauses) > len(_rows_before[1])
+                        )
+                    ):
+                        _where = (
+                            " WHERE " + " AND ".join(context.where_conditions)
+                            if context.where_conditions
+                            else ""
+                        )
+                        context._unwind_merge_node_subqs.setdefault(var_name, []).append(
+                            (
+                                f"SELECT {context.variable_aliases[var_name]}.node_id FROM "
+                                + ", ".join(context.from_clauses)
+                                + "".join(" " + j for j in context.join_clauses)
+                                + _where,
+                                list(context.join_params) + list(context.where_params),
+                            )
+                        )
                 # Collect relationship identities created in this iteration
                 if not hasattr(context, "_unwind_create_rel_ids"):
                     context._unwind_create_rel_ids = {}  # var_name → [(s,p,o), ...]
@@ -3005,6 +3046,10 @@ def _tts_process_parts(cypher_query, context, metadata):
             # structure before building the WITH stage (avoids 5-JOIN spurious structure).
             _apply_unwind_create_context_reset(context, part.with_clause)
             _to_sql_handle_with(part, context, i)
+            # The WITH projected the created variables into Stage{i+1}; a later part
+            # reads them from there, not from the created-id lists (Match4 [4]).
+            context._unwind_create_node_ids = {}
+            context._unwind_create_rel_ids = {}
     return is_transactional
 
 
@@ -3029,6 +3074,15 @@ def _ast_var_names(node, acc=None):
     return acc
 
 
+def _stage_node_id(col: str) -> str:
+    """A stage column bound to a node, as a node id.
+
+    A node taken from a list (`WITH nodeList[i] AS n1`) holds the node's JSON when
+    the list came from `collect(n)`, and the bare id when it came from `[a]`.
+    """
+    return f"CASE WHEN SUBSTRING({col}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({col}, '$._id') ELSE {col} END"
+
+
 def _apply_unwind_create_context_reset(context, projection=None):
     """Reset FROM/JOIN/WHERE to correct single-table structure after UNWIND+CREATE expansion.
 
@@ -3037,7 +3091,10 @@ def _apply_unwind_create_context_reset(context, projection=None):
     `projection` (the RETURN / WITH clause) limits the rebuilt tables to the
     variables it reads.
     """
-    unwind_node_ids = getattr(context, "_unwind_create_node_ids", {})
+    unwind_node_ids = dict(getattr(context, "_unwind_create_node_ids", {}))
+    # A merged node is found by one lookup per element: `(sql, params)` entries.
+    for _mv, _subqs in getattr(context, "_unwind_merge_node_subqs", {}).items():
+        unwind_node_ids.setdefault(_mv, _subqs)
     if unwind_node_ids and projection is not None:
         # Each tracked variable becomes its own table, cross-joined with the others:
         # keep only the ones the projection reads, or `MERGE (y)<-[:IN]-(e) RETURN e`
@@ -3045,6 +3102,9 @@ def _apply_unwind_create_context_reset(context, projection=None):
         _used = _ast_var_names(projection)
         if _used & set(unwind_node_ids):
             unwind_node_ids = {k: v for k, v in unwind_node_ids.items() if k in _used}
+    # The part's incoming stage (`WITH a, b UNWIND … CREATE (n) WITH a, b, collect(n)`)
+    # stays in FROM: its columns are still in scope (Match4 [4]).
+    _stage_from = [f for f in context.from_clauses if f.startswith("Stage") and f[5:].isdigit()]
     if unwind_node_ids:
         context.select_items, context.select_params = [], []
         context.join_clauses, context.join_params = [], []
@@ -3057,6 +3117,16 @@ def _apply_unwind_create_context_reset(context, projection=None):
             if first_node_alias is None:
                 first_node_alias = node_alias
             context.variable_aliases[var_name] = node_alias
+            if isinstance(ids[0], tuple):
+                # The lookup finds the node by its MERGE key, not by a value a SET
+                # changed: the RETURN's modified-property filter must keep it.
+                _cond = "(" + " OR ".join(f"{node_alias}.node_id IN ({sq})" for sq, _ in ids) + ")"
+                context.where_conditions.append(_cond)
+                context._unwind_lookup_conds = getattr(context, "_unwind_lookup_conds", set())
+                context._unwind_lookup_conds.add(_cond)
+                for _, sq_params in ids:
+                    context.where_params.extend(sq_params)
+                continue
             placeholders = ",".join(["?"] * len(ids))
             context.where_conditions.append(f"{node_alias}.node_id IN ({placeholders})")
             context.where_params.extend(ids)
@@ -3067,6 +3137,7 @@ def _apply_unwind_create_context_reset(context, projection=None):
                     continue
                 na = context.variable_aliases[var_name]
                 context.from_clauses.append(f"{_table('nodes')} {na}")
+            context.from_clauses = _stage_from + context.from_clauses
         return
 
     unwind_rel_ids = getattr(context, "_unwind_create_rel_ids", {})
@@ -3219,7 +3290,7 @@ def _tts_finalize_context(cypher_query, context):
                 is_modified_property_condition = False
 
                 # Check for .val = pattern (property value comparisons)
-                if ".val = " in cond:
+                if ".val = " in cond and cond not in getattr(context, "_unwind_lookup_conds", ()):
                     is_modified_property_condition = True
                     # Verify this isn't part of a sub-SELECT (like "NOT IN (SELECT 1 ... .val = ?)")
                     # by checking it's at the top level
@@ -5165,7 +5236,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             if s_id
             else (
                 (
-                    f"{s_alias}.{_safe_alias(source_node.variable)}"
+                    _stage_node_id(f"{s_alias}.{_safe_alias(source_node.variable)}")
                     if s_alias and s_alias.startswith("Stage")
                     else f"{s_alias}.node_id"
                 ),
@@ -5177,7 +5248,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             if t_id
             else (
                 (
-                    f"{t_alias}.{_safe_alias(target_node.variable)}"
+                    _stage_node_id(f"{t_alias}.{_safe_alias(target_node.variable)}")
                     if t_alias and t_alias.startswith("Stage")
                     else f"{t_alias}.node_id"
                 ),
@@ -17629,6 +17700,10 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
             context_alias = context.variable_aliases.get(var_name, "")
             if context_alias:
                 if context_alias.startswith("Stage"):
+                    # A relationship carried through WITH keeps its type in
+                    # `__edge_{v}_p`; the `{v}` column holds its properties.
+                    if var_name in getattr(context, "edge_stage_variables", set()):
+                        return f"{context_alias}.__edge_{var_name}_p"
                     return f"{context_alias}.{_safe_alias(var_name)}"
                 p_col = (
                     "_p"
@@ -19310,9 +19385,47 @@ def translate_with_clause(with_clause, context):
                     alias = context.next_alias("v")
                 alias_to_expr[alias] = item.expression
 
+            # `WITH a AS first WHERE first.name …`: the WHERE runs on the incoming row,
+            # where only `a` is bound, so a renamed variable reads as its source.
+            _renames = {
+                k: v.name
+                for k, v in alias_to_expr.items()
+                if isinstance(v, ast.Variable) and v.name != k
+            }
+            if _renames:
+                expr = _rename_variables(expr, _renames)
             # Translate the WHERE using a substitute function that expands aliases to original expressions
             where_sql = _translate_where_with_alias_expansion(expr, alias_to_expr, context)
             context.where_conditions.append(where_sql)
+
+
+def _rename_variables(expr, renames: dict):
+    """A copy of `expr` with each variable (and its property references) renamed."""
+    import dataclasses
+
+    if isinstance(expr, ast.Variable):
+        return ast.Variable(renames[expr.name]) if expr.name in renames else expr
+    if isinstance(expr, ast.PropertyReference):
+        if expr.variable in renames:
+            return ast.PropertyReference(renames[expr.variable], expr.property_name)
+        return expr
+    if isinstance(expr, list):
+        return [_rename_variables(e, renames) for e in expr]
+    if isinstance(expr, tuple):
+        return tuple(_rename_variables(e, renames) for e in expr)
+    if isinstance(expr, dict):
+        return {k: _rename_variables(v, renames) for k, v in expr.items()}
+    if dataclasses.is_dataclass(expr) and not isinstance(expr, type):
+        changes = {}
+        for f in dataclasses.fields(expr):
+            v = getattr(expr, f.name)
+            nv = _rename_variables(v, renames)
+            if nv is not v:
+                changes[f.name] = nv
+        if isinstance(expr, ast.NodePattern) and expr.variable in renames:
+            changes["variable"] = renames[expr.variable]
+        return dataclasses.replace(expr, **changes) if changes else expr
+    return expr
 
 
 def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) -> str:

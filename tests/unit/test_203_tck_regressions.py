@@ -1922,7 +1922,8 @@ class TestUnwindMapParamPropertyIntoMerge:
             {"events": [{"year": 2016, "id": 1}, {"year": 2016, "id": 2}]},
         )
         final = t.sql[-1] if isinstance(t.sql, list) else t.sql
-        assert final.count("nodes n") == 1
+        # The merged e is found by one lookup subquery per element, inside WHERE.
+        assert final[: final.index("\nWHERE")].count("nodes n") == 1
 
 
 class TestUnwindRangeClippedToWithLimit:
@@ -2538,3 +2539,106 @@ class TestHarnessOrderedMixedTypes:
             {"types": '{"a": "map"}'},
         ]
         assert t.compare(rows, ["types"]) is None
+
+
+_M4_SETUP = (
+    "CREATE (a {var: 'start'}), (b {var: 'end'}) WITH * "
+    "UNWIND range(1, 20) AS i CREATE (n {var: i}) "
+    "WITH a, b, [a] + collect(n) + [b] AS nodeList "
+    "UNWIND range(0, size(nodeList) - 2, 1) AS i "
+    "WITH nodeList[i] AS n1, nodeList[i+1] AS n2 "
+    "CREATE (n1)-[:T]->(n2)"
+)
+
+
+class TestUnwindCreateThenLaterStages:
+    """Match4 [4] setup failed -23 (Label 'STAGE2' is not listed among the
+    applicable tables): the created-node ids of the UNWIND+CREATE part were
+    re-applied to every later part, which replaced `FROM Stage2` and the second
+    UNWIND's JSON_TABLE with `FROM nodes nX WHERE node_id IN (...)`. The same
+    reset also dropped `Stage1` from the part that did the CREATE.
+    """
+
+    def _stage(self, sql, n):
+        m = re.search(rf"Stage{n} AS \((.*?)\n\)", sql, re.S)
+        assert m, sql
+        return m.group(1)
+
+    def test_later_part_keeps_its_stage_and_unwind(self):
+        sql = _sql(_M4_SETUP)
+        s3 = self._stage(sql, 3)
+        assert "FROM Stage2" in s3, s3
+        assert "CypherFn_IVGRANGE" in s3, s3
+        assert "node_id IN" not in s3, s3
+
+    def test_create_part_keeps_earlier_stage(self):
+        s2 = self._stage(_sql(_M4_SETUP), 2)
+        assert "Stage1" in s2, s2
+
+    def test_list_element_endpoint_reads_node_id(self):
+        # nodeList mixes plain ids ([a]) with collected node JSON (collect(n)):
+        # an endpoint taken from it must use the element's `_id`.
+        sql = _sql(_M4_SETUP)
+        ins = sql[sql.index("rdf_edges (s") :]
+        assert "'$._id'" in ins, ins
+
+
+class TestTypeOfStageRelationship:
+    """`type(r)` after `WITH r` read the stage's qualifiers column (`Stage1.r`),
+    so it returned the relationship's properties instead of its type."""
+
+    @pytest.mark.parametrize(
+        "q,col",
+        [
+            ("MATCH (a)-[r]->(b) WITH r RETURN type(r)", "__edge_r_p"),
+            ("MATCH (a)-[r]->(b) WITH r AS x RETURN type(x)", "__edge_x_p"),
+        ],
+    )
+    def test_type_reads_stage_type_column(self, q, col):
+        sql = _sql(q)
+        final = sql[sql.rindex("\nSELECT ") :]
+        assert f"Stage1.{col} AS type_" in final, final
+
+
+class TestWithRenameThenWhere:
+    """`WITH a AS first WHERE first.name = 'x'` raised "Undefined variable":
+    the WITH WHERE is evaluated against the incoming row, where only `a` exists."""
+
+    @pytest.mark.parametrize("alias", ["x", "first"])
+    def test_renamed_node_property_in_where(self, alias):
+        sql = _sql(f"MATCH (a) WITH a AS {alias} WHERE {alias}.name = 'x' RETURN {alias}")
+        s1 = sql[: sql.index("\n)")]
+        assert "rdf_props" in s1 and "WHERE" in s1, s1
+
+    def test_swapped_names(self):
+        sql = _sql("MATCH (a:A), (b:B) WITH a AS b, b AS a WHERE b.name = 'x' RETURN a, b")
+        assert "Undefined" not in sql
+
+
+class TestUnwindParamMergeThenReturn:
+    """`UNWIND $props AS prop MERGE (p {login: prop.login}) SET … RETURN p` kept each
+    element's MERGE lookup in FROM, so element 2's SET and the RETURN cross-joined
+    element 1's node, and the RETURN still unwound the list (Unwind1 [14])."""
+
+    Q = (
+        "UNWIND $props AS prop MERGE (p:Person {login: prop.login}) "
+        "SET p.name = prop.name RETURN p.name, p.login"
+    )
+    P = {"props": [{"login": "login1", "name": "name1"}, {"login": "login2", "name": "name2"}]}
+
+    def _t(self):
+        return _stmts(translate_to_sql(parse_query(self.Q), self.P))
+
+    def test_each_element_set_reads_only_its_node(self):
+        updates = [(s, p) for s, p in self._t() if s.startswith("UPDATE") and "rdf_props SET" in s]
+        assert len(updates) == 2
+        for s, _ in updates:
+            assert "CROSS JOIN" not in s, s
+        assert "login2" in updates[1][1] and "login1" not in updates[1][1]
+
+    def test_return_reads_each_merged_node_once(self):
+        final, params = self._t()[-1]
+        assert final.startswith("SELECT"), final
+        assert "JSON_TABLE" not in final and "CROSS JOIN" not in final, final
+        assert final.count(".node_id IN (SELECT") == 2, final
+        assert "login1" in params and "login2" in params
