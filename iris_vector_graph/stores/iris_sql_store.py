@@ -684,7 +684,7 @@ class IRISGraphStore:
     @staticmethod
     def _stmt_is_dml(stmt: str) -> bool:
         """Return True if stmt is a DELETE/INSERT/UPDATE DML (not a SELECT)."""
-        if stmt.startswith("__constraint_check_delete_connected__"):
+        if stmt.startswith(("__constraint_check_delete_connected__", "__capture_edge_hwm__")):
             return False  # handled separately; not a data-mutating DML
         upper = stmt.lstrip().upper()
         # Statements may be prefixed by a CTE ("WITH … DELETE …")
@@ -750,8 +750,18 @@ class IRISGraphStore:
                 pre_captured_rows = cursor.fetchall()
                 pre_captured_description = cursor.description
 
+            edge_hwm = None
             for i, stmt in enumerate(stmts):
                 p = params_list[i] if i < len(params_list) else []
+                # `DELETE r CREATE …`: the translator runs the CREATE first and
+                # bounds the DELETE by the edge_id high-water mark from before it.
+                if isinstance(stmt, str) and stmt.startswith("__capture_edge_hwm__"):
+                    cursor.execute(stmt[len("__capture_edge_hwm__ ") :], p)
+                    hwm_row = cursor.fetchone()
+                    edge_hwm = hwm_row[0] if hwm_row and hwm_row[0] is not None else 0
+                    continue
+                if edge_hwm is not None and "__EDGE_HWM__" in p:
+                    p = [edge_hwm if v == "__EDGE_HWM__" else v for v in p]
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"
                 ):

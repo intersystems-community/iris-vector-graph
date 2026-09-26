@@ -2095,3 +2095,102 @@ class TestVlpChainUdfDefinition:
         body = self._ddl()
         for key in ('"t"', '"l"', '"n"', '"y"', '"r"', '"k"', '"s"'):
             assert key in body, key
+
+
+class TestDeleteRelThenCreateUsesPreStatementMatch:
+    """Match5 [26]/[27] setup: `MATCH (a)-[r]->(b) DELETE r CREATE (b)-[:LIKES]->(a)`.
+    The DELETE ran first, so the CREATE re-ran the MATCH over a graph with the
+    edges gone and made nothing. The DELETE also removed every edge whose s, p and
+    o_id each appeared somewhere in the match rather than the matched edges."""
+
+    Q26 = "MATCH (a:A)-[r]->(b) DELETE r CREATE (b)-[:LIKES]->(a)"
+    Q27 = "MATCH (a)-[r]->(b) WHERE NOT a:A DELETE r CREATE (b)-[:LIKES]->(a)"
+
+    @staticmethod
+    def _kinds(stmts):
+        out = []
+        for s, _ in stmts:
+            if s.startswith("__capture_edge_hwm__"):
+                out.append("hwm")
+            elif re.search(r"DELETE FROM \S*rdf_edges ", s):
+                out.append("del")
+            elif re.search(r"INSERT INTO \S*rdf_edges ", s):
+                out.append("ins")
+        return out
+
+    @pytest.mark.parametrize("q", [Q26, Q27])
+    def test_create_runs_before_the_delete(self, q):
+        assert self._kinds(_stmts(tr(q))) == ["hwm", "ins", "del"]
+
+    @pytest.mark.parametrize("q", [Q26, Q27])
+    def test_delete_is_by_matched_edge_id_below_the_high_water_mark(self, q):
+        dels = [(s, p) for s, p in _stmts(tr(q)) if re.search(r"DELETE FROM \S*rdf_edges ", s)]
+        assert len(dels) == 1
+        s, p = dels[0]
+        assert re.search(r"WHERE edge_id IN \(SELECT e\d+\.edge_id", s), s
+        assert " IN (SELECT e3.s" not in s and "p IN (" not in s, s
+        assert s.rstrip().endswith("AND edge_id <= ?"), s
+        assert p[-1] == "__EDGE_HWM__"
+        assert s.count("?") == len(p), (s, p)
+
+    def test_delete_without_create_is_by_edge_id_and_not_reordered(self):
+        stmts = _stmts(tr("MATCH (a:A)-[r]->(b) DELETE r"))
+        assert self._kinds(stmts) == ["del"]
+        s, p = stmts[0]
+        assert re.search(r"WHERE edge_id IN \(SELECT e\d+\.edge_id", s), s
+        assert "__EDGE_HWM__" not in p
+
+    def test_undirected_delete_uses_the_cte_edge_id(self):
+        stmts = _stmts(tr("MATCH (a:A)-[r]-(b) DELETE r"))
+        dels = [s for s, _ in stmts if re.search(r"DELETE FROM \S*rdf_edges ", s)]
+        assert len(dels) == 1 and re.search(r"edge_id IN \(SELECT \w+\.edge_id", dels[0]), dels
+
+
+class TestEdgeHighWaterMarkSentinel:
+    """The executor side of the Match5 [26]/[27] fix: `__capture_edge_hwm__` runs its
+    SELECT, and later `__EDGE_HWM__` bind parameters take the captured value."""
+
+    def test_hwm_is_captured_and_substituted(self):
+        from unittest.mock import MagicMock
+
+        from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+
+        conn = MagicMock()
+        cur = MagicMock()
+        conn.cursor.return_value = cur
+        cur.description = None
+        cur.fetchone.return_value = (41,)
+        store = IRISGraphStore(conn)
+        store.execute_transaction(
+            [
+                "__capture_edge_hwm__ SELECT COALESCE(MAX(edge_id), 0) FROM rdf_edges",
+                "INSERT INTO rdf_edges (s, p, o_id) VALUES (?, ?, ?)",
+                "DELETE FROM rdf_edges WHERE edge_id IN (SELECT 1) AND edge_id <= ?",
+            ],
+            [[], ["a", "R", "b"], ["__EDGE_HWM__"]],
+        )
+        calls = [c.args for c in cur.execute.call_args_list]
+        assert ("SELECT COALESCE(MAX(edge_id), 0) FROM rdf_edges", []) in calls
+        assert (
+            "DELETE FROM rdf_edges WHERE edge_id IN (SELECT 1) AND edge_id <= ?",
+            [41],
+        ) in calls
+        assert not any(str(c[0]).startswith("__capture") for c in calls)
+
+
+class TestBidirectedBracketRelationship:
+    """Match5 [27] query: `()<-[:LIKES*3]->(c)` is the bidirected form, matched as
+    undirected (openCypher). The parser demanded `-` after `]` once it saw `<-`."""
+
+    def test_bidirected_bracket_parses_as_both(self):
+        from iris_vector_graph.cypher import ast as cast
+
+        q = parse_query("MATCH (a)<-[r:LIKES*3]->(c) RETURN c")
+        rel = q.query_parts[0].clauses[0].patterns[0].relationships[0]
+        assert rel.direction == cast.Direction.BOTH
+        assert rel.types == ["LIKES"] and rel.variable_length is not None
+
+    def test_bidirected_translates_like_undirected(self):
+        a = tr("MATCH (a:A)-[:LIKES]->()<-[:LIKES*3]->(c) RETURN c.name")
+        b = tr("MATCH (a:A)-[:LIKES]->()-[:LIKES*3]-(c) RETURN c.name")
+        assert a.sql == b.sql and a.parameters == b.parameters

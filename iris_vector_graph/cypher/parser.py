@@ -1073,7 +1073,11 @@ class Parser:
 
         # Closing arrow
         if direction == ast.Direction.INCOMING:
-            self.expect(TokenType.MINUS)
+            # <-[...]-> is the bidirected form, matched as undirected (Match5 [27])
+            if self.matches(TokenType.ARROW_RIGHT):
+                direction = ast.Direction.BOTH
+            else:
+                self.expect(TokenType.MINUS)
         else:
             if self.matches(TokenType.ARROW_RIGHT):
                 direction = ast.Direction.OUTGOING
