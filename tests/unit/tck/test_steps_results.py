@@ -43,9 +43,14 @@ class TestResultSteps:
     def test_no_side_effects_passes(self):
         from tests.tck.steps.results import step_no_side_effects
 
+        from tests.tck.side_effects import SIDE_EFFECT_COLUMNS
+
         ctx = MagicMock()
         ctx.last_error = None
-        # should not raise
+        ctx.last_result.error = None
+        # a measured zero delta (spec 229: the step no longer passes unconditionally)
+        ctx.side_effects = {c: 0 for c in SIDE_EFFECT_COLUMNS}
+        ctx.side_effects_unexpected = {}
         step_no_side_effects(ctx)
 
     def test_error_type_assertion_pass(self):

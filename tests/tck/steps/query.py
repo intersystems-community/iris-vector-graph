@@ -9,36 +9,36 @@ except ImportError:
         def _d(f): return f
         return _d
 
+from tests.tck.side_effects import SideEffects
 from tests.tck.steps.comparison import TCKValue
 from tests.tck.steps.graph_setup import _inject_label
+from tests.tck.strictness import lenient
 
 
 @when("executing query:")
 def step_executing_query(context, query=None):
     if query is None:
         query = context.text
-    query = query.strip()
-    injected = _inject_match_scope(
-        _inject_label(query, context.scenario_label, inject_anonymous=False),
-        context.scenario_label,
-    )
-    params = getattr(context, "params", {}) or {}
-    procedures = getattr(context, "_tck_procedures", None) or {}
-    context.last_error = None
-    try:
-        context.last_result = context.engine.execute_cypher(
-            injected, params, procedures=procedures
-        )
-    except Exception as exc:
-        context.last_result = None
-        context.last_error = exc
-    context.params = {}
+    _run_query(context, query)
 
 
 @when("executing control query:")
 def step_control_query(context, query=None):
     if query is None:
         query = context.text
+    _run_query(context, query)
+
+
+def _run_query(context, query: str) -> None:
+    """Execute one scenario query and measure its side effects (spec 229 FR-001).
+
+    The graph state is snapshotted on the engine's own connection immediately before
+    and after the query, so uncommitted writes are visible and rows other scenarios
+    left behind cancel out. The delta is taken even when the query raises, so a
+    partial write is not hidden behind the error; the side-effect steps report the
+    error first. A snapshot that fails leaves ``side_effects`` None with the reason
+    in ``side_effects_error``: the side-effect steps then fail rather than pass.
+    """
     query = query.strip()
     injected = _inject_match_scope(
         _inject_label(query, context.scenario_label, inject_anonymous=False),
@@ -47,6 +47,11 @@ def step_control_query(context, query=None):
     params = getattr(context, "params", {}) or {}
     procedures = getattr(context, "_tck_procedures", None) or {}
     context.last_error = None
+    context.side_effects = None
+    context.side_effects_unexpected = {}
+    context.side_effects_error = None
+    measure = not lenient()
+    before = _snapshot(context, "before") if measure else None
     try:
         context.last_result = context.engine.execute_cypher(
             injected, params, procedures=procedures
@@ -54,7 +59,23 @@ def step_control_query(context, query=None):
     except Exception as exc:
         context.last_result = None
         context.last_error = exc
+    if before is not None:
+        after = _snapshot(context, "after")
+        if after is not None:
+            context.side_effects = before.delta_to(after)
+            context.side_effects_unexpected = before.unexpected_to(after)
     context.params = {}
+
+
+def _snapshot(context, when: str):
+    engine = context.engine
+    try:
+        return SideEffects.capture(
+            engine.conn, schema=getattr(engine, "_schema_prefix", None) or "Graph_KG"
+        )
+    except Exception as exc:  # recorded, never swallowed: the side-effect steps fail on it
+        context.side_effects_error = f"{when}-query snapshot failed: {type(exc).__name__}: {exc}"
+        return None
 
 
 @step("parameters are:")
