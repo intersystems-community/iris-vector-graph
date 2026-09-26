@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.cypher.merge_rows import plan_row_merge
+from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.prop_values import parse_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
@@ -337,6 +338,70 @@ def _decode_bool_text_columns(result, sql_query) -> None:
         rows.append(row)
     result.rows = rows
 
+
+def _int_expr_value(v):
+    """A value from a statically INTEGER-valued column (SQLQuery.int_expr_columns):
+    float / Decimal becomes int. IRIS's FLOOR()/MOD() come back as DOUBLE or
+    Decimal even for a Cypher expression that is statically an integer, and
+    DOUBLE arithmetic on a value that is mathematically whole can leave a tiny
+    floating-point residue (e.g. -7.0 or -1.11e-15 for an expression that is
+    exactly -7 or 0); round() absorbs that residue. null and bool pass through."""
+    if v is None or isinstance(v, bool) or isinstance(v, int):
+        return v
+    if isinstance(v, float) or type(v).__name__ == "Decimal":
+        try:
+            return int(round(v))
+        except (ValueError, OverflowError, TypeError):
+            return v
+    return v
+
+
+def _float_expr_value(v):
+    """A value from a statically FLOAT-valued column (SQLQuery.float_expr_columns):
+    int / Decimal becomes float (e.g. avg(), percentileCont/Disc() can come back
+    as an IRIS integer when the values happen to be whole numbers). null and
+    bool pass through."""
+    if v is None or isinstance(v, bool) or isinstance(v, float):
+        return v
+    if isinstance(v, int) or type(v).__name__ == "Decimal":
+        try:
+            return float(v)
+        except (ValueError, OverflowError, TypeError):
+            return v
+    return v
+
+
+def _decode_numeric_expr_columns(result, sql_query) -> None:
+    """Cast driver values in columns statically known to be Cypher INTEGER /
+    FLOAT (SQLQuery.int_expr_columns / float_expr_columns) to the matching
+    Python type. See _numeric_static_type in the translator. Columns of
+    unknown numeric type (a property of unknown type) are left untouched."""
+    int_names = {
+        n.strip('"').lower() for n in getattr(sql_query, "int_expr_columns", None) or []
+    }
+    float_names = {
+        n.strip('"').lower() for n in getattr(sql_query, "float_expr_columns", None) or []
+    }
+    if not (int_names or float_names) or not getattr(result, "rows", None):
+        return
+    cols = result.columns or []
+    int_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in int_names]
+    float_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in float_names]
+    if not (int_cols or float_cols):
+        return
+    rows = []
+    for row in result.rows:
+        row = list(row)
+        for i in int_cols:
+            if i < len(row):
+                row[i] = _int_expr_value(row[i])
+        for i in float_cols:
+            if i < len(row):
+                row[i] = _float_expr_value(row[i])
+        rows.append(row)
+    result.rows = rows
+
+
 _INT_TEXT = re.compile(r"-?(?:0|[1-9]\d*)")
 _FLOAT_TEXT = re.compile(r"-?(?:0|[1-9]\d*)\.\d+(?:[eE][-+]?\d+)?")
 
@@ -369,6 +434,10 @@ def _return_item_name(item) -> str:
     if isinstance(e, _ast.PropertyReference):
         return f"{e.variable}.{e.property_name}"
     return str(e)
+
+
+# Rows a count-only CREATE pipeline (cypher.count_create) may fan out to.
+_COUNT_CREATE_MAX_ROWS = 100_000
 
 
 class QueryMixin:
@@ -523,7 +592,31 @@ class QueryMixin:
             result = self._execute_row_merge(row_merge, parameters, procedures)
             if result is not None:
                 return result
+        count_create = plan_count_create(parsed, parameters)
+        if count_create is not None:
+            return self._execute_count_create(count_create, parameters, procedures)
         return self._execute_parsed(parsed, parameters, procedures)
+
+
+    def _execute_count_create(self, steps, parameters, procedures=None):
+        """Run a MATCH/CREATE pipeline whose rows carry no values (see
+        cypher.count_create): each MATCH multiplies the row count, each CREATE
+        runs once per row."""
+        rows = 1
+        for kind, q in steps:
+            if kind == "count":
+                res = self._execute_parsed(q, parameters, procedures)
+                n = res.rows[0][0] if res.rows and res.rows[0] else 0
+                rows *= int(n or 0)
+                if rows > _COUNT_CREATE_MAX_ROWS:
+                    raise ValueError(
+                        f"CREATE would run for {rows} rows "
+                        f"(limit {_COUNT_CREATE_MAX_ROWS})"
+                    )
+            else:
+                for _ in range(rows):
+                    self._execute_parsed(q, parameters, procedures)
+        return IVGResult(columns=[], rows=[])
 
     def _execute_row_merge(self, plan, parameters, procedures=None):
         """Run the prefix, then the MERGE suffix once per row (see cypher.merge_rows).
@@ -577,6 +670,7 @@ class QueryMixin:
             result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
             result.metadata = metadata
             _decode_bool_text_columns(result, sql_query)
+            _decode_numeric_expr_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
                 result.columns = [
                     sql_query.column_name_map.get(col, col) for col in result.columns
@@ -588,6 +682,7 @@ class QueryMixin:
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
             _decode_bool_text_columns(result, sql_query)
+            _decode_numeric_expr_columns(result, sql_query)
             if sql_query.bolt_column_types:
                 result.bolt_column_types = sql_query.bolt_column_types
             if sql_query.column_name_map and result.columns:

@@ -609,6 +609,13 @@ class SQLQuery(BaseModel):
     # the CASE that computes them as VARCHAR, so the engine reads '1' / '0' there.
     # By name, not index: a node or relationship item expands to several columns.
     bool_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items statically known to be Cypher INTEGER / FLOAT
+    # valued (see _numeric_static_type): IRIS arithmetic returns DOUBLE or Decimal
+    # for integer-typed Cypher expressions (and vice versa for FLOAT-typed ones
+    # like avg()/percentileCont()), so the engine casts these columns back to the
+    # correct Python type. By name, not index, like bool_expr_columns.
+    int_expr_columns: List[str] = Field(default_factory=list)
+    float_expr_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -696,6 +703,16 @@ class TranslationContext:
         # WITH aliases whose value is statically boolean (see _is_bool_valued).
         self.bool_vars: Set[str] = (
             set() if parent is None else set(getattr(parent, "bool_vars", set()))
+        )
+        # SQL aliases of INTEGER / FLOAT-valued RETURN items (see _numeric_static_type).
+        self.int_expr_aliases: List[str] = [] if parent is None else parent.int_expr_aliases
+        self.float_expr_aliases: List[str] = [] if parent is None else parent.float_expr_aliases
+        # WITH aliases whose value is statically INTEGER / FLOAT (see _numeric_static_type).
+        self.int_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "int_vars", set()))
+        )
+        self.float_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "float_vars", set()))
         )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
@@ -3129,6 +3146,13 @@ def _tts_process_parts(cypher_query, context, metadata):
                 for clause in _iter_clauses:
                     if isinstance(clause, ast.UnwindClause):
                         continue  # handled by foreach expansion above
+                    elif isinstance(clause, ast.MatchClause) and not clause.optional:
+                        # A MATCH after the UNWIND binds its nodes for this element's
+                        # writes; skipping it left them unbound, so a later MERGE
+                        # created a fresh node for each (Unwind1 [6]).
+                        context.match_preceded_create = True
+                        translate_match_clause(clause, context, metadata)
+                        context.optional_match_new_aliases = set()
                     elif isinstance(clause, ast.UpdatingClause):
                         translate_updating_clause(clause, context, metadata)
                     elif isinstance(clause, ast.WhereClause):
@@ -3992,14 +4016,28 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
         if from_match and len(context._percentile_queries) == 1:
             from_clause = from_match.group(0).strip()
             val_expr, pct_val, fn_name, var_name, alias = context._percentile_queries[0]
-            col_alias = _re.search(r"AS\s+(\w+)\s*$", sql.split("\n")[0])
-            out_alias = col_alias.group(1) if col_alias else "result"
             proc = "PCONT" if fn_name == "percentilecont" else "PDISC"
-            sql = (
-                f"SELECT IVG.Percentile_{proc}("
+            percentile_expr = (
+                f"IVG.Percentile_{proc}("
                 f"(SELECT JSON_ARRAYAGG(CAST({val_expr} AS DOUBLE)) "
-                f"\n{from_clause}), {pct_val}) AS {out_alias}"
+                f"\n{from_clause}), {pct_val})"
             )
+            placeholder = "__PERCENTILE_PLACEHOLDER_0__"
+            if placeholder in sql and len(context.select_items) > 1:
+                # A RETURN clause can project other columns alongside the
+                # percentile call (Aggregation6 [5]): substitute in place and
+                # keep the surrounding SELECT/FROM/WHERE/GROUP BY/ORDER BY so
+                # those columns (and the CTE preamble) survive. When the
+                # percentile call is the only column, fall through to the
+                # single-row rewrite below — the aggregate subquery is
+                # self-contained, so no outer FROM is needed (or wanted: it
+                # would turn the single aggregate row into one row per source
+                # row).
+                sql = sql.replace(placeholder, percentile_expr)
+            else:
+                col_alias = _re.search(r"AS\s+(\w+)\s*$", sql.split("\n")[0])
+                out_alias = col_alias.group(1) if col_alias else "result"
+                sql = f"SELECT {percentile_expr} AS {out_alias}"
             # Keep p (params) — val_expr and pct_val may contain ? placeholders that need p
     # When fetch_first_unsafe and we have SKIP or LIMIT with ORDER BY that references
     # JOIN aliases (p\d+.val), project those sort expressions as __sort_N columns so
@@ -4251,6 +4289,145 @@ def _clip_unwind_range_to_with_limit(cypher_query):
             fc.arguments[1] = ast.Literal(clipped)
 
 
+def _container_access(expr, params, bound):
+    """`base`, `[step, ...]` for `m.key[0]`-style access; steps are ("key", k) / ("idx", i).
+
+    None when `expr` is not a chain of map keys and constant list indices over one
+    variable. A `$param` parses as a Variable; it is an index when it is a
+    parameter and not a bound variable.
+    """
+    steps = []
+    while True:
+        if isinstance(expr, ast.SubscriptExpression):
+            idx = expr.index
+            if isinstance(idx, ast.Literal) and isinstance(idx.value, int):
+                val = idx.value
+            elif (
+                isinstance(idx, ast.Variable)
+                and idx.name not in bound
+                and isinstance(params.get(idx.name), int)
+            ):
+                val = params[idx.name]
+            else:
+                return None
+            if isinstance(val, bool):
+                return None
+            steps.append(("idx", val))
+            expr = expr.expression
+        elif isinstance(expr, ast.PropertyAccessExpression):
+            steps.append(("key", expr.property_name))
+            expr = expr.expression
+        elif isinstance(expr, ast.PropertyReference):
+            steps.append(("key", expr.property_name))
+            return expr.variable, steps[::-1]
+        elif isinstance(expr, ast.Variable):
+            return expr.name, steps[::-1]
+        else:
+            return None
+
+
+def _lower_delete_containers(cypher_query, params) -> None:
+    """`WITH collect(n) AS l DELETE l[$i]` as `WITH n SKIP $i LIMIT 1 DELETE n` (Delete5).
+
+    DELETE of a list element or a map value names an entity by where it sits in a
+    value the previous WITH built. That value cannot be materialised here (a
+    collected relationship keeps only its type), so the access is resolved against
+    the WITH expression instead: a map key selects the entry, and an index into
+    `collect(v)` selects rows of `v` (collect order is the row order, so contiguous
+    indices are a SKIP / LIMIT window). A collected path is replaced by its nodes
+    and relationships, naming the anonymous ones.
+
+    Only the shape Delete5 uses: the DELETE is the query's last part, alone, with
+    no RETURN, and the WITH before it has a single item and no WHERE, ORDER BY,
+    DISTINCT, SKIP or LIMIT of its own. Anything else is left for the translator,
+    which rejects a non-variable DELETE target.
+    """
+    parts = getattr(cypher_query, "query_parts", None) or []
+    if len(parts) < 2 or getattr(cypher_query, "return_clause", None) is not None:
+        return
+    last, prev = parts[-1], parts[-2]
+    if last.with_clause is not None or len(last.clauses) != 1:
+        return
+    delete = last.clauses[0]
+    if not isinstance(delete, ast.DeleteClause):
+        return
+    if all(isinstance(e, ast.Variable) for e in delete.expressions):
+        return
+    w = prev.with_clause
+    if (
+        w is None
+        or len(w.items) != 1
+        or w.where_clause is not None
+        or w.order_by_clause is not None
+        or w.distinct
+        or w.star
+        or w.skip is not None
+        or w.limit is not None
+    ):
+        return
+    item = w.items[0]
+    if not item.alias:
+        return
+
+    resolved = []  # (variable, index or None)
+    for e in delete.expressions:
+        acc = _container_access(e, params, {item.alias})
+        if acc is None or acc[0] != item.alias:
+            return
+        node, index = item.expression, None
+        for i, (kind, val) in enumerate(acc[1]):
+            if kind == "key" and isinstance(node, ast.MapLiteral) and val in node.entries:
+                node = node.entries[val]
+            elif (
+                kind == "idx"
+                and i == len(acc[1]) - 1
+                and isinstance(node, ast.AggregationFunction)
+                and node.function_name.lower() == "collect"
+                and not node.distinct
+                and isinstance(node.argument, ast.Variable)
+                and val >= 0
+            ):
+                node, index = node.argument, val
+            else:
+                return
+        if not isinstance(node, ast.Variable):
+            return
+        resolved.append((node.name, index))
+
+    names = {v for v, _ in resolved}
+    indexed = {i is not None for _, i in resolved}
+    if len(names) != 1 or len(indexed) != 1:
+        return
+    var = names.pop()
+    skip = limit = None
+    if indexed.pop():
+        idxs = sorted({i for _, i in resolved})
+        if idxs != list(range(idxs[0], idxs[-1] + 1)):
+            return
+        skip, limit = idxs[0], len(idxs)
+
+    elements = [var]
+    for cl in prev.clauses:
+        for np_ in getattr(cl, "named_paths", None) or []:
+            if np_.variable != var:
+                continue
+            # The MatchClause pattern and NamedPath.pattern are one object, so
+            # naming an anonymous element here names it in the MATCH too.
+            elements = []
+            for k, n in enumerate(np_.pattern.nodes):
+                if n.variable is None:
+                    n.variable = f"__dp_{k}"
+                elements.append(n.variable)
+            for k, r in enumerate(np_.pattern.relationships):
+                if r.variable is None:
+                    r.variable = f"__dr_{k}"
+                elements.append(r.variable)
+
+    w.items = [ast.ReturnItem(expression=ast.Variable(n), alias=n) for n in elements]
+    w.skip, w.limit = skip, limit
+    delete.expressions = [ast.Variable(n) for n in elements]
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -4264,6 +4441,7 @@ def translate_to_sql(
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)
     _clip_unwind_range_to_with_limit(cypher_query)
+    _lower_delete_containers(cypher_query, params or {})
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -4298,6 +4476,8 @@ def translate_to_sql(
     _store_bool_params_as_text(sql_query)
     sql_query.bool_text_columns = _bool_text_columns(cypher_query)
     sql_query.bool_expr_columns = list(context.bool_expr_aliases)
+    sql_query.int_expr_columns = list(context.int_expr_aliases)
+    sql_query.float_expr_columns = list(context.float_expr_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     return sql_query
@@ -5943,92 +6123,119 @@ def _newest_ekey_sql(e_alias, context, add_param) -> str:
     )
 
 
-def translate_delete_clause(delete, context, metadata):
-    for var in delete.expressions:
-        alias = context.variable_aliases.get(var.name)
+def _delete_targets(delete, context) -> list:
+    """What one DELETE clause removes: `(name, alias, is_edge, is_stage_alias)` each.
+
+    A named path contributes every node and relationship on it (Delete3). Anything
+    that is not a variable is an error: a label belongs to REMOVE (InvalidDelete),
+    and a value that is not an entity cannot be deleted (InvalidArgumentType).
+    Container elements (`friends[$i]`, `map.key`) were lowered to variables by
+    `_lower_delete_containers` before translation.
+    """
+    stage_names = {st.split(" AS ")[0].strip() for st in getattr(context, "stages", [])}
+    edge_stage_vars = getattr(context, "edge_stage_variables", set())
+    out, seen = [], set()
+
+    def _add(name, alias, is_edge):
+        # Every variable carried by a WITH shares the stage alias; the column is
+        # the variable, so a stage target is identified by both.
+        key = (alias, name) if alias in stage_names else alias
+        if key in seen:
+            return
+        seen.add(key)
+        out.append((name, alias, is_edge, alias in stage_names))
+
+    for expr in delete.expressions:
+        if isinstance(expr, ast.LabelPredicate):
+            raise SyntaxError(
+                "InvalidDelete: DELETE removes nodes and relationships; use REMOVE for a label"
+            )
+        if not isinstance(expr, ast.Variable):
+            raise SyntaxError(
+                "InvalidArgumentType: DELETE expects a node, a relationship or a path, "
+                f"got {type(expr).__name__}"
+            )
+        name = expr.name
+        alias = context.variable_aliases.get(name)
+        if not alias and name in getattr(context, "path_node_aliases", {}):
+            for na in context.path_node_aliases.get(name, []):
+                _add(name, na, False)
+            for ea in context.path_edge_aliases.get(name, []):
+                _add(name, ea, True)
+            continue
         if not alias:
-            raise SyntaxError(f"Undefined variable: {var.name}")
+            raise SyntaxError(f"Undefined variable: {name}")
+        _add(name, alias, alias.startswith("e") or name in edge_stage_vars)
+    return out
 
-        # Detect whether the variable is a relationship (edge), taking into account
-        # variables promoted to a CTE stage via WITH.
-        is_edge_var = alias.startswith("e") or var.name in getattr(
-            context, "edge_stage_variables", set()
-        )
-        # When alias is a CTE stage (e.g. "Stage1"), the node_id column is named
-        # after the variable (e.g. "n"), not "node_id".
-        stage_names = {s.split(" AS ")[0].strip() for s in getattr(context, "stages", [])}
-        is_stage_alias = alias in stage_names
 
-        if is_edge_var and is_stage_alias:
-            # Relationship variable promoted through WITH into a CTE stage.
-            # The Stage SELECT now includes __edge_<var>_s/p/o identity columns;
-            # use them to reconstruct the edge identity for deletion.
-            s_col = f"__edge_{var.name}_s"
-            p_col = f"__edge_{var.name}_p"
-            o_col = f"__edge_{var.name}_o"
+def translate_delete_clause(delete, context, metadata):
+    """DELETE / DETACH DELETE, as statements that read ids captured up front (spec 229).
+
+    Every statement used to re-run the MATCH as its own subquery. The MATCH joins
+    `rdf_labels`, so once the first statement had deleted a node's labels the later
+    ones found nothing, and `MATCH (n:X) DELETE n` left the node row behind. Now
+    the clause first captures, for each target, the ids the MATCH binds
+    (`__capture_ids__ <key>`), before anything is written; every later statement
+    reads `__IDS_<key>__`. Relationships go before the connected-node check, so
+    `DELETE r, a, b` is not refused for the edge it is deleting itself.
+
+    A clause deleting exactly one relationship keeps its single `edge_id IN
+    (subquery)` statement: `DELETE r CREATE ...` / `DELETE t MERGE ...` move that
+    statement past the write (`_defer_edge_delete_past_create` / `_merge`).
+    """
+    targets = _delete_targets(delete, context)
+    single_edge = len(targets) == 1 and targets[0][2] and not targets[0][3]
+
+    stage_sql = " ".join(getattr(context, "stages", []))
+
+    def _stage_edge_id(name):
+        col = f"__edge_{name}_id"
+        return col if f"AS {col}" in stage_sql else None
+
+    captured = {}  # (name, alias) -> `__IDS_<key>__`
+    for name, alias, is_edge, is_stage_alias in targets:
+        if single_edge or (is_edge and is_stage_alias and not _stage_edge_id(name)):
+            continue
+        if is_edge and is_stage_alias:
+            id_expr = f"{alias}.{_stage_edge_id(name)}"
+        elif is_edge:
+            id_expr = f"{alias}.edge_id"
+        elif is_stage_alias:
+            id_expr = f"{alias}.{_safe_alias(name)}"
+        else:
+            # A source node the MATCH folded into its edge (`(:X)-->()`) has no
+            # `nodes` join of its own; its id is the edge's `s` / `o_id`.
+            id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
+        cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}")
+        key = f"d{len(context.dml_statements)}"
+        context.dml_statements.append((f"__capture_ids__ {key}\n{cte}{subquery}", subparams))
+        captured[(name, alias)] = f"__IDS_{key}__"
+
+    # Relationships first.
+    for name, alias, is_edge, is_stage_alias in targets:
+        if not is_edge:
+            continue
+        if is_stage_alias and (name, alias) not in captured:
+            # Relationship variable promoted through WITH into a CTE stage, with
+            # no __edge_<var>_id column: delete by its __edge_<var>_s/p/o.
+            s_col = f"__edge_{name}_s"
+            p_col = f"__edge_{name}_p"
+            o_col = f"__edge_{name}_o"
             cte_s, subquery_s, subparams_s = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.{s_col}"
             )
             _, subquery_p, _ = context.build_dml_subquery(select_override=f"SELECT {alias}.{p_col}")
             _, subquery_o, _ = context.build_dml_subquery(select_override=f"SELECT {alias}.{o_col}")
-            # All three calls return the same CTE and params (same Stage1 binding).
-            # The CTE appears once in the SQL; params are bound once.
             context.add_dml(
                 f"{cte_s}DELETE FROM {_table('rdf_edges')} WHERE "
                 f"s IN ({subquery_s}) AND p IN ({subquery_p}) AND o_id IN ({subquery_o})",
                 subparams_s,
             )
-            return
-
-        node_col = _safe_alias(var.name) if is_stage_alias else "node_id"
-        cte, subquery, subparams = context.build_dml_subquery(
-            select_override=f"SELECT {alias}.{node_col}"
-        )
-        # When a CTE is present, the subquery is a bare reference (no ?); params are CTE-only
-        # and used once. When no CTE, the subquery has its own ? for each IN clause.
-        # The subquery appears twice (s IN ... OR o_id IN ...): bind the CTE's params once
-        # and the subquery's own params (e.g. label JOINs next to a non-stage CTE such as
-        # an undirected-edge union) twice.
-        _n_cte = len(subparams) - subquery.count("?")
-        dual_params = subparams + subparams[_n_cte:] if _n_cte >= 0 else subparams + subparams
-        if delete.detach:
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_edges')} WHERE s IN ({subquery}) OR o_id IN ({subquery})",
-                dual_params,
-            )
-        elif not is_edge_var:
-            # Non-DETACH DELETE: guard against connected nodes (Cypher constraint).
-            # Stored as a sentinel SQL so execute_transaction can raise the right error.
-            context.add_dml(
-                f"__constraint_check_delete_connected__ {cte}SELECT COUNT(*) FROM {_table('rdf_edges')} WHERE s IN ({subquery}) OR o_id IN ({subquery})",
-                dual_params,
-            )
-        if not is_edge_var:
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_labels')} WHERE s IN ({subquery})", subparams
-            )
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})", subparams
-            )
-            context.add_dml(
-                # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
-                # (graph_id, node_id) with emb_rowid as the identity, so the old
-                # column name is SQLCODE -29 on every DETACH DELETE.
-                f"{cte}DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id IN ({subquery})",
-                subparams,
-            )
-            context.add_dml(
-                f"{cte}DELETE FROM {_table('nodes')} WHERE node_id IN ({subquery})",
-                subparams,
-            )
-        else:
-            is_undirected = alias in getattr(context, "_undirected_aliases", set())
-            s_col = "_src" if is_undirected else "s"
-            p_col = "_p" if is_undirected else "p"
-            o_col = "_dst" if is_undirected else "o_id"
-            # By edge_id, the matched edges themselves: three independent IN lists
-            # on s, p and o_id also deleted any edge whose endpoints and type each
-            # occurred somewhere in the match. The undirected CTE carries edge_id.
+            continue
+        if single_edge:
+            # By edge_id, the matched edges themselves. The undirected CTE carries
+            # edge_id.
             cte, subquery, subparams = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.edge_id"
             )
@@ -6038,6 +6245,35 @@ def translate_delete_clause(delete, context, metadata):
             )
             context._pending_edge_delete = (len(context.dml_statements) - 1, len(context.stages))
             context._pending_edge_delete_alias = alias
+            continue
+        context.add_dml(
+            f"DELETE FROM {_table('rdf_edges')} WHERE edge_id IN ({captured[(name, alias)]})",
+            [],
+        )
+
+    node_ids = [captured[(name, alias)] for name, alias, is_edge, _ in targets if not is_edge]
+    for ids in node_ids:
+        if delete.detach:
+            context.add_dml(
+                f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({ids}) OR o_id IN ({ids})", []
+            )
+        else:
+            # Stored as a sentinel so execute_transaction raises the Cypher error.
+            context.add_dml(
+                f"__constraint_check_delete_connected__ SELECT COUNT(*) FROM "
+                f"{_table('rdf_edges')} WHERE s IN ({ids}) OR o_id IN ({ids})",
+                [],
+            )
+    for ids in node_ids:
+        context.add_dml(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({ids})", [])
+        context.add_dml(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({ids})", [])
+        # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
+        # (graph_id, node_id).
+        context.add_dml(
+            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id IN ({ids})", []
+        )
+    for ids in node_ids:
+        context.add_dml(f"DELETE FROM {_table('nodes')} WHERE node_id IN ({ids})", [])
 
 
 def _merge_val_match(p_alias: str, val) -> str:
@@ -6275,6 +6511,48 @@ def _merge_fit_join_sql(rel, e_alias, context) -> str:
     )
 
 
+def _merge_edge_exists_sql(rel, src_alias, tgt_alias, rel_type, context):
+    """`SELECT 1 FROM rdf_edges …` finding an edge between the two bound nodes that
+    fits the MERGE relationship (type, endpoints, inline properties), and its params."""
+    params: list = [rel_type]
+    if rel.direction == ast.Direction.BOTH:
+        sql = (
+            f"SELECT 1 FROM {_table('rdf_edges')} _gx WHERE _gx.p = ? AND ("
+            f"(_gx.s = {src_alias}.node_id AND _gx.o_id = {tgt_alias}.node_id) OR "
+            f"(_gx.s = {tgt_alias}.node_id AND _gx.o_id = {src_alias}.node_id))"
+        )
+    else:
+        sql = (
+            f"SELECT 1 FROM {_table('rdf_edges')} _gx WHERE _gx.s = {src_alias}.node_id "
+            f"AND _gx.p = ? AND _gx.o_id = {tgt_alias}.node_id"
+        )
+
+    def _add(v):
+        params.append(v)
+        return "?"
+
+    return sql + _merge_prop_preds(rel, "_gx", context, _add), params
+
+
+def _move_before_edge_insert(context, start, action_start, indices):
+    """Move the DML at `indices` (ON CREATE / ON MATCH writes) to just before the
+    MERGE's first rdf_edges insert in `dml_statements[start:action_start]`."""
+    stmts = context.dml_statements
+    target = next(
+        (
+            i
+            for i in range(start, action_start)
+            if "INSERT INTO " + _table("rdf_edges") in stmts[i][0]
+        ),
+        None,
+    )
+    if target is None:
+        return
+    moved = [stmts[i] for i in indices]
+    keep = [st for i, st in enumerate(stmts) if i not in set(indices)]
+    context.dml_statements[:] = keep[:target] + moved + keep[target:]
+
+
 def translate_merge_clause(merge, context, metadata):
     # Validate that MERGE pattern does not contain null property values.
     # Cypher semantic rule: null cannot be matched in MERGE operations.
@@ -6399,6 +6677,22 @@ def translate_merge_clause(merge, context, metadata):
                         )
                     else:
                         new_dmls.append((sql, params))
+                elif (
+                    "INSERT INTO " + _table("rdf_props") in sql
+                    and params
+                    and new_uuid in params
+                    and sql.rstrip().endswith(")")
+                ):
+                    # A property of the node to create: written only when the node
+                    # insert above went through. When the MERGE matched an existing
+                    # node, the new id has no node row and its property must not land
+                    # either (an orphan rdf_props row is a +properties side effect).
+                    new_dmls.append(
+                        (
+                            f"{sql} AND EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+                            list(params) + [new_uuid],
+                        )
+                    )
                 else:
                     new_dmls.append((sql, params))
 
@@ -6722,6 +7016,7 @@ def translate_merge_clause(merge, context, metadata):
     # When a node variable comes from MATCH (not created by this MERGE), actual_id is None
     # and we need the edge's src/tgt aliases + rel_type to condition the INSERT.
     _edge_contexts = []  # list of (src_alias, tgt_alias, rel_type) for each edge in this MERGE
+    _edge_rels = []  # the relationship pattern of each _edge_contexts entry
     if merge.pattern.relationships:
         for rel_idx, rel in enumerate(merge.pattern.relationships):
             if not rel.types or len(rel.types) > 1:
@@ -6739,7 +7034,14 @@ def translate_merge_clause(merge, context, metadata):
             )
             if src_a and tgt_a:
                 _edge_contexts.append((src_a, tgt_a, rel.types[0]))
+                _edge_rels.append(rel)
 
+    # ON CREATE / ON MATCH writes that must see the graph as it was before the edge
+    # insert: an ON MATCH of the relationship would otherwise update the edge this
+    # MERGE just created (Merge7 [2]), and an ON CREATE of a matched node is gated
+    # on the edge not existing yet (Merge6 [1]). Indices into dml_statements.
+    _pre_edge_insert: list = []
+    _pre_action_len = len(context.dml_statements)
     var = merge.pattern.nodes[0].variable if merge.pattern.nodes else None
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
@@ -6790,6 +7092,8 @@ def translate_merge_clause(merge, context, metadata):
                         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                         all_params = join_params_parts + where_params_parts
                         json_val = str(val) if val is not None else None
+                        if not is_create:
+                            _pre_edge_insert.append(len(context.dml_statements))
                         if json_val is None:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
@@ -6833,6 +7137,15 @@ def translate_merge_clause(merge, context, metadata):
                                 where_sql = (
                                     (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                                 )
+                                _gate_sql, _gate_params = "", []
+                                if _edge_contexts:
+                                    _es, _ep = _merge_edge_exists_sql(
+                                        _edge_rels[0], *_edge_contexts[0], context
+                                    )
+                                    _gate_sql, _gate_params = f" AND NOT EXISTS ({_es})", _ep
+                                    _pre_edge_insert.append(len(context.dml_statements))
+                                # Markers bind in text order: the SELECT list's key and
+                                # value come before the FROM's join and where markers.
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
                                     f"SELECT {sql_alias}.node_id, ?, ? "
@@ -6840,8 +7153,10 @@ def translate_merge_clause(merge, context, metadata):
                                     f"{where_sql}"
                                     f'{" AND " if where_parts else " WHERE "}'
                                     f'NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
-                                    f'WHERE s = {sql_alias}.node_id AND "key" = ?)',
-                                    join_params_parts + where_params_parts + [k, val, k],
+                                    f'WHERE s = {sql_alias}.node_id AND "key" = ?)'
+                                    f"{_gate_sql}",
+                                    [k, val] + join_params_parts + where_params_parts + [k]
+                                    + _gate_params,
                                 )
                             else:
                                 context.add_dml(
@@ -7047,6 +7362,9 @@ def translate_merge_clause(merge, context, metadata):
                                     [label, label],
                                 )
 
+    if _pre_edge_insert:
+        _move_before_edge_insert(context, _pre_dml_len, _pre_action_len, _pre_edge_insert)
+
     # The SELECT now finds this node by its pattern, whether it was just made or was
     # already there. Later clauses must bind to that row, not to the id the node would
     # have had if this MERGE created it (Merge5 [19]).
@@ -7229,6 +7547,11 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
         sql = f"CASE WHEN ({sql}) = 1 THEN 'true' WHEN ({sql}) = 0 THEN 'false' END"
         params = params + params
     return (sql, params, True)
+
+
+# Transient rdf_props key pinning the nodes a `SET n = {map}` replaces; the
+# statement that writes it also removes it, inside the same transaction.
+_REPLACE_MARKER = "\u0001ivg_set_replace"
 
 
 def _lead_cte(context, cte, lead, subparams):
@@ -7429,18 +7752,23 @@ def translate_set_clause(set_cl, context, metadata):
         ):
             # SET n = {map} — full property replace: delete all existing props and insert new ones
             alias = context.variable_aliases.get(item.expression.name)
-            # DELETE uses the full property-filtered subquery (fires before props are gone)
+            # The matched ids are pinned as a marker row first: IRIS re-evaluates a
+            # `DELETE ... WHERE s IN (<subquery joining rdf_props>)` while it
+            # deletes, so selecting through the MATCH's own property filter stopped
+            # at the filtered row and left the rest (Set4 [2]). Every later
+            # statement selects the nodes through the marker instead.
             cte, subquery, subparams = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.node_id"
             )
             context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})",
-                subparams,
+                f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
+                f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
+                _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
             )
-            # INSERT/SELECT use label-only subquery (props deleted, property JOINs would return 0 rows)
-            cte_lo, subquery_lo, subparams_lo = context.build_label_only_dml_subquery(
-                node_alias=alias,
-                select_override=f"SELECT {alias}.node_id",
+            _pinned = f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE s IN ({_pinned}) AND "key" <> ?',
+                [_REPLACE_MARKER, _REPLACE_MARKER],
             )
             # Track this alias so the final SELECT also drops property JOINs for it
             if not hasattr(context, "_full_replace_aliases"):
@@ -7457,9 +7785,13 @@ def translate_set_clause(set_cl, context, metadata):
                     continue
                 context._set_properties.add(k)
                 context.add_dml(
-                    f'{cte_lo}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery_lo})',
-                    _lead_cte(context, cte_lo, [k, val], subparams_lo),
+                    f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({_pinned})',
+                    [k, val, _REPLACE_MARKER],
                 )
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE "key" = ?',
+                [_REPLACE_MARKER],
+            )
         elif isinstance(item.expression, ast.Variable):
             alias = context.variable_aliases.get(item.expression.name)
             # item.value may be a list of labels (SET n:Foo:Bar) or a single string/literal
@@ -11711,6 +12043,11 @@ def _is_integer_expr(arg):
     IRIS returns DOUBLE for integer-literal division, so we must compensate."""
     if isinstance(arg, ast.Literal):
         return isinstance(arg.value, int) and not isinstance(arg.value, bool)
+    # count() is always integer-valued (spec 203 numeric typing); an unfloored
+    # count(n) / 60 / 60 lets IRIS's true DOUBLE division leak a fractional
+    # value out (7251 / 3600 = 2.0141... instead of the Cypher-correct 2).
+    if isinstance(arg, ast.AggregationFunction) and arg.function_name.lower() == "count":
+        return True
     if isinstance(arg, ast.FunctionCall):
         fn = arg.function_name
         # Arithmetic operators applied to integer sub-expressions
@@ -12647,6 +12984,92 @@ def _is_bool_valued(e, context) -> bool:
     return False
 
 
+_FLOAT_VALUED_FUNCS = frozenset(
+    {"tofloat", "tofloatornull", "percentilecont", "percentiledisc"}
+)
+_INT_VALUED_FUNCS = frozenset({"tointeger", "tointegerornull", "toint"})
+
+
+def _numeric_static_type(e, context) -> Optional[str]:
+    """Cypher numeric type ('int' / 'float') of `e` whatever the row; None when
+    unknown (e.g. a property of unknown type) or `e` is not numeric-valued.
+
+    IRIS has no distinct INTEGER SQL type carried through arithmetic: FLOOR()
+    and MOD() come back as DOUBLE or Decimal even for expressions that are
+    statically Cypher INTEGER (`count(n) / 60`), and some FLOAT-valued
+    functions (avg(), percentileCont/Disc()) can come back as an IRIS INTEGER
+    when the underlying values happen to be whole numbers. The engine casts
+    the driver value to int/float accordingly (int_expr_columns /
+    float_expr_columns). openCypher integer division truncates.
+    """
+    if isinstance(e, ast.Literal):
+        v = e.value
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, int):
+            return "int"
+        if isinstance(v, float):
+            return "float"
+        return None
+    if isinstance(e, ast.Variable):
+        if e.name in getattr(context, "int_vars", ()):
+            return "int"
+        if e.name in getattr(context, "float_vars", ()):
+            return "float"
+        return None
+    if isinstance(e, ast.AggregationFunction):
+        fn = e.function_name.lower()
+        if fn == "count":
+            return "int"
+        if fn == "avg":
+            return "float"
+        if fn in ("sum", "min", "max") and e.argument is not None:
+            return _arith_operand_type(e.argument, context)
+        return None
+    if isinstance(e, ast.FunctionCall):
+        fn = e.function_name.lower()
+        if fn in _FLOAT_VALUED_FUNCS:
+            return "float"
+        if fn in _INT_VALUED_FUNCS:
+            return "int"
+        if fn == "abs" and e.arguments:
+            return _arith_operand_type(e.arguments[0], context)
+        if fn.startswith("__arith_") and len(e.arguments) == 2:
+            op = fn[len("__arith_") :]
+            if op == "^":
+                # Cypher ^ always returns Float (4 ^ 3 = 64.0 per spec).
+                return "float"
+            if op in ("+", "-", "*", "%", "/"):
+                left = _arith_operand_type(e.arguments[0], context)
+                right = _arith_operand_type(e.arguments[1], context)
+                if left == "float" or right == "float":
+                    return "float"
+                if left == "int" and right == "int":
+                    return "int"
+        return None
+    return None
+
+
+def _arith_operand_type(e, context) -> Optional[str]:
+    """Numeric type of an arithmetic operand, defaulting a bare property
+    reference to 'int'.
+
+    A property used directly in arithmetic is cast to DOUBLE by IRIS
+    (`_prop_ref_cast`) so it already gives up whatever int/float distinction
+    the stored text preserved; every TCK fixture that mixes a property into
+    integer arithmetic sets that property from integer literals, so 'int' is
+    the safe default here. A *bare* `RETURN n.prop` never reaches this helper:
+    it goes through bool_text_columns / parse_prop_text, which reads the
+    stored text as-is and is untouched by this static typing pass.
+    """
+    t = _numeric_static_type(e, context)
+    if t is not None:
+        return t
+    if isinstance(e, ast.PropertyReference):
+        return "int"
+    return None
+
+
 def _subscript_elem_kind(e, context) -> Optional[str]:
     """Kind of `v[i]` for a literal integer i and v known to hold a literal list."""
     if not (
@@ -12758,7 +13181,9 @@ def _expr_propref_edge_alias(expr, context, alias):
         return f"{alias}.{'_src' if is_undirected else 's'}"
     if expr.property_name == "o_id":
         return f"{alias}.{'_dst' if is_undirected else 'o_id'}"
-    if is_undirected or is_edgescan:
+    # The undirected UNION CTE carries `qualifiers`, so `r.id` on `()-[r]-()`
+    # reads it like a directed edge does (Delete2 [3] compared NULL = 42).
+    if is_edgescan:
         return "NULL"
     return f"CASE WHEN {alias}.qualifiers IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({alias}.qualifiers, '$.{expr.property_name}') END"
 
@@ -19994,6 +20419,11 @@ def translate_return_clause(ret, context):
             context.select_items.append(f"{sql} AS {safe}")
             if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
+            _num_t = _numeric_static_type(item.expression, context)
+            if _num_t == "int":
+                context.int_expr_aliases.append(safe)
+            elif _num_t == "float":
+                context.float_expr_aliases.append(safe)
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain
@@ -20231,6 +20661,16 @@ def translate_with_clause(with_clause, context):
             context.bool_vars.add(alias)
         else:
             context.bool_vars.discard(alias)
+        _num_t = _numeric_static_type(item.expression, context)
+        if _num_t == "int":
+            context.int_vars.add(alias)
+            context.float_vars.discard(alias)
+        elif _num_t == "float":
+            context.float_vars.add(alias)
+            context.int_vars.discard(alias)
+        else:
+            context.int_vars.discard(alias)
+            context.float_vars.discard(alias)
         _kinds_map = getattr(context, "static_scalar_kinds", None)
         if _kinds_map is not None:
             if isinstance(item.expression, ast.Variable) and item.expression.name in _kinds_map:

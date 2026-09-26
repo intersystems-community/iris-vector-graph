@@ -23,7 +23,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from iris_vector_graph.cypher import ast
 
@@ -37,11 +37,14 @@ class RowMergePlan:
     suffix_parts: List[ast.QueryPart]
     return_clause: Optional[ast.ReturnClause]
     graph_context: Optional[str] = None
+    # prefix column -> (variable, property) it reads; those references are inlined
+    prop_refs: Dict[str, Tuple[str, str]] = dataclasses.field(default_factory=dict)
 
     def bind(self, row: Dict[str, Any]) -> Optional[ast.CypherQuery]:
         """The suffix query for one row, or None when a value cannot be inlined."""
         if any(not isinstance(v, _SCALAR) for v in row.values()):
             return None
+        row = {self.prop_refs.get(k, k): v for k, v in row.items()}
         parts = [_substitute(copy.deepcopy(p), row) for p in self.suffix_parts]
         ret = None
         if self.return_clause is not None:
@@ -52,6 +55,10 @@ class RowMergePlan:
                     it.expression.name in row
                 ):
                     alias = it.expression.name
+                if alias is None and isinstance(it.expression, ast.PropertyReference) and (
+                    (it.expression.variable, it.expression.property_name) in row
+                ):
+                    alias = f"{it.expression.variable}.{it.expression.property_name}"
                 items.append(
                     ast.ReturnItem(
                         expression=_substitute(copy.deepcopy(it.expression), row), alias=alias
@@ -124,10 +131,42 @@ def plan_row_merge(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opti
         prefix_ret = ast.ReturnClause(
             items=[ast.ReturnItem(expression=ast.Variable(name=a), alias=a) for a in row_vars]
         )
+    elif not any(isinstance(c, ast.DeleteClause) for c in head_clauses):
+        # MERGE after a MATCH in the same part whose pattern reads properties of the
+        # matched rows (`MATCH (p:Person) MERGE (:City {name: p.bornIn})`, Merge1
+        # [11]). The MATCH runs as a read-only prefix returning those properties.
+        if not outer or _has_updates(q.query_parts[:k]):
+            return None
+        if not all(isinstance(c, _READING) for c in head_clauses):
+            return None
+        refs = _outer_prop_refs(suffix_clauses, ret, outer)
+        if not refs or not _merges_on(suffix_clauses, {v for v, _p in refs}):
+            return None
+        prop_refs = {f"__rm{i}": r for i, r in enumerate(sorted(refs))}
+        prefix = ast.CypherQuery(
+            query_parts=list(q.query_parts[:k])
+            + [ast.QueryPart(clauses=list(head_clauses), with_clause=None)],
+            return_clause=ast.ReturnClause(
+                items=[
+                    ast.ReturnItem(
+                        expression=ast.PropertyReference(variable=v, property_name=pn),
+                        alias=a,
+                    )
+                    for a, (v, pn) in prop_refs.items()
+                ]
+            ),
+        )
+        prefix.graph_context = q.graph_context
+        return RowMergePlan(
+            prefix=prefix,
+            row_vars=list(prop_refs),
+            suffix_parts=[ast.QueryPart(clauses=list(suffix_clauses), with_clause=None)],
+            return_clause=ret,
+            graph_context=q.graph_context,
+            prop_refs=prop_refs,
+        )
     else:
         # MERGE after a DELETE in the same part, reading none of the part's rows.
-        if not any(isinstance(c, ast.DeleteClause) for c in head_clauses):
-            return None
         if outer:
             return None
         if _has_updates(q.query_parts[:k]) or any(
@@ -161,6 +200,38 @@ def plan_row_merge(q: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> Opti
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+_READING = (ast.MatchClause, ast.UnwindClause, ast.WhereClause)
+
+
+def _outer_prop_refs(merges, ret, outer):
+    """`{(var, prop)}` the suffix reads of `outer` variables, or None when it uses one
+    other than through a property in a MERGE pattern or the RETURN (a bare node, or
+    anything in ON CREATE / ON MATCH, cannot be inlined)."""
+    refs = set()
+    for m in merges:
+        if _vars_in([m.on_create, m.on_match]) & outer:
+            return None
+        for el in list(m.pattern.nodes) + list(m.pattern.relationships):
+            if el.variable in outer:
+                return None
+            for v in (el.properties or {}).values():
+                if not _only_prop_refs(v, outer, refs):
+                    return None
+    if ret is not None:
+        for it in ret.items:
+            if not _only_prop_refs(it.expression, outer, refs):
+                return None
+    return refs
+
+
+def _only_prop_refs(expr, outer, refs) -> bool:
+    for n in _walk(expr):
+        if isinstance(n, ast.Variable) and n.name in outer:
+            return False
+        if isinstance(n, ast.PropertyReference) and n.variable in outer:
+            refs.add((n.variable, n.property_name))
+    return True
 
 
 def _first_merge(q):
@@ -264,6 +335,9 @@ def _pattern_is_bound(pattern) -> bool:
 
 def _substitute(obj, row):
     """Replace row variables with literals in place (returning the new node)."""
+    if isinstance(obj, ast.PropertyReference):
+        key = (obj.variable, obj.property_name)
+        return ast.Literal(value=row[key]) if key in row else obj
     if isinstance(obj, ast.Variable):
         return ast.Literal(value=row[obj.name]) if obj.name in row else obj
     if isinstance(obj, list):
