@@ -647,6 +647,9 @@ class SQLQuery(BaseModel):
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
+    # Aliases of the final SELECT's items, in order (empty when any item has none).
+    # Routes that answer without running the SQL (var-length BFS) shape to these.
+    select_aliases: List[str] = Field(default_factory=list)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -4508,7 +4511,22 @@ def translate_to_sql(
     sql_query.float_expr_columns = list(context.float_expr_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
+    sql_query.select_aliases = _select_aliases(context.select_items)
     return sql_query
+
+
+_SELECT_ALIAS_RE = re.compile(r'\sAS\s+("?)([A-Za-z_][\w.]*)\1\s*$', re.IGNORECASE)
+
+
+def _select_aliases(select_items) -> List[str]:
+    """The alias of each top-level SELECT item; [] unless every item has one."""
+    out = []
+    for item in select_items or []:
+        m = _SELECT_ALIAS_RE.search(str(item))
+        if not m:
+            return []
+        out.append(m.group(2))
+    return out
 
 
 _PROP_WRITE_RE = re.compile(
