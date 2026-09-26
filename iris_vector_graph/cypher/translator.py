@@ -644,6 +644,13 @@ class SQLQuery(BaseModel):
     # correct Python type. By name, not index, like bool_expr_columns.
     int_expr_columns: List[str] = Field(default_factory=list)
     float_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items that are a list comprehension whose projection
+    # is statically FLOAT-valued (`[i IN n.numbers | i / 2.0]`): IRIS's
+    # JSON_ARRAYAGG serializes a whole-number DOUBLE without a decimal point
+    # (1.0 -> "1"), so a JSON-decoded element loses its Cypher FLOAT type. The
+    # engine rewrites bare-integer numeric tokens in the JSON array text to
+    # X.0 form. By name, not index, like bool_expr_columns.
+    float_list_expr_columns: List[str] = Field(default_factory=list)
     # Number of RETURN items; the engine applies bool_text_columns only when the
     # result has exactly this many columns.
     return_arity: int = 0
@@ -744,6 +751,11 @@ class TranslationContext:
         )
         self.float_vars: Set[str] = (
             set() if parent is None else set(getattr(parent, "float_vars", set()))
+        )
+        # SQL aliases of RETURN items that are a Float-valued list comprehension
+        # (see _numeric_static_type / float_list_expr_columns).
+        self.float_list_expr_aliases: List[str] = (
+            [] if parent is None else parent.float_list_expr_aliases
         )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
@@ -4542,6 +4554,7 @@ def translate_to_sql(
     sql_query.bool_expr_columns = list(context.bool_expr_aliases)
     sql_query.int_expr_columns = list(context.int_expr_aliases)
     sql_query.float_expr_columns = list(context.float_expr_aliases)
+    sql_query.float_list_expr_columns = list(context.float_list_expr_aliases)
     rc = getattr(cypher_query, "return_clause", None)
     sql_query.return_arity = len(rc.items) if rc is not None else 0
     sql_query.select_aliases = _select_aliases(context.select_items)
@@ -20553,6 +20566,12 @@ def translate_return_clause(ret, context):
                 context.int_expr_aliases.append(safe)
             elif _num_t == "float":
                 context.float_expr_aliases.append(safe)
+            elif (
+                isinstance(item.expression, ast.ListComprehension)
+                and item.expression.projection is not None
+                and _numeric_static_type(item.expression.projection, context) == "float"
+            ):
+                context.float_list_expr_aliases.append(safe)
         else:
             context.select_items.append(sql)
         # If there's aggregation in the RETURN clause and this item does not contain

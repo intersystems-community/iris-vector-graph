@@ -388,6 +388,23 @@ def _float_expr_value(v):
     return v
 
 
+_JSON_BARE_INT_RE = re.compile(r"(?<![\d.eE+-])-?\d+(?![\d.eE])")
+
+
+def _float_list_expr_value(v):
+    """A value from a Float-valued list comprehension
+    (SQLQuery.float_list_expr_columns): IRIS's JSON_ARRAYAGG serializes a
+    whole-number DOUBLE without a decimal point (1.0 -> "1"), so a
+    JSON-decoded element loses its Cypher FLOAT type (Set1 [5]:
+    `[i IN n.numbers | i / 2.0]` -> "[0.5,1,1.5]" instead of "[0.5,1.0,1.5]").
+    Appends .0 to every bare-integer element in the JSON array text. Anything
+    that isn't a `[...]`-shaped string (null, already decoded, ...) passes
+    through unchanged."""
+    if not isinstance(v, str) or not (v.startswith("[") and v.endswith("]")):
+        return v
+    return _JSON_BARE_INT_RE.sub(lambda m: m.group(0) + ".0", v)
+
+
 def _decode_numeric_expr_columns(result, sql_query) -> None:
     """Cast driver values in columns statically known to be Cypher INTEGER /
     FLOAT (SQLQuery.int_expr_columns / float_expr_columns) to the matching
@@ -399,12 +416,18 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
     float_names = {
         n.strip('"').lower() for n in getattr(sql_query, "float_expr_columns", None) or []
     }
-    if not (int_names or float_names) or not getattr(result, "rows", None):
+    float_list_names = {
+        n.strip('"').lower() for n in getattr(sql_query, "float_list_expr_columns", None) or []
+    }
+    if not (int_names or float_names or float_list_names) or not getattr(result, "rows", None):
         return
     cols = result.columns or []
     int_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in int_names]
     float_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in float_names]
-    if not (int_cols or float_cols):
+    float_list_cols = [
+        i for i, c in enumerate(cols) if str(c).strip('"').lower() in float_list_names
+    ]
+    if not (int_cols or float_cols or float_list_cols):
         return
     rows = []
     for row in result.rows:
@@ -415,6 +438,9 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
         for i in float_cols:
             if i < len(row):
                 row[i] = _float_expr_value(row[i])
+        for i in float_list_cols:
+            if i < len(row):
+                row[i] = _float_list_expr_value(row[i])
         rows.append(row)
     result.rows = rows
 

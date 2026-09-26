@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from iris_vector_graph._engine.query import _decode_numeric_expr_columns
+from iris_vector_graph._engine.query import _decode_numeric_expr_columns, _float_list_expr_value
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 
@@ -298,3 +298,55 @@ class TestPercentileRewritePreservesOtherColumns:
         sq = tr("MATCH (n) RETURN percentileDisc(n.price, 0.5) AS p")
         assert "IVG.Percentile_PDISC" in sq.sql
         assert "GROUP BY" not in sq.sql.upper()
+
+
+class TestFloatListComprehensionTagged:
+    """IRIS's JSON_ARRAYAGG serializes a whole-number DOUBLE without a decimal
+    point (1.0 -> "1"), so a JSON-decoded element of a Float-valued list
+    comprehension loses its Cypher FLOAT type (Set1 [5]:
+    `[i IN n.numbers | i / 2.0]` -> "[0.5,1,1.5]" instead of "[0.5,1.0,1.5]").
+    """
+
+    def test_float_division_projection_tagged(self):
+        sq = tr("MATCH (n) RETURN [i IN n.numbers | i / 2.0] AS x")
+        assert sq.float_list_expr_columns == ["x"]
+
+    def test_int_projection_not_tagged(self):
+        sq = tr("RETURN [i IN [1, 2, 3] | i + 1] AS x")
+        assert sq.float_list_expr_columns == []
+
+    def test_unknown_projection_not_tagged(self):
+        # A bare property with no arithmetic: leave to the existing
+        # bool_text_columns / parse_prop_text path, same as a scalar column.
+        sq = tr("MATCH (n) RETURN [i IN n.numbers | i] AS x")
+        assert sq.float_list_expr_columns == []
+
+
+class TestEngineDecodesFloatListColumns:
+    def test_bare_integer_element_gets_decimal(self):
+        assert _float_list_expr_value("[0.5,1,1.5]") == "[0.5,1.0,1.5]"
+
+    def test_all_bare_integers(self):
+        assert _float_list_expr_value("[1,2,3]") == "[1.0,2.0,3.0]"
+
+    def test_negative_integer(self):
+        assert _float_list_expr_value("[-1,2]") == "[-1.0,2.0]"
+
+    def test_already_decimal_untouched(self):
+        assert _float_list_expr_value("[0.5,1.5]") == "[0.5,1.5]"
+
+    def test_null_element_untouched(self):
+        assert _float_list_expr_value("[1,null,2]") == "[1.0,null,2.0]"
+
+    def test_non_list_value_untouched(self):
+        assert _float_list_expr_value("5") == "5"
+        assert _float_list_expr_value(None) is None
+        assert _float_list_expr_value([1, 2]) == [1, 2]
+
+    def test_decode_columns_applies_float_list(self):
+        sq = SimpleNamespace(
+            int_expr_columns=[], float_expr_columns=[], float_list_expr_columns=["x"]
+        )
+        res = SimpleNamespace(columns=["x"], rows=[("[0.5,1,1.5]",)])
+        _decode_numeric_expr_columns(res, sq)
+        assert res.rows == [["[0.5,1.0,1.5]"]]
