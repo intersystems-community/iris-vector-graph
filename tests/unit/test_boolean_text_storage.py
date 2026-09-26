@@ -221,7 +221,8 @@ class TestBooleanExpressionColumns:
         )
         _decode_bool_text_columns(res, sq)
         assert [r[0] for r in res.rows] == ["1", "0", "x", "y"]
-        assert [r[3] for r in res.rows] == [True, False, 1, None]
+        assert [r[3] for r in res.rows] == [True, False, True, None]
+        assert [type(r[3]) for r in res.rows[:3]] == [bool, bool, bool]
 
 
 class TestHarnessIsStrict:

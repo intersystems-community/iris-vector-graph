@@ -667,6 +667,7 @@ class TranslationContext:
         self.select_params: List[Any] = []
         self.join_params: List[Any] = []
         self.where_params: List[Any] = []
+        self.select_params_as_where: bool = False
 
         self.dml_statements: List[tuple[str, List[Any]]] = []
 
@@ -692,6 +693,10 @@ class TranslationContext:
         self.column_name_map: Dict[str, str] = {} if parent is None else parent.column_name_map
         # SQL aliases of boolean-valued RETURN items (SQLQuery.bool_expr_columns).
         self.bool_expr_aliases: List[str] = [] if parent is None else parent.bool_expr_aliases
+        # WITH aliases whose value is statically boolean (see _is_bool_valued).
+        self.bool_vars: Set[str] = (
+            set() if parent is None else set(getattr(parent, "bool_vars", set()))
+        )
         # OPTIONAL MATCH null-row fallback: when set, the generated SQL gains a
         # UNION ALL branch that emits one null row when the label has no nodes.
         # List of (label_value, param_placeholder) tuples — one per optional label constraint.
@@ -825,6 +830,10 @@ class TranslationContext:
         return value
 
     def add_select_param(self, value: Any) -> str:
+        if self.select_params_as_where:
+            # An EXISTS subquery's context: everything it emits sits in the parent's
+            # WHERE, so a select-segment bind (a function argument) belongs there too.
+            return self.add_where_param(value)
         self.select_params.append(self._coerce_param(value))
         return "?"
 
@@ -1314,6 +1323,9 @@ def _translate_test_procedure(proc: ast.CypherProcedureCall, context: Translatio
     # --- No outputs → no CTE needed ---
     output_names = [out["name"] for out in outputs_spec]
     if not output_names:
+        # A void procedure yields no columns. The FROM builder still needs a row
+        # source for a leading CALL (Call1 [1], [2]); see _to_sql_init_part_from.
+        context._tck_void_proc = True
         return
 
     # --- Filter rows by argument values ---
@@ -2301,6 +2313,21 @@ def _demote_agg_stages_to_subqueries(sql: str, ctes: list) -> tuple:
     return sql, remaining_ctes
 
 
+def _tck_void_stage(context: TranslationContext, cypher_query: ast.CypherQuery) -> str:
+    """Row source for a leading CALL of a void test procedure (Call1 [1], [2]).
+
+    A standalone call returns no rows; a leading call followed by other clauses
+    passes its one input row through.
+    """
+    standalone = cypher_query.return_clause is None and not any(
+        part.clauses or part.with_clause for part in cypher_query.query_parts
+    )
+    where = " WHERE 1=0" if standalone else ""
+    context.stages.insert(0, f"TCK_Void AS (\nSELECT 1 AS tck_void{where}\n)")
+    context._tck_proc_cte = "TCK_Void"
+    return "TCK_Void"
+
+
 def _to_sql_init_part_from(
     context: TranslationContext, cypher_query: ast.CypherQuery, i: int
 ) -> None:
@@ -2319,6 +2346,8 @@ def _to_sql_init_part_from(
         elif context.stages:
             cte_name = context.stages[0].split(" AS ")[0].strip()
             context.from_clauses.append(cte_name)
+        elif getattr(context, "_tck_void_proc", False):
+            context.from_clauses.append(_tck_void_stage(context, cypher_query))
         else:
             context.from_clauses.append("VecSearch")
     elif context.stages and not context.from_clauses:
@@ -2387,6 +2416,14 @@ def _check_with_order_by_aggregation(with_clause, context: TranslationContext) -
     projected_aggs = {
         _expr_to_cypher_text(a) for wi in with_clause.items for a in _collect_agg_calls(wi.expression)
     }
+    # A projected non-aggregate expression may appear beside an aggregate even when
+    # its variable is not projected: `WITH me.age AS age ... ORDER BY me.age + count(*)`
+    # (WithOrderBy4 [18]).
+    projected_exprs = {
+        _expr_to_cypher_text(wi.expression)
+        for wi in with_clause.items
+        if not _contains_aggregation(wi.expression)
+    } - {None, ""}
     for ob in ob_items:
         if not _contains_aggregation(ob.expression):
             continue
@@ -2399,7 +2436,17 @@ def _check_with_order_by_aggregation(with_clause, context: TranslationContext) -
             if _expr_to_cypher_text(a) not in projected_aggs
         ]
         for part in parts:
+            simple = isinstance(part, (ast.Variable, ast.PropertyReference))
+            if simple and _expr_to_cypher_text(part) in projected_exprs:
+                continue
             names = _collect_var_names(part) - set(context.input_params)
+            if names and not simple and not isinstance(part, ast.AggregationFunction):
+                # Only a projected variable or property may sit beside an aggregate,
+                # even when the whole expression is projected (WithOrderBy4 [20]).
+                raise SyntaxError(
+                    "AmbiguousAggregationExpression: An expression using aggregation "
+                    f"and a non-aggregate is ambiguous: '{_expr_to_cypher_text(ob.expression)}'"
+                )
             undefined = names - available
             if undefined:
                 raise SyntaxError(
@@ -2421,7 +2468,49 @@ def _collect_agg_calls(expr) -> list:
     return out
 
 
+def _subst_projected_props(expr, prop_alias_map: dict):
+    """Replace projected property references outside aggregates with their WITH alias."""
+    if isinstance(expr, ast.PropertyReference):
+        alias = prop_alias_map.get((expr.variable, expr.property_name))
+        return ast.Variable(alias) if alias else expr
+    if isinstance(expr, ast.FunctionCall):
+        return dataclasses.replace(
+            expr, arguments=[_subst_projected_props(a, prop_alias_map) for a in expr.arguments]
+        )
+    if isinstance(expr, ast.BooleanExpression):
+        return dataclasses.replace(
+            expr, operands=[_subst_projected_props(o, prop_alias_map) for o in expr.operands]
+        )
+    return expr
+
+
+def _node_coalesce_vars(expr, context) -> list:
+    """Arguments of `coalesce(a, b, ...)` when every one is a bound node variable, else []."""
+    if not (
+        isinstance(expr, ast.FunctionCall)
+        and expr.function_name.lower() == "coalesce"
+        and expr.arguments
+    ):
+        return []
+    names = []
+    for arg in expr.arguments:
+        if not (
+            isinstance(arg, ast.Variable)
+            and context.variable_types.get(arg.name) == "node"
+            and arg.name in context.variable_aliases
+            and arg.name not in context.scalar_variables
+            and arg.name not in getattr(context, "collected_node_variables", set())
+        ):
+            return []
+        names.append(arg.name)
+    return names
+
+
 def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=None) -> None:
+    if part.with_clause.order_by_clause:
+        # Before the projection: an ambiguous sort key is reported ahead of a
+        # missing alias (WithOrderBy4 [20]).
+        _check_with_order_by_aggregation(part.with_clause, context)
     translate_with_clause(part.with_clause, context)
 
     # Build alias → underlying SQL expression map from the projected SELECT items.
@@ -2461,7 +2550,6 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
     import re as _re_ob
 
     if part.with_clause.order_by_clause:
-        _check_with_order_by_aggregation(part.with_clause, context)
         for item in part.with_clause.order_by_clause.items:
             direction = "ASC" if item.ascending else "DESC"
             # Validate: ORDER BY variables must be in scope (projected by WITH or bound by MATCH).
@@ -2514,7 +2602,20 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # expressions like `a + 2` emit `a + 2` not `u0.a + 2` (u0 is out of
                     # scope in the outer SELECT * FROM (...) __ob ORDER BY ...).
                     prev_ob_map = getattr(context, "_orderby_alias_sql", None)
-                    context._orderby_alias_sql = {name: _safe_alias(name) for name in with_aliases}
+                    if _contains_aggregation(item.expression):
+                        # An aggregate sort key is projected into the grouped SELECT,
+                        # which cannot see its own aliases: read the projected
+                        # expressions instead (WithOrderBy4 [17]).
+                        context._orderby_alias_sql = {
+                            name: f"({_with_alias_sql[name]})"
+                            if name in _with_alias_sql
+                            else _safe_alias(name)
+                            for name in with_aliases
+                        }
+                    else:
+                        context._orderby_alias_sql = {
+                            name: _safe_alias(name) for name in with_aliases
+                        }
                     if prev_ob_map:
                         context._orderby_alias_sql.update(prev_ob_map)
                     # Snapshot join_params AND select_params length before translating.
@@ -2525,7 +2626,11 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     _where_params_before = len(context.where_params)
                     # Use segment="inline" so numeric literals become inline constants.
                     # Property references add JOINs to context (join_params) as needed.
-                    expr = translate_expression(item.expression, context, segment="inline")
+                    _ob_expr = item.expression
+                    if _contains_aggregation(_ob_expr) and prop_alias_map:
+                        # `me.age` projected as `age` sorts on the grouping column
+                        _ob_expr = _subst_projected_props(_ob_expr, prop_alias_map)
+                    expr = translate_expression(_ob_expr, context, segment="inline")
                     # Capture params added by this sort expression (will appear in SQL before FROM).
                     _new_sort_params = context.join_params[_join_params_before:]
                     _new_select_sort_params = context.select_params[_select_params_before:]
@@ -2722,7 +2827,9 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 # If it's a reference to an existing variable, preserve its type.
                 # Otherwise, it's a scalar (function result, literal, etc.)
                 # WITH creates a new scope: force=True allows rebinding existing names to new types
-                if isinstance(item.expression, ast.Variable):
+                if _node_coalesce_vars(item.expression, context):
+                    context.bind_variable_type(alias, "node", force=True)
+                elif isinstance(item.expression, ast.Variable):
                     # Passthrough: preserve the bound variable's type
                     # (from MATCH, previous WITH, etc.)
                     existing_type = context.variable_types.get(item.expression.name)
@@ -2751,7 +2858,11 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                         and collected_var not in getattr(context, "edge_stage_variables", set())
                     ):
                         context.collected_node_lists[alias] = collected_var
-            elif alias and not isinstance(item.expression, ast.Variable):
+            elif (
+                alias
+                and not isinstance(item.expression, ast.Variable)
+                and not _node_coalesce_vars(item.expression, context)
+            ):
                 context.scalar_variables.add(alias)
             elif (
                 alias
@@ -2829,6 +2940,7 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
 
     sqls = []
     all_params = []
+    branch_bool_cols: List[List[str]] = []
     for branch in branches:
         branch_copy = ast.CypherQuery(
             query_parts=branch.query_parts,
@@ -2844,6 +2956,7 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
         # SIGSEGVs in %qaqpre. Dropping it here re-armed that crash for every UNION
         # whose branch joined tables under a LIMIT, however the caller was holding it.
         r = translate_to_sql(branch_copy, params, engine=engine, procedures=procedures)
+        branch_bool_cols.append(list(getattr(r, "bool_expr_columns", None) or []))
         sqls.append(r.sql if isinstance(r.sql, str) else "\n".join(r.sql))
         all_params.extend(r.parameters)
     sep = " UNION ALL " if any(all_flags[1:]) else " UNION "
@@ -2857,7 +2970,11 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
     flat_params = []
     for p_list in all_params:
         flat_params.extend(p_list)
-    return SQLQuery(sql=combined, parameters=[flat_params])
+    # A column is boolean only when it is boolean in every branch.
+    bool_cols = [
+        c for c in branch_bool_cols[0] if all(c in other for other in branch_bool_cols[1:])
+    ]
+    return SQLQuery(sql=combined, parameters=[flat_params], bool_expr_columns=bool_cols)
 
 
 def _tts_process_parts(cypher_query, context, metadata):
@@ -2877,6 +2994,8 @@ def _tts_process_parts(cypher_query, context, metadata):
                 for td_name in context.temporal_derived:
                     if td_name not in context.from_clauses:
                         context.from_clauses.append(td_name)
+            elif getattr(context, "_tck_void_proc", False) and not context.stages:
+                context.from_clauses.append(_tck_void_stage(context, cypher_query))
             else:
                 cte_name = getattr(context, "result_stage", None) or (
                     context.stages[0].split(" AS ")[0].strip() if context.stages else "VecSearch"
@@ -3416,6 +3535,8 @@ def _tts_finalize_context(cypher_query, context):
                 for out_name in output_names:
                     context.select_items.append(f"{cte_name}.{out_name} AS {out_name}")
                 context.select_params = []
+            elif getattr(context, "_tck_void_proc", False) and not context.select_items:
+                context.select_items.append(f"{cte_name}.tck_void AS tck_void")
 
     # YIELD * is not allowed in an in-query CALL (where a RETURN clause follows)
     if _proc is not None and _proc.yield_star and cypher_query.return_clause:
@@ -3598,6 +3719,38 @@ def _build_null_row_not_exists(labels):
     return f"NOT EXISTS ({inner})", params
 
 
+# Functions that return null for a null argument: UNWIND of one over a null
+# optional variable unwinds null, which yields no rows.
+_NULL_IN_NULL_OUT_FNS = frozenset(
+    {"keys", "labels", "properties", "type", "nodes", "relationships", "tail", "reverse"}
+)
+
+
+def _null_when_optional_null(expr, optional_vars: set) -> bool:
+    if isinstance(expr, ast.Variable):
+        return expr.name in optional_vars
+    if isinstance(expr, ast.PropertyReference):
+        return expr.variable in optional_vars
+    if isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in _NULL_IN_NULL_OUT_FNS:
+        return bool(expr.arguments) and _null_when_optional_null(expr.arguments[0], optional_vars)
+    return False
+
+
+def _unwind_drops_the_null_row(part) -> bool:
+    """True when an UNWIND after the OPTIONAL MATCH unwinds a value that is null on
+    the null row, so that row yields nothing (Graph8 [7]: `UNWIND keys(r)`)."""
+    optional_vars: set = set()
+    for clause in part.clauses:
+        if isinstance(clause, ast.MatchClause) and clause.optional:
+            for pat in clause.patterns:
+                optional_vars.update(n.variable for n in pat.nodes if n.variable)
+                optional_vars.update(r.variable for r in pat.relationships if r.variable)
+        elif isinstance(clause, ast.UnwindClause):
+            if _null_when_optional_null(clause.expression, optional_vars):
+                return True
+    return False
+
+
 def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl):
     """Null-row fallback for a query that is a single unlabelled OPTIONAL MATCH.
 
@@ -3614,6 +3767,7 @@ def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl):
         and cypher_query.skip is None
         and cypher_query.limit is None
         and not vl
+        and not _unwind_drops_the_null_row(cypher_query.query_parts[0])
     ):
         return "", []
     null_items = list(context.optional_null_row_items)
@@ -4778,6 +4932,7 @@ def translate_unwind_clause(unwind, context):
     context.scalar_variables.add(unwind.alias)
     context.bind_variable_type(unwind.alias, "scalar")
     context.mixed_list_vars.discard(unwind.alias)
+    context.bool_vars.discard(unwind.alias)
     if _mixed_src:
         context.mixed_value_vars.add(unwind.alias)
     else:
@@ -10162,6 +10317,16 @@ def _register_unbound_node(node, child_ctx, sub_froms, sub_wheres):
         )
 
 
+def _bind_exists_rel_variable(rel, edge_alias, child_ctx) -> None:
+    """Put a subquery's relationship variable in scope for its WHERE
+    (ExistentialSubquery1 [4]: `exists { (n)-[r]->() WHERE type(r) = 'NA' }`)."""
+    if not rel.variable or rel.variable in child_ctx.variable_aliases:
+        return
+    child_ctx.variable_aliases[rel.variable] = edge_alias
+    child_ctx.rel_variables.add(rel.variable)
+    child_ctx.bind_variable_type(rel.variable, "relationship", force=True)
+
+
 def _boolean_expr_exists(expr, context) -> Optional[str]:
     pat = expr.pattern
 
@@ -10205,6 +10370,7 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
                 if cmp_value is not None:
                     # Build the count subquery
                     child_ctx = TranslationContext()
+                    child_ctx.select_params_as_where = True
                     child_ctx.input_params = context.input_params
                     child_ctx._alias_counter = context._alias_counter
                     child_ctx.variable_aliases = dict(context.variable_aliases)
@@ -10223,6 +10389,7 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
                             rel, left_node, right_node, edge_alias, child_ctx
                         )
                         sub_wheres.extend(conds)
+                        _bind_exists_rel_variable(rel, edge_alias, child_ctx)
                     if expr.where_condition:
                         wc_sql = translate_boolean_expression(expr.where_condition, child_ctx)
                         _absorb_child_joins(child_ctx, context, sub_froms, sub_wheres)
@@ -10250,6 +10417,7 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
 
     if pat.relationships:
         child_ctx = TranslationContext()
+        child_ctx.select_params_as_where = True
         child_ctx.input_params = context.input_params
         child_ctx._alias_counter = context._alias_counter
         child_ctx.variable_aliases = dict(context.variable_aliases)
@@ -10276,6 +10444,7 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
             sub_froms.append(f"{_table('rdf_edges')} {edge_alias}")
             conds = _exists_edge_conds(rel, left_node, right_node, edge_alias, child_ctx)
             sub_wheres.extend(conds)
+            _bind_exists_rel_variable(rel, edge_alias, child_ctx)
 
         if expr.where_condition:
             where_sql = translate_boolean_expression(expr.where_condition, child_ctx)
@@ -10296,6 +10465,7 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
     # Translates to EXISTS (SELECT 1 FROM nodes _m WHERE <cond>)
     if expr.where_condition is not None:
         child_ctx = TranslationContext()
+        child_ctx.select_params_as_where = True
         child_ctx.input_params = context.input_params
         child_ctx._alias_counter = context._alias_counter
         child_ctx.variable_aliases = dict(context.variable_aliases)
@@ -12478,6 +12648,37 @@ def _static_value_kind(e) -> Optional[str]:
     ):
         return "num"
     return None
+
+
+_BOOL_VALUED_FUNCS = frozenset({"exists", "toboolean", "tobooleanornull", "isempty"})
+
+
+def _is_bool_valued(e, context) -> bool:
+    """True when the Cypher value of `e` is a boolean (or null) whatever the row.
+
+    IRIS has no boolean SQL type, so such a RETURN column comes back as 1 / 0 or
+    '1' / '0'; the engine reads it back as True / False (bool_expr_columns).
+    """
+    if isinstance(e, ast.Literal):
+        return isinstance(e.value, bool)
+    if isinstance(
+        e,
+        (ast.BooleanExpression, ast.LabelPredicate, ast.ListPredicateExpression, ast.ExistsExpression),
+    ):
+        return True
+    if isinstance(e, ast.FunctionCall):
+        return e.function_name.lower() in _BOOL_VALUED_FUNCS
+    if isinstance(e, ast.Variable):
+        if e.name in getattr(context, "bool_vars", ()):
+            return True
+        return getattr(context, "static_scalar_kinds", {}).get(e.name) == frozenset({"bool"})
+    if isinstance(e, ast.CaseExpression):
+        results = [w.result for w in e.when_clauses]
+        if e.else_result is not None:
+            results.append(e.else_result)
+        results = [r for r in results if not (isinstance(r, ast.Literal) and r.value is None)]
+        return bool(results) and all(_is_bool_valued(r, context) for r in results)
+    return False
 
 
 def _subscript_elem_kind(e, context) -> Optional[str]:
@@ -19723,7 +19924,7 @@ def translate_return_clause(ret, context):
                 if cypher_text_final and cypher_text_final != safe:
                     context.column_name_map[safe] = cypher_text_final
             context.select_items.append(f"{sql} AS {safe}")
-            if isinstance(item.expression, (ast.BooleanExpression, ast.LabelPredicate)):
+            if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
         else:
             context.select_items.append(sql)
@@ -19839,6 +20040,12 @@ def translate_with_clause(with_clause, context):
             # Named path forwarded through WITH: project its value; downstream it is a
             # scalar column of the stage (see _to_sql_handle_with).
             sql = _named_path_json_sql(context, item.expression.name)
+        elif _node_coalesce_vars(item.expression, context):
+            # coalesce() of nodes is a node: the stage keeps its id (Match7 [22])
+            sql = "COALESCE(" + ", ".join(
+                _bound_node_id_ref(context.variable_aliases[v], v)
+                for v in _node_coalesce_vars(item.expression, context)
+            ) + ")"
         else:
             sql = translate_expression(item.expression, context, segment="select")
         # Do NOT apply %EXACT() wrapping here — WITH items are intermediate CTE columns
@@ -19925,6 +20132,10 @@ def translate_with_clause(with_clause, context):
                 ):
                     context.non_integer_index_vars.add(alias)
 
+        if _is_bool_valued(item.expression, context):
+            context.bool_vars.add(alias)
+        else:
+            context.bool_vars.discard(alias)
         _kinds_map = getattr(context, "static_scalar_kinds", None)
         if _kinds_map is not None:
             if isinstance(item.expression, ast.Variable) and item.expression.name in _kinds_map:

@@ -40,6 +40,7 @@ class TestNormaliseIrisValue:
     def test_string_passthrough(self):
         assert normalise_iris_value("Alice", "Alice") == "Alice"
 
-    def test_float_to_int_when_expected_int(self):
-        assert normalise_iris_value(3.0, 3) == 3
-        assert isinstance(normalise_iris_value(3.0, 3), int)
+    def test_float_stays_float_when_expected_int(self):
+        # openCypher: 3.0 is a float, not the integer 3; the TCK tells them apart.
+        assert isinstance(normalise_iris_value(3.0, 3), float)
+        assert normalise_iris_value(3.5, 3) == 3.5

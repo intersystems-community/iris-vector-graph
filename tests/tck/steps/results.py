@@ -12,7 +12,7 @@ except ImportError:
         return _d
 
 from tests.tck.side_effects import compare_side_effects, parse_side_effects_table
-from tests.tck.steps.comparison import TCKValue, TCKResultTable
+from tests.tck.steps.comparison import SqlHydrator, TCKValue, TCKResultTable
 from tests.tck.steps.errors import KIND_SURFACE, classify, mismatch
 from tests.tck.strictness import lenient
 from iris_vector_graph.cypher.parser import CypherParseError
@@ -158,11 +158,9 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
         _fail_on_query_error(context, "a result table")
         assert result is not None, "Expected a result table, but no result was recorded (no query ran?)"
     raw_rows = result.rows if result is not None else []
-    actual_cols = (
-        result.columns
-        if result is not None and hasattr(result, "columns") and result.columns
-        else columns
-    )
+    # The engine's own column list, even when empty: a missing or extra column is a
+    # mismatch, not something to fill in from the expected header.
+    actual_cols = list(getattr(result, "columns", None) or []) if result is not None else []
 
     # Normalise rows: IVG returns list-of-lists; convert to list-of-dicts
     if raw_rows and isinstance(raw_rows[0], (list, tuple)):
@@ -173,7 +171,7 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
     else:
         actual_rows = raw_rows  # already dicts
 
-    diff = tck_table.compare(actual_rows, actual_cols)
+    diff = tck_table.compare(actual_rows, actual_cols, hydrator=_hydrator(context))
     assert diff is None, f"Result mismatch:\n{diff}"
 
 
@@ -191,3 +189,13 @@ def _fail_on_query_error(context, expected_what: str) -> None:
         raise AssertionError(
             f"Expected {expected_what}, but the query returned an error result: {result_error}"
         )
+
+
+def _hydrator(context):
+    """Reads result nodes / path hops back from the scenario's tables (paths carry ids only)."""
+    conn = getattr(context, "conn", None)
+    engine = getattr(context, "engine", None)
+    if conn is None or not hasattr(conn, "cursor"):
+        return None
+    schema = getattr(engine, "_schema_prefix", None)
+    return SqlHydrator(conn, schema if isinstance(schema, str) and schema else "Graph_KG")
