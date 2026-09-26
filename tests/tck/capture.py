@@ -165,6 +165,9 @@ def tag_maybe_json(v: Any) -> dict:
     return tag(v)
 
 
+_REL_KEYS = frozenset({"type", "props", "id", "_id", "start", "end", "s", "o"})
+
+
 def _dict_shape(d: dict) -> Optional[dict]:
     """A node/path/relationship tag for ``d``'s raw shape, or ``None`` when
     it is not one of those -- just a plain map."""
@@ -176,7 +179,9 @@ def _dict_shape(d: dict) -> Optional[dict]:
         }
     if "nodes" in d and "rels" in d:
         return _serialize_path(d)
-    if "type" in d and "_labels" not in d:
+    # A relationship column carries only type/props (plus id fields); a plain
+    # map that merely has a "type" key (Literals7/8 [18]) has other keys too.
+    if "type" in d and set(d) <= _REL_KEYS:
         return {
             "t": "rel",
             "type": d.get("type"),

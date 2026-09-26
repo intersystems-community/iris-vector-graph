@@ -236,6 +236,15 @@ class TestSerializeActualRows:
         rows = capture.serialize_actual_rows([actual_row], ["r"])
         assert rows == [[{"t": "rel", "type": "KNOWS", "props": {"since": {"t": "int", "v": 2020}}}]]
 
+    def test_plain_map_with_a_type_key_is_a_map(self):
+        """A literal map that merely has a ``type`` key (Literals7/8 [18]'s
+        donut map) is a map, not a relationship."""
+        actual_row = {"m": json.dumps({"id": 1, "type": "donut", "name": "Glazed"})}
+        rows = capture.serialize_actual_rows([actual_row], ["m"])
+        assert rows[0][0]["t"] == "jsontext"
+        assert rows[0][0]["decoded"]["t"] == "map"
+        assert rows[0][0]["decoded"]["v"]["type"] == {"t": "str", "v": "donut"}
+
     def test_node_property_holding_a_json_list_is_jsontext(self):
         actual_row = {
             "p_id": "n1",
