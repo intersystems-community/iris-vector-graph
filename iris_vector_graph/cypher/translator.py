@@ -2941,6 +2941,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                     elif (
                         var_name != unwind_clause.alias
                         and var_name not in context.rel_variables
+                        and f"__create_edge_{var_name}" not in context.input_params
                         and context.from_clauses
                         and (
                             len(context.from_clauses) > len(_rows_before[0])

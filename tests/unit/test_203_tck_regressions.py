@@ -2644,6 +2644,14 @@ class TestUnwindParamMergeThenReturn:
         assert final.count(".node_id IN (SELECT") == 2, final
         assert "login1" in params and "login2" in params
 
+    def test_created_relationship_is_not_looked_up_as_a_node(self):
+        # the per-element lookup is for MERGEd nodes; a CREATEd relationship is
+        # returned from rdf_edges by its (s, p, o) (Create6 [10]-[14])
+        q = "UNWIND [42, 42] AS x CREATE ()-[r:R {num: x}]->() RETURN r.num AS num"
+        final, _ = _stmts(translate_to_sql(parse_query(q), {}))[-1]
+        assert "rdf_edges" in final.partition("\nWHERE")[0], final
+        assert ".node_id IN (SELECT" not in final, final
+
 
 class TestOptionalMatchWhereNewVariableIsNull:
     """`OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL` can never match: a matched r is
