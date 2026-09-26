@@ -5,7 +5,7 @@ Class IVG.Percentile Extends %RegisteredObject [ SqlSchemaName = IVG ]
 /// percentileDisc(vals, p) — discrete Nth percentile of sorted JSON array.
 ClassMethod PDISC(vals As %String, p As %Double) As %String [ SqlProc ]
 {
-	If (p < 0) || (p > 1) { Throw ##class(%Exception.General).%New("ArgumentError","5030","Bad argument given; Details: Incorrect number out of range") }
+	If (p < 0) || (p > 1) { Throw ##class(%Exception.General).%New("ArgumentError","5030",,"ArgumentError: NumberOutOfRange: percentile must be between 0.0 and 1.0") }
 	Set arr = ##class(%Library.DynamicArray).%FromJSON(vals)
 	Set n = arr.%Size()
 	If n = 0 { Quit "" }
@@ -19,7 +19,7 @@ ClassMethod PDISC(vals As %String, p As %Double) As %String [ SqlProc ]
 /// percentileCont(vals, p) — continuous Nth percentile (linear interpolation).
 ClassMethod PCONT(vals As %String, p As %Double) As %Double [ SqlProc ]
 {
-	If (p < 0) || (p > 1) { Throw ##class(%Exception.General).%New("ArgumentError","5030","Bad argument given; Details: Incorrect number out of range") }
+	If (p < 0) || (p > 1) { Throw ##class(%Exception.General).%New("ArgumentError","5030",,"ArgumentError: NumberOutOfRange: percentile must be between 0.0 and 1.0") }
 	Set arr = ##class(%Library.DynamicArray).%FromJSON(vals)
 	Set n = arr.%Size()
 	If n = 0 { Quit 0 }

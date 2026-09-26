@@ -12,18 +12,10 @@ except ImportError:
         return _d
 
 from tests.tck.steps.comparison import TCKValue, TCKResultTable
-from iris_vector_graph.cypher.parser import CypherParseError
+from tests.tck.steps.errors import KIND_SURFACE, classify, mismatch
 
-ERROR_TYPE_MAP: dict[str, tuple[type, ...]] = {
-    "TypeError": (TypeError,),
-    "ArgumentError": (ValueError,),
-    "EntityNotFound": (KeyError,),
-    "SemanticError": (Exception,),
-    "SyntaxError": (SyntaxError, CypherParseError),
-    "ProcedureError": (Exception,),
-    "ParameterMissing": (KeyError, TypeError),
-    "ConstraintVerificationFailed": (Exception,),
-}
+# openCypher error kind -> the IVG/IRIS error surface that represents it (spec 229 FR-007).
+ERROR_TYPE_MAP = KIND_SURFACE
 
 
 # ---------------------------------------------------------------------------
@@ -82,41 +74,39 @@ def step_side_effects_should_be(context):
 
 @then(u'a {err_type} should be raised at compile time: {detail}')
 def step_error_compile(context, err_type, detail):
-    step_error_type_raised(context, err_type)
+    step_error_type_raised(context, err_type, "compile time", detail)
 
 
 @then(u'a {err_type} should be raised at runtime: {detail}')
 def step_error_runtime(context, err_type, detail):
-    step_error_type_raised(context, err_type)
+    step_error_type_raised(context, err_type, "runtime", detail)
 
 
 @then(u'a {err_type} should be raised at any time: {detail}')
 def step_error_any_time(context, err_type, detail):
-    step_error_type_raised(context, err_type)
+    step_error_type_raised(context, err_type, "any time", detail)
 
 
-def step_error_type_raised(context, error_type: str):
-    expected_types = ERROR_TYPE_MAP.get(error_type, (Exception,))
+def step_error_type_raised(context, error_type: str, phase: str = "any time", detail: str = "*"):
+    """The query raised ``error_type`` at ``phase`` with ``detail`` (spec 229 US3).
+
+    Kind, phase and detail are matched through ``errors.classify``; a raise that maps to
+    no openCypher kind (a SQL prepare failure, a stale connection, an interpreter
+    TypeError) fails the step. An ``IVGResult.error`` string is classified the same way
+    rather than accepted for being non-empty (FR-008).
+    """
     err = getattr(context, "last_error", None)
-    # Also accept SQL-level errors stored in result.error (IRIS raises as result, not exception)
     if err is None:
         result = getattr(context, "last_result", None)
         result_error = getattr(result, "error", None) if result is not None else None
         if isinstance(result_error, str) and result_error:
-            return  # SQL error string in result counts as an error being raised
+            err = result_error
     assert err is not None, (
-        f"Expected a {error_type} to be raised, but no error occurred. "
+        f"Expected a {error_type} to be raised at {phase}: {detail}, but no error occurred. "
         f"Last result: {getattr(context, 'last_result', None)}"
     )
-    # Accept any Exception subclass for unmapped types (conservative)
-    if expected_types == (Exception,):
-        assert isinstance(err, Exception), (
-            f"Expected an exception, got {type(err)}: {err}"
-        )
-        return
-    assert isinstance(err, expected_types), (
-        f"Expected {error_type} ({expected_types}), got {type(err).__name__}: {err}"
-    )
+    why = mismatch(error_type, phase, detail, classify(err))
+    assert why is None, why
 
 
 # ---------------------------------------------------------------------------

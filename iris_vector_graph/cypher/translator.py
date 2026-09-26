@@ -7581,6 +7581,8 @@ def translate_match_clause(match_clause, context, metadata):
             context.optional_null_row_unconditional = False
     # Validate no duplicate variables within the same MATCH clause (across all patterns)
     vars_in_match = set()
+    node_vars_in_match: set = set()
+    vars_before_match = set(context.variable_types)
     for pattern in match_clause.patterns:
         if not pattern.nodes:
             continue
@@ -7597,21 +7599,27 @@ def translate_match_clause(match_clause, context, metadata):
                 else:
                     node_vars_in_pattern[node.variable] = idx_n
                 vars_in_match.add(node.variable)
+                node_vars_in_match.add(node.variable)
         # Track rel vars in a separate set (rel vars can't be duplicated)
         rel_vars_in_pattern: set = set()
         for rel in pattern.relationships:
             if rel.variable:
                 if rel.variable in rel_vars_in_pattern:
                     raise CypherParseError(
-                        f"VariableAlreadyBound: variable '{rel.variable}' appears twice "
-                        f"in the same pattern"
+                        f"RelationshipUniquenessViolation: relationship '{rel.variable}' "
+                        f"appears twice in the same pattern"
                     )
                 rel_vars_in_pattern.add(rel.variable)
                 # Also check if this variable was already seen in this MATCH clause
+                if rel.variable in node_vars_in_match:
+                    raise CypherParseError(
+                        f"VariableTypeConflict: variable '{rel.variable}' is bound as a "
+                        f"node in this MATCH clause, cannot rebind as a relationship"
+                    )
                 if rel.variable in vars_in_match:
                     raise CypherParseError(
-                        f"VariableAlreadyBound: variable '{rel.variable}' is already bound "
-                        f"in this MATCH clause"
+                        f"RelationshipUniquenessViolation: relationship '{rel.variable}' "
+                        f"appears twice in this MATCH clause"
                     )
                 vars_in_match.add(rel.variable)
         first_node = pattern.nodes[0]
@@ -7796,6 +7804,27 @@ def translate_match_clause(match_clause, context, metadata):
                 _pattern_edge_aliases.append((new_ea, new_is_und))
 
     for np in match_clause.named_paths:
+        existing = context.variable_types.get(np.variable)
+        if existing is not None and existing != "path":
+            # openCypher (TCK Match6 [21]-[24] vs Match1 [10], Match2 [12]): a name bound
+            # before the path -- a preceding clause, an earlier pattern, or inside the
+            # path itself -- is VariableAlreadyBound; one first used by a pattern *after*
+            # the path in this MATCH reuses the path as a node/rel: VariableTypeConflict.
+            pats = match_clause.patterns
+            upto = next((i for i, p in enumerate(pats) if p is np.pattern), len(pats) - 1)
+            earlier = np.variable in vars_before_match or any(
+                np.variable in {n.variable for n in p.nodes} | {r.variable for r in p.relationships}
+                for p in pats[: upto + 1]
+            )
+            if not earlier:
+                raise CypherParseError(
+                    f"VariableTypeConflict: variable '{np.variable}' names a path, "
+                    f"cannot rebind as {existing!r}"
+                )
+            raise CypherParseError(
+                f"VariableAlreadyBound: variable '{np.variable}' is already bound "
+                f"as {existing!r}, cannot name a path"
+            )
         context.named_paths[np.variable] = np
         # Track path variable type for semantic validation
         context.bind_variable_type(np.variable, "path")

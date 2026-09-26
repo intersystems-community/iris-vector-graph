@@ -1689,6 +1689,69 @@ reads its rows by column name for this reason.
 
 ---
 
+## TCK error matching (verified 2026-09-26)
+
+Since spec 229 US3 the TCK step `Then a <Kind> should be raised at <phase>: <detail>`
+checks the error. It used to pass on any exception at all, and on any non-empty
+`IVGResult.error` string. `tests/tck/steps/errors.py` maps what IVG or IRIS raised onto
+an openCypher kind, phase and detail. An error with no mapped kind now fails the
+scenario. Examples are a SQL prepare failure, a UDF failing without a tag, or a Python
+`TypeError` that the interpreter raised rather than an IVG `raise` statement.
+
+### What the harness cannot tell apart
+
+- **Detail, when IVG's message names none.** A bare parse error such as `Expected ),
+got EOF` carries no openCypher detail code. The harness matches it on kind and phase
+  alone, so `UnexpectedSyntax`, `InvalidNumberLiteral`,
+  `InvalidRelationshipPattern` and the other syntax details all pass on any
+  `CypherParseError`. A detail that IVG _does_ name must be the expected one.
+- **Runtime vs compile time, in one direction.** IVG's translator binds parameter
+  values and folds constants, so some errors that openCypher raises at runtime surface
+  during translation. A scenario that expects a runtime error accepts a compile-time
+  one. A scenario that expects a compile-time error still fails on a runtime one.
+- **Integrity details other than `DeleteConnectedNode`.** IRIS SQLCODE `-124` (a
+  foreign-key check on DELETE) maps to `DeleteConnectedNode`. The other integrity codes,
+  `-119`..`-123`, map to `ConstraintVerificationFailed` with the SQLCODE as a
+  pseudo-detail. So they satisfy `*` and no named detail.
+- **Kinds with no IVG surface.** `ConstraintValidationFailed`, `PropertyNotFound`,
+  `LabelNotFound` and `ArithmeticError` are never produced. IVG answers `null` for
+  division by zero; see
+  [Division by zero answers `null`](#division-by-zero-answers-null-where-opencypher-raises).
+- **A UDF failure without a tag.** `SQLUSER.JSON_VALUE` or `JSON_ARRAYGET` failing
+  with an empty `%msg` has no kind. IVG raises a kind at runtime only through
+  `CypherFn_IVGTYPEERROR`, or through a UDF whose `%msg` starts with the kind (such as
+  `ArgumentError: NumberOutOfRange: ...` from `IVG.Percentile`).
+
+### Engine gaps the strict step exposed
+
+Each of these scenarios passed only because some error was raised. IVG does refuse the
+query, but it raises the wrong kind or detail, or it emits SQL that IRIS refuses at
+prepare time.
+
+- **SQL prepare errors instead of a Cypher error**:
+  - `InvalidAggregation`: Call1 [16] (`-23`), MatchWhere1 [15] (`-19`);
+  - `UnknownFunction`: Return2 [18] (`-359`);
+  - `ColumnNameConflict`: With4 [4] (`-27`);
+  - `type()` on a non-relationship: Graph4 [6], [7] (`-29`);
+  - `IN` on a non-list literal: List5 [42] example 5 (`-1`);
+  - `percentileDisc()` in a larger query: Aggregation6 [5] (`-23`);
+  - variable reuse in two examples: Match1 [10] example 20 and Match2 [9] example 22
+    (`-23`).
+- **Untagged UDF failures instead of `TypeError`**: indexing a non-list or non-map,
+  where `JSON_VALUE`/`JSON_ARRAYGET` fail with an empty `%msg`. These are List1 [6],
+  [7] and Map2 [8].
+- **Wrong detail**:
+  - WithOrderBy4 [20] raises `NoExpressionAlias` where `AmbiguousAggregationExpression`
+    is expected;
+  - ReturnOrderBy6 [4] raises `AmbiguousAggregationExpression` where `UndefinedVariable`
+    is expected;
+  - MatchWhere1 [14] raises `UndefinedVariable` where `InvalidArgumentType` is expected.
+- **Accidental Python error**: Set1 [10] (a list of maps as a property). `json.dumps`
+  fails on an AST node before IVG checks the property type, which should be
+  `InvalidPropertyType`.
+
+---
+
 ## GraphQL API (verified 2026-09-20)
 
 The three entries below came out of unskipping 19 contract tests in
