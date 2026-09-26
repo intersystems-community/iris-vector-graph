@@ -4025,11 +4025,44 @@ def translate_updating_clause(upd, context, metadata):
     elif isinstance(upd, ast.DeleteClause):
         translate_delete_clause(upd, context, metadata)
     elif isinstance(upd, ast.MergeClause):
+        if upd.path_variable:
+            _name_merge_path_elements(upd)
         translate_merge_clause(upd, context, metadata)
+        if upd.path_variable:
+            _register_merge_path(upd, context)
     elif isinstance(upd, ast.SetClause):
         translate_set_clause(upd, context, metadata)
     elif isinstance(upd, ast.RemoveClause):
         translate_remove_clause(upd, context, metadata)
+
+
+_MERGE_PATH_PREFIX = "__mp_"
+
+
+def _name_merge_path_elements(merge):
+    """`MERGE p = (…)` needs an alias for every element of p, and only named ones
+    get one — so give the anonymous nodes and relationships hidden names."""
+    pv = merge.path_variable
+    for i, n in enumerate(merge.pattern.nodes):
+        if not n.variable:
+            n.variable = f"{_MERGE_PATH_PREFIX}{pv}_n{i}"
+    for i, r in enumerate(merge.pattern.relationships):
+        if not r.variable:
+            r.variable = f"{_MERGE_PATH_PREFIX}{pv}_r{i}"
+
+
+def _register_merge_path(merge, context):
+    """Bind `p` of `MERGE p = (…)` exactly as MATCH binds a named path."""
+    pv = merge.path_variable
+    np_ = ast.NamedPath(variable=pv, pattern=merge.pattern)
+    context.named_paths[pv] = np_
+    context.bind_variable_type(pv, "path")
+    context.path_node_aliases[pv] = [
+        context.variable_aliases.get(n.variable) for n in merge.pattern.nodes
+    ]
+    context.path_edge_aliases[pv] = [
+        context.variable_aliases.get(r.variable) for r in merge.pattern.relationships
+    ]
 
 
 def translate_unwind_clause(unwind, context):
@@ -4223,33 +4256,42 @@ def _create_match_gate(context):
     deviation this does not claim to fix.
 
     Parameters bind in text order — projection first, then this derived table, then the
-    NOT EXISTS guard — measured against the enterprise container, not assumed.
+    NOT EXISTS guard — measured against the enterprise container, not assumed. A
+    leading `WITH StageN AS (...)` binds before all of them; the returned params are
+    the derived table's only, and `_cte_params(context, cte)` gives the CTE's.
     """
     if not getattr(context, "_correlate_create_dml", False):
         return "", "", [], ""
     cte, sub, params = context.build_dml_subquery(select_override="SELECT 1 AS _one")
-    return cte, f" FROM ({sub}) AS _cg", params, " DISTINCT"
+    n = len(_cte_params(context, cte))
+    return cte, f" FROM ({sub}) AS _cg", params[n:], " DISTINCT"
+
+
+def _cte_params(context, cte):
+    """Markers of the leading CTE `build_dml_subquery` returned; they bind first."""
+    return list(context.all_stage_params) if cte else []
 
 
 def _create_node_literal(node, node_id_expr, context):
     node_id = node_id_expr.value if isinstance(node_id_expr, ast.Literal) else node_id_expr
     _cte, _from, _gate_params, _d = _create_match_gate(context)
+    _cp = _cte_params(context, _cte)
     if getattr(context, "graph_context", None):
         _gc = context.graph_context.replace("'", "''")
         context.add_dml(
             f"{_cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT{_d} ?, ?{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND graph_id = ?)",
-            [node_id, context.graph_context] + _gate_params + [node_id, context.graph_context],
+            _cp + [node_id, context.graph_context] + _gate_params + [node_id, context.graph_context],
         )
     else:
         context.add_dml(
             f"{_cte}INSERT INTO {_table('nodes')} (node_id, graph_id) SELECT{_d} ?, ''{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ? AND COALESCE(graph_id, '') = '')",
-            [node_id] + _gate_params + [node_id],
+            _cp + [node_id] + _gate_params + [node_id],
         )
     _gcol, _gval, _gguard = _child_graph_sql(context)
     for label in node.labels:
         context.add_dml(
             f"{_cte}INSERT INTO {_table('rdf_labels')} (s, label{_gcol}) SELECT{_d} ?, ?{_gval}{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = ? AND label = ?{_gguard})",
-            [node_id, label] + _gate_params + [node_id, label],
+            _cp + [node_id, label] + _gate_params + [node_id, label],
         )
     if node.variable and node.properties:
         if not hasattr(context, "_create_node_props"):
@@ -4275,12 +4317,15 @@ def _create_node_literal(node, node_id_expr, context):
             )
             context.add_dml(
                 f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) {sql} WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?{_gguard})',
-                [node_id, k] + p + [node_id, k],
+                p[: len(_cte_params(context, cte))]
+                + [node_id, k]
+                + p[len(_cte_params(context, cte)) :]
+                + [node_id, k],
             )
         else:
             context.add_dml(
                 f'{_cte}INSERT INTO {_table("rdf_props")} (s, "key", val{_gcol}) SELECT{_d} ?, ?, ?{_gval}{_from} WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} WHERE s = ? AND "key" = ?{_gguard})',
-                [node_id, k, val] + _gate_params + [node_id, k],
+                _cp + [node_id, k, val] + _gate_params + [node_id, k],
             )
 
 
@@ -4410,10 +4455,16 @@ def _create_clause_node_entry(node, context):
             if not hasattr(context, "_id_as_property_vars"):
                 context._id_as_property_vars = set()
             context._id_as_property_vars.add(node.variable)
-        if not context.from_clauses and isinstance(node_id_expr, ast.Literal):
+        if isinstance(node_id_expr, ast.Literal):
             node_id_val = node_id_expr.value
             alias = context.variable_aliases[node.variable]
-            context.from_clauses.append(f"{_table('nodes')} {alias}")
+            # The first node of the query heads FROM; every later one — the second
+            # node of `CREATE (a), (b)`, or a node created after a MATCH — is crossed
+            # in, else a RETURN of it names an alias no table in the query defines.
+            if not context.from_clauses:
+                context.from_clauses.append(f"{_table('nodes')} {alias}")
+            else:
+                context.join_clauses.append(f"CROSS JOIN {_table('nodes')} {alias}")
             context.where_conditions.append(
                 f"{alias}.node_id = {context.add_where_param(node_id_val)}"
             )
@@ -4581,14 +4632,29 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             )
         )
         for rt in rel.types:
-            # IRIS binds outer ? before inner subquery ? — pass graph_id first
+            # IRIS binds a leading CTE's markers first, then the outer select list,
+            # then the derived table — so graph_id sits after the stage parameters
+            # but ahead of everything inside `_ge`.
             cte2, sql2, p2 = context.build_dml_subquery(
                 select_override=f"SELECT {s_expr} c1, ? c2, {t_expr} c3"
             )
+            # rdf_edges holds one edge per (s, p, o_id, graph_id), so a row whose edge
+            # already exists — an earlier row or clause created it — is skipped rather
+            # than failing the transaction on u_spo_graph.
+            _n_cte = len(context.all_stage_params) if cte2 else 0
             context.add_dml(
                 f"{cte2}INSERT INTO {_table('rdf_edges')} (s, p, o_id, graph_id) "
-                f"SELECT _ge.c1, _ge.c2, _ge.c3, ? FROM ({sql2}) AS _ge",
-                [_graph_of(context)] + s_p + [rt] + t_p + p2,
+                f"SELECT DISTINCT _ge.c1, _ge.c2, _ge.c3, ? FROM ({sql2}) AS _ge "
+                f"WHERE NOT EXISTS (SELECT 1 FROM {_table('rdf_edges')} _gx "
+                f"WHERE _gx.s = _ge.c1 AND _gx.p = _ge.c2 AND _gx.o_id = _ge.c3 "
+                f"AND COALESCE(_gx.graph_id, '') = COALESCE(?, ''))",
+                p2[:_n_cte]
+                + [_graph_of(context)]
+                + s_p
+                + [rt]
+                + t_p
+                + p2[_n_cte:]
+                + [_graph_of(context)],
             )
 
 
@@ -4894,6 +4960,55 @@ def _validate_merge_pattern_no_null_properties(merge_node):
             )
 
 
+def _merge_action_value_sql(v, context, pre):
+    """SQL for a non-literal ON CREATE / ON MATCH SET value, as a scalar subquery.
+
+    `MATCH (person) MERGE (city:City) ON CREATE SET city.name = person.bornIn`
+    reads a value from the rows the preceding clauses bound. The value is taken
+    from the first of those rows — ON CREATE fires once, for the row that created
+    the node. Returns (sql, params), or None when the expression cannot be rendered
+    self-contained (it would need a JOIN or a stage the DML cannot see).
+    """
+    if isinstance(v, ast.Literal) or context.stages:
+        return None
+    from_len, join_len, where_len, jp_len, wp_len = pre
+    snap = (
+        len(context.join_clauses),
+        len(context.join_params),
+        len(context.where_conditions),
+        len(context.where_params),
+        len(context.select_params),
+    )
+    try:
+        expr_sql = translate_expression(v, context, segment="inline")
+    except Exception:
+        expr_sql = None
+    added = (
+        context.join_clauses[snap[0] :],
+        context.join_params[snap[1] :],
+        context.where_conditions[snap[2] :],
+        context.where_params[snap[3] :],
+    )
+    expr_params = list(context.select_params[snap[4] :])
+    del context.select_params[snap[4] :]
+    if expr_sql is None or any(added):
+        del context.join_clauses[snap[0] :]
+        del context.join_params[snap[1] :]
+        del context.where_conditions[snap[2] :]
+        del context.where_params[snap[3] :]
+        return None
+    from_parts = context.from_clauses[:from_len]
+    if not from_parts:
+        return f"CAST(({expr_sql}) AS VARCHAR(4000))", expr_params
+    sub = f"SELECT TOP 1 {expr_sql} FROM {', '.join(from_parts)}"
+    if context.join_clauses[:join_len]:
+        sub += " " + " ".join(context.join_clauses[:join_len])
+    if context.where_conditions[:where_len]:
+        sub += " WHERE " + " AND ".join(context.where_conditions[:where_len])
+    params = expr_params + context.join_params[:jp_len] + context.where_params[:wp_len]
+    return f"CAST(({sub}) AS VARCHAR(4000))", params
+
+
 def translate_merge_clause(merge, context, metadata):
     # Validate that MERGE pattern does not contain null property values.
     # Cypher semantic rule: null cannot be matched in MERGE operations.
@@ -4964,6 +5079,10 @@ def translate_merge_clause(merge, context, metadata):
         _has_uuid_where = (
             len(added_wheres) == 1 and node_alias and f"{node_alias}.node_id = ?" in added_wheres[0]
         )
+        # A node merged after the query already has a FROM is crossed in instead.
+        _has_uuid_cross = bool(node_alias) and (
+            f"CROSS JOIN {_table('nodes')} {node_alias}" in context.join_clauses[_pre_join_len:]
+        )
 
         exist_sql, exist_params = _merge_pattern_existence_sql(merge_node, context)
         new_uuid = generated_uuid
@@ -5016,14 +5135,16 @@ def translate_merge_clause(merge, context, metadata):
             context.dml_statements.extend(new_dmls)
 
         # --- Fix SELECT query to find the node by label/property, not by the new UUID ---
-        if _has_uuid_from and _has_uuid_where:
-            del context.from_clauses[_pre_from_len:]
+        if (_has_uuid_from or _has_uuid_cross) and _has_uuid_where:
             del context.where_conditions[_pre_where_len:]
             del context.where_params[_pre_where_params_len:]
 
             # Re-add FROM nodes + label JOINs + property JOINs so the SELECT finds the
-            # matching node whether it was just created or already existed.
-            context.from_clauses.append(f"{_table('nodes')} {node_alias}")
+            # matching node whether it was just created or already existed. A crossed-in
+            # node keeps its CROSS JOIN; the label/property JOINs follow it.
+            if _has_uuid_from:
+                del context.from_clauses[_pre_from_len:]
+                context.from_clauses.append(f"{_table('nodes')} {node_alias}")
             for label in merge_node.labels:
                 l_alias = context.next_alias("l")
                 context.join_clauses.append(
@@ -5182,7 +5303,7 @@ def translate_merge_clause(merge, context, metadata):
                         )
                         new_dmls.append((new_sql, params + not_exists_uuid_params))
                         edge_inserted = True
-                    elif sql.rstrip().endswith("AS _ge"):
+                    elif sql.rstrip().endswith("AS _ge") or " AS _ge WHERE NOT EXISTS (" in sql:
                         # The derived-table INSERT: `SELECT _ge.c1, … FROM (…) AS _ge`.
                         # Its outer SELECT carries no WHERE — every predicate is inside
                         # the derived table — and the aliases in there (n0, n2, l1 …) are
@@ -5203,7 +5324,9 @@ def translate_merge_clause(merge, context, metadata):
                             _ge_params = [rel_type, rel_type]
                         new_dmls.append(
                             (
-                                f"{sql.rstrip()} WHERE NOT EXISTS ({_ge_guard})",
+                                f"{sql.rstrip()} "
+                                f"{'AND' if ' AS _ge WHERE ' in sql else 'WHERE'} "
+                                f"NOT EXISTS ({_ge_guard})",
                                 params + _ge_params,
                             )
                         )
@@ -5350,6 +5473,27 @@ def translate_merge_clause(merge, context, metadata):
                         raise SyntaxError(f"Undefined variable: {var_name}")
                     k, v = item.expression.property_name, item.value
                     val = v.value if isinstance(v, ast.Literal) else v
+                    # A value read from the bound rows (`= person.bornIn`) is rendered
+                    # as SQL; `?` + [val] is the literal form of the same slot.
+                    _vsql, _vparams = "?", [val]
+                    if (
+                        actual_id
+                        and not isinstance(v, ast.Literal)
+                        and var_name not in context.rel_variables
+                    ):
+                        _rendered = _merge_action_value_sql(
+                            v,
+                            context,
+                            (
+                                _pre_from_len,
+                                _pre_join_len,
+                                _pre_where_len,
+                                _pre_join_params_len,
+                                _pre_where_params_len,
+                            ),
+                        )
+                        if _rendered is not None:
+                            _vsql, _vparams = _rendered
                     # Relationship property SET: update rdf_edges.qualifiers
                     if var_name in context.rel_variables and _edge_contexts:
                         src_a, tgt_a, rel_type = _edge_contexts[0]
@@ -5387,8 +5531,8 @@ def translate_merge_clause(merge, context, metadata):
                             # which is not valid IRIS SQL without a FROM clause).
                             context.add_dml(
                                 f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                                f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id = ?',
-                                [k, val, actual_id],
+                                f'SELECT node_id, ?, {_vsql} FROM {_table("nodes")} WHERE node_id = ?',
+                                [k] + _vparams + [actual_id],
                             )
                         else:
                             # Node is MATCH-bound (actual_id unknown at translate time).
@@ -5441,24 +5585,24 @@ def translate_merge_clause(merge, context, metadata):
                                 _on_fj = _on_es.replace("SELECT 1 ", "", 1)
                                 # UPDATE existing property row
                                 context.add_dml(
-                                    f'UPDATE {_table("rdf_props")} SET val = ? '
+                                    f'UPDATE {_table("rdf_props")} SET val = {_vsql} '
                                     f'WHERE s IN ({_on_ns}) AND "key" = ?',
-                                    [val] + _on_ep + [k],
+                                    _vparams + _on_ep + [k],
                                 )
                                 # INSERT property if not yet present on matched node.
                                 # Param order: k, val (for SELECT ?, ?), _on_ep (JOIN conditions), k (NOT EXISTS)
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
-                                    f"SELECT _ml0.node_id, ?, ? {_on_fj} "
+                                    f"SELECT _ml0.node_id, ?, {_vsql} {_on_fj} "
                                     f'WHERE NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
                                     f'WHERE s = _ml0.node_id AND "key" = ?)',
-                                    [k, val] + _on_ep + [k],
+                                    [k] + _vparams + _on_ep + [k],
                                 )
                             else:
                                 # No pattern constraints — update all nodes (degenerate MERGE (a)).
                                 context.add_dml(
-                                    f'UPDATE {_table("rdf_props")} SET val = ? WHERE "key" = ?',
-                                    [val, k],
+                                    f'UPDATE {_table("rdf_props")} SET val = {_vsql} WHERE "key" = ?',
+                                    _vparams + [k],
                                 )
                         else:
                             # MATCH-bound node: use pre-MERGE MATCH context subquery.
@@ -5531,6 +5675,43 @@ def translate_merge_clause(merge, context, metadata):
                                     f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
                                     [mk, str(json_val)] + all_params + [rel_type] + all_params,
                                 )
+                        continue
+                    # SET r = a: copy a bound node's properties onto the
+                    # merged relationship's qualifiers object.
+                    if (
+                        var_name in context.rel_variables
+                        and isinstance(item.value, ast.Variable)
+                        and item.value.name not in context.rel_variables
+                        and context.variable_aliases.get(item.value.name)
+                        and _edge_contexts
+                    ):
+                        src_a, tgt_a, rel_type = _edge_contexts[0]
+                        _na = context.variable_aliases[item.value.name]
+                        from_sql = ", ".join(context.from_clauses[:_pre_from_len])
+                        join_parts = context.join_clauses[:_pre_join_len]
+                        where_parts = context.where_conditions[:_pre_where_len]
+                        join_sql = (" " + " ".join(join_parts)) if join_parts else ""
+                        where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+                        all_params = (
+                            context.join_params[:_pre_join_params_len]
+                            + context.where_params[:_pre_where_params_len]
+                        )
+                        _q = "'\"'"
+                        _esc_k = "REPLACE(REPLACE(\"key\", '\\', '\\\\'), '\"', '\\\"')"
+                        _esc_v = "REPLACE(REPLACE(val, '\\', '\\\\'), '\"', '\\\"')"
+                        _obj = (
+                            f"(SELECT '{{' || LIST({_q} || {_esc_k} || '\":\"' || {_esc_v} || {_q}) || '}}' "
+                            f"FROM {_table('rdf_props')} WHERE s = "
+                            f"(SELECT TOP 1 {_na}.node_id FROM {from_sql}{join_sql}{where_sql}))"
+                        )
+                        _new_q = f"COALESCE({_obj}, CAST('{{}}' AS VARCHAR(256)))"
+                        if not getattr(item, "merge", False):
+                            context.add_dml(
+                                f'UPDATE {_table("rdf_edges")} SET qualifiers = {_new_q} '
+                                f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
+                                f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
+                                all_params + all_params + [rel_type] + all_params,
+                            )
                         continue
                     # Label assignment: MERGE (...) ON CREATE SET a:SomeLabel or SET a:Foo:Bar
                     # Validate: variable must be defined.
@@ -10242,7 +10423,9 @@ def _expr_property_reference(expr, context, segment):
             return f"{alias}.{sanitize_identifier(mapping['id_column'])}"
         return f"{alias}.{sanitize_identifier(expr.property_name)}"
     if alias.startswith("Stage"):
-        if expr.property_name in ("node_id", "id"):
+        # Only `node_id` names the stage column; `id` is a property here exactly as
+        # it is on an un-staged node (an integer id is stored as one).
+        if expr.property_name == "node_id":
             return _safe_alias(expr.variable)
 
         # Check if this is a temporal scalar variable (date, time, datetime, duration, etc.)
@@ -15960,6 +16143,8 @@ def translate_return_clause(ret, context):
         # Variables must be sorted deterministically for test reproducibility.
         for var_name in sorted(context.variable_aliases.keys()):
             if var_name in context.scalar_variables:
+                continue
+            if var_name.startswith(_MERGE_PATH_PREFIX):
                 continue
 
             alias_name = context.variable_aliases.get(var_name)
