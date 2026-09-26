@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
+from iris_vector_graph.cypher.merge_rows import plan_row_merge
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.prop_values import parse_prop_text
 from iris_vector_graph._validate import CypherInput, KHop2Input
@@ -320,6 +321,40 @@ def _decode_bool_text_columns(result, sql_query) -> None:
         rows.append(row)
     result.rows = rows
 
+_INT_TEXT = re.compile(r"-?(?:0|[1-9]\d*)")
+_FLOAT_TEXT = re.compile(r"-?(?:0|[1-9]\d*)\.\d+(?:[eE][-+]?\d+)?")
+
+
+def _prefix_value(v: Any) -> Any:
+    """A row value read back as text, typed for binding into a MERGE.
+
+    Properties are stored as text, so `foo.x` reads back '0'; `y + 1` must add,
+    not concatenate. Decimal and other numeric driver types become int/float.
+    """
+    from decimal import Decimal
+
+    if isinstance(v, Decimal):
+        return int(v) if v == v.to_integral_value() else float(v)
+    if isinstance(v, str):
+        if _INT_TEXT.fullmatch(v):
+            return int(v)
+        if _FLOAT_TEXT.fullmatch(v):
+            return float(v)
+        return parse_prop_text(v)
+    return v
+
+
+def _return_item_name(item) -> str:
+    from iris_vector_graph.cypher import ast as _ast
+
+    e = item.expression
+    if isinstance(e, _ast.Variable):
+        return e.name
+    if isinstance(e, _ast.PropertyReference):
+        return f"{e.variable}.{e.property_name}"
+    return str(e)
+
+
 class QueryMixin:
     def execute_aql(
         self,
@@ -467,7 +502,43 @@ class QueryMixin:
                             current_params[col] = val
             return result
 
+        row_merge = plan_row_merge(parsed, parameters)
+        if row_merge is not None:
+            result = self._execute_row_merge(row_merge, parameters, procedures)
+            if result is not None:
+                return result
         return self._execute_parsed(parsed, parameters, procedures)
+
+    def _execute_row_merge(self, plan, parameters, procedures=None):
+        """Run the prefix, then the MERGE suffix once per row (see cypher.merge_rows).
+
+        Returns None, having written nothing, when a row cannot be bound; the prefix
+        of a row-bound plan is read-only, and a count-only plan binds no values.
+        """
+        prefix = self._execute_parsed(plan.prefix, parameters, procedures)
+        cols = list(prefix.columns or [])
+        if plan.row_vars:
+            rows = [dict(zip(cols, r)) for r in (prefix.rows or [])]
+            rows = [{v: _prefix_value(row.get(v)) for v in plan.row_vars} for row in rows]
+        else:
+            n = prefix.rows[0][0] if prefix.rows and prefix.rows[0] else 0
+            rows = [{} for _ in range(int(n or 0))]
+        bound = [plan.bind(row) for row in rows]
+        if any(q is None for q in bound):
+            return None
+        out_cols, out_rows, last = None, [], None
+        for q in bound:
+            last = self._execute_parsed(q, parameters, procedures)
+            if out_cols is None:
+                out_cols = last.columns
+            out_rows.extend(last.rows or [])
+        if last is None:
+            items = plan.return_clause.items if plan.return_clause else []
+            out_cols = [it.alias or _return_item_name(it) for it in items]
+            return IVGResult(columns=out_cols, rows=[])
+        last.columns = out_cols
+        last.rows = out_rows
+        return last
     def _execute_parsed(self, parsed, parameters, procedures=None):
         if parsed.procedure_call is not None:
             # `USE GRAPH` and the query's parameters live on the parsed query, not on

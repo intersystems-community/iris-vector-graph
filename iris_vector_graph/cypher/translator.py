@@ -2946,9 +2946,28 @@ def _tts_process_parts(cypher_query, context, metadata):
             except (TypeError, ValueError, IndexError):
                 pass
 
+        # Further literal-list UNWINDs in the part unroll with the first, over the
+        # cartesian product (`UNWIND [0, 1] AS x UNWIND [0, 1] AS y CREATE …`,
+        # Merge1 [9]). Any other extra UNWIND keeps the old single-UNWIND path.
+        _unwind_all = [c for c in part.clauses if isinstance(c, ast.UnwindClause)]
+        _unwind_rows = None
+        if unwind_literals is not None:
+            _unwind_rows = [[(unwind_clause.alias, it)] for it in unwind_literals]
+            for _uc in _unwind_all[1:]:
+                if not (
+                    isinstance(_uc.expression, ast.Literal)
+                    and isinstance(_uc.expression.value, list)
+                ):
+                    _unwind_rows = [[(unwind_clause.alias, it)] for it in unwind_literals]
+                    _unwind_all = _unwind_all[:1]
+                    break
+                _unwind_rows = [
+                    r + [(_uc.alias, it)] for r in _unwind_rows for it in _uc.expression.value
+                ]
         if unwind_literals is not None:
             # UNWIND literal list + updating clauses → expand Python-side, one DML set per element
             is_transactional = True
+            _unwind_aliases = {c.alias for c in _unwind_all}
             aliases_before = dict(context.variable_aliases)
             last_iter_aliases = dict(context.variable_aliases)
             # Accumulate created node IDs per variable for use in RETURN
@@ -2965,8 +2984,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                 list(context.where_conditions),
                 list(context.where_params),
             )
-            for item in unwind_literals:
-                item_val = item.value if isinstance(item, ast.Literal) else item
+            for _urow in _unwind_rows:
                 (
                     context.from_clauses,
                     context.join_clauses,
@@ -2976,15 +2994,15 @@ def _tts_process_parts(cypher_query, context, metadata):
                 ) = (list(x) for x in _rows_before)
                 # Start each iteration from the pre-loop state so new vars don't accumulate
                 context.variable_aliases = dict(aliases_before)
-                context.variable_aliases[unwind_clause.alias] = "__foreach_literal__"
                 context.foreach_literals = getattr(context, "foreach_literals", {})
-                context.foreach_literals[unwind_clause.alias] = item_val
-                _map_val = _extract_literal_value(item_val)
-                _iter_clauses = (
-                    _bind_unwound_map_props(part.clauses, unwind_clause.alias, _map_val)
-                    if isinstance(_map_val, dict)
-                    else part.clauses
-                )
+                _iter_clauses = part.clauses
+                for _ualias, item in _urow:
+                    item_val = item.value if isinstance(item, ast.Literal) else item
+                    context.variable_aliases[_ualias] = "__foreach_literal__"
+                    context.foreach_literals[_ualias] = item_val
+                    _map_val = _extract_literal_value(item_val)
+                    if isinstance(_map_val, dict):
+                        _iter_clauses = _bind_unwound_map_props(_iter_clauses, _ualias, _map_val)
                 for clause in _iter_clauses:
                     if isinstance(clause, ast.UnwindClause):
                         continue  # handled by foreach expansion above
@@ -2998,7 +3016,7 @@ def _tts_process_parts(cypher_query, context, metadata):
                     if nid:
                         context._unwind_create_node_ids.setdefault(var_name, []).append(nid)
                     elif (
-                        var_name != unwind_clause.alias
+                        var_name not in _unwind_aliases
                         and var_name not in context.rel_variables
                         and f"__create_edge_{var_name}" not in context.input_params
                         and context.from_clauses
@@ -3030,12 +3048,15 @@ def _tts_process_parts(cypher_query, context, metadata):
                         context._unwind_create_rel_ids.setdefault(var_name, []).append(edge_key)
                 last_iter_aliases = dict(context.variable_aliases)
             if hasattr(context, "foreach_literals"):
-                context.foreach_literals.pop(unwind_clause.alias, None)
+                for _ualias in _unwind_aliases:
+                    context.foreach_literals.pop(_ualias, None)
             # After loop: keep vars created by updating clauses (from last iteration)
             context.variable_aliases = last_iter_aliases
-            context.variable_aliases.pop(unwind_clause.alias, None)
+            for _ualias in _unwind_aliases:
+                context.variable_aliases.pop(_ualias, None)
             # Still need to add the UNWIND to context for RETURN clause access
-            translate_unwind_clause(unwind_clause, context)
+            for _uc in _unwind_all:
+                translate_unwind_clause(_uc, context)
         else:
             _skip_ci = set()
             for _ci, clause in enumerate(part.clauses):
