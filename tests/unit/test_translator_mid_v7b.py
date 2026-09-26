@@ -212,6 +212,34 @@ class TestTckValToSql:
         # The outer quotes are stripped, inner content kept
         assert "AS name" in result
 
+    def test_unquoted_integer_string_generates_numeric_literal(self):
+        # behave table cells are always Python str, even for "46" (an unquoted
+        # Cypher integer literal). This must come back as an INTEGER column
+        # from IRIS, not a TEXT '46' — otherwise typed TCK scoring sees
+        # int->str (Call2 [1]/[2]/[3], Call5 [3]/[4]/[8]).
+        result = _tck_val_to_sql("46", "country_code")
+        assert result == "46 AS country_code"
+
+    def test_unquoted_negative_integer_string_generates_numeric_literal(self):
+        result = _tck_val_to_sql("-5", "n")
+        assert result == "-5 AS n"
+
+    def test_unquoted_float_string_generates_numeric_literal(self):
+        result = _tck_val_to_sql("3.14", "score")
+        assert result == "3.14 AS score"
+
+    def test_unquoted_true_generates_bit_literal(self):
+        result = _tck_val_to_sql("true", "flag")
+        assert result == "1 AS flag"
+
+    def test_unquoted_false_generates_bit_literal(self):
+        result = _tck_val_to_sql("false", "flag")
+        assert result == "0 AS flag"
+
+    def test_unquoted_null_string_generates_null(self):
+        result = _tck_val_to_sql("null", "out")
+        assert result == "NULL AS out"
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # _translate_test_procedure (lines 722-931)
