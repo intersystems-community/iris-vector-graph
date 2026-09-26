@@ -3125,6 +3125,13 @@ def _tts_process_parts(cypher_query, context, metadata):
                 for clause in _iter_clauses:
                     if isinstance(clause, ast.UnwindClause):
                         continue  # handled by foreach expansion above
+                    elif isinstance(clause, ast.MatchClause) and not clause.optional:
+                        # A MATCH after the UNWIND binds its nodes for this element's
+                        # writes; skipping it left them unbound, so a later MERGE
+                        # created a fresh node for each (Unwind1 [6]).
+                        context.match_preceded_create = True
+                        translate_match_clause(clause, context, metadata)
+                        context.optional_match_new_aliases = set()
                     elif isinstance(clause, ast.UpdatingClause):
                         translate_updating_clause(clause, context, metadata)
                     elif isinstance(clause, ast.WhereClause):
@@ -6454,6 +6461,48 @@ def _merge_fit_join_sql(rel, e_alias, context) -> str:
     )
 
 
+def _merge_edge_exists_sql(rel, src_alias, tgt_alias, rel_type, context):
+    """`SELECT 1 FROM rdf_edges …` finding an edge between the two bound nodes that
+    fits the MERGE relationship (type, endpoints, inline properties), and its params."""
+    params: list = [rel_type]
+    if rel.direction == ast.Direction.BOTH:
+        sql = (
+            f"SELECT 1 FROM {_table('rdf_edges')} _gx WHERE _gx.p = ? AND ("
+            f"(_gx.s = {src_alias}.node_id AND _gx.o_id = {tgt_alias}.node_id) OR "
+            f"(_gx.s = {tgt_alias}.node_id AND _gx.o_id = {src_alias}.node_id))"
+        )
+    else:
+        sql = (
+            f"SELECT 1 FROM {_table('rdf_edges')} _gx WHERE _gx.s = {src_alias}.node_id "
+            f"AND _gx.p = ? AND _gx.o_id = {tgt_alias}.node_id"
+        )
+
+    def _add(v):
+        params.append(v)
+        return "?"
+
+    return sql + _merge_prop_preds(rel, "_gx", context, _add), params
+
+
+def _move_before_edge_insert(context, start, action_start, indices):
+    """Move the DML at `indices` (ON CREATE / ON MATCH writes) to just before the
+    MERGE's first rdf_edges insert in `dml_statements[start:action_start]`."""
+    stmts = context.dml_statements
+    target = next(
+        (
+            i
+            for i in range(start, action_start)
+            if "INSERT INTO " + _table("rdf_edges") in stmts[i][0]
+        ),
+        None,
+    )
+    if target is None:
+        return
+    moved = [stmts[i] for i in indices]
+    keep = [st for i, st in enumerate(stmts) if i not in set(indices)]
+    context.dml_statements[:] = keep[:target] + moved + keep[target:]
+
+
 def translate_merge_clause(merge, context, metadata):
     # Validate that MERGE pattern does not contain null property values.
     # Cypher semantic rule: null cannot be matched in MERGE operations.
@@ -6578,6 +6627,22 @@ def translate_merge_clause(merge, context, metadata):
                         )
                     else:
                         new_dmls.append((sql, params))
+                elif (
+                    "INSERT INTO " + _table("rdf_props") in sql
+                    and params
+                    and new_uuid in params
+                    and sql.rstrip().endswith(")")
+                ):
+                    # A property of the node to create: written only when the node
+                    # insert above went through. When the MERGE matched an existing
+                    # node, the new id has no node row and its property must not land
+                    # either (an orphan rdf_props row is a +properties side effect).
+                    new_dmls.append(
+                        (
+                            f"{sql} AND EXISTS (SELECT 1 FROM {_table('nodes')} WHERE node_id = ?)",
+                            list(params) + [new_uuid],
+                        )
+                    )
                 else:
                     new_dmls.append((sql, params))
 
@@ -6901,6 +6966,7 @@ def translate_merge_clause(merge, context, metadata):
     # When a node variable comes from MATCH (not created by this MERGE), actual_id is None
     # and we need the edge's src/tgt aliases + rel_type to condition the INSERT.
     _edge_contexts = []  # list of (src_alias, tgt_alias, rel_type) for each edge in this MERGE
+    _edge_rels = []  # the relationship pattern of each _edge_contexts entry
     if merge.pattern.relationships:
         for rel_idx, rel in enumerate(merge.pattern.relationships):
             if not rel.types or len(rel.types) > 1:
@@ -6918,7 +6984,14 @@ def translate_merge_clause(merge, context, metadata):
             )
             if src_a and tgt_a:
                 _edge_contexts.append((src_a, tgt_a, rel.types[0]))
+                _edge_rels.append(rel)
 
+    # ON CREATE / ON MATCH writes that must see the graph as it was before the edge
+    # insert: an ON MATCH of the relationship would otherwise update the edge this
+    # MERGE just created (Merge7 [2]), and an ON CREATE of a matched node is gated
+    # on the edge not existing yet (Merge6 [1]). Indices into dml_statements.
+    _pre_edge_insert: list = []
+    _pre_action_len = len(context.dml_statements)
     var = merge.pattern.nodes[0].variable if merge.pattern.nodes else None
     for action, is_create in [(merge.on_create, True), (merge.on_match, False)]:
         if action:
@@ -6969,6 +7042,8 @@ def translate_merge_clause(merge, context, metadata):
                         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                         all_params = join_params_parts + where_params_parts
                         json_val = str(val) if val is not None else None
+                        if not is_create:
+                            _pre_edge_insert.append(len(context.dml_statements))
                         if json_val is None:
                             context.add_dml(
                                 f'UPDATE {_table("rdf_edges")} SET qualifiers = '
@@ -7012,6 +7087,15 @@ def translate_merge_clause(merge, context, metadata):
                                 where_sql = (
                                     (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                                 )
+                                _gate_sql, _gate_params = "", []
+                                if _edge_contexts:
+                                    _es, _ep = _merge_edge_exists_sql(
+                                        _edge_rels[0], *_edge_contexts[0], context
+                                    )
+                                    _gate_sql, _gate_params = f" AND NOT EXISTS ({_es})", _ep
+                                    _pre_edge_insert.append(len(context.dml_statements))
+                                # Markers bind in text order: the SELECT list's key and
+                                # value come before the FROM's join and where markers.
                                 context.add_dml(
                                     f'INSERT INTO {_table("rdf_props")} (s, "key", val) '
                                     f"SELECT {sql_alias}.node_id, ?, ? "
@@ -7019,8 +7103,10 @@ def translate_merge_clause(merge, context, metadata):
                                     f"{where_sql}"
                                     f'{" AND " if where_parts else " WHERE "}'
                                     f'NOT EXISTS (SELECT 1 FROM {_table("rdf_props")} '
-                                    f'WHERE s = {sql_alias}.node_id AND "key" = ?)',
-                                    join_params_parts + where_params_parts + [k, val, k],
+                                    f'WHERE s = {sql_alias}.node_id AND "key" = ?)'
+                                    f"{_gate_sql}",
+                                    [k, val] + join_params_parts + where_params_parts + [k]
+                                    + _gate_params,
                                 )
                             else:
                                 context.add_dml(
@@ -7226,6 +7312,9 @@ def translate_merge_clause(merge, context, metadata):
                                     [label, label],
                                 )
 
+    if _pre_edge_insert:
+        _move_before_edge_insert(context, _pre_dml_len, _pre_action_len, _pre_edge_insert)
+
     # The SELECT now finds this node by its pattern, whether it was just made or was
     # already there. Later clauses must bind to that row, not to the id the node would
     # have had if this MERGE created it (Merge5 [19]).
@@ -7410,6 +7499,11 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
     return (sql, params, True)
 
 
+# Transient rdf_props key pinning the nodes a `SET n = {map}` replaces; the
+# statement that writes it also removes it, inside the same transaction.
+_REPLACE_MARKER = "\u0001ivg_set_replace"
+
+
 def _lead_cte(context, cte, lead, subparams):
     """Bind `lead` after the CTE's markers but ahead of the subquery's.
 
@@ -7584,18 +7678,23 @@ def translate_set_clause(set_cl, context, metadata):
         ):
             # SET n = {map} — full property replace: delete all existing props and insert new ones
             alias = context.variable_aliases.get(item.expression.name)
-            # DELETE uses the full property-filtered subquery (fires before props are gone)
+            # The matched ids are pinned as a marker row first: IRIS re-evaluates a
+            # `DELETE ... WHERE s IN (<subquery joining rdf_props>)` while it
+            # deletes, so selecting through the MATCH's own property filter stopped
+            # at the filtered row and left the rest (Set4 [2]). Every later
+            # statement selects the nodes through the marker instead.
             cte, subquery, subparams = context.build_dml_subquery(
                 select_override=f"SELECT {alias}.node_id"
             )
             context.add_dml(
-                f"{cte}DELETE FROM {_table('rdf_props')} WHERE s IN ({subquery})",
-                subparams,
+                f'{cte}INSERT INTO {_table("rdf_props")} (s, "key", val) '
+                f'SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery})',
+                _lead_cte(context, cte, [_REPLACE_MARKER, "1"], subparams),
             )
-            # INSERT/SELECT use label-only subquery (props deleted, property JOINs would return 0 rows)
-            cte_lo, subquery_lo, subparams_lo = context.build_label_only_dml_subquery(
-                node_alias=alias,
-                select_override=f"SELECT {alias}.node_id",
+            _pinned = f'SELECT _rm.s FROM {_table("rdf_props")} _rm WHERE _rm."key" = ?'
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE s IN ({_pinned}) AND "key" <> ?',
+                [_REPLACE_MARKER, _REPLACE_MARKER],
             )
             # Track this alias so the final SELECT also drops property JOINs for it
             if not hasattr(context, "_full_replace_aliases"):
@@ -7612,9 +7711,13 @@ def translate_set_clause(set_cl, context, metadata):
                     continue
                 context._set_properties.add(k)
                 context.add_dml(
-                    f'{cte_lo}INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({subquery_lo})',
-                    _lead_cte(context, cte_lo, [k, val], subparams_lo),
+                    f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, ? FROM {_table("nodes")} WHERE node_id IN ({_pinned})',
+                    [k, val, _REPLACE_MARKER],
                 )
+            context.add_dml(
+                f'DELETE FROM {_table("rdf_props")} WHERE "key" = ?',
+                [_REPLACE_MARKER],
+            )
         elif isinstance(item.expression, ast.Variable):
             alias = context.variable_aliases.get(item.expression.name)
             # item.value may be a list of labels (SET n:Foo:Bar) or a single string/literal
