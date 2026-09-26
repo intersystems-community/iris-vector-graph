@@ -199,9 +199,18 @@ class TCKResultTable:
                 f"Actual:   {norm_actual}"
             )
 
+        def _matches(exp, i):
+            if _rows_equal(exp, norm_actual[i], self.columns, self.list_unordered):
+                return True
+            # A column mixing types (ORDER BY over [n, r, 1.5, false, ...]):
+            # normalise the cell against its own expected value instead.
+            own = {c: type_schema.get(c) if exp.get(c) is None else exp[c] for c in self.columns}
+            act2 = _normalise_row_with_nodes(remapped_rows[i], own, self.columns)
+            return _rows_equal(exp, act2, self.columns, self.list_unordered)
+
         if self.ordered:
             for i, (exp, act) in enumerate(zip(expected_rows, norm_actual)):
-                if not _rows_equal(exp, act, self.columns, self.list_unordered):
+                if not _matches(exp, i):
                     return f"Row {i} mismatch:\n  expected: {exp}\n  actual:   {act}"
             return None
         else:
@@ -215,7 +224,7 @@ class TCKResultTable:
                     return True
                 exp = exp_rows[0]
                 for i in avail_indices:
-                    if _rows_equal(exp, norm_actual[i], self.columns, self.list_unordered):
+                    if _matches(exp, i):
                         remaining = [j for j in avail_indices if j != i]
                         if _can_match(exp_rows[1:], remaining):
                             return True
@@ -872,6 +881,19 @@ def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) 
             continue
         # List of relationships, in path order: TCK [[':T {k: v}'], [':T']] vs actual
         # {"type", "props"} values (a var-length relationship, or relationships(p)).
+        # A single relationship cell [:T] against one {"type", "props"} value.
+        if (
+            isinstance(ev, list)
+            and len(ev) == 1
+            and isinstance(ev[0], str)
+            and ev[0].startswith(":")
+            and not isinstance(av, list)
+        ):
+            _one = _as_rel_obj(av)
+            if _one is not None:
+                if _rel_obj_matches(ev[0], _one):
+                    continue
+                return False
         av_seq = av
         if isinstance(ev, list) and isinstance(av, str) and av.startswith("["):
             try:
