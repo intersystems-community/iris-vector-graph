@@ -245,6 +245,13 @@ class TestSerializeActualRows:
         assert rows[0][0]["decoded"]["t"] == "map"
         assert rows[0][0]["decoded"]["v"]["type"] == {"t": "str", "v": "donut"}
 
+    def test_id_and_type_only_map_is_a_map(self):
+        """``{"id", "type"}`` (Literals7/8 [18]'s nested batter maps) has no
+        ``props``, so it is a map too."""
+        actual_row = {"m": json.dumps({"id": "1001", "type": "Regular"})}
+        rows = capture.serialize_actual_rows([actual_row], ["m"])
+        assert rows[0][0]["decoded"]["t"] == "map"
+
     def test_node_property_holding_a_json_list_is_jsontext(self):
         actual_row = {
             "p_id": "n1",

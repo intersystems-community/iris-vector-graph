@@ -179,9 +179,10 @@ def _dict_shape(d: dict) -> Optional[dict]:
         }
     if "nodes" in d and "rels" in d:
         return _serialize_path(d)
-    # A relationship column carries only type/props (plus id fields); a plain
-    # map that merely has a "type" key (Literals7/8 [18]) has other keys too.
-    if "type" in d and set(d) <= _REL_KEYS:
+    # A relationship column always carries "props" and nothing beyond
+    # type/props/id fields; a plain map that merely has a "type" key
+    # (Literals7/8 [18]: {"id", "type"}, {"id", "type", "name", ...}) does not.
+    if "type" in d and "props" in d and set(d) <= _REL_KEYS:
         return {
             "t": "rel",
             "type": d.get("type"),
