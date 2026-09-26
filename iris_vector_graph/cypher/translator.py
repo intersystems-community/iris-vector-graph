@@ -3073,6 +3073,206 @@ def _tts_union_branches(cypher_query, params, engine=None, procedures=None):
     return SQLQuery(sql=combined, parameters=[flat_params], bool_expr_columns=bool_cols)
 
 
+def _detect_unwind_dml_expansion(part, context):
+    """Detect the Python-side per-row DML expansion for `part`: a literal-list,
+    input-param-list, or range() UNWIND feeding an updating clause, one DML
+    set per element (like FOREACH). Returns (unwind_clause, unwind_literals,
+    unwind_all, unwind_rows); unwind_literals is None when `part` doesn't
+    qualify.
+
+    A range() bound that is a Variable already bound in
+    context.foreach_literals also resolves (to that value): when this part is
+    itself run once per row of an *enclosing* chained part (see
+    _part_chains_from_unwind_var), its own range bound (`UNWIND range(0, i) AS
+    j` where `i` is the enclosing part's per-row variable) is concrete by the
+    time this part runs, even though it is a Variable, not a Literal, in the
+    AST.
+    """
+    unwind_clause = next((c for c in part.clauses if isinstance(c, ast.UnwindClause)), None)
+    has_updating = any(isinstance(c, ast.UpdatingClause) for c in part.clauses)
+    if unwind_clause is None or not has_updating:
+        return None, None, None, None
+    unwind_literals = None
+    if isinstance(unwind_clause.expression, ast.Literal) and isinstance(
+        unwind_clause.expression.value, list
+    ):
+        unwind_literals = unwind_clause.expression.value
+    elif (
+        isinstance(unwind_clause.expression, ast.Variable)
+        and unwind_clause.expression.name in context.input_params
+        and isinstance(context.input_params[unwind_clause.expression.name], list)
+    ):
+        unwind_literals = [
+            ast.Literal(v) if not isinstance(v, ast.Literal) else v
+            for v in context.input_params[unwind_clause.expression.name]
+        ]
+    elif (
+        isinstance(unwind_clause.expression, ast.FunctionCall)
+        and unwind_clause.expression.function_name.lower() == "range"
+    ):
+        _range_args = unwind_clause.expression.arguments
+        _foreach = getattr(context, "foreach_literals", None) or {}
+
+        def _resolve(arg):
+            if isinstance(arg, ast.Literal):
+                return arg.value
+            if isinstance(arg, ast.Variable) and arg.name in _foreach:
+                return _foreach[arg.name]
+            return None
+
+        try:
+            _rvals = [_resolve(a) for a in _range_args]
+            _start = int(_rvals[0]) if len(_rvals) >= 1 and _rvals[0] is not None else None
+            _end = int(_rvals[1]) if len(_rvals) >= 2 and _rvals[1] is not None else None
+            _step = int(_rvals[2]) if len(_rvals) >= 3 and _rvals[2] is not None else 1
+            if _start is not None and _end is not None and _step != 0:
+                _vals = list(range(_start, _end + (1 if _step > 0 else -1), _step))
+                unwind_literals = [ast.Literal(v) for v in _vals]
+        except (TypeError, ValueError, IndexError):
+            pass
+    if unwind_literals is None:
+        return unwind_clause, None, None, None
+    # Further literal-list UNWINDs in the part unroll with the first, over the
+    # cartesian product (`UNWIND [0, 1] AS x UNWIND [0, 1] AS y CREATE …`,
+    # Merge1 [9]). Any other extra UNWIND keeps the old single-UNWIND path.
+    _unwind_all = [c for c in part.clauses if isinstance(c, ast.UnwindClause)]
+    _unwind_rows = [[(unwind_clause.alias, it)] for it in unwind_literals]
+    for _uc in _unwind_all[1:]:
+        if not (
+            isinstance(_uc.expression, ast.Literal) and isinstance(_uc.expression.value, list)
+        ):
+            _unwind_rows = [[(unwind_clause.alias, it)] for it in unwind_literals]
+            _unwind_all = _unwind_all[:1]
+            break
+        _unwind_rows = [
+            r + [(_uc.alias, it)] for r in _unwind_rows for it in _uc.expression.value
+        ]
+    return unwind_clause, unwind_literals, _unwind_all, _unwind_rows
+
+
+def _part_chains_from_unwind_var(part, bound_aliases):
+    """True when `part` is itself a Python-side-expandable UNWIND+update part
+    (see _detect_unwind_dml_expansion) whose single UNWIND is a `range()` call
+    with a bound referencing one of `bound_aliases` — a per-row variable an
+    *enclosing* part binds via its own UNWIND expansion. Bounded to a single
+    UNWIND clause in the chained part: a second UNWIND there would need
+    another level of nesting this helper doesn't attempt.
+    """
+    if not any(isinstance(c, ast.UpdatingClause) for c in part.clauses):
+        return False
+    unwinds = [c for c in part.clauses if isinstance(c, ast.UnwindClause)]
+    if len(unwinds) != 1:
+        return False
+    uc = unwinds[0]
+    if not (
+        isinstance(uc.expression, ast.FunctionCall)
+        and uc.expression.function_name.lower() == "range"
+    ):
+        return False
+    return any(
+        isinstance(a, ast.Variable) and a.name in bound_aliases for a in uc.expression.arguments
+    )
+
+
+def _run_unwind_dml_rows(
+    context, metadata, iter_clauses, unwind_rows, unwind_aliases, per_row_hook=None
+):
+    """Run one Python-side per-row DML expansion of `iter_clauses` over
+    `unwind_rows`, each row binding `unwind_aliases` to a literal value in
+    context.foreach_literals for that iteration. Mutates
+    context._unwind_create_node_ids / _unwind_create_rel_ids /
+    _unwind_merge_node_subqs and the from/join/where/variable_aliases state in
+    place (reset to the pre-call state at the start of every row). Returns the
+    variable_aliases produced by the last row.
+
+    `per_row_hook(row_index)`, when given, runs right after that row's
+    clauses and id collection, with context in that row's post-processing
+    state — e.g. context.foreach_literals holding this row's value, so a
+    chained part's own UNWIND range (`WITH s, i UNWIND range(0, i) AS j
+    CREATE ...`) can resolve and expand right here instead of once, after
+    this whole loop has already moved on to its last row (Aggregation6 [5]).
+    """
+    aliases_before = dict(context.variable_aliases)
+    last_iter_aliases = dict(context.variable_aliases)
+    rows_before = (
+        list(context.from_clauses),
+        list(context.join_clauses),
+        list(context.join_params),
+        list(context.where_conditions),
+        list(context.where_params),
+    )
+    if not hasattr(context, "_unwind_create_node_ids"):
+        context._unwind_create_node_ids = {}
+    if not hasattr(context, "_unwind_create_rel_ids"):
+        context._unwind_create_rel_ids = {}
+    context._unwind_merge_node_subqs = getattr(context, "_unwind_merge_node_subqs", None) or {}
+    for _row_idx, _urow in enumerate(unwind_rows):
+        (
+            context.from_clauses,
+            context.join_clauses,
+            context.join_params,
+            context.where_conditions,
+            context.where_params,
+        ) = (list(x) for x in rows_before)
+        context.variable_aliases = dict(aliases_before)
+        context.foreach_literals = getattr(context, "foreach_literals", {})
+        _iter_clauses = iter_clauses
+        for _ualias, item in _urow:
+            item_val = item.value if isinstance(item, ast.Literal) else item
+            context.variable_aliases[_ualias] = "__foreach_literal__"
+            context.foreach_literals[_ualias] = item_val
+            _map_val = _extract_literal_value(item_val)
+            if isinstance(_map_val, dict):
+                _iter_clauses = _bind_unwound_map_props(_iter_clauses, _ualias, _map_val)
+        for clause in _iter_clauses:
+            if isinstance(clause, ast.UnwindClause):
+                continue  # handled by foreach expansion above
+            elif isinstance(clause, ast.MatchClause) and not clause.optional:
+                context.match_preceded_create = True
+                translate_match_clause(clause, context, metadata)
+                context.optional_match_new_aliases = set()
+            elif isinstance(clause, ast.UpdatingClause):
+                translate_updating_clause(clause, context, metadata)
+            elif isinstance(clause, ast.WhereClause):
+                translate_where_clause(clause, context)
+        for var_name in set(context.variable_aliases) - set(aliases_before):
+            nid = context.input_params.get(f"__create_id_{var_name}")
+            if nid:
+                context._unwind_create_node_ids.setdefault(var_name, []).append(nid)
+            elif (
+                var_name not in unwind_aliases
+                and var_name not in context.rel_variables
+                and f"__create_edge_{var_name}" not in context.input_params
+                and context.from_clauses
+                and (
+                    len(context.from_clauses) > len(rows_before[0])
+                    or len(context.join_clauses) > len(rows_before[1])
+                )
+            ):
+                _where = (
+                    " WHERE " + " AND ".join(context.where_conditions)
+                    if context.where_conditions
+                    else ""
+                )
+                context._unwind_merge_node_subqs.setdefault(var_name, []).append(
+                    (
+                        f"SELECT {context.variable_aliases[var_name]}.node_id FROM "
+                        + ", ".join(context.from_clauses)
+                        + "".join(" " + j for j in context.join_clauses)
+                        + _where,
+                        list(context.join_params) + list(context.where_params),
+                    )
+                )
+        for var_name in set(context.variable_aliases) - set(aliases_before):
+            edge_key = context.input_params.get(f"__create_edge_{var_name}")
+            if edge_key:
+                context._unwind_create_rel_ids.setdefault(var_name, []).append(edge_key)
+        last_iter_aliases = dict(context.variable_aliases)
+        if per_row_hook is not None:
+            per_row_hook(_row_idx)
+    return last_iter_aliases
+
+
 def _tts_process_parts(cypher_query, context, metadata):
     """Handle procedure_call + iterate query_parts. Returns is_transactional."""
     is_transactional = False
@@ -3098,7 +3298,13 @@ def _tts_process_parts(cypher_query, context, metadata):
                 )
                 context.from_clauses.append(cte_name)
 
+    # A part consumed by an earlier part's UNWIND chain (see
+    # _part_chains_from_unwind_var) has already run once per row of that
+    # earlier part; the top-level dispatch below must skip it entirely.
+    _consumed_part_indices: Set[int] = set()
     for i, part in enumerate(cypher_query.query_parts):
+        if i in _consumed_part_indices:
+            continue
         context.select_items, context.from_clauses, context.join_clauses = [], [], []
         context.where_conditions, context.group_by_items = [], []
         context.select_params, context.join_params, context.where_params = [], [], []
@@ -3109,166 +3315,50 @@ def _tts_process_parts(cypher_query, context, metadata):
                 break
         # Check for UNWIND+UPDATE pattern: when a literal-list UNWIND feeds updating clauses,
         # expand Python-side (like FOREACH) so each list element gets its own DML set.
-        unwind_clause = next((c for c in part.clauses if isinstance(c, ast.UnwindClause)), None)
-        has_updating = any(isinstance(c, ast.UpdatingClause) for c in part.clauses)
-        unwind_literals = None
-        if (
-            unwind_clause is not None
-            and has_updating
-            and isinstance(unwind_clause.expression, ast.Literal)
-            and isinstance(unwind_clause.expression.value, list)
-        ):
-            unwind_literals = unwind_clause.expression.value
-        elif (
-            unwind_clause is not None
-            and has_updating
-            and isinstance(unwind_clause.expression, ast.Variable)
-            and unwind_clause.expression.name in context.input_params
-            and isinstance(context.input_params[unwind_clause.expression.name], list)
-        ):
-            unwind_literals = [
-                ast.Literal(v) if not isinstance(v, ast.Literal) else v
-                for v in context.input_params[unwind_clause.expression.name]
-            ]
-        elif (
-            unwind_clause is not None
-            and has_updating
-            and isinstance(unwind_clause.expression, ast.FunctionCall)
-            and unwind_clause.expression.function_name.lower() == "range"
-        ):
-            # UNWIND range(start, end[, step]) AS i CREATE (...) — evaluate range Python-side
-            # so each element gets its own DML set (one INSERT per row).
-            _range_args = unwind_clause.expression.arguments
-            try:
-                _start = (
-                    int(_range_args[0].value)
-                    if len(_range_args) >= 1 and isinstance(_range_args[0], ast.Literal)
-                    else None
-                )
-                _end = (
-                    int(_range_args[1].value)
-                    if len(_range_args) >= 2 and isinstance(_range_args[1], ast.Literal)
-                    else None
-                )
-                _step = (
-                    int(_range_args[2].value)
-                    if len(_range_args) >= 3 and isinstance(_range_args[2], ast.Literal)
-                    else 1
-                )
-                if _start is not None and _end is not None and _step != 0:
-                    _vals = list(range(_start, _end + (1 if _step > 0 else -1), _step))
-                    unwind_literals = [ast.Literal(v) for v in _vals]
-            except (TypeError, ValueError, IndexError):
-                pass
-
-        # Further literal-list UNWINDs in the part unroll with the first, over the
-        # cartesian product (`UNWIND [0, 1] AS x UNWIND [0, 1] AS y CREATE …`,
-        # Merge1 [9]). Any other extra UNWIND keeps the old single-UNWIND path.
-        _unwind_all = [c for c in part.clauses if isinstance(c, ast.UnwindClause)]
-        _unwind_rows = None
-        if unwind_literals is not None:
-            _unwind_rows = [[(unwind_clause.alias, it)] for it in unwind_literals]
-            for _uc in _unwind_all[1:]:
-                if not (
-                    isinstance(_uc.expression, ast.Literal)
-                    and isinstance(_uc.expression.value, list)
-                ):
-                    _unwind_rows = [[(unwind_clause.alias, it)] for it in unwind_literals]
-                    _unwind_all = _unwind_all[:1]
-                    break
-                _unwind_rows = [
-                    r + [(_uc.alias, it)] for r in _unwind_rows for it in _uc.expression.value
-                ]
+        unwind_clause, unwind_literals, _unwind_all, _unwind_rows = _detect_unwind_dml_expansion(
+            part, context
+        )
         if unwind_literals is not None:
             # UNWIND literal list + updating clauses → expand Python-side, one DML set per element
             is_transactional = True
             _unwind_aliases = {c.alias for c in _unwind_all}
-            aliases_before = dict(context.variable_aliases)
-            last_iter_aliases = dict(context.variable_aliases)
-            # Accumulate created node IDs per variable for use in RETURN
-            if not hasattr(context, "_unwind_create_node_ids"):
-                context._unwind_create_node_ids = {}  # var_name → [uuid, ...]
-            # A node MERGE finds its node by pattern (FROM + JOINs), not by id. Each
-            # element starts from the pre-loop rows, or element 2's SET cross-joins
-            # element 1's node; the lookup is kept for the RETURN (Unwind1 [14]).
-            context._unwind_merge_node_subqs = {}  # var_name → [(sql, params), ...]
-            _rows_before = (
-                list(context.from_clauses),
-                list(context.join_clauses),
-                list(context.join_params),
-                list(context.where_conditions),
-                list(context.where_params),
+            # A later part whose own UNWIND range references a variable THIS
+            # part binds per row (`WITH s, i UNWIND range(0, i) AS j CREATE
+            # ...`) must run once per row of this part, not once as its own
+            # top-level part after this loop has already moved on to its last
+            # row's value (Aggregation6 [5]).
+            _chain_index = i + 1
+            _chain_part = (
+                cypher_query.query_parts[_chain_index]
+                if _chain_index < len(cypher_query.query_parts)
+                else None
             )
-            for _urow in _unwind_rows:
-                (
-                    context.from_clauses,
-                    context.join_clauses,
-                    context.join_params,
-                    context.where_conditions,
-                    context.where_params,
-                ) = (list(x) for x in _rows_before)
-                # Start each iteration from the pre-loop state so new vars don't accumulate
-                context.variable_aliases = dict(aliases_before)
-                context.foreach_literals = getattr(context, "foreach_literals", {})
-                _iter_clauses = part.clauses
-                for _ualias, item in _urow:
-                    item_val = item.value if isinstance(item, ast.Literal) else item
-                    context.variable_aliases[_ualias] = "__foreach_literal__"
-                    context.foreach_literals[_ualias] = item_val
-                    _map_val = _extract_literal_value(item_val)
-                    if isinstance(_map_val, dict):
-                        _iter_clauses = _bind_unwound_map_props(_iter_clauses, _ualias, _map_val)
-                for clause in _iter_clauses:
-                    if isinstance(clause, ast.UnwindClause):
-                        continue  # handled by foreach expansion above
-                    elif isinstance(clause, ast.MatchClause) and not clause.optional:
-                        # A MATCH after the UNWIND binds its nodes for this element's
-                        # writes; skipping it left them unbound, so a later MERGE
-                        # created a fresh node for each (Unwind1 [6]).
-                        context.match_preceded_create = True
-                        translate_match_clause(clause, context, metadata)
-                        context.optional_match_new_aliases = set()
-                    elif isinstance(clause, ast.UpdatingClause):
-                        translate_updating_clause(clause, context, metadata)
-                    elif isinstance(clause, ast.WhereClause):
-                        translate_where_clause(clause, context)
-                # Collect node IDs created in this iteration
-                for var_name in set(context.variable_aliases) - set(aliases_before):
-                    nid = context.input_params.get(f"__create_id_{var_name}")
-                    if nid:
-                        context._unwind_create_node_ids.setdefault(var_name, []).append(nid)
-                    elif (
-                        var_name not in _unwind_aliases
-                        and var_name not in context.rel_variables
-                        and f"__create_edge_{var_name}" not in context.input_params
-                        and context.from_clauses
-                        and (
-                            len(context.from_clauses) > len(_rows_before[0])
-                            or len(context.join_clauses) > len(_rows_before[1])
-                        )
-                    ):
-                        _where = (
-                            " WHERE " + " AND ".join(context.where_conditions)
-                            if context.where_conditions
-                            else ""
-                        )
-                        context._unwind_merge_node_subqs.setdefault(var_name, []).append(
-                            (
-                                f"SELECT {context.variable_aliases[var_name]}.node_id FROM "
-                                + ", ".join(context.from_clauses)
-                                + "".join(" " + j for j in context.join_clauses)
-                                + _where,
-                                list(context.join_params) + list(context.where_params),
-                            )
-                        )
-                # Collect relationship identities created in this iteration
-                if not hasattr(context, "_unwind_create_rel_ids"):
-                    context._unwind_create_rel_ids = {}  # var_name → [(s,p,o), ...]
-                for var_name in set(context.variable_aliases) - set(aliases_before):
-                    edge_key = context.input_params.get(f"__create_edge_{var_name}")
-                    if edge_key:
-                        context._unwind_create_rel_ids.setdefault(var_name, []).append(edge_key)
-                last_iter_aliases = dict(context.variable_aliases)
+            _chained = _chain_part is not None and _part_chains_from_unwind_var(
+                _chain_part, _unwind_aliases
+            )
+
+            def _chain_hook(_row_idx, _chain_part=_chain_part):
+                _, _inner_literals, _inner_all, _inner_rows = _detect_unwind_dml_expansion(
+                    _chain_part, context
+                )
+                if _inner_literals is None:
+                    return  # defensive: static detection said yes, resolution didn't
+                _inner_aliases = {c.alias for c in _inner_all}
+                _run_unwind_dml_rows(
+                    context, metadata, _chain_part.clauses, _inner_rows, _inner_aliases
+                )
+                if hasattr(context, "foreach_literals"):
+                    for _ia in _inner_aliases:
+                        context.foreach_literals.pop(_ia, None)
+
+            last_iter_aliases = _run_unwind_dml_rows(
+                context,
+                metadata,
+                part.clauses,
+                _unwind_rows,
+                _unwind_aliases,
+                per_row_hook=_chain_hook if _chained else None,
+            )
             if hasattr(context, "foreach_literals"):
                 for _ualias in _unwind_aliases:
                     context.foreach_literals.pop(_ualias, None)
@@ -3279,6 +3369,12 @@ def _tts_process_parts(cypher_query, context, metadata):
             # Still need to add the UNWIND to context for RETURN clause access
             for _uc in _unwind_all:
                 translate_unwind_clause(_uc, context)
+            if _chained:
+                _chain_unwind_clause = next(
+                    c for c in _chain_part.clauses if isinstance(c, ast.UnwindClause)
+                )
+                translate_unwind_clause(_chain_unwind_clause, context)
+                _consumed_part_indices.add(_chain_index)
         else:
             _skip_ci = set()
             for _ci, clause in enumerate(part.clauses):
