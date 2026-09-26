@@ -2714,6 +2714,8 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
         for _pv in [n for n in context.named_paths if _is_fixed_named_path(context, n)]:
             context.named_paths.pop(_pv, None)
         context.scalar_variables.update(_fwd)
+        # ... holding the path JSON, which nodes(p) / length(p) read
+        context.stage_path_vars = _fwd
     context.variable_aliases = new_aliases
 
 
@@ -9337,6 +9339,46 @@ def _mpt_expand_pattern_lengths(pat):
     return expansions
 
 
+def _mpt_exists_vlp(pat, context) -> Optional[str]:
+    """EXISTS over CY_VLP_PATHS for a lone var-length hop too long to unroll
+    (`WHERE (n)-[:T*]-(m)`) between two bound, unconstrained nodes; None otherwise."""
+    if len(pat.relationships) != 1 or len(pat.nodes) != 2:
+        return None
+    rel = pat.relationships[0]
+    vl = rel.variable_length
+    if (
+        vl is None
+        or vl.shortest
+        or vl.all_shortest
+        or vl.max_hops <= _MPT_UNROLL_MAX_HOPS
+        or rel.properties
+        or rel.variable
+    ):
+        return None
+    refs = []
+    for node in pat.nodes:
+        if node is None or not node.variable or node.labels or node.properties:
+            return None
+        ref = _vlp_node_ref(context.variable_aliases.get(node.variable), node.variable)
+        if ref is None:
+            return None
+        refs.append(ref)
+    direction = (
+        "both"
+        if rel.direction == ast.Direction.BOTH
+        else ("in" if rel.direction == ast.Direction.INCOMING else "out")
+    )
+    types_json = json.dumps(list(rel.types or [])).replace("'", "''")
+    graph = getattr(context, "graph_context", None)
+    gall, gid = (1, "-") if graph is None else (0, graph.replace("'", "''"))
+    vx = context.next_alias("vlx")
+    return (
+        f"EXISTS (SELECT 1 FROM JSON_TABLE(SQLUser.CY_VLP_PATHS({refs[0]}, '{types_json}', "
+        f"'{direction}', {vl.min_hops}, {vl.max_hops}, {gall}, '{gid}', '{_table('rdf_edges')}'), "
+        f"'$[*]' COLUMNS(t VARCHAR(512) PATH '$.t')) {vx} WHERE {vx}.t = {refs[1]})"
+    )
+
+
 def _mpt_exists_one_expansion(nodes, rels, context) -> str:
     """EXISTS (...) for one fixed-length pattern-predicate chain.
 
@@ -9498,6 +9540,9 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
                     return f"{prefix}({count_sub}) = {cmp_sql}"
 
     if pat.relationships and expr.where_condition is None:
+        vlp_sub = _mpt_exists_vlp(pat, context)
+        if vlp_sub is not None:
+            return f"NOT {vlp_sub}" if expr.negated else vlp_sub
         expansions = _mpt_expand_pattern_lengths(pat)
         if expansions is not None:
             subs = [_mpt_exists_one_expansion(nodes, rels, context) for nodes, rels in expansions]
@@ -12331,6 +12376,39 @@ def _expr_map_projection(expr, context, segment):
     return "('{'||" + "||','||".join(parts) + "||'}')"
 
 
+def _graph_value_sql(var_name, context):
+    """JSON text of a node or relationship variable as a value inside a returned
+    list or map; None when the variable is not a MATCH-bound node/relationship."""
+    if var_name in context.scalar_variables or var_name.startswith(_MERGE_PATH_PREFIX):
+        return None
+    alias = context.variable_aliases.get(var_name)
+    if not alias:
+        return None
+    if alias.startswith("Stage"):
+        if var_name in getattr(context, "edge_stage_variables", set()):
+            return (
+                f"'{{\"type\":\"' || {alias}.__edge_{var_name}_p || '\",\"props\":' || "
+                f"COALESCE({alias}.{var_name}, '{{}}') || '}}'"
+            )
+        return None
+    if alias in _PROC_CTE_ALIASES:
+        return None
+    if alias.startswith("e"):
+        if var_name not in context.rel_variables:
+            return None
+        p_col = "_p" if alias in getattr(context, "_undirected_aliases", set()) else "p"
+        return (
+            f"'{{\"type\":\"' || {alias}.{p_col} || '\",\"props\":' || "
+            f"COALESCE({alias}.qualifiers, '{{}}') || '}}'"
+        )
+    nid = f"{alias}.node_id"
+    return (
+        f"'{{\"_id\":\"' || {nid} || '\",' "
+        f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+        f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+    )
+
+
 def _expr_map_literal(expr, context, segment):
     if not expr.entries:
         # Typed: a bare '{}' is literal-substituted by the IRIS statement cache
@@ -12365,6 +12443,11 @@ def _expr_map_literal(expr, context, segment):
             # Nested list literal: already a JSON array — no extra quotes
             val_sql = translate_expression(v, context, segment=segment)
             parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({val_sql} AS VARCHAR)")
+        elif getattr(context, "_graph_value_elems", False) and isinstance(v, ast.Variable) and (
+            _graph_value_sql(v.name, context) is not None
+        ):
+            # RETURN {k: n}: the node / relationship value itself, not its id
+            parts.append(f"'\"'||'{safe_k}'||'\":'||{_graph_value_sql(v.name, context)}")
         else:
             val_sql = translate_expression(v, context, segment=segment)
             parts.append(f"'\"'||'{safe_k}'||'\":\"'||CAST({val_sql} AS VARCHAR)||'\"'")
@@ -12918,6 +13001,13 @@ def _expr_literal(expr, context, segment):
             str_len = max(len(json_str) + 1, 256)
             escaped = json_str.replace("'", "''")
             return f"CAST('{escaped}' AS VARCHAR({str_len}))"
+        if getattr(context, "_graph_value_elems", False) and v and all(
+            isinstance(item, ast.Variable) and _graph_value_sql(item.name, context) is not None
+            for item in v
+        ):
+            # RETURN [n, r, m]: the node / relationship values themselves, not their ids
+            graph_items = " || ',' || ".join(_graph_value_sql(item.name, context) for item in v)
+            return f"('[' || {graph_items} || ']')"
         sql_items = []
         for item in v:
             if isinstance(item, ast.Literal):
@@ -13043,6 +13133,25 @@ def _expr_aggregation(expr, context, segment):
             )
             distinct_kw = "DISTINCT " if expr.distinct else ""
             return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{node_json}), CAST('[]' AS VARCHAR(256)))"
+    # collect(nodes(p)): each element is the path's list of nodes, not of node ids
+    if (
+        fn == "JSON_ARRAYAGG"
+        and not expr.distinct
+        and isinstance(expr.argument, ast.FunctionCall)
+        and expr.argument.function_name.lower() == "nodes"
+        and _path_elem_kind(expr.argument, context) == "node"
+    ):
+        lc = context.next_alias("lc")
+        nid = f"{lc}.x"
+        node_json = (
+            f"'{{\"_id\":\"' || {nid} || '\",' "
+            f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+            f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+        )
+        return (
+            f"COALESCE(JSON_ARRAYAGG((SELECT JSON_ARRAYAGG({node_json}) FROM JSON_TABLE({arg}, "
+            f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc})), CAST('[]' AS VARCHAR(256)))"
+        )
     if fn in ("MIN", "MAX") and isinstance(expr.argument, ast.Variable):
         # Values unwound from a literal list of lists or of mixed kinds: VARCHAR
         # order is not Cypher orderability (list < string < boolean < number,
@@ -17309,6 +17418,17 @@ def _expr_fn_path_funcs(fn, expr, context):
     # null literal: nodes(null), relationships(null), length(null) → NULL
     if isinstance(arg, ast.Literal) and arg.value is None:
         return "NULL"
+    if (
+        isinstance(arg, ast.Variable)
+        and arg.name not in context.named_paths
+        and arg.name in getattr(context, "stage_path_vars", ())
+        and fn in ("nodes", "length")
+    ):
+        # a path projected through WITH: the stage column holds {"nodes": [...], "rels": [...]}
+        col = translate_expression(arg, context, segment="select")
+        if fn == "nodes":
+            return f"SQLUser.JSON_VALUE({col}, '$.nodes')"
+        return f"SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE({col}, '$.rels'))"
     if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
         if isinstance(arg, ast.Variable) and arg.name not in context.named_paths:
             if fn in ("nodes", "relationships"):
@@ -18618,7 +18738,41 @@ def translate_return_clause(ret, context):
                 if has_agg:
                     context.group_by_items.append(node_expr)
                 continue
-        sql = translate_expression(item.expression, context, segment="select")
+        # nodes(p) of a path projected through WITH holds node ids; return the nodes
+        _ie = item.expression
+        if (
+            isinstance(_ie, ast.FunctionCall)
+            and _ie.function_name.lower() == "nodes"
+            and len(_ie.arguments) == 1
+            and isinstance(_ie.arguments[0], ast.Variable)
+            and _ie.arguments[0].name not in context.named_paths
+            and _ie.arguments[0].name in getattr(context, "stage_path_vars", ())
+            and item.alias
+        ):
+            col = translate_expression(_ie, context, segment="select")
+            lc = context.next_alias("lc")
+            nid = f"{lc}.x"
+            node_json = (
+                f"'{{\"_id\":\"' || {nid} || '\",' "
+                f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+                f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+            )
+            context.select_items.append(
+                f"COALESCE((SELECT JSON_ARRAYAGG({node_json}) FROM JSON_TABLE({col}, "
+                f"'$[*]' COLUMNS(x VARCHAR(512) PATH '$')) {lc}), CAST('[]' AS VARCHAR(256))) "
+                f"AS {_safe_alias(item.alias)}"
+            )
+            context.optional_null_row_items.append("NULL")
+            if has_agg:
+                context.group_by_items.append(col)
+            continue
+        context._graph_value_elems = isinstance(item.expression, ast.MapLiteral) or (
+            isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list)
+        )
+        try:
+            sql = translate_expression(item.expression, context, segment="select")
+        finally:
+            context._graph_value_elems = False
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact

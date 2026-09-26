@@ -566,6 +566,13 @@ def normalise_iris_value(iris_val: Any, expected_tck_val: Any) -> Any:
         return ''
     # None vs list: IRIS function like labels() returns None instead of empty list
     if iris_val is None and isinstance(expected_tck_val, list):
+        # ... but a null relationship / relationship list ([:T], [[:X]]) stays null
+        if expected_tck_val and all(
+            (isinstance(x, str) and x.startswith(":"))
+            or (isinstance(x, list) and len(x) == 1 and isinstance(x[0], str) and x[0].startswith(":"))
+            for x in expected_tck_val
+        ):
+            return None
         return []
     if iris_val is None:
         return None
@@ -728,6 +735,46 @@ def _rel_obj_matches(pattern: str, rel: dict) -> bool:
         if av != pv:
             return False
     return True
+
+
+def _graph_value_matches(ev: Any, av: Any, unordered: bool = False) -> bool:
+    """Nested TCK value holding node / relationship patterns — `[(:A), [:T], (:B)]`,
+    `{node1: (:A), rel: [:T]}` — against the engine's JSON list / map of node and
+    relationship values. `unordered` ignores the order of the outermost list."""
+    import json as _json
+
+    if isinstance(av, str) and av[:1] in ("[", "{"):
+        try:
+            av = _json.loads(av)
+        except (ValueError, TypeError):
+            pass
+    if isinstance(ev, str):
+        pattern = _parse_node_pattern(ev)
+        if pattern is not None:
+            return isinstance(av, dict) and "_labels" in av and _node_matches(av, pattern)
+        return ev == av
+    if isinstance(ev, list) and len(ev) == 1 and isinstance(ev[0], str) and ev[0].startswith(":"):
+        rel = _as_rel_obj(av)
+        return rel is not None and _rel_obj_matches(ev[0], rel)
+    if isinstance(ev, list):
+        if not (isinstance(av, list) and len(ev) == len(av)):
+            return False
+        if not unordered:
+            return all(_graph_value_matches(e, a) for e, a in zip(ev, av))
+
+        def _match(i, avail):
+            if i == len(ev):
+                return True
+            return any(
+                _graph_value_matches(ev[i], av[j]) and _match(i + 1, avail - {j}) for j in avail
+            )
+
+        return _match(0, frozenset(range(len(av))))
+    if isinstance(ev, dict):
+        return isinstance(av, dict) and set(ev) == set(av) and all(
+            _graph_value_matches(ev[k], av[k]) for k in ev
+        )
+    return ev == av
 
 
 def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) -> bool:
@@ -927,12 +974,16 @@ def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) 
                         if not _node_matches(node, pat):
                             return False
                 continue
+            if ev != av_parsed and _graph_value_matches(ev, av, unordered=list_unordered):
+                continue
             if list_unordered:
                 if sorted(str(x) for x in ev) != sorted(str(x) for x in av_parsed):
                     return False
             else:
                 if ev != av_parsed:
                     return False
+            continue
+        if ev != av and isinstance(ev, (list, dict)) and _graph_value_matches(ev, av):
             continue
         if ev != av:
             return False

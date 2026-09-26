@@ -2329,3 +2329,68 @@ class TestReservedWordStageAliasesAreQuoted:
         assert "AS first_id" in sql
         cmap = getattr(t, "column_name_map", None) or {}
         assert all('"' not in str(k) and '"' not in str(v) for k, v in cmap.items())
+
+
+class TestGraphValuesInReturnedListAndMap:
+    """Return2 [12]/[13]: `RETURN [n, r, m]` and `RETURN {node1: n, rel: r}` listed
+    the node ids and the relationship type; they must list the node and the
+    relationship values themselves."""
+
+    def test_list_of_nodes_and_relationship(self):
+        sql = tr("MATCH (n)-[r]->(m) RETURN [n, r, m] AS r").sql
+        assert "JSON_ARRAY(n0.node_id, e2.p, n1.node_id)" not in sql, sql
+        assert '"_labels"' in sql and '"type"' in sql and "e2.qualifiers" in sql, sql
+
+    def test_map_of_nodes_and_relationship(self):
+        sql = tr("MATCH (n)-[r]->(m) RETURN {node1: n, rel: r, node2: m} AS m").sql
+        assert '"_labels"' in sql and '"type"' in sql, sql
+
+    def test_with_list_keeps_ids(self):
+        # a WITH list of nodes still carries node ids for later MATCHes
+        sql = tr("MATCH (n)-[r]->(m) WITH [n, m] AS l RETURN size(l) AS s").sql
+        assert "JSON_ARRAY(n0.node_id, n1.node_id)" in sql, sql
+
+
+class TestUnboundedVarLengthPatternPredicate:
+    """Pattern1 [17]: `WHERE (n)-[:REL1*]-(m)` kept a single hop; it must walk any
+    number of hops."""
+
+    def test_unbounded_predicate_walks_paths(self):
+        sql = tr("MATCH (n), (m) WHERE (n)-[:REL1*]-(m) RETURN n, m").sql
+        assert "CY_VLP_PATHS(n0.node_id, '[\"REL1\"]', 'both', 1, " in sql, sql
+        assert ".t = n1.node_id" in sql, sql
+
+    def test_negated_unbounded_predicate(self):
+        sql = tr("MATCH (n), (m) WHERE NOT (n)-[*]->(m) RETURN n, m").sql
+        assert "NOT (EXISTS (SELECT 1 FROM JSON_TABLE(SQLUser.CY_VLP_PATHS(" in sql, sql
+
+    def test_bounded_predicate_still_unrolls(self):
+        sql = tr("MATCH (n), (m) WHERE (n)-[:R*1..2]->(m) RETURN n, m").sql
+        assert "CY_VLP_PATHS" not in sql, sql
+
+
+class TestPathFunctionsOnWithProjectedPath:
+    """With6 [4]: a path projected through WITH is a stage column holding the path
+    JSON; nodes(p) / length(p) must read it instead of raising 'not a named path'."""
+
+    def test_nodes_of_projected_path(self):
+        sql = tr("MATCH p = ()-[*]->() WITH count(*) AS c, p AS p RETURN nodes(p) AS nodes").sql
+        assert "SQLUser.JSON_VALUE(Stage1.p, '$.nodes')" in sql, sql
+
+    def test_length_of_projected_path(self):
+        sql = tr("MATCH p = ()-[]->() WITH p RETURN length(p) AS l").sql
+        assert "SQLUser.JSON_ARRAYLENGTH(SQLUser.JSON_VALUE(Stage1.p, '$.rels'))" in sql, sql
+
+
+class TestCollectNodesOfPath:
+    """ReturnOrderBy2 [12]: collect(nodes(p)) collected id lists; each element must
+    be the path's list of nodes."""
+
+    def test_collect_nodes_hydrates_each_path(self):
+        sql = tr("MATCH p = (a)-[*]->(b) RETURN collect(nodes(p)) AS paths, length(p) AS l").sql
+        assert "JSON_ARRAYAGG((SELECT JSON_ARRAYAGG('{\"_id\":\"' || " in sql, sql
+        assert "FROM JSON_TABLE(SQLUser.LIST_CONCAT(JSON_ARRAY(n0.node_id), vlp1.n)" in sql, sql
+
+    def test_collect_of_scalar_unchanged(self):
+        sql = tr("MATCH (a) RETURN collect(a.name) AS names").sql
+        assert "JSON_TABLE" not in sql, sql
