@@ -9,6 +9,7 @@ except ImportError:
         def _d(f): return f
         return _d
 
+from tests.tck import capture
 from tests.tck.side_effects import SideEffects
 from tests.tck.steps.comparison import TCKValue
 from tests.tck.steps.graph_setup import _inject_label
@@ -40,6 +41,7 @@ def _run_query(context, query: str) -> None:
     in ``side_effects_error``: the side-effect steps then fail rather than pass.
     """
     query = query.strip()
+    capture.note_query(context, query)
     injected = _inject_match_scope(
         _inject_label(query, context.scenario_label, inject_anonymous=False),
         context.scenario_label,

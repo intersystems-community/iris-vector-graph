@@ -11,6 +11,7 @@ except ImportError:
         def _d(f): return f
         return _d
 
+from tests.tck import capture
 from tests.tck.side_effects import compare_side_effects, parse_side_effects_table
 from tests.tck.steps.comparison import SqlHydrator, TCKValue, TCKResultTable
 from tests.tck.steps.errors import KIND_SURFACE, classify, mismatch
@@ -48,6 +49,14 @@ def step_result_in_order_list_unordered(context):
 @then("the result should be empty")
 def step_result_should_be_empty(context):
     result = context.last_result
+    if capture.enabled():
+        actual_rows, actual_cols = _actual_rows_and_cols(context)
+        capture.note(
+            context,
+            expected_result={"empty": True},
+            actual_columns=capture.grouped_columns(actual_cols),
+            actual_rows=capture.serialize_actual_rows(actual_rows, actual_cols, _hydrator(context)),
+        )
     if lenient():
         # pre-229 scoring: an error counted as an empty result
         if context.last_error is not None:
@@ -64,8 +73,22 @@ def step_result_should_be_empty(context):
 # Side-effects
 # ---------------------------------------------------------------------------
 
+def _capture_side_effects_snapshot(context, expected: dict) -> None:
+    """Capture the *measured* delta alongside `expected`, at the moment this
+    step reads it -- a scenario with an earlier query+assertion block already
+    overwrote `context.side_effects` by the time ``flush()`` runs, so this
+    pairing must happen here, not deferred to scenario teardown."""
+    capture.note(
+        context,
+        expected_side_effects=expected,
+        side_effects=getattr(context, "side_effects", None),
+        side_effects_unexpected=getattr(context, "side_effects_unexpected", None) or {},
+    )
+
+
 @then("no side effects")
 def step_no_side_effects(context):
+    _capture_side_effects_snapshot(context, {})
     if lenient():
         return
     _assert_side_effects(context, {})
@@ -73,10 +96,11 @@ def step_no_side_effects(context):
 
 @then("the side effects should be:")
 def step_side_effects_should_be(context):
-    if lenient():
-        return
     table = context.table
     expected = parse_side_effects_table(table.headings, table.rows)
+    _capture_side_effects_snapshot(context, expected)
+    if lenient():
+        return
     _assert_side_effects(context, expected)
 
 
@@ -123,6 +147,11 @@ def step_error_type_raised(context, error_type: str, phase: str = "any time", de
     TypeError) fails the step. An ``IVGResult.error`` string is classified the same way
     rather than accepted for being non-empty (FR-008).
     """
+    capture.note(
+        context,
+        expected_error={"kind": error_type, "phase": phase, "detail": detail},
+        error=capture.error_record(context),
+    )
     err = getattr(context, "last_error", None)
     if err is None:
         result = getattr(context, "last_result", None)
@@ -154,15 +183,29 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
         list_unordered=list_unordered,
     )
     result = context.last_result
+    actual_rows, actual_cols = _actual_rows_and_cols(context)
+    if capture.enabled():
+        capture.note(
+            context,
+            expected_result=capture.serialize_expected_table(columns, rows, ordered, list_unordered),
+            actual_columns=capture.grouped_columns(actual_cols),
+            actual_rows=capture.serialize_actual_rows(actual_rows, actual_cols, _hydrator(context)),
+        )
     if not lenient():
         _fail_on_query_error(context, "a result table")
         assert result is not None, "Expected a result table, but no result was recorded (no query ran?)"
-    raw_rows = result.rows if result is not None else []
-    # The engine's own column list, even when empty: a missing or extra column is a
-    # mismatch, not something to fill in from the expected header.
-    actual_cols = list(getattr(result, "columns", None) or []) if result is not None else []
 
-    # Normalise rows: IVG returns list-of-lists; convert to list-of-dicts
+    diff = tck_table.compare(actual_rows, actual_cols, hydrator=_hydrator(context))
+    assert diff is None, f"Result mismatch:\n{diff}"
+
+
+def _actual_rows_and_cols(context):
+    """The last query's result as (list-of-dicts, columns), or ``([], [])`` when no
+    result was recorded. Shared by ``_assert_table`` and ``step_result_should_be_empty``
+    so capture sees the same normalised shape either step reads."""
+    result = getattr(context, "last_result", None)
+    raw_rows = result.rows if result is not None else []
+    actual_cols = list(getattr(result, "columns", None) or []) if result is not None else []
     if raw_rows and isinstance(raw_rows[0], (list, tuple)):
         actual_rows = [
             {col: val for col, val in zip(actual_cols, row)}
@@ -170,9 +213,7 @@ def _assert_table(context, table, ordered: bool, list_unordered: bool):
         ]
     else:
         actual_rows = raw_rows  # already dicts
-
-    diff = tck_table.compare(actual_rows, actual_cols, hydrator=_hydrator(context))
-    assert diff is None, f"Result mismatch:\n{diff}"
+    return actual_rows, actual_cols
 
 
 def _fail_on_query_error(context, expected_what: str) -> None:
