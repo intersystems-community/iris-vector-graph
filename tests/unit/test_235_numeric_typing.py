@@ -197,3 +197,104 @@ class TestEngineDecodesNumericColumns:
         res = SimpleNamespace(columns=["a"], rows=[(104.0,)])
         _decode_numeric_expr_columns(res, sq)
         assert res.rows == [(104.0,)]
+
+
+class TestCteQualifierDroppedForOrderBy:
+    """A CTE-qualified column in the outer SELECT breaks once an ORDER BY is
+    added — even `ORDER BY 1` — with SQLCODE -23 "Label 'X' is not listed
+    among the applicable tables" (Aggregation6 [5]: `WITH n, size([(n)-->() |
+    1]) AS deg ... RETURN deg ORDER BY deg`-shaped queries). The unqualified
+    column, or the same query without ORDER BY, both work."""
+
+    def test_stage_qualifier_dropped_when_order_by_present(self):
+        from iris_vector_graph.cypher.translator import TranslationContext
+        from iris_vector_graph.cypher.translator import _drop_cte_select_qualifier_for_order_by
+
+        ctx = TranslationContext()
+        ctx.from_clauses = ["Stage1"]
+        all_ctes = ["Stage1 AS (\nSELECT n0.node_id AS n, 5 AS deg\nFROM nodes n0\n)"]
+        sql = "SELECT Stage1.deg AS deg\nFROM Stage1\nORDER BY deg ASC"
+        out = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, ctx)
+        assert out == "SELECT deg AS deg\nFROM Stage1\nORDER BY deg ASC"
+
+    def test_qualifier_kept_without_order_by(self):
+        from iris_vector_graph.cypher.translator import TranslationContext
+        from iris_vector_graph.cypher.translator import _drop_cte_select_qualifier_for_order_by
+
+        ctx = TranslationContext()
+        ctx.from_clauses = ["Stage1"]
+        all_ctes = ["Stage1 AS (\nSELECT n0.node_id AS n, 5 AS deg\nFROM nodes n0\n)"]
+        sql = "SELECT Stage1.deg AS deg\nFROM Stage1"
+        out = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, ctx)
+        assert out == sql
+
+    def test_qualifier_kept_when_join_present(self):
+        # A JOIN makes an unqualified column potentially ambiguous.
+        from iris_vector_graph.cypher.translator import TranslationContext
+        from iris_vector_graph.cypher.translator import _drop_cte_select_qualifier_for_order_by
+
+        ctx = TranslationContext()
+        ctx.from_clauses = ["Stage1"]
+        ctx.join_clauses = ["JOIN Stage2 ON Stage2.n = Stage1.n"]
+        all_ctes = ["Stage1 AS (\nSELECT n0.node_id AS n, 5 AS deg\nFROM nodes n0\n)"]
+        sql = "SELECT Stage1.deg AS deg\nFROM Stage1\nORDER BY deg ASC"
+        out = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, ctx)
+        assert out == sql
+
+    def test_qualifier_kept_when_multiple_from_sources(self):
+        from iris_vector_graph.cypher.translator import TranslationContext
+        from iris_vector_graph.cypher.translator import _drop_cte_select_qualifier_for_order_by
+
+        ctx = TranslationContext()
+        ctx.from_clauses = ["Stage1", "Stage2"]
+        all_ctes = ["Stage1 AS (SELECT 5 AS deg)", "Stage2 AS (SELECT 6 AS deg)"]
+        sql = "SELECT Stage1.deg AS deg\nFROM Stage1, Stage2\nORDER BY deg ASC"
+        out = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, ctx)
+        assert out == sql
+
+    def test_qualifier_kept_when_from_is_not_a_cte(self):
+        # FROM a plain table alias, not one of the CTE names, is untouched
+        # (the bug is specific to CTE column binding, not any alias).
+        from iris_vector_graph.cypher.translator import TranslationContext
+        from iris_vector_graph.cypher.translator import _drop_cte_select_qualifier_for_order_by
+
+        ctx = TranslationContext()
+        ctx.from_clauses = ["nodes n0"]
+        all_ctes = ["Stage1 AS (SELECT 5 AS deg)"]
+        sql = "SELECT n0.deg AS deg\nFROM nodes n0\nORDER BY deg ASC"
+        out = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, ctx)
+        assert out == sql
+
+    def test_end_to_end_translation_drops_qualifier(self):
+        # WITH n, size([(n)-->() | 1]) AS deg ... RETURN deg ORDER BY deg:
+        # the single-stage CTE column must not be qualified once ORDER BY
+        # is added, or IRIS raises SQLCODE -23 at Prepare.
+        sq = tr(
+            "MATCH (n) WITH n, size([(n)-->() | 1]) AS deg RETURN deg ORDER BY deg"
+        )
+        assert "Stage1.deg" not in sq.sql
+        assert "ORDER BY" in sq.sql.upper()
+
+
+class TestPercentileRewritePreservesOtherColumns:
+    """The single-percentile-query SQL rewrite used to discard every other
+    RETURN column and the enclosing WITH-CTE preamble (Aggregation6 [5]:
+    `RETURN percentileDisc(0.90, deg), deg` broke with "Label 'STAGE2' is not
+    listed among the applicable tables"). It now substitutes the percentile
+    call in place when there are other columns."""
+
+    def test_other_column_and_cte_preamble_survive(self):
+        sq = tr(
+            "MATCH (n:S) WITH n, size([(n)-->() | 1]) AS deg WHERE deg > 2 "
+            "WITH deg LIMIT 100 RETURN percentileDisc(0.90, deg), deg"
+        )
+        assert "IVG.Percentile_PDISC" in sq.sql
+        assert "Stage2" in sq.sql  # CTE preamble preserved
+        assert sq.sql.count(" AS deg") >= 1  # the plain `deg` column survives
+
+    def test_sole_percentile_column_still_translates(self):
+        # No other RETURN columns: JSON_ARRAYAGG is a genuine SQL aggregate
+        # here, so it collapses the FROM to one row on its own.
+        sq = tr("MATCH (n) RETURN percentileDisc(n.price, 0.5) AS p")
+        assert "IVG.Percentile_PDISC" in sq.sql
+        assert "GROUP BY" not in sq.sql.upper()

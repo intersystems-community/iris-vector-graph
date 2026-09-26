@@ -2248,6 +2248,38 @@ def _json_list_membership(left: str, right_sql: str, context) -> str:
     return pred
 
 
+_CTE_NAME_RE = re.compile(r"^(\w+)\s+AS\s*\(", re.MULTILINE)
+
+
+def _drop_cte_select_qualifier_for_order_by(sql: str, all_ctes: List[str], context) -> str:
+    """Strip `<CTEName>.` qualifiers from the final query when it has an ORDER BY.
+
+    IRIS's CTE column binding breaks once an ORDER BY is added to a query whose
+    SELECT list qualifies a column with the CTE's own name (`SELECT Stage1.deg
+    AS deg FROM Stage1 ORDER BY deg`) — even `ORDER BY 1` triggers it — with
+    "Label 'STAGE1' is not listed among the applicable tables" (SQLCODE -23).
+    The identical query with an unqualified column (`SELECT deg AS deg FROM
+    Stage1 ORDER BY deg`), or without the ORDER BY, both work (Aggregation6
+    [5], and any `WITH n, size([(n)-->() | 1]) AS deg ... RETURN deg ORDER BY
+    deg`-shaped query). Dropping the qualifier is safe only when the query's
+    FROM is exactly that one CTE (no JOINs), so the bare column name can't be
+    ambiguous. Runs on `sql` before the CTE preamble ("WITH ... \n") is
+    prepended, so it only ever touches the outer query, never a CTE body.
+    """
+    if "ORDER BY" not in sql.upper():
+        return sql
+    if getattr(context, "join_clauses", None):
+        return sql
+    from_clauses = getattr(context, "from_clauses", None) or []
+    if len(from_clauses) != 1:
+        return sql
+    from_name = from_clauses[0].split()[0]
+    cte_names = {m.group(1) for m in _CTE_NAME_RE.finditer("\n".join(all_ctes))}
+    if from_name not in cte_names:
+        return sql
+    return re.sub(rf"\b{re.escape(from_name)}\.(\w+)", r"\1", sql)
+
+
 def _hoist_repeated_json_table_predicates(sql: str) -> str:
     """Compute each repeated list-predicate subquery once.
 
@@ -4164,6 +4196,7 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     if all_ctes:
         sql, all_ctes = _demote_agg_stages_to_subqueries(sql, all_ctes)
         sql = _hoist_repeated_json_table_predicates(sql)
+        sql = _drop_cte_select_qualifier_for_order_by(sql, all_ctes, context)
         if all_ctes:
             sql = "WITH " + ",\n".join(all_ctes) + "\n" + sql
         if optional_union_sql:
