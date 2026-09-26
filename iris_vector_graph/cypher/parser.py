@@ -1059,7 +1059,12 @@ class Parser:
                     if max_tok.value:
                         max_h = int(max_tok.value)
                 # else: single dot with no number — treat as plain * (unbounded)
-            var_len = ast.VariableLength(min_h, max_h)
+            if max_h < min_h:
+                # An empty interval (`*2..1`, `*..0`) matches no path (Match5 [11]-[13]):
+                # one hop of a type no edge carries.
+                types = [ast.EMPTY_INTERVAL_TYPE]
+            else:
+                var_len = ast.VariableLength(min_h, max_h)
 
         props = {}
         if self.peek().kind == TokenType.LBRACE:
