@@ -369,7 +369,23 @@ def _return_item_name(item) -> str:
         return e.name
     if isinstance(e, _ast.PropertyReference):
         return f"{e.variable}.{e.property_name}"
-    return str(e)
+    return getattr(item, "source_text", None) or str(e)
+
+
+def _fill_empty_columns(result, parsed) -> None:
+    """An empty result still carries the RETURN clause's column names; several routes
+    (var-length BFS, DML with LIMIT 0, subqueries) return columns=[] when no row comes back."""
+    from iris_vector_graph.cypher import ast as _ast
+
+    if result is None or getattr(result, "error", None) or result.columns or result.rows:
+        return
+    ret = getattr(parsed, "return_clause", None)
+    items = list(getattr(ret, "items", None) or [])
+    if not items or any(
+        isinstance(it.expression, _ast.Literal) and it.expression.value == "*" for it in items
+    ):
+        return
+    result.columns = [it.alias or _return_item_name(it) for it in items]
 
 
 class QueryMixin:
@@ -524,7 +540,9 @@ class QueryMixin:
             result = self._execute_row_merge(row_merge, parameters, procedures)
             if result is not None:
                 return result
-        return self._execute_parsed(parsed, parameters, procedures)
+        result = self._execute_parsed(parsed, parameters, procedures)
+        _fill_empty_columns(result, parsed)
+        return result
 
     def _execute_row_merge(self, plan, parameters, procedures=None):
         """Run the prefix, then the MERGE suffix once per row (see cypher.merge_rows).

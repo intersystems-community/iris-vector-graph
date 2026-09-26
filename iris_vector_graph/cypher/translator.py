@@ -18221,7 +18221,8 @@ def _expr_fn_path_funcs(fn, expr, context):
             # Use _p for bidirectional (undirected) edges, p for directed edges
             col = "_p" if a in undirected_aliases else "p"
             rel_refs.append(f"{a}.{col}")
-        return f"JSON_ARRAY({', '.join(rel_refs)})"
+        # IRIS renders an empty JSON_ARRAY() as [null].
+        return f"JSON_ARRAY({', '.join(rel_refs)})" if rel_refs else "'[]'"
 
 
 def _expr_fn_vector_ops(fn, args_exprs, args, context):
@@ -19295,7 +19296,9 @@ def translate_return_clause(ret, context):
                 col = "_p" if a in undirected_aliases else "p"
                 rels_parts.append(f"{a}.{col}")
             rels_arr = ", ".join(rels_parts)
-            raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || JSON_ARRAY({rels_arr}) || '}}'"
+            # IRIS renders an empty JSON_ARRAY() as [null]; a zero-length path has no rels.
+            rels_json = f"JSON_ARRAY({rels_arr})" if rels_parts else "'[]'"
+            raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || {rels_json} || '}}'"
             # For OPTIONAL MATCH named paths: if any relationship alias is NULL (no match),
             # the path should be NULL rather than a JSON string with null elements.
             if rels_parts:
@@ -19379,7 +19382,9 @@ def translate_return_clause(ret, context):
                     col = "_p" if a in undirected_aliases else "p"
                     rels_parts.append(f"{a}.{col}")
                 rels_arr = ", ".join(rels_parts)
-                raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || JSON_ARRAY({rels_arr}) || '}}'"
+                # IRIS renders an empty JSON_ARRAY() as [null]; a zero-length path has no rels.
+                rels_json = f"JSON_ARRAY({rels_arr})" if rels_parts else "'[]'"
+                raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":' || {rels_json} || '}}'"
                 # For OPTIONAL MATCH: if any relationship alias is NULL, path should be NULL.
                 if rels_parts:
                     null_check = " OR ".join(f"{rp} IS NULL" for rp in rels_parts)
