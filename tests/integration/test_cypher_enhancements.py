@@ -19,10 +19,19 @@ def _parse_labels(raw):
 
 
 def _parse_props(raw):
+    """The key/value list an `n_props` field carries internally (RETURN n's
+    node value hydration) — NOT properties()'s own output; see
+    `_parse_properties_map` for that."""
     items = json.loads(raw) if raw else []
     if items and isinstance(items[0], str):
         items = [json.loads(item) for item in items]
     return {item["key"]: item["value"] for item in items}
+
+
+def _parse_properties_map(raw):
+    """properties(n)/properties(r) returns a Cypher map (spec 203, Graph9 [1]):
+    decode it as one, not the internal key/value list `_parse_props` handles."""
+    return json.loads(raw) if raw else {}
 
 
 def test_return_node_includes_labels_and_properties(engine):
@@ -64,7 +73,7 @@ def test_labels_and_properties_functions(engine):
     row_map = dict(zip(cols, row))
 
     labels = _parse_labels(row_map.get("labels"))
-    props = _parse_props(row_map.get("props"))
+    props = _parse_properties_map(row_map.get("props"))
 
     assert labels == ["Solo"]
     assert props.get("only") == "one"

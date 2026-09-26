@@ -117,6 +117,20 @@ only for users who may already read the repository's tables.
 - `MERGE` on a boolean property matched only `'True'`, so it missed the `'1'` rows that
   Cypher wrote; it now matches every spelling.
 
+**`properties()` returns a Cypher map, and its values are typed**
+
+- `properties(n)` returned a key/value list (`[{"key":"level","value":"9001"}]`),
+  not the map the Cypher spec requires. It now builds a real `{key: value}` map, via a
+  new `SQLUser.CY_PROPS_MAP` UDF — IRIS SQL has no aggregate that can concatenate a
+  string across rows inside a subquery, so this was not reachable in plain SQL. A node
+  or relationship _value_'s internal `_props` field (e.g. from `RETURN n`) is unchanged.
+- Map values coming from `properties()` on a relationship, or from a dynamic expression
+  inside a `{...}` literal (`{name: count(b)}`, `{lvl: n.level}`), came back as text
+  (`{"level":"9001"}` instead of `{"level":9001}`) even though a bare property fetch
+  (`RETURN n.level`) already reads back as a typed int. Both now reuse that same rule —
+  `SQLUser.CY_RETYPE_MAP` for a relationship's stored qualifiers, a typed `CASE` at
+  translate time for a map literal's dynamic values.
+
 ### v4.0.1 (unreleased)
 
 **Fixed**

@@ -316,7 +316,8 @@ class TestNodePropertiesAsJson:
     def test_properties_function(self):
         sql = _sql("MATCH (n) RETURN properties(n)")
         assert sql  # Should produce some SQL
-        assert "JSON" in sql.upper() or "key" in sql.lower()
+        # A Cypher map (spec 203, Graph9 [1]), built by the CY_PROPS_MAP UDF.
+        assert "CY_PROPS_MAP" in sql.upper()
 
     def test_properties_with_specific_node(self):
         sql = _sql("MATCH (n {node_id: 'x'}) RETURN properties(n)")

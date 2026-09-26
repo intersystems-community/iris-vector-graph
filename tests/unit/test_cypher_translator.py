@@ -29,7 +29,9 @@ def test_translate_properties_function():
     sql_query = translate_to_sql(parsed)
     sql = "\n".join(sql_query.sql) if isinstance(sql_query.sql, list) else sql_query.sql
 
-    assert "JSON_ARRAYAGG" in sql
+    # properties() returns a Cypher map (spec 203, Graph9 [1]), built by the
+    # CY_PROPS_MAP UDF rather than a JSON_ARRAYAGG key/value list.
+    assert "SQLUser.CY_PROPS_MAP(" in sql
 
 
 def test_translate_order_by_limit():
