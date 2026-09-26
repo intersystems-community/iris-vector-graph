@@ -2303,16 +2303,41 @@ def _check_with_order_by_aggregation(with_clause, context: TranslationContext) -
             available.add(wi.alias)
         elif isinstance(wi.expression, ast.Variable):
             available.add(wi.expression.name)
+    projected_aggs = {
+        _expr_to_cypher_text(a) for wi in with_clause.items for a in _collect_agg_calls(wi.expression)
+    }
     for ob in ob_items:
         if not _contains_aggregation(ob.expression):
             continue
-        for part in _collect_non_agg_var_refs(ob.expression):
+        parts = list(_collect_non_agg_var_refs(ob.expression))
+        # An aggregate the projection does not compute is evaluated in the narrowed
+        # scope too, so the variables it reads must be projected.
+        parts += [
+            a
+            for a in _collect_agg_calls(ob.expression)
+            if _expr_to_cypher_text(a) not in projected_aggs
+        ]
+        for part in parts:
             names = _collect_var_names(part) - set(context.input_params)
             undefined = names - available
             if undefined:
                 raise SyntaxError(
                     f"UndefinedVariable: Variable `{sorted(undefined)[0]}` not defined"
                 )
+
+
+def _collect_agg_calls(expr) -> list:
+    """Aggregation calls in an expression (not descending into them)."""
+    if isinstance(expr, ast.AggregationFunction):
+        return [expr]
+    out: list = []
+    if isinstance(expr, ast.FunctionCall):
+        for arg in expr.arguments:
+            out.extend(_collect_agg_calls(arg))
+    elif isinstance(expr, ast.BooleanExpression):
+        for op in expr.operands:
+            out.extend(_collect_agg_calls(op))
+    return out
 
 
 def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=None) -> None:
@@ -2416,6 +2441,7 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # not join_params. We capture both to cover all sort expression param types.
                     _join_params_before = len(context.join_params)
                     _select_params_before = len(context.select_params)
+                    _where_params_before = len(context.where_params)
                     # Use segment="inline" so numeric literals become inline constants.
                     # Property references add JOINs to context (join_params) as needed.
                     expr = translate_expression(item.expression, context, segment="inline")
@@ -2426,10 +2452,21 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # front-loading. join_params from sort expressions are in JOIN position
                     # (after MATCH label JOINs) and must stay in their natural order.
                     sort_expr_params.extend(_new_select_sort_params)
+                    # Query parameters ($x) in a sort expression land in where_params, which
+                    # has no WHERE condition to carry them; bind them with the sort expression.
+                    _new_where_sort_params = context.where_params[_where_params_before:]
+                    del context.where_params[_where_params_before:]
                     context._orderby_alias_sql = prev_ob_map
                     # If the expression references JOIN aliases (p\d+.val) or a correlated
                     # rdf_props subquery, it cannot be used in OVER() — project it as a sort column.
-                    if _re_ob.search(r"\b(?:%EXACT\()?p\d+\.val\)?", expr) or "rdf_props" in expr:
+                    if (
+                        _new_where_sort_params
+                        or _re_ob.search(r"\b(?:%EXACT\()?p\d+\.val\)?", expr)
+                        or "rdf_props" in expr
+                        # A previous stage's column is out of scope outside the __ob wrapper.
+                        or _re_ob.search(r'\bStage\d+\.', expr)
+                    ):
+                        sort_expr_params.extend(_new_where_sort_params)
                         sort_alias = f"__sort{len(sort_projections)}"
                         sort_projections.append((sort_alias, _sort_key(expr)))
                         order_by_items.append(f"{sort_alias} {direction}")
@@ -2647,6 +2684,18 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     context.collected_node_lists[alias] = context.collected_node_lists[
                         item.expression.name
                     ]
+    if not part.with_clause.star:
+        # Fixed-length named paths do not survive a WITH as paths: projected ones are now
+        # scalar stage columns, the rest are out of scope.
+        _fwd = {
+            (item.alias or item.expression.name)
+            for item in part.with_clause.items
+            if isinstance(item.expression, ast.Variable)
+            and _is_fixed_named_path(context, item.expression.name)
+        }
+        for _pv in [n for n in context.named_paths if _is_fixed_named_path(context, n)]:
+            context.named_paths.pop(_pv, None)
+        context.scalar_variables.update(_fwd)
     context.variable_aliases = new_aliases
 
 
@@ -3236,6 +3285,34 @@ def _build_null_row_not_exists(labels):
     return f"NOT EXISTS ({inner})", params
 
 
+def _unlabelled_optional_null_union(cypher_query, context, sql, params, vl):
+    """Null-row fallback for a query that is a single unlabelled OPTIONAL MATCH.
+
+    With no anchor label to test, the null row fires exactly when the match itself
+    yields nothing. Returns (union_sql, extra_params); ("", []) when not applicable.
+    """
+    if not (
+        getattr(context, "_optional_anchor_unlabeled", False)
+        and context.optional_null_row_items
+        and not context.return_is_pure_aggregation
+        and not context.stages
+        and len(cypher_query.query_parts) == 1
+        and cypher_query.order_by_clause is None
+        and cypher_query.skip is None
+        and cypher_query.limit is None
+        and not vl
+    ):
+        return "", []
+    null_items = list(context.optional_null_row_items)
+    while len(null_items) < len(context.select_items):
+        null_items.append("NULL")
+    null_select = ", ".join(null_items[: len(context.select_items)])
+    return (
+        f"\nUNION ALL\nSELECT {null_select} WHERE NOT EXISTS (SELECT 1 FROM ({sql}) __om)",
+        list(params),
+    )
+
+
 def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     """Assemble SQLQuery for transactional (DML) queries."""
     stmts, all_params = [], []
@@ -3274,6 +3351,11 @@ def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
                 optional_extra_params.append(label)
         where_clause = " AND ".join(not_exists_parts)
         optional_union_sql = f"\nUNION ALL\nSELECT {null_select} WHERE {where_clause}"
+    elif sql is not None:
+        optional_union_sql, _ou_params = _unlabelled_optional_null_union(
+            cypher_query, context, sql, p, context.var_length_paths
+        )
+        optional_extra_params.extend(_ou_params)
 
     all_ctes = [
         c
@@ -3512,6 +3594,11 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
                 optional_extra_params.append(label)
         where_clause = " AND ".join(not_exists_parts)
         optional_union_sql = f"\nUNION ALL\nSELECT {null_select} WHERE {where_clause}"
+    else:
+        optional_union_sql, _ou_params = _unlabelled_optional_null_union(
+            cypher_query, context, sql, p, vl
+        )
+        optional_extra_params.extend(_ou_params)
 
     all_ctes = [
         c
@@ -3548,6 +3635,60 @@ def _tts_select_result(cypher_query, context, metadata, order_by_items):
     )
 
 
+class EntityNotFoundError(KeyError):
+    """openCypher EntityNotFound: reading an entity that no longer exists."""
+
+
+def _walk_expr_nodes(expr):
+    """Yield every AST node inside an expression tree."""
+    import dataclasses as _dc
+
+    stack = [expr]
+    while stack:
+        e = stack.pop()
+        if isinstance(e, (list, tuple)):
+            stack.extend(e)
+            continue
+        if isinstance(e, dict):
+            stack.extend(e.values())
+            continue
+        if not _dc.is_dataclass(e):
+            continue
+        yield e
+        for f in _dc.fields(e):
+            stack.append(getattr(e, f.name))
+
+
+def _check_deleted_entity_access(cypher_query) -> None:
+    """RETURN reading properties or labels of an entity the same part deleted."""
+    parts = getattr(cypher_query, "query_parts", None) or []
+    ret = getattr(cypher_query, "return_clause", None)
+    if not parts or ret is None or parts[-1].with_clause is not None:
+        return
+    deleted = set()
+    for cl in parts[-1].clauses:
+        if isinstance(cl, ast.DeleteClause):
+            deleted |= {e.name for e in cl.expressions if isinstance(e, ast.Variable)}
+    if not deleted:
+        return
+    for item in ret.items:
+        for node in _walk_expr_nodes(item.expression):
+            name = None
+            if isinstance(node, ast.PropertyReference):
+                name = node.variable
+            elif (
+                isinstance(node, ast.FunctionCall)
+                and node.function_name.lower() in ("labels", "keys", "properties")
+                and node.arguments
+                and isinstance(node.arguments[0], ast.Variable)
+            ):
+                name = node.arguments[0].name
+            if name in deleted:
+                raise EntityNotFoundError(
+                    f"EntityNotFound: DeletedEntityAccess: `{name}` was deleted"
+                )
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -3559,6 +3700,7 @@ def translate_to_sql(
     # than at each of the five SQLQuery construction sites, where it would be
     # forgotten by the sixth (spec 227).
     graph_context = getattr(cypher_query, "graph_context", None)
+    _check_deleted_entity_access(cypher_query)
 
     result = _tts_union_branches(cypher_query, params, engine=engine, procedures=procedures)
     if result is not None:
@@ -4647,7 +4789,12 @@ def _translate_create_patterns(create, context, metadata):
             if node.variable and node.variable in context.variable_aliases:
                 # VariableAlreadyBound: re-binding a known variable in CREATE is an error
                 # if it adds new labels/props, or if it appears as a standalone CREATE (no rel).
-                if node.labels or node.properties or not is_relationship_pattern:
+                if (
+                    node.labels
+                    or node.properties
+                    or getattr(node, "has_property_map", False)
+                    or not is_relationship_pattern
+                ):
                     raise SyntaxError(
                         f"VariableAlreadyBound: variable '{node.variable}' already bound"
                     )
@@ -4762,7 +4909,11 @@ def translate_delete_clause(delete, context, metadata):
         )
         # When a CTE is present, the subquery is a bare reference (no ?); params are CTE-only
         # and used once. When no CTE, the subquery has its own ? for each IN clause.
-        dual_params = subparams if cte else subparams + subparams
+        # The subquery appears twice (s IN ... OR o_id IN ...): bind the CTE's params once
+        # and the subquery's own params (e.g. label JOINs next to a non-stage CTE such as
+        # an undirected-edge union) twice.
+        _n_cte = len(subparams) - subquery.count("?")
+        dual_params = subparams + subparams[_n_cte:] if _n_cte >= 0 else subparams + subparams
         if delete.detach:
             context.add_dml(
                 f"{cte}DELETE FROM {_table('rdf_edges')} WHERE s IN ({subquery}) OR o_id IN ({subquery})",
@@ -6281,6 +6432,14 @@ def translate_match_clause(match_clause, context, metadata):
     # the source only exists if the full optional path was found).
     if match_clause.optional:
         context.optional_prebound_aliases = set(context.variable_aliases.values())
+        if (
+            not context.from_clauses
+            and not context.stages
+            and not context.variable_aliases
+            and match_clause.patterns
+            and all(not n.labels for pat in match_clause.patterns for n in pat.nodes)
+        ):
+            context._optional_anchor_unlabeled = True
     else:
         context.optional_prebound_aliases = set()
         # Non-optional MATCH after a stage (WITH clause): a prior OPTIONAL MATCH may have
@@ -8084,6 +8243,13 @@ def _absorb_child_joins(child_ctx, context, sub_froms, sub_wheres):
         context.where_params.append(p)
 
 
+def _bound_node_id_ref(alias: str, variable: str) -> str:
+    """Node id of a bound variable; a WITH stage stores it under the variable name."""
+    if alias.startswith("Stage"):
+        return f"{alias}.{_safe_alias(variable)}"
+    return f"{alias}.node_id"
+
+
 def _exists_edge_conds(rel, left_node, right_node, edge_alias, child_ctx):
     """Return (s_col_expr, o_id_col_expr) for an edge given the relationship direction.
 
@@ -8095,7 +8261,7 @@ def _exists_edge_conds(rel, left_node, right_node, edge_alias, child_ctx):
 
     def node_ref(node):
         if node and node.variable and node.variable in aliases:
-            return f"{aliases[node.variable]}.node_id"
+            return _bound_node_id_ref(aliases[node.variable], node.variable)
         return None
 
     left_ref = node_ref(left_node)
@@ -8371,6 +8537,14 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
 
         # Register all unbound nodes first so _exists_edge_conds can resolve them
         for node in pat.nodes:
+            if node and node.variable and node.labels and node.variable in context.variable_aliases:
+                # A label on an already-bound node narrows it: (a)-[:T]->(b:Label).
+                _bound_ref = _bound_node_id_ref(context.variable_aliases[node.variable], node.variable)
+                for lbl in node.labels:
+                    sub_wheres.append(
+                        f"EXISTS (SELECT 1 FROM {_table('rdf_labels')} WHERE s = {_bound_ref}"
+                        f" AND label = {child_ctx.add_where_param(lbl)})"
+                    )
             _register_unbound_node(node, child_ctx, sub_froms, sub_wheres)
 
         # Add one rdf_edges row per relationship and connect to the surrounding nodes
@@ -11353,6 +11527,14 @@ def _expr_property_access(expr, context, segment):
                 f"TypeError: Type mismatch: expected Map or Node but was a literal non-map value"
             )
     base_sql = translate_expression(expr.expression, context, segment=segment)
+    if isinstance(expr.expression, ast.SubscriptExpression) and "?" not in base_sql:
+        # A list element is either a map (JSON object) or a node, which lists carry
+        # as its id; read a node's property from rdf_props.
+        return (
+            f"CASE WHEN ({base_sql}) IS NULL THEN NULL"
+            f" WHEN SUBSTRING({base_sql}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
+            f" ELSE (SELECT val FROM {_table('rdf_props')} WHERE s = {base_sql} AND \"key\" = '{prop}') END"
+        )
     return f"CASE WHEN ({base_sql}) IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({base_sql}, '$.{prop}') END"
 
 
@@ -11377,6 +11559,9 @@ def _expr_variable(expr, context, segment):
             if isinstance(val, bool):
                 return "1" if val else "0"
             return str(val)
+    if not alias and _is_fixed_named_path(context, expr.name):
+        # Named path used as a value (count(p), [p], {k: p}, ...).
+        return _named_path_json_sql(context, expr.name)
     if not alias:
         if expr.name in context.input_params:
             v = context.input_params[expr.name]
@@ -16143,6 +16328,14 @@ def _expr_function_call(expr, context, segment):
     if result is not None:
         return result
 
+    if (
+        fn in ("labels", "type", "size")
+        and expr.arguments
+        and isinstance(expr.arguments[0], ast.Variable)
+        and _is_fixed_named_path(context, expr.arguments[0].name)
+    ):
+        raise SyntaxError(f"InvalidArgumentType: {fn}() does not accept a path")
+
     if fn == "toboolean" and expr.arguments and isinstance(expr.arguments[0], ast.Literal):
         v = expr.arguments[0].value
         if not isinstance(v, str):
@@ -17176,6 +17369,31 @@ def translate_return_clause(ret, context):
             context.optional_null_row_items.append("NULL")
 
 
+def _named_path_json_sql(context, path_var):
+    """SQL for a fixed-length named path value: '{"nodes":[...],"rels":[...]}'."""
+    node_aliases = context.path_node_aliases[path_var]
+    edge_aliases = context.path_edge_aliases.get(path_var, [])
+    node_id_expr = getattr(context, "node_id_expr", {})
+    nodes_arr = ", ".join(node_id_expr.get(a, f"{a}.node_id") for a in node_aliases)
+    undirected_aliases = getattr(context, "_undirected_aliases", set())
+    rels_parts = [f"{a}.{'_p' if a in undirected_aliases else 'p'}" for a in edge_aliases]
+    rels_arr = ", ".join(rels_parts)
+    # An empty JSON_ARRAY() inside a CTE comes back as [null]; spell the empty list out.
+    rels_json = f"' || JSON_ARRAY({rels_arr}) || '" if rels_parts else "[]"
+    raw_json = f"'{{\"nodes\":' || JSON_ARRAY({nodes_arr}) || ',\"rels\":{rels_json}}}'"
+    if rels_parts:
+        null_check = " OR ".join(f"{rp} IS NULL" for rp in rels_parts)
+        return f"CASE WHEN ({null_check}) THEN NULL ELSE {raw_json} END"
+    return raw_json
+
+
+def _is_fixed_named_path(context, name):
+    if name not in context.named_paths or name not in (context.path_node_aliases or {}):
+        return False
+    vl_names = {vl.get("path_var") for vl in (context.var_length_paths or [])}
+    return name not in vl_names
+
+
 def translate_with_clause(with_clause, context):
     if with_clause.star:
         for var, alias in context.variable_aliases.items():
@@ -17232,7 +17450,14 @@ def translate_with_clause(with_clause, context):
 
     # Process WITH clause items: translate expressions and add to select
     for item in with_clause.items:
-        sql = translate_expression(item.expression, context, segment="select")
+        if isinstance(item.expression, ast.Variable) and _is_fixed_named_path(
+            context, item.expression.name
+        ):
+            # Named path forwarded through WITH: project its value; downstream it is a
+            # scalar column of the stage (see _to_sql_handle_with).
+            sql = _named_path_json_sql(context, item.expression.name)
+        else:
+            sql = translate_expression(item.expression, context, segment="select")
         # Do NOT apply %EXACT() wrapping here — WITH items are intermediate CTE columns
         # used in downstream WHERE comparisons. Wrapping with %EXACT() causes comparison
         # mismatches when downstream queries use raw p*.val against Stage columns.

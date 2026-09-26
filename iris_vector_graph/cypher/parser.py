@@ -892,12 +892,20 @@ class Parser:
                     labels.append(alt_tok.value)
 
         props = {}
+        has_map = False
         if self.matches(TokenType.LBRACE):
+            has_map = True
             props = self.parse_map_literal()
             self.expect(TokenType.RBRACE)
 
         self.expect(TokenType.RPAREN)
-        return ast.NodePattern(variable=var, labels=labels, properties=props, labels_or=labels_or)
+        return ast.NodePattern(
+            variable=var,
+            labels=labels,
+            properties=props,
+            labels_or=labels_or,
+            has_property_map=has_map,
+        )
 
     def parse_relationship_pattern(self) -> ast.RelationshipPattern:
         """Parse -[r:TYPE]-> or <-[r:TYPE]- or -[r:TYPE]- or --> or <-- or --
