@@ -1471,3 +1471,116 @@ class TestRowDrivenEdgeInsertSkipsAnExistingEdge:
         assert sql.count(" AS _ge WHERE ") == 1, sql
         assert "AND NOT EXISTS (SELECT 1 FROM rdf_edges WHERE" in sql.replace("Graph_KG.", ""), sql
         assert sql.count("?") == len(params), sql
+
+def _sql_text(t):
+    return t.sql if isinstance(t.sql, str) else "\n".join(t.sql)
+
+
+class TestVarLengthExpandsInSql:
+    """Match5 [3], [8], [19]-[29]; Match6 [15]-[20]; Path2 [1], [2]; ReturnOrderBy2 [12].
+
+    A var-length relationship was handed to the engine's Python BFS, which ignored
+    `*0` bounds, dropped every other hop in the chain, and deduplicated targets
+    instead of returning one row per path. It now expands in SQL through
+    `SQLUser.CY_VLP_PATHS`, so the rest of the pattern joins as usual.
+    """
+
+    def test_zero_length_bound_is_expanded_in_sql(self):
+        t = tr("MATCH (a:A) MATCH (a)-[:LIKES*0]->(c) RETURN c.name")
+        sql = _sql_text(t)
+        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert "'out', 0, 0" in sql
+        assert not t.var_length_paths
+
+    def test_chain_keeps_the_fixed_hop(self):
+        t = tr("MATCH (a:A) MATCH (a)-[:LIKES*1]->()-[:LIKES]->(c) RETURN c.name")
+        sql = _sql_text(t)
+        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert "rdf_edges" in sql.split("CY_VLP_PATHS", 1)[1]
+        # the fixed hop may not reuse an edge the var-length segment walked
+        assert "SQLUser.CY_VLP_HAS(" in sql
+        assert not t.var_length_paths
+
+    def test_two_var_length_segments_are_edge_disjoint(self):
+        t = tr("MATCH p = (a {name: 'A'})-[:KNOWS*0..1]->(b)-[:FRIEND*0..1]->(c) RETURN p")
+        sql = _sql_text(t)
+        assert sql.count("SQLUser.CY_VLP_PATHS(") == 2
+        assert "SQLUser.CY_VLP_DISJOINT(" in sql
+
+    def test_named_path_splices_the_segment_nodes(self):
+        t = tr("MATCH p = (n {name: 'A'})-[:KNOWS*1..2]->(x) RETURN p")
+        sql = _sql_text(t)
+        assert "LIST_CONCAT(" in sql
+        assert not t.var_length_paths
+
+    def test_length_of_a_var_length_path_reads_the_segment_length(self):
+        t = tr("MATCH p = (a)-[*]->(b) RETURN collect(nodes(p)) AS paths, length(p) AS l ORDER BY l")
+        sql = _sql_text(t)
+        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert ".l" in sql
+        assert not t.var_length_paths
+
+    def test_relationships_of_a_var_length_path_are_objects(self):
+        t = tr("MATCH p = (a:Start)-[:REL*2..2]->(b) RETURN relationships(p)")
+        sql = _sql_text(t)
+        assert "SQLUser.CY_VLP_PATHS(" in sql
+        assert ".r" in sql
+
+    def test_shortest_path_still_goes_to_the_engine(self):
+        t = tr("MATCH p = shortestPath((a {name: 'A'})-[*]->(b {name: 'B'})) RETURN p")
+        assert t.var_length_paths
+
+    def test_optional_var_length_still_goes_to_the_engine(self):
+        t = tr("MATCH (a:Single) OPTIONAL MATCH (a)-[*]->(b) RETURN b")
+        assert t.var_length_paths
+
+    def test_var_length_with_relationship_properties_still_goes_to_the_engine(self):
+        t = tr("MATCH (a:Artist)-[:WORKED_WITH* {year: 1988}]->(b:Artist) RETURN *")
+        assert t.var_length_paths
+
+    def test_node_id_bound_endpoint_keeps_the_engine_bfs_fast_path(self):
+        # `{node_id: ...}` pins the endpoint as surely as `{id: ...}`; the engine's
+        # id-bound BFS (and approx_count_distinct, spec 230) read var_length_paths.
+        for q in (
+            "MATCH (a {node_id: 'star:c'})-[:SPOKE*1..2]-(b) RETURN b",
+            "MATCH (a {node_id: $src})-[:SPOKE*1..2]-(b) RETURN b",
+        ):
+            t = translate_to_sql(parse_query(q), {"src": "star:c"})
+            assert t.var_length_paths, q
+
+    def test_where_bound_endpoint_id_keeps_the_engine_route(self):
+        # `WHERE a.node_id = $src` pins the source just like `{node_id: $src}`.
+        for q in (
+            "USE GRAPH 'g1' MATCH (a)-[:SMOKE*1..1]->(b) WHERE a.node_id = $src RETURN b.node_id",
+            "MATCH (a)-[:SMOKE*1..2]->(b) WHERE b.id = $src RETURN a",
+        ):
+            t = translate_to_sql(parse_query(q), {"src": "x"})
+            assert t.var_length_paths, q
+
+    def test_approx_count_distinct_keeps_the_engine_route(self):
+        # The engine answers approx_count_distinct from var_length_paths (spec 230).
+        t = translate_to_sql(
+            parse_query("MATCH (a)-[:SPOKE*1..2]-(b) RETURN approx_count_distinct(b) AS c"), {}
+        )
+        assert t.var_length_paths
+
+    def test_where_on_other_property_still_expands_in_sql(self):
+        t = translate_to_sql(
+            parse_query("MATCH (a)-[:SMOKE*1..2]->(b) WHERE a.name = 'x' RETURN b"), {}
+        )
+        assert not t.var_length_paths
+
+    def test_path_udf_keeps_its_adjacency_cache_private(self):
+        # A LANGUAGE OBJECTSCRIPT function is not a procedure block, so an
+        # un-NEWed local outlives the call: a second segment in the same process
+        # reused the first segment's adjacency cache and ignored its own types.
+        from iris_vector_graph.schema import GraphSchema
+
+        ddl = next(
+            s for s in GraphSchema.get_procedures_sql_list()
+            if "FUNCTION SQLUser.CY_VLP_PATHS(" in s
+        )
+        body = ddl.split("LANGUAGE OBJECTSCRIPT {", 1)[1].lstrip()
+        assert body.startswith("New ")
+        newed = {v.strip() for v in body[4:].split(" Set ", 1)[0].split(",")}
+        assert {"adj", "st", "sd", "sl", "se", "args", "sql", "targ"} <= newed

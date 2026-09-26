@@ -384,6 +384,9 @@ def _parse_path_pattern(s: str) -> dict | None:
                             # For now, if there's content, try to extract type
                             # Simple case: just the type name
                             rel_type = rel_inner.split()[0].lstrip(":") if rel_inner else None
+                    # `[:KNOWS {num: 1}]` — the type ends where the property map starts
+                    if rel_type:
+                        rel_type = rel_type.split("{", 1)[0].strip() or None
                     rels.append(rel_type)
                     i = bracket_end + 1
                     # Skip any trailing -> or - or <
@@ -686,6 +689,47 @@ def normalise_iris_value(iris_val: Any, expected_tck_val: Any) -> Any:
     return iris_val
 
 
+def _as_rel_obj(v: Any):
+    """A relationship value as {"type", "props"}, or None if it is not one."""
+    import json as _json
+
+    if isinstance(v, str):
+        try:
+            v = _json.loads(v)
+        except (ValueError, TypeError):
+            return None
+    if isinstance(v, dict) and "type" in v:
+        props = v.get("props") or {}
+        if isinstance(props, str):
+            try:
+                props = _json.loads(props)
+            except (ValueError, TypeError):
+                props = {}
+        return {"type": v["type"], "props": props if isinstance(props, dict) else {}}
+    return None
+
+
+def _rel_obj_matches(pattern: str, rel: dict) -> bool:
+    """TCK relationship pattern ':T' or ':T {k: v}' against a {"type", "props"} value."""
+    m = re.match(r":(\w+)\s*(?:\{(.*)\})?$", pattern.strip())
+    if not m or rel["type"] != m.group(1):
+        return False
+    expected = _parse_tck_value("{" + m.group(2) + "}") if m.group(2) else {}
+    actual = rel["props"]
+    if set(actual.keys()) != set(expected.keys()):
+        return False
+    for k, pv in expected.items():
+        av = actual.get(k)
+        if isinstance(pv, (int, float)) and not isinstance(pv, bool):
+            try:
+                av = type(pv)(av)
+            except (TypeError, ValueError):
+                pass
+        if av != pv:
+            return False
+    return True
+
+
 def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) -> bool:
     for col in columns:
         ev = exp.get(col)
@@ -779,6 +823,31 @@ def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) 
                         continue
                 return False
             continue
+        # List of relationships, in path order: TCK [[':T {k: v}'], [':T']] vs actual
+        # {"type", "props"} values (a var-length relationship, or relationships(p)).
+        av_seq = av
+        if isinstance(ev, list) and isinstance(av, str) and av.startswith("["):
+            try:
+                import json as _json_rl
+
+                av_seq = _json_rl.loads(av)
+            except (ValueError, TypeError):
+                av_seq = av
+        if (
+            isinstance(ev, list)
+            and isinstance(av_seq, list)
+            and ev
+            and len(ev) == len(av_seq)
+            and all(
+                isinstance(x, list) and len(x) == 1 and isinstance(x[0], str) and x[0].startswith(":")
+                for x in ev
+            )
+        ):
+            av_rels = [_as_rel_obj(x) for x in av_seq]
+            if all(r is not None for r in av_rels):
+                if all(_rel_obj_matches(e[0], r) for e, r in zip(ev, av_rels)):
+                    continue
+                return False
         # List-of-nodes comparison: TCK [(), ()] vs actual [{"_id":..., "_labels":..., "_props":...}]
         if isinstance(ev, list) and isinstance(av, list):
             # Parse items that are JSON strings of node objects (from collect(nodeVar))
