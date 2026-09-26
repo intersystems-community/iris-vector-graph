@@ -13176,7 +13176,9 @@ def _expr_property_access(expr, context, segment):
                 f"{_table('rdf_props')} WHERE s = SQLUser.JSON_VALUE({base_sql}, '$._id') "
                 f"AND \"key\" = '{prop}')"
                 f" WHEN SUBSTRING({base_sql}, 1, 9) = '{{\"type\":\"' "
-                f"THEN SQLUser.JSON_VALUE({base_sql}, '$.props.{prop}')"
+                # SQLUser.JSON_VALUE does not follow a dotted path: read the
+                # '$.props' object, then the key.
+                f"THEN SQLUser.JSON_VALUE(SQLUser.JSON_VALUE({base_sql}, '$.props'), '$.{prop}')"
             )
         return (
             f"CASE WHEN ({base_sql}) IS NULL THEN NULL{_graph_whens}"
