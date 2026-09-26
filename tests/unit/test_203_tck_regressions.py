@@ -2583,6 +2583,21 @@ class TestUnwindCreateThenLaterStages:
         ins = sql[sql.index("rdf_edges (s") :]
         assert "'$._id'" in ins, ins
 
+    def test_chained_list_concat_stays_a_list(self):
+        # `[a] + collect(n) + [b]`: the outer + saw a nested + and took it for a
+        # string, so it emitted `||` and made `[..][..]`, which JSON_ARRAYLENGTH
+        # rejects (-149/-400) when size(nodeList) runs
+        s2 = self._stage(_sql(_M4_SETUP), 2)
+        assert s2.count("SQLUser.LIST_CONCAT(") == 2, s2
+        assert "||  CAST(JSON_ARRAY(b)" not in s2 and ") || CAST(JSON_ARRAY(b)" not in s2, s2
+
+    @pytest.mark.parametrize(
+        "q",
+        ["RETURN 'a' + 'b' + 'c' AS s", "WITH 'x' AS x RETURN x + 'b' + 'c' AS s"],
+    )
+    def test_chained_string_concat_still_concatenates(self, q):
+        assert "LIST_CONCAT" not in _sql(q)
+
 
 class TestTypeOfStageRelationship:
     """`type(r)` after `WITH r` read the stage's qualifiers column (`Stage1.r`),

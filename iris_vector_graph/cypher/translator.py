@@ -11096,10 +11096,12 @@ def _expr_arith(expr, context, segment):
     if op == "+":
 
         def _is_str(arg):
-            return (
-                (isinstance(arg, ast.Literal) and isinstance(arg.value, str))
-                or isinstance(arg, ast.FunctionCall)
+            # a nested + is a string unless it concatenates lists
+            # (`[a] + collect(n) + [b]`, Match4 [4])
+            return (isinstance(arg, ast.Literal) and isinstance(arg.value, str)) or (
+                isinstance(arg, ast.FunctionCall)
                 and arg.function_name.startswith("__arith_+")
+                and not _is_list(arg)
             )
 
         def _is_list(arg):
