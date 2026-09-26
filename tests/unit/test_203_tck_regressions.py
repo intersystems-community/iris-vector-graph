@@ -5,6 +5,7 @@ Each class names the openCypher TCK scenario and the commit that broke it
 scenario cannot silently regress again.
 """
 
+import json
 import re
 
 import pytest
@@ -1826,7 +1827,7 @@ class TestOptionalVarLengthInSql:
     alias twice and left `__vl_rel__` placeholders in the WHERE (0 rows)."""
 
     def test_bound_endpoints_left_join_the_expansion(self):
-        t = tr("MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL AND a <> b RETURN b")
+        t = tr("MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL AND a <> b RETURN b, r")
         sql = _sql_text(t)
         assert not t.var_length_paths, sql
         assert "LEFT OUTER JOIN JSON_TABLE(SQLUser.CY_VLP_PATHS(" in sql, sql
@@ -1922,7 +1923,8 @@ class TestUnwindMapParamPropertyIntoMerge:
             {"events": [{"year": 2016, "id": 1}, {"year": 2016, "id": 2}]},
         )
         final = t.sql[-1] if isinstance(t.sql, list) else t.sql
-        assert final.count("nodes n") == 1
+        # The merged e is found by one lookup subquery per element, inside WHERE.
+        assert final[: final.index("\nWHERE")].count("nodes n") == 1
 
 
 class TestUnwindRangeClippedToWithLimit:
@@ -2570,3 +2572,272 @@ class TestMixedGraphListElementAccess:
         # Not a mixed list: no JSON unwrapping.
         sql = self._sql("MATCH (a) WITH [a] AS list RETURN labels(list[0]) AS l")
         assert "'$._id'" not in sql.rsplit("SELECT", 1)[-1]
+_M4_SETUP = (
+    "CREATE (a {var: 'start'}), (b {var: 'end'}) WITH * "
+    "UNWIND range(1, 20) AS i CREATE (n {var: i}) "
+    "WITH a, b, [a] + collect(n) + [b] AS nodeList "
+    "UNWIND range(0, size(nodeList) - 2, 1) AS i "
+    "WITH nodeList[i] AS n1, nodeList[i+1] AS n2 "
+    "CREATE (n1)-[:T]->(n2)"
+)
+
+
+class TestUnwindCreateThenLaterStages:
+    """Match4 [4] setup failed -23 (Label 'STAGE2' is not listed among the
+    applicable tables): the created-node ids of the UNWIND+CREATE part were
+    re-applied to every later part, which replaced `FROM Stage2` and the second
+    UNWIND's JSON_TABLE with `FROM nodes nX WHERE node_id IN (...)`. The same
+    reset also dropped `Stage1` from the part that did the CREATE.
+    """
+
+    def _stage(self, sql, n):
+        m = re.search(rf"Stage{n} AS \((.*?)\n\)", sql, re.S)
+        assert m, sql
+        return m.group(1)
+
+    def test_later_part_keeps_its_stage_and_unwind(self):
+        sql = _sql(_M4_SETUP)
+        s3 = self._stage(sql, 3)
+        assert "FROM Stage2" in s3, s3
+        assert "CypherFn_IVGRANGE" in s3, s3
+        assert "node_id IN" not in s3, s3
+
+    def test_create_part_keeps_earlier_stage(self):
+        s2 = self._stage(_sql(_M4_SETUP), 2)
+        assert "Stage1" in s2, s2
+
+    def test_list_element_endpoint_reads_node_id(self):
+        # nodeList mixes plain ids ([a]) with collected node JSON (collect(n)):
+        # an endpoint taken from it must use the element's `_id`.
+        sql = _sql(_M4_SETUP)
+        ins = sql[sql.index("rdf_edges (s") :]
+        assert "'$._id'" in ins, ins
+
+    def test_chained_list_concat_stays_a_list(self):
+        # `[a] + collect(n) + [b]`: the outer + saw a nested + and took it for a
+        # string, so it emitted `||` and made `[..][..]`, which JSON_ARRAYLENGTH
+        # rejects (-149/-400) when size(nodeList) runs
+        s2 = self._stage(_sql(_M4_SETUP), 2)
+        assert s2.count("SQLUser.LIST_CONCAT(") == 2, s2
+        assert "||  CAST(JSON_ARRAY(b)" not in s2 and ") || CAST(JSON_ARRAY(b)" not in s2, s2
+
+    @pytest.mark.parametrize(
+        "q",
+        ["RETURN 'a' + 'b' + 'c' AS s", "WITH 'x' AS x RETURN x + 'b' + 'c' AS s"],
+    )
+    def test_chained_string_concat_still_concatenates(self, q):
+        assert "LIST_CONCAT" not in _sql(q)
+
+
+class TestTypeOfStageRelationship:
+    """`type(r)` after `WITH r` read the stage's qualifiers column (`Stage1.r`),
+    so it returned the relationship's properties instead of its type."""
+
+    @pytest.mark.parametrize(
+        "q,col",
+        [
+            ("MATCH (a)-[r]->(b) WITH r RETURN type(r)", "__edge_r_p"),
+            ("MATCH (a)-[r]->(b) WITH r AS x RETURN type(x)", "__edge_x_p"),
+        ],
+    )
+    def test_type_reads_stage_type_column(self, q, col):
+        sql = _sql(q)
+        final = sql[sql.rindex("\nSELECT ") :]
+        assert f"Stage1.{col} AS type_" in final, final
+
+
+class TestWithRenameThenWhere:
+    """`WITH a AS first WHERE first.name = 'x'` raised "Undefined variable":
+    the WITH WHERE is evaluated against the incoming row, where only `a` exists."""
+
+    @pytest.mark.parametrize("alias", ["x", "first"])
+    def test_renamed_node_property_in_where(self, alias):
+        sql = _sql(f"MATCH (a) WITH a AS {alias} WHERE {alias}.name = 'x' RETURN {alias}")
+        s1 = sql[: sql.index("\n)")]
+        assert "rdf_props" in s1 and "WHERE" in s1, s1
+
+    def test_swapped_names(self):
+        sql = _sql("MATCH (a:A), (b:B) WITH a AS b, b AS a WHERE b.name = 'x' RETURN a, b")
+        assert "Undefined" not in sql
+
+
+class TestUnwindParamMergeThenReturn:
+    """`UNWIND $props AS prop MERGE (p {login: prop.login}) SET … RETURN p` kept each
+    element's MERGE lookup in FROM, so element 2's SET and the RETURN cross-joined
+    element 1's node, and the RETURN still unwound the list (Unwind1 [14])."""
+
+    Q = (
+        "UNWIND $props AS prop MERGE (p:Person {login: prop.login}) "
+        "SET p.name = prop.name RETURN p.name, p.login"
+    )
+    P = {"props": [{"login": "login1", "name": "name1"}, {"login": "login2", "name": "name2"}]}
+
+    def _t(self):
+        return _stmts(translate_to_sql(parse_query(self.Q), self.P))
+
+    def test_each_element_set_reads_only_its_node(self):
+        updates = [(s, p) for s, p in self._t() if s.startswith("UPDATE") and "rdf_props SET" in s]
+        assert len(updates) == 2
+        for s, _ in updates:
+            assert "CROSS JOIN" not in s, s
+        assert "login2" in updates[1][1] and "login1" not in updates[1][1]
+
+    def test_return_reads_each_merged_node_once(self):
+        final, params = self._t()[-1]
+        assert final.startswith("SELECT"), final
+        assert "JSON_TABLE" not in final and "CROSS JOIN" not in final, final
+        assert final.count(".node_id IN (SELECT") == 2, final
+        assert "login1" in params and "login2" in params
+
+    def test_created_relationship_is_not_looked_up_as_a_node(self):
+        # the per-element lookup is for MERGEd nodes; a CREATEd relationship is
+        # returned from rdf_edges by its (s, p, o) (Create6 [10]-[14])
+        q = "UNWIND [42, 42] AS x CREATE ()-[r:R {num: x}]->() RETURN r.num AS num"
+        final, _ = _stmts(translate_to_sql(parse_query(q), {}))[-1]
+        assert "rdf_edges" in final.partition("\nWHERE")[0], final
+        assert ".node_id IN (SELECT" not in final, final
+
+
+class TestOptionalMatchWhereNewVariableIsNull:
+    """`OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL` can never match: a matched r is
+    never null, so every row gets the null extension. The WHERE forced the LEFT JOIN
+    form, whose correlated CY_VLP_PATHS fails on IRIS (-149/-400), so the query
+    returned nothing (Match9 [8]). With the optional variables unread afterwards,
+    the pattern is dropped."""
+
+    Q = (
+        "MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) "
+        "WHERE r IS NULL AND a <> b RETURN b"
+    )
+
+    def test_pattern_dropped(self):
+        sql = _sql(self.Q)
+        assert "CY_VLP_PATHS" not in sql and "rdf_edges" not in sql, sql
+        assert sql.count("rdf_labels l") == 2, sql
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            # r is read afterwards: it must come out as null, so keep the pattern
+            "MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL RETURN b, r",
+            "MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL "
+            "WITH b, r RETURN b",
+            # the null test is on a bound variable, not the pattern's new one
+            "MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE a IS NULL RETURN b",
+            # a disjunct can still hold
+            "MATCH (a:A), (b:B) OPTIONAL MATCH (a)-[r*]-(b) WHERE r IS NULL OR a <> b RETURN b",
+        ],
+    )
+    def test_pattern_kept(self, q):
+        assert "CY_VLP_PATHS" in _sql(q)
+
+
+_L12_Q1 = (
+    "MATCH (a:Label1) WITH collect(a) AS nodes "
+    "WITH nodes, [x IN nodes | x.name] AS oldNames "
+    "UNWIND nodes AS n SET n.name = 'newName' RETURN n.name, oldNames"
+)
+
+
+class TestValuesProjectedBeforeSetStayPreSet:
+    """A WITH value computed before a SET (`[x IN nodes | x.name] AS oldNames`) was
+    recomputed by the RETURN after the UPDATE ran, so it showed the new value
+    (List12 [1]/[2]). The translator asks the executor to capture the stage's
+    computed columns before any DML; the RETURN reads them from that capture."""
+
+    def test_translator_emits_snapshot_of_computed_columns(self):
+        stmts = _stmts(translate_to_sql(parse_query(_L12_Q1), {}))
+        first, first_params = stmts[0]
+        assert first.startswith("__snapshot_stage__ "), first
+        spec = json.loads(first.split("\n", 1)[0][len("__snapshot_stage__ ") :])
+        assert spec == {"stage": "Stage2", "cols": ["oldNames"]}
+        assert first.split("\n", 1)[1].rstrip().endswith("SELECT * FROM Stage2")
+        assert first_params == ["Label1"]
+        final = stmts[-1][0]
+        assert "Stage2__live AS (" in final and "Stage2 AS (__SNAPSHOT__)" in final, final
+        # The DML statements still read the live stage.
+        for s, _ in stmts[1:-1]:
+            assert "__SNAPSHOT__" not in s
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            # nothing computed: every stage column is a variable
+            "MATCH (a) WITH a SET a.name = 'x' RETURN a.name",
+            # no update after the WITH
+            "MATCH (a) WITH a, a.name AS old RETURN old",
+        ],
+    )
+    def test_no_snapshot_when_not_needed(self, q):
+        t = translate_to_sql(parse_query(q), {})
+        sqls = t.sql if isinstance(t.sql, list) else [t.sql]
+        assert not any(s.startswith("__snapshot_stage__") for s in sqls)
+        assert not any("__SNAPSHOT__" in s for s in sqls)
+
+    def test_snapshot_sql_single_row_cross_joins(self):
+        from iris_vector_graph.stores.iris_sql_store import _stage_snapshot_sql
+
+        sql = _stage_snapshot_sql(
+            "Stage2", ["oldNames"], ["nodes", "oldNames"], [('[{"_id":"n1"}]', '["o\'k"]')]
+        )
+        assert sql.startswith('SELECT l."nodes" AS "nodes", s."oldNames" AS "oldNames"')
+        assert "FROM Stage2__live l CROSS JOIN JSON_TABLE(" in sql
+        assert "o''k" in sql  # quote doubled inside the SQL literal
+        assert "WHERE" not in sql
+
+    def test_snapshot_sql_joins_on_scalar_key_columns(self):
+        from iris_vector_graph.stores.iris_sql_store import _stage_snapshot_sql
+
+        sql = _stage_snapshot_sql("Stage1", ["old"], ["a", "old"], [("n1", "x"), ("n2", "y")])
+        assert 'WHERE l."a" = s."a"' in sql, sql
+
+    @pytest.mark.parametrize(
+        "rows",
+        [
+            [('[{"_id":"n1"}]', "x"), ('[{"_id":"n2"}]', "y")],  # only JSON keys
+            [("n1", "x"), ("n1", "y")],  # duplicate key
+        ],
+    )
+    def test_snapshot_sql_falls_back_to_live_when_rows_cannot_align(self, rows):
+        from iris_vector_graph.stores.iris_sql_store import _stage_snapshot_sql
+
+        assert _stage_snapshot_sql("Stage1", ["old"], ["a", "old"], rows) == (
+            "SELECT * FROM Stage1__live"
+        )
+
+    def test_snapshot_sql_keeps_node_values_live(self):
+        from iris_vector_graph.stores.iris_sql_store import _stage_snapshot_sql
+
+        # `collect(a) AS ns`: node JSON must show the post-SET properties.
+        assert _stage_snapshot_sql(
+            "Stage1", ["ns"], ["ns"], [('[{"_id":"n1","_props":[]}]',)]
+        ) == ("SELECT * FROM Stage1__live")
+
+    def test_executor_runs_snapshot_first_and_fills_placeholder(self):
+        from unittest.mock import MagicMock
+
+        from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
+
+        conn = MagicMock()
+        cur = MagicMock()
+        conn.cursor.return_value = cur
+        cur.description = [("nodes",), ("oldNames",)]
+        cur.fetchall.return_value = [('[{"_id":"n1"}]', '["original"]')]
+        store = IRISGraphStore(conn)
+        store.execute_transaction(
+            [
+                '__snapshot_stage__ {"stage": "Stage2", "cols": ["oldNames"]}\n'
+                "WITH Stage2 AS (SELECT 1) SELECT * FROM Stage2",
+                "UPDATE rdf_props SET val = ?",
+                "WITH Stage2__live AS (SELECT 1), Stage2 AS (__SNAPSHOT__) SELECT * FROM Stage2",
+            ],
+            [["p"], ["v"], []],
+        )
+        calls = [c.args for c in cur.execute.call_args_list]
+        sqls = [c[0] for c in calls]
+        snap_i = sqls.index("WITH Stage2 AS (SELECT 1) SELECT * FROM Stage2")
+        assert snap_i < sqls.index("UPDATE rdf_props SET val = ?")
+        assert calls[snap_i][1] == ["p"]
+        final = sqls[-1]
+        assert "__SNAPSHOT__" not in final and "JSON_TABLE(" in final, final
+        assert "original" in final

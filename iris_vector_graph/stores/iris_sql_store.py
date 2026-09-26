@@ -42,6 +42,72 @@ def _fix_iris_json(raw3: str) -> str:
     return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
 
 
+def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> str:
+    """The body of `{stage} AS (…)` that reads `cols` from rows captured before the DML.
+
+    The other columns stay live (`{stage}__live`). The captured rows line up with
+    the live ones on the stage's scalar columns (node ids), or trivially when the
+    stage has one row; when they cannot line up, the stage stays live. A column
+    holding node JSON stays live too: a node shows its post-SET properties.
+    """
+    from decimal import Decimal
+
+    live = f"SELECT * FROM {stage}__live"
+    idx = {c.lower(): i for i, c in enumerate(colnames)}
+
+    def _is_json(v):
+        return isinstance(v, str) and v[:1] in ("{", "[")
+
+    def _is_node_json(v):
+        return isinstance(v, str) and (v.startswith('{"_id"') or v.startswith('[{"_id"'))
+
+    snap = [
+        idx[c.lower()]
+        for c in cols
+        if c.lower() in idx and not any(_is_node_json(r[idx[c.lower()]]) for r in rows)
+    ]
+    if not snap:
+        return live
+    keys = [
+        i
+        for i in range(len(colnames))
+        if i not in snap and rows and all(r[i] is not None and not _is_json(r[i]) for r in rows)
+    ]
+    if len(rows) > 1 and (not keys or len({tuple(r[i] for i in keys) for r in rows}) < len(rows)):
+        return live
+
+    def _jv(v):
+        if isinstance(v, Decimal):
+            return int(v) if v == v.to_integral_value() else float(v)
+        return v
+
+    def _sql_type(i):
+        vals = [r[i] for r in rows if r[i] is not None]
+        if vals and all(isinstance(v, (int, Decimal)) and not isinstance(v, bool) for v in vals):
+            if all(_jv(v) == int(v) for v in vals):
+                return "INTEGER"
+        if vals and all(isinstance(v, (int, float, Decimal)) for v in vals):
+            return "DOUBLE"
+        return "VARCHAR(32000)"
+
+    used = snap + keys
+    doc = json.dumps([{f"k{i}": _jv(r[i]) for i in used} for r in rows], default=str)
+    columns = ", ".join(f'"{colnames[i]}" {_sql_type(i)} PATH \'$.k{i}\'' for i in used)
+    select = ", ".join(
+        f'{"s" if i in snap else "l"}."{c}" AS "{c}"' for i, c in enumerate(colnames)
+    )
+    sql = (
+        f"SELECT {select} FROM {stage}__live l CROSS JOIN JSON_TABLE("
+        + "'"
+        + doc.replace("'", "''")
+        + "'"
+        + f", '$[*]' COLUMNS({columns})) s"
+    )
+    if len(rows) > 1:
+        sql += " WHERE " + " AND ".join(f'l."{colnames[i]}" = s."{colnames[i]}"' for i in keys)
+    return sql
+
+
 # ── BFS strategy protocol (spec-arch-4, internal seam) ─────────────────────
 # Three adapters exist for BFS: Arno/NKG (Rust), ObjectScript, and SQL fallback.
 # A formal internal seam makes each independently testable and adding a fourth
@@ -743,8 +809,35 @@ class IRISGraphStore:
                 and not self._stmt_is_dml(stmts[-1])
                 and not stmts[-1].startswith("__constraint_check_delete_connected__")
             )
+            # `__snapshot_stage__ {spec}\n<sql>`: capture a WITH stage's computed
+            # columns before the DML runs; `{stage} AS (__SNAPSHOT__)` in a later
+            # statement reads them back (List12 [1]/[2]).
+            stage_snaps: dict = {}
+
+            def _fill_snapshots(sql):
+                if not isinstance(sql, str) or "(__SNAPSHOT__)" not in sql:
+                    return sql
+                for m in _del_re.finditer(r"(\w+) AS \(__SNAPSHOT__\)", sql):
+                    name = m.group(1)
+                    body = (
+                        _stage_snapshot_sql(name, *stage_snaps[name])
+                        if name in stage_snaps
+                        else f"SELECT * FROM {name}__live"
+                    )
+                    sql = sql.replace(f"{name} AS (__SNAPSHOT__)", f"{name} AS ({body})", 1)
+                return sql
+
+            for i, stmt in enumerate(stmts):
+                if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ "):
+                    spec_line, snap_sql = stmt[len("__snapshot_stage__ ") :].split("\n", 1)
+                    spec = json.loads(spec_line)
+                    cursor.execute(snap_sql, params_list[i] if i < len(params_list) else [])
+                    snap_rows = [list(r) for r in cursor.fetchall()]
+                    snap_cols = [d[0] for d in cursor.description] if cursor.description else []
+                    stage_snaps[spec["stage"]] = (spec["cols"], snap_cols, snap_rows)
+
             if has_delete_dml and last_is_select:
-                final_sql = stmts[-1]
+                final_sql = _fill_snapshots(stmts[-1])
                 final_params = params_list[-1] if len(params_list) >= len(stmts) else []
                 cursor.execute(final_sql, final_params)
                 pre_captured_rows = cursor.fetchall()
@@ -762,6 +855,9 @@ class IRISGraphStore:
                     continue
                 if edge_hwm is not None and "__EDGE_HWM__" in p:
                     p = [edge_hwm if v == "__EDGE_HWM__" else v for v in p]
+                if isinstance(stmt, str) and stmt.startswith("__snapshot_stage__ "):
+                    continue  # captured before the loop
+                stmt = _fill_snapshots(stmt)
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"
                 ):
