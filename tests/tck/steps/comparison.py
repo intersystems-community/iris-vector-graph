@@ -730,6 +730,36 @@ def _rel_obj_matches(pattern: str, rel: dict) -> bool:
     return True
 
 
+def _graph_value_matches(ev: Any, av: Any) -> bool:
+    """Nested TCK value holding node / relationship patterns — `[(:A), [:T], (:B)]`,
+    `{node1: (:A), rel: [:T]}` — against the engine's JSON list / map of node and
+    relationship values."""
+    import json as _json
+
+    if isinstance(av, str) and av[:1] in ("[", "{"):
+        try:
+            av = _json.loads(av)
+        except (ValueError, TypeError):
+            pass
+    if isinstance(ev, str):
+        pattern = _parse_node_pattern(ev)
+        if pattern is not None:
+            return isinstance(av, dict) and "_labels" in av and _node_matches(av, pattern)
+        return ev == av
+    if isinstance(ev, list) and len(ev) == 1 and isinstance(ev[0], str) and ev[0].startswith(":"):
+        rel = _as_rel_obj(av)
+        return rel is not None and _rel_obj_matches(ev[0], rel)
+    if isinstance(ev, list):
+        return isinstance(av, list) and len(ev) == len(av) and all(
+            _graph_value_matches(e, a) for e, a in zip(ev, av)
+        )
+    if isinstance(ev, dict):
+        return isinstance(av, dict) and set(ev) == set(av) and all(
+            _graph_value_matches(ev[k], av[k]) for k in ev
+        )
+    return ev == av
+
+
 def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) -> bool:
     for col in columns:
         ev = exp.get(col)
@@ -927,12 +957,16 @@ def _rows_equal(exp: dict, act: dict, columns: list[str], list_unordered: bool) 
                         if not _node_matches(node, pat):
                             return False
                 continue
+            if not list_unordered and ev != av_parsed and _graph_value_matches(ev, av):
+                continue
             if list_unordered:
                 if sorted(str(x) for x in ev) != sorted(str(x) for x in av_parsed):
                     return False
             else:
                 if ev != av_parsed:
                     return False
+            continue
+        if ev != av and isinstance(ev, (list, dict)) and _graph_value_matches(ev, av):
             continue
         if ev != av:
             return False

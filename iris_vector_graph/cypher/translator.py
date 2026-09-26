@@ -12331,6 +12331,39 @@ def _expr_map_projection(expr, context, segment):
     return "('{'||" + "||','||".join(parts) + "||'}')"
 
 
+def _graph_value_sql(var_name, context):
+    """JSON text of a node or relationship variable as a value inside a returned
+    list or map; None when the variable is not a MATCH-bound node/relationship."""
+    if var_name in context.scalar_variables or var_name.startswith(_MERGE_PATH_PREFIX):
+        return None
+    alias = context.variable_aliases.get(var_name)
+    if not alias:
+        return None
+    if alias.startswith("Stage"):
+        if var_name in getattr(context, "edge_stage_variables", set()):
+            return (
+                f"'{{\"type\":\"' || {alias}.__edge_{var_name}_p || '\",\"props\":' || "
+                f"COALESCE({alias}.{var_name}, '{{}}') || '}}'"
+            )
+        return None
+    if alias in _PROC_CTE_ALIASES:
+        return None
+    if alias.startswith("e"):
+        if var_name not in context.rel_variables:
+            return None
+        p_col = "_p" if alias in getattr(context, "_undirected_aliases", set()) else "p"
+        return (
+            f"'{{\"type\":\"' || {alias}.{p_col} || '\",\"props\":' || "
+            f"COALESCE({alias}.qualifiers, '{{}}') || '}}'"
+        )
+    nid = f"{alias}.node_id"
+    return (
+        f"'{{\"_id\":\"' || {nid} || '\",' "
+        f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+        f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+    )
+
+
 def _expr_map_literal(expr, context, segment):
     if not expr.entries:
         # Typed: a bare '{}' is literal-substituted by the IRIS statement cache
@@ -12365,6 +12398,11 @@ def _expr_map_literal(expr, context, segment):
             # Nested list literal: already a JSON array — no extra quotes
             val_sql = translate_expression(v, context, segment=segment)
             parts.append(f"'\"'||'{safe_k}'||'\":'||CAST({val_sql} AS VARCHAR)")
+        elif getattr(context, "_graph_value_elems", False) and isinstance(v, ast.Variable) and (
+            _graph_value_sql(v.name, context) is not None
+        ):
+            # RETURN {k: n}: the node / relationship value itself, not its id
+            parts.append(f"'\"'||'{safe_k}'||'\":'||{_graph_value_sql(v.name, context)}")
         else:
             val_sql = translate_expression(v, context, segment=segment)
             parts.append(f"'\"'||'{safe_k}'||'\":\"'||CAST({val_sql} AS VARCHAR)||'\"'")
@@ -12918,6 +12956,13 @@ def _expr_literal(expr, context, segment):
             str_len = max(len(json_str) + 1, 256)
             escaped = json_str.replace("'", "''")
             return f"CAST('{escaped}' AS VARCHAR({str_len}))"
+        if getattr(context, "_graph_value_elems", False) and v and all(
+            isinstance(item, ast.Variable) and _graph_value_sql(item.name, context) is not None
+            for item in v
+        ):
+            # RETURN [n, r, m]: the node / relationship values themselves, not their ids
+            graph_items = " || ',' || ".join(_graph_value_sql(item.name, context) for item in v)
+            return f"('[' || {graph_items} || ']')"
         sql_items = []
         for item in v:
             if isinstance(item, ast.Literal):
@@ -18618,7 +18663,13 @@ def translate_return_clause(ret, context):
                 if has_agg:
                     context.group_by_items.append(node_expr)
                 continue
-        sql = translate_expression(item.expression, context, segment="select")
+        context._graph_value_elems = isinstance(item.expression, ast.MapLiteral) or (
+            isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list)
+        )
+        try:
+            sql = translate_expression(item.expression, context, segment="select")
+        finally:
+            context._graph_value_elems = False
         # IRIS VARCHAR collation uppercases string values in SELECT/GROUP BY/DISTINCT.
         # Wrap bare property-value references (p\d+.val) with %EXACT() to preserve case.
         import re as _re_exact

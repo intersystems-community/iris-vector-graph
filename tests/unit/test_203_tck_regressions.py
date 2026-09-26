@@ -2263,3 +2263,23 @@ class TestPathFunctionsOverCollectedPaths:
         assert "JSON_ARRAYGET(JSON_ARRAY(" in sql and "COUNT(" in sql.upper(), sql
         # the comprehension over collect() is itself an aggregate, not a grouping key
         assert "GROUP BY" not in sql, sql
+
+
+class TestGraphValuesInReturnedListAndMap:
+    """Return2 [12]/[13]: `RETURN [n, r, m]` and `RETURN {node1: n, rel: r}` listed
+    the node ids and the relationship type; they must list the node and the
+    relationship values themselves."""
+
+    def test_list_of_nodes_and_relationship(self):
+        sql = tr("MATCH (n)-[r]->(m) RETURN [n, r, m] AS r").sql
+        assert "JSON_ARRAY(n0.node_id, e2.p, n1.node_id)" not in sql, sql
+        assert '"_labels"' in sql and '"type"' in sql and "e2.qualifiers" in sql, sql
+
+    def test_map_of_nodes_and_relationship(self):
+        sql = tr("MATCH (n)-[r]->(m) RETURN {node1: n, rel: r, node2: m} AS m").sql
+        assert '"_labels"' in sql and '"type"' in sql, sql
+
+    def test_with_list_keeps_ids(self):
+        # a WITH list of nodes still carries node ids for later MATCHes
+        sql = tr("MATCH (n)-[r]->(m) WITH [n, m] AS l RETURN size(l) AS s").sql
+        assert "JSON_ARRAY(n0.node_id, n1.node_id)" in sql, sql
