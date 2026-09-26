@@ -2384,16 +2384,8 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # Safe even for SQL-reserved-word aliases (e.g. "count") since _raw_sql is
                     # the concrete column (e.g. p2.val), not the quoted alias.
                     _sort_alias = f"__sort{len(sort_projections)}"
-                    sort_projections.append(
-                        (
-                            _sort_alias,
-                            f"CASE WHEN ISNUMERIC({_raw_sql}) = 1 THEN CAST({_raw_sql} AS DOUBLE) END",
-                        )
-                    )
-                    _sort_alias2 = f"__sort{len(sort_projections)}"
-                    sort_projections.append((_sort_alias2, _raw_sql))
+                    sort_projections.append((_sort_alias, _sort_key(_raw_sql)))
                     order_by_items.append(f"{_sort_alias} {direction}")
-                    order_by_items.append(f"{_sort_alias2} {direction}")
                     continue
             # If the expression is a variable that matches a WITH alias, emit as bare column name.
             # Route through sort_projections so OVER() gets the real SQL expression.
@@ -2403,16 +2395,8 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                 col = _safe_alias(_alias_name)
                 _raw_sql = _with_alias_sql.get(_alias_name, col)
                 _sort_alias = f"__sort{len(sort_projections)}"
-                sort_projections.append(
-                    (
-                        _sort_alias,
-                        f"CASE WHEN ISNUMERIC({_raw_sql}) = 1 THEN CAST({_raw_sql} AS DOUBLE) END",
-                    )
-                )
-                _sort_alias2 = f"__sort{len(sort_projections)}"
-                sort_projections.append((_sort_alias2, _raw_sql))
+                sort_projections.append((_sort_alias, _sort_key(_raw_sql)))
                 order_by_items.append(f"{_sort_alias} {direction}")
-                order_by_items.append(f"{_sort_alias2} {direction}")
             else:
                 try:
                     # Map WITH-projected aliases to bare column names so ORDER BY arithmetic
@@ -2442,10 +2426,10 @@ def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=
                     # rdf_props subquery, it cannot be used in OVER() — project it as a sort column.
                     if _re_ob.search(r"\b(?:%EXACT\()?p\d+\.val\)?", expr) or "rdf_props" in expr:
                         sort_alias = f"__sort{len(sort_projections)}"
-                        sort_projections.append((sort_alias, expr))
+                        sort_projections.append((sort_alias, _sort_key(expr)))
                         order_by_items.append(f"{sort_alias} {direction}")
                     else:
-                        order_by_items.append(f"{expr} {direction}")
+                        order_by_items.append(f"{_sort_key(expr)} {direction}")
                 except Exception:
                     pass
 
@@ -3605,6 +3589,16 @@ def _collect_var_names(expr) -> set:
     return set()
 
 
+def _sort_key(expr: str) -> str:
+    """Wrap an ORDER BY expression so SQL collation follows Cypher orderability.
+
+    SQLUser.CY_SORT_KEY encodes type rank (map < node < relationship < list < path <
+    temporal < string < boolean < number < NaN < null) and an order-preserving value
+    (lists element-wise, zoned temporals by instant). %EXACT keeps codepoint order.
+    """
+    return f"%EXACT(SQLUser.CY_SORT_KEY({expr}, 'x'))"
+
+
 def preprocess_order_by(query: ast.CypherQuery, context: TranslationContext) -> list:
     if not query.order_by_clause:
         return []
@@ -3829,7 +3823,7 @@ def _preprocess_order_by_items(query, context, items, alias_to_sql, _proc_prefix
                     expr = f"CASE WHEN {col_ref} IS NULL THEN NULL ELSE SQLUser.JSON_VALUE({col_ref}, '$.{prop}') END"
             else:
                 raise
-        items.append(f"{expr} {'ASC' if item.ascending else 'DESC'}")
+        items.append(f"{_sort_key(expr)} {'ASC' if item.ascending else 'DESC'}")
     return items
 
 
@@ -7988,6 +7982,20 @@ def _boolean_expr_exists(expr, context) -> Optional[str]:
     return None
 
 
+def _is_scalar_var(expr, context) -> bool:
+    """A variable that is not a node, relationship, path or collected-node list."""
+    if not isinstance(expr, ast.Variable):
+        return False
+    n = expr.name
+    alias = context.variable_aliases.get(n)
+    return not (
+        (alias and alias[0] in ("n", "e") and not alias.startswith("ES_"))
+        or n in context.rel_variables
+        or n in context.named_paths
+        or n in context.collected_node_variables
+    )
+
+
 def _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr) -> Optional[str]:
     if op == ast.BooleanOperator.EQUALS:
         return f"{left} = {right}"
@@ -8781,6 +8789,19 @@ def translate_boolean_expression(expr, context) -> str:
             right_expr is not None and _is_non_string_literal(right_expr)
         ):
             return "NULL"
+
+    # Two untyped scalar variables (UNWIND / comprehension / WITH scalars): compare by
+    # Cypher orderability so `x < value` agrees with ORDER BY (lists, zoned temporals).
+    if op in _ordering_ops and _is_scalar_var(left_expr, context) and _is_scalar_var(right_expr, context):
+        _l = translate_expression(left_expr, context, segment="where")
+        _r = translate_expression(right_expr, context, segment="where")
+        _cmp_pred = {
+            ast.BooleanOperator.LESS_THAN: "= -1",
+            ast.BooleanOperator.LESS_THAN_OR_EQUAL: "IN (-1, 0)",
+            ast.BooleanOperator.GREATER_THAN: "= 1",
+            ast.BooleanOperator.GREATER_THAN_OR_EQUAL: "IN (0, 1)",
+        }[op]
+        return f"(SQLUser.CY_CMP({_l}, {_r}) {_cmp_pred})"
 
     left_inlined = _inline_literal(left_expr)
     left = (

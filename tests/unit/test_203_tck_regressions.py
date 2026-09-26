@@ -615,3 +615,76 @@ class TestZonedTimeOrdering:
         )
         iris_cursor.execute(t.sql, t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters)
         assert tuple(int(v) for v in iris_cursor.fetchall()[0]) == (0, 1, 0, 1)
+
+
+def _rows(cur, t):
+    cur.execute(t.sql, t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters)
+    return [r[0] for r in cur.fetchall()]
+
+
+class TestOrderBySortKey:
+    """WithOrderBy1/ReturnOrderBy1: ORDER BY follows Cypher orderability via SQLUser.CY_SORT_KEY."""
+
+    def test_with_order_by_emits_sort_key(self):
+        assert "CY_SORT_KEY" in tr("UNWIND [2, 1] AS x WITH x ORDER BY x RETURN x").sql
+
+    def test_return_order_by_emits_sort_key(self):
+        assert "CY_SORT_KEY" in tr("UNWIND [2, 1] AS x RETURN x ORDER BY x").sql
+
+    def test_key_orders_numbers(self, iris_cursor):
+        vals = ["-100", "-2", "-1.5", "-1", "-.001", "0", ".001", "1", "1.5", "2", "10", "123456789012"]
+        keys = []
+        for v in vals:
+            iris_cursor.execute("SELECT SQLUser.CY_SORT_KEY(?, 'x')", [v])
+            keys.append(iris_cursor.fetchone()[0])
+        assert keys == sorted(keys)
+
+    def test_lists_sort_elementwise(self, iris_cursor):
+        t = tr(
+            "UNWIND [[], ['a'], ['a', 1], [1], [1, 'a'], [1, null], [null, 1], [null, 2]] AS lists "
+            "WITH lists ORDER BY lists LIMIT 4 RETURN lists"
+        )
+        assert _rows(iris_cursor, t) == ["[]", '["a"]', '["a",1]', "[1]"]
+
+    def test_zoned_times_sort_by_instant(self, iris_cursor):
+        t = tr(
+            "UNWIND [time({hour: 10, minute: 35, timezone: '-08:00'}), "
+            "time({hour: 12, minute: 35, second: 15, timezone: '+05:00'})] AS t "
+            "RETURN t ORDER BY t"
+        )
+        assert _rows(iris_cursor, t)[0].startswith("12:35:15")
+
+    def test_nulls_last_ascending_first_descending(self, iris_cursor):
+        asc = _rows(iris_cursor, tr("UNWIND [2, null, 1] AS x RETURN x ORDER BY x"))
+        desc = _rows(iris_cursor, tr("UNWIND [2, null, 1] AS x RETURN x ORDER BY x DESC"))
+        assert asc[-1] is None and desc[0] is None
+
+
+class TestScalarVarComparison:
+    """WithOrderBy1 [45]: `x < value` on untyped scalar variables agrees with ORDER BY (SQLUser.CY_CMP)."""
+
+    def test_var_var_ordering_emits_cy_cmp(self):
+        t = tr("WITH [1, 2] AS vs UNWIND vs AS v RETURN [x IN vs WHERE x < v] AS lt")
+        assert "CY_CMP" in t.sql
+
+    def test_property_comparison_does_not_use_cy_cmp(self):
+        assert "CY_CMP" not in tr("MATCH (n) WHERE n.x < 3 RETURN n").sql
+
+    def test_lists_compare_elementwise(self, iris_cursor):
+        t = tr(
+            "WITH [[2, 2], [1], [1, -20], []] AS values UNWIND values AS value "
+            "RETURN size([x IN values WHERE x < value]) AS c ORDER BY value"
+        )
+        assert _rows(iris_cursor, t) == [0, 1, 2, 3]
+
+    def test_zoned_times_compare_by_instant(self, iris_cursor):
+        t = tr(
+            "WITH [time({hour: 10, minute: 35, timezone: '-08:00'}), "
+            "time({hour: 12, minute: 35, second: 15, timezone: '+05:00'})] AS values "
+            "UNWIND values AS value RETURN size([x IN values WHERE x < value]) AS c ORDER BY value"
+        )
+        assert _rows(iris_cursor, t) == [0, 1]
+
+    def test_cross_type_is_null(self, iris_cursor):
+        iris_cursor.execute("SELECT SQLUser.CY_CMP('a', '1')")
+        assert iris_cursor.fetchone()[0] is None
