@@ -2566,7 +2566,8 @@ class TestMixedGraphListElementAccess:
 
     def test_property_of_mixed_list_rel_element(self):
         sql = self._sql("MATCH ()-[r]->() WITH [123, r] AS list RETURN (list[1]).k")
-        assert "'$.props.k'" in sql.rsplit("SELECT CASE", 1)[-1]
+        tail = sql.rsplit("SELECT CASE", 1)[-1]
+        assert "'$.props'" in tail and "'$.k'" in tail
 
     def test_plain_id_list_sql_unchanged(self):
         # Not a mixed list: no JSON unwrapping.
@@ -2841,3 +2842,20 @@ class TestValuesProjectedBeforeSetStayPreSet:
         final = sqls[-1]
         assert "__SNAPSHOT__" not in final and "JSON_TABLE(" in final, final
         assert "original" in final
+
+
+class TestMixedListRelElementPropertyNested:
+    """Graph6 [8]: SQLUser.JSON_VALUE does not follow a dotted path ('$.props.k' is
+    NULL), so a relationship element's property is read as JSON_VALUE of the
+    '$.props' object."""
+
+    def test_rel_element_property_reads_props_object_then_key(self):
+        sql = translate_to_sql(
+            parse_query("MATCH ()-[r]->() WITH [123, r] AS list RETURN (list[1]).existing")
+        ).sql
+        tail = sql.rsplit("SELECT CASE", 1)[-1]
+        assert "'$.props.existing'" not in tail
+        assert re.search(
+            r"SQLUser\.JSON_VALUE\(SQLUser\.JSON_VALUE\(.*?, '\$\.props'\), '\$\.existing'\)",
+            tail,
+        ), tail
