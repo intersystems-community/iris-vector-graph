@@ -694,6 +694,11 @@ class TranslationContext:
         self.literal_list_vars: Dict[str, list] = (
             {} if parent is None else parent.literal_list_vars.copy()
         )
+        # Scalar variable -> set of value kinds it can hold (see _static_value_kind),
+        # known when it was unwound from a literal list. Null is not a kind.
+        self.static_scalar_kinds: Dict[str, frozenset] = (
+            {} if parent is None else dict(getattr(parent, "static_scalar_kinds", {}))
+        )
 
     def next_alias(self, prefix: str = "t") -> str:
         alias = f"{prefix}{self._alias_counter}"
@@ -2176,7 +2181,7 @@ def _hoist_repeated_json_table_predicates(sql: str) -> str:
             continue
         if (
             (
-                frag.startswith("(SELECT CASE WHEN ")
+                frag.startswith(("(SELECT CASE WHEN ", "(SELECT CASE MIN(", "(SELECT CASE MAX(", "(SELECT CASE COALESCE(SUM("))
                 or (frag.startswith("(SELECT JSON_ARRAYAGG(") and f") FROM JSON_TABLE({stage}." in frag)
             )
             and f"JSON_TABLE({stage}." in frag
@@ -4035,10 +4040,35 @@ def translate_updating_clause(upd, context, metadata):
         translate_remove_clause(upd, context, metadata)
 
 
+def _literal_list_elem_kinds(elems) -> Optional[frozenset]:
+    kinds = set()
+    for el in elems:
+        if isinstance(el, ast.Literal) and el.value is None:
+            continue
+        k = _static_value_kind(el)
+        if k is None:
+            return None
+        kinds.add(k)
+    return frozenset(kinds)
+
+
 def translate_unwind_clause(unwind, context):
     alias = context.register_variable(unwind.alias, prefix="u")
     context.scalar_variables.add(unwind.alias)
     context.bind_variable_type(unwind.alias, "scalar")
+
+    _kinds_map = getattr(context, "static_scalar_kinds", None)
+    if _kinds_map is not None:
+        _src_elems = None
+        if isinstance(unwind.expression, ast.Literal) and isinstance(unwind.expression.value, list):
+            _src_elems = unwind.expression.value
+        elif isinstance(unwind.expression, ast.Variable):
+            _src_elems = getattr(context, "literal_list_vars", {}).get(unwind.expression.name)
+        _k = _literal_list_elem_kinds(_src_elems) if _src_elems is not None else None
+        if _k is not None:
+            _kinds_map[unwind.alias] = _k
+        else:
+            _kinds_map.pop(unwind.alias, None)
 
     # Detect UNWIND of a collected node list: mark alias as collected_node_variable
     # so property access generates a rdf_props join using the _id from the JSON blob.
@@ -6315,7 +6345,11 @@ def translate_match_clause(match_clause, context, metadata):
         if not skip_first_node_join:
             if first_node.variable:
                 translate_node_pattern(
-                    first_node, context, metadata, optional=match_clause.optional
+                    first_node,
+                    context,
+                    metadata,
+                    optional=match_clause.optional,
+                    standalone=not has_rels and getattr(match_clause, "where", None) is None,
                 )
             elif first_node.labels or first_node.properties:
                 if not has_rels:
@@ -6645,7 +6679,7 @@ def translate_subquery_call(subquery: ast.SubqueryCall, context: TranslationCont
         _subquery_uncorrelated(subquery, inner, context, metadata)
 
 
-def translate_node_pattern(node, context, metadata, optional=False):
+def translate_node_pattern(node, context, metadata, optional=False, standalone=False):
     if node.variable and node.variable in context.variable_aliases:
         # Special case: scalar variable used as node in OPTIONAL MATCH.
         # e.g. WITH null AS a … OPTIONAL MATCH p = (a)-[r]->()
@@ -6783,6 +6817,29 @@ def translate_node_pattern(node, context, metadata, optional=False):
     # target node in MATCH (a) OPTIONAL MATCH (a)-->(b)).
     is_anchor_optional = optional and not context.from_clauses
     effective_jt = "JOIN" if is_anchor_optional else jt
+    if (
+        optional
+        and standalone
+        and not is_anchor_optional
+        and node.labels
+        and not node.properties
+        and not getattr(node, "labels_or", False)
+        and alias not in context.mapped_node_aliases
+        and not any(alias in j for j in context.join_clauses)
+    ):
+        # Disconnected OPTIONAL MATCH (n:Label): one null row when no node has
+        # the label, so the label filter lives inside the LEFT-JOINed subquery.
+        _on = context.next_alias("on")
+        _conds = " AND ".join(
+            f"EXISTS (SELECT 1 FROM {_table('rdf_labels')} _onl"
+            f" WHERE _onl.s = {_on}.node_id AND _onl.label = {context.add_join_param(lab)})"
+            for lab in node.labels
+        )
+        context.join_clauses.append(
+            f"LEFT OUTER JOIN (SELECT {_on}.node_id FROM {nodes_tbl} {_on} WHERE {_conds})"
+            f" {alias} ON 1=1"
+        )
+        return
     if not context.from_clauses:
         context.from_clauses.append(f"{nodes_tbl} {alias}")
     elif f"{nodes_tbl} {alias}" not in context.from_clauses and not any(
@@ -9162,6 +9219,9 @@ def translate_boolean_expression(expr, context) -> str:
                 rv_num = isinstance(rv, (int, float))
                 if (lv_str and rv_num) or (lv_num and rv_str):
                     return "NULL"
+        # Same for computed numbers (0.0 / 0.0 > 'a').
+        if {_static_value_kind(left_expr), _static_value_kind(right_expr)} == {"num", "str"}:
+            return "NULL"
 
     # String predicate type guard: STARTS WITH, ENDS WITH, CONTAINS require string operands.
     # If either operand is a known non-string literal (number, bool, list, map), return NULL.
@@ -9172,6 +9232,9 @@ def translate_boolean_expression(expr, context) -> str:
     ):
 
         def _is_non_string_literal(e):
+            if isinstance(e, ast.Variable):
+                _k = getattr(context, "static_scalar_kinds", {}).get(e.name)
+                return _k is not None and "str" not in _k
             if isinstance(e, ast.Literal) and e.value is not None:
                 return not isinstance(e.value, str)
             if isinstance(e, ast.MapLiteral):
@@ -9347,6 +9410,14 @@ def _cypher_list_cmp(a, b):
     return len(a) - len(b)
 
 
+def _int_sql(v: int) -> str:
+    # IRIS reads the literal -9223372036854775808 as a rounded decimal; the
+    # smallest int64 has to be built from representable parts.
+    if v == -9223372036854775808:
+        return "(-9223372036854775807 - 1)"
+    return str(v)
+
+
 def _inline_literal(expr) -> Optional[str]:
     if expr is None:
         return None
@@ -9356,7 +9427,9 @@ def _inline_literal(expr) -> Optional[str]:
             return "NULL"
         if isinstance(v, bool):
             return "1" if v else "0"
-        if isinstance(v, (int, float)):
+        if isinstance(v, int):
+            return _int_sql(v)
+        if isinstance(v, float):
             return str(v)
         if isinstance(v, list):
             # List literals need full translate_expression (json.dumps path)
@@ -10030,44 +10103,70 @@ def _expr_list_predicate(expr, context, segment):
         # Bare column reference (e.g. lp0.x) — treat as truth test
         where_pred = f"{where_pred} = 1"
 
-    # 3VL single-pass aggregation: one JSON_TABLE scan, inline SUM expressions.
-    # No derived-table wrapper — avoids IRIS <UNDEFINED>corr in correlated contexts.
+    # 3VL single-pass aggregation: one JSON_TABLE scan, no derived-table wrapper
+    # (avoids IRIS <UNDEFINED>corr in correlated contexts). The predicate is
+    # folded once per element into a 1/0/NULL value and each quantifier decodes
+    # a single aggregate of it with a simple CASE, so the predicate text (and a
+    # nested quantifier's subquery) is not repeated — nesting used to multiply
+    # the SQL until IRIS hit <STRINGSTACK> at Prepare.
     counts_alias = context.next_alias("qc")
-    sat_pred = where_pred.replace(f"{alias}.", f"{counts_alias}.")
-    not_pred = where_pred.replace(f"{alias}.", f"{counts_alias}.")
+    val_pred = pred_with_alias.replace(f"{alias}.", f"{counts_alias}.")
     _jt_null_filter = (
         f" WHERE {counts_alias}.{_safe_alias(expr.variable)} IS NOT NULL" if null_sentinel else ""
     )
     jt_from = f"FROM JSON_TABLE({source_sql}, '$[*]' COLUMNS({_safe_alias(expr.variable)} {col_type} PATH '$')) {counts_alias}{_jt_null_filter}"
-    sat_expr = f"SUM(CASE WHEN {sat_pred} THEN 1 ELSE 0 END)"
-    dfail_expr = f"SUM(CASE WHEN NOT ({not_pred}) THEN 1 ELSE 0 END)"
-    total_expr = "COUNT(*)"
-    unc_expr = f"({total_expr} - {sat_expr} - {dfail_expr})"
-    if expr.quantifier == "all":
-        return (
-            f"(SELECT CASE WHEN {dfail_expr} > 0 THEN 0"
-            f" WHEN ({unc_expr}) > 0 THEN NULL"
-            f" ELSE 1 END {jt_from})"
-        )
-    elif expr.quantifier == "none":
-        return (
-            f"(SELECT CASE WHEN {sat_expr} > 0 THEN 0"
-            f" WHEN ({unc_expr}) > 0 THEN NULL"
-            f" ELSE 1 END {jt_from})"
-        )
-    elif expr.quantifier == "single":
-        return (
-            f"(SELECT CASE WHEN {sat_expr} >= 2 THEN 0"
-            f" WHEN {sat_expr} = 1 AND ({unc_expr}) = 0 THEN 1"
-            f" WHEN ({unc_expr}) > 0 THEN NULL"
-            f" ELSE 0 END {jt_from})"
-        )
-    else:  # any
+    if not (val_pred.startswith("(SELECT ") and val_pred.endswith(")")):
+        # Flat predicate: SUM-based 3VL counts (the shape IRIS prepares reliably
+        # when the 3VL CASE of an enclosing boolean repeats the quantifier).
+        sat_pred = where_pred.replace(f"{alias}.", f"{counts_alias}.")
+        sat_expr = f"SUM(CASE WHEN {sat_pred} THEN 1 ELSE 0 END)"
+        dfail_expr = f"SUM(CASE WHEN NOT ({sat_pred}) THEN 1 ELSE 0 END)"
+        unc_expr = f"(COUNT(*) - {sat_expr} - {dfail_expr})"
+        if expr.quantifier == "all":
+            return (
+                f"(SELECT CASE WHEN {dfail_expr} > 0 THEN 0"
+                f" WHEN ({unc_expr}) > 0 THEN NULL"
+                f" ELSE 1 END {jt_from})"
+            )
+        if expr.quantifier == "none":
+            return (
+                f"(SELECT CASE WHEN {sat_expr} > 0 THEN 0"
+                f" WHEN ({unc_expr}) > 0 THEN NULL"
+                f" ELSE 1 END {jt_from})"
+            )
+        if expr.quantifier == "single":
+            return (
+                f"(SELECT CASE WHEN {sat_expr} >= 2 THEN 0"
+                f" WHEN {sat_expr} = 1 AND ({unc_expr}) = 0 THEN 1"
+                f" WHEN ({unc_expr}) > 0 THEN NULL"
+                f" ELSE 0 END {jt_from})"
+            )
         return (
             f"(SELECT CASE WHEN {sat_expr} > 0 THEN 1"
             f" WHEN ({unc_expr}) > 0 THEN NULL"
             f" ELSE 0 END {jt_from})"
         )
+    # Nested quantifier: the inner subquery is already a 1/0/NULL value. Each
+    # quantifier decodes a single aggregate of it, so the inner subquery is not
+    # repeated; the SUM form repeated it per count and nesting multiplied the
+    # SQL until IRIS hit <STRINGSTACK> at Prepare (Quantifier6 [2]).
+    elem_val = val_pred
+    # true -> 2, unknown -> 1, false -> 0
+    rank = f"CASE ({elem_val}) WHEN 1 THEN 2 WHEN 0 THEN 0 ELSE 1 END"
+    if expr.quantifier == "all":
+        return f"(SELECT CASE MIN({rank}) WHEN 0 THEN 0 WHEN 1 THEN NULL ELSE 1 END {jt_from})"
+    elif expr.quantifier == "none":
+        return f"(SELECT CASE MAX({rank}) WHEN 2 THEN 0 WHEN 1 THEN NULL ELSE 1 END {jt_from})"
+    elif expr.quantifier == "single":
+        # Packed count: each true adds 1000000, each unknown adds 1. Exactly one
+        # true and no unknown is 1000000; two or more trues is >= 2000000.
+        packed = f"COALESCE(SUM(CASE ({elem_val}) WHEN 1 THEN 1000000 WHEN 0 THEN 0 ELSE 1 END), 0)"
+        return (
+            f"(SELECT CASE {packed} WHEN 1000000 THEN 1 WHEN 0 THEN 0"
+            f" ELSE CASE WHEN {packed} >= 2000000 THEN 0 ELSE NULL END END {jt_from})"
+        )
+    else:  # any
+        return f"(SELECT CASE MAX({rank}) WHEN 2 THEN 1 WHEN 1 THEN NULL ELSE 0 END {jt_from})"
 
 
 def _list_comprehension_type_check(expr):
@@ -10313,11 +10412,54 @@ def _expr_reduce(expr, context, segment):
     )
 
 
+def _static_value_kind(e) -> Optional[str]:
+    """Cypher value kind of an expression when it is known without running it:
+    'bool', 'num', 'str', 'list', 'map'; None when unknown or null."""
+    if isinstance(e, ast.Literal):
+        v = e.value
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            return "bool"
+        if isinstance(v, (int, float)):
+            return "num"
+        if isinstance(v, str):
+            return "str"
+        if isinstance(v, list):
+            return "list"
+        return None
+    if isinstance(e, ast.MapLiteral):
+        return "map"
+    if (
+        isinstance(e, ast.FunctionCall)
+        and e.function_name in ("__arith_+", "__arith_-", "__arith_*", "__arith_/", "__arith_%", "__arith_^")
+        and e.arguments
+        and all(_static_value_kind(a) == "num" for a in e.arguments)
+    ):
+        return "num"
+    return None
+
+
 def _expr_case(expr, context, segment):
     parts = ["CASE"]
+    when_clauses = list(expr.when_clauses)
     if expr.test_expression is not None:
+        # Simple CASE compares with Cypher equality, which never holds across
+        # value kinds; SQL would coerce ('0' = 0, true = 1), so drop those WHENs.
+        test_kind = _static_value_kind(expr.test_expression)
+        if test_kind is not None:
+            when_clauses = [
+                wc
+                for wc in when_clauses
+                if _static_value_kind(wc.condition) in (None, test_kind)
+                or isinstance(wc.condition, ast.BooleanExpression)
+            ]
+        if not when_clauses:
+            if expr.else_result is None:
+                return "NULL"
+            return translate_expression(expr.else_result, context, segment)
         parts.append(translate_expression(expr.test_expression, context, segment))
-    for wc in expr.when_clauses:
+    for wc in when_clauses:
         if expr.test_expression is None:
             # Searched CASE: WHEN condition must be a boolean predicate in SQL.
             cond = translate_boolean_expression(wc.condition, context)
@@ -10921,7 +11063,9 @@ def _expr_map_projection(expr, context, segment):
 
 def _expr_map_literal(expr, context, segment):
     if not expr.entries:
-        return "'{}'"
+        # Typed: a bare '{}' is literal-substituted by the IRIS statement cache
+        # and can inherit the column type of an earlier `SELECT 0 AS x`.
+        return "CAST('{}' AS VARCHAR(256))"
     if _is_fully_literal(expr):
         import json as _json
 
@@ -11530,7 +11674,7 @@ def _expr_literal(expr, context, segment):
         return f"CAST('{escaped}' AS VARCHAR({str_len}))"
     # Integers: always inline without bind parameters
     if isinstance(v, int):
-        return str(v)
+        return _int_sql(v)
     if segment == "select":
         return context.add_select_param(v)
     if segment == "join":
@@ -11616,6 +11760,15 @@ def _expr_aggregation(expr, context, segment):
             )
             distinct_kw = "DISTINCT " if expr.distinct else ""
             return f"COALESCE(JSON_ARRAYAGG({distinct_kw}{node_json}), CAST('[]' AS VARCHAR(256)))"
+    if fn in ("MIN", "MAX") and isinstance(expr.argument, ast.Variable):
+        # Values unwound from a literal list of lists or of mixed kinds: VARCHAR
+        # order is not Cypher orderability (list < string < boolean < number,
+        # lists element-wise), so aggregate an ordering key that carries the value.
+        _kinds = getattr(context, "static_scalar_kinds", {}).get(expr.argument.name)
+        if _kinds and ("list" in _kinds or len(_kinds) > 1):
+            return (
+                f"SQLUser.CY_EXP_ORDVAL({fn}(%EXACT(SQLUser.CY_EXP_ORDKEY({arg}, 'top'))))"
+            )
     result_expr = f"{fn}({'DISTINCT ' if expr.distinct else ''}{arg})"
     # collect() must return [] not NULL when all collected values are NULL
     if fn == "JSON_ARRAYAGG":
@@ -17163,6 +17316,13 @@ def translate_with_clause(with_clause, context):
                     or isinstance(_pval, (list, dict))
                 ):
                     context.non_integer_index_vars.add(alias)
+
+        _kinds_map = getattr(context, "static_scalar_kinds", None)
+        if _kinds_map is not None:
+            if isinstance(item.expression, ast.Variable) and item.expression.name in _kinds_map:
+                _kinds_map[alias] = _kinds_map[item.expression.name]
+            else:
+                _kinds_map.pop(alias, None)
 
         # Track literal list variables for list-comprehension constant folding.
         # When a WITH item binds a variable to a literal list, record the Python value so that

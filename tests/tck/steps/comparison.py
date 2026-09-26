@@ -14,9 +14,26 @@ class TCKValue:
 
     @staticmethod
     def parse(cell: str) -> "TCKValue":
-        cell = cell.strip()
+        cell = _gherkin_unescape(cell.strip())
         python = _parse_tck_value(cell)
         return TCKValue(raw=cell, python=python)
+
+
+def _gherkin_unescape(cell: str) -> str:
+    """Gherkin table-cell escapes (``\\\\``, ``\\n``); behave only handles ``\\|``."""
+    if "\\" not in cell:
+        return cell
+    out = []
+    i = 0
+    while i < len(cell):
+        c = cell[i]
+        if c == "\\" and i + 1 < len(cell) and cell[i + 1] in "\\n":
+            out.append("\\" if cell[i + 1] == "\\" else "\n")
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _parse_tck_value(s: str) -> Any:

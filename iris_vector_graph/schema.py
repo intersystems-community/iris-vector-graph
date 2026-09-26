@@ -1580,6 +1580,12 @@ CREATE OR REPLACE FUNCTION SQLUser.LIST_LAST(j VARCHAR(32000)) RETURNS VARCHAR(4
             """
 CREATE OR REPLACE FUNCTION SQLUser.STR_SPLIT(str VARCHAR(4000), delim VARCHAR(100)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { Set out = ##class(%Library.DynamicArray).%New(), n = $LENGTH(str, delim), i = 1  While i <= n { Do out.%Push($PIECE(str, delim, i))  Set i = i + 1 } Quit out.%ToJSON() }
 """,
+            """
+CREATE OR REPLACE FUNCTION SQLUser.CY_EXP_ORDKEY(v VARCHAR(32000), t VARCHAR(16)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New tt, top, k, arr, it, ix, el, et, x, neg, ex, m, ev Set tt = t, top = (t = "top"), k = "" If top { If v = "" { Quit "" } Set tt = "string" If $Extract(v) = "[" { Set tt = "array" } ElseIf $Extract(v) = "{" { Set tt = "object" } ElseIf $IsValidNum(v) { Set tt = "number" } ElseIf (v = "true") || (v = "false") { Set tt = "boolean" } } If tt = "string" { Set k = "B" _ v _ $Char(1) } ElseIf tt = "boolean" { Set k = "C" _ ((v = 1) || (v = "true")) } ElseIf tt = "null" { Set k = "E" } ElseIf tt = "object" { Set k = "@" _ v _ $Char(1) } ElseIf tt = "array" { Set arr = "" Try { Set arr = ##class(%Library.DynamicArray).%FromJSON(v) } Catch { Set arr = "" } If $IsObject(arr) = 0 { Set k = "B" _ v _ $Char(1) } Else { Set k = "A", it = arr.%GetIterator() While it.%GetNext(.ix, .el, .et) { If (et = "array") || (et = "object") { Set el = el.%ToJSON() } Set k = k _ ##class(User.funcCYEXPORDKEY).CYEXPORDKEY(el, et) } Set k = k _ $Char(1) } } Else { Set x = +v If x = 0 { Set k = "D1" } Else { Set neg = (x < 0) If neg { Set x = -x } Set ex = 0 While (x >= 10) { Set x = x / 10, ex = ex + 1 } While (x < 1) { Set x = x * 10, ex = ex - 1 } Set m = $Extract($Translate(x, ".") _ "00000000000000000000", 1, 20), ev = ex + 500 If neg { Set ev = 1000 - ev, m = $Translate(m, "0123456789", "9876543210"), k = "D0" _ ev _ m } Else { Set k = "D2" _ ev _ m } } } If top { Quit k _ $Char(2) _ v } Quit k }
+""",
+            """
+CREATE OR REPLACE FUNCTION SQLUser.CY_EXP_ORDVAL(k VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { If k = "" { Quit "" } Quit $Piece(k, $Char(2), 2, $Length(k, $Char(2))) }
+""",
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),

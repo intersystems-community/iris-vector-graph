@@ -960,3 +960,185 @@ class TestQuantifierOverCollect:
     def test_distinct_collect_keeps_the_list_path(self):
         sql = tr("UNWIND [1, 1] AS x RETURN any(v IN collect(DISTINCT x) WHERE v > 0) AS a").sql
         assert "JSON_TABLE" in sql
+
+class TestSmallestIntegerLiteral:
+    """Literals2 [8], Literals3 [8], Literals4 [8].
+
+    IRIS parses the SQL literal -9223372036854775808 as a rounded decimal
+    (-9223372036854775810); it must be built from representable parts.
+    """
+
+    @pytest.mark.parametrize(
+        "lit", ["-9223372036854775808", "-0x8000000000000000", "-0o1000000000000000000000"]
+    )
+    def test_min_int64_is_not_emitted_as_one_literal(self, lit):
+        sql = tr(f"RETURN {lit} AS literal").sql
+        assert "-9223372036854775808" not in sql
+        assert "(-9223372036854775807 - 1)" in sql
+
+
+class TestEmptyMapLiteralIsTyped:
+    """Literals8 [1]: a bare '{}' is literal-substituted by the IRIS statement
+    cache and inherits the type of an earlier `SELECT 0 AS literal`."""
+
+    def test_empty_map_is_cast_to_varchar(self):
+        sql = tr("RETURN {} AS literal").sql
+        assert "CAST('{}' AS VARCHAR" in sql
+
+
+class TestSimpleCaseCrossType:
+    """Conditional2 [1] @1.10/@1.11: CASE '0' WHEN 0 / CASE true WHEN 1 must not
+    match, since Cypher equality never holds across types."""
+
+    def test_string_test_value_skips_numeric_whens(self):
+        sql = tr(
+            "RETURN CASE '0' WHEN 0 THEN 'zero' WHEN 1 THEN 'one' "
+            "ELSE 'something else' END AS result"
+        ).sql
+        assert "'zero'" not in sql and "'one'" not in sql
+        assert "'something else'" in sql
+
+    def test_boolean_test_value_skips_numeric_whens(self):
+        sql = tr(
+            "RETURN CASE true WHEN 0 THEN 'zero' WHEN 1 THEN 'one' "
+            "ELSE 'something else' END AS result"
+        ).sql
+        assert "'zero'" not in sql and "'one'" not in sql
+
+    def test_same_type_whens_are_kept(self):
+        sql = tr("RETURN CASE 1 WHEN 0 THEN 'zero' WHEN 1 THEN 'one' END AS result").sql
+        assert "'zero'" in sql and "'one'" in sql
+
+    def test_all_whens_dropped_without_else_is_null(self):
+        sql = tr("RETURN CASE 'x' WHEN 1 THEN 'one' END AS result").sql
+        assert "'one'" not in sql
+        assert "NULL" in sql
+
+
+class TestNumericExpressionVersusStringOrdering:
+    """Comparison2 [5] @1.4: 0.0 / 0.0 > 'a' is null — ordering a number
+    against a string is undefined even when the number is computed."""
+
+    def test_arith_vs_string_is_null(self):
+        sql = tr("RETURN 0.0 / 0.0 > 'a' AS gt, 0.0 / 0.0 <= 'a' AS ltE").sql
+        assert sql.replace(" ", "").startswith("SELECTNULLASgt,NULLASltE")
+
+
+class TestGherkinCellUnescape:
+    """Literals6 [5]: Gherkin unescapes `\\\\` in table cells before the value
+    is read as a Cypher literal; behave only unescapes `\\|`."""
+
+    def test_double_backslash_in_cell(self):
+        from tests.tck.steps.comparison import TCKValue
+
+        cell = "'a\\\\\\\\bcn5t\\'\"\\\\\\\\//\\\\\\\\\"\\''"
+        assert TCKValue.parse(cell).python == 'a\\bcn5t\'"\\//\\"\''
+
+    def test_escaped_newline_cell(self):
+        from tests.tck.steps.comparison import TCKValue
+
+        assert TCKValue.parse("'\\nFoo\\n'").python == "\nFoo\n"
+
+
+class TestDisconnectedOptionalLabeledNode:
+    """Aggregation5 [2]: a second, disconnected OPTIONAL MATCH (n:Label) must
+    yield one null row when no node carries the label. A CROSS JOIN over all
+    nodes plus a WHERE label check drops every row instead."""
+
+    def test_left_joins_a_labeled_subquery(self):
+        sql = tr(
+            "OPTIONAL MATCH (f:DoesExist) OPTIONAL MATCH (n:DoesNotExist) "
+            "RETURN collect(DISTINCT n.num) AS a, collect(DISTINCT f.num) AS b"
+        ).sql
+        assert "CROSS JOIN" not in sql
+        assert "LEFT OUTER JOIN (SELECT" in sql
+        assert "ON 1=1" in sql
+
+
+class TestNestedQuantifierSqlSize:
+    """Quantifier6 [2]: single(x IN list WHERE single(y IN list WHERE ...))
+    blew the IRIS <STRINGSTACK> at Prepare because each quantifier repeated its
+    predicate (and so the nested subquery) five or six times."""
+
+    @pytest.mark.parametrize("outer", ["single", "any", "all", "none"])
+    @pytest.mark.parametrize("inner", ["single", "any", "all", "none"])
+    def test_nested_predicate_is_not_repeated(self, outer, inner):
+        sql = tr(
+            "WITH [1, 2, 3, 4, 5, 6, 7, 8, 9] AS list "
+            f"RETURN {outer}(x IN list WHERE {inner}(y IN list WHERE x % y = 1)) AS result"
+        ).sql
+        assert sql.count("JSON_TABLE") <= 3
+
+    def test_flat_quantifier_keeps_sum_counts(self):
+        # The SUM-count shape is what IRIS prepares reliably when an enclosing
+        # 3VL CASE repeats the quantifier (Quantifier7 [3], Precedence1 [23]).
+        sql = tr("WITH [1, 2] AS list RETURN single(x IN list WHERE x > 1) AS r").sql
+        assert "SUM(CASE WHEN qc" in sql and "COUNT(*)" in sql
+
+
+class TestStringPredicateOnUnwoundNonStrings:
+    """String8 [8], String9 [8], String10 [8]: operands unwound from a literal
+    list with no string element can never satisfy STARTS WITH / ENDS WITH /
+    CONTAINS; the result is null, not a coerced LIKE."""
+
+    @pytest.mark.parametrize("op", ["STARTS WITH", "ENDS WITH", "CONTAINS"])
+    def test_non_string_operands_give_null(self, op):
+        sql = tr(
+            "WITH [1, 3.14, true, [], {}, null] AS operands "
+            "UNWIND operands AS op1 UNWIND operands AS op2 "
+            f"WITH op1 {op} op2 AS v RETURN v, count(*)"
+        ).sql
+        assert "LIKE" not in sql
+
+    def test_string_elements_keep_like(self):
+        sql = tr(
+            "WITH ['a', 1] AS operands UNWIND operands AS op1 "
+            "WITH op1 STARTS WITH 'a' AS v RETURN v"
+        ).sql
+        assert "LIKE" in sql
+
+    def test_rebinding_clears_kinds(self):
+        sql = tr(
+            "UNWIND [1, 2] AS x WITH toString(x) AS x "
+            "RETURN x STARTS WITH '1' AS v"
+        ).sql
+        assert "LIKE" in sql
+
+
+class TestMinMaxOverMixedKinds:
+    """Aggregation2 [9], [11], [12]: min()/max() over values unwound from a
+    literal list holding lists or mixed kinds use Cypher orderability
+    (list < string < boolean < number, lists element-wise), not VARCHAR order."""
+
+    @pytest.mark.parametrize(
+        "src",
+        ["[[1], [2], [2, 1]]", "[1, 'a', null, [1, 2], 0.2, 'b']"],
+    )
+    def test_ordering_key_is_used(self, src):
+        sql = tr(f"UNWIND {src} AS x RETURN max(x)").sql
+        assert "CY_EXP_ORDKEY" in sql and "CY_EXP_ORDVAL" in sql
+
+    def test_single_kind_scalars_keep_native_aggregate(self):
+        sql = tr("UNWIND [1, 2, 3] AS x RETURN max(x)").sql
+        assert "CY_EXP_ORDKEY" not in sql
+
+    @pytest.mark.parametrize(
+        "src, fn, expected",
+        [
+            ("[[1], [2], [2, 1]]", "max", "[2,1]"),
+            ("[[1], [2], [2, 1]]", "min", "[1]"),
+            ("[1, 'a', null, [1, 2], 0.2, 'b']", "max", "1"),
+            ("[1, 'a', null, [1, 2], 0.2, 'b']", "min", "[1,2]"),
+            ("[-1.5, 'x', -1.55, [3]]", "max", "-1.5"),
+        ],
+    )
+    def test_cypher_orderability(self, iris_cursor, src, fn, expected):
+        from iris_vector_graph.schema import GraphSchema
+
+        for ddl in GraphSchema.get_procedures_sql_list():
+            if "CY_EXP_ORD" in ddl:
+                iris_cursor.execute(ddl.strip())
+        t = tr(f"UNWIND {src} AS x RETURN {fn}(x) AS m")
+        params = t.parameters[0] if t.parameters and isinstance(t.parameters[0], list) else t.parameters
+        iris_cursor.execute(t.sql, params)
+        assert str(iris_cursor.fetchall()[0][0]).replace(" ", "") == expected
