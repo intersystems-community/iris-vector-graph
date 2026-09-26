@@ -12464,6 +12464,25 @@ def _track_mixed_graph_value(alias, expr, context):
         values.add(alias)
 
 
+def _is_mixed_list_element(expr, context) -> bool:
+    """`l[i]` over a list mixing graph values with others, or a value taken from one:
+    the element is node / relationship JSON text, not a bare id."""
+    if isinstance(expr, ast.SubscriptExpression):
+        return isinstance(expr.expression, ast.Variable) and expr.expression.name in getattr(
+            context, "mixed_list_vars", set()
+        )
+    return isinstance(expr, ast.Variable) and expr.name in getattr(
+        context, "mixed_value_vars", set()
+    )
+
+
+def _mixed_element_node_id(sql):
+    return (
+        f"CASE WHEN SUBSTRING({sql}, 1, 7) = '{{\"_id\":' "
+        f"THEN SQLUser.JSON_VALUE({sql}, '$._id') ELSE {sql} END"
+    )
+
+
 def _mixed_graph_list_sql(items, context, segment):
     """JSON_ARRAY of a mixed list whose elements keep their type in their text:
     node / relationship JSON, path JSON, 'true' / 'false', 'NaN'. CY_SORT_KEY and
@@ -12804,8 +12823,18 @@ def _expr_property_access(expr, context, segment):
     if isinstance(expr.expression, ast.SubscriptExpression) and "?" not in base_sql:
         # A list element is either a map (JSON object) or a node, which lists carry
         # as its id; read a node's property from rdf_props.
+        _graph_whens = ""
+        if _is_mixed_list_element(expr.expression, context):
+            # Element of a mixed list: node / relationship JSON (_mixed_graph_list_sql).
+            _graph_whens = (
+                f" WHEN SUBSTRING({base_sql}, 1, 7) = '{{\"_id\":' THEN (SELECT val FROM "
+                f"{_table('rdf_props')} WHERE s = SQLUser.JSON_VALUE({base_sql}, '$._id') "
+                f"AND \"key\" = '{prop}')"
+                f" WHEN SUBSTRING({base_sql}, 1, 9) = '{{\"type\":\"' "
+                f"THEN SQLUser.JSON_VALUE({base_sql}, '$.props.{prop}')"
+            )
         return (
-            f"CASE WHEN ({base_sql}) IS NULL THEN NULL"
+            f"CASE WHEN ({base_sql}) IS NULL THEN NULL{_graph_whens}"
             f" WHEN SUBSTRING({base_sql}, 1, 1) = '{{' THEN SQLUser.JSON_VALUE({base_sql}, '$.{prop}')"
             f" ELSE (SELECT val FROM {_table('rdf_props')} WHERE s = {base_sql} AND \"key\" = '{prop}') END"
         )
@@ -17637,6 +17666,8 @@ def _expr_fn_node_funcs(fn, args_exprs, args, context):
                     else "p"
                 )
                 return f"{context_alias}.{p_col}"
+        if args_exprs and args and _is_mixed_list_element(args_exprs[0], context):
+            return f"SQLUser.JSON_VALUE({args[0]}, '$.type')"
         return args[0] if args else "NULL"
     if fn == "startnode":
         if args_exprs and isinstance(args_exprs[0], ast.Variable):
@@ -17948,7 +17979,10 @@ def _expr_function_call(expr, context, segment):
     if fn == "labels":
         _check_labels_argument(expr.arguments[0] if expr.arguments else None, context)
         removed = getattr(context, "_removed_labels", None)
-        return labels_subquery(args[0] if args else "NULL", exclude_labels=removed or None)
+        _arg = args[0] if args else "NULL"
+        if expr.arguments and _is_mixed_list_element(expr.arguments[0], context):
+            _arg = _mixed_element_node_id(_arg)
+        return labels_subquery(_arg, exclude_labels=removed or None)
     if fn == "properties":
         if expr.arguments:
             arg0 = expr.arguments[0]

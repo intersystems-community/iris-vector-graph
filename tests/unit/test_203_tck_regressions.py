@@ -2538,3 +2538,35 @@ class TestHarnessOrderedMixedTypes:
             {"types": '{"a": "map"}'},
         ]
         assert t.compare(rows, ["types"]) is None
+
+
+class TestMixedGraphListElementAccess:
+    """Graph3 [6], Graph4 [5], Graph6 [4]: an element of a list mixing graph values
+    with others is node / relationship JSON, so labels(), type() and property access
+    read the id / type / props out of it."""
+
+    @staticmethod
+    def _sql(q):
+        return translate_to_sql(parse_query(q)).sql
+
+    def test_labels_of_mixed_list_element_reads_id(self):
+        sql = self._sql("MATCH (a) WITH [a, 1] AS list RETURN labels(list[0]) AS l")
+        assert "'$._id'" in sql.split("FROM Stage1", 1)[-1] or "'$._id'" in sql.rsplit("SELECT", 1)[-1]
+
+    def test_type_of_mixed_list_element_reads_type(self):
+        sql = self._sql("MATCH ()-[r]->() WITH [r, 1] AS list RETURN type(list[0])")
+        assert "'$.type'" in sql.rsplit("SELECT", 1)[-1]
+
+    def test_property_of_mixed_list_node_element(self):
+        sql = self._sql("MATCH (n) WITH [123, n] AS list RETURN (list[1]).existing")
+        tail = sql.rsplit("SELECT CASE", 1)[-1]
+        assert "'$._id'" in tail and "\"key\" = 'existing'" in tail
+
+    def test_property_of_mixed_list_rel_element(self):
+        sql = self._sql("MATCH ()-[r]->() WITH [123, r] AS list RETURN (list[1]).k")
+        assert "'$.props.k'" in sql.rsplit("SELECT CASE", 1)[-1]
+
+    def test_plain_id_list_sql_unchanged(self):
+        # Not a mixed list: no JSON unwrapping.
+        sql = self._sql("MATCH (a) WITH [a] AS list RETURN labels(list[0]) AS l")
+        assert "'$._id'" not in sql.rsplit("SELECT", 1)[-1]
