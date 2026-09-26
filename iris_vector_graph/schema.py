@@ -1595,6 +1595,9 @@ CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_HAS(k VARCHAR(32000), s VARCHAR(512), 
             """
 CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_DISJOINT(a VARCHAR(32000), b VARCHAR(32000)) RETURNS INTEGER LANGUAGE OBJECTSCRIPT { If (a = "") || (b = "") { Quit 1 } New r, n, i, e Set r = 1, n = $Length(a, $Char(2)) For i = 2 : 1 : (n - 1) { Set e = $Piece(a, $Char(2), i) If (e = "") = 0 { If b [ ($Char(2) _ e _ $Char(2)) { Set r = 0 Quit } } } Quit r }
 """,
+            """
+CREATE OR REPLACE FUNCTION SQLUser.CY_VLP_OPT(paths VARCHAR(32000), tmode INTEGER, tgt VARCHAR(512), labels VARCHAR(4000), ltbl VARCHAR(256)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, out, i, o, t, keep, la, nl, j, sql, rs, q Set q = $Char(63), out = ##class(%Library.DynamicArray).%New() If (paths = "") || (paths = $Char(0)) { Set paths = "[]" } If tgt = $Char(0) { Set tgt = "" } If labels = $Char(0) { Set labels = "" } Set a = ##class(%Library.DynamicArray).%FromJSON(paths), nl = 0 If (labels = "") = 0 { Set la = ##class(%Library.DynamicArray).%FromJSON(labels), nl = la.%Size() } Set sql = "SELECT 1 FROM " _ ltbl _ " l WHERE l.s = " _ q _ " AND l.label = " _ q For i = 0 : 1 : (a.%Size() - 1) { Set o = a.%Get(i), t = o.%Get("t"), keep = 1 If tmode { If (tgt = "") || ((t = tgt) = 0) { Set keep = 0 } } For j = 0 : 1 : (nl - 1) { If keep { Set rs = ##class(%SQL.Statement).%ExecDirect(, sql, t, la.%Get(j)) If rs.%Next() = 0 { Set keep = 0 } } } If keep { Do out.%Push(o) } } If out.%Size() = 0 { Quit "[{}]" } Quit out.%ToJSON() }
+""",
             f"""
 CREATE OR REPLACE PROCEDURE {table_schema}.kg_KNN_VEC(
   IN queryInput VARCHAR(32000),
