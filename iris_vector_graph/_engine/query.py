@@ -311,6 +311,23 @@ def _bool_expr_value(v):
     return v
 
 
+_INTERNAL_COLUMN = re.compile(r"__sort\d+(?:_[ns])?")
+
+
+def _drop_internal_columns(result) -> None:
+    """Remove the translator's __sortN sort-key columns (and their values) from a result."""
+    columns = list(getattr(result, "columns", None) or [])
+    drop = [i for i, c in enumerate(columns) if _INTERNAL_COLUMN.fullmatch(str(c))]
+    if not drop:
+        return
+    keep = [i for i in range(len(columns)) if i not in set(drop)]
+    result.columns = [columns[i] for i in keep]
+    result.rows = [[row[i] for i in keep if i < len(row)] for row in (result.rows or [])]
+    bolt = getattr(result, "bolt_column_types", None)
+    if bolt and len(bolt) == len(columns):
+        result.bolt_column_types = [bolt[i] for i in keep]
+
+
 def _decode_bool_text_columns(result, sql_query) -> None:
     """Read 'true' / 'false' as booleans in columns that return a stored property,
     and 1 / 0 as booleans in columns whose value is statically boolean
@@ -433,7 +450,23 @@ def _return_item_name(item) -> str:
         return e.name
     if isinstance(e, _ast.PropertyReference):
         return f"{e.variable}.{e.property_name}"
-    return str(e)
+    return getattr(item, "source_text", None) or str(e)
+
+
+def _fill_empty_columns(result, parsed) -> None:
+    """An empty result still carries the RETURN clause's column names; several routes
+    (var-length BFS, DML with LIMIT 0, subqueries) return columns=[] when no row comes back."""
+    from iris_vector_graph.cypher import ast as _ast
+
+    if result is None or getattr(result, "error", None) or result.columns or result.rows:
+        return
+    ret = getattr(parsed, "return_clause", None)
+    items = list(getattr(ret, "items", None) or [])
+    if not items or any(
+        isinstance(it.expression, _ast.Literal) and it.expression.value == "*" for it in items
+    ):
+        return
+    result.columns = [it.alias or _return_item_name(it) for it in items]
 
 
 # Rows a count-only CREATE pipeline (cypher.count_create) may fan out to.
@@ -595,7 +628,9 @@ class QueryMixin:
         count_create = plan_count_create(parsed, parameters)
         if count_create is not None:
             return self._execute_count_create(count_create, parameters, procedures)
-        return self._execute_parsed(parsed, parameters, procedures)
+        result = self._execute_parsed(parsed, parameters, procedures)
+        _fill_empty_columns(result, parsed)
+        return result
 
 
     def _execute_count_create(self, steps, parameters, procedures=None):
@@ -669,6 +704,7 @@ class QueryMixin:
             _ledger_check(self, "cypher_dml")
             result = self._store.execute_transaction(sql_query.sql, sql_query.parameters)
             result.metadata = metadata
+            _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
             if sql_query.column_name_map and result.columns:
@@ -681,6 +717,7 @@ class QueryMixin:
             p = sql_query.parameters[0] if sql_query.parameters else []
             result = self._store.execute_sql(sql_str, p)
             result.metadata = metadata
+            _drop_internal_columns(result)
             _decode_bool_text_columns(result, sql_query)
             _decode_numeric_expr_columns(result, sql_query)
             if sql_query.bolt_column_types:

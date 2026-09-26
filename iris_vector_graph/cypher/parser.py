@@ -1093,6 +1093,13 @@ class Parser:
             properties=props,
         )
 
+    def _source_between(self, start: int, end: int) -> Optional[str]:
+        """The query text from offset `start` up to `end`, trimmed; None if unavailable."""
+        source = getattr(self.lexer, "source", None)
+        if not isinstance(source, str) or not (0 <= start < end <= len(source)):
+            return None
+        return source[start:end].strip() or None
+
     def parse_return_clause(self) -> ast.ReturnClause:
         """Parse RETURN a, b.prop AS alias"""
         self.expect(TokenType.RETURN)
@@ -1101,12 +1108,14 @@ class Parser:
         items = []
 
         while True:
+            start = self.peek().pos
             expr = self.parse_expression()
+            source_text = self._source_between(start, self.peek().pos)
             alias = None
             if self.matches(TokenType.AS):
                 alias = self.expect_identifier_or_keyword().value
 
-            items.append(ast.ReturnItem(expression=expr, alias=alias))
+            items.append(ast.ReturnItem(expression=expr, alias=alias, source_text=source_text))
 
             if not self.matches(TokenType.COMMA):
                 break
