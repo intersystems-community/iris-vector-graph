@@ -117,7 +117,26 @@ def before_all(context):
     _enable_tck_multigraph(context)
 
 
+# Tags that upstream uses to take a scenario out of the suite. The vendored TCK
+# has one: Graph5 [2]. @skipGrammarCheck / @skipStyleCheck are for the
+# openCypher grammar and style tooling, not for engines, so they still run.
+UPSTREAM_IGNORE_TAGS = frozenset({"ignore"})
+
+
+def _upstream_ignored(tags) -> bool:
+    """True when a scenario is tagged @ignore upstream and should be skipped.
+
+    ``IVG_TCK_RUN_IGNORED=1`` runs such scenarios anyway (scripts/tck/summarize.py
+    still reports them as ignored, outside the denominator).
+    """
+    if os.environ.get("IVG_TCK_RUN_IGNORED") == "1":
+        return False
+    return bool(set(tags) & UPSTREAM_IGNORE_TAGS)
+
+
 def before_scenario(context, scenario):
+    if _upstream_ignored(getattr(scenario, "effective_tags", ())):
+        scenario.skip(reason="tagged @ignore upstream")
     context.scenario_label = f"TCK_{uuid4().hex[:8]}"
     context.params = {}
     context.last_result = None
