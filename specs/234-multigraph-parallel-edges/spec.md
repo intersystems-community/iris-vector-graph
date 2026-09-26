@@ -51,7 +51,7 @@ exists today.
 - Q: What does `create_edge` return in a multigraph? → A: unchanged
   (True/False). A new `create_edge_returning_id()` returns the new `edge_id`.
 
-## User Scenarios & Testing _(mandatory)_
+## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Parallel edges in a multigraph (Priority: P1)
 
@@ -199,7 +199,7 @@ fingerprints and row counts with the pre-upgrade values.
 - **`BuildKG` rebuilding a multigraph**: it rebuilds children and counters from
   `rdf_edges` rows. It must produce the same `^KG` as incremental writes.
 
-## Requirements _(mandatory)_
+## Requirements *(mandatory)*
 
 ### Functional Requirements
 
@@ -307,7 +307,7 @@ fingerprints and row counts with the pre-upgrade values.
   PPR and BFS results in a multigraph graph MUST equal the results of the same
   graph with its parallel edges collapsed.
 - **FR-016**: With multigraph off everywhere, the full TCK run MUST show zero
-  regressions against the best-ever baseline (3724/3897). Every unit and E2E
+  regressions against `/tmp/tck_r4_base.tsv` (3835/3897; best full run 3855, r5). Every unit and E2E
   suite MUST keep its `92b078e` pass rate.
 
 ### Non-goals
@@ -334,7 +334,7 @@ fingerprints and row counts with the pre-upgrade values.
   comparisons. The ledger statement id stays the ledger's identity, mapped to
   one `(s, p, o, g, ekey)`.
 
-## Success Criteria _(mandatory)_
+## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
