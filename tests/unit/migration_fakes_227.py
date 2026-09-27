@@ -150,6 +150,7 @@ class MigrationCursor(FakeCursor):
             self._registry_scan,
             self._keys_of,
             self._max_of,
+            self._doubled_keys,
             self._structural_read,
             self._insert_select,
             self._insert_values,
@@ -245,6 +246,12 @@ class MigrationCursor(FakeCursor):
             rows = [r for r in rows if r.get("source_table") == args[0]]
         values = [str(r[column]) for r in rows if r.get(column) is not None]
         return [(max(values),)] if values else [(None,)]
+
+    def _doubled_keys(self, flat, upper, args):
+        """The re-key's post-dedupe check for a natural key still held twice."""
+        if not upper.startswith("SELECT") or "HAVING COUNT(*) > 1" not in upper:
+            return None
+        return []
 
     def _structural_read(self, flat, upper, args):
         """The label/prop rows whose node does not sit in exactly one graph."""
@@ -377,6 +384,11 @@ class MigrationCursor(FakeCursor):
         rows = self.registry.data.get(table)
         if rows is None:
             return None
+        if " NOT IN (SELECT MIN(" in upper:
+            # The re-key's dedupe of exact label/prop copies. This fake's child rows
+            # are never duplicated, and it is not a row move: it deletes nothing.
+            self.registry.ddl.append(flat)
+            return []
         columns = [
             part.split("=")[0].strip().strip('"')
             for part in flat.split(" WHERE ", 1)[1].split(" AND ")

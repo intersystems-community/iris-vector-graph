@@ -91,6 +91,49 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
   `python -m iris_demo_server.services.fhir_demo_data`, which PUTs 200 synthetic
   patients (885 resources) through the FHIR service.
 
+**Genomics on the FHIR graph** (spec 233)
+
+- `fhir_expand_concepts` and `fhir_concept_ppr` take `direction="in"|"out"|"both"`,
+  default `"in"`. Hierarchy edges in OWL, SKOS and OBO (`subClassOf`, `broader`,
+  `is_a`) point from child to parent, so in-edges reach a class's subclasses and a
+  disease's genes. A `narrower` graph such as the demo's passes `"out"`. Any other value
+  raises `ValueError`.
+- Measured on 377 HL7 Genomics Reporting IG examples (pinned, sha256 and license in
+  `tests/e2e/fixtures/fhir/genomics/SOURCE.md`) with no new sync code: 1,363 edges
+  over 13 params, 2 contained references, no unresolved rows. 62 references have no
+  edge because no R4 search param indexes their path (`extension.valueReference`,
+  Task `reasonReference`, ...).
+- Concept graph: a MONDO, HGNC and Sequence Ontology slice, 456 nodes and 650 edges;
+  crosswalk 136 clean rows, 1 normalized, 3 unmapped. Genes sit in Observation
+  components, so the default `params=["code"]` finds none of them; use
+  `component-value-concept`. From `MONDO_0019052` (`direction="in"`, 6 hops): 20
+  concepts, 7 Observations, 2 Patients; resolve 4 ms and concept-PPR 25 ms median.
+- A model result (Device, prediction Observation, Provenance) syncs to `target`,
+  `agent` and `entity` edges; `Provenance.target` is documented as a PPR hub-denylist
+  candidate.
+- Tests: `tests/{unit,integration,e2e}/test_233_*.py`; guide section "Genomics" in
+  `docs/FHIR_GRAPH.md`.
+
+**Fixed** (spec 233)
+
+- `materialize_inference` wrote inferred rows to `rdf_edges` only, after `import_rdf`
+  had run BuildKG, so no `^KG` walker (concept expansion, BFS, PPR) saw them. Each
+  inferred edge now goes through `EdgeScan.WriteAdjacency`, and `retract_inference`
+  removes it from `^KG` unless an asserted row for the same triple remains.
+- `materialize_inference` read its domain/range, TransitiveProperty and
+  SymmetricProperty rules from `rdf_edges` with no graph predicate (domain/range
+  under `LIMIT 50000`), so one graph's rules ran over any graph's edges. Every read is
+  now scoped to the target graph and unbounded.
+- Arno default-graph PPR (`ArnoAccel.PPRJson`) answered from garbage in any process
+  that had loaded the Arno library. `BuildGraphJson` walked the pre-214 layout
+  `^KG("out",s,p,o)` and listed graph keys as nodes; it now walks the default graph
+  `^KG("out",0,...)` only. Its cache stamp `^KG("__version")` was bumped only by
+  `Eraser`; `EdgeScan.WriteAdjacency`, `WriteAdjacencyShadow`, `DeleteAdjacency`,
+  `TraversalBuild.BuildKG` and `LedgerApply` now bump it too.
+- Known, not fixed: `^ArnoKG("KG","nkg_adj")` is an all-graph `^NKG` snapshot, warmed
+  by betweenness and cleared only by BuildKG. While it exists, Arno `*_global` calls
+  answer from it across graphs.
+
 **Deprecated, removed in 5.0**
 
 - `fhir_bridge.get_kg_anchors` and `unified_clinical_pipeline`: use
@@ -207,6 +250,50 @@ upstream and is excluded), on `irishealth:2026.3.0AI.113.0`.
   never listed `fhir_bridges`. It now checks `INFORMATION_SCHEMA.TABLES` and reports the
   real primary key, `pk_bridge (fhir_code, kg_node_id)`.
 - `docs/SEMANTIC_LAYER.md` documented an `import_fhir_bundle` that does not exist.
+
+**Fixed: 4.0.0 migration of 3.x installs** (found on a 3.2.0-era install with about
+1.6M props and 243k labels)
+
+- The `rdf_edges` rescue could not resume. If the restore failed after `Graph.KG.Edge`
+  was deleted, the rows stayed in `rdf_edges__ivg400rescue`, and the re-run that
+  `RdfEdgesRescueError` advised was a silent no-op that reported success.
+  `initialize_schema` now resumes from a rescue table whenever one exists, on both
+  deploy paths.
+  - Staging never drops an existing rescue table.
+  - The `SQLUser.rdf_edges` view and any leftover `rdf_edges` table are dropped
+    before the rebuild. The table is dropped only if the rescue table holds every one
+    of its rows.
+- Duplicate rows from 3.x failed the restore on `u_spo_graph`. v3.2.0's bulk loader
+  wrote them with `INSERT %NOINDEX %NOCHECK`. The restore now keeps one row per key:
+  - rows that are exact copies (qualifiers compared with `%EXACT`) are collapsed;
+  - rows with the same key but different qualifiers are quarantined;
+  - `restore_rescued_rdf_edges` returns the staged, restored, collapsed and
+    quarantined counts.
+- Duplicate labels and props blocked the composite primary keys. They are now removed
+  first, keeping the lowest `%ID`. Props that share a key but hold different values
+  refuse the re-key and are listed in `MigrationReport.key_conflicts`.
+- `_rekey_children` treated `rdf_labels.graph_id` as proof that the re-key had
+  finished, so a run killed partway through never completed. It now checks the
+  catalog (keys and nullability) and finishes on re-run.
+- A legacy `PRIMARY KEY (node_id)`, such as `NODES_PKEY1`, survived the re-key, so a
+  second graph's copy of a node id failed with `-119`. The re-key now drops every
+  unique key on exactly `(node_id)`, whatever its name, and adds
+  `pk_nodes_graph (node_id, graph_id)`. An IDKEY or an unknown dependent foreign key
+  refuses and is listed in `node_key_blockers`.
+- `delete_nodes` erased an id from every graph. It also built one `IN` list for the
+  whole batch, which failed to prepare past about 2,000 ids (`-202`), returned the
+  number of ids it was given instead of the rows removed, and left `^KG`, `^NKG` and
+  embeddings stale. `delete_edges` had the same problems. Both now chunk at 500 ids,
+  return the rows removed, and clean up through `Graph.KG.Eraser` when it is
+  compiled.
+- New: `Graph.KG.Eraser.EraseNodes(pGraph, pPrefix)` and
+  `engine.delete_nodes_by_prefix(prefix, graph=None)`. An empty prefix is refused;
+  use `EraseGraph` to erase a whole graph.
+
+**Changed**
+
+- `store.delete_nodes` and `store.delete_edges` take a keyword `graph=`. Without it
+  they affect only the default graph. They used to affect every graph.
 
 ### v4.0.0 (2026-09-22)
 

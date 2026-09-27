@@ -34,7 +34,8 @@ migration. Those rows are counted and named in ``MigrationReport.structural_bloc
 """
 
 import logging
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from iris_vector_graph.constants import DEFAULT_GRAPH
@@ -96,6 +97,25 @@ _ALREADY_DONE = (
 #: How IRIS reports the unique-constraint violation that makes a re-run idempotent.
 _DUPLICATE = ("-119", "unique constraint")
 
+#: The structural references the re-key re-points, and the columns each ends on.
+_REKEYED_REFERENCES = {
+    ("rdf_labels", "fk_labels_node"): ["graph_id", "s"],
+    ("rdf_edges", "fk_edges_source"): ["graph_id", "s"],
+    ("rdf_edges", "fk_edges_dest"): ["graph_id", "o_id"],
+}
+
+#: Every reference to ``nodes`` the re-key knows how to drop and put back — the three
+#: above, and the two the embedding reshape re-declares (``_FOREIGN_KEYS``).
+_KNOWN_NODE_REFERENCES = set(_REKEYED_REFERENCES) | {
+    (table, name) for table, name in _FOREIGN_KEYS.items()
+}
+
+#: ``{child table: (primary key, last key column)}`` once re-keyed on ``graph_id``.
+_CHILD_KEYS = {"rdf_labels": ("pk_labels", "label"), "rdf_props": ("pk_props", "key")}
+
+#: ``DATA_TYPE`` values IRIS reports for a stream column, which ``=`` cannot compare.
+_STREAM_TYPES = ("longvarchar", "longvarbinary", "clob", "blob", "stream")
+
 
 @dataclass(frozen=True)
 class AmbiguousVector:
@@ -123,11 +143,41 @@ class MigrationReport:
     #: ``{child_table: [node_id, ...]}`` for rows whose node is not in exactly one
     #: graph. Non-empty means the structural re-key was refused, not attempted.
     structural_blockers: Dict[str, List[str]] = field(default_factory=dict)
+    #: ``{child_table: rows}`` of exact duplicates collapsed to the lowest ``%ID``
+    #: before the composite primary key was added (predicted, on a dry run).
+    duplicates_removed: Dict[str, int] = field(default_factory=dict)
+    #: ``{child_table: [(s, key), ...]}`` for props whose copies disagree on the
+    #: value. Non-empty means the re-key was refused: keeping one would be a guess.
+    key_conflicts: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
+    #: Keys on ``nodes`` over ``node_id`` alone, whatever their name, that the re-key
+    #: drops (e.g. ``NODES_PKEY1``, the inline primary key of a 2.x-born table).
+    legacy_node_keys: List[str] = field(default_factory=list)
+    #: ``{key: reason}`` for a legacy key the re-key cannot drop safely — an IDKEY, or
+    #: one a foreign key it does not know still references. Non-empty means refused.
+    node_key_blockers: Dict[str, str] = field(default_factory=dict)
 
     @property
     def rows_accounted(self) -> int:
         """Placed + quarantined. Must equal the pre-upgrade row count (FR-026)."""
         return sum(self.rows_placed.values()) + sum(self.rows_quarantined.values())
+
+
+@dataclass(frozen=True)
+class RekeyOutcome:
+    """What the structural re-key found, and whether it ran."""
+
+    #: True once the schema is fully re-keyed — before this pass, or by it.
+    complete: bool = False
+    blockers: Dict[str, List[str]] = field(default_factory=dict)
+    key_conflicts: Dict[str, List[Tuple[str, str]]] = field(default_factory=dict)
+    duplicates_removed: Dict[str, int] = field(default_factory=dict)
+    legacy_node_keys: List[str] = field(default_factory=list)
+    node_key_blockers: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def refused(self) -> bool:
+        """True when running the re-key would lose or guess at data."""
+        return bool(self.blockers or self.key_conflicts or self.node_key_blockers)
 
 
 @dataclass(frozen=True)
@@ -204,9 +254,7 @@ class _Migrator:
         self.engine = IRISGraphEngine(self.conn, vector_dtype="DOUBLE")
         cursor = self.conn.cursor()
         try:
-            blockers = self._structural_blockers(cursor)
-            if not blockers and not self.dry_run:
-                self._rekey_children(cursor)
+            rekey = self.rekey(cursor)
 
             # A refused re-key leaves `nodes` keyed by node_id alone, so the composite
             # reference a rebuilt embedding table declares has nothing to point at
@@ -214,7 +262,7 @@ class _Migrator:
             # reference while every generated route has one — the asymmetry FR-008 is
             # there to prevent. Nothing is written, so the report is the predicted one
             # and it carries the blockers that stopped the pass.
-            writing = not self.dry_run and not blockers
+            writing = not self.dry_run and not rekey.refused
 
             plans: List[_Plan] = []
             reshaped = False
@@ -236,52 +284,385 @@ class _Migrator:
                 self._install_procedures(cursor)
 
             if not writing:
-                return self._predicted(plans, blockers)
-            return self._observed(cursor, plans, blockers)
+                return self._predicted(plans, rekey)
+            return self._observed(cursor, plans, rekey)
         finally:
             self._close(cursor)
 
     # --------------------------------------------------------- the structural half
 
+    def rekey(self, cursor) -> RekeyOutcome:
+        """Give ``rdf_labels`` / ``rdf_props`` a ``graph_id`` and key ``nodes`` per graph.
+
+        Decided from the state the catalog is in, never from a marker a previous pass
+        left: a pass killed anywhere in the statement list is resumed by running the
+        list again, and a finished re-key is recognised and not redone.
+
+        Refused, with nothing written, when finishing it would lose or guess at data:
+        a child row whose node is not in exactly one graph (FR-036), a prop whose
+        duplicate copies disagree on the value, or a legacy key over ``node_id`` alone
+        that cannot be dropped safely. A dry run reports the same findings, including
+        how many exact duplicates the run would collapse.
+        """
+        keys = self._catalog_keys(cursor)
+        legacy = self._node_id_only_keys(keys)
+        if self._rekeyed(cursor, keys, legacy):
+            return RekeyOutcome(complete=True)
+
+        outcome = RekeyOutcome(
+            blockers=self._structural_blockers(cursor),
+            key_conflicts=self._key_conflicts(cursor),
+            duplicates_removed=self._duplicates(cursor),
+            legacy_node_keys=legacy,
+            node_key_blockers=self._node_key_blockers(cursor, keys, legacy),
+        )
+        if outcome.refused:
+            self._log_refusal(outcome)
+            return outcome
+        if self.dry_run:
+            return outcome
+
+        removed = self._rekey_children(cursor, keys, legacy)
+        if removed:
+            logger.info(
+                "Collapsed exact duplicate rows before keying on graph_id: %s",
+                ", ".join(f"{t}: {n}" for t, n in sorted(removed.items())),
+            )
+        if legacy:
+            logger.info("Dropped keys on nodes over node_id alone: %s", ", ".join(legacy))
+        return replace(outcome, complete=True, duplicates_removed=removed)
+
     def _structural_blockers(self, cursor) -> Dict[str, List[str]]:
-        """Child rows whose node is not in exactly one graph (FR-036).
+        """Child rows with no graph yet whose node is not in exactly one graph (FR-036).
 
         Read before anything is written, because the answer decides whether the re-key
         can run at all: its ``ALTER COLUMN graph_id NOT NULL`` fails on exactly these
         rows, and the failure would land half way through a statement list whose order
-        is not interchangeable.
+        is not interchangeable. A table that already declares ``graph_id`` — a resumed
+        pass — is asked only about the rows the backfill has not placed.
         """
         blockers: Dict[str, List[str]] = {}
         nodes = self._t("nodes")
         for table in _CHILD_TABLES:
             if not self._declares(cursor, table, "s"):
                 continue  # not this schema's table
-            if self._declares(cursor, table, "graph_id"):
-                continue  # already re-keyed, so every row has a graph
+            unplaced = (
+                "c.graph_id IS NULL AND " if self._declares(cursor, table, "graph_id") else ""
+            )
             rows = self._read(
                 cursor,
-                f"SELECT c.s FROM {self._t(table)} c WHERE "
+                f"SELECT c.s FROM {self._t(table)} c WHERE {unplaced}"
                 f"(SELECT COUNT(DISTINCT n.graph_id) FROM {nodes} n "
                 f"WHERE n.node_id = c.s) <> 1",
             )
             named = sorted({str(r[0]) for r in rows if r and r[0] is not None})
             if named:
                 blockers[table] = named
-        if blockers:
+        return blockers
+
+    def _same_key(self, cursor, table: str) -> str:
+        """``k`` and ``d`` are the same child row by its natural key.
+
+        ``s`` decides the graph — the blockers read guarantees it — so a row the
+        backfill has not reached yet (``graph_id`` still ``NULL``) is compared as if it
+        already held its node's graph.
+        """
+        tail = '"key"' if table == "rdf_props" else "label"
+        clause = f"k.s = d.s AND k.{tail} = d.{tail}"
+        if self._declares(cursor, table, "graph_id"):
+            clause += " AND (k.graph_id = d.graph_id OR k.graph_id IS NULL OR d.graph_id IS NULL)"
+        return clause
+
+    def _val_is_stream(self, cursor) -> bool:
+        rows = self._read(
+            cursor,
+            "SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            [self.engine._schema_prefix, "rdf_props", "val"],
+        )
+        kind = str(rows[0][0] if rows and rows[0] else "").lower()
+        return any(t in kind for t in _STREAM_TYPES)
+
+    def _key_conflicts(self, cursor) -> Dict[str, List[Tuple[str, str]]]:
+        """Props whose copies disagree on the value — two facts, not one duplicate.
+
+        ``val`` has been ``VARCHAR(64000)`` in every released DDL, so ``=`` decides it
+        exactly. Were it a stream, nothing could prove two copies equal, and every
+        duplicate key is reported rather than collapsed on a guess.
+        """
+        table = "rdf_props"
+        if not self._declares(cursor, table, "s"):
+            return {}
+        q = self._t(table)
+        differs = (
+            ""
+            if self._val_is_stream(cursor)
+            else " AND (k.val <> d.val OR (k.val IS NULL AND d.val IS NOT NULL)"
+            " OR (k.val IS NOT NULL AND d.val IS NULL))"
+        )
+        rows = self._read(
+            cursor,
+            f'SELECT d.s, d."key" FROM {q} d WHERE EXISTS (SELECT 1 FROM {q} k WHERE '
+            f"{self._same_key(cursor, table)} AND k.%ID <> d.%ID{differs})",
+        )
+        named = sorted({(str(r[0]), str(r[1])) for r in rows if r})
+        return {table: named} if named else {}
+
+    def _duplicates(self, cursor) -> Dict[str, int]:
+        """Rows the dedupe will delete: exact copies of a row with a lower ``%ID``."""
+        counts: Dict[str, int] = {}
+        for table in _CHILD_TABLES:
+            if not self._declares(cursor, table, "s"):
+                continue
+            if table == "rdf_props" and self._val_is_stream(cursor):
+                continue  # refused by _key_conflicts; nothing is collapsed
+            q = self._t(table)
+            same = (
+                " AND (k.val = d.val OR (k.val IS NULL AND d.val IS NULL))"
+                if table == "rdf_props"
+                else ""
+            )
+            rows = self._read(
+                cursor,
+                f"SELECT d.%ID FROM {q} d WHERE EXISTS (SELECT 1 FROM {q} k WHERE "
+                f"{self._same_key(cursor, table)}{same} AND k.%ID < d.%ID)",
+            )
+            if rows:
+                counts[table] = len(rows)
+        return counts
+
+    def _catalog_keys(self, cursor) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """``{(table, name): {type, cols, ref}}`` for every key in the schema."""
+        rows = self._read(
+            cursor,
+            "SELECT TABLE_NAME, CONSTRAINT_NAME, CONSTRAINT_TYPE, COLUMN_NAME, "
+            "ORDINAL_POSITION, REFERENCED_TABLE_NAME, REFERENCED_CONSTRAINT_NAME "
+            "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ?",
+            [self.engine._schema_prefix],
+        )
+        keys: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        ordered: Dict[Tuple[str, str], List[Tuple[int, str]]] = {}
+        for row in rows:
+            if not row or len(row) < 7:
+                continue
+            table, name, kind, column, position, ref_table, ref_name = row[:7]
+            key = (str(table), str(name))
+            entry = keys.setdefault(
+                key,
+                {
+                    "type": str(kind or "").upper(),
+                    "cols": [],
+                    "ref": (str(ref_table), str(ref_name)) if ref_table else None,
+                },
+            )
+            if entry["ref"] is None and ref_table:
+                entry["ref"] = (str(ref_table), str(ref_name))
+            ordered.setdefault(key, []).append((self._int(position) or 0, str(column)))
+        for key, cols in ordered.items():
+            keys[key]["cols"] = [c for _p, c in sorted(cols)]
+        return keys
+
+    @staticmethod
+    def _node_id_only_keys(keys) -> List[str]:
+        """Every unique or primary key on ``nodes`` whose column set is ``(node_id)``."""
+        return sorted(
+            name
+            for (table, name), k in keys.items()
+            if table.lower() == "nodes"
+            and k["type"] in ("PRIMARY KEY", "UNIQUE")
+            and [c.lower() for c in k["cols"]] == ["node_id"]
+        )
+
+    def _rekeyed(self, cursor, keys, legacy: List[str]) -> bool:
+        """True when the catalog is already what the statement list produces."""
+        if legacy:
+            return False
+
+        def cols(table, name):
+            k = keys.get((table, name))
+            return [c.lower() for c in k["cols"]] if k else None
+
+        if cols("nodes", "uq_nodes_graph_node") != ["graph_id", "node_id"]:
+            return False
+        if not any(
+            t == "nodes" and k["type"] == "PRIMARY KEY"
+            and sorted(c.lower() for c in k["cols"]) == ["graph_id", "node_id"]
+            for (t, _n), k in keys.items()
+        ):
+            return False
+        for table, (pk, tail) in _CHILD_KEYS.items():
+            if not self._declares(cursor, table, "s"):
+                continue
+            if self._nullable(cursor, table, "graph_id") != "NO":
+                return False
+            if cols(table, pk) != ["graph_id", "s", tail]:
+                return False
+        return all(
+            self._rekeyed_reference(keys, table, name)
+            for (table, name) in _REKEYED_REFERENCES
+            if self._declares(cursor, table, "s")
+        )
+
+    @staticmethod
+    def _rekeyed_reference(keys, table: str, name: str) -> bool:
+        k = keys.get((table, name))
+        if not k or [c.lower() for c in k["cols"]] != _REKEYED_REFERENCES[(table, name)]:
+            return False
+        ref = k["ref"]
+        if not ref or ref[0].lower() != "nodes":
+            return False
+        target = keys.get(("nodes", ref[1]))
+        return target is None or sorted(c.lower() for c in target["cols"]) == [
+            "graph_id",
+            "node_id",
+        ]
+
+    def _nullable(self, cursor, table: str, column: str) -> Optional[str]:
+        rows = self._read(
+            cursor,
+            "SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS "
+            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+            [self.engine._schema_prefix, table, column],
+        )
+        return str(rows[0][0]).upper() if rows and rows[0] else None
+
+    def _node_key_blockers(self, cursor, keys, legacy: List[str]) -> Dict[str, str]:
+        """Legacy keys ``ALTER TABLE ... DROP CONSTRAINT`` cannot remove safely.
+
+        An IDKEY is the row's storage address: dropping it means rebuilding the table,
+        which a migration should not do on its own. A foreign key the re-key does not
+        know would have to be dropped with nothing to put back in its place. Either
+        way the key is named and nothing is written.
+        """
+        if not legacy:
+            return {}
+        blocked: Dict[str, str] = {}
+        idkeys = self._idkeys(cursor, "nodes")
+        for name in legacy:
+            if name in idkeys:
+                blocked[name] = (
+                    f"{name} is the IDKEY of nodes; dropping it needs a table rebuild"
+                )
+                continue
+            holders = sorted(
+                f"{t}.{n}"
+                for (t, n), k in keys.items()
+                if k["type"] == "FOREIGN KEY"
+                and k["ref"]
+                and k["ref"][0].lower() == "nodes"
+                and k["ref"][1] == name
+                and (t, n) not in _KNOWN_NODE_REFERENCES
+            )
+            if holders:
+                blocked[name] = (
+                    f"{name} is referenced by {', '.join(holders)}, which the re-key "
+                    "cannot re-point; drop or re-point it first"
+                )
+        return blocked
+
+    def _idkeys(self, cursor, table: str) -> set:
+        try:
+            rows = self._read(
+                cursor,
+                "SELECT CLASSNAME FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                [self.engine._schema_prefix, table],
+            )
+            if not rows or not rows[0] or not rows[0][0]:
+                return set()
+            names = self._read(
+                cursor,
+                "SELECT SqlName FROM %Dictionary.CompiledIndex WHERE parent = ? AND IdKey = 1",
+                [str(rows[0][0])],
+            )
+        except Exception as e:  # pragma: no cover - catalog access is driver-dependent
+            logger.debug("Could not read the IDKEY of %s: %s", table, e)
+            return set()
+        return {str(r[0]) for r in names if r and r[0]}
+
+    @staticmethod
+    def _log_refusal(outcome: RekeyOutcome) -> None:
+        if outcome.blockers:
             logger.warning(
                 "Refusing the graph re-key: %s. Their graph is unrecoverable from the "
                 "data, and assigning one would be a guess (FR-036).",
-                ", ".join(f"{t}: {len(ids)} row(s)" for t, ids in blockers.items()),
+                ", ".join(f"{t}: {len(ids)} row(s)" for t, ids in outcome.blockers.items()),
             )
-        return blockers
+        for table, pairs in outcome.key_conflicts.items():
+            logger.warning(
+                "Refusing the graph re-key: %d %s key(s) hold copies that disagree on "
+                "the value (first: %s). Resolve them; keeping one would be a guess.",
+                len(pairs),
+                table,
+                pairs[:5],
+            )
+        for name, reason in outcome.node_key_blockers.items():
+            logger.warning("Refusing the graph re-key: %s", reason)
 
-    def _rekey_children(self, cursor) -> None:
-        """Run `contracts/sql-schema.md` §4 in its exact order, once."""
-        if self._declares(cursor, "rdf_labels", "graph_id"):
-            return  # a previous pass already re-keyed this schema
-        for sql in GraphSchema.get_graph_scope_migration_sql():
+    def _rekey_children(self, cursor, keys, legacy: List[str]) -> Dict[str, int]:
+        """Run `contracts/sql-schema.md` §4 in its exact order.
+
+        Every statement is safe to repeat, so a resumed pass runs the whole list; the
+        answers that mean "already done" are tolerated. A primary or foreign key that is
+        already in its re-keyed shape is left alone rather than dropped and rebuilt.
+
+        Returns:
+            ``{child table: rows}`` the dedupe deleted.
+        """
+        skip = set()
+        for table, (pk, tail) in _CHILD_KEYS.items():
+            k = keys.get((table, pk))
+            if k and [c.lower() for c in k["cols"]] == ["graph_id", "s", tail]:
+                skip.add((table, pk))
+        for table, name in _REKEYED_REFERENCES:
+            if self._rekeyed_reference(keys, table, name):
+                skip.add((table, name))
+
+        removed: Dict[str, int] = {}
+        for sql in GraphSchema.get_graph_scope_migration_sql(legacy_node_keys=legacy):
+            m = re.match(r"ALTER TABLE Graph_KG\.(\w+) (?:DROP|ADD) CONSTRAINT (\w+)", sql)
+            if m and (m.group(1), m.group(2)) in skip:
+                continue
+            if sql.startswith("DELETE FROM"):
+                table = sql.split()[2].split(".")[-1]
+                count = self._dedupe(cursor, table, sql)
+                if count:
+                    removed[table] = count
+                continue
             self._tolerate(cursor, sql)
         self._commit()
+        return removed
+
+    def _dedupe(self, cursor, table: str, delete_sql: str) -> int:
+        """Collapse exact copies, and prove it: the count is read, not reported.
+
+        Measured on IRIS 2026.3 (``ivg-iris-enterprise``): a correlated
+        ``DELETE ... WHERE EXISTS`` over the same table deleted nothing and reported
+        ``rowcount`` 0, with no error, while the same predicate as a ``SELECT`` found
+        the copies. The statement list no longer uses that form, and the migrator does
+        not take any ``DELETE``'s word for it: the rows are counted before and after,
+        and a natural key still held twice stops the pass here, loudly, rather than as
+        the composite primary key's -125 two statements later.
+        """
+        q = self._t(table)
+        tail = '"key"' if table == "rdf_props" else "label"
+        before = self._count(cursor, q)
+        self._tolerate(cursor, delete_sql)
+        after = self._count(cursor, q)
+        doubled = self._read(
+            cursor,
+            f"SELECT g.s FROM {q} g GROUP BY g.graph_id, g.s, g.{tail} HAVING COUNT(*) > 1",
+        )
+        if doubled:
+            raise RuntimeError(
+                f"{len(doubled)} ({table}) key(s) still held by more than one row after "
+                "the dedupe; the composite primary key cannot be added over them"
+            )
+        return max(before - after, 0)
+
+    def _count(self, cursor, qualified: str) -> int:
+        rows = self._read(cursor, f"SELECT COUNT(*) FROM {qualified}")
+        return self._int(rows[0][0] if rows and rows[0] else 0) or 0
 
     # ----------------------------------------------------------------- the plan
 
@@ -531,7 +912,7 @@ class _Migrator:
 
     # --------------------------------------------------------------- the report
 
-    def _observed(self, cursor, plans: List[_Plan], blockers) -> MigrationReport:
+    def _observed(self, cursor, plans: List[_Plan], rekey: RekeyOutcome) -> MigrationReport:
         """Report the state the install is in, not what this pass did.
 
         A killed pass placed rows too, and an operator reconciling against the
@@ -557,10 +938,14 @@ class _Migrator:
             indexes_created=list(self.indexes_created),
             indexes_refused=dict(self.indexes_refused),
             widths_reconciled=dict(self.widths_reconciled),
-            structural_blockers=blockers,
+            structural_blockers=rekey.blockers,
+            duplicates_removed=dict(rekey.duplicates_removed),
+            key_conflicts=dict(rekey.key_conflicts),
+            legacy_node_keys=list(rekey.legacy_node_keys),
+            node_key_blockers=dict(rekey.node_key_blockers),
         )
 
-    def _predicted(self, plans: List[_Plan], blockers) -> MigrationReport:
+    def _predicted(self, plans: List[_Plan], rekey: RekeyOutcome) -> MigrationReport:
         placed: Dict[Tuple[str, str], int] = {}
         quarantined: Dict[str, int] = {}
         ids: List[str] = []
@@ -581,7 +966,11 @@ class _Migrator:
             rows_quarantined=quarantined,
             quarantined_ids=ids,
             tables_created=[r for plan in plans for r in plan.needs_routes],
-            structural_blockers=blockers,
+            structural_blockers=rekey.blockers,
+            duplicates_removed=dict(rekey.duplicates_removed),
+            key_conflicts=dict(rekey.key_conflicts),
+            legacy_node_keys=list(rekey.legacy_node_keys),
+            node_key_blockers=dict(rekey.node_key_blockers),
         )
 
     def _quarantine_state(self, cursor) -> Tuple[Dict[str, int], List[str]]:

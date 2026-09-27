@@ -113,6 +113,16 @@ class TestCheckObjectscriptClasses:
 
 
 class TestDeployObjectscriptClasses:
+    @pytest.fixture(autouse=True)
+    def _nothing_to_rescue(self):
+        """A bare MagicMock answers every probe truthy — including "a rescue table and
+        a non-empty rdf_edges both exist", which the rdf_edges rescue rightly refuses
+        to drop. These tests are about the deploy itself, so say there is nothing to
+        rescue (tests/unit/test_230_rdf_edges_rescue.py covers the rescue)."""
+        with patch.object(GraphSchema, "stage_class_owned_rdf_edges", return_value=None):
+            with patch.object(GraphSchema, "pending_rdf_edges_rescue", return_value=None):
+                yield
+
     def test_returns_capabilities_after_deploy(self):
         cursor = MagicMock()
         expected = IRISCapabilities(objectscript_deployed=True, kg_built=True, graphoperators_deployed=True)
@@ -156,6 +166,16 @@ class TestDeployRemovesTheStaleEdgeClasses:
     """
 
     STALE = ("Graph.KG.Edge", "Graph.KG.TestEdge")
+
+    @pytest.fixture(autouse=True)
+    def _nothing_to_rescue(self):
+        """A bare MagicMock answers every probe truthy — including "a rescue table and
+        a non-empty rdf_edges both exist", which the rdf_edges rescue rightly refuses
+        to drop. These tests are about the deploy itself, so say there is nothing to
+        rescue (tests/unit/test_230_rdf_edges_rescue.py covers the rescue)."""
+        with patch.object(GraphSchema, "stage_class_owned_rdf_edges", return_value=None):
+            with patch.object(GraphSchema, "pending_rdf_edges_rescue", return_value=None):
+                yield
 
     def _deploy_calls(self):
         cursor = MagicMock()

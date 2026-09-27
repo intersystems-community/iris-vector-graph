@@ -7,6 +7,7 @@ Extracted from the biomedical-specific implementation for reusability.
 """
 
 import logging
+import re
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -54,6 +55,13 @@ RESCUE_UNPLACED_TABLE = "rdf_edges__ivg400unplaced"
 #: namespace. ``Graph.KG.TestEdge`` went first; spec 227 deleted ``Graph.KG.Edge``.
 STALE_EDGE_CLASSES = ("Graph.KG.Edge", "Graph.KG.TestEdge")
 
+#: The compatibility view ``initialize_schema`` puts over ``rdf_edges`` for unqualified
+#: reads. The rescue has to drop and re-create it: while it exists ``DROP TABLE
+#: Graph_KG.rdf_edges`` fails with SQLCODE -321, and once the v3.2.0 class it was
+#: compiled against is deleted it dangles (SQLCODE -30 on every read) while still
+#: blocking ``CREATE VIEW`` as already present.
+RDF_EDGES_COMPAT_VIEW_DDL = "CREATE VIEW SQLUser.rdf_edges AS SELECT * FROM Graph_KG.rdf_edges"
+
 
 class RdfEdgesRescueError(RuntimeError):
     """A class-owned ``rdf_edges`` was emptied but its rows did not all come back.
@@ -64,6 +72,22 @@ class RdfEdgesRescueError(RuntimeError):
     ``initialize_schema`` still reported ``objectscript_deployed: True``, so this one
     exception is re-raised past the best-effort handler.
     """
+
+
+def _qualifiers_equal(left: str, right: str) -> str:
+    """Null-safe, exact equality of two aliases' ``qualifiers``.
+
+    Part of the rescue's dedupe key. The staging column is ``VARCHAR(64000)`` — an
+    ordinary string, so comparable, but declared without ``%EXACT`` and therefore
+    SQLUPPER-collated: measured on IRIS, a bare ``=`` answers ``'{"A":1}' = '{"a":1}'``
+    true, which would collapse two different edges into one. ``%EXACT`` on both
+    sides compares the stored text byte for byte. ``DISTINCT`` / ``GROUP BY`` are not
+    used for the same reason: they group by the collated value.
+    """
+    return (
+        f"(%EXACT({left}.qualifiers) = %EXACT({right}.qualifiers) "
+        f"OR ({left}.qualifiers IS NULL AND {right}.qualifiers IS NULL))"
+    )
 
 
 def _call_classmethod(conn_or_cursor, class_name: str, method_name: str, *args) -> Any:
@@ -1004,7 +1028,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         return result
 
     @staticmethod
-    def get_graph_scope_migration_sql() -> List[str]:
+    def get_graph_scope_migration_sql(legacy_node_keys: Sequence[str] = ()) -> List[str]:
         """Statements that re-key a 3.2.0 schema so a node ID is unique per graph.
 
         Spec 227, ``contracts/sql-schema.md`` §4.  The order is not interchangeable
@@ -1043,6 +1067,36 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         running any of these statements and refuses the whole re-key when it finds
         one, reporting the rows rather than repairing them.
 
+        Every statement is safe to repeat, because a killed pass is resumed by running
+        the list again (the migrator tolerates the "already done" answers): the
+        backfill claims only rows still ``NULL``, and the dedupe deletes nothing the
+        second time.
+
+        Two repairs a real 3.x-era install needed, beyond the §4 order:
+
+        * **A key over ``node_id`` alone under another name.** A 2.x-born ``nodes``
+          table declared ``node_id ... PRIMARY KEY`` inline, which IRIS names
+          ``NODES_PKEY1``. Dropping ``uq_nodes_nodeid`` by name left it in place, so
+          the catalog looked 4.0.0 while a node ID still could not be written into a
+          second graph (SQLCODE -119). The migrator finds every such key by its column
+          set and passes the names in as ``legacy_node_keys``; they are dropped after
+          the five dependents are, and ``pk_nodes_graph PRIMARY KEY (node_id,
+          graph_id)`` — what a fresh install declares — takes the primary key's place.
+          On a 3.2.0 table, which already declares it, that ``ADD`` is SQLCODE -307
+          and is tolerated as done.
+        * **Exact duplicate rows.** An install whose child tables were never keyed on
+          ``(s, label)`` / ``(s, key)`` holds full copies, and they make the composite
+          primary key fail with SQLCODE -125. Before the key is added, every copy but
+          the lowest ``%ID`` is deleted. For ``rdf_props`` a copy is only a row whose
+          ``val`` is also equal (``NULL`` equal to ``NULL``): two rows that disagree on
+          the value are a conflict, which the migrator refuses the re-key over and
+          reports, rather than keeping one value at random.
+
+        Args:
+            legacy_node_keys: Names of unique or primary keys on ``nodes`` whose
+                column set is exactly ``(node_id)``, other than ``uq_nodes_nodeid``,
+                which the list always drops.
+
         Returns:
             Statements in execution order, with no trailing semicolons (IRIS
             rejects one on a statement sent through the DB-API).
@@ -1056,9 +1110,21 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             "ALTER TABLE Graph_KG.kg_NodeEmbeddings_optimized DROP CONSTRAINT fk_emb_node_opt",
             # 2 — the swap that makes a node ID unique per graph
             "ALTER TABLE Graph_KG.nodes DROP CONSTRAINT uq_nodes_nodeid",
-            "ALTER TABLE Graph_KG.nodes ADD CONSTRAINT uq_nodes_graph_node "
-            "UNIQUE (graph_id, node_id)",
         ]
+        for name in legacy_node_keys:
+            if name == "uq_nodes_nodeid":
+                continue
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise ValueError(f"not a constraint name this migration can drop: {name!r}")
+            statements.append(f"ALTER TABLE Graph_KG.nodes DROP CONSTRAINT {name}")
+        statements.extend(
+            [
+                "ALTER TABLE Graph_KG.nodes ADD CONSTRAINT uq_nodes_graph_node "
+                "UNIQUE (graph_id, node_id)",
+                "ALTER TABLE Graph_KG.nodes ADD CONSTRAINT pk_nodes_graph "
+                "PRIMARY KEY (node_id, graph_id)",
+            ]
+        )
 
         # 3 — labels and props gain graph_id, in data-model.md §3's order
         for table, pk_name, tail in (
@@ -1066,15 +1132,33 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             ("rdf_props", "pk_props", '"key"'),
         ):
             qualified = f"Graph_KG.{table}"
+            # Keep the lowest %ID of each (graph_id, s, tail). Written without a
+            # correlated subquery: on IRIS 2026.3 `DELETE ... WHERE EXISTS (SELECT ...
+            # k.%ID < d.%ID)` over the same table deleted nothing, silently, while the
+            # same predicate as a SELECT answered correctly. A prop row is deleted only
+            # when a lower %ID holds the same value too, so running this list without
+            # the migrator's conflict check still never discards a distinct value — the
+            # primary key then refuses (-125) instead.
+            dedupe = (
+                f"DELETE FROM {qualified} WHERE %ID NOT IN (SELECT MIN(g.%ID) FROM "
+                f"{qualified} g GROUP BY g.graph_id, g.s, g.{tail})"
+            )
+            if table == "rdf_props":
+                dedupe += (
+                    f" AND %ID IN (SELECT d.%ID FROM {qualified} d, {qualified} k "
+                    f"WHERE k.graph_id = d.graph_id AND k.s = d.s AND k.{tail} = d.{tail} "
+                    "AND k.%ID < d.%ID AND (k.val = d.val OR (k.val IS NULL AND d.val IS NULL)))"
+                )
             statements.extend(
                 [
                     f"ALTER TABLE {qualified} ADD COLUMN graph_id VARCHAR(256) %EXACT NULL",
                     f"UPDATE {qualified} c SET c.graph_id = "
                     f"(SELECT MIN(n.graph_id) FROM Graph_KG.nodes n WHERE n.node_id = c.s) "
-                    f"WHERE (SELECT COUNT(DISTINCT n.graph_id) FROM Graph_KG.nodes n "
-                    f"WHERE n.node_id = c.s) = 1",
+                    f"WHERE c.graph_id IS NULL AND (SELECT COUNT(DISTINCT n.graph_id) "
+                    f"FROM Graph_KG.nodes n WHERE n.node_id = c.s) = 1",
                     f"ALTER TABLE {qualified} ALTER COLUMN graph_id NOT NULL",
                     f"ALTER TABLE {qualified} ALTER COLUMN graph_id SET DEFAULT ''",
+                    dedupe,
                     f"ALTER TABLE {qualified} DROP CONSTRAINT {pk_name}",
                     f"ALTER TABLE {qualified} ADD CONSTRAINT {pk_name} "
                     f"PRIMARY KEY (graph_id, s, {tail})",
@@ -2128,6 +2212,7 @@ LANGUAGE OBJECTSCRIPT
         # After the delete, whether or not LoadDir found a directory: the class is
         # gone either way on the path that reached it, and a rescue left un-restored
         # is an install with no rdf_edges at all.
+        # `staged is None` still resumes a rescue an earlier run left unfinished.
         GraphSchema.restore_rescued_rdf_edges(cursor, staged)
 
         if not deployed:
@@ -2165,30 +2250,42 @@ LANGUAGE OBJECTSCRIPT
             return None
 
         staging = f"Graph_KG.{RESCUE_STAGING_TABLE}"
-        try:
-            cursor.execute(f"DROP TABLE {staging}")
-        except Exception:
-            pass
-        cursor.execute(
-            f"CREATE TABLE {staging} (\n"
-            "  s          VARCHAR(256) %EXACT,\n"
-            "  p          VARCHAR(128) %EXACT,\n"
-            "  o_id       VARCHAR(256) %EXACT,\n"
-            "  qualifiers VARCHAR(64000),\n"
-            "  graph_id   VARCHAR(256) %EXACT\n"
-            ")"
-        )
         # The class-owned table has no `edge_id` — that column is spec 227's, and its
         # absence is why the class had to go. v3.2.0 declared
         # `graph_id NOT NULL DEFAULT $c(0)`, so a default-graph edge reaches here as
         # NULL or as CHAR(0); both mean the default graph rather than a third one, and
         # both have to read as '' because that is the spelling 4.0.0's FK to
         # `nodes (graph_id, node_id)` compares against.
-        cursor.execute(
-            f"INSERT INTO {staging} (s, p, o_id, qualifiers, graph_id) "
-            "SELECT s, p, o_id, qualifiers, COALESCE(NULLIF(graph_id, CHAR(0)), '') "
-            "FROM Graph_KG.rdf_edges"
-        )
+        graph = "COALESCE(NULLIF(e.graph_id, CHAR(0)), '')"
+        if GraphSchema._graph_kg_table_exists(cursor, RESCUE_STAGING_TABLE):
+            # A rescue table left by an earlier run is never dropped here: if that run
+            # deleted the class and something re-compiled it since, the table this
+            # would re-stage from is empty and the rescue table is the only copy. Add
+            # what the class table holds that the rescue table does not, and leave the
+            # rest — exact duplicates among what is added collapse in the restore.
+            cursor.execute(
+                f"INSERT INTO {staging} (s, p, o_id, qualifiers, graph_id) "
+                f"SELECT e.s, e.p, e.o_id, e.qualifiers, {graph} "
+                "FROM Graph_KG.rdf_edges e WHERE NOT EXISTS ("
+                f"SELECT 1 FROM {staging} r WHERE r.s = e.s AND r.p = e.p "
+                f"AND r.o_id = e.o_id AND r.graph_id = {graph} "
+                f"AND {_qualifiers_equal('r', 'e')})"
+            )
+        else:
+            cursor.execute(
+                f"CREATE TABLE {staging} (\n"
+                "  s          VARCHAR(256) %EXACT,\n"
+                "  p          VARCHAR(128) %EXACT,\n"
+                "  o_id       VARCHAR(256) %EXACT,\n"
+                "  qualifiers VARCHAR(64000),\n"
+                "  graph_id   VARCHAR(256) %EXACT\n"
+                ")"
+            )
+            cursor.execute(
+                f"INSERT INTO {staging} (s, p, o_id, qualifiers, graph_id) "
+                "SELECT s, p, o_id, qualifiers, COALESCE(NULLIF(graph_id, CHAR(0)), '') "
+                "FROM Graph_KG.rdf_edges"
+            )
         cursor.execute(f"SELECT COUNT(*) FROM {staging}")
         row = cursor.fetchone()
         staged = int(row[0]) if row and row[0] is not None else 0
@@ -2201,7 +2298,21 @@ LANGUAGE OBJECTSCRIPT
         return staged
 
     @staticmethod
-    def restore_rescued_rdf_edges(cursor, staged: Optional[int]) -> None:
+    def pending_rdf_edges_rescue(cursor) -> Optional[int]:
+        """Rows waiting in a rescue table an earlier run left behind, or ``None``.
+
+        The rescue table outlives a failed restore on purpose, but the class whose
+        existence triggers staging is already deleted by then — so a re-run cannot
+        rely on staging to notice it. This is what notices it.
+        """
+        if not GraphSchema._graph_kg_table_exists(cursor, RESCUE_STAGING_TABLE):
+            return None
+        cursor.execute(f"SELECT COUNT(*) FROM Graph_KG.{RESCUE_STAGING_TABLE}")
+        row = cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    @staticmethod
+    def restore_rescued_rdf_edges(cursor, staged: Optional[int]) -> Optional[Dict[str, int]]:
         """Re-create ``rdf_edges`` from the canonical DDL and put the rows back.
 
         v3.2.0's FK was ``nodes (node_id)`` alone while its rows already carried a
@@ -2212,25 +2323,56 @@ LANGUAGE OBJECTSCRIPT
         instead — place what resolves, quarantine what does not, delete nothing, and
         never place a row by guessing at its graph.
 
+        v3.2.0 also wrote full duplicate rows: ``bulk_loader.py`` inserted with
+        ``%NOINDEX %NOCHECK``, which skips the class's ``uspo`` unique index, and
+        staging folds NULL and CHAR(0) graph ids together. 4.0.0's
+        ``u_spo_graph (s, p, o_id, graph_id)`` admits one of each, and a single
+        duplicate used to fail the whole INSERT…SELECT. So one row per key is placed
+        — the lowest ``%ID`` in the rescue table, i.e. the first staged — and a row
+        identical to it in all five columns is counted *collapsed*. A row with the
+        same key but different ``qualifiers`` is not a duplicate: it is quarantined.
+
         Args:
             cursor: Active IRIS dbapi cursor.
             staged: What :meth:`stage_class_owned_rdf_edges` returned. ``None`` means
-                nothing was rescued and this is a no-op.
+                nothing was staged by *this* run; a rescue table an earlier run left
+                behind is then resumed — unless a v3.2.0 edge class is still compiled,
+                in which case its extent is the authoritative copy and the next
+                staging reads from it.
+
+        Returns:
+            ``{"staged", "restored", "collapsed", "quarantined"}`` counts, or ``None``
+            when there was nothing to restore.
 
         Raises:
-            RdfEdgesRescueError: when the placed and quarantined rows together do not
-                account for every staged row, and for any error raised along the way.
-                The staging table is deliberately left in place — it is the only
-                surviving copy. The error type matters: the deploy call site re-raises
-                this one and logs every other exception at DEBUG as "expected in
-                Docker", which is how a failed rebuild once produced an install with no
-                edge table and a success report.
+            RdfEdgesRescueError: when the placed, collapsed and quarantined rows
+                together do not account for every staged row, and for any error
+                raised along the way. The staging table is deliberately left in place
+                — it is the only surviving copy — and the next ``initialize_schema()``
+                resumes from it. The error type matters: the deploy call site
+                re-raises this one and logs every other exception at DEBUG as
+                "expected in Docker", which is how a failed rebuild once produced an
+                install with no edge table and a success report.
         """
         if staged is None:
-            return
+            try:
+                staged = GraphSchema.pending_rdf_edges_rescue(cursor)
+                if staged is not None and GraphSchema._stale_edge_class_exists(cursor):
+                    staged = None
+            except Exception as exc:
+                logger.warning("rdf_edges rescue resume probe failed: %s", exc)
+                staged = None
+            if staged is None:
+                return None
+            logger.warning(
+                "Graph_KG.%s holds %s row(s) from an earlier rdf_edges rescue that did not "
+                "finish; resuming the restore",
+                RESCUE_STAGING_TABLE,
+                staged,
+            )
 
         try:
-            GraphSchema._restore_rescued_rdf_edges(cursor, staged)
+            return GraphSchema._restore_rescued_rdf_edges(cursor, staged)
         except RdfEdgesRescueError:
             raise
         except Exception as exc:
@@ -2239,19 +2381,40 @@ LANGUAGE OBJECTSCRIPT
                 f"row(s) out of the v3.2.0 class-owned table: {exc}. The rows are still "
                 f"in Graph_KG.{RESCUE_STAGING_TABLE}, which is left in place on purpose "
                 "— nothing has been deleted. Re-run initialize_schema() once the cause "
-                "is cleared, or copy them back by hand."
+                "is cleared: it resumes from that table."
             ) from exc
 
     @staticmethod
-    def _restore_rescued_rdf_edges(cursor, staged: int) -> None:
+    def _restore_rescued_rdf_edges(cursor, staged: int) -> Dict[str, int]:
         """The body of :meth:`restore_rescued_rdf_edges`, which wraps what this raises."""
         staging = f"Graph_KG.{RESCUE_STAGING_TABLE}"
         unplaced = f"Graph_KG.{RESCUE_UNPLACED_TABLE}"
         endpoint_resolves = (
             "EXISTS (SELECT 1 FROM Graph_KG.nodes n1 "
-            f"       WHERE n1.graph_id = {staging}.graph_id AND n1.node_id = {staging}.s) "
+            "       WHERE n1.graph_id = r.graph_id AND n1.node_id = r.s) "
             "AND EXISTS (SELECT 1 FROM Graph_KG.nodes n2 "
-            f"       WHERE n2.graph_id = {staging}.graph_id AND n2.node_id = {staging}.o_id)"
+            "       WHERE n2.graph_id = r.graph_id AND n2.node_id = r.o_id)"
+        )
+
+        def same_key(a: str, b: str) -> str:
+            # The staging columns are %EXACT, so `=` compares exactly with either side.
+            return (
+                f"{a}.s = {b}.s AND {a}.p = {b}.p AND {a}.o_id = {b}.o_id "
+                f"AND {a}.graph_id = {b}.graph_id"
+            )
+
+        # `r` is the key's representative: no lower %ID shares its key. Placement only
+        # depends on (graph_id, s, o_id), so every row of a key resolves or none does.
+        is_representative = (
+            f"NOT EXISTS (SELECT 1 FROM {staging} d WHERE {same_key('d', 'r')} "
+            "AND d.%ID < r.%ID)"
+        )
+        # `r` is a later copy of its key's representative, identical in all five columns.
+        copies_representative = (
+            f"EXISTS (SELECT 1 FROM {staging} d WHERE {same_key('d', 'r')} "
+            f"AND d.%ID < r.%ID AND {_qualifiers_equal('d', 'r')} "
+            f"AND NOT EXISTS (SELECT 1 FROM {staging} d2 WHERE {same_key('d2', 'd')} "
+            "AND d2.%ID < d.%ID))"
         )
 
         # The rebuilt table's two foreign keys point at `nodes (graph_id, node_id)`, and
@@ -2272,18 +2435,67 @@ LANGUAGE OBJECTSCRIPT
         except Exception as exc:
             logger.debug("uq_nodes_graph_node already present or not addable: %s", exc)
 
+        # Staging already writes '' for the default graph, but a rescue table resumed
+        # from an older run, or filled by hand, may still carry NULL. ('' and CHAR(0)
+        # are one value in IRIS SQL.) Lossless: both spell the default graph.
+        cursor.execute(f"UPDATE {staging} SET graph_id = '' WHERE graph_id IS NULL")
+        # The dedupe is three correlated lookups per row; without this index each one
+        # is a scan of the rescue table.
+        try:
+            cursor.execute(
+                f"CREATE INDEX idx_ivg400rescue_key ON {staging} (s, p, o_id, graph_id)"
+            )
+        except Exception as exc:
+            logger.debug("rescue key index already present or not addable: %s", exc)
+
+        # Clear the way for the rebuild. The compatibility view blocks DROP TABLE
+        # (SQLCODE -321) and, once the class it was compiled against is gone, dangles.
+        try:
+            cursor.execute("DROP VIEW SQLUser.rdf_edges")
+        except Exception as exc:
+            logger.debug("SQLUser.rdf_edges view not dropped: %s", exc)
+        # A re-run after a failed restore finds a DDL rdf_edges in the way — created by
+        # the failed rebuild, or by the base DDL script of the re-run itself — and the
+        # rebuild refuses with SQLCODE -201. It is dropped only when every row it holds
+        # is also in the rescue table; one that is not may be an edge written since.
+        if GraphSchema._graph_kg_table_exists(cursor, "rdf_edges"):
+            cursor.execute(
+                "SELECT COUNT(*) FROM Graph_KG.rdf_edges e WHERE NOT EXISTS ("
+                f"SELECT 1 FROM {staging} r WHERE r.s = e.s AND r.p = e.p "
+                "AND r.o_id = e.o_id AND r.graph_id = COALESCE(e.graph_id, '') "
+                f"AND {_qualifiers_equal('r', 'e')})"
+            )
+            row = cursor.fetchone()
+            foreign = int(row[0]) if row and row[0] is not None else 0
+            if foreign:
+                raise RdfEdgesRescueError(
+                    f"Graph_KG.rdf_edges already exists and holds {foreign} row(s) that "
+                    f"are not in {staging}, so it cannot be replaced by the rebuilt "
+                    f"table without losing them. Nothing has been dropped: copy those "
+                    f"rows into {staging} (s, p, o_id, qualifiers, graph_id), drop "
+                    "Graph_KG.rdf_edges, and re-run initialize_schema()."
+                )
+            cursor.execute("DROP TABLE Graph_KG.rdf_edges")
+
         cursor.execute(RDF_EDGES_DDL)
         cursor.execute(
             "INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) "
-            f"SELECT s, p, o_id, qualifiers, graph_id FROM {staging} "
-            f"WHERE {endpoint_resolves}"
+            f"SELECT r.s, r.p, r.o_id, r.qualifiers, r.graph_id FROM {staging} r "
+            f"WHERE {endpoint_resolves} AND {is_representative}"
         )
         cursor.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges")
         row = cursor.fetchone()
         restored = int(row[0]) if row and row[0] is not None else 0
 
+        cursor.execute(
+            f"SELECT COUNT(*) FROM {staging} r "
+            f"WHERE {endpoint_resolves} AND {copies_representative}"
+        )
+        row = cursor.fetchone()
+        collapsed = int(row[0]) if row and row[0] is not None else 0
+
         quarantined = 0
-        if restored != staged:
+        if restored + collapsed != staged:
             try:
                 cursor.execute(f"DROP TABLE {unplaced}")
             except Exception:
@@ -2297,36 +2509,70 @@ LANGUAGE OBJECTSCRIPT
                 "  graph_id   VARCHAR(256) %EXACT\n"
                 ")"
             )
+            # The exact complement of placed-or-collapsed: an endpoint that does not
+            # resolve, or a later row of its key whose qualifiers differ from the one
+            # placed. `EXISTS` never answers NULL, so no row falls between the tables.
             cursor.execute(
                 f"INSERT INTO {unplaced} (s, p, o_id, qualifiers, graph_id) "
-                f"SELECT s, p, o_id, qualifiers, graph_id FROM {staging} "
-                f"WHERE NOT ({endpoint_resolves})"
+                f"SELECT r.s, r.p, r.o_id, r.qualifiers, r.graph_id FROM {staging} r "
+                f"WHERE NOT ({endpoint_resolves}) "
+                f"OR (NOT {is_representative} AND NOT {copies_representative})"
             )
             cursor.execute(f"SELECT COUNT(*) FROM {unplaced}")
             row = cursor.fetchone()
             quarantined = int(row[0]) if row and row[0] is not None else 0
 
-        if restored + quarantined != staged:
+        if restored + collapsed + quarantined != staged:
             raise RdfEdgesRescueError(
                 f"rescued {staged} row(s) out of a class-owned Graph_KG.rdf_edges but "
-                f"placed {restored} and quarantined {quarantined}. The rows are still "
-                f"in {staging}, which is left in place on purpose — copy them back "
-                "before writing anything else."
+                f"placed {restored}, collapsed {collapsed} exact duplicate(s) and "
+                f"quarantined {quarantined}. The rows are still in {staging}, which is "
+                "left in place on purpose — the next initialize_schema() resumes from it."
             )
+
+        try:
+            cursor.execute(RDF_EDGES_COMPAT_VIEW_DDL)
+        except Exception as exc:
+            logger.debug("SQLUser.rdf_edges view not re-created: %s", exc)
 
         cursor.execute(f"DROP TABLE {staging}")
         if quarantined:
             logger.warning(
-                "Graph_KG.rdf_edges rebuilt; %s row(s) restored and %s row(s) held in "
-                "%s because an endpoint has no node row in the graph the edge claims. "
-                "Nothing was deleted: place them by creating the missing node rows, or "
-                "by correcting the edge's graph_id, then copy them back",
+                "Graph_KG.rdf_edges rebuilt; %s row(s) restored, %s exact duplicate(s) "
+                "collapsed, and %s row(s) held in %s because an endpoint has no node row "
+                "in the graph the edge claims, or because another row with the same "
+                "(s, p, o_id, graph_id) but different qualifiers was placed. Nothing was "
+                "deleted: place them by creating the missing node rows, by correcting "
+                "the edge's graph_id, or by merging the qualifiers, then copy them back",
                 restored,
+                collapsed,
                 quarantined,
                 unplaced,
             )
         else:
-            logger.warning("Graph_KG.rdf_edges rebuilt; %s row(s) restored", restored)
+            logger.warning(
+                "Graph_KG.rdf_edges rebuilt; %s row(s) restored, %s exact duplicate(s) "
+                "collapsed",
+                restored,
+                collapsed,
+            )
+        return {
+            "staged": staged,
+            "restored": restored,
+            "collapsed": collapsed,
+            "quarantined": quarantined,
+        }
+
+    @staticmethod
+    def _graph_kg_table_exists(cursor, name: str) -> bool:
+        """Is ``Graph_KG.<name>`` a base table? (A view of the same name is not.)"""
+        cursor.execute(
+            "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+            f"WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME = '{name}' "
+            "AND TABLE_TYPE = 'BASE TABLE'"
+        )
+        row = cursor.fetchone()
+        return bool(row and row[0])
 
     @staticmethod
     def _stale_edge_class_exists(cursor) -> bool:

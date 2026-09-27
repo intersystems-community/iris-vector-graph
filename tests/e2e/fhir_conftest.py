@@ -18,6 +18,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import uuid
 
 import pytest
@@ -29,6 +30,25 @@ PORT = int(os.environ.get("IVG_PORT", "31972"))
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _FIXTURES = os.path.join(_ROOT, "tests", "e2e", "fixtures", "fhir")
+
+
+def prefix_resources(resources: list[dict], prefix: str) -> list[dict]:
+    """Deep copies with every id set to f"{prefix}-{id}", and every `Type/id` substring
+    naming one of `resources` rewritten to `Type/{prefix}-id` where it is followed by
+    `"`, `|`, `/` or `#`. Longest ids go first, so no id rewrites inside a longer one.
+    Substrings naming a key outside `resources` are left alone."""
+    keys = {(r["resourceType"], r["id"]) for r in resources}
+    if not keys:
+        return []
+    alt = "|".join(re.escape(f"{t}/{i}") for t, i in sorted(keys, key=lambda k: (-len(k[1]), k)))
+    pattern = re.compile(rf"({alt})(?=[\"|/#])")
+    out = []
+    for r in resources:
+        raw = pattern.sub(lambda m: m.group(1).replace("/", f"/{prefix}-", 1), json.dumps(r))
+        copied = json.loads(raw)
+        copied["id"] = f"{prefix}-{r['id']}"
+        out.append(copied)
+    return out
 
 
 def connect():
@@ -121,23 +141,49 @@ class FhirLoader:
 
 
 @pytest.fixture(scope="session")
-def fhir_conn():
+def _fhir_session():
+    """(conn, None) when IVGFHIR is up and deployed, else (None, reason). Shared by
+    `fhir_conn` (skips) and `fhir_conn_required` (fails), so both use one
+    connection and one deploy."""
     try:
         conn = connect()
     except Exception as exc:  # pragma: no cover - environment
-        pytest.skip(f"IVGFHIR on port {PORT} not reachable ({exc}); see tests/e2e/fhir_conftest.py")
+        yield None, f"IVGFHIR on port {PORT} not reachable ({exc}); see tests/e2e/fhir_conftest.py"
+        return
     cur = conn.cursor()
     try:
         cur.execute("SELECT COUNT(*) FROM HS_FHIRServer.RepoInstance")
     except Exception:  # pragma: no cover - environment
-        pytest.skip("IVGFHIR has no FHIR server; install it per tests/e2e/fhir_conftest.py")
+        conn.close()
+        yield None, "IVGFHIR has no FHIR server; install it per tests/e2e/fhir_conftest.py"
+        return
     errors = deploy(conn)
     assert not errors, "compile errors in IVGFHIR:\n" + "\n".join(errors)
     from iris_vector_graph.engine import IRISGraphEngine
 
     IRISGraphEngine(conn, embedding_dimension=4).initialize_schema(auto_deploy_objectscript=False)
-    yield conn
+    yield conn, None
     conn.close()
+
+
+@pytest.fixture(scope="session")
+def fhir_conn(_fhir_session):
+    conn, reason = _fhir_session
+    if conn is None:  # pragma: no cover - environment
+        pytest.skip(reason)
+    return conn
+
+
+@pytest.fixture(scope="session")
+def fhir_conn_required(_fhir_session):
+    """`fhir_conn`, but a missing IVGFHIR fails the run unless SKIP_IRIS_TESTS is
+    set (constitution VIII, Gate 1)."""
+    conn, reason = _fhir_session
+    if conn is None:  # pragma: no cover - environment
+        if os.environ.get("SKIP_IRIS_TESTS", "false") == "false":
+            pytest.fail(reason)
+        pytest.skip(reason)
+    return conn
 
 
 @pytest.fixture(scope="session")
@@ -150,3 +196,106 @@ def fhir_engine(fhir_conn):
 @pytest.fixture
 def fhir_loader(fhir_conn):
     return FhirLoader(fhir_conn)
+
+
+# ------------------------------------------------------------------ spec 233
+
+
+def _chunks(items, n=200):
+    items = sorted(items)
+    for i in range(0, len(items), n):
+        yield items[i : i + n]
+
+
+def graph_edges(conn, keys) -> list[tuple[str, str, str]]:
+    """(s, p, o_id) in GRAPH where s is one of `keys`."""
+    out = []
+    cur = conn.cursor()
+    try:
+        for chunk in _chunks(keys):
+            marks = ",".join("?" * len(chunk))
+            cur.execute(
+                f"SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s IN ({marks})",
+                [GRAPH, *chunk],
+            )
+            out.extend(tuple(row) for row in cur.fetchall())
+    finally:
+        cur.close()
+    return out
+
+
+def neighbourhood(conn, key: str, hops: int) -> set[str]:
+    """Every node within `hops` of `key`, walking GRAPH's rdf_edges both ways. The
+    seed is excluded. `kg_SUBGRAPH` and friends are not graph-scoped (research R7)."""
+    seen, frontier = {key}, {key}
+    cur = conn.cursor()
+    try:
+        for _ in range(hops):
+            nxt = set()
+            for chunk in _chunks(frontier):
+                marks = ",".join("?" * len(chunk))
+                cur.execute(
+                    f"SELECT s, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? "
+                    f"AND (s IN ({marks}) OR o_id IN ({marks}))",
+                    [GRAPH, *chunk, *chunk],
+                )
+                for s, o in cur.fetchall():
+                    nxt.update((s, o))
+            frontier = nxt - seen
+            seen |= nxt
+    finally:
+        cur.close()
+    return seen - {key}
+
+
+def _sync(conn) -> None:
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    IRISGraphEngine(conn, embedding_dimension=4).fhir_graph_sync(GRAPH)
+
+
+def load_run(conn, loader: FhirLoader, resources: list[dict]) -> list[dict]:
+    """PUT `resources` (already prefixed) and sync; returns the ones stored. Any
+    server rejection fails the test with the full list, each a finding for
+    SOURCE.md's excluded list. Stored resources are torn down before failing."""
+    stored, rejected = [], []
+    try:
+        for r in resources:
+            out = loader.dispatch("PUT", f"/{r['resourceType']}/{r['id']}", r)
+            if str(out["status"]).startswith("20"):
+                stored.append(r)
+            else:
+                rejected.append(f"{r['resourceType']}/{r['id']}: {out}")
+        if rejected:
+            pytest.fail("server rejected resources:\n" + "\n".join(rejected))
+        _sync(conn)
+    except BaseException:
+        teardown_run(conn, loader, stored)
+        raise
+    return stored
+
+
+def teardown_run(conn, loader: FhirLoader, resources: list[dict]) -> None:
+    """Delete `resources` in reverse load order, then sync."""
+    for r in reversed(resources):
+        loader.dispatch("DELETE", f"/{r['resourceType']}/{r['id']}")
+    _sync(conn)
+
+
+@pytest.fixture(scope="module")
+def genomics_loaded(fhir_conn_required):
+    """(prefix, resources): the vendored genomics fixture, loaded under a fresh
+    per-run prefix for one module and deleted afterwards."""
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    from tests.e2e.genomics_fixture import load_fixture
+
+    engine = IRISGraphEngine(fhir_conn_required, embedding_dimension=4)
+    if not engine.fhir_graph_register(denylist=[]).get("rebuilt"):
+        engine.fhir_graph_rebuild(GRAPH)
+    loader = FhirLoader(fhir_conn_required)
+    resources = load_run(fhir_conn_required, loader, prefix_resources(load_fixture(), loader.prefix))
+    try:
+        yield loader.prefix, resources
+    finally:
+        teardown_run(fhir_conn_required, loader, resources)

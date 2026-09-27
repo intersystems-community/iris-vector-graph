@@ -1,0 +1,1049 @@
+<http://identifiers.org/clinvar:13961> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/1097> .
+<http://identifiers.org/clinvar:14909> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/4932> .
+<http://identifiers.org/clinvar:1780982> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/7235> .
+<http://identifiers.org/clinvar:30880> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/21497> .
+<http://identifiers.org/clinvar:441262> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/613> .
+<http://identifiers.org/clinvar:503634> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8565> .
+<http://identifiers.org/clinvar:638797> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/2621> .
+<http://identifiers.org/clinvar:962538> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8028> .
+<http://identifiers.org/hgnc/10483> <http://www.w3.org/2000/01/rdf-schema#label> "RYR1" .
+<http://identifiers.org/hgnc/10483> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007783> .
+<http://identifiers.org/hgnc/10483> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0100150> .
+<http://identifiers.org/hgnc/10519> <http://www.w3.org/2000/01/rdf-schema#label> "SACS" .
+<http://identifiers.org/hgnc/10519> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010041> .
+<http://identifiers.org/hgnc/1097> <http://www.w3.org/2000/01/rdf-schema#label> "BRAF" .
+<http://identifiers.org/hgnc/1097> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007265> .
+<http://identifiers.org/hgnc/1097> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013379> .
+<http://identifiers.org/hgnc/1097> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013380> .
+<http://identifiers.org/hgnc/11100> <http://www.w3.org/2000/01/rdf-schema#label> "SMARCA4" .
+<http://identifiers.org/hgnc/11100> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013224> .
+<http://identifiers.org/hgnc/11100> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013821> .
+<http://identifiers.org/hgnc/11117> <http://www.w3.org/2000/01/rdf-schema#label> "SMN1" .
+<http://identifiers.org/hgnc/11117> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0009669> .
+<http://identifiers.org/hgnc/11117> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0009672> .
+<http://identifiers.org/hgnc/11117> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0009673> .
+<http://identifiers.org/hgnc/11117> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010056> .
+<http://identifiers.org/hgnc/11355> <http://www.w3.org/2000/01/rdf-schema#label> "STAG2" .
+<http://identifiers.org/hgnc/11355> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0026722> .
+<http://identifiers.org/hgnc/11355> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0026763> .
+<http://identifiers.org/hgnc/16712> <http://www.w3.org/2000/01/rdf-schema#label> "FBXW7" .
+<http://identifiers.org/hgnc/16712> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0859280> .
+<http://identifiers.org/hgnc/1787> <http://www.w3.org/2000/01/rdf-schema#label> "CDKN2A" .
+<http://identifiers.org/hgnc/1787> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007964> .
+<http://identifiers.org/hgnc/1787> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007967> .
+<http://identifiers.org/hgnc/1787> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0011713> .
+<http://identifiers.org/hgnc/21497> <http://www.w3.org/2000/01/rdf-schema#label> "ACAD9" .
+<http://identifiers.org/hgnc/21497> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0012624> .
+<http://identifiers.org/hgnc/23663> <http://www.w3.org/2000/01/rdf-schema#label> "VKORC1" .
+<http://identifiers.org/hgnc/23663> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0011837> .
+<http://identifiers.org/hgnc/2621> <http://www.w3.org/2000/01/rdf-schema#label> "CYP2C19" .
+<http://identifiers.org/hgnc/3236> <http://www.w3.org/2000/01/rdf-schema#label> "EGFR" .
+<http://identifiers.org/hgnc/3236> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0014481> .
+<http://identifiers.org/hgnc/3689> <http://www.w3.org/2000/01/rdf-schema#label> "FGFR2" .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007041> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007405> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007412> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0012307> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013815> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0020667> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0100302> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0600018> .
+<http://identifiers.org/hgnc/3689> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_1060147> .
+<http://identifiers.org/hgnc/3775> <http://www.w3.org/2000/01/rdf-schema#label> "FMR1" .
+<http://identifiers.org/hgnc/3775> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010382> .
+<http://identifiers.org/hgnc/3775> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010383> .
+<http://identifiers.org/hgnc/3775> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010706> .
+<http://identifiers.org/hgnc/427> <http://www.w3.org/2000/01/rdf-schema#label> "ALK" .
+<http://identifiers.org/hgnc/427> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013083> .
+<http://identifiers.org/hgnc/4932> <http://www.w3.org/2000/01/rdf-schema#label> "HLA-B" .
+<http://identifiers.org/hgnc/4932> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007126> .
+<http://identifiers.org/hgnc/4933> <http://www.w3.org/2000/01/rdf-schema#label> "HLA-C" .
+<http://identifiers.org/hgnc/4933> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0008334> .
+<http://identifiers.org/hgnc/583> <http://www.w3.org/2000/01/rdf-schema#label> "APC" .
+<http://identifiers.org/hgnc/583> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007608> .
+<http://identifiers.org/hgnc/583> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0017790> .
+<http://identifiers.org/hgnc/583> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0021056> .
+<http://identifiers.org/hgnc/6126> <http://www.w3.org/2000/01/rdf-schema#label> "IRS2" .
+<http://identifiers.org/hgnc/613> <http://www.w3.org/2000/01/rdf-schema#label> "APOE" .
+<http://identifiers.org/hgnc/613> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007089> .
+<http://identifiers.org/hgnc/613> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010017> .
+<http://identifiers.org/hgnc/613> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0012725> .
+<http://identifiers.org/hgnc/644> <http://www.w3.org/2000/01/rdf-schema#label> "AR" .
+<http://identifiers.org/hgnc/644> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010384> .
+<http://identifiers.org/hgnc/644> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010735> .
+<http://identifiers.org/hgnc/644> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0019154> .
+<http://identifiers.org/hgnc/644> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0971170> .
+<http://identifiers.org/hgnc/7133> <http://www.w3.org/2000/01/rdf-schema#label> "KMT2D" .
+<http://identifiers.org/hgnc/7133> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007843> .
+<http://identifiers.org/hgnc/7133> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0035651> .
+<http://identifiers.org/hgnc/76> <http://www.w3.org/2000/01/rdf-schema#label> "ABL1" .
+<http://identifiers.org/hgnc/76> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0060532> .
+<http://identifiers.org/hgnc/777> <http://www.w3.org/2000/01/rdf-schema#label> "ZFHX3" .
+<http://identifiers.org/hgnc/777> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0010847> .
+<http://identifiers.org/hgnc/777> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013100> .
+<http://identifiers.org/hgnc/777> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0980988> .
+<http://identifiers.org/hgnc/7881> <http://www.w3.org/2000/01/rdf-schema#label> "NOTCH1" .
+<http://identifiers.org/hgnc/7881> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_1060150> .
+<http://identifiers.org/hgnc/7989> <http://www.w3.org/2000/01/rdf-schema#label> "NRAS" .
+<http://identifiers.org/hgnc/7989> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0009578> .
+<http://identifiers.org/hgnc/7989> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013186> .
+<http://identifiers.org/hgnc/7989> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013767> .
+<http://identifiers.org/hgnc/8028> <http://www.w3.org/2000/01/rdf-schema#label> "NTHL1" .
+<http://identifiers.org/hgnc/8028> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0014630> .
+<http://identifiers.org/hgnc/8028> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0100502> .
+<http://identifiers.org/hgnc/8565> <http://www.w3.org/2000/01/rdf-schema#label> "PABPN1" .
+<http://identifiers.org/hgnc/8565> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0958176> .
+<http://identifiers.org/hgnc/882> <http://www.w3.org/2000/01/rdf-schema#label> "ATR" .
+<http://identifiers.org/hgnc/882> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0008869> .
+<http://identifiers.org/hgnc/882> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013806> .
+<http://identifiers.org/hgnc/8975> <http://www.w3.org/2000/01/rdf-schema#label> "PIK3CA" .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0007962> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0008420> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0011240> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0011723> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013038> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0013125> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0014047> .
+<http://identifiers.org/hgnc/8975> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0859192> .
+<http://identifiers.org/hgnc/9949> <http://www.w3.org/2000/01/rdf-schema#label> "RECQL4" .
+<http://identifiers.org/hgnc/9949> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0009039> .
+<http://identifiers.org/hgnc/9949> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0009955> .
+<http://identifiers.org/hgnc/9949> <https://w3id.org/biolink/vocab/gene_associated_with_condition> <http://purl.obolibrary.org/obo/MONDO_0016369> .
+<http://purl.obolibrary.org/obo/MONDO_0000078> <http://www.w3.org/2000/01/rdf-schema#label> "acrocephalopolysyndactyly" .
+<http://purl.obolibrary.org/obo/MONDO_0000078> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019796> .
+<http://purl.obolibrary.org/obo/MONDO_0000147> <http://www.w3.org/2000/01/rdf-schema#label> "polyposis" .
+<http://purl.obolibrary.org/obo/MONDO_0000147> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021075> .
+<http://purl.obolibrary.org/obo/MONDO_0000425> <http://www.w3.org/2000/01/rdf-schema#label> "X-linked disease" .
+<http://purl.obolibrary.org/obo/MONDO_0000426> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal dominant disease" .
+<http://purl.obolibrary.org/obo/MONDO_0000426> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000429> .
+<http://purl.obolibrary.org/obo/MONDO_0000429> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal genetic disease" .
+<http://purl.obolibrary.org/obo/MONDO_0000437> <http://www.w3.org/2000/01/rdf-schema#label> "cerebellar ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0000437> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005395> .
+<http://purl.obolibrary.org/obo/MONDO_0000437> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0022687> .
+<http://purl.obolibrary.org/obo/MONDO_0000437> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100308> .
+<http://purl.obolibrary.org/obo/MONDO_0000462> <http://www.w3.org/2000/01/rdf-schema#label> "eye adnexa disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0000462> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002022> .
+<http://purl.obolibrary.org/obo/MONDO_0000591> <http://www.w3.org/2000/01/rdf-schema#label> "intrinsic cardiomyopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0000591> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004994> .
+<http://purl.obolibrary.org/obo/MONDO_0000605> <http://www.w3.org/2000/01/rdf-schema#label> "hypersensitivity reaction disease" .
+<http://purl.obolibrary.org/obo/MONDO_0000605> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005046> .
+<http://purl.obolibrary.org/obo/MONDO_0000648> <http://www.w3.org/2000/01/rdf-schema#label> "nervous system benign neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0000648> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005165> .
+<http://purl.obolibrary.org/obo/MONDO_0000648> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021248> .
+<http://purl.obolibrary.org/obo/MONDO_0000652> <http://www.w3.org/2000/01/rdf-schema#label> "integumentary system benign neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0000652> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002051> .
+<http://purl.obolibrary.org/obo/MONDO_0000652> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005165> .
+<http://purl.obolibrary.org/obo/MONDO_0000820> <http://www.w3.org/2000/01/rdf-schema#label> "cerebral cavernous malformation" .
+<http://purl.obolibrary.org/obo/MONDO_0000820> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002320> .
+<http://purl.obolibrary.org/obo/MONDO_0001056> <http://www.w3.org/2000/01/rdf-schema#label> "gastric cancer" .
+<http://purl.obolibrary.org/obo/MONDO_0001056> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002516> .
+<http://purl.obolibrary.org/obo/MONDO_0001056> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021085> .
+<http://purl.obolibrary.org/obo/MONDO_0001411> <http://www.w3.org/2000/01/rdf-schema#label> "synostosis" .
+<http://purl.obolibrary.org/obo/MONDO_0001411> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018234> .
+<http://purl.obolibrary.org/obo/MONDO_0001516> <http://www.w3.org/2000/01/rdf-schema#label> "spinal muscular atrophy" .
+<http://purl.obolibrary.org/obo/MONDO_0001516> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003182> .
+<http://purl.obolibrary.org/obo/MONDO_0001516> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024257> .
+<http://purl.obolibrary.org/obo/MONDO_0001531> <http://www.w3.org/2000/01/rdf-schema#label> "blood coagulation disease" .
+<http://purl.obolibrary.org/obo/MONDO_0001531> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005570> .
+<http://purl.obolibrary.org/obo/MONDO_0001627> <http://www.w3.org/2000/01/rdf-schema#label> "dementia" .
+<http://purl.obolibrary.org/obo/MONDO_0001627> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002039> .
+<http://purl.obolibrary.org/obo/MONDO_0001889> <http://www.w3.org/2000/01/rdf-schema#label> "ovarian dysfunction" .
+<http://purl.obolibrary.org/obo/MONDO_0001889> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005558> .
+<http://purl.obolibrary.org/obo/MONDO_0002022> <http://www.w3.org/2000/01/rdf-schema#label> "disorder of orbital region" .
+<http://purl.obolibrary.org/obo/MONDO_0002025> <http://www.w3.org/2000/01/rdf-schema#label> "psychiatric disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002039> <http://www.w3.org/2000/01/rdf-schema#label> "cognitive disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002039> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002025> .
+<http://purl.obolibrary.org/obo/MONDO_0002051> <http://www.w3.org/2000/01/rdf-schema#label> "integumentary system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002081> <http://www.w3.org/2000/01/rdf-schema#label> "musculoskeletal system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002145> <http://www.w3.org/2000/01/rdf-schema#label> "disorder of sexual differentiation" .
+<http://purl.obolibrary.org/obo/MONDO_0002145> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002259> .
+<http://purl.obolibrary.org/obo/MONDO_0002145> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019755> .
+<http://purl.obolibrary.org/obo/MONDO_0002217> <http://www.w3.org/2000/01/rdf-schema#label> "central nervous system sarcoma" .
+<http://purl.obolibrary.org/obo/MONDO_0002217> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002714> .
+<http://purl.obolibrary.org/obo/MONDO_0002217> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018078> .
+<http://purl.obolibrary.org/obo/MONDO_0002242> <http://www.w3.org/2000/01/rdf-schema#label> "coagulation protein disease" .
+<http://purl.obolibrary.org/obo/MONDO_0002242> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001531> .
+<http://purl.obolibrary.org/obo/MONDO_0002243> <http://www.w3.org/2000/01/rdf-schema#label> "hemorrhagic disease" .
+<http://purl.obolibrary.org/obo/MONDO_0002243> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005570> .
+<http://purl.obolibrary.org/obo/MONDO_0002254> <http://www.w3.org/2000/01/rdf-schema#label> "syndromic disease" .
+<http://purl.obolibrary.org/obo/MONDO_0002259> <http://www.w3.org/2000/01/rdf-schema#label> "gonadal disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002259> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005039> .
+<http://purl.obolibrary.org/obo/MONDO_0002259> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005151> .
+<http://purl.obolibrary.org/obo/MONDO_0002263> <http://www.w3.org/2000/01/rdf-schema#label> "female reproductive system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002263> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005039> .
+<http://purl.obolibrary.org/obo/MONDO_0002320> <http://www.w3.org/2000/01/rdf-schema#label> "congenital nervous system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002320> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0002427> <http://www.w3.org/2000/01/rdf-schema#label> "cerebellar disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002427> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005560> .
+<http://purl.obolibrary.org/obo/MONDO_0002459> <http://www.w3.org/2000/01/rdf-schema#label> "type IV hypersensitivity disease" .
+<http://purl.obolibrary.org/obo/MONDO_0002459> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000605> .
+<http://purl.obolibrary.org/obo/MONDO_0002516> <http://www.w3.org/2000/01/rdf-schema#label> "digestive system cancer" .
+<http://purl.obolibrary.org/obo/MONDO_0002516> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004335> .
+<http://purl.obolibrary.org/obo/MONDO_0002516> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004992> .
+<http://purl.obolibrary.org/obo/MONDO_0002516> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021223> .
+<http://purl.obolibrary.org/obo/MONDO_0002525> <http://www.w3.org/2000/01/rdf-schema#label> "inherited lipid metabolism disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002525> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019052> .
+<http://purl.obolibrary.org/obo/MONDO_0002531> <http://www.w3.org/2000/01/rdf-schema#label> "skin neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0002531> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0002531> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005093> .
+<http://purl.obolibrary.org/obo/MONDO_0002545> <http://www.w3.org/2000/01/rdf-schema#label> "spinal cord disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002545> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002602> .
+<http://purl.obolibrary.org/obo/MONDO_0002561> <http://www.w3.org/2000/01/rdf-schema#label> "lysosomal storage disease" .
+<http://purl.obolibrary.org/obo/MONDO_0002561> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019052> .
+<http://purl.obolibrary.org/obo/MONDO_0002602> <http://www.w3.org/2000/01/rdf-schema#label> "central nervous system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0002602> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0002616> <http://www.w3.org/2000/01/rdf-schema#label> "mesenchymal cell neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0002616> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0002637> <http://www.w3.org/2000/01/rdf-schema#label> "histiocytosis" .
+<http://purl.obolibrary.org/obo/MONDO_0002637> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005833> .
+<http://purl.obolibrary.org/obo/MONDO_0002714> <http://www.w3.org/2000/01/rdf-schema#label> "central nervous system cancer" .
+<http://purl.obolibrary.org/obo/MONDO_0002714> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005872> .
+<http://purl.obolibrary.org/obo/MONDO_0002714> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006130> .
+<http://purl.obolibrary.org/obo/MONDO_0002728> <http://www.w3.org/2000/01/rdf-schema#label> "rhabdoid tumor" .
+<http://purl.obolibrary.org/obo/MONDO_0002728> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005564> .
+<http://purl.obolibrary.org/obo/MONDO_0002728> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018078> .
+<http://purl.obolibrary.org/obo/MONDO_0003182> <http://www.w3.org/2000/01/rdf-schema#label> "anterior horn disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0003182> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002545> .
+<http://purl.obolibrary.org/obo/MONDO_0003620> <http://www.w3.org/2000/01/rdf-schema#label> "peripheral nervous system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0003620> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0003778> <http://www.w3.org/2000/01/rdf-schema#label> "inborn error of immunity" .
+<http://purl.obolibrary.org/obo/MONDO_0003778> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005046> .
+<http://purl.obolibrary.org/obo/MONDO_0003900> <http://www.w3.org/2000/01/rdf-schema#label> "connective tissue disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0003939> <http://www.w3.org/2000/01/rdf-schema#label> "muscle tissue disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0003939> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002081> .
+<http://purl.obolibrary.org/obo/MONDO_0004298> <http://www.w3.org/2000/01/rdf-schema#label> "stomach disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0004298> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004335> .
+<http://purl.obolibrary.org/obo/MONDO_0004335> <http://www.w3.org/2000/01/rdf-schema#label> "digestive system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0004746> <http://www.w3.org/2000/01/rdf-schema#label> "myopathy of extraocular muscle" .
+<http://purl.obolibrary.org/obo/MONDO_0004746> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000462> .
+<http://purl.obolibrary.org/obo/MONDO_0004746> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005336> .
+<http://purl.obolibrary.org/obo/MONDO_0004746> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024458> .
+<http://purl.obolibrary.org/obo/MONDO_0004950> <http://www.w3.org/2000/01/rdf-schema#label> "gastric carcinoma" .
+<http://purl.obolibrary.org/obo/MONDO_0004950> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001056> .
+<http://purl.obolibrary.org/obo/MONDO_0004950> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006181> .
+<http://purl.obolibrary.org/obo/MONDO_0004975> <http://www.w3.org/2000/01/rdf-schema#label> "Alzheimer disease" .
+<http://purl.obolibrary.org/obo/MONDO_0004975> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001627> .
+<http://purl.obolibrary.org/obo/MONDO_0004975> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005574> .
+<http://purl.obolibrary.org/obo/MONDO_0004981> <http://www.w3.org/2000/01/rdf-schema#label> "atrial fibrillation" .
+<http://purl.obolibrary.org/obo/MONDO_0004981> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0007263> .
+<http://purl.obolibrary.org/obo/MONDO_0004992> <http://www.w3.org/2000/01/rdf-schema#label> "cancer" .
+<http://purl.obolibrary.org/obo/MONDO_0004992> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0004993> <http://www.w3.org/2000/01/rdf-schema#label> "carcinoma" .
+<http://purl.obolibrary.org/obo/MONDO_0004993> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004992> .
+<http://purl.obolibrary.org/obo/MONDO_0004993> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005626> .
+<http://purl.obolibrary.org/obo/MONDO_0004994> <http://www.w3.org/2000/01/rdf-schema#label> "cardiomyopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0004994> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003939> .
+<http://purl.obolibrary.org/obo/MONDO_0004994> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005267> .
+<http://purl.obolibrary.org/obo/MONDO_0004995> <http://www.w3.org/2000/01/rdf-schema#label> "cardiovascular disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005020> <http://www.w3.org/2000/01/rdf-schema#label> "intestinal disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005020> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004335> .
+<http://purl.obolibrary.org/obo/MONDO_0005027> <http://www.w3.org/2000/01/rdf-schema#label> "epilepsy" .
+<http://purl.obolibrary.org/obo/MONDO_0005027> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005560> .
+<http://purl.obolibrary.org/obo/MONDO_0005031> <http://www.w3.org/2000/01/rdf-schema#label> "fibromatosis" .
+<http://purl.obolibrary.org/obo/MONDO_0005031> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006209> .
+<http://purl.obolibrary.org/obo/MONDO_0005039> <http://www.w3.org/2000/01/rdf-schema#label> "reproductive system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005045> <http://www.w3.org/2000/01/rdf-schema#label> "hypertrophic cardiomyopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0005045> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000591> .
+<http://purl.obolibrary.org/obo/MONDO_0005046> <http://www.w3.org/2000/01/rdf-schema#label> "immune system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005047> <http://www.w3.org/2000/01/rdf-schema#label> "infertility disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005047> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005039> .
+<http://purl.obolibrary.org/obo/MONDO_0005066> <http://www.w3.org/2000/01/rdf-schema#label> "metabolic disease" .
+<http://purl.obolibrary.org/obo/MONDO_0005070> <http://www.w3.org/2000/01/rdf-schema#label> "neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0005070> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0023370> .
+<http://purl.obolibrary.org/obo/MONDO_0005071> <http://www.w3.org/2000/01/rdf-schema#label> "nervous system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005073> <http://www.w3.org/2000/01/rdf-schema#label> "melanocytic nevus" .
+<http://purl.obolibrary.org/obo/MONDO_0005073> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021440> .
+<http://purl.obolibrary.org/obo/MONDO_0005073> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021583> .
+<http://purl.obolibrary.org/obo/MONDO_0005079> <http://www.w3.org/2000/01/rdf-schema#label> "polyp" .
+<http://purl.obolibrary.org/obo/MONDO_0005079> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0045024> .
+<http://purl.obolibrary.org/obo/MONDO_0005087> <http://www.w3.org/2000/01/rdf-schema#label> "respiratory system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005089> <http://www.w3.org/2000/01/rdf-schema#label> "sarcoma" .
+<http://purl.obolibrary.org/obo/MONDO_0005089> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004992> .
+<http://purl.obolibrary.org/obo/MONDO_0005093> <http://www.w3.org/2000/01/rdf-schema#label> "skin disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005093> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002051> .
+<http://purl.obolibrary.org/obo/MONDO_0005151> <http://www.w3.org/2000/01/rdf-schema#label> "endocrine system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005165> <http://www.w3.org/2000/01/rdf-schema#label> "benign neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0005165> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0005172> <http://www.w3.org/2000/01/rdf-schema#label> "skeletal system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005172> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002081> .
+<http://purl.obolibrary.org/obo/MONDO_0005217> <http://www.w3.org/2000/01/rdf-schema#label> "familial cardiomyopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0005217> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004994> .
+<http://purl.obolibrary.org/obo/MONDO_0005217> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100547> .
+<http://purl.obolibrary.org/obo/MONDO_0005244> <http://www.w3.org/2000/01/rdf-schema#label> "peripheral neuropathy" .
+<http://purl.obolibrary.org/obo/MONDO_0005244> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003620> .
+<http://purl.obolibrary.org/obo/MONDO_0005244> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019056> .
+<http://purl.obolibrary.org/obo/MONDO_0005265> <http://www.w3.org/2000/01/rdf-schema#label> "inflammatory bowel disease" .
+<http://purl.obolibrary.org/obo/MONDO_0005265> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005020> .
+<http://purl.obolibrary.org/obo/MONDO_0005265> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005046> .
+<http://purl.obolibrary.org/obo/MONDO_0005267> <http://www.w3.org/2000/01/rdf-schema#label> "heart disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005267> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004995> .
+<http://purl.obolibrary.org/obo/MONDO_0005328> <http://www.w3.org/2000/01/rdf-schema#label> "eye disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005328> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002022> .
+<http://purl.obolibrary.org/obo/MONDO_0005328> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024458> .
+<http://purl.obolibrary.org/obo/MONDO_0005336> <http://www.w3.org/2000/01/rdf-schema#label> "myopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0005336> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020120> .
+<http://purl.obolibrary.org/obo/MONDO_0005345> <http://www.w3.org/2000/01/rdf-schema#label> "hypospadias" .
+<http://purl.obolibrary.org/obo/MONDO_0005345> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005039> .
+<http://purl.obolibrary.org/obo/MONDO_0005345> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0005381> <http://www.w3.org/2000/01/rdf-schema#label> "bone disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005381> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005172> .
+<http://purl.obolibrary.org/obo/MONDO_0005385> <http://www.w3.org/2000/01/rdf-schema#label> "vascular disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005385> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004995> .
+<http://purl.obolibrary.org/obo/MONDO_0005387> <http://www.w3.org/2000/01/rdf-schema#label> "primary ovarian failure" .
+<http://purl.obolibrary.org/obo/MONDO_0005387> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001889> .
+<http://purl.obolibrary.org/obo/MONDO_0005395> <http://www.w3.org/2000/01/rdf-schema#label> "movement disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005395> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0005453> <http://www.w3.org/2000/01/rdf-schema#label> "congenital heart disease" .
+<http://purl.obolibrary.org/obo/MONDO_0005453> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005267> .
+<http://purl.obolibrary.org/obo/MONDO_0005453> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024239> .
+<http://purl.obolibrary.org/obo/MONDO_0005497> <http://www.w3.org/2000/01/rdf-schema#label> "bone development disease" .
+<http://purl.obolibrary.org/obo/MONDO_0005497> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005381> .
+<http://purl.obolibrary.org/obo/MONDO_0005497> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0005554> <http://www.w3.org/2000/01/rdf-schema#label> "rheumatic disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005554> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003900> .
+<http://purl.obolibrary.org/obo/MONDO_0005558> <http://www.w3.org/2000/01/rdf-schema#label> "ovarian disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005558> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002259> .
+<http://purl.obolibrary.org/obo/MONDO_0005558> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002263> .
+<http://purl.obolibrary.org/obo/MONDO_0005559> <http://www.w3.org/2000/01/rdf-schema#label> "neurodegenerative disease" .
+<http://purl.obolibrary.org/obo/MONDO_0005559> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002602> .
+<http://purl.obolibrary.org/obo/MONDO_0005560> <http://www.w3.org/2000/01/rdf-schema#label> "brain disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005560> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002602> .
+<http://purl.obolibrary.org/obo/MONDO_0005564> <http://www.w3.org/2000/01/rdf-schema#label> "embryonal neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0005564> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0005570> <http://www.w3.org/2000/01/rdf-schema#label> "hematologic disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005574> <http://www.w3.org/2000/01/rdf-schema#label> "tauopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0005574> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005559> .
+<http://purl.obolibrary.org/obo/MONDO_0005574> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_7770011> .
+<http://purl.obolibrary.org/obo/MONDO_0005579> <http://www.w3.org/2000/01/rdf-schema#label> "idiopathic generalized epilepsy" .
+<http://purl.obolibrary.org/obo/MONDO_0005579> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100576> .
+<http://purl.obolibrary.org/obo/MONDO_0005626> <http://www.w3.org/2000/01/rdf-schema#label> "epithelial neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0005626> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0005833> <http://www.w3.org/2000/01/rdf-schema#label> "lymphatic system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0005833> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0044986> .
+<http://purl.obolibrary.org/obo/MONDO_0005872> <http://www.w3.org/2000/01/rdf-schema#label> "nervous system cancer" .
+<http://purl.obolibrary.org/obo/MONDO_0005872> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004992> .
+<http://purl.obolibrary.org/obo/MONDO_0005872> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021248> .
+<http://purl.obolibrary.org/obo/MONDO_0006025> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal recessive disease" .
+<http://purl.obolibrary.org/obo/MONDO_0006025> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000429> .
+<http://purl.obolibrary.org/obo/MONDO_0006130> <http://www.w3.org/2000/01/rdf-schema#label> "central nervous system neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0006130> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002602> .
+<http://purl.obolibrary.org/obo/MONDO_0006130> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021248> .
+<http://purl.obolibrary.org/obo/MONDO_0006181> <http://www.w3.org/2000/01/rdf-schema#label> "digestive system carcinoma" .
+<http://purl.obolibrary.org/obo/MONDO_0006181> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002516> .
+<http://purl.obolibrary.org/obo/MONDO_0006181> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004993> .
+<http://purl.obolibrary.org/obo/MONDO_0006209> <http://www.w3.org/2000/01/rdf-schema#label> "fibroblastic neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0006209> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002616> .
+<http://purl.obolibrary.org/obo/MONDO_0006209> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021581> .
+<http://purl.obolibrary.org/obo/MONDO_0006424> <http://www.w3.org/2000/01/rdf-schema#label> "soft tissue neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0006424> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0044334> .
+<http://purl.obolibrary.org/obo/MONDO_0006566> <http://www.w3.org/2000/01/rdf-schema#label> "keratosis" .
+<http://purl.obolibrary.org/obo/MONDO_0006566> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005093> .
+<http://purl.obolibrary.org/obo/MONDO_0006566> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0045011> .
+<http://purl.obolibrary.org/obo/MONDO_0007041> <http://www.w3.org/2000/01/rdf-schema#label> "Apert syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0007041> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019796> .
+<http://purl.obolibrary.org/obo/MONDO_0007043> <http://www.w3.org/2000/01/rdf-schema#label> "Pfeiffer syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0007043> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000078> .
+<http://purl.obolibrary.org/obo/MONDO_0007089> <http://www.w3.org/2000/01/rdf-schema#label> "Alzheimer disease 2" .
+<http://purl.obolibrary.org/obo/MONDO_0007089> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100087> .
+<http://purl.obolibrary.org/obo/MONDO_0007126> <http://www.w3.org/2000/01/rdf-schema#label> "spondyloarthropathy, susceptibility to, 1" .
+<http://purl.obolibrary.org/obo/MONDO_0007126> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024512> .
+<http://purl.obolibrary.org/obo/MONDO_0007179> <http://www.w3.org/2000/01/rdf-schema#label> "autoimmune disease" .
+<http://purl.obolibrary.org/obo/MONDO_0007179> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005046> .
+<http://purl.obolibrary.org/obo/MONDO_0007263> <http://www.w3.org/2000/01/rdf-schema#label> "cardiac rhythm disease" .
+<http://purl.obolibrary.org/obo/MONDO_0007263> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005267> .
+<http://purl.obolibrary.org/obo/MONDO_0007265> <http://www.w3.org/2000/01/rdf-schema#label> "cardiofaciocutaneous syndrome 1" .
+<http://purl.obolibrary.org/obo/MONDO_0007265> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015280> .
+<http://purl.obolibrary.org/obo/MONDO_0007405> <http://www.w3.org/2000/01/rdf-schema#label> "Crouzon syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0007405> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015338> .
+<http://purl.obolibrary.org/obo/MONDO_0007412> <http://www.w3.org/2000/01/rdf-schema#label> "Beare-Stevenson cutis gyrata syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0007412> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0007412> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015161> .
+<http://purl.obolibrary.org/obo/MONDO_0007412> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015338> .
+<http://purl.obolibrary.org/obo/MONDO_0007608> <http://www.w3.org/2000/01/rdf-schema#label> "desmoid tumor" .
+<http://purl.obolibrary.org/obo/MONDO_0007608> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005031> .
+<http://purl.obolibrary.org/obo/MONDO_0007608> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006424> .
+<http://purl.obolibrary.org/obo/MONDO_0007608> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0023603> .
+<http://purl.obolibrary.org/obo/MONDO_0007783> <http://www.w3.org/2000/01/rdf-schema#label> "malignant hyperthermia, susceptibility to, 1" .
+<http://purl.obolibrary.org/obo/MONDO_0007783> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0800188> .
+<http://purl.obolibrary.org/obo/MONDO_0007843> <http://www.w3.org/2000/01/rdf-schema#label> "Kabuki syndrome 1" .
+<http://purl.obolibrary.org/obo/MONDO_0007843> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016512> .
+<http://purl.obolibrary.org/obo/MONDO_0007872> <http://www.w3.org/2000/01/rdf-schema#label> "LADD syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0007872> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0007872> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015161> .
+<http://purl.obolibrary.org/obo/MONDO_0007872> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0800066> .
+<http://purl.obolibrary.org/obo/MONDO_0007893> <http://www.w3.org/2000/01/rdf-schema#label> "Noonan syndrome with multiple lentigines" .
+<http://purl.obolibrary.org/obo/MONDO_0007893> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0007893> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0007893> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015161> .
+<http://purl.obolibrary.org/obo/MONDO_0007893> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020297> .
+<http://purl.obolibrary.org/obo/MONDO_0007962> <http://www.w3.org/2000/01/rdf-schema#label> "megalodactyly" .
+<http://purl.obolibrary.org/obo/MONDO_0007962> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0007964> <http://www.w3.org/2000/01/rdf-schema#label> "melanoma, cutaneous malignant, susceptibility to, 2" .
+<http://purl.obolibrary.org/obo/MONDO_0007964> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0007964> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024462> .
+<http://purl.obolibrary.org/obo/MONDO_0007967> <http://www.w3.org/2000/01/rdf-schema#label> "melanoma and neural system tumor syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0007967> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0007967> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0008116> <http://www.w3.org/2000/01/rdf-schema#label> "oculopharyngeal muscular dystrophy" .
+<http://purl.obolibrary.org/obo/MONDO_0008116> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004746> .
+<http://purl.obolibrary.org/obo/MONDO_0008116> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016106> .
+<http://purl.obolibrary.org/obo/MONDO_0008116> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100546> .
+<http://purl.obolibrary.org/obo/MONDO_0008116> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0700223> .
+<http://purl.obolibrary.org/obo/MONDO_0008334> <http://www.w3.org/2000/01/rdf-schema#label> "psoriasis 1, susceptibility to" .
+<http://purl.obolibrary.org/obo/MONDO_0008334> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100171> .
+<http://purl.obolibrary.org/obo/MONDO_0008420> <http://www.w3.org/2000/01/rdf-schema#label> "seborrheic keratosis" .
+<http://purl.obolibrary.org/obo/MONDO_0008420> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006566> .
+<http://purl.obolibrary.org/obo/MONDO_0008420> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0008803> <http://www.w3.org/2000/01/rdf-schema#label> "Antley-Bixler syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0008803> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0011679> .
+<http://purl.obolibrary.org/obo/MONDO_0008803> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015160> .
+<http://purl.obolibrary.org/obo/MONDO_0008803> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015338> .
+<http://purl.obolibrary.org/obo/MONDO_0008869> <http://www.w3.org/2000/01/rdf-schema#label> "Seckel syndrome 1" .
+<http://purl.obolibrary.org/obo/MONDO_0008869> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019342> .
+<http://purl.obolibrary.org/obo/MONDO_0009039> <http://www.w3.org/2000/01/rdf-schema#label> "Baller-Gerold syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0009039> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015338> .
+<http://purl.obolibrary.org/obo/MONDO_0009061> <http://www.w3.org/2000/01/rdf-schema#label> "cystic fibrosis" .
+<http://purl.obolibrary.org/obo/MONDO_0009061> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005087> .
+<http://purl.obolibrary.org/obo/MONDO_0009061> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006025> .
+<http://purl.obolibrary.org/obo/MONDO_0009332> <http://www.w3.org/2000/01/rdf-schema#label> "congenital hematological disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0009332> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005570> .
+<http://purl.obolibrary.org/obo/MONDO_0009578> <http://www.w3.org/2000/01/rdf-schema#label> "neurocutaneous melanocytosis" .
+<http://purl.obolibrary.org/obo/MONDO_0009578> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000648> .
+<http://purl.obolibrary.org/obo/MONDO_0009578> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005073> .
+<http://purl.obolibrary.org/obo/MONDO_0009578> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0042983> .
+<http://purl.obolibrary.org/obo/MONDO_0009578> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0009578> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0009669> <http://www.w3.org/2000/01/rdf-schema#label> "spinal muscular atrophy, type 1" .
+<http://purl.obolibrary.org/obo/MONDO_0009669> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019079> .
+<http://purl.obolibrary.org/obo/MONDO_0009672> <http://www.w3.org/2000/01/rdf-schema#label> "spinal muscular atrophy, type III" .
+<http://purl.obolibrary.org/obo/MONDO_0009672> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019079> .
+<http://purl.obolibrary.org/obo/MONDO_0009673> <http://www.w3.org/2000/01/rdf-schema#label> "spinal muscular atrophy, type II" .
+<http://purl.obolibrary.org/obo/MONDO_0009673> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019079> .
+<http://purl.obolibrary.org/obo/MONDO_0009955> <http://www.w3.org/2000/01/rdf-schema#label> "rapadilino syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0009955> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006025> .
+<http://purl.obolibrary.org/obo/MONDO_0009955> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015161> .
+<http://purl.obolibrary.org/obo/MONDO_0009955> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018234> .
+<http://purl.obolibrary.org/obo/MONDO_0009955> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019054> .
+<http://purl.obolibrary.org/obo/MONDO_0009955> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019713> .
+<http://purl.obolibrary.org/obo/MONDO_0010002> <http://www.w3.org/2000/01/rdf-schema#label> "Rothmund-Thomson syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0010002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0010002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015951> .
+<http://purl.obolibrary.org/obo/MONDO_0010002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0010017> <http://www.w3.org/2000/01/rdf-schema#label> "sea-blue histiocyte syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0010017> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015531> .
+<http://purl.obolibrary.org/obo/MONDO_0010017> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015905> .
+<http://purl.obolibrary.org/obo/MONDO_0010017> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019255> .
+<http://purl.obolibrary.org/obo/MONDO_0010041> <http://www.w3.org/2000/01/rdf-schema#label> "Charlevoix-Saguenay spastic ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0010041> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015244> .
+<http://purl.obolibrary.org/obo/MONDO_0010041> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0017847> .
+<http://purl.obolibrary.org/obo/MONDO_0010056> <http://www.w3.org/2000/01/rdf-schema#label> "spinal muscular atrophy, type IV" .
+<http://purl.obolibrary.org/obo/MONDO_0010056> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019079> .
+<http://purl.obolibrary.org/obo/MONDO_0010382> <http://www.w3.org/2000/01/rdf-schema#label> "fragile X-associated tremor/ataxia syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0010382> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0010382> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016612> .
+<http://purl.obolibrary.org/obo/MONDO_0010383> <http://www.w3.org/2000/01/rdf-schema#label> "fragile X syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0010383> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0010384> <http://www.w3.org/2000/01/rdf-schema#label> "hypospadias 1, X-linked" .
+<http://purl.obolibrary.org/obo/MONDO_0010384> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005345> .
+<http://purl.obolibrary.org/obo/MONDO_0010706> <http://www.w3.org/2000/01/rdf-schema#label> "premature ovarian failure 1" .
+<http://purl.obolibrary.org/obo/MONDO_0010706> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019852> .
+<http://purl.obolibrary.org/obo/MONDO_0010735> <http://www.w3.org/2000/01/rdf-schema#label> "Kennedy disease" .
+<http://purl.obolibrary.org/obo/MONDO_0010735> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024237> .
+<http://purl.obolibrary.org/obo/MONDO_0010847> <http://www.w3.org/2000/01/rdf-schema#label> "spinocerebellar ataxia type 4" .
+<http://purl.obolibrary.org/obo/MONDO_0010847> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019792> .
+<http://purl.obolibrary.org/obo/MONDO_0011240> <http://www.w3.org/2000/01/rdf-schema#label> "megalencephaly-capillary malformation-polymicrogyria syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0011240> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100283> .
+<http://purl.obolibrary.org/obo/MONDO_0011240> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0011240> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_1040002> .
+<http://purl.obolibrary.org/obo/MONDO_0011679> <http://www.w3.org/2000/01/rdf-schema#label> "craniosynostosis syndrome, autosomal recessive" .
+<http://purl.obolibrary.org/obo/MONDO_0011679> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006025> .
+<http://purl.obolibrary.org/obo/MONDO_0011679> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015469> .
+<http://purl.obolibrary.org/obo/MONDO_0011713> <http://www.w3.org/2000/01/rdf-schema#label> "melanoma-pancreatic cancer syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0011713> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018453> .
+<http://purl.obolibrary.org/obo/MONDO_0011723> <http://www.w3.org/2000/01/rdf-schema#label> "hemifacial myohyperplasia" .
+<http://purl.obolibrary.org/obo/MONDO_0011723> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019716> .
+<http://purl.obolibrary.org/obo/MONDO_0011837> <http://www.w3.org/2000/01/rdf-schema#label> "vitamin K-dependent clotting factors, combined deficiency of, type 2" .
+<http://purl.obolibrary.org/obo/MONDO_0011837> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015722> .
+<http://purl.obolibrary.org/obo/MONDO_0012307> <http://www.w3.org/2000/01/rdf-schema#label> "familial scaphocephaly syndrome, McGillivray type" .
+<http://purl.obolibrary.org/obo/MONDO_0012307> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015704> .
+<http://purl.obolibrary.org/obo/MONDO_0012624> <http://www.w3.org/2000/01/rdf-schema#label> "acyl-CoA dehydrogenase 9 deficiency" .
+<http://purl.obolibrary.org/obo/MONDO_0012624> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0017713> .
+<http://purl.obolibrary.org/obo/MONDO_0012725> <http://www.w3.org/2000/01/rdf-schema#label> "lipoprotein glomerulopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0012725> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015905> .
+<http://purl.obolibrary.org/obo/MONDO_0013038> <http://www.w3.org/2000/01/rdf-schema#label> "CLOVES syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0013038> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0013038> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005073> .
+<http://purl.obolibrary.org/obo/MONDO_0013038> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019296> .
+<http://purl.obolibrary.org/obo/MONDO_0013038> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0013038> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_1040002> .
+<http://purl.obolibrary.org/obo/MONDO_0013083> <http://www.w3.org/2000/01/rdf-schema#label> "neuroblastoma, susceptibility to, 3" .
+<http://purl.obolibrary.org/obo/MONDO_0013083> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0013100> <http://www.w3.org/2000/01/rdf-schema#label> "atrial fibrillation, familial, 8" .
+<http://purl.obolibrary.org/obo/MONDO_0013100> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018054> .
+<http://purl.obolibrary.org/obo/MONDO_0013125> <http://www.w3.org/2000/01/rdf-schema#label> "CLAPO syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0013125> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019716> .
+<http://purl.obolibrary.org/obo/MONDO_0013186> <http://www.w3.org/2000/01/rdf-schema#label> "Noonan syndrome 6" .
+<http://purl.obolibrary.org/obo/MONDO_0013186> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018997> .
+<http://purl.obolibrary.org/obo/MONDO_0013224> <http://www.w3.org/2000/01/rdf-schema#label> "rhabdoid tumor predisposition syndrome 2" .
+<http://purl.obolibrary.org/obo/MONDO_0013224> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016473> .
+<http://purl.obolibrary.org/obo/MONDO_0013224> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020560> .
+<http://purl.obolibrary.org/obo/MONDO_0013224> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0013379> <http://www.w3.org/2000/01/rdf-schema#label> "Noonan syndrome 7" .
+<http://purl.obolibrary.org/obo/MONDO_0013379> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018997> .
+<http://purl.obolibrary.org/obo/MONDO_0013380> <http://www.w3.org/2000/01/rdf-schema#label> "LEOPARD syndrome 3" .
+<http://purl.obolibrary.org/obo/MONDO_0013380> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0007893> .
+<http://purl.obolibrary.org/obo/MONDO_0013767> <http://www.w3.org/2000/01/rdf-schema#label> "autoimmune lymphoproliferative syndrome type 4" .
+<http://purl.obolibrary.org/obo/MONDO_0013767> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0017979> .
+<http://purl.obolibrary.org/obo/MONDO_0013806> <http://www.w3.org/2000/01/rdf-schema#label> "familial cutaneous telangiectasia and oropharyngeal predisposition cancer syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0013806> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0013806> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019293> .
+<http://purl.obolibrary.org/obo/MONDO_0013806> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0013815> <http://www.w3.org/2000/01/rdf-schema#label> "bent bone dysplasia syndrome 1" .
+<http://purl.obolibrary.org/obo/MONDO_0013815> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0031615> .
+<http://purl.obolibrary.org/obo/MONDO_0013821> <http://www.w3.org/2000/01/rdf-schema#label> "intellectual disability, autosomal dominant 16" .
+<http://purl.obolibrary.org/obo/MONDO_0013821> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0013821> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015452> .
+<http://purl.obolibrary.org/obo/MONDO_0013821> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0700120> .
+<http://purl.obolibrary.org/obo/MONDO_0014047> <http://www.w3.org/2000/01/rdf-schema#label> "Cowden syndrome 5" .
+<http://purl.obolibrary.org/obo/MONDO_0014047> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016063> .
+<http://purl.obolibrary.org/obo/MONDO_0014047> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_1040002> .
+<http://purl.obolibrary.org/obo/MONDO_0014481> <http://www.w3.org/2000/01/rdf-schema#label> "inflammatory skin and bowel disease, neonatal, 2" .
+<http://purl.obolibrary.org/obo/MONDO_0014481> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0017411> .
+<http://purl.obolibrary.org/obo/MONDO_0014630> <http://www.w3.org/2000/01/rdf-schema#label> "familial adenomatous polyposis 3" .
+<http://purl.obolibrary.org/obo/MONDO_0014630> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021057> .
+<http://purl.obolibrary.org/obo/MONDO_0015127> <http://www.w3.org/2000/01/rdf-schema#label> "pituitary deficiency" .
+<http://purl.obolibrary.org/obo/MONDO_0015127> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005151> .
+<http://purl.obolibrary.org/obo/MONDO_0015159> <http://www.w3.org/2000/01/rdf-schema#label> "multiple congenital anomalies/dysmorphic syndrome-intellectual disability" .
+<http://purl.obolibrary.org/obo/MONDO_0015159> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019042> .
+<http://purl.obolibrary.org/obo/MONDO_0015160> <http://www.w3.org/2000/01/rdf-schema#label> "multiple congenital anomalies/dysmorphic syndrome-variable intellectual disability syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015160> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019042> .
+<http://purl.obolibrary.org/obo/MONDO_0015161> <http://www.w3.org/2000/01/rdf-schema#label> "multiple congenital anomalies/dysmorphic syndrome without intellectual disability" .
+<http://purl.obolibrary.org/obo/MONDO_0015161> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019042> .
+<http://purl.obolibrary.org/obo/MONDO_0015185> <http://www.w3.org/2000/01/rdf-schema#label> "intestinal polyposis syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015185> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0015244> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal recessive cerebellar ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0015244> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006025> .
+<http://purl.obolibrary.org/obo/MONDO_0015244> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100310> .
+<http://purl.obolibrary.org/obo/MONDO_0015280> <http://www.w3.org/2000/01/rdf-schema#label> "cardiofaciocutaneous syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015280> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015159> .
+<http://purl.obolibrary.org/obo/MONDO_0015280> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019287> .
+<http://purl.obolibrary.org/obo/MONDO_0015280> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020297> .
+<http://purl.obolibrary.org/obo/MONDO_0015338> <http://www.w3.org/2000/01/rdf-schema#label> "syndromic craniosynostosis" .
+<http://purl.obolibrary.org/obo/MONDO_0015338> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0015338> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015469> .
+<http://purl.obolibrary.org/obo/MONDO_0015338> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018230> .
+<http://purl.obolibrary.org/obo/MONDO_0015356> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary neoplastic syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015356> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020573> .
+<http://purl.obolibrary.org/obo/MONDO_0015356> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021058> .
+<http://purl.obolibrary.org/obo/MONDO_0015452> <http://www.w3.org/2000/01/rdf-schema#label> "Coffin-Siris syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015452> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0015452> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005172> .
+<http://purl.obolibrary.org/obo/MONDO_0015452> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015159> .
+<http://purl.obolibrary.org/obo/MONDO_0015469> <http://www.w3.org/2000/01/rdf-schema#label> "craniosynostosis" .
+<http://purl.obolibrary.org/obo/MONDO_0015469> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001411> .
+<http://purl.obolibrary.org/obo/MONDO_0015514> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary endocrine growth disease" .
+<http://purl.obolibrary.org/obo/MONDO_0015514> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005151> .
+<http://purl.obolibrary.org/obo/MONDO_0015531> <http://www.w3.org/2000/01/rdf-schema#label> "non-Langerhans cell histiocytosis" .
+<http://purl.obolibrary.org/obo/MONDO_0015531> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002637> .
+<http://purl.obolibrary.org/obo/MONDO_0015547> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary dementia" .
+<http://purl.obolibrary.org/obo/MONDO_0015547> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001627> .
+<http://purl.obolibrary.org/obo/MONDO_0015650> <http://www.w3.org/2000/01/rdf-schema#label> "epilepsy syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015650> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005027> .
+<http://purl.obolibrary.org/obo/MONDO_0015704> <http://www.w3.org/2000/01/rdf-schema#label> "familial scaphocephaly syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0015704> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015338> .
+<http://purl.obolibrary.org/obo/MONDO_0015722> <http://www.w3.org/2000/01/rdf-schema#label> "congenital vitamin K-dependent coagulation factors deficiency" .
+<http://purl.obolibrary.org/obo/MONDO_0015722> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002242> .
+<http://purl.obolibrary.org/obo/MONDO_0015722> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002243> .
+<http://purl.obolibrary.org/obo/MONDO_0015722> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0009332> .
+<http://purl.obolibrary.org/obo/MONDO_0015722> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021181> .
+<http://purl.obolibrary.org/obo/MONDO_0015905> <http://www.w3.org/2000/01/rdf-schema#label> "syndromic dyslipidemia" .
+<http://purl.obolibrary.org/obo/MONDO_0015905> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0015905> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002525> .
+<http://purl.obolibrary.org/obo/MONDO_0015951> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary photodermatosis" .
+<http://purl.obolibrary.org/obo/MONDO_0015951> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0016063> <http://www.w3.org/2000/01/rdf-schema#label> "Cowden disease" .
+<http://purl.obolibrary.org/obo/MONDO_0016063> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0016063> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0016106> <http://www.w3.org/2000/01/rdf-schema#label> "progressive muscular dystrophy" .
+<http://purl.obolibrary.org/obo/MONDO_0016106> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020121> .
+<http://purl.obolibrary.org/obo/MONDO_0016296> <http://www.w3.org/2000/01/rdf-schema#label> "holoprosencephaly" .
+<http://purl.obolibrary.org/obo/MONDO_0016296> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0016296> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002320> .
+<http://purl.obolibrary.org/obo/MONDO_0016296> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015159> .
+<http://purl.obolibrary.org/obo/MONDO_0016296> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018762> .
+<http://purl.obolibrary.org/obo/MONDO_0016296> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0016369> <http://www.w3.org/2000/01/rdf-schema#label> "Rothmund-Thomson syndrome type 2" .
+<http://purl.obolibrary.org/obo/MONDO_0016369> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005328> .
+<http://purl.obolibrary.org/obo/MONDO_0016369> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0010002> .
+<http://purl.obolibrary.org/obo/MONDO_0016473> <http://www.w3.org/2000/01/rdf-schema#label> "familial rhabdoid tumor" .
+<http://purl.obolibrary.org/obo/MONDO_0016473> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002728> .
+<http://purl.obolibrary.org/obo/MONDO_0016473> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0016512> <http://www.w3.org/2000/01/rdf-schema#label> "Kabuki syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0016512> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0016512> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015159> .
+<http://purl.obolibrary.org/obo/MONDO_0016537> <http://www.w3.org/2000/01/rdf-schema#label> "lymphoproliferative syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0016537> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003778> .
+<http://purl.obolibrary.org/obo/MONDO_0016612> <http://www.w3.org/2000/01/rdf-schema#label> "X-linked cerebellar ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0016612> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000425> .
+<http://purl.obolibrary.org/obo/MONDO_0016612> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100310> .
+<http://purl.obolibrary.org/obo/MONDO_0017411> <http://www.w3.org/2000/01/rdf-schema#label> "neonatal inflammatory skin and bowel disease" .
+<http://purl.obolibrary.org/obo/MONDO_0017411> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005265> .
+<http://purl.obolibrary.org/obo/MONDO_0017411> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019268> .
+<http://purl.obolibrary.org/obo/MONDO_0017411> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019751> .
+<http://purl.obolibrary.org/obo/MONDO_0017411> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0023603> .
+<http://purl.obolibrary.org/obo/MONDO_0017411> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0017713> <http://www.w3.org/2000/01/rdf-schema#label> "disorder of fatty acid oxidation and ketogenesis" .
+<http://purl.obolibrary.org/obo/MONDO_0017713> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019223> .
+<http://purl.obolibrary.org/obo/MONDO_0017713> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0037858> .
+<http://purl.obolibrary.org/obo/MONDO_0017790> <http://www.w3.org/2000/01/rdf-schema#label> "gastric adenocarcinoma and proximal polyposis of the stomach" .
+<http://purl.obolibrary.org/obo/MONDO_0017790> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000147> .
+<http://purl.obolibrary.org/obo/MONDO_0017790> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0017790> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018502> .
+<http://purl.obolibrary.org/obo/MONDO_0017845> <http://www.w3.org/2000/01/rdf-schema#label> "spastic ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0017845> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100309> .
+<http://purl.obolibrary.org/obo/MONDO_0017847> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal recessive spastic ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0017847> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006025> .
+<http://purl.obolibrary.org/obo/MONDO_0017847> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0017845> .
+<http://purl.obolibrary.org/obo/MONDO_0017979> <http://www.w3.org/2000/01/rdf-schema#label> "autoimmune lymphoproliferative syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0017979> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002459> .
+<http://purl.obolibrary.org/obo/MONDO_0017979> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0007179> .
+<http://purl.obolibrary.org/obo/MONDO_0017979> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016537> .
+<http://purl.obolibrary.org/obo/MONDO_0017979> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021058> .
+<http://purl.obolibrary.org/obo/MONDO_0018054> <http://www.w3.org/2000/01/rdf-schema#label> "familial atrial fibrillation" .
+<http://purl.obolibrary.org/obo/MONDO_0018054> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004981> .
+<http://purl.obolibrary.org/obo/MONDO_0018054> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_1010180> .
+<http://purl.obolibrary.org/obo/MONDO_0018078> <http://www.w3.org/2000/01/rdf-schema#label> "soft tissue sarcoma" .
+<http://purl.obolibrary.org/obo/MONDO_0018078> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005089> .
+<http://purl.obolibrary.org/obo/MONDO_0018078> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024637> .
+<http://purl.obolibrary.org/obo/MONDO_0018230> <http://www.w3.org/2000/01/rdf-schema#label> "skeletal dysplasia" .
+<http://purl.obolibrary.org/obo/MONDO_0018230> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005381> .
+<http://purl.obolibrary.org/obo/MONDO_0018234> <http://www.w3.org/2000/01/rdf-schema#label> "dysostosis" .
+<http://purl.obolibrary.org/obo/MONDO_0018234> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005497> .
+<http://purl.obolibrary.org/obo/MONDO_0018453> <http://www.w3.org/2000/01/rdf-schema#label> "familial atypical multiple mole melanoma syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0018453> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002051> .
+<http://purl.obolibrary.org/obo/MONDO_0018453> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0018502> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary gastric cancer" .
+<http://purl.obolibrary.org/obo/MONDO_0018502> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004950> .
+<http://purl.obolibrary.org/obo/MONDO_0018762> <http://www.w3.org/2000/01/rdf-schema#label> "non-acquired combined pituitary hormone deficiency" .
+<http://purl.obolibrary.org/obo/MONDO_0018762> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019824> .
+<http://purl.obolibrary.org/obo/MONDO_0018997> <http://www.w3.org/2000/01/rdf-schema#label> "Noonan syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0018997> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0018997> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015160> .
+<http://purl.obolibrary.org/obo/MONDO_0018997> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019313> .
+<http://purl.obolibrary.org/obo/MONDO_0018997> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020297> .
+<http://purl.obolibrary.org/obo/MONDO_0019042> <http://www.w3.org/2000/01/rdf-schema#label> "multiple congenital anomalies/dysmorphic syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0019042> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019755> .
+<http://purl.obolibrary.org/obo/MONDO_0019052> <http://www.w3.org/2000/01/rdf-schema#label> "inborn errors of metabolism" .
+<http://purl.obolibrary.org/obo/MONDO_0019052> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005066> .
+<http://purl.obolibrary.org/obo/MONDO_0019054> <http://www.w3.org/2000/01/rdf-schema#label> "congenital limb malformation" .
+<http://purl.obolibrary.org/obo/MONDO_0019054> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019755> .
+<http://purl.obolibrary.org/obo/MONDO_0019056> <http://www.w3.org/2000/01/rdf-schema#label> "neuromuscular disease" .
+<http://purl.obolibrary.org/obo/MONDO_0019056> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0019079> <http://www.w3.org/2000/01/rdf-schema#label> "proximal spinal muscular atrophy" .
+<http://purl.obolibrary.org/obo/MONDO_0019079> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001516> .
+<http://purl.obolibrary.org/obo/MONDO_0019079> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020127> .
+<http://purl.obolibrary.org/obo/MONDO_0019119> <http://www.w3.org/2000/01/rdf-schema#label> "muscular channelopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0019119> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019056> .
+<http://purl.obolibrary.org/obo/MONDO_0019119> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_7770011> .
+<http://purl.obolibrary.org/obo/MONDO_0019154> <http://www.w3.org/2000/01/rdf-schema#label> "androgen insensitivity syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0019154> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020040> .
+<http://purl.obolibrary.org/obo/MONDO_0019175> <http://www.w3.org/2000/01/rdf-schema#label> "primary lymphedema" .
+<http://purl.obolibrary.org/obo/MONDO_0019175> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019297> .
+<http://purl.obolibrary.org/obo/MONDO_0019223> <http://www.w3.org/2000/01/rdf-schema#label> "disorder of fatty acid and ketone body metabolism" .
+<http://purl.obolibrary.org/obo/MONDO_0019223> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019243> .
+<http://purl.obolibrary.org/obo/MONDO_0019243> <http://www.w3.org/2000/01/rdf-schema#label> "inborn disorder of energy metabolism" .
+<http://purl.obolibrary.org/obo/MONDO_0019243> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019052> .
+<http://purl.obolibrary.org/obo/MONDO_0019245> <http://www.w3.org/2000/01/rdf-schema#label> "lysosomal lipid storage disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0019245> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002525> .
+<http://purl.obolibrary.org/obo/MONDO_0019245> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002561> .
+<http://purl.obolibrary.org/obo/MONDO_0019255> <http://www.w3.org/2000/01/rdf-schema#label> "sphingolipidosis" .
+<http://purl.obolibrary.org/obo/MONDO_0019255> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019245> .
+<http://purl.obolibrary.org/obo/MONDO_0019268> <http://www.w3.org/2000/01/rdf-schema#label> "epidermal disease" .
+<http://purl.obolibrary.org/obo/MONDO_0019268> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005093> .
+<http://purl.obolibrary.org/obo/MONDO_0019287> <http://www.w3.org/2000/01/rdf-schema#label> "ectodermal dysplasia syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0019287> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0019287> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021026> .
+<http://purl.obolibrary.org/obo/MONDO_0019287> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100118> .
+<http://purl.obolibrary.org/obo/MONDO_0019293> <http://www.w3.org/2000/01/rdf-schema#label> "skin vascular disease" .
+<http://purl.obolibrary.org/obo/MONDO_0019293> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005093> .
+<http://purl.obolibrary.org/obo/MONDO_0019293> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005385> .
+<http://purl.obolibrary.org/obo/MONDO_0019296> <http://www.w3.org/2000/01/rdf-schema#label> "subcutaneous tissue disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0019296> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002051> .
+<http://purl.obolibrary.org/obo/MONDO_0019297> <http://www.w3.org/2000/01/rdf-schema#label> "lymphedema" .
+<http://purl.obolibrary.org/obo/MONDO_0019297> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005833> .
+<http://purl.obolibrary.org/obo/MONDO_0019313> <http://www.w3.org/2000/01/rdf-schema#label> "lymphatic malformation" .
+<http://purl.obolibrary.org/obo/MONDO_0019313> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005385> .
+<http://purl.obolibrary.org/obo/MONDO_0019313> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019175> .
+<http://purl.obolibrary.org/obo/MONDO_0019342> <http://www.w3.org/2000/01/rdf-schema#label> "Seckel syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0019342> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0019342> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006025> .
+<http://purl.obolibrary.org/obo/MONDO_0019698> <http://www.w3.org/2000/01/rdf-schema#label> "bent bone dysplasia" .
+<http://purl.obolibrary.org/obo/MONDO_0019698> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018230> .
+<http://purl.obolibrary.org/obo/MONDO_0019713> <http://www.w3.org/2000/01/rdf-schema#label> "non-syndromic limb reduction defect" .
+<http://purl.obolibrary.org/obo/MONDO_0019713> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018230> .
+<http://purl.obolibrary.org/obo/MONDO_0019716> <http://www.w3.org/2000/01/rdf-schema#label> "overgrowth syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0019716> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0019751> <http://www.w3.org/2000/01/rdf-schema#label> "autoinflammatory syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0019751> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0019751> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005554> .
+<http://purl.obolibrary.org/obo/MONDO_0019755> <http://www.w3.org/2000/01/rdf-schema#label> "developmental defect during embryogenesis" .
+<http://purl.obolibrary.org/obo/MONDO_0019755> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0019792> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal dominant cerebellar ataxia type I" .
+<http://purl.obolibrary.org/obo/MONDO_0019792> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020380> .
+<http://purl.obolibrary.org/obo/MONDO_0019796> <http://www.w3.org/2000/01/rdf-schema#label> "acrocephalosyndactyly" .
+<http://purl.obolibrary.org/obo/MONDO_0019796> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015338> .
+<http://purl.obolibrary.org/obo/MONDO_0019796> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019054> .
+<http://purl.obolibrary.org/obo/MONDO_0019824> <http://www.w3.org/2000/01/rdf-schema#label> "non-acquired pituitary hormone deficiency" .
+<http://purl.obolibrary.org/obo/MONDO_0019824> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015127> .
+<http://purl.obolibrary.org/obo/MONDO_0019824> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015514> .
+<http://purl.obolibrary.org/obo/MONDO_0019852> <http://www.w3.org/2000/01/rdf-schema#label> "inherited primary ovarian failure" .
+<http://purl.obolibrary.org/obo/MONDO_0019852> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005387> .
+<http://purl.obolibrary.org/obo/MONDO_0019852> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015514> .
+<http://purl.obolibrary.org/obo/MONDO_0019852> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021124> .
+<http://purl.obolibrary.org/obo/MONDO_0019952> <http://www.w3.org/2000/01/rdf-schema#label> "congenital myopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0019952> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005336> .
+<http://purl.obolibrary.org/obo/MONDO_0020022> <http://www.w3.org/2000/01/rdf-schema#label> "central nervous system malformation" .
+<http://purl.obolibrary.org/obo/MONDO_0020022> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0020022> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019755> .
+<http://purl.obolibrary.org/obo/MONDO_0020040> <http://www.w3.org/2000/01/rdf-schema#label> "46 XY differences of sex development" .
+<http://purl.obolibrary.org/obo/MONDO_0020040> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002145> .
+<http://purl.obolibrary.org/obo/MONDO_0020120> <http://www.w3.org/2000/01/rdf-schema#label> "skeletal muscle disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0020120> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003939> .
+<http://purl.obolibrary.org/obo/MONDO_0020121> <http://www.w3.org/2000/01/rdf-schema#label> "muscular dystrophy" .
+<http://purl.obolibrary.org/obo/MONDO_0020121> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005336> .
+<http://purl.obolibrary.org/obo/MONDO_0020121> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019056> .
+<http://purl.obolibrary.org/obo/MONDO_0020127> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary peripheral neuropathy" .
+<http://purl.obolibrary.org/obo/MONDO_0020127> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005244> .
+<http://purl.obolibrary.org/obo/MONDO_0020127> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100546> .
+<http://purl.obolibrary.org/obo/MONDO_0020128> <http://www.w3.org/2000/01/rdf-schema#label> "motor neuron disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0020128> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005559> .
+<http://purl.obolibrary.org/obo/MONDO_0020128> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019056> .
+<http://purl.obolibrary.org/obo/MONDO_0020297> <http://www.w3.org/2000/01/rdf-schema#label> "Noonan syndrome and Noonan-related syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0020297> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021060> .
+<http://purl.obolibrary.org/obo/MONDO_0020297> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0020297> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024573> .
+<http://purl.obolibrary.org/obo/MONDO_0020380> <http://www.w3.org/2000/01/rdf-schema#label> "autosomal dominant cerebellar ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0020380> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_0020380> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015547> .
+<http://purl.obolibrary.org/obo/MONDO_0020380> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100310> .
+<http://purl.obolibrary.org/obo/MONDO_0020560> <http://www.w3.org/2000/01/rdf-schema#label> "atypical teratoid rhabdoid tumor" .
+<http://purl.obolibrary.org/obo/MONDO_0020560> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002217> .
+<http://purl.obolibrary.org/obo/MONDO_0020560> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002728> .
+<http://purl.obolibrary.org/obo/MONDO_0020573> <http://www.w3.org/2000/01/rdf-schema#label> "inherited disease susceptibility" .
+<http://purl.obolibrary.org/obo/MONDO_0020573> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0042489> .
+<http://purl.obolibrary.org/obo/MONDO_0020605> <http://www.w3.org/2000/01/rdf-schema#label> "X-linked recessive disease" .
+<http://purl.obolibrary.org/obo/MONDO_0020605> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000425> .
+<http://purl.obolibrary.org/obo/MONDO_0020667> <http://www.w3.org/2000/01/rdf-schema#label> "Antley-Bixler syndrome without genital anomalies or disordered steroidogenesis" .
+<http://purl.obolibrary.org/obo/MONDO_0020667> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0008803> .
+<http://purl.obolibrary.org/obo/MONDO_0021002> <http://www.w3.org/2000/01/rdf-schema#label> "syndactyly" .
+<http://purl.obolibrary.org/obo/MONDO_0021002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005172> .
+<http://purl.obolibrary.org/obo/MONDO_0021002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0021003> <http://www.w3.org/2000/01/rdf-schema#label> "polydactyly" .
+<http://purl.obolibrary.org/obo/MONDO_0021003> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005172> .
+<http://purl.obolibrary.org/obo/MONDO_0021003> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0021026> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary epidermal appendage anomaly" .
+<http://purl.obolibrary.org/obo/MONDO_0021026> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005093> .
+<http://purl.obolibrary.org/obo/MONDO_0021056> <http://www.w3.org/2000/01/rdf-schema#label> "familial adenomatous polyposis 1" .
+<http://purl.obolibrary.org/obo/MONDO_0021056> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021057> .
+<http://purl.obolibrary.org/obo/MONDO_0021057> <http://www.w3.org/2000/01/rdf-schema#label> "classic or attenuated familial adenomatous polyposis" .
+<http://purl.obolibrary.org/obo/MONDO_0021057> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015185> .
+<http://purl.obolibrary.org/obo/MONDO_0021058> <http://www.w3.org/2000/01/rdf-schema#label> "neoplastic syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0021058> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0021058> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0023370> .
+<http://purl.obolibrary.org/obo/MONDO_0021060> <http://www.w3.org/2000/01/rdf-schema#label> "RASopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0021060> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_7770011> .
+<http://purl.obolibrary.org/obo/MONDO_0021074> <http://www.w3.org/2000/01/rdf-schema#label> "precancerous condition" .
+<http://purl.obolibrary.org/obo/MONDO_0021074> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0045024> .
+<http://purl.obolibrary.org/obo/MONDO_0021075> <http://www.w3.org/2000/01/rdf-schema#label> "neoplastic polyp" .
+<http://purl.obolibrary.org/obo/MONDO_0021075> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005079> .
+<http://purl.obolibrary.org/obo/MONDO_0021075> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021074> .
+<http://purl.obolibrary.org/obo/MONDO_0021085> <http://www.w3.org/2000/01/rdf-schema#label> "gastric neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0021085> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004298> .
+<http://purl.obolibrary.org/obo/MONDO_0021085> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021223> .
+<http://purl.obolibrary.org/obo/MONDO_0021124> <http://www.w3.org/2000/01/rdf-schema#label> "female infertility" .
+<http://purl.obolibrary.org/obo/MONDO_0021124> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002263> .
+<http://purl.obolibrary.org/obo/MONDO_0021124> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005047> .
+<http://purl.obolibrary.org/obo/MONDO_0021143> <http://www.w3.org/2000/01/rdf-schema#label> "melanocytic neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0021143> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0021143> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021635> .
+<http://purl.obolibrary.org/obo/MONDO_0021147> <http://www.w3.org/2000/01/rdf-schema#label> "disorder of development or morphogenesis" .
+<http://purl.obolibrary.org/obo/MONDO_0021181> <http://www.w3.org/2000/01/rdf-schema#label> "inherited blood coagulation disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0021181> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0001531> .
+<http://purl.obolibrary.org/obo/MONDO_0021223> <http://www.w3.org/2000/01/rdf-schema#label> "digestive system neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0021223> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0021248> <http://www.w3.org/2000/01/rdf-schema#label> "nervous system neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0021248> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0021248> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0021440> <http://www.w3.org/2000/01/rdf-schema#label> "benign neoplasm of skin" .
+<http://purl.obolibrary.org/obo/MONDO_0021440> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000652> .
+<http://purl.obolibrary.org/obo/MONDO_0021440> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002531> .
+<http://purl.obolibrary.org/obo/MONDO_0021581> <http://www.w3.org/2000/01/rdf-schema#label> "connective tissue neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0021581> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003900> .
+<http://purl.obolibrary.org/obo/MONDO_0021581> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0021583> <http://www.w3.org/2000/01/rdf-schema#label> "melanocytic skin neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0021583> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002531> .
+<http://purl.obolibrary.org/obo/MONDO_0021583> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021143> .
+<http://purl.obolibrary.org/obo/MONDO_0021635> <http://www.w3.org/2000/01/rdf-schema#label> "neurocristopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0021635> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0022687> <http://www.w3.org/2000/01/rdf-schema#label> "cerebellar degeneration" .
+<http://purl.obolibrary.org/obo/MONDO_0022687> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002427> .
+<http://purl.obolibrary.org/obo/MONDO_0022687> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005559> .
+<http://purl.obolibrary.org/obo/MONDO_0023370> <http://www.w3.org/2000/01/rdf-schema#label> "neoplastic disease or syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0023370> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0045024> .
+<http://purl.obolibrary.org/obo/MONDO_0023603> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary disorder of connective tissue" .
+<http://purl.obolibrary.org/obo/MONDO_0023603> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0003900> .
+<http://purl.obolibrary.org/obo/MONDO_0024237> <http://www.w3.org/2000/01/rdf-schema#label> "inherited neurodegenerative disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0024237> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005559> .
+<http://purl.obolibrary.org/obo/MONDO_0024237> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0024239> <http://www.w3.org/2000/01/rdf-schema#label> "congenital anomaly of cardiovascular system" .
+<http://purl.obolibrary.org/obo/MONDO_0024239> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004995> .
+<http://purl.obolibrary.org/obo/MONDO_0024239> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0024257> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary motor neuron disease" .
+<http://purl.obolibrary.org/obo/MONDO_0024257> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020128> .
+<http://purl.obolibrary.org/obo/MONDO_0024257> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024237> .
+<http://purl.obolibrary.org/obo/MONDO_0024257> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100546> .
+<http://purl.obolibrary.org/obo/MONDO_0024458> <http://www.w3.org/2000/01/rdf-schema#label> "disorder of visual system" .
+<http://purl.obolibrary.org/obo/MONDO_0024462> <http://www.w3.org/2000/01/rdf-schema#label> "susceptibility to familial cutaneous melanoma" .
+<http://purl.obolibrary.org/obo/MONDO_0024462> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0024512> <http://www.w3.org/2000/01/rdf-schema#label> "spondyloarthropathy, susceptibility to" .
+<http://purl.obolibrary.org/obo/MONDO_0024512> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020573> .
+<http://purl.obolibrary.org/obo/MONDO_0024573> <http://www.w3.org/2000/01/rdf-schema#label> "familial hypertrophic cardiomyopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0024573> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005045> .
+<http://purl.obolibrary.org/obo/MONDO_0024573> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005217> .
+<http://purl.obolibrary.org/obo/MONDO_0024637> <http://www.w3.org/2000/01/rdf-schema#label> "malignant soft tissue neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0024637> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004992> .
+<http://purl.obolibrary.org/obo/MONDO_0024637> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0006424> .
+<http://purl.obolibrary.org/obo/MONDO_0026722> <http://www.w3.org/2000/01/rdf-schema#label> "Mullegama-Klein-Martinez syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0026763> <http://www.w3.org/2000/01/rdf-schema#label> "holoprosencephaly 13, X-linked" .
+<http://purl.obolibrary.org/obo/MONDO_0026763> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0016296> .
+<http://purl.obolibrary.org/obo/MONDO_0026763> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020605> .
+<http://purl.obolibrary.org/obo/MONDO_0031037> <http://www.w3.org/2000/01/rdf-schema#label> "famililal cerebral cavernous malformations" .
+<http://purl.obolibrary.org/obo/MONDO_0031037> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000820> .
+<http://purl.obolibrary.org/obo/MONDO_0031037> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0031615> <http://www.w3.org/2000/01/rdf-schema#label> "familial bent bone dysplasia syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0031615> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019698> .
+<http://purl.obolibrary.org/obo/MONDO_0035651> <http://www.w3.org/2000/01/rdf-schema#label> "choanal atresia-athelia-hypothyroidism-delayed puberty-short stature syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0035651> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0037858> <http://www.w3.org/2000/01/rdf-schema#label> "inherited fatty acid metabolism disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0037858> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002525> .
+<http://purl.obolibrary.org/obo/MONDO_0042489> <http://www.w3.org/2000/01/rdf-schema#label> "disease susceptibility" .
+<http://purl.obolibrary.org/obo/MONDO_0042983> <http://www.w3.org/2000/01/rdf-schema#label> "neurocutaneous syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0042983> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0044334> <http://www.w3.org/2000/01/rdf-schema#label> "connective and soft tissue neoplasm" .
+<http://purl.obolibrary.org/obo/MONDO_0044334> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005070> .
+<http://purl.obolibrary.org/obo/MONDO_0044986> <http://www.w3.org/2000/01/rdf-schema#label> "lymphoid system disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0044986> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005046> .
+<http://purl.obolibrary.org/obo/MONDO_0045011> <http://www.w3.org/2000/01/rdf-schema#label> "keratinization disease" .
+<http://purl.obolibrary.org/obo/MONDO_0045011> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002051> .
+<http://purl.obolibrary.org/obo/MONDO_0045011> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021147> .
+<http://purl.obolibrary.org/obo/MONDO_0045024> <http://www.w3.org/2000/01/rdf-schema#label> "cancer or benign tumor" .
+<http://purl.obolibrary.org/obo/MONDO_0060532> <http://www.w3.org/2000/01/rdf-schema#label> "congenital heart defects and skeletal malformations syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0100087> <http://www.w3.org/2000/01/rdf-schema#label> "familial Alzheimer disease" .
+<http://purl.obolibrary.org/obo/MONDO_0100087> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0004975> .
+<http://purl.obolibrary.org/obo/MONDO_0100087> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015547> .
+<http://purl.obolibrary.org/obo/MONDO_0100087> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024237> .
+<http://purl.obolibrary.org/obo/MONDO_0100118> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary skin disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0100118> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005093> .
+<http://purl.obolibrary.org/obo/MONDO_0100150> <http://www.w3.org/2000/01/rdf-schema#label> "RYR1-related myopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0100150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002320> .
+<http://purl.obolibrary.org/obo/MONDO_0100150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019119> .
+<http://purl.obolibrary.org/obo/MONDO_0100150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019952> .
+<http://purl.obolibrary.org/obo/MONDO_0100150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100546> .
+<http://purl.obolibrary.org/obo/MONDO_0100150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0700223> .
+<http://purl.obolibrary.org/obo/MONDO_0100171> <http://www.w3.org/2000/01/rdf-schema#label> "psoriasis, susceptibility to" .
+<http://purl.obolibrary.org/obo/MONDO_0100171> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020573> .
+<http://purl.obolibrary.org/obo/MONDO_0100283> <http://www.w3.org/2000/01/rdf-schema#label> "overgrowth syndrome and/or cerebral malformations due to abnormalities in MTOR pathway genes" .
+<http://purl.obolibrary.org/obo/MONDO_0100283> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020022> .
+<http://purl.obolibrary.org/obo/MONDO_0100302> <http://www.w3.org/2000/01/rdf-schema#label> "LADD syndrome 1" .
+<http://purl.obolibrary.org/obo/MONDO_0100302> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0007872> .
+<http://purl.obolibrary.org/obo/MONDO_0100308> <http://www.w3.org/2000/01/rdf-schema#label> "atactic disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0100308> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0100309> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0100309> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100308> .
+<http://purl.obolibrary.org/obo/MONDO_0100309> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0100310> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary cerebellar ataxia" .
+<http://purl.obolibrary.org/obo/MONDO_0100310> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000437> .
+<http://purl.obolibrary.org/obo/MONDO_0100310> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0024237> .
+<http://purl.obolibrary.org/obo/MONDO_0100310> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100309> .
+<http://purl.obolibrary.org/obo/MONDO_0100502> <http://www.w3.org/2000/01/rdf-schema#label> "NTHL1-deficiency tumor predisposition syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0100502> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0100545> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary neurological disease" .
+<http://purl.obolibrary.org/obo/MONDO_0100545> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005071> .
+<http://purl.obolibrary.org/obo/MONDO_0100546> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary neuromuscular disease" .
+<http://purl.obolibrary.org/obo/MONDO_0100546> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019056> .
+<http://purl.obolibrary.org/obo/MONDO_0100546> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0100547> <http://www.w3.org/2000/01/rdf-schema#label> "cardiogenetic disease" .
+<http://purl.obolibrary.org/obo/MONDO_0100547> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005267> .
+<http://purl.obolibrary.org/obo/MONDO_0100574> <http://www.w3.org/2000/01/rdf-schema#label> "generalized epilepsy" .
+<http://purl.obolibrary.org/obo/MONDO_0100574> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005027> .
+<http://purl.obolibrary.org/obo/MONDO_0100575> <http://www.w3.org/2000/01/rdf-schema#label> "genetic generalized epilepsy" .
+<http://purl.obolibrary.org/obo/MONDO_0100575> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100574> .
+<http://purl.obolibrary.org/obo/MONDO_0100576> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary generalized epilepsy" .
+<http://purl.obolibrary.org/obo/MONDO_0100576> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100545> .
+<http://purl.obolibrary.org/obo/MONDO_0100576> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100575> .
+<http://purl.obolibrary.org/obo/MONDO_0100614> <http://www.w3.org/2000/01/rdf-schema#label> "syndromic congenital heart disease" .
+<http://purl.obolibrary.org/obo/MONDO_0100614> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0002254> .
+<http://purl.obolibrary.org/obo/MONDO_0100614> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005453> .
+<http://purl.obolibrary.org/obo/MONDO_0100619> <http://www.w3.org/2000/01/rdf-schema#label> "variable age epilepsy syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0100619> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015650> .
+<http://purl.obolibrary.org/obo/MONDO_0600016> <http://www.w3.org/2000/01/rdf-schema#label> "acinar dysplasia" .
+<http://purl.obolibrary.org/obo/MONDO_0600016> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005087> .
+<http://purl.obolibrary.org/obo/MONDO_0600018> <http://www.w3.org/2000/01/rdf-schema#label> "acinar dysplasia caused by mutation in FGFR2" .
+<http://purl.obolibrary.org/obo/MONDO_0600018> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0600016> .
+<http://purl.obolibrary.org/obo/MONDO_0700120> <http://www.w3.org/2000/01/rdf-schema#label> "BAFopathy" .
+<http://purl.obolibrary.org/obo/MONDO_0700223> <http://www.w3.org/2000/01/rdf-schema#label> "hereditary skeletal muscle disorder" .
+<http://purl.obolibrary.org/obo/MONDO_0700223> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020120> .
+<http://purl.obolibrary.org/obo/MONDO_0800066> <http://www.w3.org/2000/01/rdf-schema#label> "polydactyly-syndactyly-triphalangism" .
+<http://purl.obolibrary.org/obo/MONDO_0800066> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0018230> .
+<http://purl.obolibrary.org/obo/MONDO_0800066> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021002> .
+<http://purl.obolibrary.org/obo/MONDO_0800066> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0021003> .
+<http://purl.obolibrary.org/obo/MONDO_0800188> <http://www.w3.org/2000/01/rdf-schema#label> "malignant hyperthermia, susceptibility to" .
+<http://purl.obolibrary.org/obo/MONDO_0800188> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0020573> .
+<http://purl.obolibrary.org/obo/MONDO_0800487> <http://www.w3.org/2000/01/rdf-schema#label> "variable-age onset idiopathic generalized epilepsy syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_0800487> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0005579> .
+<http://purl.obolibrary.org/obo/MONDO_0800487> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100619> .
+<http://purl.obolibrary.org/obo/MONDO_0859192> <http://www.w3.org/2000/01/rdf-schema#label> "cerebral cavernous malformation 4" .
+<http://purl.obolibrary.org/obo/MONDO_0859192> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0031037> .
+<http://purl.obolibrary.org/obo/MONDO_0859280> <http://www.w3.org/2000/01/rdf-schema#label> "developmental delay, hypotonia, and impaired language" .
+<http://purl.obolibrary.org/obo/MONDO_0958176> <http://www.w3.org/2000/01/rdf-schema#label> "oculopharyngeal muscular dystrophy 1" .
+<http://purl.obolibrary.org/obo/MONDO_0958176> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0008116> .
+<http://purl.obolibrary.org/obo/MONDO_0971170> <http://www.w3.org/2000/01/rdf-schema#label> "prostate cancer, hereditary, X-linked 3" .
+<http://purl.obolibrary.org/obo/MONDO_0971170> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0015356> .
+<http://purl.obolibrary.org/obo/MONDO_0980988> <http://www.w3.org/2000/01/rdf-schema#label> "epilepsy, idiopathic generalized 20" .
+<http://purl.obolibrary.org/obo/MONDO_0980988> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0800487> .
+<http://purl.obolibrary.org/obo/MONDO_1010180> <http://www.w3.org/2000/01/rdf-schema#label> "cardiogenetic rhythm disorder" .
+<http://purl.obolibrary.org/obo/MONDO_1010180> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0007263> .
+<http://purl.obolibrary.org/obo/MONDO_1010180> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100547> .
+<http://purl.obolibrary.org/obo/MONDO_1040002> <http://www.w3.org/2000/01/rdf-schema#label> "PIK3CA-related overgrowth spectrum" .
+<http://purl.obolibrary.org/obo/MONDO_1040002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0019716> .
+<http://purl.obolibrary.org/obo/MONDO_1060147> <http://www.w3.org/2000/01/rdf-schema#label> "FGFR2-related Pfeiffer syndrome" .
+<http://purl.obolibrary.org/obo/MONDO_1060147> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0007043> .
+<http://purl.obolibrary.org/obo/MONDO_1060150> <http://www.w3.org/2000/01/rdf-schema#label> "NOTCH1-related AOS spectrum disorder" .
+<http://purl.obolibrary.org/obo/MONDO_1060150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0000426> .
+<http://purl.obolibrary.org/obo/MONDO_1060150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100547> .
+<http://purl.obolibrary.org/obo/MONDO_1060150> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/MONDO_0100614> .
+<http://purl.obolibrary.org/obo/MONDO_7770011> <http://www.w3.org/2000/01/rdf-schema#label> "disease by molecular mechanism" .
+<http://purl.obolibrary.org/obo/SO_0000159> <http://www.w3.org/2000/01/rdf-schema#label> "deletion" .
+<http://purl.obolibrary.org/obo/SO_0000159> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001059> .
+<http://purl.obolibrary.org/obo/SO_0000248> <http://www.w3.org/2000/01/rdf-schema#label> "sequence_length_alteration" .
+<http://purl.obolibrary.org/obo/SO_0000248> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001059> .
+<http://purl.obolibrary.org/obo/SO_0000667> <http://www.w3.org/2000/01/rdf-schema#label> "insertion" .
+<http://purl.obolibrary.org/obo/SO_0000667> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001059> .
+<http://purl.obolibrary.org/obo/SO_0001019> <http://www.w3.org/2000/01/rdf-schema#label> "copy_number_variation" .
+<http://purl.obolibrary.org/obo/SO_0001019> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0000248> .
+<http://purl.obolibrary.org/obo/SO_0001059> <http://www.w3.org/2000/01/rdf-schema#label> "sequence_alteration" .
+<http://purl.obolibrary.org/obo/SO_0001483> <http://www.w3.org/2000/01/rdf-schema#label> "SNV" .
+<http://purl.obolibrary.org/obo/SO_0001483> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_1000002> .
+<http://purl.obolibrary.org/obo/SO_0001536> <http://www.w3.org/2000/01/rdf-schema#label> "functional_effect_variant" .
+<http://purl.obolibrary.org/obo/SO_0001537> <http://www.w3.org/2000/01/rdf-schema#label> "structural_variant" .
+<http://purl.obolibrary.org/obo/SO_0001564> <http://www.w3.org/2000/01/rdf-schema#label> "gene_variant" .
+<http://purl.obolibrary.org/obo/SO_0001564> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001878> .
+<http://purl.obolibrary.org/obo/SO_0001565> <http://www.w3.org/2000/01/rdf-schema#label> "gene_fusion" .
+<http://purl.obolibrary.org/obo/SO_0001565> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001564> .
+<http://purl.obolibrary.org/obo/SO_0001565> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001882> .
+<http://purl.obolibrary.org/obo/SO_0001568> <http://www.w3.org/2000/01/rdf-schema#label> "splicing_variant" .
+<http://purl.obolibrary.org/obo/SO_0001568> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001576> .
+<http://purl.obolibrary.org/obo/SO_0001575> <http://www.w3.org/2000/01/rdf-schema#label> "splice_donor_variant" .
+<http://purl.obolibrary.org/obo/SO_0001575> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001629> .
+<http://purl.obolibrary.org/obo/SO_0001576> <http://www.w3.org/2000/01/rdf-schema#label> "transcript_variant" .
+<http://purl.obolibrary.org/obo/SO_0001576> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001564> .
+<http://purl.obolibrary.org/obo/SO_0001580> <http://www.w3.org/2000/01/rdf-schema#label> "coding_sequence_variant" .
+<http://purl.obolibrary.org/obo/SO_0001580> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001791> .
+<http://purl.obolibrary.org/obo/SO_0001580> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001968> .
+<http://purl.obolibrary.org/obo/SO_0001583> <http://www.w3.org/2000/01/rdf-schema#label> "missense_variant" .
+<http://purl.obolibrary.org/obo/SO_0001583> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001992> .
+<http://purl.obolibrary.org/obo/SO_0001587> <http://www.w3.org/2000/01/rdf-schema#label> "stop_gained" .
+<http://purl.obolibrary.org/obo/SO_0001587> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001906> .
+<http://purl.obolibrary.org/obo/SO_0001587> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001992> .
+<http://purl.obolibrary.org/obo/SO_0001589> <http://www.w3.org/2000/01/rdf-schema#label> "frameshift_variant" .
+<http://purl.obolibrary.org/obo/SO_0001589> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001818> .
+<http://purl.obolibrary.org/obo/SO_0001622> <http://www.w3.org/2000/01/rdf-schema#label> "UTR_variant" .
+<http://purl.obolibrary.org/obo/SO_0001622> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001791> .
+<http://purl.obolibrary.org/obo/SO_0001622> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001968> .
+<http://purl.obolibrary.org/obo/SO_0001623> <http://www.w3.org/2000/01/rdf-schema#label> "5_prime_UTR_variant" .
+<http://purl.obolibrary.org/obo/SO_0001623> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001622> .
+<http://purl.obolibrary.org/obo/SO_0001627> <http://www.w3.org/2000/01/rdf-schema#label> "intron_variant" .
+<http://purl.obolibrary.org/obo/SO_0001627> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001576> .
+<http://purl.obolibrary.org/obo/SO_0001629> <http://www.w3.org/2000/01/rdf-schema#label> "splice_site_variant" .
+<http://purl.obolibrary.org/obo/SO_0001629> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001568> .
+<http://purl.obolibrary.org/obo/SO_0001629> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001627> .
+<http://purl.obolibrary.org/obo/SO_0001650> <http://www.w3.org/2000/01/rdf-schema#label> "inframe_variant" .
+<http://purl.obolibrary.org/obo/SO_0001650> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001818> .
+<http://purl.obolibrary.org/obo/SO_0001791> <http://www.w3.org/2000/01/rdf-schema#label> "exon_variant" .
+<http://purl.obolibrary.org/obo/SO_0001791> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001576> .
+<http://purl.obolibrary.org/obo/SO_0001818> <http://www.w3.org/2000/01/rdf-schema#label> "protein_altering_variant" .
+<http://purl.obolibrary.org/obo/SO_0001818> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001580> .
+<http://purl.obolibrary.org/obo/SO_0001819> <http://www.w3.org/2000/01/rdf-schema#label> "synonymous_variant" .
+<http://purl.obolibrary.org/obo/SO_0001819> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001580> .
+<http://purl.obolibrary.org/obo/SO_0001878> <http://www.w3.org/2000/01/rdf-schema#label> "feature_variant" .
+<http://purl.obolibrary.org/obo/SO_0001878> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001537> .
+<http://purl.obolibrary.org/obo/SO_0001882> <http://www.w3.org/2000/01/rdf-schema#label> "feature_fusion" .
+<http://purl.obolibrary.org/obo/SO_0001882> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001537> .
+<http://purl.obolibrary.org/obo/SO_0001886> <http://www.w3.org/2000/01/rdf-schema#label> "transcript_fusion" .
+<http://purl.obolibrary.org/obo/SO_0001886> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001882> .
+<http://purl.obolibrary.org/obo/SO_0001906> <http://www.w3.org/2000/01/rdf-schema#label> "feature_truncation" .
+<http://purl.obolibrary.org/obo/SO_0001906> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001878> .
+<http://purl.obolibrary.org/obo/SO_0001968> <http://www.w3.org/2000/01/rdf-schema#label> "coding_transcript_variant" .
+<http://purl.obolibrary.org/obo/SO_0001968> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001576> .
+<http://purl.obolibrary.org/obo/SO_0001992> <http://www.w3.org/2000/01/rdf-schema#label> "nonsynonymous_variant" .
+<http://purl.obolibrary.org/obo/SO_0001992> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001650> .
+<http://purl.obolibrary.org/obo/SO_0002007> <http://www.w3.org/2000/01/rdf-schema#label> "MNV" .
+<http://purl.obolibrary.org/obo/SO_0002007> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_1000002> .
+<http://purl.obolibrary.org/obo/SO_0002054> <http://www.w3.org/2000/01/rdf-schema#label> "loss_of_function_variant" .
+<http://purl.obolibrary.org/obo/SO_0002054> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0002218> .
+<http://purl.obolibrary.org/obo/SO_0002073> <http://www.w3.org/2000/01/rdf-schema#label> "no_sequence_alteration" .
+<http://purl.obolibrary.org/obo/SO_0002218> <http://www.w3.org/2000/01/rdf-schema#label> "functionally_abnormal" .
+<http://purl.obolibrary.org/obo/SO_0002218> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001536> .
+<http://purl.obolibrary.org/obo/SO_1000002> <http://www.w3.org/2000/01/rdf-schema#label> "substitution" .
+<http://purl.obolibrary.org/obo/SO_1000002> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001059> .
+<http://purl.obolibrary.org/obo/SO_1000032> <http://www.w3.org/2000/01/rdf-schema#label> "delins" .
+<http://purl.obolibrary.org/obo/SO_1000032> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001059> .
+<http://purl.obolibrary.org/obo/SO_1000036> <http://www.w3.org/2000/01/rdf-schema#label> "inversion" .
+<http://purl.obolibrary.org/obo/SO_1000036> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://purl.obolibrary.org/obo/SO_0001059> .
+<urn:ivg233:hgvs:NC_000003.11%3Ag.128625063C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/21497> .
+<urn:ivg233:hgvs:NC_000003.11%3Ag.142269071_142269072insTTACT> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/882> .
+<urn:ivg233:hgvs:NC_000007.13%3Ag.140453136A%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/1097> .
+<urn:ivg233:hgvs:NC_000007.13%3Ag.55259515T%3EG> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/3236> .
+<urn:ivg233:hgvs:NC_000009.11%3Ag.139395147C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/7881> .
+<urn:ivg233:hgvs:NC_000010.10%3Ag.96540410G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/2621> .
+<urn:ivg233:hgvs:NC_000010.11%3Ag.121498525T%3EG> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/3689> .
+<urn:ivg233:hgvs:NC_000016.10%3Ag.2040196C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8028> .
+<urn:ivg233:hgvs:NC_000016.9%3Ag.31096368G%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/23663> .
+<urn:ivg233:hgvs:NC_000016.9%3Ag.72992292C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/777> .
+<urn:ivg233:hgvs:NC_000023.10%3Ag.123227930_123227931insGTGACTATTAATAT> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/11355> .
+<urn:ivg233:hgvs:NM_000044.6%3Ac.7G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/644> .
+<urn:ivg233:hgvs:NM_000077.4%3Ac.9_32del> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/1787> .
+<urn:ivg233:hgvs:NM_000540.3%3Ac.4964G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/10483> .
+<urn:ivg233:hgvs:NM_001184.4%3Ac.2878_2879insAGTAA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/882> .
+<urn:ivg233:hgvs:NM_001349798.2%3Ac.1394G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/16712> .
+<urn:ivg233:hgvs:NM_002024.5%3Ac.-128_-69GGC%5B10%5DGGA%5B1%5DGGC%5B9%5DGGA%5B1%5DGGC%5B10%5D> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/3775> .
+<urn:ivg233:hgvs:NM_002524.4%3Ac.34G%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/7989> .
+<urn:ivg233:hgvs:NM_002528.7%3Ac.728G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8028> .
+<urn:ivg233:hgvs:NM_003072.5%3Ac.2372C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/11100> .
+<urn:ivg233:hgvs:NM_003482.3%3Ac.7900_7901delCA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/7133> .
+<urn:ivg233:hgvs:NM_003749.2%3Ac.3960C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/6126> .
+<urn:ivg233:hgvs:NM_004260.4%3Ac.2086C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/9949> .
+<urn:ivg233:hgvs:NM_004643.3%3Ac.3GGC%5B14%5D> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8565> .
+<urn:ivg233:hgvs:NM_004787.3%3Ac.1290C%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/11086> .
+<urn:ivg233:hgvs:NM_005228.4%3Ac.2573T%3EG> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/3236> .
+<urn:ivg233:hgvs:NM_006218.3%3Ac.333G%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8975> .
+<urn:ivg233:hgvs:NM_006218.4%3Ac.3140A%3EG> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8975> .
+<urn:ivg233:hgvs:NM_006603.5%3Ac.3530_3531insGTGACTATTAATAT> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/11355> .
+<urn:ivg233:hgvs:NM_006885.4%3Ac.1753G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/777> .
+<urn:ivg233:hgvs:NM_014049.4%3Ac.1249C%3ET> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/21497> .
+<urn:ivg233:hgvs:NM_014363.5%3Ac.12118G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/10519> .
+<urn:ivg233:hgvs:NM_017617.5%3Ac.5791G%3EA> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/7881> .
+<urn:ivg233:hgvs:NP_000035.2%3Ap.Val3Met> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/644> .
+<urn:ivg233:hgvs:NP_000068.1%3Ap.Ala4_Pro11del> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/1787> .
+<urn:ivg233:hgvs:NP_000531.2%3Ap.Arg1655Leu> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/10483> .
+<urn:ivg233:hgvs:NP_001336727.1%3Ap.Arg465His> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/16712> .
+<urn:ivg233:hgvs:NP_002519.2%3Ap.Trp243Ter> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8028> .
+<urn:ivg233:hgvs:NP_003063.2%3Ap.Ala791Val> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/11100> .
+<urn:ivg233:hgvs:NP_004251.4%3Ap.Arg696Cys> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/9949> .
+<urn:ivg233:hgvs:NP_004324.2%3Ap.Val600Glu> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/1097> .
+<urn:ivg233:hgvs:NP_005219.2%3Ap.Leu858Arg> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/3236> .
+<urn:ivg233:hgvs:NP_006209.2%3Ap.His1047Arg> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/8975> .
+<urn:ivg233:hgvs:NP_006594.3%3Ap.S1178%2A> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/11355> .
+<urn:ivg233:hgvs:NP_008816.3%3Ap.G585S> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/777> .
+<urn:ivg233:hgvs:NP_054768.2%3Ap.Arg417Cys> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/21497> .
+<urn:ivg233:hgvs:NP_060087.3%3Ap.A1931T> <https://w3id.org/biolink/vocab/is_sequence_variant_of> <http://identifiers.org/hgnc/7881> .

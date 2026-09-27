@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import (
+    RDF_EDGES_COMPAT_VIEW_DDL,
     GraphSchema,
     RdfEdgesRescueError,
     _call_classmethod,
@@ -27,6 +28,7 @@ from iris_vector_graph.embedding_identity import (
 from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 from iris_vector_graph.prop_values import prop_text
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
+from iris_vector_graph._validate import graph_index_key
 
 logger = logging.getLogger(__name__)
 
@@ -1943,7 +1945,7 @@ class SchemaMixin:
         # 5b. Create SQLUser views so IVG's Python PPR fallback can use unqualified table names
         for view_sql in [
             "CREATE VIEW SQLUser.nodes AS SELECT node_id, created_at FROM Graph_KG.nodes",
-            "CREATE VIEW SQLUser.rdf_edges AS SELECT * FROM Graph_KG.rdf_edges",
+            RDF_EDGES_COMPAT_VIEW_DDL,
             "CREATE VIEW SQLUser.rdf_labels AS SELECT * FROM Graph_KG.rdf_labels",
             "CREATE VIEW SQLUser.rdf_props AS SELECT * FROM Graph_KG.rdf_props",
         ]:
@@ -1974,6 +1976,12 @@ class SchemaMixin:
                 self.capabilities = IRISCapabilities()
         else:
             self.capabilities = IRISCapabilities()
+            # The deploy is what normally restores a rescued `rdf_edges`, and with
+            # `staged=None` it resumes one an earlier run left unfinished. Skipping the
+            # deploy must not skip that: a rescue table left behind is the only copy of
+            # the edges, next to an `rdf_edges` the base DDL above just created empty.
+            # Raises RdfEdgesRescueError, like the deploy path.
+            GraphSchema.restore_rescued_rdf_edges(cursor, None)
 
         # 6b. Always detect capabilities from %Dictionary (deployment may have failed
         # but classes could already be compiled from a prior docker cp + LoadDir)
@@ -2322,9 +2330,14 @@ class SchemaMixin:
             row = cursor.fetchone()
             return row is not None and int(row[0]) > 0
 
+        # import_rdf runs BuildKG before inference, so an inferred row that only
+        # reaches rdf_edges is invisible to every ^KG walker (concept expansion,
+        # BFS, PPR). Each one is indexed as create_edge indexes it (spec 233 FR-015).
+        graph_key = graph_index_key(graph)
+
         def _insert_inferred(triples):
             nonlocal inferred_count
-            for s, p, o in triples:
+            for s, p, o in sorted(triples):
                 if not _exists(s, p, o):
                     try:
                         if graph:
@@ -2340,7 +2353,13 @@ class SchemaMixin:
                             )
                         inferred_count += 1
                     except Exception:
-                        pass
+                        continue
+                    try:
+                        self._iris_obj().classMethodVoid(
+                            "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0", graph_key
+                        )
+                    except Exception as e:
+                        logger.warning(f"materialize_inference ^KG write failed (BuildKG can recover): {e}")
             try:
                 self.conn.commit()
             except Exception:
@@ -2384,9 +2403,12 @@ class SchemaMixin:
         domain_edges = _fetch_edges(RDFS_DOMAIN)
         range_edges = _fetch_edges(RDFS_RANGE)
         all_predicate_edges = {}
+        # Scoped to the target graph and unbounded: a LIMIT with no graph predicate
+        # ran one graph's domain/range rules over the first 50,000 edges of any graph
+        # (spec 233 FR-015).
         cursor.execute(
-            "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE p NOT IN (?, ?, ?, ?, ?) LIMIT 50000",
-            [RDFS_SUBCLASSOF, RDFS_SUBPROPOF, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE],
+            "SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE p NOT IN (?, ?, ?, ?, ?)" + graph_filter_sql,
+            [RDFS_SUBCLASSOF, RDFS_SUBPROPOF, RDF_TYPE, RDFS_DOMAIN, RDFS_RANGE] + graph_filter_params,
         )
         for s, p, o in cursor.fetchall():
             all_predicate_edges.setdefault(p, []).append((s, o))
@@ -2418,8 +2440,8 @@ class SchemaMixin:
                     inferred.add((y, p, x))
 
             cursor.execute(
-                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?",
-                [RDF_TYPE, OWL_TRANS_PROP],
+                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?" + graph_filter_sql,
+                [RDF_TYPE, OWL_TRANS_PROP] + graph_filter_params,
             )
             trans_props = {r[0] for r in cursor.fetchall()}
             for tp in trans_props:
@@ -2427,8 +2449,8 @@ class SchemaMixin:
                 inferred |= {(a, tp, c) for a, c in _transitive_closure(tp_edges)}
 
             cursor.execute(
-                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?",
-                [RDF_TYPE, OWL_SYM_PROP],
+                "SELECT s FROM Graph_KG.rdf_edges WHERE p=? AND o_id=?" + graph_filter_sql,
+                [RDF_TYPE, OWL_SYM_PROP] + graph_filter_params,
             )
             sym_props = {r[0] for r in cursor.fetchall()}
             for sp in sym_props:
@@ -2448,21 +2470,41 @@ class SchemaMixin:
         # DELETE that removed every graph's inferred edges (spec 230, FR-001).
         # A cross-graph retraction is a different operation and has no spelling here.
         if graph is None or graph == "":
-            cursor.execute(
-                f"DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
-                "AND COALESCE(graph_id, '') = ''"
-            )
+            scope_sql, scope_params = "COALESCE(graph_id, '') = ''", []
         else:
-            cursor.execute(
-                f"DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
-                "AND graph_id = ?",
-                [graph],
-            )
+            scope_sql, scope_params = "graph_id = ?", [graph]
+        # materialize_inference indexes what it writes, so retraction takes the same
+        # edges back out of ^KG (spec 233 FR-015).
+        cursor.execute(
+            f"SELECT s, p, o_id FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+            f"AND {scope_sql}",
+            scope_params,
+        )
+        retracted = [tuple(r) for r in cursor.fetchall()]
+        cursor.execute(
+            f"DELETE FROM Graph_KG.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+            f"AND {scope_sql}",
+            scope_params,
+        )
         deleted = cursor.rowcount or 0
         try:
             self.conn.commit()
         except Exception:
             pass
+        graph_key = graph_index_key(graph)
+        for s, p, o in retracted:
+            # An asserted row for the same triple keeps its adjacency entry.
+            cursor.execute(
+                f"SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s=? AND p=? AND o_id=? AND {scope_sql}",
+                [s, p, o] + scope_params,
+            )
+            row = cursor.fetchone()
+            if row is not None and int(row[0]) > 0:
+                continue
+            try:
+                self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", "DeleteAdjacency", s, p, o, graph_key)
+            except Exception as e:
+                logger.warning(f"retract_inference ^KG kill failed (BuildKG can recover): {e}")
         return deleted
 
 

@@ -492,6 +492,7 @@ ClassMethod OpCreateRel(pOp As %DynamicObject, ByRef pCtx, ByRef pRecords, ByRef
     If $Data(^KG("out", tGKey, tS, tP, tO)) {
         Set ^KG("out", tGKey, tS, tP, tO) = ..WeightOf(tQuals)
         Set ^KG("in", tGKey, tO, tP, tS) = ..WeightOf(tQuals)
+        Set tmp = $Increment(^KG("__version"))
     } Else {
         Do ##class(Graph.KG.EdgeScan).WriteAdjacency(tS, tP, tO, ..WeightOf(tQuals), tGKey)
     }
@@ -545,6 +546,7 @@ ClassMethod PersistQuals(pSchema As %String, pEdgeId As %String, pS, pP, pO, pG,
     Set tW = ..WeightOf(pQuals)
     If $Data(^KG("out", tGKey, pS, pP, pO)) Set ^KG("out", tGKey, pS, pP, pO) = tW
     If $Data(^KG("in", tGKey, pO, pP, pS)) Set ^KG("in", tGKey, pO, pP, pS) = tW
+    Set tmp = $Increment(^KG("__version"))
     Return ""
 }
 

@@ -57,6 +57,14 @@ def _fhir_graph(graph: Optional[str]) -> str:
     return name
 
 
+_DIRECTIONS = ("out", "in", "both")
+
+
+def _check_direction(direction) -> None:
+    if direction not in _DIRECTIONS:
+        raise ValueError(f"direction must be one of {_DIRECTIONS}, got {direction!r}")
+
+
 def _strings(values, what: str) -> List[str]:
     out = list(values)
     for v in out:
@@ -185,15 +193,24 @@ class FhirGraphMixin:
         *,
         predicates: Optional[List[str]] = None,
         hops: int = 1,
+        direction: str = "in",
     ) -> List[str]:
         """``ids`` and every concept reachable from them in at most ``hops`` over
-        ``concept_graph``'s out-edges, optionally only along ``predicates``."""
+        ``concept_graph``, optionally only along ``predicates``.
+
+        ``direction`` is the edge direction followed at every hop. The default ``"in"``
+        goes from object to subject: under the child-to-parent edges of
+        ``rdfs:subClassOf``, ``skos:broader`` and OBO ``is_a`` that is a class to its
+        subclasses, and a disease to its associated genes. ``"out"`` goes from subject
+        to object, which is downward only for parent-to-child edges such as
+        ``narrower``. ``"both"`` follows either."""
         cg = validate_graph_name(concept_graph)
         if isinstance(hops, bool) or not isinstance(hops, int) or not 0 <= hops <= _MAX_HOPS:
             raise ValueError(f"hops must be an integer in 0..{_MAX_HOPS}, got {hops!r}")
+        _check_direction(direction)
         concept_ids = _strings(ids, "concept ids")
         preds = "" if predicates is None else json.dumps(_strings(predicates, "predicates"))
-        reply = self._fhir_call("ExpandConcepts", cg, json.dumps(concept_ids), preds, hops)
+        reply = self._fhir_call("ExpandConcepts", cg, json.dumps(concept_ids), preds, hops, direction)
         return list(reply.get("ids", []))
 
     def fhir_concept_ppr(
@@ -203,6 +220,7 @@ class FhirGraphMixin:
         ids: List[str],
         *,
         hops: int = 1,
+        direction: str = "in",
         predicates: Optional[List[str]] = None,
         params: Optional[List[str]] = None,
         relations: Optional[List[str]] = None,
@@ -216,8 +234,11 @@ class FhirGraphMixin:
         Returns PPR scores keyed by FHIR key; empty when nothing resolves.
         """
         g = _fhir_graph(graph)
+        _check_direction(direction)
         concepts = (
-            self.fhir_expand_concepts(concept_graph, ids, predicates=predicates, hops=hops)
+            self.fhir_expand_concepts(
+                concept_graph, ids, predicates=predicates, hops=hops, direction=direction
+            )
             if hops
             else list(ids)
         )
