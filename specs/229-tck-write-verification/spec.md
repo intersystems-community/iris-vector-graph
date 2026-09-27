@@ -2,7 +2,8 @@
 
 **Feature Branch**: `229-tck-write-verification`
 **Created**: 2026-09-20
-**Status**: Draft
+**Status**: Partially implemented (2026-09-26). US1–US3 done; US4
+(`features_ivg/`) not started; US5 superseded by capture/rescore.
 **Input**: The openCypher TCK harness reports 2930/3897 scenarios passing (75.2%) and did not
 catch either translator write defect fixed in 4.0.0. Investigation shows why: the harness's
 entire write-verification surface is a no-op, and a raising query is scored as an empty

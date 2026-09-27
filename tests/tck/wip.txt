@@ -5,7 +5,7 @@
 # in the same comment block. load_wip_registry() (tests/tck/conftest.py) refuses a
 # file with a reasonless entry (spec 229 FR-011).
 # Baseline: 1015/3897 passing as of v2.4.8 + TCK harness fixes (2026-08-01)
-# Current:  3724/3897 passing as of 2026-09-25 (spec 203, full TCK, enterprise container)
+# Current:  3896/3896 eligible passing, strict + typed, as of 2026-09-26 (spec 203, 937d4b7)
 # Earlier:  1771/3897 passing as of 2026-08-01 (session 201 round-7)
 #   Key fixes: 3VL boolean simplification (AND/OR null folding, CASE WHEN unwrapping),
 #              _expr_boolean CASE WHEN detection, comparison.py '1'/'0' bool coercion,
@@ -19,9 +19,4 @@
 #              quantifier property access via JSON_VALUE for scalar vars,
 #              size() on scalar vars: runtime dispatch (JSON_ARRAYLENGTH vs LENGTH)
 
-# reason: null guard missing for OPTIONAL MATCH rel → DELETE
-features.clauses.delete.Delete2.Delete2 - Deleting relationships::Scenario: [4] Ignore null when deleting relationship
-# reason: undirected MATCH expand not supported
-features.clauses.delete.Delete4.Delete4 - Delete clause interoperation with other clauses::Scenario: [1] Undirected expand followed by delete and count
-# reason: undirected variable-length MATCH not supported
-features.clauses.delete.Delete4.Delete4 - Delete clause interoperation with other clauses::Scenario: [2] Undirected variable length expand followed by delete and count
+# (empty: all 3896 eligible scenarios pass, strict, at 937d4b7 — 2026-09-26)

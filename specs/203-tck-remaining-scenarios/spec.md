@@ -2,9 +2,11 @@
 
 **Feature Branch**: `203-tck-remaining-scenarios`
 **Created**: 2026-08-05
-**Status**: Draft
+**Status**: Complete (2026-09-26)
 **Baseline**: 2930/3897 passing (75.2%) as of commit `78171ad`
 **Target**: ≥3118/3897 (80%) — 188 additional scenarios
+**Outcome**: 3896/3896 eligible, strict and typed, at `937d4b7` (merged to
+`main` as `3ec5bec`). Multigraph off: 3889/3896. See `docs/TCK.md`.
 
 ---
 

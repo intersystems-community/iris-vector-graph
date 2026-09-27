@@ -2,7 +2,8 @@
 
 **Feature Branch**: `234-multigraph-parallel-edges`
 **Created**: 2026-09-26
-**Status**: Draft
+**Status**: Partially implemented (2026-09-26). Mode, storage and Cypher
+shipped in 4.1.0; ledger/restore (US4) and SC-004 timing not done.
 **Input**: Spec 234. Option B for the parallel-edge blocker found in spec 203:
 parallel edges as an opt-in, with existing single-edge data and layout left
 byte-identical when the mode is off.

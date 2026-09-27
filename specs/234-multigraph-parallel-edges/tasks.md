@@ -281,17 +281,25 @@ with it unset.
 - [ ] T049 Measure SC-004 against the T001 numbers: mode off, mode on with no
       parallel edges, and 10% of triples doubled. Record the results in
       `specs/234-multigraph-parallel-edges/baseline.txt`.
-- [ ] T050 Remove the six SC-001 scenarios from `tests/tck/wip.txt` if they are
+- [x] T050 Remove the six SC-001 scenarios from `tests/tck/wip.txt` if they are
       listed there.
 - [ ] T051 Final gate, part 1: full TCK with the mode off,
       `/tmp/iris_locked.sh /tmp/tck_all.sh /tmp/tck_234_off`, then
       `python3 /tmp/tck_sum.py /tmp/tck_234_off /tmp/tck_234_off.tsv`. Zero REG
       vs `/tmp/tck_r4_base.tsv`.
-- [ ] T052 Final gate, part 2: full TCK with `IVG_TCK_MULTIGRAPH=1`, into
+- [x] T052 Final gate, part 2: full TCK with `IVG_TCK_MULTIGRAPH=1`, into
       `/tmp/tck_234_on`. Zero REG vs `/tmp/tck_r4_base.tsv`. All six SC-001
       scenarios pass.
 - [ ] T053 Full unit and E2E suites keep their pass rates at `972ae7c`
       (FR-016).
+
+Status 2026-09-26: T050: `tests/tck/wip.txt` is empty. T052: 3896/3896
+strict and typed at `937d4b7` via `scripts/tck/run_sharded.sh`. T051: mode
+off measured 3889/3896 at `937d4b7`; the 7 failures all need parallel edges.
+Earlier-phase boxes were not ticked while the work landed; the tests exist
+(`tests/unit/test_234_*`, `tests/e2e/test_234_*`), but no one has audited
+them against each task. US4 (ledger, restore, rescue) has no tests and is
+not done. `create_edge_returning_id()` does not exist.
 
 ## Dependencies
 
