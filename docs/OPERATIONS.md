@@ -208,7 +208,7 @@ default-graph assignment the migration refuses to make, under another name.
 
 `place_quarantined` raises and leaves the row where it is when the pair has no
 route, when the route's declared width or dtype disagrees with the row's, or when
-the node does not exist *in that graph*. It never creates a route — that would
+the node does not exist _in that graph_. It never creates a route — that would
 declare a width taken from a row whose provenance is the thing in doubt. Create
 the route by storing a known-good vector into the pair first, then place.
 
@@ -234,7 +234,7 @@ One row per embedding **route**, keyed `(table_name, graph_id)` and indexed
 `(graph_id, model_key)`. In 3.2.0 `graph_id` was reserved and always `''`; since 4.0.0 it
 is real, and a row names the graph whose vectors that table holds. `''` is the default
 graph, not "all graphs". The registry is the only authority on what a route is called —
-`route_table_name()` says what a route *would* be named, but IRIS may have derived a class
+`route_table_name()` says what a route _would_ be named, but IRIS may have derived a class
 name the table name does not predict, so never derive a name to find a route.
 
 `set_by` says where the row came from, which is what tells you how much to trust
@@ -270,11 +270,11 @@ first. The call logs at `WARNING` saying so.
 The graph adjacency index (`^KG`) is maintained automatically for individual writes (`create_edge`, `create_node`). After bulk loads via `bulk_ingest_edges()`, rebuild manually:
 
 ```python
-engine.rebuild_kg()    # rebuilds ^KG from rdf_edges SQL table
-engine.rebuild_nkg()   # rebuilds ^NKG integer index (needed for Arno/BFS acceleration)
+engine.sync()   # rebuilds ^KG from rdf_edges, then the ^NKG integer index
 ```
 
-`rebuild_nkg()` is slow on large graphs (422s for LDBC SF10). Only required when using Arno-accelerated BFS or variable-length Cypher path queries.
+(`rebuild_kg()` and `rebuild_nkg()` are deprecated aliases, due for removal in 5.0.) The
+`^NKG` half is slow on large graphs (422s for LDBC SF10). Only required when using Arno-accelerated BFS or variable-length Cypher path queries.
 
 A variable-length Cypher query against a stale `^NKG` **raises `IndexNotSyncedError`** — it does not warn and answer. Both var-length routes check the flag before any traversal runs, so an unsynced bulk load cannot produce a quietly incomplete path result. `engine.sync()` clears it; `engine.status().pending_sync` reports it. (Through 3.2.0 this paragraph promised a `RuntimeWarning`, which no code path emits. The `RuntimeWarning`s the engine does raise are about the Arno accelerator not being loaded and about `degree_centrality(top_k=0)` on a large graph, neither of which is a staleness signal.)
 

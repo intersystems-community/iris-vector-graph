@@ -46,6 +46,7 @@ def _fix_iris_json(raw3: str) -> str:
 _CAPTURED_ID_CHUNK = 500
 _CAPTURE_PREFIX = "__capture_ids__ "
 _IDS_TOKEN_RE = _re_global.compile(r"__IDS_(\w+?)__")
+_GRAPH_TOKEN_RE = _re_global.compile(r"graph_id = __GRAPH_(\w+?)__")
 
 
 def _ids_literal(ids: list) -> str:
@@ -59,6 +60,52 @@ def _ids_literal(ids: list) -> str:
         else:
             out.append("'" + str(v).replace("'", "''") + "'")
     return ", ".join(out)
+
+
+def _capture_rows(key: str, rows, captured: dict, captured_graphs: dict) -> None:
+    """Record what a `__capture_ids__` select returned under `key`.
+
+    One column is the ids. A graph-less node DELETE selects `graph_id` second, and
+    its ids are also kept per graph, so each of its statements deletes the rows the
+    MATCH bound and not every graph's row for the same id.
+    """
+    rows = [r for r in rows if r and r[0] is not None]
+    captured[key] = list(dict.fromkeys(r[0] for r in rows))
+    if rows and len(rows[0]) > 1:
+        by_graph: dict = {}
+        for r in rows:
+            by_graph.setdefault(r[1], {})[r[0]] = None
+        captured_graphs[key] = {g: list(ids) for g, ids in by_graph.items()}
+    else:
+        captured_graphs[key] = {}
+
+
+def _graph_literal(graph) -> str:
+    return "IS NULL" if graph is None else "= '" + str(graph).replace("'", "''") + "'"
+
+
+def _expand_captured(stmt: str, captured: dict, captured_graphs: dict) -> list:
+    """`_expand_captured_ids`, run once per graph for `graph_id = __GRAPH_<key>__`.
+
+    The translator writes one graph token per statement, keyed like its ids. With
+    nothing captured the statement still runs once and matches nothing.
+    """
+    keys = list(dict.fromkeys(_GRAPH_TOKEN_RE.findall(stmt)))
+    if not keys:
+        return _expand_captured_ids(stmt, captured)
+    if len(keys) > 1:
+        raise RuntimeError(f"one graph token per statement, got {keys}: {stmt[:200]}")
+    key = keys[0]
+    if key not in captured:
+        raise RuntimeError(f"no ids captured under {key!r} before: {stmt[:200]}")
+    groups = captured_graphs.get(key) or {}
+    if not groups:
+        return _expand_captured_ids(_GRAPH_TOKEN_RE.sub("graph_id = NULL", stmt), captured)
+    out = []
+    for graph, ids in groups.items():
+        scoped = _GRAPH_TOKEN_RE.sub(lambda m, g=graph: "graph_id " + _graph_literal(g), stmt)
+        out.extend(_expand_captured_ids(scoped, {**captured, key: ids}))
+    return out
 
 
 def _expand_captured_ids(stmt: str, captured: dict) -> list:
@@ -1073,6 +1120,7 @@ class IRISGraphStore:
 
             edge_hwm = None
             captured_ids: dict = {}
+            captured_graphs: dict = {}
             # `__after_result__` statements run once the result has been read: a
             # multigraph `DELETE t MERGE … RETURN` (spec 234) reads the matched rows
             # after MERGE wrote and before the DELETE removes what they matched.
@@ -1099,17 +1147,14 @@ class IRISGraphStore:
                 if isinstance(stmt, str) and stmt.startswith(_CAPTURE_PREFIX):
                     key, cap_sql = stmt[len(_CAPTURE_PREFIX) :].split("\n", 1)
                     cursor.execute(cap_sql, p)
-                    seen = dict.fromkeys(
-                        r[0] for r in cursor.fetchall() if r and r[0] is not None
-                    )
-                    captured_ids[key.strip()] = list(seen)
+                    _capture_rows(key.strip(), cursor.fetchall(), captured_ids, captured_graphs)
                     continue
                 if isinstance(stmt, str) and stmt.startswith(
                     "__constraint_check_delete_connected__"
                 ):
                     actual_sql = stmt[len("__constraint_check_delete_connected__ ") :]
                     count = 0
-                    for chunk_sql in _expand_captured_ids(actual_sql, captured_ids):
+                    for chunk_sql in _expand_captured(actual_sql, captured_ids, captured_graphs):
                         cursor.execute(chunk_sql, p)
                         count_row = cursor.fetchone()
                         count += (count_row[0] or 0) if count_row else 0
@@ -1123,7 +1168,9 @@ class IRISGraphStore:
                     continue
                 is_dml = isinstance(stmt, str) and self._stmt_is_dml(stmt)
                 for chunk_sql in (
-                    _expand_captured_ids(stmt, captured_ids) if isinstance(stmt, str) else [stmt]
+                    _expand_captured(stmt, captured_ids, captured_graphs)
+                    if isinstance(stmt, str)
+                    else [stmt]
                 ):
                     cursor.execute(chunk_sql, p)
                 # IRIS keeps the previous SELECT's description after a DML
@@ -1137,7 +1184,7 @@ class IRISGraphStore:
                 if stmt.startswith("__constraint_check_delete_connected__"):
                     actual_sql = stmt[len("__constraint_check_delete_connected__ ") :]
                     count = 0
-                    for chunk_sql in _expand_captured_ids(actual_sql, captured_ids):
+                    for chunk_sql in _expand_captured(actual_sql, captured_ids, captured_graphs):
                         cursor.execute(chunk_sql, p)
                         count_row = cursor.fetchone()
                         count += (count_row[0] or 0) if count_row else 0
@@ -1146,7 +1193,7 @@ class IRISGraphStore:
                             "ConstraintVerificationFailed: Cannot delete node with existing relationships. Use DETACH DELETE."
                         )
                     continue
-                for chunk_sql in _expand_captured_ids(stmt, captured_ids):
+                for chunk_sql in _expand_captured(stmt, captured_ids, captured_graphs):
                     cursor.execute(chunk_sql, p)
             self.conn.commit()
 
@@ -1479,6 +1526,8 @@ class IRISGraphStore:
         reverse_edge_weight: float = 1.0,
         *,
         graph: Optional[str] = None,
+        exclude: Optional[list] = None,
+        limit: Optional[int] = None,
     ) -> IVGResult:
         import json as _json
 
@@ -1486,6 +1535,11 @@ class IRISGraphStore:
 
         if not seed_ids:
             raise ValueError("seed_ids must not be empty")
+        # Spec 235: the two trailing RunJson arguments go only when asked for, so the
+        # default call is the pre-235 call.
+        extra = ()
+        if exclude is not None or limit is not None:
+            extra = (_json.dumps(list(exclude)) if exclude else "", str(1000 if limit is None else int(limit)))
         graph_name = validate_graph_name(graph)
         seeds_json = _json.dumps(seed_ids)
         wants_reverse = bool(bidirectional) and reverse_edge_weight > 0
@@ -1497,8 +1551,12 @@ class IRISGraphStore:
             #
             # Nor a named graph: `^NKG` has no graph dimension, so Arno would answer
             # from the default graph's adjacency (spec 231, FR-016).
+            #
+            # Nor an exclusion or a row limit: `PPRJson` has neither (spec 235).
             if (
                 not wants_reverse
+                and not exclude
+                and limit is None
                 and graph_name == ""
                 and self._detect_arno()
                 and "ppr" in self._arno_capabilities.get("algorithms", [])
@@ -1526,6 +1584,7 @@ class IRISGraphStore:
                         "1" if wants_reverse else "0",
                         str(float(reverse_edge_weight)),
                         graph_name,
+                        *extra,
                     )
                 )
             results = _json.loads(raw) if raw else []

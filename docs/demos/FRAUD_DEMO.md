@@ -1,35 +1,51 @@
 # Fraud Detection Demo
 
-The fraud detection demo shows how IVG's graph engine enables real-time financial fraud detection — the same class of problem described in the AWS Neptune reference notebook [_Building a Fraud Graph Application on Amazon Neptune_](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb), which covers fraud rings (first-party fraud) and identity theft (third-party fraud) in credit card transaction data using Gremlin. The IVG demo implements the same patterns with Cypher on IRIS.
+The fraud detection demo shows how IVG's graph engine enables real-time financial fraud detection — the same class of problem described in the AWS Neptune reference notebook [_Building a Fraud Graph Application on Amazon Neptune_](https://github.com/aws/graph-notebook/blob/main/src/graph_notebook/notebooks/01-Neptune-Database/03-Sample-Applications/01-Fraud-Graphs/01-Building-a-Fraud-Graph-Application.ipynb), which covers fraud rings (first-party fraud) and identity theft (third-party fraud) in credit card transaction data using Gremlin. The demo page scores single transactions; the Cypher further down shows how those fraud-ring and identity patterns look on IVG.
 
 ## Running the Demo
 
 ```bash
-# Start IRIS
-docker compose up -d
-
-# Install dependencies
-pip install "iris-vector-graph[full]"
-
-# Start demo server
-python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1 --app-dir src
-
-# Open browser
+cd src
+DEMO_MODE=true python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1
 open http://localhost:8200/fraud
 ```
 
-## What It Demonstrates
+## What the page runs
 
-### Four Pre-Built Scenarios
+Scores come from one of two places, and the page header says which:
 
-| Scenario              | Amount  | Risk Level | Key Signal                     |
-| --------------------- | ------- | ---------- | ------------------------------ |
-| Legitimate purchase   | $149.99 | LOW        | Trusted device, known merchant |
-| Suspicious activity   | $8,500  | HIGH       | New merchant + foreign IP      |
-| High-risk transaction | $25,000 | CRITICAL   | Tor browser + crypto exchange  |
-| Late arrival          | ~$200   | MEDIUM     | 72-hour settlement delay       |
+- **Fraud API.** With `DEMO_MODE` unset, the page posts each transaction to the fraud
+  scoring service at `FRAUD_API_URL` (default `http://localhost:8100`). That service is
+  separate from this repository.
+- **Demo heuristic.** With `DEMO_MODE=true`, or when the API is unreachable and the
+  circuit breaker opens, the score comes from the amount alone: above $10,000 scores
+  0.85, above $5,000 0.65, above $2,000 0.35, anything else 0.15. Results are labelled
+  "Demo Heuristic".
 
-### Fraud Detection Patterns
+The transaction graph under each score is illustrative. Payer, device, merchant and IP
+come from the submitted transaction; the historical transactions and related devices and
+merchants are placeholders showing the shape of the graph, not rows read from IRIS. The
+"IRIS SQL Graph Queries" and "Bitemporal Audit Queries" panels are reference queries; the
+page does not run them.
+
+### Four pre-built scenarios
+
+Risk bands: low below 0.30, medium below 0.60, high below 0.85, critical from 0.85. The
+levels below are what the demo heuristic returns.
+
+| Scenario              | Amount     | Heuristic level | Intended signal                    |
+| --------------------- | ---------- | --------------- | ---------------------------------- |
+| Legitimate purchase   | $149.99    | LOW             | Trusted device, known merchant     |
+| Suspicious activity   | $8,500.00  | HIGH            | New device, overseas merchant      |
+| High-risk transaction | $25,000.00 | CRITICAL        | Tor browser, crypto exchange       |
+| Late arrival          | $12,750.00 | CRITICAL        | Dormant account, offshore merchant |
+
+The heuristic ignores device, merchant and IP; only a real scoring model uses them.
+
+## Fraud patterns on IVG
+
+The Cypher below shows how the same problems look on IVG. It is reference material; the
+demo page does not run it.
 
 **Ring detection** — Find clusters of accounts sharing identifiers (email, phone, device, IP address). Classic first-party fraud: a group of people pool false identities to max out credit, then default.
 
@@ -67,7 +83,7 @@ RETURN node.id, score
 
 ### Bitemporal Audit Trail
 
-Every risk score is stored with two timestamps: when the transaction occurred (`valid_time`) and when the score was computed (`system_time`). This enables time-travel queries for regulatory audit:
+A bitemporal design stores each risk score with two timestamps: when the transaction occurred (`valid_time`) and when the score was computed (`system_time`). That supports time-travel queries for regulatory audit. The demo does not store scores; these queries show the shape:
 
 ```cypher
 -- Current risk score
@@ -93,9 +109,9 @@ Traditional fraud detection uses flat tables with hand-crafted features. Graph t
 
 The AWS/Neptune case study ([Delivery Hero](https://aws.amazon.com/blogs/database/empowering-fraud-detection-at-delivery-hero-with-amazon-neptune/)) found graph traversal ran at **15ms** vs. expensive MySQL JOINs and blocked **32% more fraudulent purchases**. IVG achieves the same patterns with Cypher on IRIS, with the added benefit of vector similarity search for anomaly detection in the same engine.
 
-## Data Model
+## Data model the patterns assume
 
-```
+```text
 Account -[:USES]-> Device
 Account -[:USES]-> IPAddress
 Account -[:HAS_SCORE]-> RiskScore
@@ -108,12 +124,10 @@ Transaction -[:HAS_SCORE]-> RiskScore
 
 ## Architecture
 
-```
+```text
 Browser (HTMX + D3.js)
     ↓ POST /api/fraud/score
 FastHTML route (src/iris_demo_server/routes/fraud.py)
-    ↓ engine.execute_cypher()
-IRISGraphEngine + IRISGraphStore
-    ↓ SQL + ObjectScript
-IRIS (Graph_KG schema)
+    ↓ FraudAPIClient (src/iris_demo_server/services/fraud_client.py)
+Fraud API at FRAUD_API_URL, or the demo heuristic (DEMO_MODE=true / circuit open)
 ```

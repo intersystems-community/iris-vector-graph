@@ -201,6 +201,12 @@ class BiomedicalDomainResolver(DomainResolver):
         if input.organism:
             properties["organism"] = input.organism
 
+        # Checked before the node exists, so a refused vector leaves no protein behind.
+        if input.embedding and len(input.embedding) != 768:
+            raise Exception(
+                f"Embedding must be 768-dimensional, got {len(input.embedding)}"
+            )
+
         if engine.node_exists(str(input.id)):
             raise Exception(f"Protein with ID {input.id} already exists")
 
@@ -212,11 +218,8 @@ class BiomedicalDomainResolver(DomainResolver):
         if not created:
             raise Exception(f"Protein with ID {input.id} already exists")
 
-        if input.embedding and len(input.embedding) > 0:
-            if len(input.embedding) != 768:
-                raise Exception(
-                    f"Embedding must be 768-dimensional, got {len(input.embedding)}"
-                )
+        if input.embedding:
+            engine.store_embedding(str(input.id), list(input.embedding))
 
         db_connection.commit()
 

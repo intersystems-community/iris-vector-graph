@@ -26,6 +26,8 @@ from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from dotenv import load_dotenv
 
+from iris_vector_graph.utils import execute_decoded
+
 # Try iris-devtester first, fall back to direct iris module or irisnative
 try:
     import irisnative
@@ -288,7 +290,7 @@ def bulk_insert_nodes(connection, node_ids: List[str]) -> int:
 
     for i, node_id in enumerate(node_ids):
         try:
-            cursor.execute("INSERT INTO nodes (node_id) VALUES (?)", [node_id])
+            execute_decoded(cursor, "INSERT INTO nodes (node_id) VALUES (?)", [node_id])
             inserted_count += 1
 
             # Commit batch every 1000 nodes

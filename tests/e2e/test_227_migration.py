@@ -76,10 +76,21 @@ def _quietly(cursor, sql, params=None):
 
 
 def _quietly_indexes(cursor) -> None:
-    """The indexes a real 3.2.0 install has, none of which the captured DDL describes."""
+    """The indexes a real 3.2.0 install has, none of which the captured DDL describes.
+
+    `ensure_indexes` also runs the unique-key half of schema setup, and since spec 234
+    that appends `rdf_edges.ekey` and swaps in `u_spo_graph_ekey`. 3.2.0 has neither,
+    and the appended `ekey` pushes `graph_id` off the end of `rdf_edges`, which is the
+    very tell `_rebuild_320` reads a 3.2.0 `rdf_edges` by. The replayed DDL already adds
+    3.2.0's own `u_spo_graph`, so that half is skipped here.
+    """
+    from unittest import mock
+
     from iris_vector_graph.schema import GraphSchema
 
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(Exception), mock.patch.object(
+        GraphSchema, "_spo_constraint_status", staticmethod(lambda cursor: {})
+    ):
         GraphSchema.ensure_indexes(cursor)
 
 
@@ -225,8 +236,9 @@ def _rebuild_320(conn) -> None:
         # installs. That difference is not inert: `idx_props_val_ifind` projects three
         # stored procedures (`rdfprops_idxpropsvalifind{Find,Highlight,Rank}`), so
         # without this the upgraded namespace looks like it is missing procedures the
-        # migration never owned. Every statement in `ensure_indexes` predates 227 and
-        # is idempotent, so it cannot reshape the 3.2.0 tables `_assert_is_320` checks.
+        # migration never owned. Every statement `_quietly_indexes` lets through
+        # predates 227 and is idempotent, so it cannot reshape the 3.2.0 tables
+        # `_assert_is_320` checks.
         _quietly_indexes(cursor)
         # `save_snapshot` at 3.2.0 does not export `embedding_registry`, so the rows a
         # 3.2.0 install holds — `adopted`, unscoped, one per embedding table — are

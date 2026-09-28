@@ -100,6 +100,55 @@ Re-run when:
 - After restoring from a backup
 - If stored procedures are missing (symptom: Cypher CALL ivg.\* returns errors)
 
+### Deploying into a non-USER namespace
+
+Pass `namespace=` to `IRISGraphEngine` (README §Non-USER Namespace Deployment).
+
+#### A namespace is an IVG namespace only once the classes are deployed
+
+`Graph.KG.*` ObjectScript is what gives a namespace IVG's behaviour. A
+namespace whose schema was built by DDL alone — plain `CREATE TABLE`, or
+`initialize_schema(auto_deploy_objectscript=False)` — is a shell that looks
+right and behaves differently:
+
+| Property                                                               | Classes deployed    | DDL only       |
+| ---------------------------------------------------------------------- | ------------------- | -------------- |
+| `Graph.KG.Eraser` / `TemporalIndex` / `LedgerApply`                    | present             | absent         |
+| Schema migrations (`tighten_graph_id_column`, `add_graph_id_to_nodes`) | applied             | never reach it |
+| Traversal, temporal and erasure acceleration                           | native ObjectScript | none           |
+| Per-graph erase, revision ledger, embedding routing                    | work                | raise          |
+
+Check a namespace before trusting it:
+
+```sql
+SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Eraser'
+```
+
+`Graph.KG.Eraser` declares no table, so DDL cannot produce it. It replaces the
+old marker `Graph.KG.Edge`, deleted in 4.0.0: a class-declared `rdf_edges` has
+no `edge_id`, so the DDL declares that table in every namespace now.
+
+Zero means DDL-only. Deploy the classes into that namespace — `initialize_schema()`
+with auto-deploy, or `$SYSTEM.OBJ.LoadDir("<path>/iris_src/src", "ck", .err, 1)`
+from a session in that namespace — before writing data.
+
+IRIS also auto-generates the view `SQLUser.rdf_edges`; filter the catalog on
+`TABLE_SCHEMA = 'Graph_KG'`, since a view carries no defaults and hides `graph_id`'s.
+
+#### CPF global mapping
+
+If your graph data lives in a separate database, map the `^KG` global in the
+IRIS CPF file so the probe passes without copying data:
+
+```ini
+[Map.MYGRAPH]
+Global=^KG,Directory=/db/IRISLOCALDATA/
+```
+
+After mapping, `$Data(^KG("deg"))` returns non-zero in that namespace and no
+warning is emitted. Global mapping brings the data, not the behaviour — the
+classes still have to be deployed into the namespace.
+
 ---
 
 ## 4. Index Management
@@ -111,8 +160,11 @@ IVG maintains two graph indices on top of the SQL schema:
 Built from `Graph_KG.rdf_edges`. Required for Cypher queries and PPR.
 
 ```python
-engine.rebuild_kg()    # ~8s for 500K edges
+engine.sync()    # rebuilds ^KG, then ^NKG; ~20-30s for 500K edges
 ```
+
+`engine.sync()` rebuilds both indices in order. (`rebuild_kg()` and `rebuild_nkg()` are
+deprecated aliases, due for removal in 5.0.)
 
 Or from ObjectScript:
 
@@ -130,11 +182,7 @@ Rebuild when:
 
 Built from `^KG`. Required for all graph algorithms (betweenness, closeness, Leiden, etc.). Also required for the native accelerator.
 
-```python
-engine.rebuild_nkg()   # ~15s for 500K edges
-```
-
-Or from ObjectScript:
+`engine.sync()` above rebuilds it after `^KG`. Or from ObjectScript:
 
 ```objectscript
 Do ##class(Graph.KG.Traversal).BuildNKG()
@@ -142,7 +190,7 @@ Do ##class(Graph.KG.Traversal).BuildNKG()
 
 Rebuild when:
 
-- After `rebuild_kg()` (NKG is derived from KG)
+- After `BuildKG` (NKG is derived from KG)
 - If algorithm methods return `[]` unexpectedly
 
 **Cost**: `BuildKG` + `BuildNKG` together take ~20–30s for a 500K-edge graph on Community Edition. On Enterprise with the native accelerator, `BuildNKG` includes the Rust-accelerated 2-hop precomputation.
@@ -234,7 +282,7 @@ Key fields in the returned `EngineStatus` object:
 | `nkg_node_count`          | Nodes indexed in `^NKG`                                         |
 | `adjacency.bfs_path`      | `"arno"` = Rust accelerator active, `"objectscript"` = fallback |
 
-**Common problem**: `ready_for_bfs = False` means `rebuild_nkg()` was never called or failed silently (see Troubleshooting #4).
+**Common problem**: `ready_for_bfs = False` means `engine.sync()` was never called or failed silently (see Troubleshooting #4).
 
 ---
 
@@ -257,7 +305,7 @@ IVG data lives in two places:
 - `^Graph.KG.LedgerRevisionD` / `^Graph.KG.LedgerRevisionI` — `Graph_KG.ledger_revisions` storage
 - `^Graph.KG.LedgerStatsD` — `Graph_KG.ledger_stats` storage
 
-`^KG("out"/"in"/"deg")` and `^NKG` can be rebuilt from SQL tables via `rebuild_kg()` + `rebuild_nkg()`, so they don't strictly need to be backed up — but rebuilding on large graphs takes time. The temporal subscripts of `^KG` (`tout`, `tin`, `tagg`, `bucket`, `edgeprop`, `labelset`) and the ledger globals have **no SQL source** and must be backed up. `save_snapshot(layers=["sql","globals"])` includes the ledger globals; after `restore_snapshot()` run `engine.ledger.verify()` to confirm the restored structural tables match the restored history.
+`^KG("out"/"in"/"deg")` and `^NKG` can be rebuilt from SQL tables via `engine.sync()`, so they don't strictly need to be backed up — but rebuilding on large graphs takes time. The temporal subscripts of `^KG` (`tout`, `tin`, `tagg`, `bucket`, `edgeprop`, `labelset`) and the ledger globals have **no SQL source** and must be backed up. `save_snapshot(layers=["sql","globals"])` includes the ledger globals; after `restore_snapshot()` run `engine.ledger.verify()` to confirm the restored structural tables match the restored history.
 
 **Critical**: IRIS data persists across container restarts **only** if IRIS is stopped gracefully before the container stops:
 
@@ -279,7 +327,7 @@ For production: configure your container orchestration to run the graceful stop 
 **1. Algorithm returns `[]` for all nodes**
 
 Cause: `^NKG` not built.  
-Fix: `engine.rebuild_nkg()` or `Do ##class(Graph.KG.Traversal).BuildNKG()`.  
+Fix: `engine.sync()` or `Do ##class(Graph.KG.Traversal).BuildNKG()`.  
 Verify: `engine.status().ready_for_bfs` should be `True`.
 
 **2. Algorithms slow (~500ms instead of ~8ms)**

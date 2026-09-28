@@ -1,0 +1,19 @@
+Spec 235 T002: pre-change test baseline, main 2d92da2 (233 merged), ivg-iris-enterprise:31972.
+
+E2E (tests/e2e): 176 passed, 1 failed
+  FAILED tests/e2e/test_231_ppr_graph_e2e.py::test_default_graph_walk_stays_in_the_default_graph
+  (also fails on ec3a00d, before the 233 merge: pre-existing)
+
+Unit (tests/unit), run 1: 9 failed, 11699 passed, 16 skipped, 13 deselected, 5 errors (943 s)
+  ERROR x4 TestRRFFuseEnterpriseE2E; ERROR test_zero_length_path_rels.py::test_one_hop_path_keeps_its_rel
+Unit (tests/unit), run 2: 7 failed, 11705 passed, 16 skipped, 13 deselected (1003 s)
+  FAILED tests/unit/test_194_readme.py::test_readme_line_count
+  FAILED tests/unit/test_230_default_graph_predicate.py::test_the_default_graph_scopes_a_delete
+  FAILED tests/unit/test_234_multigraph_sql.py::test_the_single_edge_writers_are_unchanged[DeleteAdjacency]
+  FAILED tests/unit/test_234_multigraph_sql.py::test_the_single_edge_writers_are_unchanged[WriteAdjacency]
+  FAILED tests/unit/test_spec_hygiene_gates.py::test_every_embedding_statement_is_graph_scoped
+  FAILED tests/unit/test_structural_guard.py::test_optional_match_no_exists_guard
+  FAILED tests/unit/test_translator_final_v9a.py::TestDeleteStageEdgeVariable::test_delete_relationship_via_with
+
+The run-to-run difference (5 errors, 2 extra failures in run 1) is live-fixture flakiness.
+Gate for 235: no failure outside these lists; these 7 + the E2E one are pre-existing.

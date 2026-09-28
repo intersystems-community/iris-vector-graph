@@ -6,6 +6,37 @@ from typing import Dict, Any, List, Optional, Tuple, Callable
 logger = logging.getLogger(__name__)
 
 
+def _exclude_entry(entry) -> Tuple[Optional[str], str]:
+    """``"p"`` -> (None, p); ``"Type.p"`` -> (Type, p). Anything else raises."""
+    if not isinstance(entry, str):
+        raise ValueError(f"exclude_predicates entries must be strings, got {entry!r}")
+    parts = entry.split(".")
+    if len(parts) > 2 or any(not x for x in parts):
+        raise ValueError(f"exclude_predicates entry must be 'p' or 'Type.p', got {entry!r}")
+    return (None, parts[0]) if len(parts) == 1 else (parts[0], parts[1])
+
+
+def _exclude_matches(entry: str, source_key: str, p: str) -> bool:
+    """Whether the edge ``source_key -p->`` is excluded by ``entry`` (spec 235): a
+    bare predicate matches every source, ``Type.p`` only a source key starting
+    ``Type/``."""
+    rtype, pred = _exclude_entry(entry)
+    if pred != p:
+        return False
+    return rtype is None or source_key.startswith(rtype + "/")
+
+
+def _check_exclusions(exclude_predicates) -> Optional[List[str]]:
+    if exclude_predicates is None:
+        return None
+    if isinstance(exclude_predicates, str):
+        raise ValueError("exclude_predicates must be a list of strings, not a string")
+    out = list(exclude_predicates)
+    for entry in out:
+        _exclude_entry(entry)
+    return out
+
+
 class AlgorithmsMixin:
     def kg_PERSONALIZED_PAGERANK(
         self,
@@ -18,6 +49,7 @@ class AlgorithmsMixin:
         reverse_edge_weight: float = 1.0,
         *,
         graph: Optional[str] = None,
+        exclude_predicates: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """
         Personalized PageRank with optional bidirectional edge traversal.
@@ -38,6 +70,10 @@ class AlgorithmsMixin:
             reverse_edge_weight: Weight multiplier for reverse edges (default 1.0)
             graph: The one graph to walk. ``None`` or ``""`` is the default graph, never
                 every graph. A seed outside it scores nothing.
+            exclude_predicates: Edges left out of both the walk and every divisor, as
+                ``"p"`` (any source) or ``"Type.p"`` (source key starts ``Type/``).
+                ``None`` is the pre-235 walk, unchanged; a list, even empty, also lifts
+                the 1000-row cap of the ObjectScript path (spec 235).
 
         Returns:
             Dict mapping entity_id to PageRank score
@@ -60,9 +96,13 @@ class AlgorithmsMixin:
         from iris_vector_graph._validate import validate_graph_name
 
         graph_name = validate_graph_name(graph)
+        exclude = _check_exclusions(exclude_predicates)
         # Sent only for a named graph, so a store predating `graph` keeps serving the
         # default graph; for a named graph its `TypeError` drops to the paths below.
         graph_kw = {"graph": graph_name} if graph_name else {}
+        # Likewise the exclusion: None sends nothing, so the call is the pre-235 call.
+        if exclude is not None:
+            graph_kw.update(exclude=exclude, limit=return_top_k or 0)
 
         if self._store_capabilities.get("ppr", True):
             # `bidirectional` and `reverse_edge_weight` go to the store, not just to the
@@ -112,6 +152,7 @@ class AlgorithmsMixin:
                     1 if bidirectional else 0,
                     reverse_edge_weight,
                     graph_name,
+                    *(() if exclude is None else (json.dumps(exclude), return_top_k or 0)),
                 )
                 if result_json:
                     items = json.loads(str(result_json))
@@ -145,6 +186,7 @@ class AlgorithmsMixin:
             bidirectional,
             reverse_edge_weight,
             graph=graph_name,
+            exclude_predicates=exclude,
         )
 
     def _kg_PERSONALIZED_PAGERANK_python_fallback(
@@ -158,6 +200,7 @@ class AlgorithmsMixin:
         reverse_edge_weight: float = 1.0,
         *,
         graph: Optional[str] = None,
+        exclude_predicates: Optional[List[str]] = None,
     ) -> Dict[str, float]:
         """
         Pure Python fallback for Personalized PageRank.
@@ -172,6 +215,7 @@ class AlgorithmsMixin:
         # One graph, always. Until 4.0.1 these reads had no graph predicate, so the
         # fallback walked every graph's edges at once (spec 231, FR-016).
         graph_id = validate_graph_name(graph)
+        exclude = _check_exclusions(exclude_predicates)
         cursor = self.conn.cursor()
         try:
             # Step 1: Get all nodes
@@ -189,13 +233,30 @@ class AlgorithmsMixin:
                 logger.warning(f"No valid seeds found in graph: {seed_entities}")
                 return {}
 
-            # Step 2: Build adjacency lists
-            cursor.execute(f"SELECT s, o_id FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id])
+            # Step 2: Build adjacency lists. With an exclusion the edges are read once
+            # with `p`, filtered, and the survivors serve both directions; without one
+            # the reads are the pre-235 reads.
+            kept = None
+            if exclude:
+                cursor.execute(
+                    f"SELECT s, p, o_id FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id]
+                )
+                kept = [
+                    (s, o)
+                    for s, p, o in cursor.fetchall()
+                    if not any(_exclude_matches(e, s, p) for e in exclude)
+                ]
+                forward = kept
+            else:
+                cursor.execute(
+                    f"SELECT s, o_id FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id]
+                )
+                forward = cursor.fetchall()
 
             in_edges = {}  # target -> [(source, weight)]
             out_degree = {}
 
-            for src, dst in cursor.fetchall():
+            for src, dst in forward:
                 # Forward edge: weight = 1.0
                 if dst not in in_edges:
                     in_edges[dst] = []
@@ -204,10 +265,14 @@ class AlgorithmsMixin:
 
             # Step 2b: Build reverse edges if bidirectional mode enabled
             if bidirectional and reverse_edge_weight > 0:
-                cursor.execute(
-                    f"SELECT o_id, s FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id]
-                )
-                for o_id, s in cursor.fetchall():
+                if kept is not None:
+                    reverse = [(o, s) for s, o in kept]
+                else:
+                    cursor.execute(
+                        f"SELECT o_id, s FROM {_t('rdf_edges')} WHERE graph_id = ?", [graph_id]
+                    )
+                    reverse = cursor.fetchall()
+                for o_id, s in reverse:
                     # Reverse edge: o_id -> s with weighted contribution
                     if s not in in_edges:
                         in_edges[s] = []

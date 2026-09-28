@@ -32,6 +32,18 @@ Parameter BATCHSIZE = 200;
 /// The one table of search-column metadata, shared by every repository.
 Parameter SEARCHCOLUMN = "HS_FHIRServer_Storage_Json.SearchColumn";
 
+/// The derived resource -> Patient edge (spec 235, research R2).
+Parameter COMPARTMENTPRED = "in_patient_compartment";
+
+/// The interpretation rules' version; fhir_graphs.interp_version below it is stale.
+Parameter INTERPVERSION = 1;
+
+/// How many patient-less keys a coverage report lists per type.
+Parameter SAMPLEMAX = 20;
+
+/// The category systems whose codes also become node labels (spec 235, research R8).
+Parameter CATEGORYSYSTEMS = "[""http://terminology.hl7.org/CodeSystem/observation-category"",""http://terminology.hl7.org/CodeSystem/condition-category"",""http://hl7.org/fhir/us/core/CodeSystem/us-core-documentreference-category"",""http://hl7.org/fhir/us/core/CodeSystem/careplan-category"",""http://hl7.org/fhir/us/core/CodeSystem/condition-category"",""http://hl7.org/fhir/us/core/CodeSystem/us-core-category""]";
+
 /// Registry row, and the index subscript derived from it (ADR-0003).
 Property GraphId As %String(MAXLEN = 256);
 
@@ -113,6 +125,28 @@ Property SplitTypes As %String [ MultiDimensional ];
 /// `deleted`), not DropNode.
 Property Pending As %String [ MultiDimensional ];
 
+/// Comp(ResourceType, param) for the patient-compartment params of each type, from
+/// the repository's own metadata set (spec 235, research R1). R4Types(type) for
+/// every resource type the schema knows.
+Property Comp As %String [ MultiDimensional ];
+
+Property R4Types As %String [ MultiDimensional ];
+
+/// Props(ResourceType, prop) = $lb(table, column, multi) for the node properties read
+/// from the search index: "category" (a token) and "meta_profile" (Resource._profile).
+Property Props As %String [ MultiDimensional ];
+
+/// CatSys(system) for the CATEGORYSYSTEMS allowlist.
+Property CatSys As %String [ MultiDimensional ];
+
+/// Interp("added") and Interp("removed"): in_patient_compartment edges inserted and
+/// deleted by this context's resyncs; Interp("category") and Interp("meta_profile"):
+/// property rows written, changed or deleted (FR-025).
+Property Interp As %Integer [ MultiDimensional ];
+
+/// The Rederive batch being run, from 1; 0 outside Rederive. The fault hook reads it.
+Property RederiveN As %Integer [ InitialExpression = 0 ];
+
 // ===================================================================== registry
 
 /// Register the namespace's FHIR repository as a graph, or update its settings.
@@ -142,7 +176,7 @@ ClassMethod Register(pEndpoint As %String = "", pDenylistJson As %String = "[]",
 			$$$ThrowStatus($$$ERROR($$$GeneralError, "namespace " _ $NAMESPACE _ " has no FHIR repository (HS_FHIRServer.Repo not found)"))
 		}
 		If 'tCtx.TableExists("Graph_KG", "fhir_graphs") {
-			$$$ThrowStatus($$$ERROR($$$GeneralError, "Graph_KG.fhir_graphs not found; run initialize_schema() in " _ $NAMESPACE))
+			$$$ThrowStatus($$$ERROR($$$GeneralError, "Graph_KG.fhir_graphs not found; register through engine.fhir_graph_register(), which creates it, in " _ $NAMESPACE))
 		}
 		If (+pIntervalS < 60) {
 			$$$ThrowStatus($$$ERROR($$$GeneralError, "interval must be at least 60 seconds (Task Manager granularity is one minute)"))
@@ -239,6 +273,28 @@ ClassMethod Register(pEndpoint As %String = "", pDenylistJson As %String = "[]",
 	Return tOut
 }
 
+/// {"type": pType, "params": [...]}: pType's params in pCompartment, sorted; [] for
+/// a type or compartment with none.
+ClassMethod CompartmentParams(pGraph As %String, pType As %String, pCompartment As %String = "patient") As %String
+{
+	Set tOut = ""
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Do tCtx.LoadCompartment(, pCompartment)
+		Set tParams = []
+		Set tParam = ""
+		For {
+			Set tParam = $Order(tCtx.Comp(pType, tParam))
+			Quit:tParam=""
+			Do tParams.%Push(tParam)
+		}
+		Set tOut = {"status": "ok", "type": (pType), "params": (tParams)}.%ToJSON()
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
 /// The registry row and live counts for one graph.
 ClassMethod Status(pGraph As %String) As %String
 {
@@ -260,7 +316,13 @@ ClassMethod Status(pGraph As %String) As %String
 		Do tRes.%Set("wm_rsrc", tCtx.WmRsrc, "number")
 		Do tRes.%Set("wm_ver", tCtx.WmVer, "number")
 		Do tRes.%Set("nodes", tCtx.Scalar("SELECT COUNT(*) FROM Graph_KG.nodes WHERE graph_id = ?", pGraph), "number")
-		Do tRes.%Set("edges", tCtx.Scalar("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE graph_id = ?", pGraph), "number")
+		// Reference edges only; the derived compartment edges are counted apart (FR-026).
+		Do tRes.%Set("edges", tCtx.Scalar("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE graph_id = ? AND p <> ?", pGraph, ..#COMPARTMENTPRED), "number")
+		Do tRes.%Set("compartment_edges", tCtx.Scalar("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE graph_id = ? AND p = ?", pGraph, ..#COMPARTMENTPRED), "number")
+		Set tVer = tCtx.InterpVersion()
+		Do tRes.%Set("interpretation_version", $Select(tVer = "": "", 1: +tVer), $Select(tVer = "": "null", 1: "number"))
+		Do tRes.%Set("interpretation_current", ..#INTERPVERSION, "number")
+		Do tRes.%Set("interpretation_stale", tCtx.InterpStale(), "boolean")
 		Do tRes.%Set("unresolved", tCtx.UnresolvedCounts())
 		Do tRes.%Set("canonical", tCtx.Scalar("SELECT COUNT(*) FROM Graph_KG.fhir_canonical_refs WHERE graph_id = ? AND kind = 'canonical'", pGraph), "number")
 		// Matches per json link, every configured entry present (FR-016).
@@ -439,6 +501,8 @@ ClassMethod Rebuild(pGraph As %String) As %String
 
 		Set tCounts = tCtx.Counts()
 		Do tCtx.Exec("UPDATE Graph_KG.fhir_graphs SET wm_rsrc = ?, wm_ver = ?, last_rebuild = CURRENT_TIMESTAMP, last_error = NULL, last_counts = ? WHERE graph_id = ?", tMaxR, tMaxV, tCounts.%ToJSON(), pGraph)
+		// Every key was just resynced under this version's rules.
+		Do tCtx.SetInterpVersion()
 
 		Set tRes = {"status": "ok", "graph_id": (pGraph)}
 		Do tRes.%Set("keys", tKeys, "number")
@@ -447,6 +511,7 @@ ClassMethod Rebuild(pGraph As %String) As %String
 		Do tRes.%Set("wm_ver", tMaxV, "number")
 		Do tRes.%Set("elapsed_ms", $Justify(($ZHorolog - tStart) * 1000, 0, 0), "number")
 		Do tRes.%Set("counts", tCounts)
+		Do tRes.%Set("interpretation", tCtx.InterpBlock(1))
 		Set tOut = tRes.%ToJSON()
 	} Catch tEx {
 		While $TLevel > tLevel { TROLLBACK 1 }
@@ -475,6 +540,15 @@ ClassMethod SyncOnce(pGraph As %String) As %String
 		Do tCtx.LoadColumns()
 		Set tMaxR = +tCtx.Scalar("SELECT MAX(ID) FROM " _ tCtx.RTable())
 		Set tMaxV = +tCtx.Scalar("SELECT MAX(ID) FROM " _ tCtx.VTable())
+
+		// A graph last interpreted by older rules (NULL: synced before spec 235, or erased) is re-derived
+		// in full first, then marked. An interrupted pass leaves the marker, so the next
+		// sync starts over (spec 235, FR-024).
+		Set tFull = tCtx.InterpStale()
+		If tFull {
+			Do tCtx.Rederive()
+			Do tCtx.SetInterpVersion()
+		}
 
 		Set tKeys = 0
 		Set tBatches = 0
@@ -511,6 +585,40 @@ ClassMethod SyncOnce(pGraph As %String) As %String
 		Do tRes.%Set("wm_rsrc", tMaxR, "number")
 		Do tRes.%Set("wm_ver", tMaxV, "number")
 		Do tRes.%Set("elapsed_ms", $Justify(($ZHorolog - tStart) * 1000, 0, 0), "number")
+		Do tRes.%Set("interpretation", tCtx.InterpBlock(tFull))
+		Set tOut = tRes.%ToJSON()
+	} Catch tEx {
+		While $TLevel > tLevel { TROLLBACK 1 }
+		Set tOut = ..Err(tEx)
+		Do ..RecordError(pGraph, tOut)
+	}
+	If tLocked { Lock -^IVG.FHIRGraph(pGraph) }
+	Return tOut
+}
+
+/// Re-derive the interpretation of every live resource now and set interp_version
+/// (spec 235). Watermarks are untouched: changes past them wait for the next sync.
+ClassMethod Reinterpret(pGraph As %String) As %String
+{
+	Set tOut = ""
+	Set tLocked = 0
+	Set tLevel = $TLevel
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Lock +^IVG.FHIRGraph(pGraph):0
+		If '$Test {
+			Set tOut = {"status": "busy", "graph_id": (pGraph)}.%ToJSON()
+			Quit
+		}
+		Set tLocked = 1
+		Set tStart = $ZHorolog
+		Do tCtx.LoadColumns()
+		Set tKeys = tCtx.Rederive()
+		Do tCtx.SetInterpVersion()
+		Set tRes = {"status": "ok", "graph": (pGraph)}
+		Do tRes.%Set("resources", tKeys, "number")
+		Do tRes.%Set("elapsed_ms", $Justify(($ZHorolog - tStart) * 1000, 0, 0), "number")
+		Do tRes.%Set("interpretation", tCtx.InterpBlock(1))
 		Set tOut = tRes.%ToJSON()
 	} Catch tEx {
 		While $TLevel > tLevel { TROLLBACK 1 }
@@ -685,7 +793,34 @@ ClassMethod ResolveConcepts(pGraph As %String, pConceptGraph As %String = "", pI
 			}
 		}
 
-		Set tRes = {"status": "ok", "graph_id": (pGraph), "keys": (tKeys)}
+		// Medication hop (spec 235, R10): a resolved Medication adds the four
+		// medication-use types that reference it through `medication`.
+		Set tVia = {}
+		Set tNMed = 0
+		Set tAdded = 0
+		Set tN = tKeys.%Size()
+		For tI = 0:1:tN-1 {
+			Set tM = tKeys.%Get(tI)
+			Continue:$Piece(tM, "/")'="Medication"
+			Set tNMed = tNMed + 1
+			Set tSrc = ""
+			For {
+				Set tSrc = $Order(^KG("in", tCtx.GKey, tM, "medication", tSrc))
+				Quit:tSrc=""
+				Continue:'$ListFind($ListBuild("MedicationRequest", "MedicationStatement", "MedicationAdministration", "MedicationDispense"), $Piece(tSrc, "/"))
+				Continue:$Data(tSeen(tSrc))
+				Set tSeen(tSrc) = ""
+				Continue:tCtx.Liveness(tSrc)'=1
+				Do tKeys.%Push(tSrc)
+				Do tVia.%Set(tSrc, "medication")
+				Set tAdded = tAdded + 1
+			}
+		}
+		Set tHop = {}
+		Do tHop.%Set("medications", tNMed, "number")
+		Do tHop.%Set("added", tAdded, "number")
+
+		Set tRes = {"status": "ok", "graph_id": (pGraph), "keys": (tKeys), "via": (tVia), "medication_hop": (tHop)}
 		Do tRes.%Set("codes", tNCodes, "number")
 		Do tRes.%Set("elapsed_ms", $Justify(($ZHorolog - tStart) * 1000, 0, 1), "number")
 		Set tOut = tRes.%ToJSON()
@@ -693,6 +828,582 @@ ClassMethod ResolveConcepts(pGraph As %String, pConceptGraph As %String = "", pI
 		Set tOut = ..Err(tEx)
 	}
 	Return tOut
+}
+
+/// Which of the token params in pParamsJson the repository indexes for a type the
+/// graph holds: {"used": [...], "dropped": [...]}, each in request order, each param
+/// once. A param counts as used when a TOKEN SearchColumn row exists for it on a
+/// resource type with a live resource (spec 235, R9).
+ClassMethod IndexedTokenParams(pGraph As %String, pParamsJson As %String = "[]") As %String
+{
+	Set tOut = ""
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Set tParams = ##class(%DynamicAbstractObject).%FromJSON(pParamsJson)
+		If 'tParams.%IsA("%DynamicArray") {
+			Set tOut = {"status": "error", "error": "params must be a JSON array"}.%ToJSON()
+			Return tOut
+		}
+		Kill tTypes
+		Set tRs = tCtx.Query("SELECT DISTINCT ResourceType FROM " _ tCtx.RTable() _ " WHERE Deleted = 0")
+		While tRs.%Next() { Set tTypes(tRs.%GetData(1)) = "" }
+		Set tUsed = []
+		Set tDropped = []
+		Kill tDone
+		Set tIt = tParams.%GetIterator()
+		While tIt.%GetNext(, .tParam) {
+			Continue:$Data(tDone(tParam))
+			Set tDone(tParam) = ""
+			Set tHit = 0
+			Set tRs = tCtx.Query("SELECT ResourceType FROM " _ ..#SEARCHCOLUMN _ " WHERE RepoKey = ? AND %UPPER(Type) = 'TOKEN' AND ParamName = ?", tCtx.RepoId, tParam)
+			While 'tHit && tRs.%Next() { Set tHit = ''$Data(tTypes(tRs.%GetData(1))) }
+			If tHit { Do tUsed.%Push(tParam) } Else { Do tDropped.%Push(tParam) }
+		}
+		Set tOut = {"status": "ok", "graph_id": (pGraph), "used": (tUsed), "dropped": (tDropped)}.%ToJSON()
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// The per-type coverage, resolution and linked-patient figures of one graph (spec
+/// 235, US4), without link_report, which Python adds from LinkReport. Computed live,
+/// never stored. pParamsJson are the token params for by_system (Python passes the
+/// indexed part of the clinical preset); pPrefix, when set, keeps only the resources
+/// whose id starts with it. Patient is never a compartment type.
+ClassMethod CoverageReport(pGraph As %String, pParamsJson As %String = "[""code""]", pPrefix As %String = "") As %String
+{
+	Set tOut = ""
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Do tCtx.LoadCompartment()
+		Do tCtx.NodeSet(pPrefix, .tNodes, .tByType)
+		Kill tLess, tWith, tHist, tCat
+		Set tKey = ""
+		For {
+			Set tKey = $Order(tNodes(tKey))
+			Quit:tKey=""
+			Set tType = $Piece(tKey, "/")
+			Continue:(tType="Patient")||'$Data(tCtx.Comp(tType))
+			If $Data(^KG("out", tCtx.GKey, tKey, ..#COMPARTMENTPRED)) {
+				Set tWith(tType) = $Get(tWith(tType)) + 1
+			} Else {
+				Set tLess(tType, " " _ tKey) = ""
+			}
+		}
+		// category and meta_profile as the sync stored them.
+		Set tCatSys = {}
+		Set tIt = ##class(%DynamicArray).%FromJSON(..#CATEGORYSYSTEMS).%GetIterator()
+		While tIt.%GetNext(, .tSys) { Do tCatSys.%Set(tSys, 1) }
+		Set tRs = tCtx.Query("SELECT s, ""key"", val FROM Graph_KG.rdf_props WHERE graph_id = ? AND ""key"" IN ('category', 'meta_profile')", tCtx.GraphId)
+		While tRs.%Next() {
+			Set tKey = tRs.%GetData(1)
+			Continue:'$Data(tNodes(tKey))
+			Set tType = $Piece(tKey, "/")
+			Set tVals = ##class(%DynamicArray).%FromJSON(tRs.%GetData(3))
+			If tRs.%GetData(2) = "meta_profile" {
+				Set tIt = tVals.%GetIterator()
+				While tIt.%GetNext(, .tV) { Set tHist(tType, tV) = $Get(tHist(tType, tV)) + 1 }
+				Continue
+			}
+			Set tLabel = 0
+			Set tIt = tVals.%GetIterator()
+			While tIt.%GetNext(, .tV) { Set:tCatSys.%Get($Piece(tV, "|", 1)) tLabel = 1 }
+			Set tCat(tType, $Select(tLabel: "label", 1: "local")) = $Get(tCat(tType, $Select(tLabel: "label", 1: "local"))) + 1
+		}
+		Set tTypes = {}
+		Set tType = ""
+		For {
+			Set tType = $Order(tByType(tType), 1, tN)
+			Quit:tType=""
+			Set tT = {}
+			Do tT.%Set("count", tN, "number")
+			Set tIsComp = (tType '= "Patient") && ($Data(tCtx.Comp(tType)) > 0)
+			Do tT.%Set("compartment_type", tIsComp, "boolean")
+			If tIsComp {
+				Set tW = +$Get(tWith(tType))
+				Do tT.%Set("with_compartment", tW, "number")
+				Do tT.%Set("compartment_share", $Justify(tW / tN, 0, 4), "number")
+				Do tT.%Set("patientless", tN - tW, "number")
+				Set tSample = []
+				Set tK = ""
+				For {
+					Set tK = $Order(tLess(tType, tK))
+					Quit:(tK="")||(tSample.%Size()>=..#SAMPLEMAX)
+					Do tSample.%Push($Extract(tK, 2, *))
+				}
+				Do tT.%Set("patientless_sample", tSample)
+			}
+			Set tH = {}
+			Set tP = ""
+			For {
+				Set tP = $Order(tHist(tType, tP), 1, tC)
+				Quit:tP=""
+				Do tH.%Set(tP, tC, "number")
+			}
+			Do tT.%Set("meta_profile", tH)
+			Set tL = +$Get(tCat(tType, "label"))
+			Set tLo = +$Get(tCat(tType, "local"))
+			Set tC = {}
+			Do tC.%Set("label", tL, "number")
+			Do tC.%Set("local", tLo, "number")
+			Do tC.%Set("none", tN - tL - tLo, "number")
+			Do tT.%Set("category", tC)
+			Do tTypes.%Set(tType, tT)
+		}
+
+		// by_system: codes and resources per system over every param's tokens.
+		Kill tCodes, tRes, tRCodes, tRRes
+		Set tParams = ##class(%DynamicAbstractObject).%FromJSON(pParamsJson)
+		Set tIt = tParams.%GetIterator()
+		While tIt.%GetNext(, .tParam) {
+			Do tCtx.TokenRows(tParam, .tByType, .tTok)
+			For tI = 1:1:$Get(tTok) {
+				Set tRs = tCtx.Query(tTok(tI))
+				While tRs.%Next() {
+					Set tKey = tRs.%GetData(1)
+					Set tCode = tRs.%GetData(3)
+					Continue:(tCode="")||'$Data(tNodes(tKey))
+					Set tSys = " " _ tRs.%GetData(2)
+					Set tCodes(tSys, " " _ tCode) = ""
+					Set tRes(tSys, tKey, " " _ tCode) = ""
+				}
+			}
+		}
+		Set tBySys = {}
+		Set tSys = ""
+		For {
+			Set tSys = $Order(tCodes(tSys))
+			Quit:tSys=""
+			Set (tNC, tNR, tNRC) = 0
+			Kill tResolved
+			Set tCode = ""
+			For {
+				Set tCode = $Order(tCodes(tSys, tCode))
+				Quit:tCode=""
+				Set tNC = tNC + 1
+				If tCtx.Crosswalked($Extract(tSys, 2, *), $Extract(tCode, 2, *)) {
+					Set tNRC = tNRC + 1
+					Set tResolved(tCode) = ""
+				}
+			}
+			// A resource is resolved when one of its codes of the system is.
+			Set tNRR = 0
+			Set tKey = ""
+			For {
+				Set tKey = $Order(tRes(tSys, tKey))
+				Quit:tKey=""
+				Set tNR = tNR + 1
+				Set tCode = ""
+				For {
+					Set tCode = $Order(tRes(tSys, tKey, tCode))
+					Quit:tCode=""
+					If $Data(tResolved(tCode)) {
+						Set tNRR = tNRR + 1
+						Quit
+					}
+				}
+			}
+			Set tS = {}
+			Do tS.%Set("codes", tNC, "number")
+			Do tS.%Set("resources", tNR, "number")
+			Do tS.%Set("resolved_codes", tNRC, "number")
+			Do tS.%Set("resolved_resources", tNRR, "number")
+			Do tBySys.%Set($Extract(tSys, 2, *), tS)
+		}
+
+		// Patients at either end of a link to another Patient of the set.
+		Kill tLinked
+		Set tKey = ""
+		For {
+			Set tKey = $Order(tNodes(tKey))
+			Quit:tKey=""
+			Continue:$Piece(tKey, "/")'="Patient"
+			Set tO = ""
+			For {
+				Set tO = $Order(^KG("out", tCtx.GKey, tKey, "link", tO))
+				Quit:tO=""
+				Continue:($Piece(tO, "/")'="Patient")||'$Data(tNodes(tO))
+				Set tLinked(tKey) = "", tLinked(tO) = ""
+			}
+		}
+		Set tNL = 0
+		Set tKey = ""
+		For {
+			Set tKey = $Order(tLinked(tKey))
+			Quit:tKey=""
+			Set tNL = tNL + 1
+		}
+
+		Set tRep = {"status": "ok", "graph": (pGraph)}
+		Set tVer = tCtx.InterpVersion()
+		If tVer = "" {
+			Do tRep.%Set("interpretation_version", "", "null")
+		} Else {
+			Do tRep.%Set("interpretation_version", tVer, "number")
+		}
+		Do tRep.%Set("interpretation_current", ..#INTERPVERSION, "number")
+		Do tRep.%Set("stale", (tVer '= ..#INTERPVERSION), "boolean")
+		Do tRep.%Set("types", tTypes)
+		Do tRep.%Set("resolution", {"by_system": (tBySys)})
+		Do tRep.%Set("linked_patients", tNL, "number")
+		Set tOut = tRep.%ToJSON()
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// The (system, code) pairs of the params with no code_crosswalk row, most resources
+/// first, then system, then code; their totals; and per param the resources with no
+/// token that carry only text there (spec 235, US4, R11). pFieldsJson is
+/// {Type: {param: [[element, ...], ...]}}, the element paths Python derives from
+/// TokenPaths; only resources with no token row for a param are read.
+ClassMethod ConceptGaps(pGraph As %String, pParamsJson As %String = "[""code""]", pFieldsJson As %String = "{}", pTop As %Integer = 20, pPrefix As %String = "") As %String
+{
+	Set tOut = ""
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Do tCtx.LoadCompartment()
+		Do tCtx.NodeSet(pPrefix, .tNodes, .tByType)
+		Set tParams = ##class(%DynamicAbstractObject).%FromJSON(pParamsJson)
+		Set tFields = ##class(%DynamicAbstractObject).%FromJSON(pFieldsJson)
+		Kill tHas, tPair
+		Set tIt = tParams.%GetIterator()
+		While tIt.%GetNext(, .tParam) {
+			Do tCtx.TokenRows(tParam, .tByType, .tTok)
+			For tI = 1:1:$Get(tTok) {
+				Set tRs = tCtx.Query(tTok(tI))
+				While tRs.%Next() {
+					Set tKey = tRs.%GetData(1)
+					Set tCode = tRs.%GetData(3)
+					Continue:(tCode="")||'$Data(tNodes(tKey))
+					Set tHas(tParam, tKey) = ""
+					Set tPair(" " _ tRs.%GetData(2), " " _ tCode, tKey) = ""
+				}
+			}
+		}
+		Kill tRank, tUnKeys
+		Set tNU = 0
+		Set tSys = ""
+		For {
+			Set tSys = $Order(tPair(tSys))
+			Quit:tSys=""
+			Set tCode = ""
+			For {
+				Set tCode = $Order(tPair(tSys, tCode))
+				Quit:tCode=""
+				Continue:tCtx.Crosswalked($Extract(tSys, 2, *), $Extract(tCode, 2, *))
+				Set tNU = tNU + 1
+				Set tN = 0
+				Set tKey = ""
+				For {
+					Set tKey = $Order(tPair(tSys, tCode, tKey))
+					Quit:tKey=""
+					Set tN = tN + 1
+					Set tUnKeys(tKey) = ""
+				}
+				Set tRank(-tN, tSys, tCode) = tN
+			}
+		}
+		Set tRows = []
+		Set tNeg = ""
+		For {
+			Set tNeg = $Order(tRank(tNeg))
+			Quit:(tNeg="")||(tRows.%Size()>=pTop)
+			Set tSys = ""
+			For {
+				Set tSys = $Order(tRank(tNeg, tSys))
+				Quit:(tSys="")||(tRows.%Size()>=pTop)
+				Set tCode = ""
+				For {
+					Set tCode = $Order(tRank(tNeg, tSys, tCode), 1, tN)
+					Quit:(tCode="")||(tRows.%Size()>=pTop)
+					Set tRow = {"system": ($Extract(tSys, 2, *)), "code": ($Extract(tCode, 2, *))}
+					Do tRow.%Set("resources", tN, "number")
+					Do tRows.%Push(tRow)
+				}
+			}
+		}
+		Set tNR = 0
+		Set tKey = ""
+		For {
+			Set tKey = $Order(tUnKeys(tKey))
+			Quit:tKey=""
+			Set tNR = tNR + 1
+		}
+
+		// text_only: one read per resource missing a token for some param.
+		Kill tText
+		Set tIt = tParams.%GetIterator()
+		While tIt.%GetNext(, .tParam) { Set tText(tParam) = 0 }
+		Set tKey = ""
+		For {
+			Set tKey = $Order(tNodes(tKey))
+			Quit:tKey=""
+			Set tType = $Piece(tKey, "/")
+			Set tByParam = tFields.%Get(tType)
+			Continue:'$IsObject(tByParam)
+			Set tBody = ""
+			Set tIt = tParams.%GetIterator()
+			While tIt.%GetNext(, .tParam) {
+				Continue:$Data(tHas(tParam, tKey))
+				Set tPaths = tByParam.%Get(tParam)
+				Continue:'$IsObject(tPaths)
+				Set:'$IsObject(tBody) tBody = tCtx.ReadResource(tKey)
+				Continue:'$IsObject(tBody)
+				Set tHit = 0
+				Set tPI = tPaths.%GetIterator()
+				While 'tHit && tPI.%GetNext(, .tPath) {
+					Set tL = ""
+					Set tEI = tPath.%GetIterator()
+					While tEI.%GetNext(, .tE) { Set tL = tL _ $ListBuild(tE) }
+					Set tHit = ..HasText(tBody, tL, 1)
+				}
+				Set:tHit tText(tParam) = tText(tParam) + 1
+			}
+		}
+		Set tTO = {}
+		Set tIt = tParams.%GetIterator()
+		While tIt.%GetNext(, .tParam) { Do tTO.%Set(tParam, tText(tParam), "number") }
+
+		Set tTotal = {}
+		Do tTotal.%Set("codes", tNU, "number")
+		Do tTotal.%Set("resources", tNR, "number")
+		Set tOut = {"status": "ok", "graph": (pGraph), "unmatched": (tRows), "unmatched_total": (tTotal), "text_only": (tTO)}.%ToJSON()
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// {"present", "concepts"}: whether the graph holds node pPatientKey and, if it does,
+/// the sorted concept ids code_crosswalk maps the pParamsJson tokens of the resources
+/// in its compartment to (spec 235, R15). Any relation counts.
+ClassMethod PatientConcepts(pGraph As %String, pPatientKey As %String, pParamsJson As %String = "[""code""]") As %String
+{
+	Set tOut = ""
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Set tPresent = ''tCtx.Scalar("SELECT COUNT(*) FROM Graph_KG.nodes WHERE graph_id = ? AND node_id = ?", tCtx.GraphId, pPatientKey)
+		Kill tRes, tByType, tPair, tIds
+		If tPresent {
+			Set tSrc = ""
+			For {
+				Set tSrc = $Order(^KG("in", tCtx.GKey, pPatientKey, ..#COMPARTMENTPRED, tSrc))
+				Quit:tSrc=""
+				Set tType = $Piece(tSrc, "/")
+				Set tRes(tType, tSrc) = ""
+				Set tByType(tType) = ""
+			}
+			Set tIt = ##class(%DynamicAbstractObject).%FromJSON(pParamsJson).%GetIterator()
+			While tIt.%GetNext(, .tParam) {
+				Do tCtx.TokenRows(tParam, .tByType, .tTok)
+				For tI = 1:1:$Get(tTok) {
+					Set tType = tTok(tI, "type")
+					Set tSrc = ""
+					For {
+						Set tSrc = $Order(tRes(tType, tSrc))
+						Quit:tSrc=""
+						Set tRs = tCtx.Query(tTok(tI) _ " WHERE Key = ?", tSrc)
+						While tRs.%Next() {
+							Set tSys = tRs.%GetData(2)
+							Set tCode = tRs.%GetData(3)
+							Continue:(tSys="")||(tCode="")
+							Set tPair(tSys, tCode) = ""
+						}
+					}
+				}
+			}
+			Set tSys = ""
+			For {
+				Set tSys = $Order(tPair(tSys))
+				Quit:tSys=""
+				Set tCode = ""
+				For {
+					Set tCode = $Order(tPair(tSys, tCode))
+					Quit:tCode=""
+					Set tRs = tCtx.Query("SELECT target_node_id FROM Graph_KG.code_crosswalk WHERE code_system_uri = ? AND code = ?", tSys, tCode)
+					While tRs.%Next() { Set tIds(" " _ tRs.%GetData(1)) = "" }
+				}
+			}
+		}
+		Set tConcepts = []
+		Set tId = ""
+		For {
+			Set tId = $Order(tIds(tId))
+			Quit:tId=""
+			Do tConcepts.%Push($Extract(tId, 2, *))
+		}
+		Set tOut = {"status": "ok", "graph": (pGraph), "present": (tPresent), "concepts": (tConcepts)}
+		Do tOut.%Set("present", tPresent, "boolean")
+		Set tOut = tOut.%ToJSON()
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// {"paths": {Type: {param: FHIRPath}}}: the TOKEN SearchColumn FHIRPath of each
+/// param in pParamsJson, for the types with a live resource. Python turns them into
+/// the element paths ConceptGaps reads.
+ClassMethod TokenPaths(pGraph As %String, pParamsJson As %String = "[""code""]") As %String
+{
+	Set tOut = ""
+	Try {
+		Set tCtx = ..Open(pGraph)
+		Kill tTypes
+		Set tRs = tCtx.Query("SELECT DISTINCT ResourceType FROM " _ tCtx.RTable() _ " WHERE Deleted = 0")
+		While tRs.%Next() { Set tTypes(tRs.%GetData(1)) = "" }
+		Set tPaths = {}
+		Set tIt = ##class(%DynamicAbstractObject).%FromJSON(pParamsJson).%GetIterator()
+		While tIt.%GetNext(, .tParam) {
+			Set tRs = tCtx.Query("SELECT ResourceType, FHIRPath FROM " _ ..#SEARCHCOLUMN _ " WHERE RepoKey = ? AND %UPPER(Type) = 'TOKEN' AND ParamName = ?", tCtx.RepoId, tParam)
+			While tRs.%Next() {
+				Set tType = tRs.%GetData(1)
+				Continue:'$Data(tTypes(tType))
+				Do:'$IsObject(tPaths.%Get(tType)) tPaths.%Set(tType, {})
+				Do tPaths.%Get(tType).%Set(tParam, tRs.%GetData(2))
+			}
+		}
+		Set tOut = {"status": "ok", "graph": (pGraph), "paths": (tPaths)}.%ToJSON()
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// Whether a leaf at element path pPath (a $List) from pNode, through arrays at any
+/// level, is an object with a non-empty text.
+ClassMethod HasText(pNode As %DynamicAbstractObject, pPath As %List, pI As %Integer) As %Boolean [ Private ]
+{
+	If pNode.%IsA("%DynamicArray") {
+		For tJ = 0:1:(pNode.%Size() - 1) {
+			Continue:'$IsObject(pNode.%Get(tJ))
+			Return:..HasText(pNode.%Get(tJ), pPath, pI) 1
+		}
+		Return 0
+	}
+	If pI > $ListLength(pPath) { Return (pNode.%Get("text") '= "") }
+	Set tE = $ListGet(pPath, pI)
+	Set tT = pNode.%GetTypeOf(tE)
+	Return:(tT'="object")&&(tT'="array") 0
+	Return ..HasText(pNode.%Get(tE), pPath, pI + 1)
+}
+
+/// pNodes(key) for the graph's nodes of an R4 type (LoadCompartment first) whose id
+/// starts with pPrefix, and pByType(type) = count.
+Method NodeSet(pPrefix As %String, Output pNodes, Output pByType) [ Private ]
+{
+	Kill pNodes, pByType
+	Set tRs = ..Query("SELECT node_id FROM Graph_KG.nodes WHERE graph_id = ?", ..GraphId)
+	While tRs.%Next() {
+		Set tKey = tRs.%GetData(1)
+		Set tType = $Piece(tKey, "/")
+		Continue:(tType="")||'$Data(..R4Types(tType))
+		Continue:(pPrefix'="")&&($Extract($Piece(tKey, "/", 2), 1, $Length(pPrefix))'=pPrefix)
+		Set pNodes(tKey) = ""
+		Set pByType(tType) = $Get(pByType(tType)) + 1
+	}
+}
+
+/// pTok(i) = a SELECT of (Key, system, code) over one TOKEN index of pParam, for
+/// each type in pByType the repository indexes it on; pTok(i, "type") is the type.
+Method TokenRows(pParam As %String, ByRef pByType, Output pTok) [ Private ]
+{
+	Kill pTok
+	Set tRs = ..Query("SELECT ResourceType, TableName, ColumnName, isMultiValue FROM " _ ..#SEARCHCOLUMN _ " WHERE RepoKey = ? AND %UPPER(Type) = 'TOKEN' AND ParamName = ?", ..RepoId, pParam)
+	While tRs.%Next() {
+		Set tType = tRs.%GetData(1)
+		Continue:'$Data(pByType(tType))
+		Set tTable = tRs.%GetData(2)
+		Set tCol = tRs.%GetData(3)
+		Set tI = $Increment(pTok)
+		Set pTok(tI, "type") = tType
+		If +tRs.%GetData(4) {
+			Set pTok(tI) = "SELECT Key, value_System, value_Value FROM " _ ..Q(..SSchema _ "_" _ tTable) _ "." _ ..Q(tCol)
+		} Else {
+			Set pTok(tI) = "SELECT Key, " _ ..Q(tCol _ "_System") _ ", " _ ..Q(tCol _ "_Value") _ " FROM " _ ..Q(..SSchema) _ "." _ ..Q(tTable)
+		}
+	}
+}
+
+/// Whether code_crosswalk maps (pSystem, pCode) to any concept.
+Method Crosswalked(pSystem As %String, pCode As %String) As %Boolean [ Private ]
+{
+	Return ''..Scalar("SELECT COUNT(*) FROM Graph_KG.code_crosswalk WHERE code_system_uri = ? AND code = ?", pSystem, pCode)
+}
+
+/// fhir_graphs.interp_version for the graph; "" when NULL or the column is absent.
+Method InterpVersion() As %String [ Private ]
+{
+	Set tV = ""
+	Try {
+		Set tV = ..Scalar("SELECT interp_version FROM Graph_KG.fhir_graphs WHERE graph_id = ?", ..GraphId)
+	} Catch {
+		Set tV = ""
+	}
+	Return tV
+}
+
+/// Whether the graph needs a full re-derivation: no marker, or an older one. A newer
+/// marker is left alone, since older rules would downgrade it.
+Method InterpStale() As %Boolean [ Private ]
+{
+	Set tV = ..InterpVersion()
+	Return (tV = "") || (+tV < ..#INTERPVERSION)
+}
+
+/// Record INTERPVERSION in fhir_graphs.interp_version. A pre-235 table without the
+/// column gets it here, by the ALTER initialize_schema issues, so a namespace upgraded
+/// by deploying classes alone does not re-derive on every sync.
+Method SetInterpVersion() [ Private ]
+{
+	Set tSql = "UPDATE Graph_KG.fhir_graphs SET interp_version = ? WHERE graph_id = ?"
+	If $$$ISERR(##class(%SQL.Statement).%New().%Prepare(tSql)) {
+		Do ..Exec("ALTER TABLE Graph_KG.fhir_graphs ADD COLUMN interp_version INTEGER")
+	}
+	Do ..Exec(tSql, ..#INTERPVERSION, ..GraphId)
+}
+
+/// The interpretation block of a sync, rebuild or reinterpret result (FR-025).
+Method InterpBlock(pFull As %Boolean) As %DynamicObject [ Private ]
+{
+	Set tB = {}
+	Do tB.%Set("compartment_edges_added", +$Get(..Interp("added")), "number")
+	Do tB.%Set("compartment_edges_removed", +$Get(..Interp("removed")), "number")
+	Do tB.%Set("category_set", +$Get(..Interp("category")), "number")
+	Do tB.%Set("meta_profile_set", +$Get(..Interp("meta_profile")), "number")
+	Do tB.%Set("full_rederivation", ''pFull, "boolean")
+	Set tV = ..InterpVersion()
+	Do tB.%Set("interpretation_version", $Select(tV = "": "", 1: +tV), $Select(tV = "": "null", 1: "number"))
+	Return tB
+}
+
+/// Resync every live key synced so far, BATCHSIZE per transaction, watermarks
+/// untouched. The caller holds the graph's lock. Returns the number of keys.
+Method Rederive() As %Integer
+{
+	Set tKeys = 0
+	Set ..RederiveN = 0
+	Kill tBatch
+	Set tN = 0
+	Set tRs = ..Query("SELECT Key FROM " _ ..RTable() _ " WHERE ID <= ? AND (Deleted IS NULL OR Deleted = 0)", ..WmRsrc)
+	While tRs.%Next() {
+		Set tBatch($Increment(tN)) = tRs.%GetData(1)
+		If tN >= ..#BATCHSIZE {
+			Set ..RederiveN = ..RederiveN + 1
+			Set tKeys = tKeys + ..RunBatch(.tBatch, 0, "", "", 0)
+			Kill tBatch
+			Set tN = 0
+		}
+	}
+	If tN > 0 {
+		Set ..RederiveN = ..RederiveN + 1
+		Set tKeys = tKeys + ..RunBatch(.tBatch, 0, "", "", 0)
+	}
+	Set ..RederiveN = 0
+	Return tKeys
 }
 
 /// The concepts reachable from pIdsJson in at most pHops of pConceptGraph, seeds
@@ -766,6 +1477,170 @@ ClassMethod ExpandConcepts(pConceptGraph As %String = "", pIdsJson As %String = 
 	Return tOut
 }
 
+/// Group PPR scores by patient (spec 235): a patient's score is the sum of the scores
+/// of the resources in its compartment, read from the in_patient_compartment edges.
+///
+/// pScoresJson: {key: score} as PPR returned it. pViaJson: a JSON array of params; a
+/// (resource, patient) pair counts only when its edge's `via` shares one ("" keeps
+/// every pair). pExplainTop: contributors listed per patient; pTopK: patients
+/// returned, 0 for all. A resource in two compartments gives its full score to each.
+/// Patients and resources with no kept pair are unattributed.
+ClassMethod GroupByPatient(pGraph As %String, pScoresJson As %String, pViaJson As %String = "", pExplainTop As %Integer = 5, pTopK As %Integer = 50) As %String
+{
+	Set tOut = ""
+	Try {
+		Set tScores = ##class(%DynamicAbstractObject).%FromJSON(pScoresJson)
+		If tScores.%ClassName(1) '= "%Library.DynamicObject" {
+			Return {"status": "error", "error": "scores must be a JSON object"}.%ToJSON()
+		}
+		Kill tS
+		Set tIt = tScores.%GetIterator()
+		While tIt.%GetNext(.tKey, .tScore) { Set tS(tKey) = tScore }
+		Set tOut = ..Group(pGraph, .tS, pViaJson, pExplainTop, pTopK)
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// Personalized PageRank from pSeedJson, walked both ways over pGraph less pExcludeJson
+/// (Graph.KG.PageRank.Run), then grouped by patient as GroupByPatient does. One call, so
+/// no score list crosses the wire: every score as JSON passed the string limit at ~100
+/// Synthea patients (spec 235, R17). Only scores above zero are grouped.
+ClassMethod GroupPPR(pGraph As %String, pSeedJson As %String, pAlpha As %Double = 0.85, pMaxIter As %Integer = 20, pExcludeJson As %String = "", pViaJson As %String = "", pExplainTop As %Integer = 5, pTopK As %Integer = 50) As %String
+{
+	Set tOut = ""
+	Try {
+		Kill tRanks, tS
+		Do ##class(Graph.KG.PageRank).Run(pSeedJson, pAlpha, pMaxIter, 1, 1.0, pGraph, pExcludeJson, .tRanks)
+		Set tKey = ""
+		For {
+			Set tKey = $Order(tRanks(tKey), 1, tScore)
+			Quit:tKey=""
+			Set:tScore>0 tS(tKey) = tScore
+		}
+		Kill tRanks
+		Set tOut = ..Group(pGraph, .tS, pViaJson, pExplainTop, pTopK)
+	} Catch tEx {
+		Set tOut = ..Err(tEx)
+	}
+	Return tOut
+}
+
+/// GroupByPatient's grouping over pScores(key) = score. Throws on a bad pViaJson.
+ClassMethod Group(pGraph As %String, ByRef pScores, pViaJson As %String, pExplainTop As %Integer, pTopK As %Integer) As %String [ Internal ]
+{
+	Set tPred = ..#COMPARTMENTPRED
+	Set tGk = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	Set tName = ##class(Graph.KG.GraphKey).ForName(pGraph)
+	Kill tViaOk
+	Set tAllVia = 1
+	If pViaJson '= "" {
+		Set tIt = ##class(%DynamicAbstractObject).%FromJSON(pViaJson).%GetIterator()
+		While tIt.%GetNext(, .tV) {
+			Set tViaOk(tV) = ""
+			Set tAllVia = 0
+		}
+	}
+	// A "" bind arrives as NULL and matches nothing, so the default graph is a literal.
+	Set tStmt = ##class(%SQL.Statement).%New()
+	$$$ThrowOnError(tStmt.%Prepare("SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ? AND graph_id = " _ $Select(tName = "": "''", 1: "?")))
+
+	Kill tSum, tN, tBy
+	Set tUnN = 0
+	Set tUnScore = 0
+	Set tKey = ""
+	For {
+		Set tKey = $Order(pScores(tKey), 1, tScore)
+		Quit:tKey=""
+		Set tKept = 0
+		If $Extract(tKey, 1, 8) '= "Patient/" {
+			Set tPat = ""
+			For {
+				Set tPat = $Order(^KG("out", tGk, tKey, tPred, tPat))
+				Quit:tPat=""
+				If tName = "" {
+					Set tRs = tStmt.%Execute(tKey, tPred, tPat)
+				} Else {
+					Set tRs = tStmt.%Execute(tKey, tPred, tPat, tName)
+				}
+				Set tVia = []
+				If tRs.%Next() {
+					Set tQ = tRs.%GetData(1)
+					If tQ '= "" {
+						Set tQv = ##class(%DynamicAbstractObject).%FromJSON(tQ).%Get("via")
+						Set:$IsObject(tQv) tVia = tQv
+					}
+				}
+				If 'tAllVia {
+					Set tHit = 0
+					Set tVi = tVia.%GetIterator()
+					While 'tHit && tVi.%GetNext(, .tV) { Set tHit = $Data(tViaOk(tV)) > 0 }
+					Continue:'tHit
+				}
+				Set tKept = 1
+				Set tSum(tPat) = $Get(tSum(tPat)) + tScore
+				Set tN(tPat) = $Get(tN(tPat)) + 1
+				// Contributors by score descending, key ascending on a tie.
+				Set tBy(tPat, -tScore, tKey) = tVia.%ToJSON()
+			}
+		}
+		If 'tKept {
+			Set tUnN = tUnN + 1
+			Set tUnScore = tUnScore + tScore
+		}
+	}
+
+	Kill tRank
+	Set tPat = ""
+	For {
+		Set tPat = $Order(tSum(tPat))
+		Quit:tPat=""
+		Set tRank(-tSum(tPat), tPat) = ""
+	}
+	Set tTopK = +pTopK
+	Set tExplain = +pExplainTop
+	Set tPatients = []
+	Set tNeg = ""
+	For {
+		Set tNeg = $Order(tRank(tNeg))
+		Quit:tNeg=""
+		Quit:(tTopK>0)&&(tPatients.%Size()>=tTopK)
+		Set tPat = ""
+		For {
+			Set tPat = $Order(tRank(tNeg, tPat))
+			Quit:tPat=""
+			Quit:(tTopK>0)&&(tPatients.%Size()>=tTopK)
+			Set tContrib = []
+			Set tCs = ""
+			For {
+				Quit:tContrib.%Size()>=tExplain
+				Set tCs = $Order(tBy(tPat, tCs))
+				Quit:tCs=""
+				Set tCk = ""
+				For {
+					Quit:tContrib.%Size()>=tExplain
+					Set tCk = $Order(tBy(tPat, tCs, tCk), 1, tViaJson)
+					Quit:tCk=""
+					Set tC = {"key": (tCk)}
+					Do tC.%Set("score", -tCs, "number")
+					Do tC.%Set("via", ##class(%DynamicAbstractObject).%FromJSON(tViaJson))
+					Do tContrib.%Push(tC)
+				}
+			}
+			Set tP = {"patient": (tPat)}
+			Do tP.%Set("score", tSum(tPat), "number")
+			Do tP.%Set("contributors_total", tN(tPat), "number")
+			Do tP.%Set("contributors", tContrib)
+			Do tPatients.%Push(tP)
+		}
+	}
+	Set tUn = {}
+	Do tUn.%Set("count", tUnN, "number")
+	Do tUn.%Set("score", tUnScore, "number")
+	Return {"status": "ok", "patients": (tPatients), "unattributed": (tUn)}.%ToJSON()
+}
+
 // ===================================================================== internals
 
 /// Load the registry row for pGraph into a new context. Throws when unregistered.
@@ -777,6 +1652,10 @@ ClassMethod Open(pGraph As %String) As Graph.KG.FHIRGraph
 	Set tCtx = ..%New()
 	Set tCtx.GraphId = ##class(Graph.KG.GraphKey).ForName(pGraph)
 	Set tCtx.GKey = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
+	// The first registration creates the table; without it nothing is registered.
+	If 'tCtx.TableExists("Graph_KG", "fhir_graphs") {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "FHIR graph " _ pGraph _ " is not registered; call Register() first"))
+	}
 	Set tRs = tCtx.Query("SELECT repo_id, rsrc_schema, search_schema, ver_schema, endpoints, denylist, interval_s, wm_rsrc, wm_ver, task_id, json_links FROM Graph_KG.fhir_graphs WHERE graph_id = ?", tCtx.GraphId)
 	If 'tRs.%Next() {
 		$$$ThrowStatus($$$ERROR($$$GeneralError, "FHIR graph " _ pGraph _ " is not registered; call Register() first"))
@@ -858,6 +1737,58 @@ Method LoadColumns()
 		Set ..DefTypes(tType) = $ListBuild($ListGet(tU, 1), $ListGet(tU, 2), $ListGet(tV, 2) _ "_Value")
 	}
 	Do ..LoadLinks(..LinksRaw)
+	Do ..LoadCompartment()
+	Do ..LoadProps()
+}
+
+/// Fill Props and CatSys (research R8). A token category is multi-value on most
+/// types and a main-table column on the rest; _profile is multi-value on every type
+/// that has its table.
+Method LoadProps()
+{
+	Kill ..Props, ..CatSys
+	Set tIt = ##class(%DynamicArray).%FromJSON(..#CATEGORYSYSTEMS).%GetIterator()
+	While tIt.%GetNext(, .tSys) { Set ..CatSys(tSys) = "" }
+	Set tRs = ..Query("SELECT ResourceType, TableName, ColumnName, isMultiValue FROM " _ ..#SEARCHCOLUMN _ " WHERE RepoKey = ? AND ParamName = 'category' AND %UPPER(Type) = 'TOKEN'", ..RepoId)
+	While tRs.%Next() {
+		Set ..Props(tRs.%GetData(1), "category") = $ListBuild(tRs.%GetData(2), tRs.%GetData(3), +tRs.%GetData(4))
+	}
+	Quit:'..Scalar("SELECT COUNT(*) FROM " _ ..#SEARCHCOLUMN _ " WHERE RepoKey = ? AND ResourceType = 'Resource' AND ParamName = '_profile'", ..RepoId)
+	Set tPre = ..SSchema _ "_"
+	Set tRs = ..Query("SELECT TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA %STARTSWITH ? AND TABLE_NAME = '_profile'", tPre)
+	While tRs.%Next() {
+		Set tType = $Extract(tRs.%GetData(1), $Length(tPre) + 1, *)
+		Set:tType'="" ..Props(tType, "meta_profile") = $ListBuild(tType, "_profile", 1)
+	}
+}
+
+/// Fill Comp and R4Types for pCompartment ("patient", "encounter", ...: the schema's
+/// lower camel case names). pSchema is an HS.FHIRServer.Schema; "" loads the
+/// repository's metadata set. An
+/// unknown compartment leaves Comp empty.
+Method LoadCompartment(pSchema As %RegisteredObject = "", pCompartment As %String = "patient")
+{
+	Kill ..Comp, ..R4Types
+	If '$IsObject(pSchema) {
+		Set tKey = ..Scalar("SELECT metadataSetKey FROM HS_FHIRServer.RepoInstance WHERE repo = ?", ..RepoId)
+		Set:$ListValid(tKey) tKey = $ListToString(tKey)
+		// By name: the class exists only in a namespace with a FHIR server.
+		Set pSchema = $ClassMethod("HS.FHIRServer.Schema", "LoadSchema", tKey)
+	}
+	Set tType = ""
+	For {
+		Set tType = pSchema.NextSearchParamResourceType(tType)
+		Quit:tType=""
+		Set ..R4Types(tType) = ""
+		Kill tP
+		Do pSchema.GetCompartmentParamsForType(tType, .tP)
+		Set tParam = ""
+		For {
+			Set tParam = $Order(tP(pCompartment, tParam))
+			Quit:tParam=""
+			Set ..Comp(tType, tParam) = ""
+		}
+	}
 }
 
 /// Load a json_links array into Links, LinkTypes, LibLink and HasExt. pJson = ""
@@ -921,6 +1852,7 @@ Method LinksJson() As %String
 ///
 /// ^IVG.FHIRGraphFault(graph) = "beforecommit" throws just before TCOMMIT. It exists
 /// so the E2E test can show the batch and its watermark roll back together.
+/// "rederive:<n>" throws in Rederive's nth batch only (spec 235).
 Method RunBatch(ByRef pBatch, pFollow As %Boolean, pFeed As %String, pWatermark As %Integer, pDefs As %Boolean = 1) As %Integer
 {
 	Kill ..Done, ..Pending
@@ -968,7 +1900,8 @@ Method RunBatch(ByRef pBatch, pFollow As %Boolean, pFeed As %String, pWatermark 
 	If pFeed '= "" {
 		Do ..Exec("UPDATE Graph_KG.fhir_graphs SET " _ pFeed _ " = ? WHERE graph_id = ?", pWatermark, ..GraphId)
 	}
-	If $Get(^IVG.FHIRGraphFault(..GraphId)) = "beforecommit" {
+	Set tFault = $Get(^IVG.FHIRGraphFault(..GraphId))
+	If (tFault = "beforecommit") || (..RederiveN && (tFault = ("rederive:" _ ..RederiveN))) {
 		$$$ThrowStatus($$$ERROR($$$GeneralError, "injected fault before commit (^IVG.FHIRGraphFault)"))
 	}
 	TCOMMIT
@@ -1188,6 +2121,30 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 		}
 	}
 
+	// --- the patient compartment, from the reference edges just wanted (R2) ----
+	// One edge per Patient; via lists every compartment param that reaches it.
+	If tType '= "Patient" {
+		Kill tVia
+		Set tP = ""
+		For {
+			Set tP = $Order(tWant(tP))
+			Quit:tP=""
+			Continue:'$Data(..Comp(tType, tP))
+			Set tO = "Patient/"
+			For {
+				Set tO = $Order(tWant(tP, tO))
+				Quit:$Extract(tO, 1, 8)'="Patient/"
+				Set tVia(tO) = $Get(tVia(tO)) _ $Select($Get(tVia(tO)) = "": "", 1: ",") _ tP
+			}
+		}
+		Set tO = ""
+		For {
+			Set tO = $Order(tVia(tO), 1, tList)
+			Quit:tO=""
+			Set tWant(..#COMPARTMENTPRED, tO) = $ListBuild("via", tList)
+		}
+	}
+
 	// --- diff against the edges the graph holds ------------------------------
 	Kill tHave
 	Set tRs = ..Query("SELECT edge_id, p, o_id, qualifiers FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ?", ..GraphId, pKey)
@@ -1251,8 +2208,12 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 			Set tQual = ..Qualifier(tDef)
 			Do ..Exec("INSERT INTO Graph_KG.rdf_edges (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)", pKey, tP, tO, tQual, ..GraphId)
 			Do ##class(Graph.KG.EdgeScan).WriteAdjacency(pKey, tP, tO, "1.0", ..GKey)
+			Set:tP=..#COMPARTMENTPRED ..Interp("added") = $Get(..Interp("added")) + 1
 		}
 	}
+
+	// --- category and meta_profile, and the labels category implies (R8) -------
+	Do ..SyncProps(pKey, tType)
 
 	// --- the unresolved rows this key owns ------------------------------------
 	Do ..Exec("DELETE FROM Graph_KG.fhir_unresolved WHERE graph_id = ? AND source = ?", ..GraphId, pKey)
@@ -1314,11 +2275,19 @@ Method ResyncKey(pKey As %String, pFollow As %Boolean = 0)
 	}
 }
 
-/// An edge's qualifiers from its tWant value, $lb(key, value).
+/// An edge's qualifiers from its tWant value, $lb(key, value). A `via` value is a
+/// comma list, written as a JSON array.
 ClassMethod Qualifier(pDef As %List) As %String [ Private ]
 {
 	Set tQual = {}
-	Do tQual.%Set($ListGet(pDef, 1), $ListGet(pDef, 2))
+	If $ListGet(pDef, 1) = "via" {
+		Set tArr = []
+		Set tList = $ListFromString($ListGet(pDef, 2), ",")
+		For tI = 1:1:$ListLength(tList) { Do tArr.%Push($ListGet(tList, tI)) }
+		Do tQual.%Set("via", tArr)
+	} Else {
+		Do tQual.%Set($ListGet(pDef, 1), $ListGet(pDef, 2))
+	}
 	Return tQual.%ToJSON()
 }
 
@@ -1373,6 +2342,11 @@ Method DropNode(pKey As %String, pReason As %String)
 	For tI = 1:1:$Get(tRows) {
 		Set tS = $ListGet(tRows(tI), 2)
 		Set tP = $ListGet(tRows(tI), 3)
+		// A compartment edge just goes: the reference edge beside it records the reason.
+		If tP = ..#COMPARTMENTPRED {
+			Do ..DeleteEdge($ListGet(tRows(tI), 1), tS, tP, pKey)
+			Continue
+		}
 		// A canonical edge's source resyncs in the batch's second pass, which records
 		// the canonical reason; `deleted` is for references to keys.
 		// A json-link edge's source resyncs too (Pending): only its own rule knows
@@ -1428,6 +2402,12 @@ Method DropNode(pKey As %String, pReason As %String)
 	Do ..Exec("DELETE FROM Graph_KG.fhir_unresolved WHERE graph_id = ? AND source = ?", ..GraphId, pKey)
 	Do ..Exec("DELETE FROM Graph_KG.fhir_canonical_refs WHERE graph_id = ? AND source = ?", ..GraphId, pKey)
 	Do ..Exec("DELETE FROM Graph_KG.fhir_definitions WHERE graph_id = ? AND rsrc_key = ?", ..GraphId, pKey)
+	// Category labels too, not only the type label. SyncProps writes them only beside
+	// the type label, so a key without one (a Rebuild's deleted history) has none.
+	If $Data(^KG("label", ..GKey, $Piece(pKey, "/", 1), pKey)) {
+		Set tRs = ..Query("SELECT label FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ?", ..GraphId, pKey)
+		While tRs.%Next() { Kill ^KG("label", ..GKey, tRs.%GetData(1), pKey) }
+	}
 	Do ..Exec("DELETE FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ?", ..GraphId, pKey)
 	Do ..Exec("DELETE FROM Graph_KG.rdf_props WHERE graph_id = ? AND s = ?", ..GraphId, pKey)
 	Do ..Exec("DELETE FROM Graph_KG.docs WHERE graph_id = ? AND id = ?", ..GraphId, pKey)
@@ -1446,6 +2426,96 @@ Method DropNode(pKey As %String, pReason As %String)
 	Kill ..Known(pKey)
 }
 
+/// Write pKey's category and meta_profile rows from the search index, and make its
+/// labels {type} + labels(category), less R4 type names. No resource read.
+Method SyncProps(pKey As %String, pType As %String) [ Private ]
+{
+	Kill tWant
+	Set tWant(pType) = ""
+	For tProp = "category", "meta_profile" {
+		Kill tVals
+		If $Data(..Props(pType, tProp), tDef) {
+			Set tTable = $ListGet(tDef, 1)
+			Set tCol = $ListGet(tDef, 2)
+			If tProp = "meta_profile" {
+				// No DISTINCT: on an SQLUPPER column it returns the upper-cased form.
+				Set tRs = ..Query("SELECT value FROM " _ ..Q(..SSchema _ "_" _ tTable) _ "." _ ..Q(tCol) _ " WHERE Key = ?", pKey)
+				While tRs.%Next() { Set:tRs.%GetData(1)'="" tVals(tRs.%GetData(1)) = "" }
+			} Else {
+				If $ListGet(tDef, 3) {
+					Set tSql = "SELECT value_System, value_Value FROM " _ ..Q(..SSchema _ "_" _ tTable) _ "." _ ..Q(tCol) _ " WHERE Key = ?"
+				} Else {
+					Set tSql = "SELECT " _ ..Q(tCol _ "_System") _ ", " _ ..Q(tCol _ "_Value") _ " FROM " _ ..Q(..SSchema) _ "." _ ..Q(tTable) _ " WHERE Key = ?"
+				}
+				Set tRs = ..Query(tSql, pKey)
+				While tRs.%Next() {
+					Set tSys = tRs.%GetData(1)
+					Set tCode = tRs.%GetData(2)
+					Continue:tCode=""
+					Set tVals(tSys _ "|" _ tCode) = ""
+					Continue:(tSys="")||'$Data(..CatSys(tSys))
+					Set tLab = ..Pascal(tCode)
+					Set:(tLab'="")&&'$Data(..R4Types(tLab)) tWant(tLab) = ""
+				}
+			}
+		}
+		Set tArr = []
+		Set tV = ""
+		For {
+			Set tV = $Order(tVals(tV))
+			Quit:tV=""
+			Do tArr.%Push(tV)
+		}
+		Set tJson = $Select(tArr.%Size(): tArr.%ToJSON(), 1: "")
+		Set tHave = ..Scalar("SELECT val FROM Graph_KG.rdf_props WHERE graph_id = ? AND s = ? AND ""key"" = ?", ..GraphId, pKey, tProp)
+		Continue:tHave=tJson
+		If tJson = "" {
+			Do ..Exec("DELETE FROM Graph_KG.rdf_props WHERE graph_id = ? AND s = ? AND ""key"" = ?", ..GraphId, pKey, tProp)
+			Kill ^KG("prop", ..GKey, pKey, tProp)
+		} Else {
+			If tHave = "" {
+				Do ..Exec("INSERT INTO Graph_KG.rdf_props (graph_id, s, ""key"", val) VALUES (?, ?, ?, ?)", ..GraphId, pKey, tProp, tJson)
+			} Else {
+				Do ..Exec("UPDATE Graph_KG.rdf_props SET val = ? WHERE graph_id = ? AND s = ? AND ""key"" = ?", tJson, ..GraphId, pKey, tProp)
+			}
+			Set ^KG("prop", ..GKey, pKey, tProp) = tJson
+		}
+		Set ..Interp(tProp) = $Get(..Interp(tProp)) + 1
+	}
+	// Labels: the type label is in tWant, so it is never removed.
+	Kill tHave
+	Set tRs = ..Query("SELECT label FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ?", ..GraphId, pKey)
+	While tRs.%Next() { Set tHave(tRs.%GetData(1)) = "" }
+	Set tL = ""
+	For {
+		Set tL = $Order(tHave(tL))
+		Quit:tL=""
+		Continue:$Data(tWant(tL))
+		Do ..Exec("DELETE FROM Graph_KG.rdf_labels WHERE graph_id = ? AND s = ? AND label = ?", ..GraphId, pKey, tL)
+		Kill ^KG("label", ..GKey, tL, pKey)
+	}
+	Set tL = ""
+	For {
+		Set tL = $Order(tWant(tL))
+		Quit:tL=""
+		Set ^KG("label", ..GKey, tL, pKey) = ""
+		Continue:$Data(tHave(tL))
+		Do ..Exec("INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) VALUES (?, ?, ?)", ..GraphId, pKey, tL)
+	}
+}
+
+/// A category code as a label: vital-signs -> VitalSigns, split on - and _.
+ClassMethod Pascal(pCode As %String) As %String
+{
+	Set tOut = ""
+	Set tCode = $Translate(pCode, "_", "-")
+	For tI = 1:1:$Length(tCode, "-") {
+		Set tP = $Piece(tCode, "-", tI)
+		Set tOut = tOut _ $ZConvert($Extract(tP), "U") _ $Extract(tP, 2, *)
+	}
+	Return tOut
+}
+
 /// Delete one edge row and everything that hangs off it.
 Method DeleteEdge(pEdgeId As %Integer, pS As %String, pP As %String, pO As %String) [ Private ]
 {
@@ -1460,6 +2530,7 @@ Method DeleteEdge(pEdgeId As %Integer, pS As %String, pP As %String, pO As %Stri
 	}
 	Do ..Exec("DELETE FROM Graph_KG.rdf_edges WHERE edge_id = ?", pEdgeId)
 	Do ##class(Graph.KG.EdgeScan).DeleteAdjacency(pS, pP, pO, ..GKey)
+	Set:pP=..#COMPARTMENTPRED ..Interp("removed") = $Get(..Interp("removed")) + 1
 }
 
 /// Ensure a node row and its resource-type label exist in this graph.
@@ -1540,7 +2611,7 @@ Method LoadRoutes() [ Private ]
 Method Counts() As %DynamicObject
 {
 	Set tParams = {}
-	Set tRs = ..Query("SELECT s, p FROM Graph_KG.rdf_edges WHERE graph_id = ?", ..GraphId)
+	Set tRs = ..Query("SELECT s, p FROM Graph_KG.rdf_edges WHERE graph_id = ? AND p <> ?", ..GraphId, ..#COMPARTMENTPRED)
 	Kill tN
 	While tRs.%Next() {
 		Set tK = $Piece(tRs.%GetData(1), "/", 1) _ "." _ tRs.%GetData(2)

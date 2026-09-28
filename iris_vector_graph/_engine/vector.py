@@ -329,21 +329,24 @@ class VectorMixin:
 
         query_cast = f"TO_VECTOR(?, {self.vector_dtype}, {dim})"
 
-        having = (
-            f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
-        )
+        # A threshold filters in WHERE: IRIS refuses HAVING after ORDER BY (-25).
+        params = [query_vec_str, graph_id]
+        threshold = ""
+        if score_threshold is not None:
+            threshold = f"AND VECTOR_COSINE(emb, {query_cast}) >= ? "
+            params += [query_vec_str, float(score_threshold)]
         sql = (
             f"SELECT TOP {int(top_k)} s, p, o_id, "
             f"VECTOR_COSINE(emb, {query_cast}) AS score "
             f"FROM {self._t(table)} "
             f"WHERE {graph_scope_predicate('graph_id')} "
-            f"ORDER BY score DESC "
-            f"{having}"
+            f"{threshold}"
+            f"ORDER BY score DESC"
         )
 
         cursor = self.conn.cursor()
         try:
-            cursor.execute(sql, [query_vec_str, graph_id])
+            cursor.execute(sql, params)
         except Exception as e:
             if "-30" in str(e) or "not found" in str(e).lower() or "empty" in str(e).lower():
                 return []
@@ -1123,24 +1126,25 @@ class VectorMixin:
         if extra:
             select_cols += f", {extra}"
 
-        having = (
-            f"HAVING score >= {score_threshold}" if score_threshold is not None else ""
-        )
         # The graph predicate is emitted only when a graph was given. A table with no
         # graph_id column — docs, fhir_bridges, anything a caller points this at —
         # would fail to compile with one, and 227 does not widen its own scope to
         # every table in the namespace.
         params = [query_vec_str]
-        where = ""
+        conditions = []
         if graph is not None:
-            where = f"WHERE {graph_scope_predicate('t.graph_id')} "
+            conditions.append(graph_scope_predicate("t.graph_id"))
             params.append(graph)
+        # A threshold filters in WHERE: IRIS refuses HAVING after ORDER BY (-25).
+        if score_threshold is not None:
+            conditions.append(f"VECTOR_COSINE(t.{vector_col}, {query_cast}) >= ?")
+            params += [query_vec_str, float(score_threshold)]
+        where = f"WHERE {' AND '.join(conditions)} " if conditions else ""
         sql = (
             f"SELECT TOP {int(top_k)} {select_cols} "
             f"FROM {table} t "
             f"{where}"
-            f"ORDER BY score DESC "
-            f"{having}"
+            f"ORDER BY score DESC"
         )
 
         cursor = self.conn.cursor()

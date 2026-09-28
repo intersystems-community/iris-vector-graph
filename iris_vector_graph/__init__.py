@@ -38,6 +38,7 @@ from .engine import IRISGraphEngine
 # that produce them live — so a caller can annotate what `resolve_route` and
 # `embedding_inventory` return without importing a private module.
 from ._engine.embeddings import EmbeddingRoute
+from ._engine.fhir_graph import CLINICAL_PARAMS, FHIR_PPR_EXCLUDE
 from ._engine.schema import EmbeddingInventoryRow, QuarantinedVector
 from .errors import (
     EmbeddingsMissingError,
@@ -99,6 +100,8 @@ except Exception:
 
 __all__ = [
     "IRISGraphEngine",
+    "FHIR_PPR_EXCLUDE",
+    "CLINICAL_PARAMS",
     "EmbeddingIdentity",
     "EmbeddingIdentityConflict",
     "EmbeddingInventoryRow",

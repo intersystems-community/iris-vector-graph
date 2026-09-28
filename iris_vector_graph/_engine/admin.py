@@ -16,6 +16,22 @@ from iris_vector_graph.result import IVGResult
 logger = logging.getLogger(__name__)
 
 
+def active_queries_sql(limit: int) -> str:
+    """The statement that lists running SQL, one row per statement.
+
+    Columns: process ID (what `kill_query` takes), status, user, statement text.
+    `%SYS.ProcessQuery` has no statement column, and the `ClientName` / `Command`
+    this used to name do not exist there; with `FETCH FIRST` the resulting Prepare
+    error SIGSEGVs the driver instead of raising. The limit is `TOP`, inlined as an
+    integer.
+    """
+    return (
+        f"SELECT TOP {int(limit)} c.ProcessID, c.Status, c.UserName, s.Statement "
+        "FROM INFORMATION_SCHEMA.CURRENT_STATEMENTS c "
+        "LEFT JOIN INFORMATION_SCHEMA.STATEMENTS s ON s.Hash = c.StatementIndexHash"
+    )
+
+
 class AdminMixin:
     """Administrative/system operations mixin for IRISGraphEngine.
 
@@ -634,29 +650,15 @@ class AdminMixin:
             cache.pop(graph, None)
 
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Return active IRIS SQL queries.
+        """Return the SQL statements running now; [] if the listing fails.
 
-        Requires IRIS Enterprise — returns [] on Community Edition.
-        The IRIS Python driver segfaults when %SYS.ProcessQuery is queried
-        on Community (insufficient privilege causes a C-level crash, not a
-        Python exception). We detect Community via GetISCProduct() == 4.
+        There used to be a Community guard here on `GetISCProduct() == 4`, but 4
+        is every InterSystems IRIS, so it returned [] everywhere. The segfault it
+        was written for came from the old statement (see `active_queries_sql`).
         """
-        try:
-            iris_obj = self._iris_obj()
-            product = int(str(iris_obj.classMethodValue("%SYSTEM.Version", "GetISCProduct")))
-            if product == 4:  # Community Edition — unsafe to query %SYS.ProcessQuery
-                return []
-        except Exception:
-            return []  # cannot determine edition — play safe
         cursor = self.conn.cursor()
         try:
-            # Inline limit — IRIS Python driver (ARM64) segfaults on
-            # FETCH FIRST ? ROWS ONLY with a parameterized placeholder.
-            safe_limit = max(1, int(limit))
-            cursor.execute(
-                f"SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
-                f"WHERE Command IS NOT NULL FETCH FIRST {safe_limit} ROWS ONLY",
-            )
+            cursor.execute(active_queries_sql(max(1, int(limit))))
             return [
                 {
                     "id": str(r[0]),

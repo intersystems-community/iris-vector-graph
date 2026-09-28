@@ -66,7 +66,7 @@ class TestEdgeVectorSearch:
         except Exception as e:
             err = str(e)
             # Edge embeddings table may be empty or have mismatched dims
-            if any(s in err for s in ["-257", "different lengths", "HAVING", "-30", "not found"]):
+            if any(s in err for s in ["-257", "different lengths", "-30", "not found"]):
                 pytest.skip(f"edge_vector_search: {err[:80]}")
             raise
 

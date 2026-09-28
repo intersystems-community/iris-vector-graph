@@ -289,11 +289,12 @@ class TestNodeOnlyQueryPath:
 class TestTemporalBFSPath:
 
     def test_temporal_cypher(self, qe_graph):
-        try:
-            result = qe_graph.execute_cypher(
+        # No Cypher syntax sets `temporal_window`; a range literal in the
+        # relationship map is a parse error, not a temporal BFS.
+        from iris_vector_graph.cypher.parser import CypherParseError
+
+        with pytest.raises(CypherParseError):
+            qe_graph.execute_cypher(
                 "MATCH (a {node_id: 'qe_0'})-[:QE_REL*1..2 {timestamp: 1..9999}]->(b) "
                 "RETURN b.node_id AS id"
             )
-            assert result is not None
-        except Exception:
-            pytest.skip("temporal BFS not supported with this Cypher pattern")

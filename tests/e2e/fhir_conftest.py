@@ -27,6 +27,8 @@ NAMESPACE = "IVGFHIR"
 ENDPOINT = "/csp/healthshare/ivgfhir/fhir/r4"
 GRAPH = "fhir:IVGFHIR:X0001"
 PORT = int(os.environ.get("IVG_PORT", "31972"))
+SYNTHEA_BATCH = 200
+BATCH_BYTES = 1_000_000  # a batch Bundle is one string; IRIS caps strings at 3.6 MB
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _FIXTURES = os.path.join(_ROOT, "tests", "e2e", "fixtures", "fhir")
@@ -254,31 +256,85 @@ def _sync(conn) -> None:
     IRISGraphEngine(conn, embedding_dimension=4).fhir_graph_sync(GRAPH)
 
 
-def load_run(conn, loader: FhirLoader, resources: list[dict]) -> list[dict]:
-    """PUT `resources` (already prefixed) and sync; returns the ones stored. Any
-    server rejection fails the test with the full list, each a finding for
-    SOURCE.md's excluded list. Stored resources are torn down before failing."""
-    stored, rejected = [], []
-    try:
-        for r in resources:
-            out = loader.dispatch("PUT", f"/{r['resourceType']}/{r['id']}", r)
-            if str(out["status"]).startswith("20"):
+def batch_bundle(resources: list[dict], method: str) -> dict:
+    """A `batch` Bundle applying `method` (PUT or DELETE) to each resource's key."""
+    entries = []
+    for r in resources:
+        entry = {"request": {"method": method, "url": f"{r['resourceType']}/{r['id']}"}}
+        if method == "PUT":
+            entry = {"resource": r, **entry}
+        entries.append(entry)
+    return {"resourceType": "Bundle", "type": "batch", "entry": entries}
+
+
+def batches(resources: list[dict], batch: int) -> list[list[dict]]:
+    """Consecutive chunks of at most `batch` resources and, unless one resource is
+    larger on its own, at most BATCH_BYTES of JSON."""
+    out, chunk, size = [], [], 0
+    for r in resources:
+        n = len(json.dumps(r))
+        if chunk and (len(chunk) >= batch or size + n > BATCH_BYTES):
+            out.append(chunk)
+            chunk, size = [], 0
+        chunk.append(r)
+        size += n
+    if chunk:
+        out.append(chunk)
+    return out
+
+
+def _put_batched(loader, resources: list[dict], batch: int, stored: list, rejected: list) -> None:
+    i = 0
+    for chunk in batches(resources, batch):
+        i += len(chunk)
+        out = loader.dispatch("POST", "", batch_bundle(chunk, "PUT"))
+        entries = out.get("body", {}).get("entry", []) if str(out["status"]).startswith("20") else []
+        if len(entries) != len(chunk):
+            rejected.append(f"batch ending at {i}: {str(out)[:500]}")
+            continue
+        for r, e in zip(chunk, entries):
+            status = str(e.get("response", {}).get("status", ""))
+            if status.startswith("20"):
                 stored.append(r)
             else:
-                rejected.append(f"{r['resourceType']}/{r['id']}: {out}")
+                rejected.append(f"{r['resourceType']}/{r['id']}: {e}")
+
+
+def load_run(conn, loader: FhirLoader, resources: list[dict], batch: int = 0) -> list[dict]:
+    """PUT `resources` (already prefixed) and sync; returns the ones stored. Any
+    server rejection fails the test with the full list, each a finding for
+    SOURCE.md's excluded list. Stored resources are torn down before failing.
+    `batch` > 0 PUTs that many per `batch` Bundle, in order."""
+    stored, rejected = [], []
+    try:
+        if batch > 0:
+            _put_batched(loader, resources, batch, stored, rejected)
+        else:
+            for r in resources:
+                out = loader.dispatch("PUT", f"/{r['resourceType']}/{r['id']}", r)
+                if str(out["status"]).startswith("20"):
+                    stored.append(r)
+                else:
+                    rejected.append(f"{r['resourceType']}/{r['id']}: {out}")
         if rejected:
             pytest.fail("server rejected resources:\n" + "\n".join(rejected))
         _sync(conn)
     except BaseException:
-        teardown_run(conn, loader, stored)
+        teardown_run(conn, loader, stored, batch=batch)
         raise
     return stored
 
 
-def teardown_run(conn, loader: FhirLoader, resources: list[dict]) -> None:
-    """Delete `resources` in reverse load order, then sync."""
-    for r in reversed(resources):
-        loader.dispatch("DELETE", f"/{r['resourceType']}/{r['id']}")
+def teardown_run(conn, loader: FhirLoader, resources: list[dict], batch: int = 0) -> None:
+    """Delete `resources` in reverse load order, then sync. `batch` > 0 deletes that
+    many per `batch` Bundle."""
+    rev = list(reversed(resources))
+    if batch > 0:
+        for chunk in batches(rev, batch):
+            loader.dispatch("POST", "", batch_bundle(chunk, "DELETE"))
+    else:
+        for r in rev:
+            loader.dispatch("DELETE", f"/{r['resourceType']}/{r['id']}")
     _sync(conn)
 
 
@@ -299,3 +355,28 @@ def genomics_loaded(fhir_conn_required):
         yield loader.prefix, resources
     finally:
         teardown_run(fhir_conn_required, loader, resources)
+
+
+@pytest.fixture(scope="module")
+def synthea_loaded(fhir_conn_required):
+    """(prefix, resources): the vendored Synthea fixture (spec 235), loaded in
+    dependency order under a fresh per-run prefix for one module and deleted
+    afterwards."""
+    from iris_vector_graph.engine import IRISGraphEngine
+
+    from tests.e2e.interp_fixture import load_order, load_synthea
+
+    engine = IRISGraphEngine(fhir_conn_required, embedding_dimension=4)
+    if not engine.fhir_graph_register(denylist=[]).get("rebuilt"):
+        engine.fhir_graph_rebuild(GRAPH)
+    loader = FhirLoader(fhir_conn_required)
+    resources = load_run(
+        fhir_conn_required,
+        loader,
+        load_order(prefix_resources(load_synthea(), loader.prefix)),
+        batch=SYNTHEA_BATCH,
+    )
+    try:
+        yield loader.prefix, resources
+    finally:
+        teardown_run(fhir_conn_required, loader, resources, batch=SYNTHEA_BATCH)

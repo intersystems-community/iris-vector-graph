@@ -13,6 +13,7 @@ from ..models.biomedical import (
     QueryType
 )
 from ..models.metrics import QueryPerformanceMetrics
+from ..services import bio_demo_data as bio_data
 from ..services.iris_biomedical_client import IRISBiomedicalClient
 
 
@@ -21,11 +22,31 @@ _biomedical_client = None
 
 
 def get_biomedical_client() -> IRISBiomedicalClient:
-    """Get or create IRIS biomedical client - queries STRING data directly"""
+    """Get or create the IRIS client over the seeded `bio:demo` graph"""
     global _biomedical_client
     if _biomedical_client is None:
         _biomedical_client = IRISBiomedicalClient()
     return _biomedical_client
+
+
+def set_biomedical_client(client) -> None:
+    """Swap the client (tests, or a server pointed at another namespace)."""
+    global _biomedical_client
+    _biomedical_client = client
+
+
+def _stats_cards():
+    """Header stats read from the graph; a dead connection shows as such, not as numbers."""
+    try:
+        st = get_biomedical_client().stats()
+        proteins, interactions, graph = str(st["proteins"]), str(st["interactions"]), bio_data.GRAPH
+    except Exception:
+        proteins, interactions, graph = "offline", "offline", "not connected"
+    cards = [("Proteins", proteins), ("Interactions", interactions),
+             ("Named graph", graph), ("Search", "Text + graph")]
+    return Div(cls="stats", id="bio-stats")(
+        *[Div(cls="stat-card")(Div(cls="label")(k), Div(cls="value")(v)) for k, v in cards]
+    )
 
 
 def register_biomedical_routes(app):
@@ -265,28 +286,11 @@ def register_biomedical_routes(app):
                     # Header
                     Div(cls="header")(
                         H1("IRIS Biomedical Research"),
-                        P("Protein similarity search with vector embeddings, network visualization, and pathway analysis"),
+                        P("Protein search, interaction networks and shortest paths over a seeded named graph (bio:demo)"),
                         Button("View Architecture", cls="arch-btn",
                                hx_get="/arch/bio", hx_target="#bio-arch-modal", hx_swap="innerHTML"),
                         Div(id="bio-arch-modal"),
-                        Div(cls="stats")(
-                            Div(cls="stat-card")(
-                                Div(cls="label")("Protein Database"),
-                                Div(cls="value")("50K+")
-                            ),
-                            Div(cls="stat-card")(
-                                Div(cls="label")("Avg Query Time"),
-                                Div(cls="value")("<500ms")
-                            ),
-                            Div(cls="stat-card")(
-                                Div(cls="label")("Search Method"),
-                                Div(cls="value")("Hybrid")
-                            ),
-                            Div(cls="stat-card")(
-                                Div(cls="label")("Network Nodes"),
-                                Div(cls="value")("<500")
-                            )
-                        )
+                        _stats_cards(),
                     ),
 
                     # Demo grid
@@ -349,24 +353,8 @@ def register_biomedical_routes(app):
             )
         )
 
-    # Demo scenarios (FR-029)
-    SCENARIOS = {
-        "cancer_protein": {
-            "query_text": "TP53",
-            "query_type": "name",
-            "top_k": 10
-        },
-        "metabolic_pathway": {
-            "source_protein_id": "ENSP00000306407",  # GAPDH
-            "target_protein_id": "ENSP00000316649",  # LDHA
-            "max_hops": 2
-        },
-        "drug_target": {
-            "query_text": "kinase inhibitor",
-            "query_type": "function",
-            "top_k": 15
-        }
-    }
+    # Demo scenarios (FR-029): answerable from the seeded graph
+    SCENARIOS = bio_data.SCENARIOS
 
     @app.get("/api/bio/scenario/{scenario_name}")
     def get_bio_scenario(scenario_name: str):
@@ -511,7 +499,7 @@ def register_biomedical_routes(app):
                     Div(cls="metric")(
                         Div(cls="label")("Backend"),
                         Div(cls="value")(
-                            "✅ Live API" if metrics.backend_used == "biomedical_api" else "📋 Demo Mode"
+                            "Live IRIS" if metrics.backend_used == "iris_direct" else "Demo Mode"
                         )
                     )
                 ),
@@ -563,34 +551,22 @@ def register_biomedical_routes(app):
                     )
                 ),
 
-                # Vector Search Method Info
+                # The query that actually ran
                 Div(cls="audit-section", style="margin-top: 2rem;")(
-                    H3("IRIS Vector Search Query"),
+                    H3("IRIS Query"),
                     P(style="color: #718096; margin-bottom: 1rem;")(
-                        f"Search method: {result.search_method} (768-dimensional protein embeddings)"
+                        f"Search method: {result.search_method}, scoped to named graph {bio_data.GRAPH}. "
+                        "The demo graph has no embeddings, so this is text matching, not vector similarity."
                     ),
-
-                    Div(style="margin-bottom: 1.5rem;")(
-                        H4(style="color: #4a5568; font-size: 1rem; margin-bottom: 0.5rem;")("Vector Similarity SQL"),
-                        Div(cls="query-box")(
-                            NotStr(f"""<span class="keyword">SELECT TOP</span> {query.top_k} protein_id, name, organism,
-       <span class="function">VECTOR_DOT_PRODUCT</span>(embedding, <span class="variable">?query_vector</span>) <span class="keyword">AS</span> similarity
-<span class="keyword">FROM</span> protein_embeddings
-<span class="keyword">WHERE</span> <span class="function">VECTOR_DOT_PRODUCT</span>(embedding, <span class="variable">?query_vector</span>) > 0.5
-<span class="keyword">ORDER BY</span> similarity <span class="keyword">DESC</span>""")
-                        )
-                    ),
-
-                    Div(style="margin-bottom: 1.5rem;")(
-                        H4(style="color: #4a5568; font-size: 1rem; margin-bottom: 0.5rem;")("HNSW Index Usage"),
-                        Div(cls="query-box")(
-                            NotStr(f"""<span class="comment">-- IRIS automatically uses HNSW index for fast approximate nearest neighbor search</span>
-<span class="keyword">CREATE INDEX</span> protein_embedding_idx
-<span class="keyword">ON</span> protein_embeddings (embedding)
-<span class="keyword">USING</span> <span class="function">HNSW</span>
-<span class="keyword">WITH</span> (m=16, ef_construction=200, ef_search=50)
-
-<span class="comment">-- Query performance: ~5ms for 50K proteins (with HNSW) vs 5800ms (brute force)</span>""")
+                    Div(cls="query-box")(
+                        NotStr(
+                            """<span class="keyword">SELECT DISTINCT</span> s <span class="keyword">FROM</span> Graph_KG.rdf_props
+<span class="keyword">WHERE</span> graph_id = <span class="variable">?graph</span>
+  <span class="keyword">AND</span> "key" <span class="keyword">IN</span> ('symbol', 'name') <span class="keyword">AND</span> <span class="function">UPPER</span>(val) <span class="keyword">LIKE</span> <span class="variable">?text</span>"""
+                            if result.search_method == "name_text_match" else
+                            """<span class="keyword">SELECT</span> s, val <span class="keyword">FROM</span> Graph_KG.rdf_props
+<span class="keyword">WHERE</span> graph_id = <span class="variable">?graph</span> <span class="keyword">AND</span> "key" = 'annotation'
+<span class="comment">-- score = fraction of query terms found in the annotation</span>"""
                         )
                     )
                 )
@@ -1232,7 +1208,7 @@ def register_biomedical_routes(app):
                     ),
                     Div(cls="metric")(
                         Div(cls="label")("Path Length"),
-                        Div(cls="value")(f"{len(pathway.path)} hops")
+                        Div(cls="value")(f"{len(pathway.path) - 1} hops")
                     ),
                     Div(cls="metric")(
                         Div(cls="label")("Confidence"),

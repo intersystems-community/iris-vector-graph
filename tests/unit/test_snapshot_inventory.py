@@ -342,3 +342,84 @@ def test_a_restore_accepts_a_snapshot_taken_before_the_stamp(tmp_path):
     result = engine.restore_snapshot(path)
 
     assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# FHIR graph bookkeeping (spec 232)
+# ---------------------------------------------------------------------------
+
+FHIR_TABLES = (
+    "Graph_KG.fhir_unresolved",
+    "Graph_KG.fhir_definitions",
+    "Graph_KG.fhir_canonical_refs",
+)
+
+
+@pytest.mark.parametrize("table", FHIR_TABLES)
+def test_the_fhir_bookkeeping_is_exported_and_restored(table):
+    """Spec 232 put these in the inventory and not in the plan.
+
+    The repository is not in the archive, so they cannot be rebuilt from it: a restore
+    that drops them leaves every later canonical link unresolved until a full resync.
+    """
+    assert snapshot_mod.STORE_PLAN.get(table) == "sql"
+    assert snapshot_mod.SQL_TABLES_EXPORT.count(table) == 1
+    fname = table.replace("Graph_KG.", "Graph_KG_") + ".ndjson"
+    assert fname in snapshot_mod.RESTORE_TABLE_ORDER
+
+
+def _restore_recording(tmp_path, files: dict, merge: bool) -> list:
+    path = str(tmp_path / "fhir.zip")
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "metadata.json",
+            json.dumps({"version": "1.1", "layout": snapshot_mod.SNAPSHOT_LAYOUT,
+                        "layers": ["sql"], "tables": {}}),
+        )
+        for name, rows in files.items():
+            zf.writestr(f"sql/{name}", "\n".join(json.dumps(r) for r in rows))
+    engine = _Engine()
+    engine.erase_all = MagicMock(return_value={})
+    executed = []
+    engine.conn.cursor.return_value.execute.side_effect = (
+        lambda sql, params=None: executed.append(sql)
+    )
+    engine.restore_snapshot(path, merge=merge)
+    return executed
+
+
+DEFS = [
+    {"graph_id": "g", "rsrc_key": "Library/1", "url": "http://x/a", "version": "1"},
+    {"graph_id": "g", "rsrc_key": "Library/2", "url": "http://x/b", "version": None},
+]
+
+
+def test_a_restore_creates_the_lazy_fhir_tables_first(tmp_path):
+    """The tables exist only where a FHIR graph was registered; the target may have none."""
+    executed = _restore_recording(tmp_path, {"Graph_KG_fhir_definitions.ndjson": DEFS}, False)
+
+    create = next(i for i, s in enumerate(executed)
+                  if "CREATE TABLE IF NOT EXISTS Graph_KG.fhir_definitions" in s)
+    insert = next(i for i, s in enumerate(executed)
+                  if s.startswith("INSERT INTO Graph_KG.fhir_definitions"))
+    assert create < insert
+
+
+def test_a_restore_without_fhir_rows_creates_no_fhir_table(tmp_path):
+    executed = _restore_recording(tmp_path, {}, False)
+    assert not any("fhir_" in s for s in executed)
+
+
+def test_a_merge_restore_keeps_every_fhir_row_of_a_graph(tmp_path):
+    """The merge guard compared the first column only, and here that is `graph_id`:
+    the second row of a graph matched the first and was skipped."""
+    executed = _restore_recording(tmp_path, {"Graph_KG_fhir_definitions.ndjson": DEFS}, True)
+
+    inserts = [s for s in executed if s.startswith("INSERT INTO Graph_KG.fhir_definitions")]
+    assert len(inserts) == 2
+    for s in inserts:
+        guard = s.split("WHERE NOT EXISTS", 1)[1]
+        for col in ("graph_id", "rsrc_key", "url", "version"):
+            assert col in guard, s
+    # A NULL column is matched as NULL, not as `= ?` (which is never true).
+    assert "version IS NULL" in inserts[1]

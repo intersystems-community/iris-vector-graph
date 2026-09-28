@@ -253,6 +253,70 @@ class ReconnectingNative:
         return _call_with_one_retry
 
 
+class SessionHeartbeat:
+    """Keeps the session-scoped connections from dying of idleness.
+
+    Measured against `ivg-iris-enterprise` from the host: a connection that has run
+    a query and then sits idle is alive at 300 s and gone at 420 s, on both the
+    OrbStack address and the published port, and the next call fails with `EPIPE`.
+    `arno_iris_connection` went unused for about six minutes in the full unit run
+    (`test_bfs_arno` to `test_rrf_fuse_e2e`), and every Enterprise test after that
+    failed at setup. See tests/unit/test_session_heartbeat.py.
+
+    `beat()` runs `SELECT 1` on each registered connection that has gone `interval`
+    seconds without one. It is called between tests, on the test thread, so it never
+    shares a connection with a running test. A dead connection is logged once at
+    `ERROR`; reopening it is not attempted, because the fixtures holding it cannot be
+    handed a new object.
+    """
+
+    def __init__(self, interval: float = 120.0, clock=None):
+        import time
+
+        self.interval = interval
+        self._clock = clock or time.monotonic
+        self._conns: dict = {}
+
+    def register(self, name: str, conn) -> None:
+        self._conns[name] = [conn, self._clock(), False]
+
+    def unregister(self, name: str) -> None:
+        self._conns.pop(name, None)
+
+    def beat(self) -> None:
+        now = self._clock()
+        for name, entry in list(self._conns.items()):
+            conn, last, reported = entry
+            if now - last < self.interval:
+                continue
+            entry[1] = now
+            cur = None
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.fetchall()
+            except Exception as exc:
+                if not reported:
+                    entry[2] = True
+                    logger.error(
+                        "Session connection %s did not answer its heartbeat (%s). "
+                        "Tests that use it from here on will fail at setup.", name, exc,
+                    )
+            finally:
+                if cur is not None:
+                    with contextlib.suppress(Exception):
+                        cur.close()
+
+
+_SESSION_HEARTBEAT = SessionHeartbeat()
+
+
+@pytest.fixture(autouse=True)
+def _session_connection_heartbeat():
+    _SESSION_HEARTBEAT.beat()
+    yield
+
+
 @pytest.fixture(scope="session")
 def iris_test_container():
     from iris_devtester import IRISContainer
@@ -515,9 +579,11 @@ def iris_connection(iris_test_container):
     # Hand the connection to the per-test width guard, which must not request this
     # fixture: requesting it would open the connection for every unit test.
     _RESOLVED_SESSION_CONN[0] = conn
+    _SESSION_HEARTBEAT.register("iris_connection", conn)
 
     yield conn
 
+    _SESSION_HEARTBEAT.unregister("iris_connection")
     _RESOLVED_SESSION_CONN[0] = None
     _restore_session_embedding_width(conn)
 
@@ -735,7 +801,9 @@ def arno_iris_connection():
         except Exception as e:
             logger.warning("arno container schema init: %s", e)
 
+    _SESSION_HEARTBEAT.register("arno_iris_connection", conn)
     yield conn
+    _SESSION_HEARTBEAT.unregister("arno_iris_connection")
     conn.close()
 
 

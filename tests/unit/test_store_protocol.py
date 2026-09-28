@@ -80,10 +80,12 @@ class MockGraphStore:
                             target_id=target_id, weight_property=weight_property, max_hops=max_hops)
 
     def execute_ppr(self, seed_ids, damping, max_iterations,
-                    bidirectional=False, reverse_edge_weight=1.0, *, graph=None):
+                    bidirectional=False, reverse_edge_weight=1.0, *, graph=None,
+                    exclude=None, limit=None):
         return self._record("execute_ppr", seed_ids=seed_ids, damping=damping,
                             max_iterations=max_iterations, bidirectional=bidirectional,
-                            reverse_edge_weight=reverse_edge_weight, graph=graph)
+                            reverse_edge_weight=reverse_edge_weight, graph=graph,
+                            exclude=exclude, limit=limit)
 
     def execute_pagerank(self, damping, max_iterations):
         return self._record("execute_pagerank", damping=damping, max_iterations=max_iterations)
@@ -223,6 +225,19 @@ class TestGraphStoreProtocol:
             f"{sorted(missing)}\n"
             f"Add stub implementations to MockGraphStore so the protocol check passes."
         )
+
+    def test_mock_execute_ppr_matches_protocol_keywords(self):
+        """Spec 235: `execute_ppr` gained `exclude` and `limit`; the mock takes the same
+        parameters, with the same defaults."""
+        want = inspect.signature(GraphStore.execute_ppr).parameters
+        got = inspect.signature(MockGraphStore.execute_ppr).parameters
+        assert list(got) == list(want)
+        for name in ("exclude", "limit"):
+            assert want[name].kind is inspect.Parameter.KEYWORD_ONLY
+            assert want[name].default is None and got[name].default is None
+        store = MockGraphStore()
+        store.execute_ppr(["a"], 0.85, 20, exclude=["p"], limit=0)
+        assert store.last_call["exclude"] == ["p"] and store.last_call["limit"] == 0
 
     def test_mock_records_calls(self):
         store = MockGraphStore()

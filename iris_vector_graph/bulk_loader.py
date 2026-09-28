@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from iris_vector_graph.exceptions import BulkLoadError
 from iris_vector_graph.prop_values import prop_text
 from iris_vector_graph.schema import _call_classmethod
+from iris_vector_graph.utils import execute_decoded, is_list_error
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +104,14 @@ class BulkLoader:
                 if commit_per_batch:
                     self._rollback()
                 err_str = str(e)
-                if not _is_duplicate(err_str):
+                # `<LIST ERROR>` hides the SQLCODE (`execute_decoded`); the row path
+                # below recovers it and decides duplicate or failure row by row.
+                if not _is_duplicate(err_str) and not is_list_error(e):
                     logger.error(f"{label} batch at {batch_start} failed: {e}")
                     raise BulkLoadError(label or "Batch", inserted, len(batch), err_str)
                 for row in batch:
                     try:
-                        cursor.execute(sql, row)
+                        execute_decoded(cursor, sql, row)
                         if commit_per_batch:
                             self.conn.commit()
                         inserted += 1

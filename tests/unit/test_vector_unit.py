@@ -326,8 +326,11 @@ class TestEdgeVectorSearch:
         cursor.close.return_value = None
         conn.cursor.return_value = cursor
         eng.edge_vector_search([1.0, 0.0, 0.0, 0.0], score_threshold=0.5)
-        sql = cursor.execute.call_args[0][0]
-        assert "0.5" in sql
+        sql, params = cursor.execute.call_args[0]
+        # Bound in WHERE, not a HAVING after ORDER BY (-25) or an inlined literal.
+        assert ">= ?" in sql and "HAVING" not in sql
+        assert sql.index(">= ?") < sql.index("ORDER BY")
+        assert params[-1] == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +438,11 @@ class TestVectorSearch:
         cursor.close.return_value = None
         conn.cursor.return_value = cursor
         eng.vector_search("S.T", "emb", [1.0, 0.0], score_threshold=0.7)
-        sql = cursor.execute.call_args[0][0]
-        assert "0.7" in sql
+        sql, params = cursor.execute.call_args[0]
+        # Bound in WHERE, not a HAVING after ORDER BY (-25) or an inlined literal.
+        assert ">= ?" in sql and "HAVING" not in sql
+        assert sql.index(">= ?") < sql.index("ORDER BY")
+        assert params[-1] == 0.7
 
     def test_return_cols_included_in_select(self):
         eng, conn, _ = _make_eng()

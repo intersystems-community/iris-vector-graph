@@ -173,6 +173,100 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.1.0 — FHIR repository as a graph, TCK strict/typed (2026-09-27, not released)
+
+Specs 231-235 (FHIR graph, canonical links, genomics, lazy `fhir_*` tables,
+interpretation contract) plus the openCypher TCK strict/typed result already on
+`main`. Measured on `235-fhir-graph-interpretation` against `ivg-iris-enterprise`
+(port 31972). Nothing is committed, tagged or published: `pyproject.toml` is still
+`4.0.0`.
+
+Found and fixed during the gate run, before release: a Cypher node `DELETE` with no
+`USE GRAPH` deleted by `node_id` alone, so it also removed labels and properties of
+graphs its `MATCH` never bound (edges and vectors are protected by the
+`(graph_id, node_id)` foreign keys). The capture now carries `graph_id` and each
+statement runs once per captured graph. Separately, under `USE GRAPH` the
+"node still has relationships" check was unscoped, so another graph's edges on the
+same ID refused the delete. Tests: `tests/unit/test_delete_graph_pairs.py` 15
+passed, `tests/e2e/test_delete_graph_scope_e2e.py` 4 passed; the E2E fails with the
+graph token ignored (negative control).
+
+| Gate                     | Status | Notes                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | known  | Work is uncommitted on `235-fhir-graph-interpretation`; 233 is merged into `main` (`2d92da2`)                                                                                                                                                                                                                                                     |
+| Unit tests               | pass   | Clean rerun: 12064 passed / 0 failed / 0 errors / 16 skipped. Two `test_vector_unit` threshold tests asserted the inlined literal; they now assert a bound `WHERE` term. The four `main` failures are fixed (234 `EdgeScan` pins repinned to `18feb40`, structural guard, v9a delete via `WITH`). The EPIPE errors were an idle drop, fixed below |
+| Integration tests        | pass   | Clean rerun with `IVG_SECONDARY_NAMESPACE=IVGSEC`: 2583 passed / 0 failed / 0 errors / 23 skipped / 1 xpassed (was 64 skipped). Skip classification below                                                                                                                                                                                         |
+| Integration (known)      | pass   | All fixed: `test_cypher_advanced` ×4 (fixture `execute_cypher` now delegates to `IRISGraphStore.execute_transaction`); `snapshot_inventory` (three `fhir_*` tables added to the snapshot plan); `<LIST ERROR>` in `bulk_loader_endpoints` / `nodepk_migration` (`utils.execute_decoded`, below)                                                   |
+| Story E2Es               | pass   | Spec 235 E2E files green on 31972; 231/232/233 FHIR E2Es unchanged                                                                                                                                                                                                                                                                                |
+| Demo E2Es                | pass   | Browser (Playwright, all three demos) 11/11; biomedical 11/11; demo units + E2E 39/39                                                                                                                                                                                                                                                             |
+| Coverage >= 89%          | pass   | 90% (29916 statements, 3134 missed); `--fail-under=89` exit 0. Translator 85%, down from 92% in the 00:46 run; cause not found (temporal tests add no lines the full run misses)                                                                                                                                                                  |
+| No benchmark regressions | waived | Same waiver as 4.0.0: `bench_utils.py` writes `SQLUser.*`                                                                                                                                                                                                                                                                                         |
+| Lint clean               | known  | `ruff check .` = 2188 findings, fewer than `main` (2202); new files clean                                                                                                                                                                                                                                                                         |
+| ObjectScript compiles    | 56/56  | `tcp-deploy` deployed and compiled 56 classes, 0 errors                                                                                                                                                                                                                                                                                           |
+| Known issues logged      | pass   | KNOWN_ISSUES records the graph-less `DELETE` reach (by design, same as `delete_node`) and both fixes                                                                                                                                                                                                                                              |
+| Version bump             | todo   | `pyproject.toml` at `4.0.0`; `.venv` reports 2.0.0 until `pip install -e .`                                                                                                                                                                                                                                                                       |
+| Documentation parity     | pass   | `docs/FHIR_GRAPH.md` user guide, README FHIR section, demo docs, `docs/releases/v4.1.0.md` drafted                                                                                                                                                                                                                                                |
+| PyPI + GitHub release    | todo   | Not started; needs explicit permission                                                                                                                                                                                                                                                                                                            |
+
+Integration skips, 64 → 23. The 41 that now run were hiding bugs or stale tests:
+
+- Hidden bugs, fixed: `vector_search` / `edge_vector_search` `score_threshold` was a
+  `HAVING` after `ORDER BY` (-25); it is a bound `WHERE` term now.
+  `list_active_queries` and `/admin/queries` returned `[]` always (a
+  `GetISCProduct()==4` guard, and `%SYS.ProcessQuery` has no `ClientName`/`Command`).
+  Biomedical `createProtein` dropped its embedding.
+- Stale tests, fixed: the advanced NodePK benchmarks (community-license skip on the
+  enterprise container, `e.id` matched the RowID, FLOAT vectors -259, duplicate random
+  edges -119); the embedding FK test (`<LIST ERROR>`, now `utils.execute_decoded`);
+  `test_vector_paths` threshold tests asserted the old -25 and its fixture declared
+  `emb` at 384, re-declaring the shared table every test (now the session width).
+- Missing environment, provided: scratch namespaces `IVGTEST` (maps to `USER`'s
+  database), `IVGREKEY` and `IVGSEC` (own databases; `IVGSEC` has `Graph.KG`
+  deployed). The FR-048 ledger test now purges `IVGSEC`'s ledger before and after, so
+  it passes on rerun.
+
+The 23 left are by design or environment: Arno `wcc`/`cdlp` not in this build (2);
+`sentence-transformers` absent path (1); embedded-Python only inside `irispython` (1);
+`graph_id` already `NOT NULL`, so the second spelling cannot exist (3);
+`rdf_props.s` FK removed for RDF 1.2 quoted triples (2); orphans cannot exist under
+the FKs, and unqualified-name migration cases (3); Docker-network timing (2);
+`RUN_PRODUCTION_SCALE` (4); the SQL PageRank benchmark is a test-local temp-table
+algorithm, not IVG code (3); `Graph_KG` cannot be dropped in a shared namespace (2).
+`test_233_arno_cache_stamp` skips when `PPRJson` falls back to `RunJson`, so the
+count is 23 or 24 depending on Arno state.
+
+`test_227_fresh_vs_migrated` fix (test-only). Since spec 234, `ensure_indexes` also
+appends `rdf_edges.ekey`, so the fixture's 3.2.0 rebuild no longer produced a 3.2.0
+table and setup failed. A setup error skips the teardown, which left `USER` half-3.2.0
+for every later test. The rebuild now skips the unique-key half, the fixture restores
+a fresh install when setup fails, and the migrated side runs the documented
+4.0.0→4.1.0 `initialize_schema()` step before it is compared.
+`test_227_fresh_vs_migrated` 25 passed, `test_227_migration` 13 passed.
+
+Shared-connection fixes (test harness and write path):
+
+- EPIPE: a host connection to `ivg-iris-enterprise` that has run a query dies after
+  300–420 s idle (alive at 300 s, dead at 420 s, on both `:1972` and `:31972`).
+  `arno_iris_connection` sat idle about 6 minutes between `test_bfs_arno` and
+  `test_rrf_fuse_e2e`. `SessionHeartbeat` in `tests/conftest.py` sends `SELECT 1`
+  between tests on session connections idle for 120 s or more.
+  `tests/unit/test_session_heartbeat.py` 9 passed. Repro: `test_bfs_arno`, a 420 s
+  sleep, then `test_rrf_fuse_e2e` fails; with the heartbeat, 23 passed.
+- `<LIST ERROR> ... IRISList`: after another connection runs `%BuildIndices`, a
+  `-119`/`-121` on a statement text the connection already used comes back as a list
+  format error. `utils.execute_decoded` reruns under a fresh trailing comment to get
+  the real SQLCODE; `BulkLoader` per-row fallback and `migrate_to_nodepk` use it.
+  `tests/integration/test_list_error_decode_live.py` reproduces it live.
+
+Coverage detail — no public-API module under 80%: `engine.py` 92, `_engine/query.py`
+90, `cypher/translator.py` 85, `_engine/nodes_edges.py` 95, `sdk.py` 95,
+`cypher_api.py` 97, `_engine/vector.py` 97, `_engine/embeddings.py` 94,
+`_engine/schema.py` 89, `_engine/fhir_graph.py` 99. Under 80%: `api_auth.py` 70% and
+`text_search.py` 79%, both unchanged, and `migrations/upgrade.py` 40%, the same
+measurement gap as 4.0.0. With `test_230_migration.py` appended it is 84%.
+
+Blocking before §9: bump the version. The test and coverage gates are clear.
+
 ### 4.0.0 — per-graph embeddings and the pre-4.0.0 correctness sweep (2026-09-22)
 
 Spec 227 (embeddings become a graph-scoped, per-model resource) plus spec 230 (the

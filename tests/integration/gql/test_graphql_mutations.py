@@ -104,8 +104,7 @@ class TestCreateProteinMutation:
                       ("PROTEIN:TEST_CREATE", "name"))
         assert cursor.fetchone()[0] == "Test Protein"
 
-    @pytest.mark.skip(reason="kg_NodeEmbeddings requires VECTOR type support not available in test environment")
-    async def test_create_protein_with_embedding(self, engine):
+    async def test_create_protein_with_embedding(self, iris_connection, engine):
         """Test createProtein with 768-dimensional embedding vector"""
         # Cleanup any existing test data first
         cursor = iris_connection.cursor()
@@ -436,8 +435,7 @@ class TestDeleteProteinMutation:
         cursor.execute("SELECT COUNT(*) FROM rdf_props WHERE s = ?", ("PROTEIN:DELETE_TEST",))
         assert cursor.fetchone()[0] == 0
 
-    @pytest.mark.skip(reason="kg_NodeEmbeddings requires VECTOR type support not available in test environment")
-    async def test_delete_protein_with_embedding(self, engine):
+    async def test_delete_protein_with_embedding(self, iris_connection, engine):
         """Test deleteProtein removes embedding (FK cascade)"""
         # Setup with embedding
         cursor = iris_connection.cursor()

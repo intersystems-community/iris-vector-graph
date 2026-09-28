@@ -212,12 +212,17 @@ class TestAdminE2E:
             assert "status" in data
 
     def test_admin_queries_e2e(self, live_client):
-        """Admin queries endpoint — method exists and is callable.
-        The /admin/queries route calls list_active_queries() which is safe
-        on Community IRIS (GetISCProduct=4 guard returns []). Route tested
-        via mock in test_cypher_api_admin.py; skip live call to avoid
-        threading-context segfault with TestClient."""
-        pytest.skip("list_active_queries segfaults in TestClient thread context on Community IRIS")
+        """Admin queries endpoint lists active queries against live IRIS.
+
+        It was skipped for a segfault blamed on Community IRIS; the crash was the
+        old statement's Prepare error under FETCH FIRST (see
+        tests/unit/test_active_queries_sql.py). The listing sees itself running.
+        """
+        tc, _ = live_client
+        resp = tc.get("/admin/queries")
+        assert resp.status_code == 200, resp.text
+        commands = [q["command"].upper() for q in resp.json()["queries"]]
+        assert any("CURRENT_STATEMENTS" in c for c in commands), commands
 
     def test_admin_explain_e2e(self, live_client):
         """Admin explain — translates Cypher to SQL and returns plan."""

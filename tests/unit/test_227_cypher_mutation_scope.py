@@ -34,6 +34,8 @@ in reader-inventory.md §10.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from iris_vector_graph.cypher.parser import parse_query
@@ -147,6 +149,11 @@ def test_a_scoped_remove_removes_only_that_graphs_row(cypher):
 def test_an_unscoped_mutation_is_left_alone():
     """No `USE GRAPH` keeps 3.2.0 reach. Narrowing it to the default graph would
     stop deleting rows callers expect to be deleted — a silent behaviour change
-    dressed as a fix."""
+    dressed as a fix.
+
+    The only graph predicate allowed is `graph_id = __GRAPH_<key>__`: the graph of
+    each row the MATCH bound, filled in from the capture (`test_delete_graph_pairs`).
+    It names no graph of its own, so every bound row is still deleted."""
     for stmt in _statements("MATCH (n {node_id: 'x'}) DETACH DELETE n"):
-        assert "graph_id" not in stmt, f"an unscoped delete grew a graph predicate:\n{stmt}"
+        rest = re.sub(r"graph_id = __GRAPH_\w+?__|, n0\.graph_id\b", "", stmt)
+        assert "graph_id" not in rest, f"an unscoped delete grew a graph predicate:\n{stmt}"

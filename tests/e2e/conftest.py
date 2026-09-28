@@ -370,4 +370,5 @@ from tests.e2e.fhir_conftest import (  # noqa: E402,F401
     fhir_engine,
     fhir_loader,
     genomics_loaded,
+    synthea_loaded,
 )

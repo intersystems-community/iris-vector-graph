@@ -24,6 +24,16 @@ def get_fraud_client() -> FraudAPIClient:
     return _fraud_client
 
 
+def scoring_mode() -> str:
+    """What the next score will come from, in words for the page."""
+    c = get_fraud_client()
+    if c.demo_mode:
+        return "Demo heuristic (DEMO_MODE=true): scores come from the amount alone"
+    if c.circuit_breaker.is_open():
+        return f"Demo heuristic: fraud API at {c.base_url} is failing, circuit open"
+    return f"Fraud API at {c.base_url} (falls back to the demo heuristic if it fails)"
+
+
 def register_fraud_routes(app):
     """Register fraud detection endpoints"""
 
@@ -124,8 +134,8 @@ def register_fraud_routes(app):
             metrics = QueryPerformanceMetrics(
                 query_type="fraud_score",
                 execution_time_ms=int((time.time() - start_time) * 1000),
-                backend_used="fraud_api" if not fraud_client.circuit_breaker.is_open()
-                            else "cached_demo",
+                backend_used="demo_heuristic" if scoring_result.scoring_model == "demo_heuristic"
+                            else "fraud_api",
                 result_count=1,
                 search_methods=[scoring_result.scoring_model],
                 timestamp=datetime.utcnow()
@@ -237,7 +247,12 @@ def register_fraud_routes(app):
 
                 # Transaction Graph Visualization
                 Div(cls="audit-section")(
-                    H3("Transaction Network Graph (12 nodes)"),
+                    H3("Transaction context (illustrative)"),
+                    P(style="color: #718096; font-size: 0.875rem; margin-bottom: 0.5rem;")(
+                        "Payer, device, merchant and IP come from this transaction. The historical "
+                        "transactions and related devices and merchants are placeholders showing the "
+                        "shape of the graph; they are not read from IRIS."
+                    ),
                     Div(id="graph"),
                     Script(f"""
                         const data = {json.dumps(graph_data)};

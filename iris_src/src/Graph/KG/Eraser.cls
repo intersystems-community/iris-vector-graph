@@ -900,14 +900,20 @@ ClassMethod EraseFHIRGraphRows(pName As %String, pAll As %Boolean) [ Private ]
 	For tStep = 1:1:$ListLength(tStores) {
 		Set tStore = $List(tStores, tStep)
 		If tStore = "Graph_KG.fhir_graphs" {
-			Set tSql = "UPDATE " _ tStore _ " SET wm_rsrc = 0, wm_ver = 0" _ tWhere
+			// interp_version = NULL makes the next sync re-derive (spec 235). A table
+			// from before spec 235 has no such column (-29) and is reset without it.
+			Set tSql = "UPDATE " _ tStore _ " SET wm_rsrc = 0, wm_ver = 0, interp_version = NULL" _ tWhere
 		} Else {
 			Set tSql = "DELETE FROM " _ tStore _ tWhere
 		}
-		If pAll {
-			Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql)
-		} Else {
-			Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql, pName)
+		For tTry = 1, 2 {
+			If pAll {
+				Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql)
+			} Else {
+				Set tRs = ##class(%SQL.Statement).%ExecDirect(, tSql, pName)
+			}
+			Quit:(tRs.%SQLCODE '= -29)||(tStore '= "Graph_KG.fhir_graphs")
+			Set tSql = $Replace(tSql, ", interp_version = NULL", "")
 		}
 		If (tRs.%SQLCODE < 0) && (tRs.%SQLCODE '= -30) {
 			$$$ThrowStatus(..SqlErr(tStore, tRs.%SQLCODE))

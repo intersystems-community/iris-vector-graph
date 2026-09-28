@@ -6,6 +6,10 @@ import json
 from typing import Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
+from importlib.util import find_spec
+
+# HTTP/2 needs the optional `h2` package; without it httpx refuses to build the client.
+HTTP2 = find_spec("h2") is not None
 
 
 class CircuitBreaker:
@@ -50,7 +54,7 @@ class FraudAPIClient:
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=10.0),
             limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            http2=True
+            http2=HTTP2
         )
         self.circuit_breaker = CircuitBreaker()
 

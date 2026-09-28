@@ -101,6 +101,7 @@ class CypherRequest(BaseModel):
     fhir_patient_id: str | None = None
     fhir_base_url: str | None = None
     fhir_auth: tuple[str, str] | list[str] | None = None
+    fhir_graph: str | None = None
 
 
 @app.websocket("/")
@@ -259,16 +260,42 @@ def _resolve_patient_anchors(req: CypherRequest) -> list[str]:
     return get_kg_anchors(engine, icd_codes)
 
 
+def _patient_anchors(req: CypherRequest) -> dict:
+    """Anchors from a synced FHIR graph that holds the patient, even an empty list;
+    otherwise from the external bridge, unchanged (spec 235, research R15). ``ids``
+    is what the query sees as ``$patient_anchors``."""
+    try:
+        found = _get_engine().fhir_patient_anchors(req.fhir_patient_id, graph=req.fhir_graph)
+    except Exception:
+        found = {"graphs": []}
+    if found.get("graphs"):
+        anchors = list(found.get("anchors") or [])
+        return {
+            "anchor_source": "graph",
+            "ids": list(dict.fromkeys(a["id"] for a in anchors)),
+            "anchors": anchors,
+        }
+    ids = _resolve_patient_anchors(req)
+    return {
+        "anchor_source": "fhir_bridge",
+        "ids": ids,
+        "anchors": [{"id": i, "graph": None} for i in ids],
+    }
+
+
 @app.post("/api/cypher")
 def cypher_query(req: CypherRequest):
     trace_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     try:
         params = dict(req.parameters)
+        found = None
         if req.fhir_patient_id:
-            anchors = _resolve_patient_anchors(req)
-            params["patient_anchors"] = anchors
+            found = _patient_anchors(req)
+            params["patient_anchors"] = found["ids"]
         result = _run_cypher(req.query, params, req.limitRows)
+        if found is not None:
+            result = {**result, "anchor_source": found["anchor_source"], "anchors": found["anchors"]}
         duration = int((time.time() - t0) * 1000)
         _log("POST", "/api/cypher", 200, duration, trace_id)
         return result
@@ -569,10 +596,9 @@ def admin_list_queries():
         eng = _get_engine()
         cursor = eng.conn.cursor()
         try:
-            cursor.execute(
-                "SELECT ID, State, ClientName, Command FROM %SYS.ProcessQuery "
-                "WHERE Command IS NOT NULL FETCH FIRST 50 ROWS ONLY"
-            )
+            from iris_vector_graph._engine.admin import active_queries_sql
+
+            cursor.execute(active_queries_sql(50))
             rows = cursor.fetchall()
             queries = [
                 {"id": str(r[0]), "state": r[1], "client": r[2], "command": str(r[3])[:200]}

@@ -293,6 +293,85 @@ class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
 
     @staticmethod
+    def get_fhir_graph_schema_sql() -> str:
+        """The FHIR-graph tables (specs 231, 232, 235).
+
+        Not part of :meth:`get_base_schema_sql`: the first ``fhir_graph_register``
+        runs this, so a namespace that never registers a FHIR repository has none of
+        these tables. Every statement is idempotent or fails with "already exists".
+        """
+        return """
+-- spec 231: one row per FHIR repository projected as a named graph. The watermarks
+-- are the highest Rsrc.ID and RsrcVer.ID a sync has consumed; they move inside the
+-- same transaction as the edges they account for.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_graphs (
+    graph_id      VARCHAR(256) %EXACT NOT NULL,
+    repo_id       VARCHAR(64) NOT NULL,
+    rsrc_schema   VARCHAR(128) NOT NULL,
+    search_schema VARCHAR(128) NOT NULL,
+    ver_schema    VARCHAR(128) NOT NULL,
+    endpoints     VARCHAR(4000) DEFAULT '[]',
+    denylist      VARCHAR(4000) DEFAULT '[]',
+    interval_s    INTEGER DEFAULT 60,
+    wm_rsrc       BIGINT DEFAULT 0,
+    wm_ver        BIGINT DEFAULT 0,
+    task_id       VARCHAR(64),
+    last_sync     TIMESTAMP,
+    last_rebuild  TIMESTAMP,
+    last_error    VARCHAR(4000),
+    last_counts   VARCHAR(32000),
+    json_links    VARCHAR(8000),
+    -- spec 235: Graph.KG.FHIRGraph INTERPVERSION of the last full interpretation.
+    -- NULL (synced before spec 235, or erased) makes the next sync re-derive every resource once.
+    interp_version INTEGER,
+    CONSTRAINT pk_fhir_graphs PRIMARY KEY (graph_id)
+);
+
+-- spec 231: a reference that did not become an edge, and why (external, missing,
+-- deleted; spec 232 adds version-not-found, ambiguous, no-definition). Owned by its
+-- source key: a resync replaces the source's rows.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_unresolved (
+    graph_id VARCHAR(256) %EXACT NOT NULL,
+    source   VARCHAR(256) %EXACT NOT NULL,
+    param    VARCHAR(128) %EXACT NOT NULL,
+    target   VARCHAR(512) %EXACT NOT NULL,
+    reason   VARCHAR(32) NOT NULL
+);
+
+CREATE INDEX idx_fhir_unres_source ON Graph_KG.fhir_unresolved (graph_id, source);
+CREATE INDEX idx_fhir_unres_target ON Graph_KG.fhir_unresolved (graph_id, target);
+
+-- spec 232: the canonical url and version each definitional key declared at its last
+-- sync, so a url edit can find the referrers of the old url. The repository index
+-- keeps 220 characters of a url or version, so these columns do too.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_definitions (
+    graph_id VARCHAR(256) %EXACT NOT NULL,
+    rsrc_key VARCHAR(256) %EXACT NOT NULL,
+    url      VARCHAR(220) %EXACT NOT NULL,
+    version  VARCHAR(220) %EXACT,
+    CONSTRAINT pk_fhir_definitions PRIMARY KEY (graph_id, rsrc_key)
+);
+
+CREATE INDEX idx_fhir_def_url ON Graph_KG.fhir_definitions (graph_id, url);
+
+-- spec 232: every canonical (and extension Reference) link a source carries, resolved
+-- or not. origin is 'index' or the json link entry; kind is canonical or reference.
+-- Owned by its source key: a resync replaces the source's rows.
+CREATE TABLE IF NOT EXISTS Graph_KG.fhir_canonical_refs (
+    graph_id VARCHAR(256) %EXACT NOT NULL,
+    source   VARCHAR(256) %EXACT NOT NULL,
+    param    VARCHAR(128) %EXACT NOT NULL,
+    url      VARCHAR(512) %EXACT NOT NULL,
+    version  VARCHAR(220) %EXACT,
+    origin   VARCHAR(1024) %EXACT NOT NULL,
+    kind     VARCHAR(16) NOT NULL
+);
+
+CREATE INDEX idx_fhir_cref_source ON Graph_KG.fhir_canonical_refs (graph_id, source);
+CREATE INDEX idx_fhir_cref_url ON Graph_KG.fhir_canonical_refs (graph_id, url);
+"""
+
+    @staticmethod
     def get_base_schema_sql(
         embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION,
     ) -> str:
@@ -418,72 +497,6 @@ CREATE TABLE IF NOT EXISTS Graph_KG.fhir_bridges (
 CREATE INDEX idx_bridges_code_type ON Graph_KG.fhir_bridges (fhir_code, bridge_type);
 CREATE INDEX idx_bridges_kg_node ON Graph_KG.fhir_bridges (kg_node_id);
 CREATE INDEX idx_bridges_type ON Graph_KG.fhir_bridges (bridge_type);
-
--- spec 231: one row per FHIR repository projected as a named graph. The watermarks
--- are the highest Rsrc.ID and RsrcVer.ID a sync has consumed; they move inside the
--- same transaction as the edges they account for.
-CREATE TABLE IF NOT EXISTS Graph_KG.fhir_graphs (
-    graph_id      VARCHAR(256) %EXACT NOT NULL,
-    repo_id       VARCHAR(64) NOT NULL,
-    rsrc_schema   VARCHAR(128) NOT NULL,
-    search_schema VARCHAR(128) NOT NULL,
-    ver_schema    VARCHAR(128) NOT NULL,
-    endpoints     VARCHAR(4000) DEFAULT '[]',
-    denylist      VARCHAR(4000) DEFAULT '[]',
-    interval_s    INTEGER DEFAULT 60,
-    wm_rsrc       BIGINT DEFAULT 0,
-    wm_ver        BIGINT DEFAULT 0,
-    task_id       VARCHAR(64),
-    last_sync     TIMESTAMP,
-    last_rebuild  TIMESTAMP,
-    last_error    VARCHAR(4000),
-    last_counts   VARCHAR(32000),
-    json_links    VARCHAR(8000),
-    CONSTRAINT pk_fhir_graphs PRIMARY KEY (graph_id)
-);
-
--- spec 231: a reference that did not become an edge, and why (external, missing,
--- deleted; spec 232 adds version-not-found, ambiguous, no-definition). Owned by its
--- source key: a resync replaces the source's rows.
-CREATE TABLE IF NOT EXISTS Graph_KG.fhir_unresolved (
-    graph_id VARCHAR(256) %EXACT NOT NULL,
-    source   VARCHAR(256) %EXACT NOT NULL,
-    param    VARCHAR(128) %EXACT NOT NULL,
-    target   VARCHAR(512) %EXACT NOT NULL,
-    reason   VARCHAR(32) NOT NULL
-);
-
-CREATE INDEX idx_fhir_unres_source ON Graph_KG.fhir_unresolved (graph_id, source);
-CREATE INDEX idx_fhir_unres_target ON Graph_KG.fhir_unresolved (graph_id, target);
-
--- spec 232: the canonical url and version each definitional key declared at its last
--- sync, so a url edit can find the referrers of the old url. The repository index
--- keeps 220 characters of a url or version, so these columns do too.
-CREATE TABLE IF NOT EXISTS Graph_KG.fhir_definitions (
-    graph_id VARCHAR(256) %EXACT NOT NULL,
-    rsrc_key VARCHAR(256) %EXACT NOT NULL,
-    url      VARCHAR(220) %EXACT NOT NULL,
-    version  VARCHAR(220) %EXACT,
-    CONSTRAINT pk_fhir_definitions PRIMARY KEY (graph_id, rsrc_key)
-);
-
-CREATE INDEX idx_fhir_def_url ON Graph_KG.fhir_definitions (graph_id, url);
-
--- spec 232: every canonical (and extension Reference) link a source carries, resolved
--- or not. origin is 'index' or the json link entry; kind is canonical or reference.
--- Owned by its source key: a resync replaces the source's rows.
-CREATE TABLE IF NOT EXISTS Graph_KG.fhir_canonical_refs (
-    graph_id VARCHAR(256) %EXACT NOT NULL,
-    source   VARCHAR(256) %EXACT NOT NULL,
-    param    VARCHAR(128) %EXACT NOT NULL,
-    url      VARCHAR(512) %EXACT NOT NULL,
-    version  VARCHAR(220) %EXACT,
-    origin   VARCHAR(1024) %EXACT NOT NULL,
-    kind     VARCHAR(16) NOT NULL
-);
-
-CREATE INDEX idx_fhir_cref_source ON Graph_KG.fhir_canonical_refs (graph_id, source);
-CREATE INDEX idx_fhir_cref_url ON Graph_KG.fhir_canonical_refs (graph_id, url);
 
 -- spec 231: a code in a code system maps to a node in a graph. Supersedes fhir_bridges,
 -- which is migrated in with relation 'related' and source 'fhir_bridges'.

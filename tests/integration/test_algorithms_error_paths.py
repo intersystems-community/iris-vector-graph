@@ -214,14 +214,11 @@ class TestKGSubgraph:
         except (AttributeError, Exception):
             pytest.skip("kg_SUBGRAPH not exposed or not implemented")
 
-    def test_subgraph_high_level(self, alg_eng):
-        try:
-            result = alg_eng.subgraph(
-                seed_ids=["alg_0"], k_hops=1, edge_types=[], max_nodes=5
-            )
-            assert result is not None
-        except AttributeError:
-            pytest.skip("subgraph method not available")
+    def test_subgraph_one_hop(self, alg_eng):
+        # The engine has no `subgraph`; this called it and skipped on AttributeError.
+        result = alg_eng.kg_SUBGRAPH(seed_ids=["alg_0"], k_hops=1, max_nodes=5)
+        assert "alg_0" in result.nodes and "alg_1" in result.nodes
+        assert "alg_2" not in result.nodes
 
 
 # ---------------------------------------------------------------------------

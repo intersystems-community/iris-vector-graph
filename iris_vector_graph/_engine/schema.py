@@ -495,6 +495,31 @@ class SchemaMixin:
             logger.debug("Registry migration step %s skipped: %s", what, e)
             return False
 
+    def _ensure_fhir_graph_columns(self, cursor) -> bool:
+        """Add ``fhir_graphs.interp_version`` (spec 235) where a pre-235 schema lacks it.
+        No backfill: NULL is stale, so the next sync re-derives the graph once.
+
+        True when the column exists afterwards; False when there is no
+        ``fhir_graphs`` table or the ALTER fails, which is logged, not raised.
+        ``Graph.KG.FHIRGraph`` adds the same column itself when it is missing."""
+        table = "Graph_KG.fhir_graphs"
+        try:
+            cursor.execute(f"SELECT interp_version FROM {table} WHERE 1 = 0")
+            return True
+        except Exception:
+            pass
+        try:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN interp_version INTEGER")
+            self.conn.commit()
+            return True
+        except Exception as e:
+            err = str(e).lower()
+            if "already" in err or "duplicate" in err:
+                return True
+            if "not found" not in err:
+                logger.warning("Could not add %s.interp_version: %s", table, e)
+            return False
+
     def _ensure_embedding_quarantine(self, cursor) -> bool:
         """Create ``embedding_quarantine`` if absent. True when it exists afterwards.
 
@@ -1907,6 +1932,9 @@ class SchemaMixin:
         # lazily by the migration: a row whose graph cannot be recovered needs a
         # destination at the moment it is found.
         self._ensure_embedding_quarantine(cursor)
+
+        # 3b-iii. spec 235: the FHIR graph interpretation marker on pre-235 registries.
+        self._ensure_fhir_graph_columns(cursor)
 
         # 3c. Adopt whatever the columns already declare (spec 226, FR-006). Runs before
         # the migration below so the recorded expectation exists before a width can move,

@@ -200,17 +200,18 @@ def test_the_two_hop_counts_survive_a_round_trip(engine, tmp_path):
     engine.create_edge("b", "KNOWS", "c", graph=GRAPH)
     engine.sync()
 
-    before = _kg(engine, "deg2p", GRAPH, "a")
-    if before == "":
-        pytest.skip("this install does not maintain ^KG(\"deg2p\") on sync")
+    # Keyed (graph, src, pred): without the predicate the read lands on an
+    # interior node and comes back empty.
+    before = _kg(engine, "deg2p", GRAPH, "a", "KNOWS")
+    assert before == "1", "sync did not build ^KG(\"deg2p\")"
 
     path = str(tmp_path / "snap.zip")
     engine.save_snapshot(path)
     engine.erase_all()
-    assert _kg(engine, "deg2p", GRAPH, "a") == ""
+    assert _kg(engine, "deg2p", GRAPH, "a", "KNOWS") == ""
     engine.restore_snapshot(path)
 
-    assert _kg(engine, "deg2p", GRAPH, "a") == before, (
+    assert _kg(engine, "deg2p", GRAPH, "a", "KNOWS") == before, (
         "the two-hop count did not survive the round trip"
     )
 

@@ -219,24 +219,41 @@ def catalogs(iris_connection):
     if iris_connection is None:
         pytest.fail("no live IRIS connection: a catalog cannot be mocked")
 
-    _rebuild_320(iris_connection)
-    # The migrated catalog is only the upgraded one if the upgrade had 3.2.0 to work on.
-    _assert_is_320(iris_connection)
-    env = Env320(iris_connection)
-    env.node("ivg227fvm:1")
-    env.label("ivg227fvm:1")
-    env.vector("ivg227fvm:1")
-    env.vector("ivg227fvm:1", table="kg_NodeEmbeddings_optimized")
-    env.commit()
-    report = migrate_to_graph_scoped_embeddings(iris_connection)
-    assert report.rows_placed, (
-        "the migration placed nothing, so the catalog it produced is not the upgraded "
-        f"one this compares: {report.rows_placed} / {report.rows_quarantined}"
-    )
-    migrated = _catalog(iris_connection)
+    # A setup error skips the teardown below, and the rebuild leaves the shared
+    # namespace at 3.2.0 or half-way there: every later test then fails on a missing
+    # `graph_id`. So a failed setup restores the namespace before it reports.
+    try:
+        _rebuild_320(iris_connection)
+        # The migrated catalog is only the upgraded one if the upgrade had 3.2.0 to work on.
+        _assert_is_320(iris_connection)
+        env = Env320(iris_connection)
+        env.node("ivg227fvm:1")
+        env.label("ivg227fvm:1")
+        env.vector("ivg227fvm:1")
+        env.vector("ivg227fvm:1", table="kg_NodeEmbeddings_optimized")
+        env.commit()
+        report = migrate_to_graph_scoped_embeddings(iris_connection)
+        assert report.rows_placed, (
+            "the migration placed nothing, so the catalog it produced is not the upgraded "
+            f"one this compares: {report.rows_placed} / {report.rows_quarantined}"
+        )
+        # 4.0.0 -> 4.1.0 is the documented second step
+        # (docs/migration/upgrading-from-older-releases.md): `initialize_schema()`
+        # appends `rdf_edges.ekey` and swaps `u_spo_graph` for `u_spo_graph_ekey`.
+        # Without it this compares a 4.0.0 upgrade against a 4.1.0 fresh install.
+        from iris_vector_graph import IRISGraphEngine
 
-    _install_fresh(iris_connection, DIM)
-    fresh = _catalog(iris_connection)
+        IRISGraphEngine(iris_connection, embedding_dimension=DIM).initialize_schema(
+            auto_deploy_objectscript=False
+        )
+        migrated = _catalog(iris_connection)
+
+        _install_fresh(iris_connection, DIM)
+        fresh = _catalog(iris_connection)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            _install_fresh(iris_connection, 768)
+        raise
 
     yield migrated, fresh
 
@@ -283,7 +300,8 @@ def test_the_upgrade_appends_graph_id_where_a_fresh_install_declares_it_first(
 
     3.2.0's `rdf_labels`, `rdf_props` and `rdf_edges` have no `graph_id`, and the
     upgrade adds it with `ALTER TABLE … ADD COLUMN`, which puts it last; the 4.0.0 DDL
-    declares it first. Rebuilding those three tables to fix the position would mean
+    declares it first. On `rdf_edges` the 4.1.0 step then appends `ekey` (spec 234)
+    after it, where the 4.1.0 DDL declares `ekey` last already. Rebuilding those three tables to fix the position would mean
     copying every row of `rdf_edges` — the largest table in the schema — for a
     difference no named-column statement can observe. It is visible to `SELECT *` and
     to an `INSERT` with no column list, so it is documented rather than hidden.
@@ -293,9 +311,10 @@ def test_the_upgrade_appends_graph_id_where_a_fresh_install_declares_it_first(
     ALTER on one path only still fails here.
     """
     migrated, fresh = catalogs
+    appended = ["graph_id", "ekey"] if table == "rdf_edges" else ["graph_id"]
     assert migrated["order"][table] == [
-        c for c in fresh["order"][table] if c != "graph_id"
-    ] + ["graph_id"]
+        c for c in fresh["order"][table] if c not in appended
+    ] + appended
 
 
 @pytest.mark.parametrize("table", _COMPARED)
