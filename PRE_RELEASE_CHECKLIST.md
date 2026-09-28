@@ -267,6 +267,20 @@ measurement gap as 4.0.0. With `test_230_migration.py` appended it is 84%.
 
 Version bumped; §9 ran on Tom's "commit and merge to main; version bump, publish!".
 
+§9: `235-fhir-graph-interpretation` merged into `main` with `--no-ff` (`a429f4a`), release
+commit `477f9c3`, `main` pushed (`ec3a00d..477f9c3`, which also carries the unpushed 233
+merge `2d92da2`), annotated tag `v4.1.0` pushed, and the 235 branch pushed. Both artifacts
+passed `twine check` and were uploaded to PyPI. The sdist is 33 MB, against 32 MB for
+4.0.0. GitHub release `v4.1.0` was created from `docs/releases/v4.1.0.md`, with the
+preamble stripped and relative links rewritten to `blob/v4.1.0` URLs. No assets attached.
+
+Verified after publishing: PyPI JSON reports `latest: 4.1.0` with both filenames. A clean
+venv install of `iris-vector-graph==4.1.0` from PyPI reports `4.1.0` from both
+`importlib.metadata` and `__version__`, and imports `_engine.admin.active_queries_sql`.
+`gh release view` reports `isDraft: false`, `isPrerelease: false`.
+
+Date: **2026-09-28** Release: **4.1.0 published**
+
 ### 4.0.0 — per-graph embeddings and the pre-4.0.0 correctness sweep (2026-09-22)
 
 Spec 227 (embeddings become a graph-scoped, per-model resource) plus spec 230 (the
