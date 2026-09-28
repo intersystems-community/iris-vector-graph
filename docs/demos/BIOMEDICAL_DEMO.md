@@ -1,129 +1,110 @@
 # Biomedical Research Demo
 
-The biomedical demo shows how IVG combines vector similarity search with graph traversal to navigate protein interaction networks — a pattern applicable to drug target discovery, pathway analysis, and literature mining.
+The biomedical demo is a small protein interaction graph: find proteins by name or
+annotation, draw a protein's interaction network, and find the shortest path between two
+proteins. It runs against a seeded named graph, `bio:demo`, so every number on the page
+comes from IRIS.
 
 ## Running the Demo
 
 ```bash
-docker compose up -d
-pip install "iris-vector-graph[full]"
-python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1 --app-dir src
+scripts/enterprise-container.sh up          # ivg-iris-enterprise, port 31972
+cd src
+PYTHONPATH=.:.. python -m iris_demo_server.services.bio_demo_data   # seed bio:demo
+python -m uvicorn iris_demo_server.app:app --port 8200 --host 127.0.0.1
 open http://localhost:8200/bio
 ```
 
-## What It Demonstrates
+The seed is idempotent: a graph that already holds exactly the seed is left alone, and
+anything else in `bio:demo` is erased and reloaded. The landing page (`/`) shows whether
+the graph is reachable and how many proteins and interactions it holds.
 
-### Three Pre-Built Scenarios
+Connection settings come from `IVG_BIO_HOST`, `IVG_BIO_PORT`, `IVG_BIO_NAMESPACE`,
+`IVG_BIO_USER` and `IVG_BIO_PASSWORD`, then the FHIR demo's `IVG_FHIR_*` variables, then
+`localhost:31972`, namespace `IVGFHIR`, `_SYSTEM`/`SYS`.
 
-| Scenario          | Query                   | Purpose                                           |
-| ----------------- | ----------------------- | ------------------------------------------------- |
-| Cancer protein    | TP53 (tumor suppressor) | Find structurally similar proteins across species |
-| Metabolic pathway | GAPDH → LDHA (2 hops)   | Trace glycolysis pathway connections              |
-| Drug target       | Kinase inhibitor search | Find proteins targetable by a drug class          |
+## The seed graph
 
-### Vector Similarity Search
+`src/iris_demo_server/services/bio_demo_data.py` holds 33 human proteins keyed by HGNC
+gene symbol and 38 interactions in three neighbourhoods:
 
-Proteins are embedded using sequence and structural features. The demo finds the `top_k` proteins most similar to a query protein:
+- the p53 network (TP53, MDM2, ATM, CHEK2, CDKN1A, BAX, BCL2 and others);
+- the EGFR/RAS/MAPK kinase cascade and its approved inhibitors' targets (EGFR, ERBB2,
+  KRAS, BRAF, MAP2K1, ABL1, JAK2, PIK3CA);
+- glycolysis from GAPDH to LDHA, with HIF1A regulating it.
 
-```cypher
-CALL ivg.vector.search('Protein', 'emb', $query_vector, 10)
-YIELD node, score
-RETURN node.id, node.name, node.organism, score
-ORDER BY score DESC
+The interactions are well-known ones. The confidence values are illustrative, not STRING
+scores.
+
+```text
+(:Protein {id: "protein:TP53", symbol, name, annotation, organism})
+  -[:interacts_with {qualifiers: {"type": "inhibition", "confidence": 0.99}}]->
+(:Protein {id: "protein:MDM2", ...})
 ```
 
-Similarity thresholds:
+Interaction types are `binding`, `phosphorylation`, `activation`, `inhibition`,
+`regulation` and `pathway`. Search, networks and paths treat edges as undirected.
 
-- **Very High** (≥ 0.9) — likely same protein family
-- **High** (≥ 0.75) — related function or structural homolog
-- **Moderate** (≥ 0.5) — distant relationship, worth investigating
-- **Low** (< 0.5) — weak signal
+## Three scenarios
 
-### Graph Traversal: Protein Interaction Networks
+| Scenario          | Input                              | What the page shows                          |
+| ----------------- | ---------------------------------- | -------------------------------------------- |
+| Cancer protein    | Name search `TP53`                 | TP53 first (exact symbol), then its network  |
+| Metabolic pathway | `GAPDH` → `LDHA`, max 5 hops       | GAPDH, PGK1, PGAM1, ENO1, PKM, LDHA (5 hops) |
+| Drug target       | Function search `kinase inhibitor` | EGFR, ERBB2, KIT, ABL1, BRAF, JAK2 and more  |
 
-From any protein, traverse interaction edges to find pathway neighbors:
+### Search is text matching
 
-```cypher
-MATCH (p:Protein {id: $protein_id})-[r:INTERACTS_WITH|ACTIVATES|INHIBITS*1..2]->(neighbor)
-RETURN neighbor.id, neighbor.name, type(r) LIMIT 25
-```
+The demo graph has no embeddings, so search does not use vector similarity:
 
-Edge types and their visual encoding in the D3 force graph:
+- **Name search** matches the query against `symbol` and `name`, case-insensitive. An
+  exact symbol scores 1.0; any other match scores 0.8.
+- **Function search** scores each protein by the fraction of query terms its
+  `annotation` contains. `kinase inhibitor` scores 1.0 for proteins whose annotation
+  names both words and 0.5 for one.
 
-- `ACTIVATES` → green edges (stimulatory)
-- `INHIBITS` → red edges (inhibitory)
-- `BINDS` → blue edges (physical binding)
-- `INTERACTS_WITH` → grey edges (general)
+The results panel shows the SQL it ran. Every query reads `Graph_KG.rdf_props` and
+`Graph_KG.rdf_edges` with `graph_id = 'bio:demo'`, so a same-named node in another graph
+of the namespace never reaches the page (`tests/e2e/test_bio_demo_e2e.py` checks this).
 
-### Hybrid Search: Vector + Graph
+### Networks and paths
 
-The power of IVG is combining both modalities in one query: find similar proteins _and_ their network neighborhood.
+- **Network** is a breadth-first expansion from one protein, capped at 500 nodes.
+- **Pathway** is an undirected breadth-first search up to `max_hops`. The path
+  confidence is the mean of its interactions' confidence values. With `max_hops` below
+  the shortest path length the page reports "No path ... within N hops".
 
-```cypher
-CALL ivg.vector.search('Protein', 'emb', $query_vector, 5) YIELD node AS seed, score
-MATCH (seed)-[:INTERACTS_WITH*1..2]->(neighbor)
-RETURN seed.id, neighbor.id, score
-ORDER BY score DESC
-```
+## Interactive network visualization
 
-This is how you find drug targets: start from a known protein, find structurally similar proteins (potential off-targets), then traverse to see what pathways they're wired into.
+The D3 force graph is interactive:
 
-## Interactive Network Visualization
+- **Click** a node to add its 1-hop neighbourhood (up to 500 nodes in total).
+- **Drag** nodes to rearrange the layout.
+- **Scroll** to zoom; **double-click** to reset the view.
 
-The D3.js force-directed graph is interactive:
-
-- **Click** a node to expand its 1-hop neighborhood (up to 500 total nodes)
-- **Drag** nodes to rearrange the layout
-- **Zoom** with scroll wheel
-- **Double-click** to reset the view
-
-Node colors indicate organism: teal = _Homo sapiens_, purple = _Mus musculus_, orange = others.
-
-## Data Model
-
-```
-Protein (id, name, organism, sequence, embedding)
-  -[:INTERACTS_WITH]-> Protein
-  -[:ACTIVATES]-> Protein
-  -[:INHIBITS]-> Protein
-  -[:BINDS]-> Protein
-  -[:IN_PATHWAY]-> Pathway
-  -[:ENCODED_BY]-> Gene
-```
-
-Protein embeddings are computed offline from UniProt sequence data and stored in `Graph_KG.kg_NodeEmbeddings` using an HNSW index for fast approximate nearest-neighbor search.
+Edge colour shows the interaction type: green for activation, red dashed for inhibition,
+blue for binding, grey for the rest. Edge width grows with confidence.
 
 ## Architecture
 
-```
-Browser (HTMX + D3.js force graph)
-    ↓ POST /api/bio/search
-    ↓ GET  /api/bio/network/{protein_id}
-FastHTML route (src/iris_demo_server/routes/biomedical.py)
-    ↓ engine.kg_KNN_VEC() / engine.execute_cypher()
-IRISGraphEngine + IRISGraphStore
-    ↓ VECTOR_COSINE + HNSW index / SQL JOIN
-IRIS (Graph_KG schema + kg_NodeEmbeddings)
+```text
+Browser (HTMX + D3 force graph)
+    ↓ POST /api/bio/search · GET /api/bio/network/{symbol} · POST /api/bio/pathway
+FastHTML routes (src/iris_demo_server/routes/biomedical.py)
+    ↓
+IRISBiomedicalClient (src/iris_demo_server/services/iris_biomedical_client.py)
+    ↓ SQL over Graph_KG.rdf_props / rdf_edges, scoped to graph_id = 'bio:demo'
+IRIS namespace IVGFHIR on ivg-iris-enterprise
 ```
 
-## Loading Demo Data
-
-The demo works best with real protein interaction data. The examples directory includes a loader:
+## Tests
 
 ```bash
-python examples/demo_biomedical.py --load-data
+export IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972
+pytest tests/unit/test_bio_demo_data.py tests/unit/test_demo_pages.py
+pytest tests/e2e/test_bio_demo_e2e.py tests/e2e/test_demo_browser_e2e.py
 ```
 
-Or load from UniProt / STRING database exports using the bulk loader:
-
-```python
-from iris_vector_graph import IRISGraphEngine
-from iris_vector_graph.bulk_loader import BulkLoader
-
-engine = IRISGraphEngine(conn)
-engine.initialize_schema(embedding_dimension=1024)
-
-loader = BulkLoader(conn)
-loader.load_nodes(protein_nodes, label_attr="type")
-loader.load_edges(interaction_edges)
-```
+The browser tests drive all three demos in headless Chromium (Playwright). They need
+`playwright install chromium-headless-shell` once, and network access for the HTMX and
+D3 CDNs.

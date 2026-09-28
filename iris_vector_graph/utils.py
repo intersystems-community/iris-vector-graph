@@ -103,3 +103,45 @@ def _split_sql_statements(sql: str) -> list[str]:
             statements.append(stmt)
             
     return [s for s in statements if s]
+
+
+# Bumped when the rerun text itself has gone stale on some connection; each value is
+# one more cached statement in the namespace, and a new one is needed only after a
+# `%BuildIndices` has run since that connection last used the current one.
+_decode_epoch = 0
+
+
+def is_list_error(exc: BaseException) -> bool:
+    return "<list error>" in str(exc).lower()
+
+
+def execute_decoded(cursor, sql: str, params=None):
+    """`cursor.execute`, with a `<LIST ERROR>` turned back into the error IRIS meant.
+
+    A connection that executed a statement before another connection ran
+    `%BuildIndices` on its class gets `<LIST ERROR> Incorrect list format ... type
+    detected : 0` from then on wherever that statement should have failed with its
+    SQLCODE (-119, -121). It is keyed on the statement text and nothing on the
+    connection clears it; a text the connection has never executed reports
+    correctly. So the statement is re-run once under such a text (the same SQL with a
+    comment), and a second time under a fresh one if that text has gone stale too.
+    The statement that raised changed nothing, so re-running it is safe. If every
+    attempt answers `<LIST ERROR>` the original exception is raised.
+    """
+    global _decode_epoch
+    try:
+        return cursor.execute(sql, params)
+    except Exception as exc:
+        if not is_list_error(exc):
+            raise
+        original = exc
+    for _ in range(2):
+        epoch = _decode_epoch
+        try:
+            # On its own line, so a trailing `--` comment cannot swallow it.
+            return cursor.execute(f"{sql}\n/* ivg-decode {epoch} */", params)
+        except Exception as exc:
+            if not is_list_error(exc):
+                raise
+            _decode_epoch = max(_decode_epoch, epoch + 1)
+    raise original

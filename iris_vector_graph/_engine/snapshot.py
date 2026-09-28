@@ -60,6 +60,13 @@ STORE_PLAN = {
     # Without it a restored install has the vectors' tables standing and unclaimed,
     # every `resolve_route` reports a miss, and the restore reports success.
     "Graph_KG.embedding_registry": "sql",
+    # Spec 232's FHIR graph bookkeeping: the references that did not resolve, the url
+    # each definitional key declared, and every canonical link a source carries. The
+    # repository is not in the archive, so none of it can be rebuilt on restore, and
+    # without it canonical links stay unresolved until a full resync.
+    "Graph_KG.fhir_unresolved": "sql",
+    "Graph_KG.fhir_definitions": "sql",
+    "Graph_KG.fhir_canonical_refs": "sql",
     "Graph_KG.kg_NodeEmbeddings_optimized": "derived",
     # ^KG — structural adjacency and its counters
     '^KG("out")': "global",
@@ -135,7 +142,39 @@ RESTORE_TABLE_ORDER = [
     # After the nodes: the routed tables rebuilt from these rows carry an FK onto
     # `nodes (graph_id, node_id)`.
     "Graph_KG_embedding_registry.ndjson",
+    # No FKs. The restore creates these tables first: they exist only where a FHIR
+    # graph was registered (`GraphSchema.get_fhir_graph_schema_sql`).
+    "Graph_KG_fhir_unresolved.ndjson",
+    "Graph_KG_fhir_definitions.ndjson",
+    "Graph_KG_fhir_canonical_refs.ndjson",
 ]
+
+#: The plain tables `save_snapshot` exports with `SELECT *`. A table that does not
+#: exist (the lazy FHIR tables, in a namespace with no FHIR graph) exports no file.
+SQL_TABLES_EXPORT = [
+    "Graph_KG.nodes",
+    "Graph_KG.rdf_edges",
+    "Graph_KG.rdf_labels",
+    "Graph_KG.rdf_props",
+    "Graph_KG.rdf_reifications",
+    # The BM25 corpus, which no archive carried until 4.0.0: `kg_TXT` came back empty
+    # after a restore that reported success, and nothing compared the two because
+    # `docs` was in no inventory either.
+    "Graph_KG.docs",
+    # The registry names every route; without it the restored tables are orphans and
+    # every scoped search reports a miss (spec 227, FR-011).
+    "Graph_KG.embedding_registry",
+    "Graph_KG.fhir_unresolved",
+    "Graph_KG.fhir_definitions",
+    "Graph_KG.fhir_canonical_refs",
+]
+
+#: Tables with no single identifying first column. A merge restore skips a row that
+#: is already present; for these, "present" means every column matches. On the first
+#: column alone, which is `graph_id`, a graph's second row matched its first.
+FHIR_TABLES = frozenset(
+    ("Graph_KG.fhir_unresolved", "Graph_KG.fhir_definitions", "Graph_KG.fhir_canonical_refs")
+)
 
 
 def routed_export_plan(registry_rows) -> Dict[str, Dict[str, Any]]:
@@ -534,25 +573,11 @@ class SnapshotMixin:
         sql_data: Dict[str, str] = {}
         globals_data: Dict[str, bytes] = {}
 
-        SQL_TABLES_EXPORT = [
-            ("Graph_KG.nodes", "node_id"),
-            ("Graph_KG.rdf_edges", "s"),
-            ("Graph_KG.rdf_labels", "s"),
-            ("Graph_KG.rdf_props", "s"),
-            ("Graph_KG.rdf_reifications", "subject_s"),
-            # The BM25 corpus, which no archive carried until 4.0.0: `kg_TXT` came
-            # back empty after a restore that reported success, and nothing compared
-            # the two because `docs` was in no inventory either.
-            ("Graph_KG.docs", "id"),
-            # The registry names every route; without it the restored tables are
-            # orphans and every scoped search reports a miss (spec 227, FR-011).
-            ("Graph_KG.embedding_registry", "table_name"),
-        ]
         VECTOR_TABLE = "Graph_KG.kg_NodeEmbeddings"
 
         if "sql" in layers:
             cursor = self.conn.cursor()
-            for table, _ in SQL_TABLES_EXPORT:
+            for table in SQL_TABLES_EXPORT:
                 try:
                     cursor.execute(f"SELECT * FROM {table}")
                     all_desc = cursor.description
@@ -876,6 +901,25 @@ class SnapshotMixin:
                         "restore: could not register %s in graph %r: %s", nid, graph_id, e
                     )
 
+        if any(
+            f"sql/{t.replace('Graph_KG.', 'Graph_KG_')}.ndjson" in sql_files for t in FHIR_TABLES
+        ):
+            from iris_vector_graph.schema import GraphSchema
+            from iris_vector_graph.utils import _split_sql_statements
+
+            for stmt in _split_sql_statements(GraphSchema.get_fhir_graph_schema_sql()):
+                if not stmt.strip():
+                    continue
+                try:
+                    cursor.execute(stmt)
+                except Exception as e:
+                    if "already" not in str(e).lower():
+                        logger.warning("restore: FHIR table DDL failed: %s", e)
+            try:
+                self.conn.commit()
+            except Exception:
+                pass
+
         for fname_short in TABLE_ORDER:
             fname = f"sql/{fname_short}"
             if fname not in sql_files:
@@ -907,7 +951,18 @@ class SnapshotMixin:
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
                     col_list = ", ".join(cols)
-                    if merge:
+                    if merge and table_name in FHIR_TABLES:
+                        keyed = [c for c in cols if row[c] is not None]
+                        guard = " AND ".join(
+                            [f"{c} = ?" for c in keyed]
+                            + [f"{c} IS NULL" for c in cols if row[c] is None]
+                        )
+                        cursor.execute(
+                            f"INSERT INTO {table_name} ({col_list}) SELECT {placeholders} "
+                            f"WHERE NOT EXISTS (SELECT 1 FROM {table_name} WHERE {guard})",
+                            vals + [row[c] for c in keyed],
+                        )
+                    elif merge:
                         cursor.execute(
                             f"INSERT INTO {table_name} ({col_list}) SELECT {placeholders} "
                             f"WHERE NOT EXISTS (SELECT 1 FROM {table_name} WHERE {cols[0]} = ?)",

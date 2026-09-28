@@ -222,19 +222,24 @@ class TestStatus:
 
 class TestListActiveQueries:
 
-    def test_community_edition_returns_empty(self):
+    def test_product_4_is_not_refused(self):
+        # GetISCProduct() is 4 for every InterSystems IRIS, enterprise included;
+        # treating it as "Community" turned the listing off everywhere.
         eng, conn, cursor = _make_eng()
+        cursor.execute.reset_mock()
+        cursor.fetchall.return_value = [(1, "Executing", "_SYSTEM", "SELECT 1")]
         iris_obj = MagicMock()
-        iris_obj.classMethodValue.return_value = "4"  # Community Edition
+        iris_obj.classMethodValue.return_value = "4"
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
             result = eng.list_active_queries()
-        assert result == []
+        assert [r["id"] for r in result] == ["1"]
 
-    def test_iris_obj_failure_returns_empty(self):
+    def test_no_native_handle_needed(self):
         eng, conn, cursor = _make_eng()
+        cursor.fetchall.return_value = [(1, "Executing", "_SYSTEM", "SELECT 1")]
         with patch.object(eng, "_iris_obj", side_effect=RuntimeError("no iris")):
             result = eng.list_active_queries()
-        assert result == []
+        assert [r["id"] for r in result] == ["1"]
 
     def test_enterprise_sql_success(self):
         eng, conn, cursor = _make_eng()

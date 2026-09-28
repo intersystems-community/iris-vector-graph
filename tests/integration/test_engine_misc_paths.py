@@ -80,11 +80,8 @@ class TestSCCErrorPath:
     def test_scc_error_returns_empty(self, misc_eng):
         err = IVGResult(columns=["id", "component", "size"], rows=[], error="forced")
         with patch.object(misc_eng._store, "execute_scc", return_value=err):
-            try:
-                result = misc_eng.scc(top_k=5)
-                assert result == []
-            except (AttributeError, NotImplementedError):
-                pytest.skip("scc method not exposed or not supported")
+            # The method is `strongly_connected_components`; `scc` skipped.
+            assert misc_eng.strongly_connected_components(top_k=5) == []
 
 
 # ---------------------------------------------------------------------------
@@ -234,18 +231,16 @@ class TestLoadNetworkx:
 
 class TestSnapshotRoundTrip:
 
-    def test_export_restore_basic(self, misc_eng, iris_connection):
+    def test_export_restore_basic(self, misc_eng, iris_connection, tmp_path):
+        # The engine has no `export_snapshot`; it is `save_snapshot(path)`.
+        path = str(tmp_path / "misc.ivg")
+        misc_eng.save_snapshot(path, layers=["sql"])
+
         eng2 = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        eng2.restore_snapshot(path, merge=True)
 
-        try:
-            snap = misc_eng.export_snapshot()
-        except Exception:
-            pytest.skip("export_snapshot not available")
-
-        assert snap is not None
-
-        try:
-            result = eng2.restore_snapshot(snap, merge=True)
-            assert result is not None
-        except Exception:
-            pytest.skip("restore_snapshot not available")
+        cur = iris_connection.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'mi_0'"
+        )
+        assert cur.fetchone()[0] == 1

@@ -17,7 +17,7 @@ graphs. `Graph.KG.FHIRGraph` does the work there, and the Python methods and the
 engine = IRISGraphEngine(conn_to_fhir_namespace)
 engine.initialize_schema()
 
-reg = engine.fhir_graph_register()          # graph id fhir:<NAMESPACE>:<pkg>
+reg = engine.fhir_graph_register()          # creates the fhir_* tables; id fhir:<NAMESPACE>:<pkg>
 g = reg["graph_id"]                          # e.g. fhir:IVGFHIR:X0001
 engine.fhir_graph_rebuild(g)                 # full build, per-param counts
 engine.fhir_graph_schedule(g, interval_s=60) # Task Manager task, one per graph
@@ -28,6 +28,27 @@ engine.code_crosswalk_add(
 )
 scores = engine.fhir_concept_ppr(g, "umls", ["C0011860"], hops=1)
 ```
+
+Then read the graph patient by patient, and check what it can and cannot resolve:
+
+```python
+# Resolve through every clinical token param, not only `code`, and rank patients
+# by the summed scores of their compartment resources
+ranked = engine.fhir_concept_ppr(
+    g, "umls", ["C0011860"], params="clinical", group_by="patient", top_k=10,
+)
+for p in ranked["patients"]:
+    print(p["patient"], p["score"], p["contributors"][:3])
+
+engine.fhir_coverage_report(g)                      # compartment share, categories, profiles, staleness
+engine.fhir_concept_gaps(g, params="clinical")      # commonest codes nothing maps to
+engine.fhir_graph_status(g)["compartment_edges"]
+engine.fhir_reinterpret(g)                          # re-derive after upgrading the classes
+```
+
+Sections below: [the model](#the-model), [sync](#sync),
+[concepts to ranked resources](#from-a-concept-to-ranked-resources) and the
+[interpretation contract](#interpretation-contract).
 
 The same operations from a shell. They connect straight to IRIS through `IRIS_HOST`,
 `IRIS_PORT`, `IRIS_NAMESPACE`, `IRIS_USERNAME` and `IRIS_PASSWORD`:
@@ -393,7 +414,10 @@ reaches the Device and the inputs, and two model versions stay separate. Deletin
 Provenance removes its edges and leaves the prediction and Device.
 
 Every Provenance points its `target` at a result, so a result with many provenance
-records becomes a hub. `Provenance.target` is a denylist candidate for PPR.
+records becomes a hub. `fhir_concept_ppr` leaves `Provenance.target` and
+`Provenance.entity` out of the walk by default (`FHIR_PPR_EXCLUDE`, see
+[Interpretation contract](#interpretation-contract)). The edges stay in the graph, so
+Cypher and the 2-hop neighbourhood above still see them, and no denylist entry is needed.
 
 ### What this is not
 
@@ -402,6 +426,99 @@ only. Co-residence is not a security design: the namespace stays the security bo
 (see below). Out of scope: patient or phenotype embeddings for FHIR nodes, a literature
 or publication graph, VCF or raw variant storage, `ValidatedBy` Experiment or
 Publication links, and any new operator or cross-graph query.
+
+## Interpretation contract
+
+Since 4.1.0 the sync reads a resource with base R4 semantics, so the graph can be walked
+patient by patient. It uses the R4 search parameters and the patient compartment
+definition the FHIR server ships. It does not read profiles: a `meta.profile` is
+claimed by the writer, not validated.
+
+| Concept                  | Kind     | Where                                                                                                                                                                                                                                                                   |
+| ------------------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `in_patient_compartment` | edge     | resource → Patient, one per (resource, patient). It is derived from the reference edges whose param is one of the type's R4 patient-compartment params. The qualifier `via` lists those params, sorted. Patient resources get none; `Patient.link` stays a `link` edge. |
+| reference edges          | edge     | one per indexed reference, predicate = search param code                                                                                                                                                                                                                |
+| clinical tokens          | token    | `code`, `value-concept`, `component-code`, `component-value-concept`, and Medication `code`. They stay in the repository's search tables. `params="clinical"` resolves through them, cut to the params the endpoint indexes.                                            |
+| `category`               | property | a JSON list of `system\|code`, from the `category` search param                                                                                                                                                                                                         |
+| `meta_profile`           | property | a JSON list of the `meta.profile` URLs, from `_profile`. Claimed by the writer, not validated. No labels.                                                                                                                                                               |
+| category labels          | label    | the PascalCase code (`Laboratory`, `VitalSigns`, `EncounterDiagnosis`) for the HL7 observation-category and condition-category systems and the US Core category systems. Other systems stay property-only. A code equal to an R4 type name is skipped.                  |
+
+A compartment edge belongs to its source resource. The sync re-derives it in the same
+transaction as the resource's reference edges and deletes it with the resource.
+`erase_graph`, snapshot restore and `verify_graph` treat it as an ordinary edge.
+`fhir_graph_status` counts it apart as `compartment_edges`, so `edges` and
+`last_counts` count reference edges only.
+
+### Ranking and anchors
+
+- `FHIR_PPR_EXCLUDE` holds `in_patient_compartment`, `Provenance.target` and
+  `Provenance.entity`. It is the default `exclude_predicates` of `fhir_concept_ppr`,
+  so compartment edges and Provenance hubs carry no mass by default.
+  `exclude_predicates=()` walks everything. `kg_PERSONALIZED_PAGERANK` excludes nothing
+  unless asked.
+- `fhir_concept_ppr(group_by="patient")` sums each patient's compartment resources'
+  scores. `via=[...]` keeps only the edges with one of those params. Each patient
+  carries its top contributors, and `unattributed` holds the mass on resources outside
+  any compartment.
+- `/api/cypher` with `fhir_patient_id` takes `$patient_anchors` from a synced graph
+  that holds the patient (`anchor_source: "graph"`), and from the external bridge
+  otherwise (`"fhir_bridge"`).
+
+### Reports
+
+`fhir_coverage_report(graph)` and `fhir_concept_gaps(graph, params=...)` are computed
+live and never stored. The coverage report gives per type the compartment share,
+patient-less resources, the `meta_profile` histogram and the category split, then the
+code resolution per system for the `clinical` params, the linked-patient count,
+`interpretation_version` and `stale`, and `fhir_link_report` unchanged. The gaps report
+lists the commonest unmatched `(system, code)` pairs and, per param, the resources whose
+field carries only `text`. Those write no token row.
+
+### Upgrading a graph built by older rules
+
+`Graph_KG.fhir_graphs.interp_version` records the rules a graph was last interpreted
+with. NULL (a graph synced by a pre-release build before spec 235, or an erased one) or an older number makes the next sync
+re-derive every live resource once before its incremental pass. The result's
+`interpretation` block reports `full_rederivation: true`. An interrupted re-derivation
+leaves the marker as it was, so the next sync starts again. `fhir_reinterpret(graph)`
+does the same on demand. Status and the coverage report flag a stale graph.
+
+### Not in scope
+
+- Enforcing or validating profiles, and per-profile interpretation maps (US Core, IPA,
+  ViewDefinition-style).
+- Encounter, Practitioner, RelatedPerson and Device compartments.
+- Identity resolution over `Patient.link`.
+- Category hub nodes.
+- Persisted or snapshotted reports.
+- Deprecating or changing `fhir_bridge`.
+
+### Measured medians
+
+`ivg-iris-enterprise` (`irishealth:2026.3.0AI.113.0`), `scripts/fhir/bench_235.py`.
+The fixture is the vendored 10-patient Synthea file; scale is about 100 Synthea
+patients. Baseline is `main` at 2d92da2, before spec 235. Budgets: sync at most +15%, grouped PPR at most
++20% of the baseline PPR, each report under 2 s. Milliseconds, `–` where the baseline has no
+such call.
+
+| Set     | Measure        | baseline | 4.1.0 |
+| ------- | -------------- | -------- | ----- |
+| fixture | `sync_ms`      | 35885    | 37348 |
+| fixture | `ppr_ms`       | 481      | 574   |
+| fixture | `ppr_group_ms` | –        | 617   |
+| fixture | `coverage_ms`  | –        | 187   |
+| fixture | `gaps_ms`      | –        | 377   |
+| scale   | `sync_ms`      | 47057    | 52401 |
+| scale   | `ppr_ms`       | 8132     | 8654  |
+| scale   | `ppr_group_ms` | –        | 9024  |
+| scale   | `coverage_ms`  | –        | 831   |
+| scale   | `gaps_ms`      | –        | 1450  |
+
+Both columns ran back to back on one container. Earlier test loads had left 165,483
+deleted resource versions in the repository, and every `Rebuild` walks them, so sync is
+slower on both sides than on a fresher repository (7.4 s fixture and 27 s scale before
+those loads). The grouped PPR is one `GroupPPR` call: the walk and the grouping both run
+in IRIS, so the scores never become a string.
 
 ## Security model
 
@@ -422,7 +539,8 @@ caller's own SQL privileges.
 - **History.** FHIR history is not graph history. The graph holds the current state.
 - **Canonicals.** Urls and versions compare on their first 220 characters. The body is
   read only through json links, not FHIRPath.
-- **Copied content.** None: no properties, no codes, no Arno-backed FHIR storage.
+- **Copied content.** Only `id`, `category` and `meta_profile` properties (see the
+  interpretation contract). No codes, no other properties, no Arno-backed FHIR storage.
 
 ## Deprecated in 4.1.0, removed in 5.0
 

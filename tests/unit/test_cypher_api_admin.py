@@ -215,7 +215,9 @@ class TestCypherQueryVariants:
 
     def test_cypher_with_fhir_patient_id(self, client):
         """CypherRequest.fhir_patient_id field — exercises FHIR anchor resolution."""
-        tc, _ = client
+        tc, mock_eng = client
+        # Not in any synced FHIR graph, so the external bridge answers (spec 235).
+        mock_eng.fhir_patient_anchors.return_value = {"graphs": [], "anchors": []}
         resp = tc.post("/api/cypher", json={
             "query": "MATCH (n) RETURN n",
             "fhir_patient_id": "Patient/123",

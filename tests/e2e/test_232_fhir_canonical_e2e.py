@@ -62,7 +62,7 @@ def k(ld, rtype, name):
 
 
 def _edges(conn, source):
-    return set(_rows(conn, "SELECT p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ?", GRAPH, source))
+    return set(_rows(conn, "SELECT p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ? AND p <> 'in_patient_compartment'", GRAPH, source))
 
 
 def _edge_ids(conn):

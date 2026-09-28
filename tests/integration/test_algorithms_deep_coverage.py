@@ -247,11 +247,9 @@ class TestRandomWalk:
 class TestBetweennessNeighborhood:
 
     def test_betweenness_neighborhood_returns_list(self, alg_graph):
-        try:
-            result = alg_graph.betweenness_neighborhood("alg_0", hops=1, top_k=5)
-            assert isinstance(result, list)
-        except (NotImplementedError, AttributeError):
-            pytest.skip("betweenness_neighborhood not supported")
+        # The method is `betweenness_centrality_neighborhood`; the old name skipped.
+        result = alg_graph.betweenness_centrality_neighborhood("alg_0", hops=1, top_k=5)
+        assert isinstance(result, list)
 
 
 # ---------------------------------------------------------------------------

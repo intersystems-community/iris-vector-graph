@@ -52,14 +52,12 @@ def test_exists_guard_references_correct_property():
 def test_optional_match_no_exists_guard():
     """OPTIONAL MATCH does not inject EXISTS guard (would break null-preserving join)."""
     sql, _ = translate_cypher("OPTIONAL MATCH (n {score: 1.0}) RETURN n")
-    where_start = sql.upper().find("WHERE")
-    if where_start == -1:
-        return  # no WHERE = definitely no guard
-    where_part = sql[where_start:]
-    # The guard should NOT appear for optional patterns
-    assert "EXISTS" not in where_part or "NOT EXISTS" not in where_part, (
-        "OPTIONAL MATCH should not use structural EXISTS guard"
-    )
+    # The guard is recognised by its alias (`_structural_guard_sql`). A leading
+    # OPTIONAL MATCH also emits `... WHERE NOT EXISTS (SELECT 1 FROM (<match>) __om)`
+    # for its null row; that is not the guard, and matching on bare "EXISTS" used to
+    # mistake it for one.
+    assert "__om)" in sql
+    assert " _sg" not in sql, "OPTIONAL MATCH should not use structural EXISTS guard"
 
 
 def test_id_property_no_exists_guard():

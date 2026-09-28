@@ -2,7 +2,7 @@
 Tests for remaining uncovered admin.py paths.
 
 Covers:
-  - list_active_queries Enterprise path (product != 4 → queries %SYS.ProcessQuery)
+  - list_active_queries (queries INFORMATION_SCHEMA.CURRENT_STATEMENTS)
   - _show_indexes with IVF/BM25/PLAID entries present
   - get_community_warnings global traversal body
   - status() with errors, edge cases
@@ -33,7 +33,7 @@ def _make_eng():
 class TestListActiveQueriesEnterprise:
 
     def test_enterprise_product_queries_sys_process(self):
-        """With GetISCProduct != 4, queries %SYS.ProcessQuery."""
+        """Queries INFORMATION_SCHEMA.CURRENT_STATEMENTS."""
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "2"  # Enterprise product code
@@ -52,7 +52,7 @@ class TestListActiveQueriesEnterprise:
             assert "state" in result[0]
 
     def test_enterprise_query_exception_returns_empty(self):
-        """Exception during %SYS.ProcessQuery query returns []."""
+        """Exception during the listing query returns []."""
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "2"

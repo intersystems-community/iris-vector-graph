@@ -17,6 +17,8 @@ import os
 from datetime import datetime
 from dotenv import load_dotenv
 
+from iris_vector_graph.utils import execute_decoded
+
 # NOTE: iris_connection fixture is provided by tests/conftest.py
 # Do not define a local fixture here to avoid shadowing
 
@@ -440,7 +442,10 @@ class TestEmbeddingForeignKeys:
         cursor = iris_connection.cursor()
         try:
             with pytest.raises(Exception) as exc_info:
-                cursor.execute(
+                # execute_decoded: after another connection's %BuildIndices this
+                # statement's -121 comes back as <LIST ERROR>.
+                execute_decoded(
+                    cursor,
                     "INSERT INTO Graph_KG.kg_NodeEmbeddings (node_id, emb) VALUES (?, TO_VECTOR(?))",
                     ['INVALID:node', dummy_vector]
                 )

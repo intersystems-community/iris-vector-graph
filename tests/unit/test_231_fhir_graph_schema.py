@@ -1,7 +1,8 @@
-"""Spec 231 FR-001, FR-012: the three FHIR-graph tables are in the schema script.
+"""Spec 231 FR-001, FR-012: the FHIR-graph tables and the code crosswalk.
 
-They are created with `IF NOT EXISTS` because `initialize_schema` runs the same script
-on a fresh namespace and on a 4.0.x one, and a 4.0.x namespace has none of them.
+They are created with `IF NOT EXISTS` because the scripts run on fresh namespaces and
+on older ones alike. `code_crosswalk` is in the base script; the FHIR-graph tables are
+in `get_fhir_graph_schema_sql`, which the first `fhir_graph_register` runs.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ from iris_vector_graph.utils import _split_sql_statements
 
 @pytest.fixture(scope="module")
 def statements():
-    return _split_sql_statements(GraphSchema.get_base_schema_sql(embedding_dimension=4))
+    return _split_sql_statements(
+        GraphSchema.get_base_schema_sql(embedding_dimension=4)
+    ) + _split_sql_statements(GraphSchema.get_fhir_graph_schema_sql())
 
 
 def _create(statements, table):

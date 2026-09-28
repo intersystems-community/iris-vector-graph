@@ -6626,6 +6626,11 @@ def translate_delete_clause(delete, context, metadata):
         return col if f"AS {col}" in stage_sql else None
 
     captured = {}  # (name, alias) -> `__IDS_<key>__`
+    # (name, alias) -> `graph_id = __GRAPH_<key>__`, for node targets of a graph-less
+    # query. With no `USE GRAPH` the MATCH binds one row per graph holding an id; the
+    # capture keeps each row's graph, so the statements below delete those rows and
+    # not every graph's row for the same id. Under `USE GRAPH` `add_dml` scopes them.
+    graph_pred = {}
     for name, alias, is_edge, is_stage_alias in targets:
         if single_edge or (is_edge and is_stage_alias and not _stage_edge_id(name)):
             continue
@@ -6639,8 +6644,13 @@ def translate_delete_clause(delete, context, metadata):
             # A source node the MATCH folded into its edge (`(:X)-->()`) has no
             # `nodes` join of its own; its id is the edge's `s` / `o_id`.
             id_expr = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
-        cte, subquery, subparams = context.build_dml_subquery(select_override=f"SELECT {id_expr}")
         key = f"d{len(context.dml_statements)}"
+        select = f"SELECT {id_expr}"
+        if not is_edge and not is_stage_alias and context.graph_context is None:
+            # A folded source's id is its edge's `s` / `o_id`; the edge row holds the graph.
+            select += f", {id_expr.split('.')[0]}.graph_id"
+            graph_pred[(name, alias)] = f"graph_id = __GRAPH_{key}__"
+        cte, subquery, subparams = context.build_dml_subquery(select_override=select)
         context.dml_statements.append((f"__capture_ids__ {key}\n{cte}{subquery}", subparams))
         captured[(name, alias)] = f"__IDS_{key}__"
 
@@ -6685,29 +6695,53 @@ def translate_delete_clause(delete, context, metadata):
             [],
         )
 
-    node_ids = [captured[(name, alias)] for name, alias, is_edge, _ in targets if not is_edge]
-    for ids in node_ids:
+    nodes = [(name, alias) for name, alias, is_edge, _ in targets if not is_edge]
+    node_ids = [captured[t] for t in nodes]
+
+    def _graph_scoped(t, where):
+        pred = graph_pred.get(t)
+        if not pred:
+            return where
+        return f"({where}) AND {pred}" if " OR " in where else f"{where} AND {pred}"
+
+    for t in nodes:
+        ids = captured[t]
+        touching = _graph_scoped(t, f"s IN ({ids}) OR o_id IN ({ids})")
         if delete.detach:
-            context.add_dml(
-                f"DELETE FROM {_table('rdf_edges')} WHERE s IN ({ids}) OR o_id IN ({ids})", []
-            )
+            context.add_dml(f"DELETE FROM {_table('rdf_edges')} WHERE {touching}", [])
         else:
+            if context.graph_context is not None:
+                # `add_dml` scopes by DML verb and this sentinel is a SELECT: unscoped,
+                # another graph's edges on the same id refuse the delete.
+                g = context.graph_context.replace("'", "''")
+                touching = f"({touching}) AND graph_id = '{g}'"
             # Stored as a sentinel so execute_transaction raises the Cypher error.
             context.add_dml(
                 f"__constraint_check_delete_connected__ SELECT COUNT(*) FROM "
-                f"{_table('rdf_edges')} WHERE s IN ({ids}) OR o_id IN ({ids})",
+                f"{_table('rdf_edges')} WHERE {touching}",
                 [],
             )
-    for ids in node_ids:
-        context.add_dml(f"DELETE FROM {_table('rdf_labels')} WHERE s IN ({ids})", [])
-        context.add_dml(f"DELETE FROM {_table('rdf_props')} WHERE s IN ({ids})", [])
-        # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
-        # (graph_id, node_id).
+    for t in nodes:
+        ids = captured[t]
         context.add_dml(
-            f"DELETE FROM {_table('kg_NodeEmbeddings')} WHERE node_id IN ({ids})", []
+            f"DELETE FROM {_table('rdf_labels')} WHERE {_graph_scoped(t, f's IN ({ids})')}", []
         )
-    for ids in node_ids:
-        context.add_dml(f"DELETE FROM {_table('nodes')} WHERE node_id IN ({ids})", [])
+        context.add_dml(
+            f"DELETE FROM {_table('rdf_props')} WHERE {_graph_scoped(t, f's IN ({ids})')}", []
+        )
+        # `node_id`, not `id`: spec 227 re-keyed the embedding tables on
+        # (graph_id, node_id). Graph-less, the predicate is `graph_id = __GRAPH_<key>__`;
+        # under `USE GRAPH`, `add_dml` appends `graph_id = '<g>'`.
+        context.add_dml(
+            f"DELETE FROM {_table('kg_NodeEmbeddings')} "
+            f"WHERE {_graph_scoped(t, f'node_id IN ({ids})')}",
+            [],
+        )
+    for t in nodes:
+        ids = captured[t]
+        context.add_dml(
+            f"DELETE FROM {_table('nodes')} WHERE {_graph_scoped(t, f'node_id IN ({ids})')}", []
+        )
 
     if not single_edge and _mutate_start < len(context.dml_statements):
         # A later MERGE in the same statement may need a variable this DELETE

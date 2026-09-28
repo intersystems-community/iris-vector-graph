@@ -173,14 +173,12 @@ class TestBFSWithProperties:
 class TestShortestPathExecution:
 
     def test_shortest_path_basic(self, query_graph):
-        try:
-            result = query_graph.execute_cypher(
-                "MATCH p = shortestPath((a {node_id: 'q_0'})-[*]-(b {node_id: 'q_3'})) "
-                "RETURN p"
-            )
-            assert result is not None
-        except Exception:
-            pytest.skip("shortestPath not supported in this env")
+        # shortestPath binds its endpoints by `id`, not `node_id`.
+        result = query_graph.execute_cypher(
+            "MATCH p = shortestPath((a {id: 'q_0'})-[*]-(b {id: 'q_3'})) "
+            "RETURN length(p) AS n"
+        )
+        assert result.rows == [[3]]
 
     def test_shortest_path_with_param(self, query_graph):
         try:
@@ -301,13 +299,10 @@ class TestReadOnlyMode:
 class TestAQLExecution:
 
     def test_execute_aql_basic(self, query_graph):
-        try:
-            result = query_graph.execute_aql(
-                "FOR n IN nodes FILTER n.labels == ['QNode'] RETURN n.id"
-            )
-            assert result is not None
-        except Exception:
-            pytest.skip("AQL not supported")
+        result = query_graph.execute_aql(
+            "FOR v IN 1..3 OUTBOUND 'q_0' GRAPH 'g' RETURN v"
+        )
+        assert sorted(r[0] for r in result.rows) == ["q_1", "q_2", "q_3"]
 
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ print("UMLS ancestors:", [r[0] for r in result.rows])
 # Import a staging snapshot, then promote by copying to default graph
 engine.import_graph_ndjson("staging.ndjson", graph="staging")
 # ... review, validate, then drop staging when done
-engine.drop_graph("staging")
+engine.erase_graph("staging")
 ```
 
 ## Part 2 — Revision Ledger
@@ -191,6 +191,6 @@ print(status.ledger)
 
 ```python
 # Drop demo named graphs
-engine.drop_graph("umls")
-engine.drop_graph("equipment-v1")
+engine.erase_graph("umls")
+engine.erase_graph("equipment-v1")
 ```

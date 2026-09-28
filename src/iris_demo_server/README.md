@@ -1,43 +1,41 @@
-# IRIS Interactive Demo Web Server
+# IRIS Vector Graph demo server
 
-Interactive demonstration server showcasing IRIS capabilities for
-**Financial Services (fraud detection)**, **Biomedical Research (protein
-networks)**, and a **FHIR repository searched as a graph**.
+A FastHTML server with three demos on one IRIS engine: fraud scoring, a protein
+interaction graph, and a FHIR repository searched as a graph. The landing page (`/`)
+lists them, says what each needs, and checks each backend after the page loads, so a
+dead database never stalls it.
 
-## Quick Start
+## Quick start
 
 ```bash
-# Install dependencies
-uv sync
-
-# Start backends
-docker-compose -f ../../docker-compose.fraud-embedded.yml up -d
-docker-compose -f ../../docker-compose.acorn.yml up -d
-
-# Run demo server
-uv run uvicorn app:app --reload --port 8200
-
-# Access demo
+scripts/enterprise-container.sh up      # ivg-iris-enterprise, port 31972
+cd src
+PYTHONPATH=.:.. python -m iris_demo_server.services.fhir_demo_data   # FHIR cohort
+PYTHONPATH=.:.. python -m iris_demo_server.services.bio_demo_data    # bio:demo graph
+DEMO_MODE=true python -m uvicorn iris_demo_server.app:app --port 8200
 open http://localhost:8200
 ```
 
-## Features
+Both seeds are idempotent. Each demo page has a **View Architecture** button with the
+path from page to IRIS.
 
-### Financial Services Demo
+## The demos
 
-- **Real-time fraud scoring**: Submit transactions, get risk assessment <2s
-- **Bitemporal time-travel**: "What did we know at approval time?"
-- **Audit trails**: Complete version history with chargeback workflow
-- **Late arrival detection**: Flag suspicious settlement delays >24h
+### Fraud scoring (`/fraud`)
 
-### Biomedical Demo
+Scores a card transaction through the fraud API at `FRAUD_API_URL`. With
+`DEMO_MODE=true`, or when the API is unreachable, the score comes from a heuristic on the
+amount alone, and the page says so. The transaction graph under each score is
+illustrative. See [docs/demos/FRAUD_DEMO.md](../../docs/demos/FRAUD_DEMO.md).
 
-- **Protein search**: Vector similarity + text search with RRF fusion
-- **Pathway queries**: Multi-hop protein interaction networks
-- **Interactive visualization**: D3.js force-directed graphs
-- **Network expansion**: Click nodes to explore connections
+### Protein interaction graph (`/bio`)
 
-### FHIR Repository Graph Demo (`/fhir`)
+Reads the seeded named graph `bio:demo` (33 proteins, 38 interactions): name and
+annotation search (text matching; the graph has no embeddings), interaction networks,
+and shortest paths such as GAPDH to LDHA through glycolysis. See
+[docs/demos/BIOMEDICAL_DEMO.md](../../docs/demos/BIOMEDICAL_DEMO.md).
+
+### FHIR repository as a graph (`/fhir`)
 
 A FHIR repository (spec 231) is exposed as the named graph `fhir:<NS>:<package>`.
 Search it by clinical concept:
@@ -69,52 +67,23 @@ PYTHONPATH=src:. python -m iris_demo_server.services.fhir_demo_data
 PYTHONPATH=src:. uvicorn iris_demo_server.app:app --port 8200 && open http://localhost:8200/fhir
 ```
 
-## Project Structure
+## Project structure
 
 ```text
 iris_demo_server/
-├── models/           # Pydantic models (session, fraud, biomedical, metrics)
-├── services/         # Backend clients (fraud_client, bio_client, demo_state, demo_data)
-├── routes/           # FastHTML endpoints (fraud, biomedical, session)
-├── templates/        # FT components (base, fraud/, biomedical/, guided_tour)
-├── static/
-│   ├── js/          # network_viz.js (D3), demo_helpers.js
-│   └── css/         # Styles
-├── demo_data/       # Synthetic data (DEMO_MODE=true)
-├── app.py           # FastHTML app entry point
-└── register_asgi.py # IRIS ASGI registration
+├── app.py          # FastHTML app, landing page, /api/status/{fraud|bio|fhir}
+├── models/         # Pydantic models (fraud, biomedical, metrics, session)
+├── routes/         # fraud.py, biomedical.py, fhir.py
+└── services/       # fraud_client, iris_biomedical_client, bio_demo_data,
+                    # fhir_graph_client, fhir_demo_data
 ```
 
-## Development Status
-
-**Phase 3.1 Setup**: ✅ Complete (project structure, dependencies, linting)
-**Phase 3.2 Tests**: ⏳ Ready (19 TDD tests to write)
-**Phase 3.3 Implementation**: ⏳ Pending (27 tasks)
-**Phase 3.4 Polish**: ⏳ Pending (6 tasks)
-
-See [STATUS.md](../../specs/005-interactive-demo-web/STATUS.md) for details.
-
-## Implementation Guide
-
-For complete implementation patterns and examples, see:
-
-- [IMPLEMENTATION_GUIDE.md](../../specs/005-interactive-demo-web/IMPLEMENTATION_GUIDE.md)
-
-Key patterns:
-
-- **Models**: Pydantic with validators (fraud.py, biomedical.py)
-- **Services**: Resilient HTTP clients with circuit breaker (fraud_client.py)
-- **Routes**: FastHTML async endpoints (fraud.py, biomedical.py)
-- **Templates**: FT components with HTMX (base.py, fraud/, biomedical/)
-
-## Environment Variables
+## Environment variables
 
 ```bash
-# Demo mode (use synthetic data)
-DEMO_MODE=false  # Set to 'true' for external demos
-
-# Fraud API
+# Fraud: scoring service, or the amount heuristic
 FRAUD_API_URL=http://localhost:8100
+DEMO_MODE=true
 
 # FHIR graph demo (defaults: localhost 31972 IVGFHIR _SYSTEM/SYS)
 IVG_FHIR_HOST=localhost IVG_FHIR_PORT=31972 IVG_FHIR_NAMESPACE=IVGFHIR
@@ -124,45 +93,25 @@ IVG_FHIR_ENDPOINT=/csp/healthshare/ivgfhir/fhir/r4
 # only if several FHIR graphs are registered
 IVG_FHIR_GRAPH=fhir:IVGFHIR:X0001
 
-# Biomedical graph
-IRIS_HOST=localhost
-IRIS_PORT=21972  # ACORN-1 (or 1972 for community)
-IRIS_NAMESPACE=USER
-IRIS_USER=_SYSTEM
-IRIS_PASSWORD=SYS
+# Biomedical demo: IVG_BIO_* first, then IVG_FHIR_*, then the defaults above
+IVG_BIO_HOST=localhost IVG_BIO_PORT=31972 IVG_BIO_NAMESPACE=IVGFHIR
+IVG_BIO_USER=_SYSTEM IVG_BIO_PASSWORD=SYS
 ```
 
 ## Testing
 
 ```bash
-# Contract tests (API schemas)
-pytest tests/demo/contract/ -v
-
-# Integration tests (live backends required)
-pytest tests/demo/integration/ -v -m integration
-
-# E2E tests (Playwright)
-pytest tests/demo/e2e/ -v --headed
+export IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972
+# pages and seeds, no IRIS needed
+pytest tests/unit/test_demo_pages.py tests/unit/test_bio_demo_data.py \
+       tests/unit/test_fhir_demo_data.py tests/unit/test_fhir_demo_routes.py
+# live IRIS
+pytest tests/e2e/test_bio_demo_e2e.py tests/e2e/test_fhir_demo_e2e.py
+# all three demos in headless Chromium
+playwright install chromium-headless-shell   # once
+pytest tests/e2e/test_demo_browser_e2e.py
 ```
 
-## Architecture
-
-- **Frontend**: FastHTML (server-rendered) + HTMX (reactive updates) + D3.js (viz)
-- **State**: Session-based (FastHTML signed cookies), no persistent DB
-- **Integration**: Fraud API (`:8100`), Biomedical graph (IRIS vector search)
-- **Deployment**: IRIS ASGI registration (primary), uvicorn (dev)
-
-## Performance Targets
-
-- FR-002: Query responses <2 seconds
-- Fraud API: <10ms backend calls
-- Vector search: <200ms with HNSW
-- HTMX swaps: <100ms UI updates
-- D3 graphs: 60 FPS with 500 nodes
-
-## References
-
-- **Spec**: [../specs/005-interactive-demo-web/spec.md](../../specs/005-interactive-demo-web/spec.md)
-- **Tasks**: [../specs/005-interactive-demo-web/tasks.md](../../specs/005-interactive-demo-web/tasks.md)
-- **Quickstart**: [../specs/005-interactive-demo-web/quickstart.md](../../specs/005-interactive-demo-web/quickstart.md)
-- **API Contract**: [../specs/005-interactive-demo-web/contracts/openapi.yaml](../../specs/005-interactive-demo-web/contracts/openapi.yaml)
+The browser tests start the server on a free port with `DEMO_MODE=true`, seed both
+graphs, and click through each scenario. HTMX and D3 load from CDNs, so they need network
+access.

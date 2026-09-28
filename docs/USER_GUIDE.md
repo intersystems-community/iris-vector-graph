@@ -486,6 +486,21 @@ scores = engine.eigenvector_centrality(max_iter=30, top_k=20)
 CALL ivg.eigenvector({maxIter: 50, topK: 20}) YIELD node, score
 ```
 
+### Personalized PageRank
+
+```python
+# Rank the neighbourhood of a seed set; graph= keeps the walk inside one graph
+scores = engine.kg_PERSONALIZED_PAGERANK(
+    ["gene:TP53"], return_top_k=20, bidirectional=True, graph="umls",
+    exclude_predicates=["mentioned_in"],   # edges the walk skips; default: none
+)
+# {"gene:TP53": 0.21, "gene:MDM2": 0.08, ...}
+```
+
+Since 4.1.0 the walk stays inside `graph=` (4.0.0 walked every graph). On a FHIR graph,
+pass `exclude_predicates=list(FHIR_PPR_EXCLUDE)` (from `iris_vector_graph`) to get the
+exclusions `fhir_concept_ppr` applies by default.
+
 ---
 
 ## 5. Community Algorithms
@@ -1004,6 +1019,43 @@ print(stats.head_seq, stats.commits_ok, stats.rejections)
 engine.status().ledger   # included in the engine status report
 ```
 
+---
+
+## 11. FHIR Repository as a Graph
+
+Connect to the FHIR namespace itself, with the `Graph.KG.*` classes deployed there.
+The first `fhir_graph_register` creates the `fhir_*` tables; a namespace without a FHIR
+repository never gets them.
+
+```python
+reg = engine.fhir_graph_register()        # graph fhir:<NAMESPACE>:<package>
+g = reg["graph_id"]
+engine.fhir_graph_rebuild(g)              # full build; per-param edge counts
+engine.fhir_graph_sync(g)                 # one incremental pass
+engine.fhir_graph_schedule(g, interval_s=60)
+engine.fhir_graph_status(g)               # nodes, edges, compartment_edges, pending
+
+# Codes -> concept nodes in another graph
+engine.code_crosswalk_add("http://loinc.org", "4548-4", "C0019018",
+                          target_graph="umls", relation="related")
+
+# Expand, resolve, rank: each step on its own graph
+concepts = engine.fhir_expand_concepts("umls", ["C0011849"], hops=2)
+keys = engine.fhir_resolve_concepts(g, "umls", concepts, params="clinical")
+scores = engine.fhir_concept_ppr(g, "umls", ["C0011849"], hops=2)   # {key: score}
+by_patient = engine.fhir_concept_ppr(g, "umls", ["C0011849"], hops=2,
+                                     group_by="patient", explain_top=3)
+
+engine.fhir_coverage_report(g)            # live; never stored
+engine.fhir_concept_gaps(g, params="clinical", top=20)
+engine.fhir_link_report(g)                # why each reference is not an edge
+```
+
+`/api/cypher` with `fhir_patient_id` fills `$patient_anchors` from the synced graph
+and reports `anchor_source: "graph"`, or `"fhir_bridge"` when no graph holds the
+patient. The full model, the interpretation contract, the CLI and the measured
+medians are in [FHIR_GRAPH.md](FHIR_GRAPH.md).
+
 For Prometheus integration see
 [docs/ledger-prometheus-hook.md](ledger-prometheus-hook.md).
 
@@ -1041,6 +1093,10 @@ For Prometheus integration see
 | Export RDF               | `engine.export_rdf("out.ttl", label_filter=[...])`               |
 | Validate SHACL           | `engine.validate_shacl("shapes.ttl")`                            |
 | Export PROV-O            | `engine.prov_export("prov.ttl", ts_start=...)`                   |
+| Personalized PageRank    | `engine.kg_PERSONALIZED_PAGERANK(seeds, graph="umls")`           |
+| Register FHIR graph      | `engine.fhir_graph_register()`                                   |
+| Rank patients by concept | `engine.fhir_concept_ppr(g, "umls", ids, group_by="patient")`    |
+| FHIR coverage            | `engine.fhir_coverage_report(g)`                                 |
 
 ---
 

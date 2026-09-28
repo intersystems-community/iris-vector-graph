@@ -13,6 +13,12 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// @param bidir      1 = also traverse edges backwards via ^KG("in")
 /// @param revWeight  Multiplier on a reverse hop's contribution (bidir only)
 /// @param pGraph     Graph name; "" is the default graph. Derived through GraphKey.ForIndex.
+/// @param pExclude   JSON array of edges the walk skips (spec 235): "p" is predicate p from
+///                   any source, "Type.p" is p only where the edge's source key starts
+///                   "Type/". "" or "[]" skips nothing; a malformed list throws. An excluded
+///                   edge is gone from both the walk and its source's divisor, so the scores
+///                   equal a walk of the graph without it.
+/// @param pLimit     How many nodes to return; 0 is every scored node.
 /// @returns JSON array: [{"id":"node","score":0.12}, ...] sorted desc by score
 ///
 /// Both bidir and revWeight were declared and ignored until 4.0.0. Callers asking for
@@ -21,12 +27,58 @@ Class Graph.KG.PageRank Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 /// fallback in _engine/algorithms.py: a node's divisor counts its forward AND reverse
 /// edges, and revWeight scales the contribution carried over a reverse hop, never the
 /// divisor.
-ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0, pGraph As %String = "") As %String
+ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %Integer = 20, bidir As %Integer = 0, revWeight As %Double = 1.0, pGraph As %String = "", pExclude As %String = "", pLimit As %Integer = 1000) As %String
 {
+	Set pLimit = +pLimit
+	Return:'..Run(seedJson, alpha, maxIter, bidir, revWeight, pGraph, pExclude, .ranks) "[]"
+	
+	// Sort by score descending using a score-keyed temp array
+	// ^||PPR.Sort(score, node) — process-private, auto-cleaned
+	Kill ^||PPR
+	Set node = ""
+	For {
+		Set node = $Order(ranks(node), 1, score)
+		Quit:node=""
+		// Use negative score for descending $Order
+		Set ^||PPR(-score, node) = ""
+	}
+	
+	// Build JSON result array (top pLimit; 0 is every node)
+	Set result = ##class(%DynamicArray).%New()
+	Set negScore = ""
+	Set count = 0
+	For {
+		Set negScore = $Order(^||PPR(negScore))
+		Quit:negScore=""
+		Set n = ""
+		For {
+			Set n = $Order(^||PPR(negScore, n))
+			Quit:n=""
+			Set obj = ##class(%DynamicObject).%New()
+			Do obj.%Set("id", n)
+			Do obj.%Set("score", -negScore, "number")
+			Do result.%Push(obj)
+			Set count = count + 1
+			Quit:(pLimit>0)&&(count>=pLimit)
+		}
+		Quit:(pLimit>0)&&(count>=pLimit)
+	}
+	
+	Kill ^||PPR
+	Return result.%ToJSON()
+}
+
+/// RunJson's walk, leaving ranks(node) = score for every scored node rather than a JSON
+/// string, so a caller in IRIS can use every score without the string size limit
+/// (spec 235, GroupByPatient). Returns 0, with ranks empty, when there are no seeds.
+ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidir As %Integer, revWeight As %Double, pGraph As %String, pExclude As %String, Output ranks) As %Boolean
+{
+	Kill ranks
 	// Until 4.0.1 pGraph was hardwired to 0: every PPR walked the default graph
 	// whatever graph its seeds lived in (spec 231, FR-016).
 	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
-	If seedJson = "" Return "[]"
+	If seedJson = "" Return 0
+	Set hasExcl = ..ParseExclude(pExclude, .excl)
 	Set revWeight = +revWeight
 	Set wantRev = ((+bidir) '= 0) && (revWeight > 0)
 	
@@ -34,9 +86,9 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 		Set seedArr = ##class(%DynamicArray).%FromJSON(seedJson)
 	} Catch seedEx {
 		Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.PageRank: seed JSON parse failed: "_seedEx.DisplayString(), 0, 2)
-		Return "[]"
+		Return 0
 	}
-	If seedArr.%Size() = 0 Return "[]"
+	If seedArr.%Size() = 0 Return 0
 	
 	// Build seed set and initial ranks
 	Set nSeeds = seedArr.%Size()
@@ -57,6 +109,27 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			Quit:node=""
 			
 			Set deg = +$Get(^KG("deg", pGraph, node))
+			If hasExcl {
+				// Count the kept out-edges rather than subtract from ^KG("deg"), so the
+				// divisor is the one a graph without the excluded edges would hold.
+				If '$Data(fwdDeg(node)) {
+					Set fDeg = 0
+					Set p = ""
+					For {
+						Set p = $Order(^KG("out", pGraph, node, p))
+						Quit:p=""
+						Continue:$Data(excl(p))&&..Excluded(.excl, node, p)
+						Set o = ""
+						For {
+							Set o = $Order(^KG("out", pGraph, node, p, o))
+							Quit:o=""
+							Set fDeg = fDeg + 1
+						}
+					}
+					Set fwdDeg(node) = fDeg
+				}
+				Set deg = fwdDeg(node)
+			}
 			Set degTot = deg
 			If wantRev {
 				// No ^KG counter holds in-degree — ^KG("degp") is per-predicate *out*-degree
@@ -70,10 +143,13 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 					For {
 						Set rp = $Order(^KG("in", pGraph, node, rp))
 						Quit:rp=""
+						Set rX = $Select('hasExcl: 0, '$Data(excl(rp)): 0, $Data(excl(rp)) # 2: 1, 1: 2)
+						Continue:rX=1
 						Set rs = ""
 						For {
 							Set rs = $Order(^KG("in", pGraph, node, rp, rs))
 							Quit:rs=""
+							Continue:(rX=2)&&..Excluded(.excl, rs, rp)
 							Set rDeg = rDeg + 1
 						}
 					}
@@ -90,6 +166,7 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 			For {
 				Set p = $Order(^KG("out", pGraph, node, p))
 				Quit:p=""
+				Continue:hasExcl&&$Data(excl(p))&&..Excluded(.excl, node, p)
 				Set share = (alpha * rank) / degTot
 				Set o = ""
 				For {
@@ -105,10 +182,13 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 				For {
 					Set rp = $Order(^KG("in", pGraph, node, rp))
 					Quit:rp=""
+					Set rX = $Select('hasExcl: 0, '$Data(excl(rp)): 0, $Data(excl(rp)) # 2: 1, 1: 2)
+					Continue:rX=1
 					Set rs = ""
 					For {
 						Set rs = $Order(^KG("in", pGraph, node, rp, rs))
 						Quit:rs=""
+						Continue:(rX=2)&&..Excluded(.excl, rs, rp)
 						Set newRanks(rs) = $Get(newRanks(rs), 0) + revShare
 					}
 				}
@@ -145,41 +225,52 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 		Kill ranks
 		Merge ranks = newRanks
 	}
-	
-	// Sort by score descending using a score-keyed temp array
-	// ^||PPR.Sort(score, node) — process-private, auto-cleaned
-	Kill ^||PPR
-	Set node = ""
-	For {
-		Set node = $Order(ranks(node), 1, score)
-		Quit:node=""
-		// Use negative score for descending $Order
-		Set ^||PPR(-score, node) = ""
+	Return 1
+}
+
+/// Parse RunJson's pExclude into excl(p) for a bare predicate and excl(p, Type) for a
+/// typed one. Returns 1 when anything is excluded. Throws on anything but a JSON array
+/// of "p" / "Type.p" strings, so a typo is an error rather than an unfiltered walk.
+ClassMethod ParseExclude(pExclude As %String, Output excl) As %Boolean [ Internal ]
+{
+	Kill excl
+	If pExclude = "" Return 0
+	Try {
+		Set arr = ##class(%DynamicArray).%FromJSON(pExclude)
+	} Catch parseEx {
+		Throw ##class(%Exception.General).%New("PPRExclude", 5001, , "pExclude is not JSON: "_pExclude)
 	}
-	
-	// Build JSON result array (top 1000)
-	Set result = ##class(%DynamicArray).%New()
-	Set negScore = ""
-	Set count = 0
-	For {
-		Set negScore = $Order(^||PPR(negScore))
-		Quit:negScore=""
-		Set n = ""
-		For {
-			Set n = $Order(^||PPR(negScore, n))
-			Quit:n=""
-			Set obj = ##class(%DynamicObject).%New()
-			Do obj.%Set("id", n)
-			Do obj.%Set("score", -negScore, "number")
-			Do result.%Push(obj)
-			Set count = count + 1
-			Quit:count>=1000
+	If '$IsObject(arr) || (arr.%ClassName(1) '= "%Library.DynamicArray") {
+		Throw ##class(%Exception.General).%New("PPRExclude", 5001, , "pExclude must be a JSON array")
+	}
+	Set hasAny = 0
+	For i = 0:1:(arr.%Size() - 1) {
+		Set entry = arr.%Get(i)
+		Set bad = (arr.%GetTypeOf(i) '= "string") || (entry = "") || ($Length(entry, ".") > 2)
+		If 'bad && ($Length(entry, ".") = 2) {
+			Set bad = ($Piece(entry, ".", 1) = "") || ($Piece(entry, ".", 2) = "")
 		}
-		Quit:count>=1000
+		If bad {
+			Throw ##class(%Exception.General).%New("PPRExclude", 5001, , "malformed pExclude entry: "_entry)
+		}
+		If $Length(entry, ".") = 2 {
+			Set excl($Piece(entry, ".", 2), $Piece(entry, ".", 1)) = ""
+		} Else {
+			Set excl(entry) = ""
+		}
+		Set hasAny = 1
 	}
-	
-	Kill ^||PPR
-	Return result.%ToJSON()
+	Return hasAny
+}
+
+/// 1 when the edge source -pred-> is excluded: a bare entry for pred, or a typed entry
+/// for pred whose Type is the source key's prefix before "/".
+ClassMethod Excluded(ByRef excl, source As %String, pred As %String) As %Boolean [ Internal ]
+{
+	If '$Data(excl(pred)) Return 0
+	If $Data(excl(pred)) # 2 Return 1
+	If source '[ "/" Return 0
+	Return $Data(excl(pred, $Piece(source, "/", 1))) > 0
 }
 
 ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String

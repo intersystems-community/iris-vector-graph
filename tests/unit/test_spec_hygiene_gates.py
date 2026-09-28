@@ -114,6 +114,15 @@ def test_fhir_sql_columns_match_schema():
     )
 
 
+def test_fhir_graphs_ddl_has_interp_version():
+    """Gate 4c (spec 235): the interpretation marker is in the fhir_graphs DDL, so a
+    fresh install and one migrated by _ensure_fhir_graph_columns agree."""
+    import pathlib
+    repo = pathlib.Path(__file__).parent.parent.parent
+    cols = _parse_schema_columns((repo / "iris_vector_graph" / "schema.py").read_text())
+    assert "interp_version" in cols["fhir_graphs"]
+
+
 # ---------------------------------------------------------------------------
 # Gate 4 (standalone) — GraphStore protocol completeness
 # ---------------------------------------------------------------------------

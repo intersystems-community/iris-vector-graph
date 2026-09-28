@@ -35,10 +35,17 @@ class GraphStore(Protocol):
     # `graph` (spec 231) is sent only for a named graph, so a store written before 4.0.1
     # still serves the default graph; one that does not accept it raises `TypeError` and
     # the engine falls back rather than scoring the default graph instead.
+    #
+    # `exclude` and `limit` (spec 235) are sent only when the caller asked for an
+    # exclusion list. `exclude` is a list of `"p"` (any source) or `"Type.p"` (source key
+    # starts `Type/`) entries left out of both the walk and the divisor; `limit` caps
+    # the rows returned, 0 meaning all. A store that cannot exclude must raise.
     def execute_ppr(self, seed_ids: list, damping: float, max_iterations: int,
                     bidirectional: bool = False,
                     reverse_edge_weight: float = 1.0, *,
-                    graph: Optional[str] = None) -> IVGResult: ...
+                    graph: Optional[str] = None,
+                    exclude: Optional[list] = None,
+                    limit: Optional[int] = None) -> IVGResult: ...
     def execute_pagerank(self, damping: float, max_iterations: int) -> IVGResult: ...
     def execute_wcc(self) -> IVGResult: ...
     def execute_cdlp(self, max_iterations: int) -> IVGResult: ...

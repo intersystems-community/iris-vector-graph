@@ -23,7 +23,11 @@ from iris_vector_graph.errors import IndexNotFoundError
 from iris_vector_graph.index_config import VectorIndexConfig, FulltextIndexConfig, MultiVectorIndexConfig
 
 
-EMB_DIM = 384
+from tests.conftest import SESSION_EMBEDDING_DIM
+
+# The shared kg_NodeEmbeddings is declared at the session width; any other width
+# re-declares the table and conftest has to restore it after every test.
+EMB_DIM = SESSION_EMBEDDING_DIM
 _ONES_VEC = [1.0 / EMB_DIM] * EMB_DIM
 _ONES_JSON = json.dumps(_ONES_VEC)
 
@@ -166,16 +170,18 @@ class TestVectorSearch:
         assert isinstance(results, list)
 
     def test_vector_search_with_score_threshold(self, vec_eng):
-        # IRIS SQL doesn't support HAVING after ORDER BY — exercises the error branch
-        with pytest.raises(ValueError, match="vector_search failed"):
-            vec_eng.vector_search(
-                table="Graph_KG.kg_NodeEmbeddings",
-                vector_col="emb",
-                query_embedding=_ONES_VEC,
-                top_k=5,
-                id_col="id",
-                score_threshold=0.0,
-            )
+        # The threshold used to be a HAVING after ORDER BY (-25); it filters in WHERE now.
+        kwargs = dict(
+            table="Graph_KG.kg_NodeEmbeddings",
+            vector_col="emb",
+            query_embedding=_ONES_VEC,
+            top_k=5,
+            id_col="node_id",
+        )
+        hits = vec_eng.vector_search(score_threshold=0.5, **kwargs)
+        assert {h["id"] for h in hits} >= {f"vec_{i}" for i in range(5)}
+        assert all(h["score"] >= 0.5 for h in hits)
+        assert vec_eng.vector_search(score_threshold=1.01, **kwargs) == []
 
     def test_vector_search_string_embedding(self, vec_eng):
         results = vec_eng.vector_search(
@@ -378,13 +384,15 @@ class TestEdgeVectorSearch:
         assert isinstance(result, list)
 
     def test_edge_vector_search_with_score_threshold(self, vec_eng):
-        # Same HAVING-after-ORDER-BY bug as vector_search — exercises the error branch
-        with pytest.raises(Exception):
-            vec_eng.edge_vector_search(
-                query_embedding=_ONES_VEC,
-                top_k=5,
-                score_threshold=0.0,
-            )
+        # Was the same HAVING-after-ORDER-BY -25 as vector_search; filters in WHERE now.
+        hits = vec_eng.edge_vector_search(
+            query_embedding=_ONES_VEC, top_k=5, score_threshold=0.5
+        )
+        assert isinstance(hits, list)
+        assert all(h["score"] >= 0.5 for h in hits)
+        assert vec_eng.edge_vector_search(
+            query_embedding=_ONES_VEC, top_k=5, score_threshold=1.01
+        ) == []
 
     def test_edge_vector_search_string_embedding(self, vec_eng):
         result = vec_eng.edge_vector_search(

@@ -472,13 +472,15 @@ class TestMergePatternExistence:
 class TestDeleteStageEdgeVariable:
     def test_delete_relationship_via_with(self):
         """DELETE relationship that was promoted through WITH."""
-        sql = tr(
+        # The first statement captures the edge IDs (`__capture_ids__`); the delete
+        # follows it.
+        sqls = tr_all(
             "MATCH (a)-[r:KNOWS]->(b) "
             "WITH r "
             "DELETE r"
         )
-        assert "DELETE" in sql
-        assert "rdf_edges" in sql
+        assert sqls[0].startswith("__capture_ids__ ")
+        assert any(s.startswith("DELETE FROM") and "rdf_edges" in s for s in sqls[1:]), sqls
 
     def test_delete_node_via_with(self):
         """DELETE node that was promoted through WITH."""

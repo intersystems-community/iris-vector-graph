@@ -57,10 +57,29 @@ See [OPERATIONS.md](../OPERATIONS.md#the-embedding-registry).
 Downgrading is safe: a pre-3.2.0 install ignores the registry table, and 3.2.0 treats a
 missing registry as "nothing recorded" rather than an error.
 
-## Scheduled for removal in 4.0.0
+## Upgrading from 4.0.0 to 4.1.0
 
-Each of these still works and emits a `DeprecationWarning` (or, for the SQL parameters, is
-documented as ignored). Fix call sites before upgrading to 4.0.0.
+No data moves. Redeploy the `Graph.KG.*` classes, then run `initialize_schema()`. It
+adds `rdf_edges.ekey` (every existing row becomes `ekey = 0`) and `code_crosswalk`, in
+resumable steps; `^KG` and the ledger are untouched. The FHIR tables are created by
+the first `fhir_graph_register`, and only in a namespace that has a FHIR repository.
+
+Check call sites for the behaviour changes: `store.delete_nodes` / `delete_edges` and
+`kg_PERSONALIZED_PAGERANK` now stay in one graph, new boolean writes store
+`'true'` / `'false'`, and `properties(n)` returns a Cypher map. The portability path
+does not carry FHIR graphs: a snapshot holds none of the FHIR tables or
+`code_crosswalk` ([known issue](../KNOWN_ISSUES.md#snapshots-carry-no-fhir-tables-and-no-code_crosswalk-verified-2026-09-27)).
+Details in the [4.1.0 release note](../releases/v4.1.0.md#upgrading-from-400).
+
+## Deprecated in 3.x
+
+The three SQL rows were settled in 4.0.0: `embedding_dimension` is gone, and
+`kg_KNN_VEC`'s fourth slot is now the graph (see the 4.0.0 changelog; a 3.2.0 caller
+still compiles and now searches a graph named after its model). The engine methods `drop_graph`, `rebuild_kg` and `rebuild_nkg` survived
+4.0.0 and 4.1.0 and still work (`rebuild_kg` and `rebuild_nkg` emit a
+`DeprecationWarning`; `drop_graph` does not). They are now due for removal in 5.0,
+together with 4.1.0's `fhir_bridge.get_kg_anchors`, `unified_clinical_pipeline` and
+`POST /fhir-event`.
 
 | Deprecated                                                                                        | Deprecated in | Replacement                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

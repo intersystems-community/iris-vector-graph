@@ -4,12 +4,25 @@
 
 ### v4.1.0 (unreleased)
 
-An ISC FHIR repository (`HS.FHIRServer`, R4 JsonAdvSQL) can be projected as one named
-graph, and a concept in a UMLS or HPO graph can be walked to the resources that carry its
-codes. Only topology is copied; codes and properties are read live from the repository.
-Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
+The first release since 4.0.0. It also carries the fixes that were drafted as 4.0.1.
 
-**The FHIR graph**
+- An ISC FHIR repository (`HS.FHIRServer`, R4 JsonAdvSQL) can be projected as one named
+  graph (specs 231, 232, 233). Only topology is copied; codes and properties are read
+  live from the repository.
+- The graph can be read patient by patient, with base R4 semantics only: patient
+  compartment edges, categories, a clinical code preset, patient-grouped PPR, and
+  coverage and gap reports (spec 235). No profiles are enforced or interpreted.
+- A concept in a UMLS or HPO graph can be walked to the resources that carry its codes
+  and ranked with PPR.
+- openCypher TCK: 3896/3896 eligible scenarios, strict and typed.
+- Opt-in multigraph mode, typed booleans and `properties()`.
+- Graph-scoping fixes: PPR walked every graph and `delete_nodes` erased an id from every
+  graph. The 4.0.0 migration now completes on 3.x installs.
+
+Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md). Interpretation contract:
+[`docs/FHIR_GRAPH.md#interpretation-contract`](docs/FHIR_GRAPH.md#interpretation-contract).
+
+**The FHIR graph** (spec 231)
 
 - `fhir_graph_register(endpoint="", denylist=None, interval_s=60)` registers the
   namespace's repository as graph `fhir:<$NAMESPACE>:<package>`, for example
@@ -26,9 +39,10 @@ Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
 - `fhir_graph_schedule` / `fhir_graph_unschedule` manage one Task Manager task
   (`Graph.KG.FHIRGraphSyncTask`) per graph, at `max(1, ceil(interval_s / 60))` minutes.
   `fhir_graph_status` reports counts, pending changes, last sync, last error and task ID.
-- New tables `Graph_KG.fhir_graphs` (registry and watermarks) and
+- New tables `Graph_KG.fhir_graphs` (registry, watermarks and `interp_version`) and
   `Graph_KG.fhir_unresolved` (references that are `external`, `missing` or `deleted`;
-  a later sync turns the last two into edges). `Graph.KG.Eraser` erases a graph's
+  a later sync turns the last two into edges). The first `fhir_graph_register` creates
+  them (see Upgrading). `Graph.KG.Eraser` erases a graph's
   unresolved rows and zeroes its watermarks, and keeps the registry row.
 - CLI: `ivg fhir register|rebuild|sync --once|status|schedule [--remove]`, straight to
   IRIS via `IRIS_HOST`/`IRIS_PORT`/`IRIS_NAMESPACE`/`IRIS_USERNAME`/`IRIS_PASSWORD`.
@@ -44,7 +58,7 @@ Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
   `ambiguous`, and deleting it restores the edge in the same sync. Urls and versions
   compare on their first 220 characters, the index's `MAXLEN`.
 - New tables `Graph_KG.fhir_definitions` (the url and version each resource declared
-  at last sync) and `Graph_KG.fhir_canonical_refs` (every canonical and json-link ref
+  at last sync, created by the first `fhir_graph_register`) and `Graph_KG.fhir_canonical_refs` (every canonical and json-link ref
   a source carries, with its origin). A url edit resyncs every source naming the old
   or new url in the same transaction. Rebuild and `Graph.KG.Eraser` clear both.
 - `fhir_graph_register(..., json_links=None)` and a `json_links` column on
@@ -67,6 +81,24 @@ Guide: [`docs/FHIR_GRAPH.md`](docs/FHIR_GRAPH.md).
   E2E gate, and a `slow` smoke loads the HL7 CPG 2.0.0 CHF examples (62 resources,
   CC0, vendored under `tests/e2e/fixtures/fhir/cpg`): 36 link rows, 31 resolved.
 
+**Interpretation** (spec 235)
+
+- New derived edge `in_patient_compartment` (resource → Patient), one per (resource,
+  patient). It comes from the reference edges whose param is one of the type's R4
+  patient-compartment params, as loaded once per sync from `HS.FHIRServer.Schema`.
+  The qualifier `via` lists those params. Patient resources get none. The edges are
+  re-derived with the resource's reference edges and deleted with it.
+  `fhir_graph_status` counts them apart as `compartment_edges`.
+- Every node carries `category` (JSON `["system|code", ...]`) and `meta_profile` (claimed
+  by the writer, not validated). HL7 observation-category and condition-category codes
+  and US Core category codes also become PascalCase labels (`Laboratory`,
+  `VitalSigns`). A code equal to an R4 type name is skipped.
+- `params="clinical"` resolves a concept through `code`, `value-concept`,
+  `component-code`, `component-value-concept` and Medication `code`, limited to the
+  params the endpoint indexes. A resolved Medication adds its MedicationRequest,
+  MedicationStatement, MedicationAdministration and MedicationDispense (`via=medication`).
+  `params=["code"]` stays the default.
+
 **From concepts to ranked resources**
 
 - `Graph_KG.code_crosswalk(code_system_uri, code, target_graph, target_node_id,
@@ -82,6 +114,26 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
   (`relation = 'related'`, `source = 'fhir_bridges'`, `source_version = bridge_type`,
   default-graph target), and can be re-run. Until 5.0, `fhir_bridge_add` writes both.
 
+**Ranking and anchors** (spec 235)
+
+- `FHIR_PPR_EXCLUDE` = `in_patient_compartment`, `Provenance.target`,
+  `Provenance.entity` is the default `exclude_predicates` of `fhir_concept_ppr`.
+  `exclude_predicates=()` walks every edge.
+- `fhir_concept_ppr(group_by="patient", via=[...])` sums each patient's compartment
+  scores and returns the top contributors plus the `unattributed` mass.
+- `/api/cypher` with `fhir_patient_id` takes `$patient_anchors` from a synced graph
+  holding the patient (`anchor_source: "graph"`) and falls back to the external bridge
+  (`"fhir_bridge"`).
+
+**Reports** (spec 235)
+
+- `fhir_coverage_report(graph, id_prefix=None)`: per-type compartment share,
+  patient-less resources, `meta_profile` histogram, category split, per-system code
+  resolution for the clinical preset, linked patients, interpretation version and
+  staleness, and `fhir_link_report` unchanged. Computed live, never stored.
+- `fhir_concept_gaps(graph, params=..., top=20, id_prefix=None)`: commonest unmatched
+  `(system, code)` pairs and text-only field counts per param.
+
 **Demo**
 
 - `/fhir` in `src/iris_demo_server`: concept search over a live FHIR repository,
@@ -90,6 +142,19 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
   Condition and syncs it. Seed with
   `python -m iris_demo_server.services.fhir_demo_data`, which PUTs 200 synthetic
   patients (885 resources) through the FHIR service.
+- `/bio` reads a seeded named graph, `bio:demo` (33 proteins, 38 interactions;
+  `python -m iris_demo_server.services.bio_demo_data`). It used to query a table and
+  port that no longer exist, so every search failed. Search is text matching, and the
+  page says so; the fake HNSW panel and invented similarity scores are gone. The
+  pathway hop count was one too high.
+- `/fraud` crashed on first score: `httpx` was asked for HTTP/2 without `h2`
+  installed. HTTP/2 is now used only when `h2` is present. The header shows the scoring
+  backend (fraud API or demo heuristic) instead of unverified figures, and the
+  transaction graph is labelled illustrative.
+- The landing page lists the three demos, what each needs, and a live status for each
+  backend (`/api/status/{fraud|bio|fhir}`), loaded after the page so a dead database
+  never stalls it. `tests/e2e/test_demo_browser_e2e.py` clicks through every scenario
+  in headless Chromium.
 
 **Genomics on the FHIR graph** (spec 233)
 
@@ -109,42 +174,10 @@ relation, source, source_version, confidence)` maps a `(system, code)` to a conc
   `component-value-concept`. From `MONDO_0019052` (`direction="in"`, 6 hops): 20
   concepts, 7 Observations, 2 Patients; resolve 4 ms and concept-PPR 25 ms median.
 - A model result (Device, prediction Observation, Provenance) syncs to `target`,
-  `agent` and `entity` edges; `Provenance.target` is documented as a PPR hub-denylist
-  candidate.
+  `agent` and `entity` edges. `Provenance.target` and `Provenance.entity` are hubs, so
+  `fhir_concept_ppr` excludes them by default (see "Ranking and anchors").
 - Tests: `tests/{unit,integration,e2e}/test_233_*.py`; guide section "Genomics" in
   `docs/FHIR_GRAPH.md`.
-
-**Fixed** (spec 233)
-
-- `materialize_inference` wrote inferred rows to `rdf_edges` only, after `import_rdf`
-  had run BuildKG, so no `^KG` walker (concept expansion, BFS, PPR) saw them. Each
-  inferred edge now goes through `EdgeScan.WriteAdjacency`, and `retract_inference`
-  removes it from `^KG` unless an asserted row for the same triple remains.
-- `materialize_inference` read its domain/range, TransitiveProperty and
-  SymmetricProperty rules from `rdf_edges` with no graph predicate (domain/range
-  under `LIMIT 50000`), so one graph's rules ran over any graph's edges. Every read is
-  now scoped to the target graph and unbounded.
-- Arno default-graph PPR (`ArnoAccel.PPRJson`) answered from garbage in any process
-  that had loaded the Arno library. `BuildGraphJson` walked the pre-214 layout
-  `^KG("out",s,p,o)` and listed graph keys as nodes; it now walks the default graph
-  `^KG("out",0,...)` only. Its cache stamp `^KG("__version")` was bumped only by
-  `Eraser`; `EdgeScan.WriteAdjacency`, `WriteAdjacencyShadow`, `DeleteAdjacency`,
-  `TraversalBuild.BuildKG` and `LedgerApply` now bump it too.
-- Known, not fixed: `^ArnoKG("KG","nkg_adj")` is an all-graph `^NKG` snapshot, warmed
-  by betweenness and cleared only by BuildKG. While it exists, Arno `*_global` calls
-  answer from it across graphs.
-
-**Deprecated, removed in 5.0**
-
-- `fhir_bridge.get_kg_anchors` and `unified_clinical_pipeline`: use
-  `fhir_resolve_concepts` and `fhir_concept_ppr`. Each warns once per call.
-- `POST /fhir-event`: answers with a `Deprecation: true` header and a warning. It takes
-  an optional `graph` (1-256 characters, validated) that every node, edge and embedding
-  write goes to; omitted, the calls are exactly the 4.0 ones.
-
-**Security.** The namespace is the boundary, not the graph ID. The FHIR graph holds
-resource keys and references, which identify patients; deploy IVG in the FHIR namespace
-only for users who may already read the repository's tables.
 
 **openCypher TCK: 3896/3896 eligible scenarios, strict and typed** (specs 203, 229)
 
@@ -229,8 +262,6 @@ upstream and is excluded), on `irishealth:2026.3.0AI.113.0`.
   `SQLUser.CY_RETYPE_MAP` for a relationship's stored qualifiers, a typed `CASE` at
   translate time for a map literal's dynamic values.
 
-### v4.0.1 (unreleased)
-
 **Fixed**
 
 - `kg_PERSONALIZED_PAGERANK` walked every graph. `Graph.KG.PageRank.RunJson` took no
@@ -250,6 +281,63 @@ upstream and is excluded), on `irishealth:2026.3.0AI.113.0`.
   never listed `fhir_bridges`. It now checks `INFORMATION_SCHEMA.TABLES` and reports the
   real primary key, `pk_bridge (fhir_code, kg_node_id)`.
 - `docs/SEMANTIC_LAYER.md` documented an `import_fhir_bundle` that does not exist.
+- `materialize_inference` wrote inferred rows to `rdf_edges` only, after `import_rdf`
+  had run BuildKG, so no `^KG` walker (concept expansion, BFS, PPR) saw them. Each
+  inferred edge now goes through `EdgeScan.WriteAdjacency`, and `retract_inference`
+  removes it from `^KG` unless an asserted row for the same triple remains.
+- `materialize_inference` read its domain/range, TransitiveProperty and
+  SymmetricProperty rules from `rdf_edges` with no graph predicate (domain/range
+  under `LIMIT 50000`), so one graph's rules ran over any graph's edges. Every read is
+  now scoped to the target graph and unbounded.
+- Arno default-graph PPR (`ArnoAccel.PPRJson`) answered from garbage in any process
+  that had loaded the Arno library. `BuildGraphJson` walked the pre-214 layout
+  `^KG("out",s,p,o)` and listed graph keys as nodes; it now walks the default graph
+  `^KG("out",0,...)` only. Its cache stamp `^KG("__version")` was bumped only by
+  `Eraser`; `EdgeScan.WriteAdjacency`, `WriteAdjacencyShadow`, `DeleteAdjacency`,
+  `TraversalBuild.BuildKG` and `LedgerApply` now bump it too.
+- Cypher node `DELETE` with no `USE GRAPH` deleted by `node_id` alone. The `MATCH`
+  reads the whole namespace and binds one row per graph holding the ID, but the
+  delete also reached the labels and properties of graphs where it bound no node.
+  The capture now selects `graph_id` beside the ID, each statement carries
+  `graph_id = __GRAPH_<key>__`, and `execute_transaction` runs it once per captured
+  graph (`_expand_captured`, still chunked). Edges and vectors were never orphaned,
+  because their foreign keys are on `(graph_id, node_id)`.
+- Under `USE GRAPH`, the non-`DETACH` check (`__constraint_check_delete_connected__`)
+  counted every graph's edges, because `add_dml` scopes only DML verbs. A node was
+  refused as connected when the same ID had edges in another graph.
+- A snapshot dropped a FHIR graph's bookkeeping. `fhir_unresolved`, `fhir_definitions`
+  and `fhir_canonical_refs` were in the store inventory but not in the snapshot plan,
+  so `save_snapshot` did not export them and a restore left them empty. The repository
+  is not in the archive, so they could not be rebuilt from it. They are now exported
+  and restored. The restore creates these lazy tables when the archive has rows for
+  them. A merge restore matches every column of these rows; before, it matched only
+  `graph_id`, which would have kept one row per graph.
+- `BulkLoader` and `scripts/migrations/migrate_to_nodepk.py` failed on a duplicate or
+  foreign-key refusal after another connection ran `%BuildIndices`. Such a refusal
+  arrives on a connection whose cached statement predates the rebuild as `<LIST ERROR>
+Incorrect list format ... type detected : 0`. It has no SQLCODE, so a re-load stopped
+  being idempotent and a `-121` lost its reason. `utils.execute_decoded` now re-runs
+  that statement under a text the connection has not executed, which reports the real
+  SQLCODE.
+- `score_threshold` never worked on `edge_vector_search` or `vector_search`. Both
+  appended `HAVING score >= x` after `ORDER BY score DESC`, which IRIS refuses at
+  Prepare (`SQLCODE -25`, "Input (HAVING) encountered after end of query"). The
+  threshold now filters in `WHERE` on the cosine expression, bound as a parameter,
+  and a non-numeric threshold raises instead of being spliced into the SQL.
+- `list_active_queries` and `GET /admin/queries` never returned a row. They selected
+  `ClientName` and `Command` from `%SYS.ProcessQuery`, which has neither column, and
+  on 2026.3 the `FETCH FIRST` form made the driver SIGSEGV on the Prepare error instead
+  of raising. A Community guard also returned `[]` when
+  `$SYSTEM.Version.GetISCProduct()` was 4, but 4 is every InterSystems IRIS. Both paths now share
+  `_engine.admin.active_queries_sql(limit)`: `SELECT TOP n` from
+  `INFORMATION_SCHEMA.CURRENT_STATEMENTS` joined to `INFORMATION_SCHEMA.STATEMENTS`
+  for the text. The row keys (`id`, `state`, `client`, `command`) are unchanged.
+- The biomedical example's GraphQL `createProtein` dropped `embedding`: the resolver
+  created the node and never called `store_embedding`. It now stores it, and it
+  refuses a vector that is not 768 wide before it creates the node.
+- Known, not fixed: `^ArnoKG("KG","nkg_adj")` is an all-graph `^NKG` snapshot, warmed
+  by betweenness and cleared only by BuildKG. While it exists, Arno `*_global` calls
+  answer from it across graphs.
 
 **Fixed: 4.0.0 migration of 3.x installs** (found on a 3.2.0-era install with about
 1.6M props and 243k labels)
@@ -294,6 +382,48 @@ upstream and is excluded), on `irishealth:2026.3.0AI.113.0`.
 
 - `store.delete_nodes` and `store.delete_edges` take a keyword `graph=`. Without it
   they affect only the default graph. They used to affect every graph.
+
+**Deprecated, removed in 5.0**
+
+- `fhir_bridge.get_kg_anchors` and `unified_clinical_pipeline`: use
+  `fhir_resolve_concepts` and `fhir_concept_ppr`. Each warns once per call.
+- `POST /fhir-event`: answers with a `Deprecation: true` header and a warning. It takes
+  an optional `graph` (1-256 characters, validated) that every node, edge and embedding
+  write goes to; omitted, the calls are exactly the 4.0 ones.
+
+**Security.** The namespace is the boundary, not the graph ID. The FHIR graph holds
+resource keys and references, which identify patients; deploy IVG in the FHIR namespace
+only for users who may already read the repository's tables.
+
+**Upgrading**
+
+Redeploy the `Graph.KG.*` classes. `Graph.KG.FHIRGraph`, `Graph.KG.GraphMode` and
+`Graph.KG.FHIRGraphSyncTask` are new, and `PageRank`, `EdgeScan` and `Eraser` changed.
+`initialize_schema()` adds `rdf_edges.ekey` and `code_crosswalk` (see the multigraph
+section).
+
+`initialize_schema` no longer creates `fhir_graphs`, `fhir_unresolved`,
+`fhir_definitions` or `fhir_canonical_refs`. The first `fhir_graph_register` in a
+namespace creates them, and only when the namespace has a FHIR repository
+(`HS_FHIRServer.Repo`). `GraphSchema.get_fhir_graph_schema_sql()` returns their DDL.
+Namespaces that already have the tables keep them. `initialize_schema` still adds
+`interp_version` to an existing `fhir_graphs`. `fhir_bridges` and `code_crosswalk`
+stay in the base schema. Without the tables, `fhir_patient_anchors` returns no
+graphs, `fhir_graph_status` says the graph is not registered, and `erase_graph` and
+`verify_graph` skip them.
+
+`fhir_graphs.interp_version` records which interpretation rules last built a graph. A
+graph synced by a pre-release build from `main` after 4.0.0 has NULL there, so its first
+sync after the upgrade re-derives every live resource once (compartment edges,
+`category`, `meta_profile`, labels) before the incremental pass, and reports
+`interpretation.full_rederivation: true`. On a large graph that sync takes about as
+long as a rebuild. Run `fhir_reinterpret(graph)` beforehand to do it at a time of your
+choosing. `erase_graph` resets the column to NULL. A marker newer than the installed
+code raises in Python and is never rewritten.
+
+A direct `kg_PERSONALIZED_PAGERANK` on a FHIR graph applies no exclusions, so it walks
+the `in_patient_compartment` and Provenance edges. Pass
+`exclude_predicates=list(FHIR_PPR_EXCLUDE)` to rank as `fhir_concept_ppr` does.
 
 ### v4.0.0 (2026-09-22)
 

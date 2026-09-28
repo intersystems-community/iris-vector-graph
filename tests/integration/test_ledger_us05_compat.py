@@ -7,6 +7,7 @@ leave ledger storage intact; (5) FR-048 namespace independence (skips when IVGTE
 USER's database, as it does on the enterprise container).
 """
 
+import contextlib
 import os
 from unittest.mock import MagicMock
 
@@ -22,6 +23,23 @@ pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 @pytest.fixture
 def engine(iris_connection, ledger_reset):
     return make_engine(iris_connection)
+
+
+def _wipe_secondary(conn, io):
+    """Purge the secondary namespace's ledger and drop the node this test creates."""
+    try:
+        io.classMethodValue("Graph.KG.Ledger", "PurgeAll")
+    except Exception:
+        io.kill("^IVG.Ledger")
+    cur = conn.cursor()
+    try:
+        for table in ("Graph_KG.rdf_labels", "Graph_KG.rdf_props"):
+            with contextlib.suppress(Exception):
+                cur.execute(f"DELETE FROM {table} WHERE s = ?", ["ns-b"])
+        cur.execute("DELETE FROM Graph_KG.nodes WHERE node_id = ?", ["ns-b"])
+        conn.commit()
+    finally:
+        cur.close()
 
 
 def _rev_count(conn):
@@ -168,17 +186,21 @@ class TestNamespaceIndependence:
     def test_two_namespaces_have_independent_ledgers(self, engine):
         import iris.dbapi as dbapi
 
+        # A namespace on its own globals database with Graph.KG deployed; IVGTEST
+        # is the fallback, and on the enterprise container it shares USER's database.
+        other_ns = os.environ.get("IVG_SECONDARY_NAMESPACE", "").strip() or "IVGTEST"
+
         conn = engine.conn
         try:
             other = dbapi.connect(
                 hostname=conn.hostname,
                 port=conn.port,
-                namespace="IVGTEST",
+                namespace=other_ns,
                 username="_SYSTEM",
                 password="SYS",
             )
         except Exception as e:
-            pytest.skip(f"IVGTEST namespace not available: {e}")
+            pytest.skip(f"{other_ns} namespace not available: {e}")
         try:
             import iris as _iris
 
@@ -190,10 +212,14 @@ class TestNamespaceIndependence:
             io_user.kill("^IVG.LedgerNsProbe")
             if shared:
                 pytest.skip(
-                    "IVGTEST shares USER's globals database on this container; "
-                    "FR-048 independence requires separate databases"
+                    f"{other_ns} shares USER's globals database on this container; "
+                    "FR-048 independence requires separate databases (set "
+                    "IVG_SECONDARY_NAMESPACE)"
                 )
-            eng2 = make_engine(other, namespace="IVGTEST")
+            # ledger_reset wipes USER only; the secondary namespace persists across
+            # runs, so a prior run's "shared-key" revision would replay here.
+            _wipe_secondary(other, io_other)
+            eng2 = make_engine(other, namespace=other_ns)
             engine.ledger.enable()
             eng2.ledger.enable()
             cs = Changeset(actor="a", actor_type="human", idempotency_key="shared-key")
@@ -206,4 +232,6 @@ class TestNamespaceIndependence:
             assert engine.ledger.head().revision_id != eng2.ledger.head().revision_id
             assert engine.ledger.head().seq == 2 and eng2.ledger.head().seq == 2
         finally:
+            with contextlib.suppress(Exception):
+                _wipe_secondary(other, _iris.createIRIS(other))
             other.close()

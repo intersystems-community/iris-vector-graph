@@ -333,12 +333,33 @@ def _method_body(src: str, name: str) -> str:
     return src[start : end + 3]
 
 
-#: sha256 of each method's text at 2b3da99, before spec 234. With the mode off the
-#: single-edge writers must be exactly what they were (FR-004, SC-003).
+#: sha256 of each method's text at 18feb40 (spec 233), the tree spec 234 was merged
+#: onto. With the mode off the single-edge writers must be exactly what they were
+#: (FR-004, SC-003). 234 was written against 2b3da99; between the two, 233 added the
+#: `^KG("__version")` bump that keeps Arno's cached snapshot from going stale, and
+#: nothing else (`test_the_only_pre_234_change_is_the_version_bump`).
 PRE_234_SHA = {
+    "WriteAdjacency": "c1c7c217aa319ddeca2fc0fbdaadbcbcf3d18383a9b040bf6f263f5216197f0c",
+    "DeleteAdjacency": "0cc44290e446f17abbde6334d14f7ea8bf8ba43458ee2e6486523c9186eb744a",
+}
+
+#: The same methods at 2b3da99, with the lines 233 added.
+AT_2B3DA99_SHA = {
     "WriteAdjacency": "0c962bc9a96e723ff3bf07ecb761baca651094d14df10c9e11e222aa30332fe4",
     "DeleteAdjacency": "0ea5df73f49fc5d5661b4cdbde9f3f9bd56147f3f353aa10362ca5efad6d3509",
 }
+_VERSION_BUMP = re.compile(
+    r'\n(\t// \^ArnoKG serves[^\n]*\n\t// write that leaves[^\n]*\n)?'
+    r'\tSet tmp = \$Increment\(\^KG\("__version"\)\)(?=\n)'
+)
+
+
+@pytest.mark.parametrize("name", sorted(AT_2B3DA99_SHA))
+def test_the_only_pre_234_change_is_the_version_bump(name):
+    body = _method_body((CLS / "EdgeScan.cls").read_text(), name)
+    assert _VERSION_BUMP.search(body), f"EdgeScan.{name} no longer bumps ^KG(\"__version\")"
+    stripped = _VERSION_BUMP.sub("", body)
+    assert hashlib.sha256(stripped.encode()).hexdigest() == AT_2B3DA99_SHA[name]
 
 
 @pytest.mark.parametrize("name", sorted(PRE_234_SHA))

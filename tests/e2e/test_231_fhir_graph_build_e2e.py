@@ -94,7 +94,7 @@ def _edges(conn, source):
     return {
         (p, o)
         for p, o in _rows(
-            conn, "SELECT p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ?", GRAPH, source
+            conn, "SELECT p, o_id FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ? AND p <> 'in_patient_compartment'", GRAPH, source
         )
     }
 
@@ -167,7 +167,7 @@ def test_reference_edges(fhir_conn, built):
         assert _adjacent(fhir_conn, k["o1"], p, o), (p, o)
     quals = _rows(
         fhir_conn,
-        "SELECT p, qualifiers FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ?",
+        "SELECT p, qualifiers FROM Graph_KG.rdf_edges WHERE graph_id = ? AND s = ? AND p <> 'in_patient_compartment'",
         GRAPH,
         k["o1"],
     )

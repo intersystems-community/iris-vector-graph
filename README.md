@@ -58,22 +58,22 @@ print(result["rows"])  # [('Bob',)]
 
 ## What It Does
 
-| Feature                     | Notes                                                                                                |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- |
-| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries            |
-| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                            |
-| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                               |
-| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR |
-| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                     |
-| **NKG fast-path**           | `[*1..N]` Cypher patterns route to integer-keyed `^NKG` index, bypassing SQL translation             |
-| **Bulk loader**             | 190–312K edges/s direct `^KG` write; incremental `^NKG` rebuild                                      |
-| **FHIR bridge**             | ICD-10 → knowledge graph mapping via FHIR R4                                                         |
-| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                              |
-| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                        |
-| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                           |
-| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                  |
-| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                            |
-| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                      |
+| Feature                     | Notes                                                                                                       |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **openCypher**              | `MATCH`, `CREATE`, `MERGE`, `DELETE`, `WITH`, `UNWIND`, variable-length paths, subqueries                   |
+| **Temporal property graph** | Time-windowed edges, pre-aggregated bucket analytics, O(1) window queries                                   |
+| **Vector search**           | HNSW (native IRIS VECTOR), IVFFlat, PLAID multi-vector, BM25 full-text                                      |
+| **Graph analytics**         | Betweenness, closeness, eigenvector, degree centrality; Leiden community detection; SCC; k-core; PPR        |
+| **Shortest path**           | Unweighted BFS (`shortestPath`), weighted Dijkstra (`ivg.shortestPath.weighted`)                            |
+| **NKG fast-path**           | `[*1..N]` Cypher patterns route to integer-keyed `^NKG` index, bypassing SQL translation                    |
+| **Bulk loader**             | 190–312K edges/s direct `^KG` write; incremental `^NKG` rebuild                                             |
+| **FHIR graph**              | An ISC FHIR repository as a named graph; concept → resource → patient ranking ([guide](docs/FHIR_GRAPH.md)) |
+| **Bolt protocol**           | neo4j-driver compatible wire protocol (TCP + WebSocket)                                                     |
+| **Embedded Python**         | Graph algorithms run server-side via IRIS embedded Python (igraph, leidenalg)                               |
+| **IPM / ZPM**               | ObjectScript-only install via InterSystems Package Manager                                                  |
+| **RDF export**              | `export_rdf()` — full or filtered graph to Turtle/NT/NQuads/JSON-LD                                         |
+| **SHACL validation**        | `validate_shacl()` — SHACL Core via PySHACL; `ValidationReport` dataclass                                   |
+| **PROV-O**                  | `prov_export()` — temporal edges as W3C PROV-O provenance graph                                             |
 
 ---
 
@@ -231,6 +231,33 @@ See [docs/USER_GUIDE.md](docs/USER_GUIDE.md#named-graphs) for the full guide.
 
 ---
 
+## FHIR Repository as a Graph
+
+Run IVG in an ISC FHIR namespace (`HS.FHIRServer`, R4 JsonAdvSQL) and the repository
+becomes the named graph `fhir:<NAMESPACE>:<package>`: one node per live resource, one
+edge per indexed reference. Codes and properties stay in the repository.
+
+```python
+reg = engine.fhir_graph_register()           # creates the fhir_* tables on first use
+g = reg["graph_id"]                          # e.g. fhir:IVGFHIR:X0001
+engine.fhir_graph_rebuild(g)
+engine.fhir_graph_schedule(g, interval_s=60) # incremental sync from the Task Manager
+
+# Map a code to a concept node, then rank patients around the concept
+engine.code_crosswalk_add("http://hl7.org/fhir/sid/icd-10-cm", "E11.9", "C0011860",
+                          target_graph="umls", relation="exact")
+ranked = engine.fhir_concept_ppr(g, "umls", ["C0011860"], params="clinical",
+                                 group_by="patient", top_k=10)
+
+engine.fhir_coverage_report(g)               # what the interpretation reached
+```
+
+The same from a shell: `ivg fhir register|rebuild|sync --once|status|schedule|links`.
+See [docs/FHIR_GRAPH.md](docs/FHIR_GRAPH.md) for the model, the interpretation
+contract (base R4, no profiles), sync, reports and limits.
+
+---
+
 ## Revision Ledger (Transaction-Time History)
 
 The structural graph (nodes, labels, properties, relationships, qualifiers) can
@@ -301,50 +328,10 @@ globals are accessible. If they are absent a `WARNING` is logged naming the
 namespace and the fix. Set `IVG_STRICT_NAMESPACE=1` to upgrade the warning
 to a raised `NamespaceMismatchWarning`.
 
-### A namespace is an IVG namespace only once the classes are deployed
-
-`Graph.KG.*` ObjectScript is what gives a namespace IVG's behaviour. A
-namespace whose schema was built by DDL alone — plain `CREATE TABLE`, or
-`initialize_schema(auto_deploy_objectscript=False)` — is a shell that looks
-right and behaves differently:
-
-| Property                                                               | Classes deployed    | DDL only       |
-| ---------------------------------------------------------------------- | ------------------- | -------------- |
-| `Graph.KG.Eraser` / `TemporalIndex` / `LedgerApply`                    | present             | absent         |
-| Schema migrations (`tighten_graph_id_column`, `add_graph_id_to_nodes`) | applied             | never reach it |
-| Traversal, temporal and erasure acceleration                           | native ObjectScript | none           |
-| Per-graph erase, revision ledger, embedding routing                    | work                | raise          |
-
-Check a namespace before trusting it:
-
-```sql
-SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'Graph.KG.Eraser'
-```
-
-`Graph.KG.Eraser` declares no table, so DDL cannot produce it. It replaces the
-old marker `Graph.KG.Edge`, deleted in 4.0.0: a class-declared `rdf_edges` has
-no `edge_id`, so the DDL declares that table in every namespace now.
-
-Zero means DDL-only. Deploy the classes into that namespace — `initialize_schema()`
-with auto-deploy, or `$SYSTEM.OBJ.LoadDir("<path>/iris_src/src", "ck", .err, 1)`
-from a session in that namespace — before writing data.
-
-IRIS also auto-generates the view `SQLUser.rdf_edges`; filter the catalog on
-`TABLE_SCHEMA = 'Graph_KG'`, since a view carries no defaults and hides `graph_id`'s.
-
-### CPF global mapping
-
-If your graph data lives in a separate database, map the `^KG` global in the
-IRIS CPF file so the probe passes without copying data:
-
-```ini
-[Map.MYGRAPH]
-Global=^KG,Directory=/db/IRISLOCALDATA/
-```
-
-After mapping, `$Data(^KG("deg"))` returns non-zero in that namespace and no
-warning is emitted. Global mapping brings the data, not the behaviour — the
-classes still have to be deployed into the namespace.
+A namespace is an IVG namespace only once the `Graph.KG.*` classes are deployed
+into it: a DDL-only schema, and a CPF global mapping alone, look right and behave
+differently. How to check a namespace and how to map `^KG`:
+[Admin Guide §3](docs/ADMIN_GUIDE.md#deploying-into-a-non-user-namespace).
 
 ### Env var controls
 
@@ -360,16 +347,17 @@ classes still have to be deployed into the namespace.
 
 ## Documentation
 
-| Document                                                 | Contents                                                             |
-| -------------------------------------------------------- | -------------------------------------------------------------------- |
-| [User Guide](docs/USER_GUIDE.md)                         | Cypher examples, named graphs, ledger, temporal edges, vector search |
-| [Admin Guide](docs/ADMIN_GUIDE.md)                       | Container setup, schema management, index rebuilding                 |
-| [Admin API](docs/ADMIN_API.md)                           | Python API reference for engine administration                       |
-| [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput             |
-| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details                 |
-| [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance                      |
-| [openCypher TCK](docs/TCK.md)                            | How the TCK figure is produced, what a pass checks, how to rerun it  |
-| [Changelog](CHANGELOG.md)                                | Full version history                                                 |
+| Document                                                 | Contents                                                                  |
+| -------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [User Guide](docs/USER_GUIDE.md)                         | Cypher examples, named graphs, ledger, temporal edges, vector search      |
+| [Admin Guide](docs/ADMIN_GUIDE.md)                       | Container setup, schema management, index rebuilding                      |
+| [Admin API](docs/ADMIN_API.md)                           | Python API reference for engine administration                            |
+| [Benchmarks](docs/performance/BENCHMARKS.md)             | Full methodology, LDBC SNB results, ingestion throughput                  |
+| [Graph Algorithms](docs/performance/GRAPH_ALGORITHMS.md) | Centrality and community detection benchmark details                      |
+| [Semantic Layer](docs/SEMANTIC_LAYER.md)                 | RDF export, SHACL validation, PROV-O provenance                           |
+| [FHIR Graph](docs/FHIR_GRAPH.md)                         | FHIR repository as a graph: quick start, interpretation contract, reports |
+| [openCypher TCK](docs/TCK.md)                            | How the TCK figure is produced, what a pass checks, how to rerun it       |
+| [Changelog](CHANGELOG.md)                                | Full version history                                                      |
 
 ---
 

@@ -5,6 +5,7 @@ from iris_vector_graph.constants import VECTOR_TABLE_NAMES
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.translator import translate_to_sql
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.conftest import SESSION_EMBEDDING_DIM
 
 
 def pytest_collection_modifyitems(items):
@@ -67,10 +68,12 @@ def engine(iris_connection):
     engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
     engine.initialize_schema(auto_deploy_objectscript=True)
     yield engine
-    # Restore dimension to 128 (session default) so subsequent fixtures aren't confused.
+    # Put the session width back so the next vector test finds the table it expects.
     _clear_embedding_tables(iris_connection)
     try:
-        IRISGraphEngine(iris_connection, embedding_dimension=128).initialize_schema(
+        IRISGraphEngine(
+            iris_connection, embedding_dimension=SESSION_EMBEDDING_DIM
+        ).initialize_schema(
             auto_deploy_objectscript=False
         )
     except Exception:
@@ -123,11 +126,6 @@ def fraud_test_data(iris_connection):
         iris_connection.rollback()
 
 
-#: Prefix the translator puts on the pre-DELETE edge count (translator.py:4367),
-#: stripped and interpreted by the executor rather than sent to IRIS.
-_DELETE_GUARD = "__constraint_check_delete_connected__"
-
-
 @pytest.fixture
 def execute_cypher(fraud_test_data):
     conn = fraud_test_data["conn"]
@@ -150,38 +148,16 @@ def execute_cypher(fraud_test_data):
         cursor = conn.cursor()
 
         if sql_query.is_transactional:
-            cursor.execute("START TRANSACTION")
-            try:
-                stmts = sql_query.sql if isinstance(sql_query.sql, list) else [sql_query.sql]
-                all_params = sql_query.parameters
-                rows = []
-                for i, stmt in enumerate(stmts):
-                    p = all_params[i] if i < len(all_params) else []
-                    if stmt.startswith(_DELETE_GUARD):
-                        # A non-DETACH DELETE emits this sentinel first: a COUNT of
-                        # the edges still attached to the nodes about to go, which
-                        # the executor runs and turns into
-                        # ConstraintVerificationFailed. It is not SQL, so handing
-                        # it to IRIS answers `SQLCODE -51 SQL statement expected`.
-                        # `IRISSQLStore.execute_transaction` strips it the same way.
-                        cursor.execute(stmt[len(_DELETE_GUARD) + 1 :], p)
-                        count_row = cursor.fetchone()
-                        if count_row and count_row[0] > 0:
-                            raise RuntimeError(
-                                "ConstraintVerificationFailed: Cannot delete node "
-                                "with existing relationships. Use DETACH DELETE."
-                            )
-                        continue
-                    cursor.execute(stmt, p)
-                    if cursor.description:
-                        rows = cursor.fetchall()
-                cursor.execute("COMMIT")
+            # The translator's mutation output is not plain SQL: it carries
+            # `__capture_ids__` and `__constraint_check_delete_connected__` sentinels
+            # and `__IDS_k__`/`__GRAPH_k__` tokens the executor fills in. Handing it
+            # to IRIS answers `SQLCODE -51 SQL statement expected`, so run it through
+            # the executor the engine uses rather than a copy of it.
+            from iris_vector_graph.stores.iris_sql_store import IRISGraphStore
 
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                return {"columns": columns, "rows": rows}
-            except Exception as e:
-                cursor.execute("ROLLBACK")
-                raise e
+            stmts = sql_query.sql if isinstance(sql_query.sql, list) else [sql_query.sql]
+            res = IRISGraphStore(conn).execute_transaction(stmts, list(sql_query.parameters))
+            return {"columns": list(res.columns), "rows": res.rows}
         else:
             sql_str = sql_query.sql if isinstance(sql_query.sql, str) else "\n".join(sql_query.sql)
             p = sql_query.parameters[0] if sql_query.parameters else []

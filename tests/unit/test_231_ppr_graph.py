@@ -150,4 +150,9 @@ def test_runjson_source_takes_pgraph():
     assert "pGraph As %String" in sig
     body = head[head.index("{") : head.index("\n}\n")]
     assert "Set pGraph = 0" not in body
-    assert "GraphKey).ForIndex(" in body
+    # Since 235 RunJson hands pGraph to Run, which does the walk (and the mapping).
+    assert "..Run(seedJson, alpha, maxIter, bidir, revWeight, pGraph," in body
+    run = src[src.index("ClassMethod Run(") :]
+    run = run[run.index("{") : run.index("\n}\n")]
+    assert "Set pGraph = 0" not in run
+    assert "GraphKey).ForIndex(" in run

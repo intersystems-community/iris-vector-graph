@@ -14,6 +14,7 @@ Performance with IRIS embedded Python:
 - 1K nodes: <200ms (via kg_PERSONALIZED_PAGERANK_JSON)
 """
 
+import os
 import pytest
 import time
 import logging
@@ -31,7 +32,7 @@ def iris_connection_pagerank():
     sys.path.insert(0, '.')
     from scripts.migrations.migrate_to_nodepk import get_connection
 
-    conn = get_connection(container_name="ivg-iris")
+    conn = get_connection(container_name=os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise"))
     cursor = conn.cursor()
 
     # Create nodes table if not exists
@@ -278,7 +279,7 @@ def pagerank_sql(connection, node_filter: str, max_iterations: int = 10, damping
     return results
 
 
-@pytest.mark.skip(reason="PageRank SQL tests hang in CI - needs investigation")
+@pytest.mark.skip(reason="Benchmarks a test-local temp-table SQL PageRank, not IVG code; creates legacy SQLUser.nodes/rdf_edges and runs CREATE/DROP TABLE per iteration in the shared namespace. IVG PageRank is covered by test_algorithms_* and the PageRank E2E tests.")
 class TestPageRankSQLOptimization:
     """Test suite for SQL-based PageRank optimization."""
 

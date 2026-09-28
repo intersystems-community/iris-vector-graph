@@ -37,27 +37,17 @@ def qd_eng(iris_connection, iris_master_cleanup):
 
 class TestExecuteAQL:
 
+    # IVG's AQL is traversal-only; `FOR n IN nodes` is not part of it.
     def test_execute_aql_simple(self, qd_eng):
-        try:
-            from iris_vector_graph.cypher.aql import translate_aql
-        except ImportError:
-            pytest.skip("AQL translation not available")
-        # AQL FOR ... IN ... RETURN  maps to Cypher MATCH
-        try:
-            result = qd_eng.execute_aql("FOR n IN nodes RETURN n")
-            assert result is not None
-        except Exception:
-            pytest.skip("AQL not fully supported")
+        result = qd_eng.execute_aql("FOR v IN 1..2 OUTBOUND 'qd_0' GRAPH 'g' RETURN v")
+        assert sorted(r[0] for r in result.rows) == ["qd_1", "qd_2"]
 
     def test_execute_aql_with_bind_vars(self, qd_eng):
-        try:
-            result = qd_eng.execute_aql(
-                "FOR n IN nodes FILTER n._key == @key RETURN n",
-                bind_vars={"key": "qd_0"}
-            )
-            assert result is not None
-        except Exception:
-            pytest.skip("AQL not fully supported")
+        result = qd_eng.execute_aql(
+            "FOR v IN 1..1 OUTBOUND @start GRAPH 'g' RETURN v",
+            bind_vars={"start": "qd_2"},
+        )
+        assert [r[0] for r in result.rows] == ["qd_3"]
 
 
 # ---------------------------------------------------------------------------

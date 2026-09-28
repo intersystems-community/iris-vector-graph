@@ -129,6 +129,32 @@ It belongs in `tests/integration/`, or it needs a fixture that rebuilds `^NKG`
 before asserting. Until then, treat it as the one expected unit failure and check
 it against `engine.status()` rather than re-running.
 
+### A Cypher `DELETE` with no `USE GRAPH` deletes the node in every graph its `MATCH` binds
+
+With no `USE GRAPH` clause a query reads the whole namespace (`graph_context is None`,
+pinned by `test_no_use_graph_clause_still_spans_the_namespace`). So
+`MATCH (n {id: 'Patient/p1'}) DETACH DELETE n` binds `Patient/p1` in the default graph
+and in `fhir:<NS>:<pkg>`, and it deletes both. That is by design, and it is the same
+reach as `delete_node` (see
+[`delete_node` reaches every graph](#delete_node-reaches-every-graph-that-holds-the-node-id)).
+To delete from one graph, say `USE GRAPH '<g>'`.
+
+Fixed in 4.1.0: the delete now removes exactly the `(graph_id, node_id)` rows the `MATCH`
+bound. Before, it deleted by `node_id` alone, so it also took labels and properties for
+that ID in graphs where the `MATCH` bound no node. Under `USE GRAPH`, the non-`DETACH`
+check for remaining relationships also counted other graphs' edges, so the delete was
+refused whenever the same ID had edges elsewhere.
+
+### One integration test fails on the tree: the snapshot plan misses the FHIR tables
+
+```text
+FAILED tests/integration/test_snapshot_inventory.py::test_the_snapshot_plan_accounts_for_every_store_in_the_inventory
+```
+
+Same root cause as
+[Snapshots carry no FHIR tables and no `code_crosswalk`](#snapshots-carry-no-fhir-tables-and-no-code_crosswalk-verified-2026-09-27).
+It fails on `main` too.
+
 ### Fixed in 4.0.0: `test_embeddings_api.py` depended on the column's leftover width
 
 ```text
@@ -2061,7 +2087,7 @@ rebuild, because sync watches the repository, not the graph. Until `delete_node`
 `topK` switches the walk to bidirectional and no top-k is applied. The loop then reads
 `item.%Get(0)` and `item.%Get(1)`, but `RunJson` returns objects `{"id", "score"}`, so
 every `nodeId` and `score` it emits is empty. It also cannot take a graph, although
-`RunJson` has taken `pGraph` since 4.0.1. Pre-existing; not touched by spec 231.
+`RunJson` has taken `pGraph` since 4.1.0. Pre-existing; not touched by spec 231.
 
 ### `^NKG` has no graph dimension
 
@@ -2071,6 +2097,22 @@ write the integer-indexed `^NKG` with no graph subscript. Every Arno path
 never route a named-graph walk to `PPRJson` (spec 231, FR-016), so a FHIR-graph PPR runs
 in ObjectScript `RunJson` or the Python fallback, both graph-scoped, but slower than
 Arno on large graphs.
+
+### Snapshots carry no FHIR tables and no `code_crosswalk` (verified 2026-09-27)
+
+`iris_vector_graph/_engine/snapshot.py` `STORE_PLAN` names none of `fhir_graphs`,
+`fhir_unresolved`, `fhir_definitions`, `fhir_canonical_refs` or `code_crosswalk`, and
+the storage inventory does. A snapshot therefore exports none of them and a restore
+leaves them empty: the FHIR graph's registration, sync cursor, unresolved-link record
+and every crosswalk mapping are gone, while the graph's nodes and edges come back.
+`tests/integration/test_snapshot_inventory.py::test_the_snapshot_plan_accounts_for_every_store_in_the_inventory`
+fails for exactly this reason.
+
+**Workaround (untested end to end):** after a restore, call `fhir_graph_register()`
+again, run `fhir_graph_rebuild(graph)` (it reconciles by diff, so restored nodes keep
+their vectors), and re-add the crosswalk rows with `code_crosswalk_add`. Keep the
+crosswalk source (the script or file it was loaded from) under version control until
+snapshots cover it.
 
 ## Loose ends
 

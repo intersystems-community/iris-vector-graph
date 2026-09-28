@@ -59,7 +59,9 @@ def _counts(edges):
 @pytest.fixture(scope="module")
 def live(fhir_conn_required, genomics_loaded):
     _, resources = genomics_loaded
-    return set(graph_edges(fhir_conn_required, _keys(resources)))
+    # Reference edges only: spec 235's derived compartment edges are checked in
+    # test_235_compartment_e2e.py.
+    return {e for e in graph_edges(fhir_conn_required, _keys(resources)) if e[1] != "in_patient_compartment"}
 
 
 def test_edges_match_fixture(genomics_loaded, live):
