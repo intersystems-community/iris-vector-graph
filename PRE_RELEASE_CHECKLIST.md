@@ -173,7 +173,7 @@ gh release create v<version> \
 
 ## Sign-off
 
-### 4.1.0 — FHIR repository as a graph, TCK strict/typed (2026-09-27, not released)
+### 4.1.0 — FHIR repository as a graph, TCK strict/typed (2026-09-28)
 
 Specs 231-235 (FHIR graph, canonical links, genomics, lazy `fhir_*` tables,
 interpretation contract) plus the openCypher TCK strict/typed result already on
@@ -193,7 +193,7 @@ graph token ignored (negative control).
 
 | Gate                     | Status | Notes                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Branch and history       | known  | Work is uncommitted on `235-fhir-graph-interpretation`; 233 is merged into `main` (`2d92da2`)                                                                                                                                                                                                                                                     |
+| Branch and history       | pass   | Committed on `235-fhir-graph-interpretation` (`4f07c60`); merged into `main` with `--no-ff` (`a429f4a`), after 233 (`2d92da2`)                                                                                                                                                                                                                    |
 | Unit tests               | pass   | Clean rerun: 12064 passed / 0 failed / 0 errors / 16 skipped. Two `test_vector_unit` threshold tests asserted the inlined literal; they now assert a bound `WHERE` term. The four `main` failures are fixed (234 `EdgeScan` pins repinned to `18feb40`, structural guard, v9a delete via `WITH`). The EPIPE errors were an idle drop, fixed below |
 | Integration tests        | pass   | Clean rerun with `IVG_SECONDARY_NAMESPACE=IVGSEC`: 2583 passed / 0 failed / 0 errors / 23 skipped / 1 xpassed (was 64 skipped). Skip classification below                                                                                                                                                                                         |
 | Integration (known)      | pass   | All fixed: `test_cypher_advanced` ×4 (fixture `execute_cypher` now delegates to `IRISGraphStore.execute_transaction`); `snapshot_inventory` (three `fhir_*` tables added to the snapshot plan); `<LIST ERROR>` in `bulk_loader_endpoints` / `nodepk_migration` (`utils.execute_decoded`, below)                                                   |
@@ -204,9 +204,9 @@ graph token ignored (negative control).
 | Lint clean               | known  | `ruff check .` = 2188 findings, fewer than `main` (2202); new files clean                                                                                                                                                                                                                                                                         |
 | ObjectScript compiles    | 56/56  | `tcp-deploy` deployed and compiled 56 classes, 0 errors                                                                                                                                                                                                                                                                                           |
 | Known issues logged      | pass   | KNOWN_ISSUES records the graph-less `DELETE` reach (by design, same as `delete_node`) and both fixes                                                                                                                                                                                                                                              |
-| Version bump             | todo   | `pyproject.toml` at `4.0.0`; `.venv` reports 2.0.0 until `pip install -e .`                                                                                                                                                                                                                                                                       |
+| Version bump             | pass   | `pyproject.toml` at `4.1.0`; CHANGELOG `### v4.1.0 (2026-09-28)`                                                                                                                                                                                                                                                                                  |
 | Documentation parity     | pass   | `docs/FHIR_GRAPH.md` user guide, README FHIR section, demo docs, `docs/releases/v4.1.0.md` drafted                                                                                                                                                                                                                                                |
-| PyPI + GitHub release    | todo   | Not started; needs explicit permission                                                                                                                                                                                                                                                                                                            |
+| PyPI + GitHub release    | pass   | Run on Tom's "commit and merge to main; version bump, publish!"; see below                                                                                                                                                                                                                                                                        |
 
 Integration skips, 64 → 23. The 41 that now run were hiding bugs or stale tests:
 
@@ -265,7 +265,7 @@ Coverage detail — no public-API module under 80%: `engine.py` 92, `_engine/que
 `text_search.py` 79%, both unchanged, and `migrations/upgrade.py` 40%, the same
 measurement gap as 4.0.0. With `test_230_migration.py` appended it is 84%.
 
-Blocking before §9: bump the version. The test and coverage gates are clear.
+Version bumped; §9 ran on Tom's "commit and merge to main; version bump, publish!".
 
 ### 4.0.0 — per-graph embeddings and the pre-4.0.0 correctness sweep (2026-09-22)
 

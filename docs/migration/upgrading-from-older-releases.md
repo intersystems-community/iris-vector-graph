@@ -67,8 +67,8 @@ the first `fhir_graph_register`, and only in a namespace that has a FHIR reposit
 Check call sites for the behaviour changes: `store.delete_nodes` / `delete_edges` and
 `kg_PERSONALIZED_PAGERANK` now stay in one graph, new boolean writes store
 `'true'` / `'false'`, and `properties(n)` returns a Cypher map. The portability path
-does not carry FHIR graphs: a snapshot holds none of the FHIR tables or
-`code_crosswalk` ([known issue](../KNOWN_ISSUES.md#snapshots-carry-no-fhir-tables-and-no-code_crosswalk-verified-2026-09-27)).
+does not fully carry FHIR graphs: a snapshot holds neither `fhir_graphs` nor
+`code_crosswalk` ([known issue](../KNOWN_ISSUES.md#snapshots-carry-no-fhir_graphs-and-no-code_crosswalk-verified-2026-09-28)).
 Details in the [4.1.0 release note](../releases/v4.1.0.md#upgrading-from-400).
 
 ## Deprecated in 3.x

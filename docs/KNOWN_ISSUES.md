@@ -145,15 +145,15 @@ that ID in graphs where the `MATCH` bound no node. Under `USE GRAPH`, the non-`D
 check for remaining relationships also counted other graphs' edges, so the delete was
 refused whenever the same ID had edges elsewhere.
 
-### One integration test fails on the tree: the snapshot plan misses the FHIR tables
+### ~~One integration test fails on the tree: the snapshot plan misses the FHIR tables~~ (fixed in 4.1.0)
 
 ```text
 FAILED tests/integration/test_snapshot_inventory.py::test_the_snapshot_plan_accounts_for_every_store_in_the_inventory
 ```
 
-Same root cause as
-[Snapshots carry no FHIR tables and no `code_crosswalk`](#snapshots-carry-no-fhir-tables-and-no-code_crosswalk-verified-2026-09-27).
-It fails on `main` too.
+`fhir_unresolved`, `fhir_definitions` and `fhir_canonical_refs` are in the snapshot plan
+now, and the test passes. What snapshots still leave out is in
+[Snapshots carry no `fhir_graphs` and no `code_crosswalk`](#snapshots-carry-no-fhir_graphs-and-no-code_crosswalk-verified-2026-09-28).
 
 ### Fixed in 4.0.0: `test_embeddings_api.py` depended on the column's leftover width
 
@@ -2098,15 +2098,13 @@ never route a named-graph walk to `PPRJson` (spec 231, FR-016), so a FHIR-graph 
 in ObjectScript `RunJson` or the Python fallback, both graph-scoped, but slower than
 Arno on large graphs.
 
-### Snapshots carry no FHIR tables and no `code_crosswalk` (verified 2026-09-27)
+### Snapshots carry no `fhir_graphs` and no `code_crosswalk` (verified 2026-09-28)
 
-`iris_vector_graph/_engine/snapshot.py` `STORE_PLAN` names none of `fhir_graphs`,
-`fhir_unresolved`, `fhir_definitions`, `fhir_canonical_refs` or `code_crosswalk`, and
-the storage inventory does. A snapshot therefore exports none of them and a restore
-leaves them empty: the FHIR graph's registration, sync cursor, unresolved-link record
-and every crosswalk mapping are gone, while the graph's nodes and edges come back.
-`tests/integration/test_snapshot_inventory.py::test_the_snapshot_plan_accounts_for_every_store_in_the_inventory`
-fails for exactly this reason.
+`iris_vector_graph/_engine/snapshot.py` `STORE_PLAN` exports and restores
+`fhir_unresolved`, `fhir_definitions` and `fhir_canonical_refs` (fixed in 4.1.0), but not
+`fhir_graphs` or `code_crosswalk`. After a restore the FHIR graph's nodes, edges and link
+bookkeeping come back, while its registration, sync cursor and every crosswalk mapping
+are gone.
 
 **Workaround (untested end to end):** after a restore, call `fhir_graph_register()`
 again, run `fhir_graph_rebuild(graph)` (it reconciles by diff, so restored nodes keep

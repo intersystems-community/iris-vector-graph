@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.1.0 (unreleased)
+### v4.1.0 (2026-09-28)
 
 The first release since 4.0.0. It also carries the fixes that were drafted as 4.0.1.
 
