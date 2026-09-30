@@ -211,7 +211,7 @@ Found and fixed during the gate run:
 
 | Gate                     | Status  | Notes                                                                                                                                                    |
 | ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Branch and history       | pending | Uncommitted on `4.1.1-debt10-fixes` (86 files against `main`)                                                                                            |
+| Branch and history       | pass    | Committed on `4.1.1-debt10-fixes` (`04bf1c6`); merged into `main` with `--no-ff` (`0fdfae0`)                                                             |
 | Unit tests               | pass    | 12199 passed / 0 failed / 15 skipped                                                                                                                     |
 | Integration tests        | pass    | 2592 passed / 4 failed / 23 skipped / 1 xpassed. The 4 were `test_235_indexed_token_params` (above); rerun after the fix with 235 compartment: 11 passed |
 | Story E2Es               | pass    | 1167 passed / 0 failed / 101 skipped (skips not classified this run). FHIR 231-235 and the 411 E2Es green                                                |
