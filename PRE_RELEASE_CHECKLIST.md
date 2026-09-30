@@ -184,8 +184,8 @@ gh release create v<version> \
 
 The five 4.1.0 bugs in DEBT entry 10 and the test gaps behind them, the FHIR Rebuild
 cost on deleted history, and workarounds for four Arno callout defects. Measured on
-`4.1.1-debt10-fixes` against `ivg-iris-enterprise` (port 31972). Nothing is
-committed, tagged or published.
+`4.1.1-debt10-fixes` against `ivg-iris-enterprise` (port 31972), before
+the release commit.
 
 Found and fixed during the gate run:
 
@@ -209,27 +209,31 @@ Found and fixed during the gate run:
   resets IVGFHIR, so the test relied on data another run left. It loads the
   genomics fixture for its module now; 5 passed.
 
-| Gate                     | Status  | Notes                                                                                                                                                    |
-| ------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Branch and history       | pass    | Committed on `4.1.1-debt10-fixes` (`04bf1c6`); merged into `main` with `--no-ff` (`0fdfae0`)                                                             |
-| Unit tests               | pass    | 12199 passed / 0 failed / 15 skipped                                                                                                                     |
-| Integration tests        | pass    | 2592 passed / 4 failed / 23 skipped / 1 xpassed. The 4 were `test_235_indexed_token_params` (above); rerun after the fix with 235 compartment: 11 passed |
-| Story E2Es               | pass    | 1167 passed / 0 failed / 101 skipped (skips not classified this run). FHIR 231-235 and the 411 E2Es green                                                |
-| Coverage >= 89%          | pass    | 90% (30216 statements, 3149 missed); `--fail-under=89` exit 0                                                                                            |
-| ci-parity                | pass    | 3.12 and 3.13 each 11867 passed; wheel carries 47 `Graph.KG` classes                                                                                     |
-| Quickstart harness       | pass    | `--isolated` 5/5, upgrade 4.1.0 → 4.1.1, against the 4.1.1 wheel                                                                                         |
-| No benchmark regressions | waived  | Same waiver as 4.0.0: `bench_utils.py` writes `SQLUser.*`                                                                                                |
-| Lint clean               | known   | `ruff check .` = 2166 findings, fewer than 4.1.0 (2188)                                                                                                  |
-| ObjectScript compiles    | 56/56   | `tcp-deploy` deployed and compiled 56 classes, 0 errors                                                                                                  |
-| Known issues logged      | pass    | KNOWN_ISSUES: gate-run failures and their causes; Arno callout defects, with khop, random_walk, neighbor_agg and BetweennessNeighborhood unverified      |
-| Version bump             | pass    | `pyproject.toml` at `4.1.1`; CHANGELOG `### v4.1.1 (2026-09-30)`; wheel rebuilt                                                                          |
-| Documentation parity     | pass    | `docs/FHIR_GRAPH.md` § Sync, `docs/releases/v4.1.1.md` drafted                                                                                           |
-| PyPI + GitHub release    | pending | Needs Tom's explicit go                                                                                                                                  |
+| Gate                     | Status | Notes                                                                                                                                                    |
+| ------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Branch and history       | pass   | Committed on `4.1.1-debt10-fixes` (`04bf1c6`); merged into `main` with `--no-ff` (`0fdfae0`)                                                             |
+| Unit tests               | pass   | 12199 passed / 0 failed / 15 skipped                                                                                                                     |
+| Integration tests        | pass   | 2592 passed / 4 failed / 23 skipped / 1 xpassed. The 4 were `test_235_indexed_token_params` (above); rerun after the fix with 235 compartment: 11 passed |
+| Story E2Es               | pass   | 1167 passed / 0 failed / 101 skipped (skips not classified this run). FHIR 231-235 and the 411 E2Es green                                                |
+| Coverage >= 89%          | pass   | 90% (30216 statements, 3149 missed); `--fail-under=89` exit 0                                                                                            |
+| ci-parity                | pass   | 3.12 and 3.13 each 11867 passed; wheel carries 47 `Graph.KG` classes                                                                                     |
+| Quickstart harness       | pass   | `--isolated` 5/5, upgrade 4.1.0 → 4.1.1, against the 4.1.1 wheel                                                                                         |
+| No benchmark regressions | waived | Same waiver as 4.0.0: `bench_utils.py` writes `SQLUser.*`                                                                                                |
+| Lint clean               | known  | `ruff check .` = 2166 findings, fewer than 4.1.0 (2188)                                                                                                  |
+| ObjectScript compiles    | 56/56  | `tcp-deploy` deployed and compiled 56 classes, 0 errors                                                                                                  |
+| Known issues logged      | pass   | KNOWN_ISSUES: gate-run failures and their causes; Arno callout defects, with khop, random_walk, neighbor_agg and BetweennessNeighborhood unverified      |
+| Version bump             | pass   | `pyproject.toml` at `4.1.1`; CHANGELOG `### v4.1.1 (2026-09-30)`; wheel rebuilt                                                                          |
+| Documentation parity     | pass   | `docs/FHIR_GRAPH.md` § Sync, `docs/releases/v4.1.1.md` drafted                                                                                           |
+| PyPI + GitHub release    | pass   | Run on Tom's "push it and publish it"; see below                                                                                                         |
 
 The unit and integration coverage runs used `-p no:warnings`; the unit suite with
 warnings on is the ci-parity run.
 
-Date: **2026-09-30** Release: **4.1.1 not published**
+§9: `main` pushed (`a8e735f..9142335`), the `4.1.1-debt10-fixes` branch and annotated tag `v4.1.1` pushed. Wheel and sdist rebuilt from `9142335` into a fresh directory, `twine check` PASSED for both, uploaded to PyPI (sdist 33 MB). GitHub release `v4.1.1` created from `docs/releases/v4.1.1.md`, preamble stripped and relative links rewritten to `blob/v4.1.1`; no assets.
+
+Verified after publishing: PyPI JSON reports `latest: 4.1.1` with both filenames. A clean 3.12 venv install from PyPI reports `4.1.1` from `importlib.metadata` and `__version__`, carries 47 `Graph.KG` classes, and imports `_engine.class_deploy`. `gh release view` reports `isDraft: false`, `isPrerelease: false`.
+
+Date: **2026-09-30** Release: **4.1.1 published**
 
 ### 4.1.0 — FHIR repository as a graph, TCK strict/typed (2026-09-28)
 
