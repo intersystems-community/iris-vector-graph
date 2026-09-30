@@ -129,58 +129,35 @@ ClassMethod BuildGraphJson() As %String
 	Return graph.%ToJSON()
 }
 
+/// The Rust kg_*_global readers walk the live ^KG unreliably (first call sees only the
+/// first source; later calls disagree). Answer from ObjectScript until Arno fixes them.
+/// See docs/KNOWN_ISSUES.md and tests/unit/test_411_arno_kg_readers.py.
 ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
-	Try {
-		Do ..CacheGraphJson("KG")
-		Set result = ..CallFn("kg_pagerank_global", "KG", damping, maxIter)
-		If $Extract(result, 1, 5) '= "ERROR" Return result
-	} Catch {
-	}
 	Return ##class(Graph.KG.PageRank).PageRankGlobalJson(damping, maxIter)
 }
 
+/// ObjectScript answer; see PageRankGlobalJson.
 ClassMethod PPRJson(seedJson As %String, damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
-	Try {
-		Do ..CacheGraphJson("KG")
-		Set result = ..CallFn("kg_ppr_global", "KG", seedJson, damping, maxIter)
-		If $Extract(result, 1, 5) '= "ERROR" Return result
-	} Catch {
-	}
 	Return ##class(Graph.KG.PageRank).RunJson(seedJson, damping, maxIter)
 }
 
+/// ObjectScript answer; see PageRankGlobalJson.
 ClassMethod WCCJson(maxIter As %Integer = 100) As %String
 {
-	Try {
-		Do ..CacheGraphJson("KG")
-		Set result = ..CallFn("kg_wcc_global", "KG")
-		If $Extract(result, 1, 5) '= "ERROR" Return result
-	} Catch {
-	}
 	Return ##class(Graph.KG.Algorithms).WCCJson(maxIter)
 }
 
+/// ObjectScript answer; see PageRankGlobalJson.
 ClassMethod CDLPJson(maxIter As %Integer = 10) As %String
 {
-	Try {
-		Do ..CacheGraphJson("KG")
-		Set result = ..CallFn("kg_cdlp_global", "KG", maxIter)
-		If $Extract(result, 1, 5) '= "ERROR" Return result
-	} Catch {
-	}
 	Return ##class(Graph.KG.Algorithms).CDLPJson(maxIter)
 }
 
+/// ObjectScript answer; see PageRankGlobalJson.
 ClassMethod SubgraphJson(seedJson As %String, hops As %Integer = 2, edgeTypesJson As %String = "", maxNodes As %Integer = 10000) As %String
 {
-	Try {
-		Do ..CacheGraphJson("KG")
-		Set result = ..CallFn("kg_subgraph_global", "KG", seedJson, hops, maxNodes)
-		If $Extract(result, 1, 5) '= "ERROR" Return result
-	} Catch {
-	}
 	Return ##class(Graph.KG.Subgraph).SubgraphJson(seedJson, hops, edgeTypesJson, maxNodes)
 }
 

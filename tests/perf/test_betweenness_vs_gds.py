@@ -83,7 +83,7 @@ def _load_into_ivg(engine, nodes: List[str], edges: List[Tuple[str, str]]) -> No
         pass
     iris_obj.tStart()
     iris_obj.kill("^KG")
-    iris_obj.kill("^NKG")
+    iris_obj.classMethodVoid("Graph.KG.GraphIndex", "DropNKG")
     iris_obj.kill("^ArnoKG")
     iris_obj.tCommit()
     cursor = engine.conn.cursor()

@@ -1,11 +1,23 @@
 """Spec 235 US3: Graph.KG.FHIRGraph.IndexedTokenParams, called directly over TCP in
-IVGFHIR on the repository's live SearchColumn rows (research R9)."""
+IVGFHIR on the repository's live SearchColumn rows (research R9). The session
+fixture resets the repository, so the module loads the genomics fixture for the
+Observations these params need (4.1.1 gate)."""
 
 from __future__ import annotations
 
 import json
 
-from tests.e2e.fhir_conftest import GRAPH, _fhir_session, fhir_conn  # noqa: F401
+import pytest
+
+from tests.e2e.fhir_conftest import (  # noqa: F401
+    GRAPH,
+    _fhir_session,
+    fhir_conn,
+    fhir_conn_required,
+    genomics_loaded,
+)
+
+pytestmark = pytest.mark.usefixtures("genomics_loaded")
 
 
 def _indexed(conn, params):

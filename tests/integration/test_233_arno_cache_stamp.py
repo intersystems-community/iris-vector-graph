@@ -1,14 +1,11 @@
 """Spec 233 FR-010: Arno's default-graph PPR answers from the live default graph.
 
-In a process that has loaded the Arno library, `Graph.KG.ArnoAccel.PPRJson` answers
-from `^ArnoKG("KG","graph_json")`, which `BuildGraphJson` fills and `CacheGraphJson`
-reuses while its stamp equals `^KG("__version")`. Two defects: `BuildGraphJson` walked
-the pre-spec-214 layout `^KG("out",s,p,o)`, so under `^KG("out",graph,s,p,o)` it listed
-graph keys as nodes and nodes as edge types; and only `Eraser` bumped the stamp, so a
-fixed snapshot would still miss every edge written after it. A process without the
-library falls back to `Graph.KG.PageRank.RunJson` and was always right, which is why
-`test_231_ppr_graph_e2e::test_default_graph_walk_stays_in_the_default_graph` failed
-only after an earlier test in the same connection had loaded Arno.
+Spec 233 blamed a stale `^ArnoKG("KG","graph_json")` snapshot for
+`test_231_ppr_graph_e2e::test_default_graph_walk_stays_in_the_default_graph` and fixed
+`BuildGraphJson`'s layout and the `^KG("__version")` stamp; those fixes stay tested
+here. The real cause was the Rust `kg_ppr_global` reader, which never opens graph_json
+and walks the live `^KG` unreliably. Since 4.1.1 `ArnoAccel.PPRJson` answers from
+`Graph.KG.PageRank.RunJson`; see tests/unit/test_411_arno_kg_readers.py.
 """
 
 import uuid
@@ -30,17 +27,12 @@ def eng(iris_connection):
 
 
 def _arno_ppr(eng, seed):
-    """`ArnoAccel.PPRJson` in a process that has loaded the library, so Rust answers
-    and not the `RunJson` fallback (whose rows say `id`, not `node`)."""
+    """`ArnoAccel.PPRJson` after the store has loaded the library, as it does."""
     import json
 
-    if not eng._store._detect_arno():
-        pytest.skip("arno library not loadable")
+    eng._store._detect_arno()
     raw = str(eng._iris_obj().classMethodValue("Graph.KG.ArnoAccel", "PPRJson", json.dumps([seed]), "0.85", "20"))
-    rows = json.loads(raw)
-    if rows and "node" not in rows[0]:
-        pytest.skip("PPRJson fell back to RunJson")
-    return {r["node"]: r["score"] for r in rows}
+    return {r.get("id", r.get("node")): r["score"] for r in json.loads(raw)}
 
 
 @pytest.mark.parametrize("graph", [None, "ivg233stamp"])

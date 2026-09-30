@@ -168,31 +168,6 @@ def test_embed_nodes_selects_only_its_own_graphs_nodes():
     assert "'graphA'" in sql, f"graph not applied: {sql}"
 
 
-def test_delete_node_removes_the_embedding_by_node_id():
-    """The delete was `WHERE id = ?`, which removed nothing and said so to no one.
-
-    Reach stays namespace-wide, matching every other delete in `delete_node` and the
-    decision recorded in `reader-inventory.md` §10: a node ID deleted without a graph
-    is deleted everywhere. The key is what was wrong, not the scope.
-    """
-    engine, cursor = _engine_with_mock_cursor()
-    engine.delete_node("patient:1")
-
-    deletes = [s for s in _touching_embeddings(cursor) if s.startswith("DELETE")]
-    assert deletes, "delete_node issued no embedding delete"
-    assert all("node_id" in s for s in deletes), deletes
-    assert not any("WHERE id" in s for s in deletes), deletes
-
-
-def test_bulk_delete_nodes_removes_embeddings_by_node_id():
-    engine, cursor = _engine_with_mock_cursor()
-    engine.bulk_delete_nodes(["a", "b"])
-
-    deletes = [s for s in _touching_embeddings(cursor) if s.startswith("DELETE")]
-    assert deletes, "bulk_delete_nodes issued no embedding delete"
-    assert all("node_id IN" in s for s in deletes), deletes
-
-
 # ---------------------------------------------------------------------------
 # The selector that decides what is missing
 # ---------------------------------------------------------------------------

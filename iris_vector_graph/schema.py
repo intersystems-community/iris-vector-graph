@@ -292,6 +292,9 @@ def repair_ifind_helpers(cursor, *, conn=None, schema: str = "Graph_KG") -> Dict
 class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
 
+    #: The ``DeployResult`` of the latest packaged ObjectScript deploy, or None.
+    last_deploy = None
+
     @staticmethod
     def get_fhir_graph_schema_sql() -> str:
         """The FHIR-graph tables (specs 231, 232, 235).
@@ -1737,16 +1740,16 @@ CREATE OR REPLACE FUNCTION SQLUser.NEWID() RETURNS VARCHAR(36) LANGUAGE OBJECTSC
             """
 CREATE OR REPLACE FUNCTION SQLUser.LIST_REVERSE(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { Set arr = ##class(%Library.DynamicArray).%FromJSON(j), out = ##class(%Library.DynamicArray).%New(), n = arr.%Size(), i = n-1 While i >= 0 { Do out.%Push(arr.%Get(i)) Set i = i-1 } Quit out.%ToJSON() }
 """,
-            """
+            r"""
 CREATE OR REPLACE FUNCTION SQLUser.CY_TEMPORAL_ARITH(a VARCHAR(4096), op VARCHAR(1), b VARCHAR(4096)) RETURNS VARCHAR(4096) LANGUAGE OBJECTSCRIPT { If (a = "") || (b = "") { Quit "" } Set dN = 86400000000000 For i = 1, 2 { Set v = $Select(i = 1: a, 1: b), mo(i) = 0, dd(i) = 0, ns(i) = 0, isD(i) = ($Extract(v) = "P") && ($Length(v) > 1) If isD(i) { Set tp = 0, num = "" Set p = 1 While p < $Length(v) { Set p = p + 1, c = $Extract(v, p) If c = "T" { Set tp = 1 } ElseIf (c = "-") || (c = ".") || ("0123456789" [ c) { Set num = num _ c } ElseIf $IsValidNum(num) = 0 { Set isD(i) = 0 } ElseIf c = "Y" { Set mo(i) = mo(i) + (num * 12), num = "" } ElseIf (c = "M") && (tp = 0) { Set mo(i) = mo(i) + num, num = "" } ElseIf c = "W" { Set dd(i) = dd(i) + (num * 7), num = "" } ElseIf c = "D" { Set dd(i) = dd(i) + num, num = "" } ElseIf c = "H" { Set ns(i) = ns(i) + (num * 3600000000000), num = "" } ElseIf c = "M" { Set ns(i) = ns(i) + (num * 60000000000), num = "" } ElseIf c = "S" { Set ns(i) = ns(i) + (num * 1000000000), num = "" } Else { Set isD(i) = 0 } } If $Length(num) { Set isD(i) = 0 } } } Set res = "", fmt = 0 If (op = "*") || (op = "/") { Set di = $Select(isD(1): 1, isD(2) && (op = "*"): 2, 1: 0) If di { Set k = $Select(di = 1: b, 1: a) If ($IsValidNum(k) = 0) || ((op = "/") && (+k = 0)) { Quit "" } Set k = +$FNumber(k, "", 15) Set f = $Select(op = "*": +k, 1: 1 / k), m = mo(di) * f, wm = m \ 1, x = (dd(di) * f) + ((m - wm) * 30.436875), wd = x \ 1, mo = wm, dd = wd, ns = ((ns(di) * f) + ((x - wd) * dN)) \ 1, fmt = 1 } } ElseIf isD(1) && isD(2) { Set s = $Select(op = "-": -1, 1: 1), mo = mo(1) + (s * mo(2)), dd = dd(1) + (s * dd(2)), ns = ns(1) + (s * ns(2)), fmt = 1 } ElseIf (isD(1) || isD(2)) && (((op = "-") && isD(1)) = 0) { Set ti = $Select(isD(1): 2, 1: 1), di = 3 - ti, t = $Select(ti = 1: a, 1: b), s = $Select(op = "-": -1, 1: 1), mo = s * mo(di), dd = s * dd(di), ns = s * ns(di) Set hasDate = $Match($Extract(t, 1, 10), "\d{4}-\d{2}-\d{2}"), rest = t, dpart = "" If hasDate { Set dpart = $Extract(t, 1, 10), rest = $Select($Extract(t, 11) = "T": $Extract(t, 12, *), 1: "") } Set hasTime = ($Length(rest) > 0), p = 1 While (p <= $Length(rest)) && ("0123456789:." [ $Extract(rest, p)) { Set p = p + 1 } Set tstr = $Extract(rest, 1, p - 1), zone = $Extract(rest, p, *), tod = ($Piece(tstr, ":", 1) * 3600000000000) + ($Piece(tstr, ":", 2) * 60000000000) + ($Piece(tstr, ":", 3) * 1000000000) If hasTime && (tstr = "") { Quit "" } If hasDate { Set tm = ($Extract(dpart, 1, 4) * 12) + $Extract(dpart, 6, 7) - 1 + mo, m2 = tm # 12, y2 = (tm - m2) / 12, m2 = m2 + 1, first = $ZDateH($Translate($Justify(y2, 4), " ", "0") _ "-" _ $Extract(100 + m2, 2, 3) _ "-01", 3, , , , , -672045), nxt = $ZDateH($Select(m2 = 12: $Translate($Justify(y2 + 1, 4), " ", "0") _ "-01", 1: $Translate($Justify(y2, 4), " ", "0") _ "-" _ $Extract(101 + m2, 2, 3)) _ "-01", 3, , , , , -672045), d = $Extract(dpart, 9, 10) If d > (nxt - first) { Set d = nxt - first } Set h = first + d - 1 + dd If hasTime { Set tn = tod + ns, r = tn # dN, h = h + ((tn - r) / dN), tod = r } Else { Set h = h + (ns \ dN) } Set res = $ZDate(h, 3, , 4, , , -672045) } Else { Set tod = (tod + ns) # dN } If hasTime { Set hh = tod \ 3600000000000, mi = tod \ 60000000000 # 60, ss = tod \ 1000000000 # 60, fr = tod # 1000000000, ts = $Extract(100 + hh, 2, 3) _ ":" _ $Extract(100 + mi, 2, 3) If ss || fr { Set ts = ts _ ":" _ $Extract(100 + ss, 2, 3) } If fr { Set fs = $Extract(1000000000 + fr, 2, 10) While $Extract(fs, *) = "0" { Set fs = $Extract(fs, 1, *-1) } Set ts = ts _ "." _ fs } Set res = res _ $Select(hasDate: "T", 1: "") _ ts _ zone } Quit res } Else { If $IsValidNum(a) && $IsValidNum(b) { Quit $Select(op = "+": a + b, op = "-": a - b, op = "*": a * b, +b = 0: "", 1: a / b) } Quit $Select(op = "+": a _ b, 1: "") } If fmt = 0 { Quit "" } Set y = mo \ 12, m = mo - (y * 12), h = ns \ 3600000000000, r = ns - (h * 3600000000000), mi = r \ 60000000000, r = r - (mi * 60000000000), out = "P" _ $Select(y: y _ "Y", 1: "") _ $Select(m: m _ "M", 1: "") _ $Select(dd: dd _ "D", 1: "") If h || mi || r { Set out = out _ "T" _ $Select(h: h _ "H", 1: "") _ $Select(mi: mi _ "M", 1: "") If r { Set sec = r / 1000000000 If $Extract(sec) = "." { Set sec = "0" _ sec } ElseIf $Extract(sec, 1, 2) = "-." { Set sec = "-0" _ $Extract(sec, 2, *) } Set out = out _ sec _ "S" } } Quit $Select(out = "P": "PT0S", 1: out) }
 """,
-            """
+            r"""
 CREATE OR REPLACE FUNCTION SQLUser.CY_DURATION_FIELD(v VARCHAR(4096), f VARCHAR(64)) RETURNS BIGINT LANGUAGE OBJECTSCRIPT { If ($Extract(v) = "P") = 0 { Quit "" } Set mo = 0, dd = 0, ns = 0, tp = 0, num = "", p = 1 While p < $Length(v) { Set p = p + 1, c = $Extract(v, p) If c = "T" { Set tp = 1 } ElseIf (c = "-") || (c = ".") || ("0123456789" [ c) { Set num = num _ c } ElseIf $IsValidNum(num) = 0 { Quit } ElseIf c = "Y" { Set mo = mo + (num * 12), num = "" } ElseIf (c = "M") && (tp = 0) { Set mo = mo + num, num = "" } ElseIf c = "W" { Set dd = dd + (num * 7), num = "" } ElseIf c = "D" { Set dd = dd + num, num = "" } ElseIf c = "H" { Set ns = ns + (num * 3600000000000), num = "" } ElseIf c = "M" { Set ns = ns + (num * 60000000000), num = "" } ElseIf c = "S" { Set ns = ns + (num * 1000000000), num = "" } Else { Quit } } Set s = ns \ 1000000000, n = ns - (s * 1000000000) If n < 0 { Set s = s - 1, n = n + 1000000000 } Quit $Case(f, "years": mo \ 12, "quarters": mo \ 3, "months": mo, "weeks": dd \ 7, "days": dd, "hours": s \ 3600, "minutes": s \ 60, "seconds": s, "milliseconds": (s * 1000) + (n \ 1000000), "microseconds": (s * 1000000) + (n \ 1000), "nanoseconds": ns, "quartersOfYear": (mo \ 3) - ((mo \ 12) * 4), "monthsOfQuarter": mo - ((mo \ 3) * 3), "monthsOfYear": mo - ((mo \ 12) * 12), "daysOfWeek": dd - ((dd \ 7) * 7), "minutesOfHour": (s \ 60) - ((s \ 3600) * 60), "secondsOfMinute": s - ((s \ 60) * 60), "millisecondsOfSecond": n \ 1000000, "microsecondsOfSecond": n \ 1000, "nanosecondsOfSecond": n, : "") }
 """,
-            """
+            r"""
 CREATE OR REPLACE FUNCTION SQLUser.CY_TEMPORAL_FIELD(v VARCHAR(4096), f VARCHAR(64)) RETURNS VARCHAR(4096) LANGUAGE OBJECTSCRIPT { If v = "" { Quit "" } Set hasDate = $Match($Extract(v, 1, 10), "\d{4}-\d{2}-\d{2}"), rest = v, (y, m, d, q, dow, wy, wk, od, dq, ep) = "" If hasDate { Set y = +$Extract(v, 1, 4), m = +$Extract(v, 6, 7), d = +$Extract(v, 9, 10), h = $ZDateH($Extract(v, 1, 10), 3, , , , , -672045), rest = $Select($Extract(v, 11) = "T": $Extract(v, 12, *), 1: ""), q = ((m - 1) \ 3) + 1, dow = ((h + 3) # 7) + 1, th = h - dow + 4, wy = +$Extract($ZDate(th, 3, , 4, , , -672045), 1, 4), wk = ((th - $ZDateH($Translate($Justify(wy, 4), " ", "0") _ "-01-01", 3, , , , , -672045)) \ 7) + 1, od = h - $ZDateH($Extract(v, 1, 4) _ "-01-01", 3, , , , , -672045) + 1, dq = h - $ZDateH($Extract(v, 1, 5) _ $Extract(100 + (((q - 1) * 3) + 1), 2, 3) _ "-01", 3, , , , , -672045) + 1 } Set p = 1 While (p <= $Length(rest)) && ("0123456789:." [ $Extract(rest, p)) { Set p = p + 1 } Set tstr = $Extract(rest, 1, p - 1), zone = $Extract(rest, p, *), hh = +$Piece(tstr, ":", 1), mi = +$Piece(tstr, ":", 2), sf = $Piece(tstr, ":", 3), ss = +$Piece(sf, ".", 1), ns = +$Extract($Piece(sf, ".", 2) _ "000000000", 1, 9), name = "", off = "", offs = 0 If zone [ "[" { Set name = $Piece($Piece(zone, "[", 2), "]", 1), zone = $Piece(zone, "[", 1) } If zone = "Z" { Set off = "Z" } ElseIf $Length(zone) { Set off = zone, offs = $Select($Extract(zone) = "-": -1, 1: 1) * (($Extract(zone, 2, 3) * 3600) + ($Extract(zone, 5, 6) * 60) + $Extract(zone, 8, 9)) } If hasDate { Set ep = ((h - 47117) * 86400) + (hh * 3600) + (mi * 60) + ss - offs } Quit $Case(f, "year": y, "quarter": q, "month": m, "week": wk, "weekYear": wy, "day": d, "ordinalDay": od, "dayOfYear": od, "weekDay": dow, "dayOfWeek": dow, "dayOfQuarter": dq, "quarterDay": dq, "hour": hh, "minute": mi, "second": ss, "millisecond": ns \ 1000000, "microsecond": ns \ 1000, "nanosecond": ns, "timezone": $Select($Length(name): name, 1: off), "offset": off, "offsetMinutes": offs \ 60, "offsetSeconds": offs, "epochSeconds": ep, "epochMillis": $Select(ep = "": "", 1: (ep * 1000) + (ns \ 1000000)), : "") }
 """,
-            """
+            r"""
 CREATE OR REPLACE FUNCTION SQLUser.CY_SORT_KEY(v VARCHAR(32000), t VARCHAR(16)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { If (v = "") || (t = "null") { Quit "z" } If v = $Char(0) { Quit "l" } If t = "string" { Quit "l" _ v } If t = "boolean" { Quit "m" _ +v } If (t = "array") || ((t = "x") && ($Extract(v) = "[")) { Set arr = "" Try { Set arr = ##class(%Library.DynamicArray).%FromJSON(v) } Catch { Set arr = "" } If $IsObject(arr) { Set k = "d", it = arr.%GetIterator() While it.%GetNext(.i, .e, .et) { If et = "array" { Set e = e.%ToJSON() } ElseIf et = "object" { Set e = e.%ToJSON() } ElseIf et = "boolean" { Set e = $Select(e: 1, 1: 0) } Set k = k _ ##class(User.funcCYSORTKEY).CYSORTKEY(e, $Select(et = "string": "x", 1: et)) _ $Char(1) } Quit k } } If t = "x" { Set q = $Char(34) If ($Extract(v, 1, 8) = ("{" _ q _ "_id" _ q _ ":" _ q)) && (v [ ("," _ q _ "_labels" _ q _ ":[")) { Quit "b" _ v } If ($Extract(v, 1, 9) = ("{" _ q _ "type" _ q _ ":" _ q)) && (v [ ("," _ q _ "props" _ q _ ":")) { Quit "c" _ v } If ($Extract(v, 1, 10) = ("{" _ q _ "nodes" _ q _ ":[")) && (v [ ("," _ q _ "rels" _ q _ ":[")) { Quit "e" _ v } } If (t = "object") || ((t = "x") && ($Extract(v) = "{")) { Quit "a" _ v } If t = "x" { If v = "true" { Quit "m1" } If v = "false" { Quit "m0" } If v = "NaN" { Quit "o" } } If (t = "number") || ((t = "x") && $IsValidNum(v)) { Set n = +v If n = 0 { Quit "n1" } Set s = "" _ $Select(n < 0: -n, 1: n), ex = 0 If s [ "E" { Set ex = +$Piece(s, "E", 2), s = $Piece(s, "E", 1) } Set ip = $Piece(s, "."), fp = $Piece(s, ".", 2) If +ip { Set e = $Length(+ip) - 1, dg = (+ip) _ fp } Else { Set dg = $ZStrip(fp, "<", "0"), e = $Length(dg) - $Length(fp) - 1 } Set dg = $ZStrip(dg, ">", "0"), e = e + ex + 50000 If n > 0 { Quit "n2" _ $Extract(100000 + e, 2, 6) _ dg } Quit "n0" _ $Extract(100000 + (99999 - e), 2, 6) _ $Translate(dg, "0123456789", "9876543210") _ "~" } If $Extract(v) = "P" { Quit "k" _ v } Set hasDate = $Match($Extract(v, 1, 10), "\d{4}-\d{2}-\d{2}"), rest = v, h = 0 If hasDate { If $Length(v) = 10 { Quit "h" _ v } If $Extract(v, 11) '= "T" { Quit "l" _ v } Set h = $ZDateH($Extract(v, 1, 10), 3, , , , , -672045), rest = $Extract(v, 12, *) } If $Match($Extract(rest, 1, 5), "\d{2}.\d{2}") = 0 { Quit "l" _ v } Set p = 1 While (p <= $Length(rest)) && ("0123456789:." [ $Extract(rest, p)) { Set p = p + 1 } Set tstr = $Extract(rest, 1, p - 1), zone = $Extract(rest, p, *), sf = $Piece(tstr, ":", 3), secs = ($Piece(tstr, ":", 1) * 3600) + ($Piece(tstr, ":", 2) * 60) + $Piece(sf, "."), ns = $Extract($Piece(sf, ".", 2) _ "000000000", 1, 9), offs = 0 If zone [ "[" { Set zone = $Piece(zone, "[", 1) } If zone = "" { If hasDate { Quit "g" _ $Extract(v, 1, 10) _ $Extract(100000 + secs, 2, 6) _ ns } Quit "j" _ $Extract(100000 + secs, 2, 6) _ ns } If zone '= "Z" { Set offs = $Select($Extract(zone) = "-": -1, 1: 1) * (($Extract(zone, 2, 3) * 3600) + ($Extract(zone, 5, 6) * 60) + $Extract(zone, 8, 9)) } If hasDate { Quit "f" _ $Extract(10000000000000 + (((h + 672045) * 86400) + secs - offs), 2, 14) _ ns } Quit "i" _ $Extract(1000000 + secs - offs + 100000, 2, 7) _ ns }
 """,
             """
@@ -2150,13 +2153,17 @@ LANGUAGE OBJECTSCRIPT
         return caps
 
     @staticmethod
-    def deploy_objectscript_classes(cursor, iris_src_path: Path, conn=None) -> "IRISCapabilities":
+    def deploy_objectscript_classes(
+        cursor, iris_src_path: Path, conn=None, force: Optional[bool] = None
+    ) -> "IRISCapabilities":
         """
         Deploy ObjectScript .cls files to IRIS and return capability flags.
 
-        Attempts to load .cls files via $system.OBJ.LoadDir through the native
-        API bridge. If files are not accessible from the IRIS server filesystem,
-        falls back to detection-only (check what's already compiled).
+        Sends the packaged sources over the connection and compiles those the
+        server can (see ``_engine/class_deploy.py``); an unchanged source set is
+        not reinstalled unless ``force``. Without packaged sources, falls back to
+        $system.OBJ.LoadDir on a server-side directory, then to detection only.
+        ``GraphSchema.last_deploy`` holds the result, including skipped classes.
 
         Args:
             cursor:        Active IRIS dbapi cursor.
@@ -2192,9 +2199,32 @@ LANGUAGE OBJECTSCRIPT
             logger.warning("rdf_edges rescue probe failed: %s", exc)
             staged = None
 
-        src_dir = str(iris_src_path / "src") if iris_src_path else ""
+        # The classes ship in the package and go over the connection; a server-side
+        # directory is only the fallback for an install without them.
+        from iris_vector_graph._engine.class_deploy import deploy_packaged_classes
+
         deployed = False
-        for candidate_dir in ["/tmp/src/", "/irisdev/app/iris_src/src/", src_dir]:
+        GraphSchema.last_deploy = None
+        try:
+            result = deploy_packaged_classes(_native, force=force)
+        except Exception as exc:
+            logger.warning("Packaged ObjectScript deploy failed: %s", exc)
+            result = None
+        if result is not None:
+            GraphSchema.last_deploy = result
+            deployed = result.deployed or result.unchanged
+            if result.deployed:
+                # `-d`: a fresh namespace has neither class, and without it every new
+                # install printed "ERROR #5351: Class ... does not exist".
+                for cls_name in _STALE_CLASSES:
+                    try:
+                        _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
+                    except Exception:
+                        pass
+
+        src_dir = str(iris_src_path / "src") if iris_src_path else ""
+        candidates = [] if deployed else ["/tmp/src/", "/irisdev/app/iris_src/src/", src_dir]
+        for candidate_dir in candidates:
             if not candidate_dir:
                 continue
             try:
@@ -2210,10 +2240,10 @@ LANGUAGE OBJECTSCRIPT
                     )
                 except Exception:
                     pass
-                _call_classmethod(_native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck", "", 1)
+                _call_classmethod(_native, "%SYSTEM.OBJ", "LoadDir", candidate_dir, "ck-d", "", 1)
                 for cls_name in _STALE_CLASSES:
                     try:
-                        _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef")
+                        _call_classmethod(_native, "%SYSTEM.OBJ", "Delete", cls_name, "ef-d")
                     except Exception:
                         pass
                 logger.debug("ObjectScript classes loaded from %s", candidate_dir)
@@ -2230,8 +2260,8 @@ LANGUAGE OBJECTSCRIPT
 
         if not deployed:
             logger.warning(
-                "Could not load .cls files from any known path. "
-                "Classes may need to be pre-loaded via docker cp + $system.OBJ.LoadDir."
+                "Could not deploy the ObjectScript classes: none are packaged with this "
+                "install and no server-side source directory was found."
             )
 
         try:

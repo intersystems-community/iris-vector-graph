@@ -15,6 +15,17 @@
 Class Graph.KG.GraphIndex Extends %RegisteredObject
 {
 
+/// Empty ^NKG but keep ^NKG("$meta","version") rising. kg_betweenness_global_v caches
+/// its answer in the process by that version and ^ArnoKG("KG","nkg_adj_ver") compares
+/// against it, so a fresh ^NKG counting up from nothing again answered with the
+/// previous graph. See tests/unit/test_411_nkg_version_monotonic.py.
+ClassMethod DropNKG()
+{
+	Set tVer = +$Get(^NKG("$meta", "version"))
+	Kill ^NKG
+	Set ^NKG("$meta", "version") = tVer + 1
+}
+
 ClassMethod InitStructuralLabels()
 {
 	If $Data(^NKG("$LS", 0)) Quit

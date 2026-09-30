@@ -381,13 +381,14 @@ class TestDeleteNode:
         result = eng.delete_node("dn_src")
         assert isinstance(result, bool)
 
-    def test_delete_node_sql_exception_returns_false(self, ne_graph):
+    def test_delete_node_sql_exception_raises(self, ne_graph):
+        # 4.1.1: a failed delete raises; `False` means only "no such node".
         cursor_mock = MagicMock()
         cursor_mock.execute.side_effect = RuntimeError("delete fail")
         cursor_mock.close = MagicMock()
         with patch.object(ne_graph.conn, "cursor", return_value=cursor_mock):
-            result = ne_graph.delete_node("ne_0")
-        assert result is False
+            with pytest.raises(RuntimeError, match="delete fail"):
+                ne_graph.delete_node("ne_0")
 
     def test_delete_node_missing_noop(self, ne_graph):
         ne_graph.delete_node("__never_existed__")

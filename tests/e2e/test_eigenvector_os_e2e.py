@@ -50,7 +50,7 @@ class TestEigenvectorOsE2E:
         _load_complete(engine, n=5)
 
         try:
-            _iris.createIRIS(iris_connection).kill("^NKG")
+            _iris.createIRIS(iris_connection).classMethodVoid("Graph.KG.GraphIndex", "DropNKG")
         except Exception:
             pass
 

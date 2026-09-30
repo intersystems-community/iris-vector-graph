@@ -48,11 +48,13 @@ result = engine.execute_cypher(
     "MATCH (a {node_id:$id})-[:KNOWS]->(b) RETURN b.name AS name",
     {"id": "alice"}
 )
-print(result["rows"])  # [('Bob',)]
+print(result["rows"])  # [['Bob']]
 ```
 
-> **Note:** `initialize_schema()` prints compile warnings on Community Edition — safe to ignore.
-> Enterprise-only classes (`Graph.KG.MCPService`, `Graph.KG.MCPToolSet`) are not required.
+> **Note:** On a stock image `initialize_schema()` logs a few `IVG setup:` lines, and none of
+> them is an error. The MCP classes (`Graph.KG.MCPService`, `MCPToolSet`, `MCPTools`) need `%AI`
+> packages the image does not ship, and are not required. The `^KG` adjacency index stays empty
+> until data is loaded.
 
 ---
 

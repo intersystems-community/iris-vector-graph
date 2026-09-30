@@ -134,8 +134,11 @@ print([row[0] for row in result.rows])
 Output:
 
 ```
-['Olaparib', 'Breast cancer', 'Ovarian cancer']
+['Breast cancer', 'Olaparib', 'Ovarian cancer']
 ```
+
+Nearest first: BRCA1 reaches Breast cancer and Olaparib in one hop, Ovarian cancer in
+two. Rows at the same hop come in node-id order.
 
 ---
 

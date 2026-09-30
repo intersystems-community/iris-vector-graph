@@ -18,6 +18,20 @@ from iris_vector_graph.schema import GraphSchema
 logger = logging.getLogger(__name__)
 
 
+#: ``graph`` omitted: every graph holding the node (distinct from None, the default graph).
+_EVERY_GRAPH: Any = object()
+
+# Ids per graph-discovery statement; IRIS fails to prepare IN lists near 2000 params.
+_DELETE_LOOKUP_CHUNK = 500
+
+
+def _deleted_count(result: Any) -> int:
+    try:
+        return int(result.rows[0][0] or 0)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return 0
+
+
 class DeleteResult(NamedTuple):
     deleted: int
     failed: int
@@ -1173,11 +1187,17 @@ class NodesEdgesMixin:
                 from iris_vector_graph.schema import _call_classmethod_large
 
                 iris_obj = self._iris_obj()
+                # Serialised here, as the SQL path below does: the class method used
+                # to JSON-quote strings itself, so `name` read back as '"Olaparib"'.
                 normalized = [
                     {
                         "id": n.get("id", ""),
                         "labels": n.get("labels", []),
-                        "props": n.get("properties", {}),
+                        "props": {
+                            k: prop_text(v)
+                            for k, v in (n.get("properties") or {}).items()
+                            if v is not None
+                        },
                     }
                     for n in nodes
                     if n.get("id")
@@ -1480,94 +1500,126 @@ class NodesEdgesMixin:
             self.sync()
         return n
 
-    def delete_node(self, node_id: str) -> bool:
-        _ledger_check(self, "delete_node")
+    def _graphs_holding(self, node_ids: List[str]) -> Dict[str, List[str]]:
+        """``{canonical graph: ids}`` for each graph with a node or edge row naming one of ``node_ids``."""
+        held: Dict[str, set] = {}
         cursor = self.conn.cursor()
         try:
-            # `WHERE id = ?` compared a node ID against the table's RowID, matched
-            # nothing, and reported nothing: a deleted node kept its vector. Reach
-            # stays namespace-wide, like every other delete in this method
-            # (reader-inventory.md §10) — the key was what was wrong.
-            cursor.execute(
-                f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE node_id = ?", [node_id]
-            )
-            cursor.execute(
-                f"SELECT edge_id FROM {self._t('rdf_edges')} WHERE s = ? OR o_id = ?",
-                [node_id, node_id],
-            )
-            edge_ids = [row[0] for row in cursor.fetchall()]
-            for eid in edge_ids:
-                cursor.execute(
-                    f"SELECT reifier_id FROM {self._t('rdf_reifications')} WHERE edge_id = ?",
-                    [eid],
-                )
-                for (reif_id,) in cursor.fetchall():
+            for i in range(0, len(node_ids), _DELETE_LOOKUP_CHUNK):
+                chunk = node_ids[i : i + _DELETE_LOOKUP_CHUNK]
+                ph = ",".join("?" * len(chunk))
+                # %EXACT: graph_id and the id columns come back in collation form otherwise.
+                for table, col in (("nodes", "node_id"), ("rdf_edges", "s"), ("rdf_edges", "o_id")):
                     cursor.execute(
-                        f"DELETE FROM {self._t('rdf_reifications')} WHERE reifier_id = ?",
-                        [reif_id],
+                        f"SELECT DISTINCT %EXACT(COALESCE(graph_id, '')), %EXACT({col}) "
+                        f"FROM {self._t(table)} WHERE {col} IN ({ph})",
+                        chunk,
                     )
-                    cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s = ?", [reif_id])
-                    cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s = ?", [reif_id])
-                    cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [reif_id])
-            cursor.execute(
-                f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? OR o_id = ?",
-                [node_id, node_id],
-            )
-            cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s = ?", [node_id])
-            cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s = ?", [node_id])
-            cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [node_id])
-            self.conn.commit()
-            # BYPASS: edge rows removed from SQL but ^KG/^NKG still hold them.
-            # Flag stale so var-length guards / verify_sync() catch the drift.
-            self._nkg_dirty = True
-            return True
-        except Exception as e:
-            logger.warning(f"delete_node({node_id}) failed: {e}")
-            return False
+                    for g, nid in cursor.fetchall():
+                        held.setdefault(validate_graph_name(g), set()).add(nid)
         finally:
             cursor.close()
+        return {g: [n for n in node_ids if n in ids] for g, ids in sorted(held.items())}
 
-    def bulk_delete_nodes(self, node_ids: List[str], batch_size: int = None) -> "DeleteResult":
+    def _reifiers_of(self, node_ids: List[str], graph: str) -> List[str]:
+        """Reifier ids of the edges in ``graph`` incident to ``node_ids``."""
+        found: Dict[str, None] = {}
+        cursor = self.conn.cursor()
+        try:
+            for i in range(0, len(node_ids), _DELETE_LOOKUP_CHUNK):
+                chunk = node_ids[i : i + _DELETE_LOOKUP_CHUNK]
+                ph = ",".join("?" * len(chunk))
+                for col in ("s", "o_id"):
+                    cursor.execute(
+                        f"SELECT %EXACT(reifier_id) FROM {self._t('rdf_reifications')} "
+                        f"WHERE edge_id IN (SELECT edge_id FROM {self._t('rdf_edges')} "
+                        f"WHERE COALESCE(graph_id, '') = ? AND {col} IN ({ph}))",
+                        [graph, *chunk],
+                    )
+                    for (reifier_id,) in cursor.fetchall():
+                        found[reifier_id] = None
+        finally:
+            cursor.close()
+        return list(found)
+
+    def _delete_in_scope(self, node_ids: List[str], graph: str) -> int:
+        """Delete ``node_ids`` from ``graph``, then the reifiers of their edges.
+
+        A reifier names exactly one edge (``pk_reifications``), so it is dead once
+        that edge is; the Eraser removes the ``rdf_reifications`` row, not the node.
+        The reifiers go after, in each graph holding them, and are not counted.
+        """
+        reifiers = [r for r in self._reifiers_of(node_ids, graph) if r not in node_ids]
+        deleted = _deleted_count(self._store.delete_nodes(node_ids, graph=graph))
+        if reifiers:
+            for scope, ids in self._graphs_holding(reifiers).items():
+                self._store.delete_nodes(ids, graph=scope)
+        return deleted
+
+    def _delete_scopes(self, node_ids: List[str], graph: Any) -> Dict[str, List[str]]:
+        if graph is _EVERY_GRAPH:
+            return self._graphs_holding(node_ids)
+        return {validate_graph_name(graph): node_ids}
+
+    def delete_node(self, node_id: str, graph: Any = _EVERY_GRAPH) -> bool:
+        """Delete one node with its labels, props, documents, vectors and incident edges,
+        and the reifier nodes of those edges.
+
+        Each graph's delete is one ``Graph.KG.Eraser.EraseNodeIds`` transaction
+        (via ``store.delete_nodes``), which reaches every vector table the graph
+        routes to, the edges' reifications and embeddings, and ``^KG``. 4.1.0 ran
+        its own statements instead: it missed a named graph's ``kg_emb_<hash>``
+        table, whose foreign key then failed the node-row delete after the labels,
+        props and edges had already been committed, and reported that as ``False``.
+
+        Args:
+            node_id: The node to delete.
+            graph: The graph to delete it from; ``None`` and ``""`` are the default
+                graph. Omitted, every graph holding ``node_id`` (4.1.0's reach),
+                one transaction per graph.
+
+        Returns:
+            True when a node row was removed, False when there was none.
+
+        Raises:
+            ValueError: for a graph name that cannot be a subscript, before
+                anything is deleted.
+            Exception: when a delete fails; that graph's delete has rolled back.
+        """
+        _ledger_check(self, "delete_node")
+        deleted = 0
+        for scope in self._delete_scopes([node_id], graph):
+            deleted += self._delete_in_scope([node_id], scope)
+        # The Eraser drops ^NKG itself when edges went; nothing is deferred.
+        return deleted > 0
+
+    def bulk_delete_nodes(
+        self, node_ids: List[str], batch_size: int = None, graph: Any = _EVERY_GRAPH
+    ) -> "DeleteResult":
+        """Delete many nodes; ``graph`` as for :meth:`delete_node`.
+
+        Each ``batch_size`` batch in each graph is one transaction. A batch that
+        fails deleted nothing, is logged, and counts its ids in ``failed``; the
+        other batches still run.
+        """
         _ledger_check(self, "bulk_delete_nodes")
+        ids = list(dict.fromkeys(str(n) for n in node_ids or [] if n is not None and str(n) != ""))
+        if not ids:
+            return DeleteResult(0, 0)
+        size = batch_size if batch_size is not None else _batch_size_for(ids)
         deleted = 0
         failed = 0
-        if not node_ids:
-            return DeleteResult(0, 0)
-        size = batch_size if batch_size is not None else _batch_size_for(node_ids)
-        for i in range(0, len(node_ids), size):
-            batch = node_ids[i : i + size]
-            phs = ",".join(["?"] * len(batch))
-            cursor = self.conn.cursor()
-            try:
-                cursor.execute(
-                    f"DELETE FROM {self._t('rdf_reifications')} WHERE edge_id IN "
-                    f"(SELECT edge_id FROM {self._t('rdf_edges')} WHERE s IN ({phs}))",
-                    batch,
-                )
-                cursor.execute(
-                    f"DELETE FROM {self._t('rdf_reifications')} WHERE edge_id IN "
-                    f"(SELECT edge_id FROM {self._t('rdf_edges')} WHERE o_id IN ({phs}))",
-                    batch,
-                )
-                cursor.execute(
-                    f"DELETE FROM {self._t('kg_NodeEmbeddings')} WHERE node_id IN ({phs})",
-                    batch,
-                )
-                cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE s IN ({phs})", batch)
-                cursor.execute(f"DELETE FROM {self._t('rdf_edges')} WHERE o_id IN ({phs})", batch)
-                cursor.execute(f"DELETE FROM {self._t('rdf_labels')} WHERE s IN ({phs})", batch)
-                cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s IN ({phs})", batch)
-                cursor.execute(f"DELETE FROM {self._t('nodes')} WHERE node_id IN ({phs})", batch)
-                self.conn.commit()
-                deleted += len(batch)
-            except Exception as e:
-                logger.warning(f"bulk_delete_nodes batch failed: {e}")
-                failed += len(batch)
-            finally:
-                cursor.close()
-        # BYPASS: SQL edge rows removed without ^KG/^NKG maintenance.
-        if deleted:
-            self._nkg_dirty = True
+        for scope, scoped_ids in self._delete_scopes(ids, graph).items():
+            for i in range(0, len(scoped_ids), size):
+                batch = scoped_ids[i : i + size]
+                try:
+                    deleted += self._delete_in_scope(batch, scope)
+                except Exception as e:
+                    logger.warning(
+                        "bulk_delete_nodes: batch of %d in graph %r rolled back: %s",
+                        len(batch), scope, e,
+                    )
+                    failed += len(batch)
         return DeleteResult(deleted, failed)
 
     def bulk_delete_adjacency(self, node_ids: List[str]) -> int:

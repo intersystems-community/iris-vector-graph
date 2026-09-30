@@ -866,6 +866,11 @@ def iris_master_cleanup(iris_connection):
         with contextlib.suppress(Exception):
             cursor.close()
     yield
+    # And after: a module fixture or an unfixtured test that runs next starts from
+    # what this test left, and a leftover ^NKG changes what the next BFS or
+    # betweenness answers (4.1.1 gate).
+    _iris.createIRIS(iris_connection).classMethodValue("Graph.KG.Eraser", "EraseAll")
+    iris_connection.commit()
 
 
 @pytest.fixture(scope="function")

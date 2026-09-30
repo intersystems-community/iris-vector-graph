@@ -69,3 +69,92 @@ def test_the_demo_error_names_the_container_and_how_to_start_it(monkeypatch):
         runner.get_connection()
     steps = " ".join(excinfo.value.next_steps or [])
     assert "enterprise-container.sh" in steps or "test-container.sh" in steps
+
+
+# 4.1.1 — the demos run from the wheel alone (scripts/quickstart_e2e.py, stage
+# `examples`). A user who ran `pip install iris-vector-graph` and `docker compose up`
+# has neither iris-devtester nor a container called ivg-iris-enterprise: every demo
+# stopped at "iris-devtester package not installed", and demo_rdf_semantic_layer.py
+# dialled localhost:21972 whatever was running.
+
+
+def _no_devtester(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "iris_devtester", None)
+    monkeypatch.setitem(sys.modules, "iris_devtester.utils", None)
+    monkeypatch.setitem(sys.modules, "iris_devtester.utils.dbapi_compat", None)
+
+
+def _fake_iris(monkeypatch, calls):
+    from unittest.mock import MagicMock
+
+    import iris
+
+    def _connect(host, port, namespace, user, password):
+        calls.append((host, port, namespace))
+        return MagicMock()
+
+    monkeypatch.setattr(iris, "connect", _connect, raising=False)
+
+
+def test_without_iris_devtester_the_driver_connects(monkeypatch):
+    import examples.demo_utils as du
+
+    _no_devtester(monkeypatch)
+    calls = []
+    _fake_iris(monkeypatch, calls)
+    monkeypatch.setattr(
+        du, "_demo_connection_targets", lambda name: [("container IP", "10.0.0.5", 1972)]
+    )
+    DemoRunner("t", total_steps=1).get_connection()
+    assert calls == [("10.0.0.5", 1972, "USER")]
+
+
+def test_the_compose_container_is_tried_when_none_is_named(monkeypatch):
+    import examples.demo_utils as du
+
+    monkeypatch.delenv("IVG_TEST_CONTAINER", raising=False)
+    _no_devtester(monkeypatch)
+    calls = []
+    _fake_iris(monkeypatch, calls)
+    targets = {"iris_vector_graph": [("container IP", "10.0.0.9", 1972)]}
+    monkeypatch.setattr(du, "_demo_connection_targets", lambda name: targets.get(name, []))
+    DemoRunner("t", total_steps=1).get_connection()
+    assert calls == [("10.0.0.9", 1972, "USER")]
+
+
+def test_a_named_container_is_the_only_one_tried(monkeypatch):
+    import examples.demo_utils as du
+
+    monkeypatch.setenv("IVG_TEST_CONTAINER", "mine")
+    seen = []
+    monkeypatch.setattr(du, "_demo_connection_targets", lambda name: seen.append(name) or [])
+    with pytest.raises(DemoError):
+        DemoRunner("t", total_steps=1).get_connection()
+    assert seen == ["mine"]
+
+
+def test_the_rdf_demo_connects_by_container_name(monkeypatch):
+    import examples.demo_rdf_semantic_layer as rdf
+    import examples.demo_utils as du
+
+    _no_devtester(monkeypatch)
+    calls = []
+    _fake_iris(monkeypatch, calls)
+    monkeypatch.setenv("IVG_TEST_CONTAINER", "mine")
+    monkeypatch.setattr(
+        du, "_demo_connection_targets", lambda name: [("container IP", "10.0.0.7", 1972)]
+    )
+    rdf.connect()
+    assert calls == [("10.0.0.7", 1972, "USER")]
+
+
+def test_the_working_system_demo_sizes_its_vector_from_the_table():
+    # scripts/quickstart_e2e.py stage `examples`: demo_rdf_semantic_layer.py had made
+    # kg_NodeEmbeddings 4 wide, and a hardcoded 768-wide query vector failed on it.
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "examples/demo_working_system.py").read_text()
+    assert "[0.1] * 768" not in src
+    assert "get_embedding_dimension(cursor)" in src

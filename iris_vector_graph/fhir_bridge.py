@@ -381,7 +381,22 @@ class GetPatientKGNeighborhoodTool:
 
         Returns:
             dict with "anchors", "ppr_results", "status".
+
+        .. deprecated:: 4.1.0
+            Removed in 5.0. Use ``engine.fhir_concept_ppr`` over a FHIR named graph.
         """
+        # Warn at the caller's line, not ours; the pipeline would warn again.
+        warnings.warn(
+            "fhir_bridge.GetPatientKGNeighborhoodTool is deprecated since 4.1.0 and is "
+            "removed in 5.0; use engine.fhir_concept_ppr over a FHIR named graph",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return self._run(patient_id)
+
+    def _run(self, patient_id: str) -> dict:
         return unified_clinical_pipeline(
             engine=self.engine,
             query=f"patient_neighborhood:{patient_id}",

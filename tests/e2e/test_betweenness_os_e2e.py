@@ -53,7 +53,7 @@ class TestBetweennessOsE2E:
         engine = IRISGraphEngine(iris_connection)
         _load_path_graph(engine, n=5)
         try:
-            _iris.createIRIS(iris_connection).kill("^NKG")
+            _iris.createIRIS(iris_connection).classMethodVoid("Graph.KG.GraphIndex", "DropNKG")
         except Exception:
             pass
 

@@ -171,8 +171,17 @@ class DocsCursor:
         return True
 
     def _unplaced_scan(self, text, args):
-        """`SELECT TOP n id, text FROM … docs WHERE graph_id IS NULL AND id > ? ORDER BY id`."""
-        if not re.search(r"(?i)FROM [\w.]*docs\b", text) or "graph_id IS NULL" not in text:
+        """`SELECT TOP n id, text FROM … docs WHERE graph_id IS NULL AND id > ? ORDER BY id`.
+
+        Before `prepare_docs` there is no column to filter on, and every row is
+        unplaced: a dry run reads them all with no WHERE.
+        """
+        if not re.search(r"(?i)FROM [\w.]*docs\b", text):
+            return False
+        unfiltered = not self.registry.has_graph_column and re.match(
+            r"(?i)^SELECT id, text FROM [\w.]*docs ORDER BY id$", text
+        )
+        if "graph_id IS NULL" not in text and not unfiltered:
             return False
         if not re.match(r"(?i)^SELECT", text):
             return False
@@ -183,7 +192,11 @@ class DocsCursor:
             else None
         )
         rows = sorted(
-            (r for r in self.registry.docs if r["graph_id"] is None and str(r["id"]) > str(after)),
+            (
+                r
+                for r in self.registry.docs
+                if r.get("graph_id") is None and str(r["id"]) > str(after)
+            ),
             key=lambda r: str(r["id"]),
         )
         if limit is not None:
@@ -551,6 +564,7 @@ class KgStoresRegistry:
         absent_tables: Iterable[str] = (),
         compiled_methods: Iterable[tuple] = None,
         compile_repairs: bool = True,
+        undefined_classes: Iterable[str] = (),
     ):
         self.props = [dict(row) for row in props]
         self.labels = [dict(row) for row in labels]
@@ -580,6 +594,10 @@ class KgStoresRegistry:
         #: when the only thing wrong was the column the class reads, false when the
         #: class is broken for some other reason.
         self.compile_repairs = compile_repairs
+        #: Shipped classes with no definition on the server: the deploy skips a class
+        #: with `[ Language = python ]` methods when there is no embedded Python. One
+        #: absent name makes `CompileList` fail for the whole list.
+        self.undefined_classes = set(undefined_classes)
         self.killed: list = []
         self.rebuilds: list = []
         self.compiles: list = []
@@ -744,9 +762,23 @@ class KgStoresNative:
     def classMethodValue(self, cls, method, *args):
         if (cls, method) == ("Graph.KG.GraphKey", "ForIndex"):
             return _index_key(args[0] if args else "")
-        if (cls, method) == ("%SYSTEM.OBJ", "CompilePackage"):
-            self.registry.compiles.append(tuple(str(a) for a in args))
+        if (cls, method) == ("%Dictionary.ClassDefinition", "%ExistsId"):
+            return 0 if str(args[0]) in self.registry.undefined_classes else 1
+        if (cls, method) in (("%SYSTEM.OBJ", "CompilePackage"), ("%SYSTEM.OBJ", "CompileList")):
+            if method == "CompileList":
+                absent = [
+                    n for n in str(args[0]).split(",")
+                    if n.removesuffix(".cls") in self.registry.undefined_classes
+                ]
+                assert not absent, f"CompileList of classes the server lacks: {absent}"
+            self.registry.compiles.append((method,) + tuple(str(a) for a in args))
             self.registry.order.append(("compile",) + tuple(str(a) for a in args))
+            spec = str(args[0] if args else "")
+            compiled = (
+                (lambda name: f"{name}.cls" in spec.split(","))
+                if method == "CompileList"
+                else (lambda name: name.startswith(spec))
+            )
             if self.registry.compile_repairs:
                 # A recompile of already-loaded source: the class definition is in the
                 # namespace, only its compiled form was missing because the embedded
@@ -758,7 +790,7 @@ class KgStoresNative:
                         ("Graph.KG.TraversalBuild", "Build2HopStats"),
                         ("Graph.KG.TraversalBuild", "Build2HopExactStats"),
                     )
-                    if name.startswith(str(args[0] if args else ""))
+                    if compiled(name)
                 }
             return 1
         if cls in ("Graph.KG.Traversal", "Graph.KG.TraversalBuild"):

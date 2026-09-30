@@ -215,11 +215,16 @@ class TestSync:
         assert eng.capabilities.kg_built is True
 
     def test_sync_kg_failure_returns_false(self):
+        # _sync_kg calls BuildKG through _iris_obj(). Patching schema._call_classmethod
+        # (which it never calls) passed only because iris.createIRIS(MagicMock) raised
+        # under the 3.11 driver; wrapper 0.6.1 returns a mock there (DEBT entry 10).
         eng, conn, cursor = _make_eng()
-        with patch("iris_vector_graph.schema._call_classmethod",
-                   side_effect=RuntimeError("BuildKG failed")):
+        mock_iris = MagicMock()
+        mock_iris.classMethodVoid.side_effect = RuntimeError("BuildKG failed")
+        with patch.object(eng, "_iris_obj", return_value=mock_iris):
             result = eng._sync_kg()
         assert result is False
+        mock_iris.classMethodVoid.assert_called_once_with("Graph.KG.Traversal", "BuildKG")
 
     def test_sync_nkg_success(self):
         eng, conn, cursor = _make_eng()

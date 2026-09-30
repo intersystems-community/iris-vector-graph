@@ -72,9 +72,13 @@ REBUILD_STEPS: Tuple[Tuple[str, str], ...] = (
 #: `rdf_labels` and `rdf_props` their `graph_id` column, so on a 3.2.0 install
 #: `Graph.KG.TraversalBuild`'s embedded SQL compiles against a table without the column
 #: it names ("Field 'GRAPH_ID' not found in the applicable tables") and the class ends
-#: up with no compiled methods at all. Recompiling the whole package rather than the
-#: three classes below: every class whose embedded SQL reads a re-keyed table is in the
-#: same position, and `Graph.KG.Subgraph` was measured failing the same way.
+#: up with no compiled methods at all. Every shipped class in the package is
+#: recompiled, not only the three below: every class whose embedded SQL reads a
+#: re-keyed table is in the same position, and `Graph.KG.Subgraph` was measured
+#: failing the same way. Shipped classes only, never `CompilePackage`: the package also
+#: holds the classes DDL generated, and recompiling `Graph.KG.prockgRRFFUSE` fails
+#: (`Field 'SCORE' not found`) and takes `Graph_KG.kg_RRF_FUSE` out of the catalog —
+#: 4.1.0 did that on every upgrade.
 REBUILD_PACKAGE = "Graph.KG"
 
 #: How deep below a store name an entry can sit: ``(graph, label, s)`` is three, and
@@ -96,6 +100,12 @@ class KgRekeyReport:
     #: layout no 4.0.0 reader addresses, so this is a count of what the pass removed,
     #: not of what it lost: the same statistics come back from the rows.
     entries_dropped: int = 0
+    #: Dry run only: the rebuild methods, as ``"Class::Method"``, with no compiled
+    #: entry point *now*. The real run recompiles the shipped :data:`REBUILD_PACKAGE`
+    #: classes first and refuses if any is still missing after that; a dry run does
+    #: not compile (a compile is a write), so it cannot say whether they come back —
+    #: only that they are missing.
+    entry_points_uncompiled: List[str] = field(default_factory=list)
 
 
 def rekey_kg_node_stores(
@@ -110,7 +120,8 @@ def rekey_kg_node_stores(
         conn: A connection to the namespace to migrate. Used for the column probes
             through a cursor and for the Native API, which is how a global is killed
             and a class method ordered.
-        dry_run: Report what would be dropped and write nothing. What the rebuild
+        dry_run: Report what would be dropped and write nothing — no kill, no rebuild,
+            no recompile, no iFind repair. What the rebuild
             will write is deliberately not predicted: predicting the two-hop counts
             would mean a second implementation of the walk that produces them, and
             the whole point of this step is that the server owns that walk.
@@ -129,24 +140,30 @@ def rekey_kg_node_stores(
     _require_scoped_sources(conn, schema)
 
     native = _native(conn)
+
+    if dry_run:
+        # No recompile: a compile writes the class dictionary and routines (4.1.0
+        # compiled the package here, deleting iFind's generated class, then "repaired"
+        # it — DEBT entry 10). So the dry run
+        # reports what is uncompiled now and leaves the verdict to the real run.
+        return KgRekeyReport(
+            entries_rebuilt={},
+            entries_dropped=sum(_count_entries(native, store) for store in REKEYED_STORES),
+            entry_points_uncompiled=_uncompiled_entry_points(conn),
+        )
+
     # The sources declare `graph_id` now; the classes that read them may have been
-    # compiled when they did not. Recompiling is not a data write, so a dry run does it
-    # too: skipping it would make the pre-flight report a failure the real run
-    # does not have.
+    # compiled when they did not.
     _recompile_rebuild_classes(native)
-    # The recompile above is a *package* compile, and a package compile deletes the
-    # generated class an iFind index is searched through without writing a new one
-    # (spec 230, FR-030). Nothing reports it — the index definition survives — so the
-    # text leg only fails later, at query Open, with <CLASS DOES NOT EXIST>. Repaired
-    # here, next to the compile that breaks it, and in a dry run too: the dry run does
-    # the same compile, so it does the same damage.
+    # A *package* compile deletes the generated class an iFind index is searched
+    # through without writing a new one (spec 230, FR-030), and 4.1.0 compiled the
+    # package here. The shipped-class list above does not touch it; the repair stays
+    # as a check, since nothing else reports the loss — the index definition survives
+    # and the text leg fails later, at query Open, with <CLASS DOES NOT EXIST>.
     _repair_ifind_after_recompile(conn, schema)
     _require_rebuild_entry_points(conn)
 
     dropped = sum(_count_entries(native, store) for store in REKEYED_STORES)
-
-    if dry_run:
-        return KgRekeyReport(entries_rebuilt={}, entries_dropped=dropped)
 
     # The kill is the whole reason this is a migration. Rebuilding without it would
     # leave every flat entry in place beside the new ones, and `Kill ^KG("prop")`
@@ -205,13 +222,18 @@ def _require_scoped_sources(conn, schema: str) -> None:
         raise RuntimeError(
             "the ^KG rebuild reads each entry's graph off the row it comes from, and "
             f"{', '.join(schema + '.' + t for t in unscoped)} has no graph_id column. "
-            "Run initialize_schema() (spec 214's migration) before re-keying the "
-            "globals — nothing has been dropped."
+            "The embeddings step of upgrade_to_4_0_0() adds it to rdf_labels and "
+            "rdf_props, and that step writes: run it (or the whole upgrade, which "
+            "orders it first) before re-keying the globals — nothing has been dropped."
         )
 
 
 def _recompile_rebuild_classes(native) -> None:
-    """Recompile :data:`REBUILD_PACKAGE` so its embedded SQL binds to the re-keyed rows.
+    """Recompile the shipped :data:`REBUILD_PACKAGE` classes against the re-keyed rows.
+
+    The list is the ``.cls`` files the package ships that the server defines: a class
+    the deploy skipped (``[ Language = python ]`` with no embedded Python) is left out,
+    because one absent name fails ``CompileList`` for the whole list.
 
     Best-effort on its own: what matters is whether the entry points exist afterwards,
     and :func:`_require_rebuild_entry_points` is what answers that. A container with no
@@ -219,9 +241,31 @@ def _recompile_rebuild_classes(native) -> None:
     naming the method instead of here with a compiler status nobody reads.
     """
     try:
-        native.classMethodValue("%SYSTEM.OBJ", "CompilePackage", REBUILD_PACKAGE, "ck-d")
+        spec = ",".join(
+            f"{name}.cls"
+            for name in _shipped_class_names()
+            if native.classMethodValue("%Dictionary.ClassDefinition", "%ExistsId", name)
+        )
+        if not spec:
+            logger.debug("recompile of %s skipped: no shipped class defined", REBUILD_PACKAGE)
+            return
+        native.classMethodValue("%SYSTEM.OBJ", "CompileList", spec, "ck-d")
     except Exception as exc:  # pragma: no cover - exercised against a live server
         logger.debug("recompile of %s skipped: %s", REBUILD_PACKAGE, exc)
+
+
+def _shipped_class_names() -> List[str]:
+    """``Graph.KG.*`` class names from the packaged ``.cls`` sources, sorted."""
+    from iris_vector_graph._engine.class_deploy import packaged_class_dir
+
+    root = packaged_class_dir()
+    if root is None:
+        return []
+    package_dir = root.joinpath(*REBUILD_PACKAGE.split("."))
+    return sorted(
+        ".".join(path.relative_to(root).with_suffix("").parts)
+        for path in package_dir.rglob("*.cls")
+    )
 
 
 def _repair_ifind_after_recompile(conn, schema: str) -> None:
@@ -258,23 +302,27 @@ def _require_rebuild_entry_points(conn) -> None:
     ``ERROR #5123: Unable to find entry point``, and by then the flat entries are gone
     and the scoped ones were never written.
     """
+    missing = _uncompiled_entry_points(conn)
+    if missing:
+        named = ", ".join(missing)
+        raise RuntimeError(
+            f"the ^KG rebuild is ordered out of {named}, and IRIS has no compiled entry "
+            f"point for it. A recompile of the shipped {REBUILD_PACKAGE} classes did not produce one, so the "
+            "class either is not loaded in this namespace or does not compile — check "
+            "the compiler output for the class, then re-run. Nothing has been dropped."
+        )
+
+
+def _uncompiled_entry_points(conn) -> List[str]:
     cursor = conn.cursor()
     try:
-        missing = [
-            (cls, method)
+        return [
+            f"{cls}::{method}"
             for cls, method in REBUILD_STEPS
             if not _compiled_method(cursor, cls, method)
         ]
     finally:
         _close(cursor)
-    if missing:
-        named = ", ".join(f"{cls}::{method}" for cls, method in missing)
-        raise RuntimeError(
-            f"the ^KG rebuild is ordered out of {named}, and IRIS has no compiled entry "
-            f"point for it. A recompile of {REBUILD_PACKAGE} did not produce one, so the "
-            "class either is not loaded in this namespace or does not compile — check "
-            "the compiler output for the class, then re-run. Nothing has been dropped."
-        )
 
 
 def _compiled_method(cursor, class_name: str, method: str) -> bool:

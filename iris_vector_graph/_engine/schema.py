@@ -1997,8 +1997,8 @@ class SchemaMixin:
                 # `initialize_schema` reports success.
                 raise
             except Exception as exc:
-                logger.debug(
-                    "ObjectScript auto-deploy skipped (expected in Docker — use docker cp + LoadDir): %s",
+                logger.warning(
+                    "ObjectScript auto-deploy failed: %s",
                     exc,
                 )
                 self.capabilities = IRISCapabilities()
@@ -2096,11 +2096,19 @@ class SchemaMixin:
                 "table at the configured width, or clear it and re-run "
                 "initialize_schema()."
             )
+        deploy = GraphSchema.last_deploy if auto_deploy_objectscript else None
+        status["objectscript_skipped"] = dict(deploy.skipped) if deploy else {}
+        if deploy is not None:
+            for name, reason in sorted(deploy.skipped.items()):
+                status["warnings"].append(f"ObjectScript class {name} not deployed: {reason}.")
+            for err in deploy.errors:
+                status["warnings"].append(f"ObjectScript deploy error: {err}")
         if not self.capabilities.objectscript_deployed:
             status["warnings"].append(
-                "ObjectScript classes not deployed — BFS, Subgraph, PageRank using Python fallbacks. "
-                "Run docker cp iris_src/src <container>:/tmp/src && docker exec <container> iris session IRIS "
-                "-U USER 'Do $system.OBJ.LoadDir(\"/tmp/src\",\"ck\",,1)' to deploy."
+                "ObjectScript classes not deployed — BFS, Subgraph, PageRank using Python "
+                "fallbacks. initialize_schema() sends the classes packaged with IVG over this "
+                "connection; see the log for why that failed. Set IVG_FORCE_CLASS_DEPLOY=1 "
+                "to reinstall an unchanged set."
             )
         if not self.capabilities.kg_built:
             status["warnings"].append(

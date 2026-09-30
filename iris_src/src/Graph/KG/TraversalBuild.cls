@@ -225,7 +225,7 @@ ClassMethod BuildNKG() As %Status
 	Try { Do ##class(Graph.KG.NKGAccel).InvalidateAdjCache() } Catch invEx {
 		Do ##class(%SYS.System).WriteToConsoleLog("Graph.KG.Traversal: InvalidateAdjCache failed: "_invEx.DisplayString(), 0, 1)
 	}
-	Kill ^NKG
+	Do ##class(Graph.KG.GraphIndex).DropNKG()
 	Do ##class(Graph.KG.GraphIndex).InitStructuralLabels()
 	Set edgeCount = 0
 	// Iterate all graph subscripts (merged view)

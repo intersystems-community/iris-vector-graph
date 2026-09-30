@@ -315,17 +315,21 @@ def place_documents(
             raise RuntimeError(
                 f"{schema}.docs does not exist, and neither does the rebuilt "
                 f"{schema}.docs{STAGING_SUFFIX}, so there is nothing to place. "
-                "Run initialize_schema() first."
+                "initialize_schema() creates it, and that call writes."
             )
-        if not _declares(cursor, schema, "docs", "graph_id"):
+        if _declares(cursor, schema, "docs", "graph_id"):
+            unplaced = f"SELECT id, text FROM {schema}.docs WHERE graph_id IS NULL ORDER BY id"
+        elif dry_run:
+            # `prepare_docs` adds the column NULL, so until it runs every row is
+            # unplaced — the prediction needs no column to read that off.
+            unplaced = f"SELECT id, text FROM {schema}.docs ORDER BY id"
+        else:
             raise RuntimeError(
                 f"{schema}.docs has no graph_id column, so its rows cannot be placed. "
-                "Run prepare_docs() (or initialize_schema()) first."
+                "prepare_docs() adds it, and that call writes (ALTER TABLE); run it "
+                "first, or run upgrade_to_4_0_0(), which does."
             )
-        rows = _read(
-            cursor,
-            f"SELECT id, text FROM {schema}.docs WHERE graph_id IS NULL ORDER BY id",
-        )
+        rows = _read(cursor, unplaced)
         report = _Tally()
         for row in rows:
             doc_id = str(row[0])

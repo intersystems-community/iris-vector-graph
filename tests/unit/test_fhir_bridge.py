@@ -1,6 +1,7 @@
 """Unit tests for iris_vector_graph.fhir_bridge — mocked FHIR, no IRIS needed."""
 
 import logging
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -375,6 +376,19 @@ class TestGetPatientKGNeighborhoodTool:
         assert result["status"] == "no_fhir_conditions"
         assert result["anchors"] == []
         assert result["ppr_results"] == []
+
+    @patch("iris_vector_graph.fhir_bridge.fhir_search_conditions")
+    def test_tool_warns_once_at_the_callers_line(self, mock_fhir):
+        # 4.1.0 warned from inside fhir_bridge, so the warning named IVG's own
+        # line and `error::DeprecationWarning:iris_vector_graph` turned it into an error.
+        mock_fhir.return_value = {"conditions": [], "error": None}
+        tool = GetPatientKGNeighborhoodTool(engine=MagicMock(), fhir_base_url="http://fhir.test")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tool("p")
+        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(deprecations) == 1
+        assert deprecations[0].filename == __file__
 
 
 class TestCypherRequestModel:

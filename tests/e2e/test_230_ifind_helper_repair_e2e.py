@@ -13,9 +13,10 @@ notices is a query, at Open:
     [SQLCODE: <-149>] ... <CLASS DOES NOT EXIST> idxdocstextifindEmbedded+2^...
 
 Two package compiles is not a contrived sequence. `initialize_schema` deploys the
-ObjectScript layer (one compile) and the `^KG` re-key recompiles the package (a second),
-and any `LoadDir` deploy over an up-to-date tree does it on its own — which is why this
-reached every upgraded *and* every re-deployed install as a silently dead text leg.
+ObjectScript layer (one compile) and the 4.1.0 `^KG` re-key recompiled the package (a
+second), and any `LoadDir` deploy over an up-to-date tree does it on its own — which is
+why this reached every upgraded *and* every re-deployed install as a silently dead text
+leg. Since 4.1.1 the re-key compiles only the shipped classes.
 
 Worse than dead: `_text_search` treats any error mentioning FIND as "no iFind index
 here" and falls back to `LIKE`, which matches substrings and scores every hit 1.0. So
@@ -180,6 +181,23 @@ def searchable_rows(iris_connection):
     yield iris_connection
 
     _wipe(iris_connection)
+    _reinstall_procedures(iris_connection)
+
+
+def _reinstall_procedures(conn):
+    """Undo the package compile's other damage, so later modules see a whole schema.
+
+    `CompilePackage("Graph.KG")` also recompiles the classes DDL generated, and
+    `Graph.KG.prockgRRFFUSE` fails there, leaving `Graph_KG.kg_RRF_FUSE` out of the
+    catalog. The procedures are `CREATE OR REPLACE`, so declaring them again restores it.
+    """
+    from iris_vector_graph.schema import GraphSchema
+
+    for sql in GraphSchema.get_procedures_sql_list(table_schema="Graph_KG"):
+        with contextlib.suppress(Exception):
+            _exec(conn, sql)
+    with contextlib.suppress(Exception):
+        conn.commit()
 
 
 class TestASecondPackageCompileBreaksTextSearch:

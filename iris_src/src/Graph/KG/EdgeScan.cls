@@ -521,7 +521,10 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 			While piter.%GetNext(.key, .val) {
 				If key = "" { Continue }
 				Try {
-					Set valStr = $Select($IsObject(val):val.%ToJSON(), $IsValidNum(val):val, 1:""""_$Replace($ZConvert(val,"O","UTF8"),"""","""""")_"""")
+					// The caller sends prop_text() strings; stored as given, like create_node.
+					// Other JSON types are for direct callers: a boolean as true/false.
+					Set tType = node.props.%GetTypeOf(key)
+					Set valStr = $Select($IsObject(val):val.%ToJSON(), tType="boolean":$Select(val:"true",1:"false"), 1:val_"")
 					&sql(INSERT OR UPDATE INTO Graph_KG.rdf_props (graph_id, s, "key", val) VALUES ('', :id, :key, :valStr))
 				} Catch ex { }
 			}

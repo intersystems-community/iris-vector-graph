@@ -2,6 +2,7 @@
 """Load ICD-10-CM → MeSH mappings from UMLS MRCONSO.RRF into Graph_KG.fhir_bridges."""
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -122,7 +123,13 @@ def main():
 
     c = IRISContainer.attach(args.container)
     port = c.get_exposed_port(1972)
-    conn = get_connection("localhost", port, "USER", "test", "test")
+    conn = get_connection(
+        "localhost",
+        port,
+        os.environ.get("IRIS_NAMESPACE", "USER"),
+        os.environ.get("IRIS_USERNAME", "_SYSTEM"),
+        os.environ.get("IRIS_PASSWORD", "SYS"),
+    )
     load_to_iris(pairs, conn)
     conn.close()
 

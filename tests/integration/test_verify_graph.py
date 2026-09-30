@@ -307,6 +307,15 @@ def test_the_inventorys_sql_claims_match_the_columns(engine):
                 continue
             schema, _, table = entry["name"].partition(".")
             cursor.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                [schema, table],
+            )
+            if not cursor.fetchone()[0]:
+                # The `fhir_*` tables are created on first FHIR sync (spec 234), so a
+                # namespace that never synced has no columns to disagree with.
+                continue
+            cursor.execute(
                 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS "
                 "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND UPPER(COLUMN_NAME) = 'GRAPH_ID'",
                 [schema, table],

@@ -71,10 +71,19 @@ class StepResult:
     #: Why the step was declined, in words an operator can act on. ``None`` when it
     #: ran.
     skipped_because: Optional[str] = None
+    #: Dry run only: why the step could not be predicted. Its input is a column an
+    #: earlier call writes — ``initialize_schema()``, or an earlier step a dry run
+    #: does not run — so any prediction would be a guess. Names that call and says
+    #: it writes. The real run refuses the same way if the column is still missing.
+    blocked_because: Optional[str] = None
 
     @property
     def skipped(self) -> bool:
         return self.skipped_because is not None
+
+    @property
+    def blocked(self) -> bool:
+        return self.blocked_because is not None
 
 
 @dataclass(frozen=True)
@@ -100,6 +109,11 @@ class UpgradeReport:
     def skipped(self) -> Tuple[str, ...]:
         """The steps that found their work already done."""
         return tuple(step.name for step in self.steps if step.skipped)
+
+    @property
+    def blocked(self) -> Tuple[str, ...]:
+        """The steps a dry run could not predict (see :attr:`StepResult.blocked_because`)."""
+        return tuple(step.name for step in self.steps if step.blocked)
 
     @property
     def rows_accounted(self) -> int:
@@ -145,7 +159,10 @@ def upgrade_to_4_0_0(
             a node for.
         edge_resolver: Offered every edge vector whose triple more than one graph
             asserts.
-        dry_run: Decide and report, write nothing. Each step's own dry run.
+        dry_run: Decide and report, write nothing: no rows, no DDL, no globals, no
+            compile. Each step's own dry run, except that a step whose input column
+            does not exist yet — on a 2.x install, or because an earlier step adds
+            it — reports ``blocked_because`` instead of guessing.
         schema: The SQL schema the two placements address.
 
     Returns:
@@ -223,6 +240,11 @@ def _run_step(name: str, conn, **kw) -> StepResult:
     dry_run = kw["dry_run"]
     schema = kw["schema"]
 
+    if dry_run and name in ("embeddings", "kg_node_stores"):
+        blocked = _dry_run_blocker(conn, name, schema)
+        if blocked:
+            return StepResult(name, blocked_because=blocked)
+
     if name == "embeddings":
         # Unguarded on purpose: this pass already reads the install's shape per table
         # and reshapes only a legacy one, and its report describes the state it found
@@ -239,6 +261,9 @@ def _run_step(name: str, conn, **kw) -> StepResult:
         if already:
             logger.info("Skipping the docs re-key: %s", already)
             return StepResult(name, skipped_because=already)
+        blocked = _dry_run_blocker(conn, name, schema) if dry_run else None
+        if blocked:
+            return StepResult(name, blocked_because=blocked)
         return StepResult(name, report=_migrate_docs(conn, **kw))
 
     if name == "edge_vectors":
@@ -291,6 +316,53 @@ def _migrate_edge_vectors(conn, **kw) -> PlacementReport:
 # ---------------------------------------------------------------------------
 # Reading the shape
 # ---------------------------------------------------------------------------
+
+
+def _dry_run_blocker(conn, name: str, schema: str) -> Optional[str]:
+    """Why a dry run cannot predict step `name`, or ``None`` if it can.
+
+    A dry run reads the install as it is. Two inputs may not exist yet, and neither
+    can be read around without guessing:
+
+    * ``nodes.graph_id``, before spec 214 (2.16 and earlier). The embeddings re-key
+      and the docs placement both decide a row's graph from it.
+      ``initialize_schema()`` adds it — and moves the ``__graph`` pseudo-props into it
+      — so that call writes, and a dry run meant to precede every write cannot make it.
+    * ``rdf_labels.graph_id`` / ``rdf_props.graph_id``, which the ``^KG`` rebuild reads
+      each entry's graph off. On every 2.x and 3.x install the embeddings step adds
+      them (spec 227's structural re-key), and a dry run does not run it.
+    """
+    cursor = conn.cursor()
+    try:
+        if name in ("embeddings", "docs") and not _declares(cursor, schema, "nodes", "graph_id"):
+            reads = (
+                "decides each vector's graph" if name == "embeddings" else "places each doc"
+            )
+            return (
+                f"{schema}.nodes has no graph_id column, so this install predates spec "
+                f"214 (2.18), and the {name} step {reads} from it. "
+                "initialize_schema() adds it, and that call writes: it alters nodes and "
+                "moves the __graph pseudo-properties into the column. Run it when you "
+                "are ready to write, then dry-run again."
+            )
+        if name == "kg_node_stores":
+            unscoped = [
+                t
+                for t in ("rdf_labels", "rdf_props", "rdf_edges")
+                if _declares(cursor, schema, t, "s")
+                and not _declares(cursor, schema, t, "graph_id")
+            ]
+            if unscoped:
+                return (
+                    f"{', '.join(schema + '.' + t for t in unscoped)} has no graph_id "
+                    "column yet, and the ^KG rebuild reads each entry's graph off it. "
+                    "The embeddings step adds it to rdf_labels and rdf_props; the real "
+                    "run writes that before this step, a dry run does not. Nothing to "
+                    "predict until then: the entries dropped are the whole flat layout."
+                )
+        return None
+    finally:
+        _close(cursor)
 
 
 def _docs_already_migrated(conn, schema: str) -> Optional[str]:

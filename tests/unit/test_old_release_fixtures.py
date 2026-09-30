@@ -235,10 +235,31 @@ def test_v320_freezes_the_statements_that_declared_its_tables():
 
 
 @pytest.mark.parametrize("release", PRE_223_RELEASES, ids=PRE_223_IDS)
-def test_an_older_release_reports_no_frozen_ddl_rather_than_guessing(release):
-    """`--ddl` arrived with the 3.2.0 fixture. An empty list is the honest answer for
-    a release frozen before it, not an error — nothing needs their shapes."""
-    assert release.ddl_statements() == []
+def test_a_2x_release_freezes_its_own_ddl(release):
+    """The 2.x fixtures once carried no DDL, on the theory that nothing needed their
+    shapes. `upgrade_to_4_0_0(dry_run=True)` then crashed on a real 2.x install (DEBT
+    entry 10), because no test could build one. Both shapes are frozen from the tags'
+    own `initialize_schema` (`generate_old_snapshot.py --ddl`)."""
+    flat = [" ".join(s.split()) for s in release.ddl_statements()]
+
+    assert flat, f"{release.tag} was frozen without --ddl"
+    docs = next(s for s in flat if s.startswith("CREATE TABLE Graph_KG.docs"))
+    labels = next(s for s in flat if s.startswith("CREATE TABLE Graph_KG.rdf_labels"))
+    assert "graph_id" not in docs, "2.x docs had no graph column"
+    assert "graph_id" not in labels, "2.x rdf_labels had no graph column"
+    assert not any("embedding_registry" in s for s in flat), "the registry is 3.x"
+
+
+def test_v216_nodes_has_no_graph_column_and_v220_does():
+    """Spec 214 landed between the two, so one fixture is each side of it."""
+
+    def nodes(tag):
+        flat = [" ".join(s.split()) for s in _by_tag(tag).ddl_statements()]
+        return next(s for s in flat if s.startswith("CREATE TABLE Graph_KG.nodes"))
+
+    assert "graph_id" not in nodes("v2.16.0")
+    assert "node_id VARCHAR(256) %EXACT PRIMARY KEY" in nodes("v2.16.0")
+    assert "graph_id VARCHAR(256) %EXACT NOT NULL DEFAULT ''" in nodes("v2.20.0")
 
 
 def test_a_captured_numeric_subscript_goes_back_as_a_number():

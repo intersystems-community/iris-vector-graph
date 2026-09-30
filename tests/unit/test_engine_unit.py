@@ -14,6 +14,7 @@ Unit tests for engine.py covering:
 No IRIS connection needed — mocks conn and cursor.
 """
 import pytest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.result import IVGResult
@@ -43,11 +44,27 @@ def _make_proc(name):
 # dbapi.connect (iris-embedded-python-wrapper is the standard connection path).
 # ---------------------------------------------------------------------------
 
+@contextmanager
+def _patched_dbapi_connect(conn):
+    """Replace `iris.dbapi` as the engine reads it: an attribute of `iris`.
+
+    `patch("iris.dbapi.connect")` imports `iris.dbapi` first. Under
+    iris-embedded-python-wrapper 0.6.1 with no runtime bound, `iris.irissdk` is a
+    MagicMock, so on 3.12+ importing the real `iris.dbapi` raises in `typing`
+    (DEBT entry 10: green on the 3.11 .venv, red in CI).
+    """
+    import iris
+
+    connect = MagicMock(return_value=conn)
+    with patch.object(iris, "dbapi", MagicMock(connect=connect)):
+        yield connect
+
+
 class TestConnectionSeam:
     def test_from_connect_uses_dbapi_connect(self):
         fake_conn = MagicMock()
         fake_conn.cursor.return_value = MagicMock()
-        with patch("iris.dbapi.connect", return_value=fake_conn) as m:
+        with _patched_dbapi_connect(fake_conn) as m:
             eng = IRISGraphEngine.from_connect(
                 hostname="h", port=1972, namespace="USER",
                 username="_SYSTEM", password="SYS", embedding_dimension=4,
@@ -66,7 +83,7 @@ class TestConnectionSeam:
         # First probe raises a broken-pipe error → triggers reconnect
         cursor.execute.side_effect = Exception("broken pipe")
         fake_conn = MagicMock()
-        with patch("iris.dbapi.connect", return_value=fake_conn) as m:
+        with _patched_dbapi_connect(fake_conn) as m:
             eng._reconnect_if_stale()
         m.assert_called_once()
         assert eng.conn is fake_conn
